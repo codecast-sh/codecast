@@ -21,9 +21,18 @@ export function isSlowRequest(e: ReplayEvent): e is NetworkEvent {
 
 export type ReplayFailure = ErrorEvent | NetworkEvent | (ConsoleEvent & { level: "error" });
 
+/**
+ * A console line the recording SDK wrote about itself ("[SessionRecording] Too
+ * many mutations…", "[PostHog.js] …"): the recorder's housekeeping, nothing
+ * the page did, so no reader lists it or counts it as a failure.
+ */
+export function isRecorderNoise(e: ReplayEvent): boolean {
+  return e.type === "console" && /^\s*\[(?:SessionRecording|PostHog(?:\.js)?|posthog-js|rrweb|Sentry Replay|Replay)\b/i.test(e.message);
+}
+
 /** Something went wrong here: a page error, a console error, or a failed request. */
 export function isFailure(e: ReplayEvent): e is ReplayFailure {
-  return e.type === "error" || (e.type === "console" && e.level === "error") || isFailedRequest(e);
+  return e.type === "error" || (e.type === "console" && e.level === "error" && !isRecorderNoise(e)) || isFailedRequest(e);
 }
 
 /**
@@ -57,8 +66,32 @@ export function sortReplayEvents(events: readonly ReplayEvent[]): ReplayEvent[] 
   return events.map((e, i) => [e, i] as const).sort((a, b) => a[0].t - b[0].t || a[1] - b[1]).map(([e]) => e);
 }
 
+/**
+ * A page visit is a change of address. A recorder that takes a full snapshot
+ * of the same page again (PostHog every couple of seconds while a tab idles,
+ * a resize, a tab coming back) writes another navigation with the same URL;
+ * those fold into the visit they repeat, so a page counts once until the
+ * person goes somewhere else. Events in time order.
+ */
+export function foldRepeatNavs(events: readonly ReplayEvent[]): ReplayEvent[] {
+  let at: string | undefined;
+  let folded = false;
+  const out = events.filter((e) => {
+    if (e.type !== "nav") return true;
+    if (e.url === at) return !(folded = true);
+    at = e.url;
+    return true;
+  });
+  return folded ? out : (events as ReplayEvent[]);
+}
+
 const s = (v: unknown, max: number): string | undefined => (typeof v === "string" ? v.slice(0, max) : undefined);
 const n = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+/** A click's landing point, both coordinates or neither, rounded to the pixel. */
+const xy = (raw: any): { x?: number; y?: number } => {
+  const x = n(raw?.x), y = n(raw?.y);
+  return x !== undefined && y !== undefined && x >= 0 && y >= 0 ? { x: Math.round(x), y: Math.round(y) } : {};
+};
 
 /**
  * Events from an untrusted chunk (an SDK upload, a vendor recording), checked
@@ -82,8 +115,8 @@ export function parseReplayEvents(body: unknown): ReplayEvent[] {
         break;
       }
       case "click": {
-        const role = s(raw.role, 40), text = s(raw.text, L.label_max_chars);
-        e = { type: "click", t, label: s(raw.label, L.label_max_chars) ?? "", selector: s(raw.selector, L.selector_max_chars) ?? "", ...(role ? { role } : {}), ...(text ? { text } : {}) };
+        const role = s(raw.role, 40), text = s(raw.text, L.label_max_chars), context = s(raw.context, L.label_max_chars);
+        e = { type: "click", t, label: s(raw.label, L.label_max_chars) ?? "", selector: s(raw.selector, L.selector_max_chars) ?? "", ...(role ? { role } : {}), ...(text ? { text } : {}), ...(context ? { context } : {}), ...xy(raw) };
         break;
       }
       case "input":
@@ -142,11 +175,15 @@ export function parseReplayEvents(body: unknown): ReplayEvent[] {
 
 /** A moment in the recording as m:ss.s (h:mm:ss past an hour). */
 export function formatReplayTime(ms: number): string {
-  const total = Math.max(0, ms) / 1000;
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(Math.floor(s)).padStart(2, "0")}`;
+  // Rounded to the unit shown before it is split, so 299.97s reads 5:00.0, never 4:60.0.
+  const tenths = Math.round(Math.max(0, ms) / 100);
+  if (tenths >= 36_000) {
+    const secs = Math.floor(tenths / 10);
+    const h = Math.floor(secs / 3600);
+    return `${h}:${String(Math.floor((secs % 3600) / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
+  }
+  const m = Math.floor(tenths / 600);
+  const s = (tenths % 600) / 10;
   return `${m}:${s.toFixed(1).padStart(4, "0")}`;
 }
 

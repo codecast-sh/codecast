@@ -142,11 +142,50 @@ export function ciCheckFingerprint(repository: string, workflow: string): string
 }
 
 /**
+ * A check group filed for one CI run before groups were keyed by workflow: a
+ * workflow with a run-name reported `Deploy <sha> for <actor>` as its name,
+ * so every run opened its own group. It records a deploy and is not a problem;
+ * its workflow's own group carries the check now.
+ */
+export function isCiRunRecord(g: { kind: string; title: string }): boolean {
+  return g.kind === "check" && /^Deploy [0-9a-f]{7,40} for \S/.test(g.title);
+}
+
+/**
+ * A group that is a record and not an issue: a CI run filed as its own group
+ * (isCiRunRecord), or a check or metric that never failed. A passing reading
+ * keeps its check's group (the last green a later red is judged against, the
+ * newest run a late one is checked against), but a monitor is an issue only
+ * once it fails, so lists and counts leave these out.
+ */
+export function isRecordNotIssue(g: { kind: string; title: string; count: number }): boolean {
+  return isCiRunRecord(g) || ((g.kind === "check" || g.kind === "metric") && g.count === 0);
+}
+
+/**
  * A wall a recording shows (shared/replay/issues.ts): its kind and what
  * failed, so the same failure in many recordings is one replay_issue group.
  */
 export function replayIssueFingerprint(kind: string, failure: string): string {
   return `${kind}-${hex8(failure)}`;
+}
+
+/**
+ * What a job's failure said, as one key: its first line, spacing collapsed,
+ * ids, times and long numbers (uuids, hex, ISO times) written as #, clipped. One job
+ * groups many causes (a timeout, a closed connection, a billing refusal); the
+ * group tallies its failures under these keys (event_groups.messages) and the
+ * page splits the kept samples the same way.
+ */
+export function failureMessageKey(message: string | undefined | null): string {
+  const line = (message ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  return line
+    .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?/g, "#")
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "#")
+    .replace(/\b(?=[0-9a-f]*\d)[0-9a-f]{12,}\b/gi, "#")
+    .replace(/\d{6,}/g, "#")
+    .replace(/\s+/g, " ")
+    .slice(0, 160);
 }
 
 /** A job's failures group by job name, whatever the case or spacing it was logged with. */

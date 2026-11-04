@@ -252,7 +252,7 @@ describe("rollup then forTeam", () => {
 
     const errors = by["sdk:union-errors"];
     expect(errors).toMatchObject({ route: "agentwatch-system", state: "flowing", today: 2, unfiled: 1, opens: { eventSourceId: "event_sources_errors" }, outcomes: { shipped: 1, total: 1 } });
-    expect(by["sdk:union-errors:job_failed"]).toMatchObject({ label: "Union-errors failed jobs", route: "unfiled", unfiled: 2, today: 1, lastAt: NOW - 5 * H });
+    expect(by["sdk:union-errors:job_failed"]).toMatchObject({ label: "union-errors failed jobs", route: "unfiled", unfiled: 2, today: 1, lastAt: NOW - 5 * H });
     expect(by["github:github-ci:check_failed"]).toMatchObject({ route: "unfiled", unfiled: 1, today: 1 });
     // Metric watches on a source that files no metric alerts: a row of their own, the alerts counted as unfiled.
     expect(by["posthog:union-posthog:metric_alert"]).toMatchObject({ route: "unfiled", unfiled: 1, state: "stopped", opens: { eventSourceId: "event_sources_posthog", metricWatchIds: ["metric_watches_1", "metric_watches_2"] } });

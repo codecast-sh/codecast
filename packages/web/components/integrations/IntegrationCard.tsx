@@ -77,7 +77,9 @@ export function IntegrationCard({
 
   return (
     <div
-      className="border-l-2 px-4 py-3.5 sm:px-5"
+      // A link can land on a card (the Ops home's GitHub CI tile: #app-github); the team's card takes the plain id.
+      id={scope === "team" ? `app-${descriptor.id}` : `app-${descriptor.id}-${scope}`}
+      className="border-l-2 px-4 py-3.5 sm:px-5 scroll-mt-4"
       style={{ borderColor: connected ? accent : `color-mix(in srgb, ${accent} 35%, transparent)` }}
     >
       <div className="flex items-center gap-2.5">

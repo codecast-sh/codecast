@@ -23,14 +23,14 @@ const TRANSITION_WORDS: Record<string, { noun: string; what: string }> = {
   metric_alert: { noun: "metric alerts", what: "A watched metric leaves its band" },
 };
 
-/** A label as a row shows it: a name that falls back to a judge's or a source's own starts with a capital. */
+/** A label as a row shows it: a finder's or a judge's words start with a capital; a source's own name is kept as Ops writes it. */
 const capFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** An event source as the row of what it files ("sdk:union-errors"): its name and provider. */
 export function eventSourceWords(src: { name: string; provider: string }, transition?: string): RowWords {
   const t = transition ? TRANSITION_WORDS[transition] : null;
-  if (t) return { label: capFirst(`${src.name} ${t.noun}`), what: `${t.what}, from ${src.provider} source ${src.name}`, group: "product" };
-  return { label: capFirst(src.name), what: `Issues the ${src.provider} source ${src.name} opens`, group: "product" };
+  if (t) return { label: `${src.name} ${t.noun}`, what: `${t.what}, from ${src.provider} source ${src.name}`, group: "product" };
+  return { label: src.name, what: `Issues the ${src.provider} source ${src.name} opens`, group: "product" };
 }
 
 /** A finding source's fallback words; `finder` is its line profile declaration, when one names it. */
@@ -38,7 +38,7 @@ export function sourceWords(key: string, finder?: { label?: string; what?: strin
   const base: RowWords =
     FIXED[key] ??
     (key.startsWith("eval") ? FIXED.evals : null) ??
-    (key.startsWith("judge:") ? { label: `${key.slice(6)} judge`, what: `The ${key.slice(6)} judge reads each moment and files what went wrong`, group: "conversations" } : null) ??
+    (key.startsWith("judge:") ? { label: capFirst(`${key.slice(6)} judge`), what: `The ${key.slice(6)} judge reads each moment and files what went wrong`, group: "conversations" } : null) ??
     (src ? eventSourceWords(src) : { label: key, what: "", group: "product" });
-  return { label: capFirst(finder?.label?.trim() || base.label), what: finder?.what?.trim() || base.what, group: finder?.group ?? base.group };
+  return { label: finder?.label?.trim() ? capFirst(finder.label.trim()) : base.label, what: finder?.what?.trim() || base.what, group: finder?.group ?? base.group };
 }

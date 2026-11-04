@@ -91,7 +91,7 @@ function eventLine(e: ReplayEvent, start: number): string {
     case "nav":
       return `${at} nav ${urlPath(e.url)}${e.title ? ` "${clip(e.title, 120)}"` : ""}`;
     case "click":
-      return `${at} click ${e.role ? `${e.role} ` : ""}"${clip(e.label || "(unlabeled)", 120)}"`;
+      return `${at} click ${e.role ? `${e.role} ` : ""}${e.label || e.text ? `"${clip(e.label || e.text || "", 120)}"` : e.context ? `(${clip(e.context, 120)})` : "(unlabeled)"}`;
     case "input":
       return `${at} type into "${clip(e.label || "(unlabeled)", 120)}": ${e.length} chars`;
     case "submit":

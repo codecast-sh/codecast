@@ -18,6 +18,8 @@ export interface ReplayClock {
   toClock: (offset: number) => number;
   /** The rrweb offset where the replay ends: playback stops here. */
   endOffset: number;
+  /** Where the capture itself ends on the replay clock: short of `duration` when an import stopped early. */
+  captureEnd: number;
 }
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(Math.max(x, lo), Math.max(lo, hi));
@@ -32,5 +34,5 @@ export function replayClock(
   const duration = typeof row === "number" && row > 0 ? row : captureEnd;
   const toOffset = (t: number) => clamp(clamp(t, 0, duration) - lead, 0, capture.totalTime);
   const toClock = (offset: number) => clamp(offset + lead, 0, duration);
-  return { duration, lead, toOffset, toClock, endOffset: toOffset(duration) };
+  return { duration, lead, toOffset, toClock, endOffset: toOffset(duration), captureEnd };
 }

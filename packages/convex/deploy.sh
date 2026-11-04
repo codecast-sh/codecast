@@ -79,17 +79,24 @@ restore_env
 # missing or logged out, offline, an older server) warns and never fails the
 # deploy, which has already succeeded. --dry-run prints the mark instead.
 # The marker names a commit, so a deploy from a tree with uncommitted edits
-# still marks HEAD (every commit up to it is live; the edits are no commit the
-# page could show) and says that it did.
+# still marks HEAD (every commit up to it is live) and records how many files
+# went out uncommitted with it (--dirty), which the deploy shows.
 SHA="$(git rev-parse HEAD)"
 if [ "$DIRTY" != "0" ]; then
     echo "warning: deployed with $DIRTY uncommitted file(s) under the backend's sources; the marker records ${SHA:0:7}, which does not include them" >&2
 fi
 MARK_DRY=""
 case " $* " in *" --dry-run "*) MARK_DRY="--dry-run" ;; esac
-if ! command -v cast >/dev/null 2>&1; then
+MARK_EXTRA=()
+[ "$DIRTY" != "0" ] && MARK_EXTRA+=(--dirty "$DIRTY")
+# A deploy codecast asked for (dp-N, run by the line-deploy graph) is finished with the sha that actually went out.
+[ -n "${CAST_DEPLOY_ID:-}" ] && MARK_EXTRA+=(--deploy "$CAST_DEPLOY_ID")
+if [ -n "${CAST_SHIP:-}" ] && [ -z "${CAST_DEPLOY_ID:-}" ]; then
+    # Under `cast ship checkout` the ship records this deploy after its push, with the sha it pushed (deploys.md DP11).
+    echo "deploy marker left to the ship, which records it after the push" >&2
+elif ! command -v cast >/dev/null 2>&1; then
     echo "warning: deploy marker skipped: cast is not on PATH" >&2
-elif CAST_HTTP_TIMEOUT_MS=15000 cast ship mark --surface backend --sha "$SHA" $MARK_DRY; then
+elif CAST_HTTP_TIMEOUT_MS=15000 cast ship mark --surface backend --sha "$SHA" ${MARK_EXTRA[@]+"${MARK_EXTRA[@]}"} $MARK_DRY; then
     :
 else
     echo "warning: deploy marker for backend at ${SHA:0:7} not recorded; the deploy itself succeeded" >&2

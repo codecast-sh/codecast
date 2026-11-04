@@ -58,7 +58,8 @@ export function pipelineFigures(map: FlowMap | null, forYou: number): Record<Pip
   const off = src.filter((s) => s.route === "off").length;
   const stopped = src.filter((s) => s.state === "stopped" && s.route !== "unfiled").length;
   const signalState: StageFigure["state"] = [
-    ...(stopped ? [{ words: `${stopped} stopped`, tone: "bad" as const }] : []),
+    // "Silent", not "stopped" or "down": a signal kind that went quiet, never the Ops home's Source down (an event source that cannot deliver).
+    ...(stopped ? [{ words: `${stopped} silent`, tone: "bad" as const }] : []),
     ...(unfiled ? [{ words: `${unfiled} not filed`, tone: "bad" as const }] : []),
     ...(off ? [{ words: `${off} off the flow`, tone: "warn" as const }] : []),
   ];
@@ -71,7 +72,7 @@ export function pipelineFigures(map: FlowMap | null, forYou: number): Record<Pip
     ];
   const h = map?.header;
   return {
-    signals: { n: map ? src.length : null, unit: src.length === 1 ? "source" : "sources", state: map ? (signalState.length ? signalState : [{ words: "all flowing", tone: "ok" }]) : [] },
+    signals: { n: map ? src.length : null, unit: src.length === 1 ? "feed" : "feeds", state: map && src.length ? (signalState.length ? signalState : [{ words: "all flowing", tone: "ok" }]) : [] },
     problems: { n: h ? h.problemsOpen : null, unit: "open", state: h ? [{ words: `${h.problemsScored.toLocaleString()} scored`, tone: "ok" }] : [] },
     flows: { n: map ? (live?.running ?? 0) + (map.off.running ?? 0) : null, unit: "running", state: flowState },
     decisions: { n: forYou, unit: "for you", state: h ? [{ words: `${h.decisionsForTeam.toLocaleString()} for the team`, tone: h.decisionsForTeam ? "ask" : "calm" }] : [] },

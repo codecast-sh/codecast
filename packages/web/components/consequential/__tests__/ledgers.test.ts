@@ -64,3 +64,17 @@ test("start these again at the line's pace: what starts now, what waits, and the
   // Nothing free: the press is blocked with the reason.
   assert.equal(L.startTheseAgainLedger({ cause: "x", count: 0, rest: 4, slots: 5, projects: [], hold: "All 5 places taken" }).blocked, "All 5 places taken");
 });
+
+test("rotating a key says what the old key carries and when it stops, at a glance", () => {
+  const kept = L.rotateKeyLedger({ source: "union-errors", prefix: "cc_ing_ab12", events24h: 2001, choice: "24h more" });
+  const ended = L.rotateKeyLedger({ source: "union-errors", prefix: "cc_ing_ab12", events24h: 2001, choice: "Ends now" });
+  for (const l of [kept, ended]) assertGlance(l);
+  assert.equal(kept.alert, undefined);
+  assert.deepEqual(kept.figures.map((f) => f.value), ["2,001", "In 24h"]);
+  // Ending the old key at once refuses a busy source's sends: said loudest, before the confirm.
+  assert.equal(ended.alert, "Sends refused until redeploy");
+  assert.deepEqual(ended.figures.map((f) => [f.value, f.tone]), [["2,001", "warn"], ["Now", "warn"]]);
+  assert.deepEqual(ended.pick, { k: "Old key", options: L.OLD_KEY_CHOICES, value: "Ends now" });
+  // A source that sent nothing loses nothing: no alarm.
+  assert.equal(L.rotateKeyLedger({ source: "quiet", events24h: 0, choice: "Ends now" }).alert, undefined);
+});

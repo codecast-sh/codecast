@@ -9,6 +9,7 @@
 // runtime all load it, which is why the key helpers use globalThis.crypto.
 import type { SignalKind } from "./signalFingerprint";
 import { JUDGE_BACKENDS, MOMENT_RETENTIONS, MOMENT_STORAGES, validateMomentEvent, type MomentEventItem } from "./moments";
+import { isCiRunSeries, parseVolumeQuery } from "./volumeWatch";
 
 // ── Sources ──
 
@@ -212,6 +213,8 @@ export const GROUP_RULES = {
   job_burst_window_ms: 3600_000,
   job_cooldown_ms: 6 * 3600_000,
   bucket_hours: 72,
+  /** Daily counts a group keeps (its `days`), the issue chart's 7d, 30d and 90d. */
+  day_buckets: 90,
   samples_per_group: 20,
   metric_points: 60,
 } as const;
@@ -268,7 +271,7 @@ export const PENDING_EVENTS_CAP = 20;
  * connector's reader that answers one number (`reader`, query
  * `<reader name> [json args]`, answer METRIC_READER_ANSWER).
  */
-export const WATCH_KINDS = ["hogql", "insight", "reader"] as const;
+export const WATCH_KINDS = ["hogql", "insight", "reader", "volume"] as const;
 export type WatchKind = (typeof WATCH_KINDS)[number];
 
 /**
@@ -329,6 +332,46 @@ export const METRIC_NO_HISTORY = {
 
 /** A watch's last history read, as stored on it: when, how many past points it added, why none, or still reading. */
 export type MetricWatchHistory = { at: number; added: number; note?: string; reading?: boolean };
+
+/** Which watch kinds a source can answer. A provider absent here has no polled metrics. */
+export const WATCH_KINDS_BY_PROVIDER: Partial<Record<SourceProvider, readonly WatchKind[]>> = {
+  posthog: ["hogql", "insight"],
+  app: ["reader"],
+  // What codecast counts itself (contracts/volumeWatch): every source that sends errors, logs or runs.
+  sentry: ["volume"],
+  sdk: ["volume"],
+  http: ["volume"],
+  github: ["volume"],
+};
+
+// PostHog insight refs are numeric ids or short ids, checked so a value can never steer a request to another path.
+const INSIGHT_REF = /^(\d{1,12}|[A-Za-z0-9_-]{1,32})$/;
+
+export function validWatchQuery(kind: "hogql" | "insight", query: string): string | null {
+  const q = query.trim();
+  if (!q) return kind === "hogql" ? "A HogQL watch needs a query" : "An insight watch needs an insight id";
+  if (q.length > METRIC_WATCH_LIMITS.query_chars) return `The query is over ${METRIC_WATCH_LIMITS.query_chars} characters`;
+  if (kind === "insight" && !INSIGHT_REF.test(q)) return `"${q.slice(0, 40)}" is not a PostHog insight id or short id`;
+  return null;
+}
+
+/** Why a watch cannot be made on this source, or null: the server's check (metrics.createWatch, updateWatch) and the web form's. */
+export function watchProblem(provider: SourceProvider, kind: WatchKind, queryText: string, threshold: number | undefined): string | null {
+  const kinds = WATCH_KINDS_BY_PROVIDER[provider];
+  if (!kinds?.includes(kind)) return `${/^[aeiou]/.test(provider) ? "An" : "A"} ${provider} source cannot watch a ${kind} metric${kinds ? ` (it takes ${kinds.join(" or ")})` : ""}`;
+  if (threshold !== undefined && !Number.isFinite(threshold)) return "The threshold must be a number";
+  if (kind === "hogql" || kind === "insight") return validWatchQuery(kind, queryText);
+  if (kind === "reader") {
+    const parsed = parseReaderQuery(queryText);
+    return "error" in parsed ? parsed.error : null;
+  }
+  if (kind === "volume") {
+    const parsed = parseVolumeQuery(queryText);
+    if ("error" in parsed) return parsed.error;
+    return isCiRunSeries(parsed.series) && provider !== "github" ? "Run time and failure rate come from a CI source" : null;
+  }
+  return null;
+}
 
 export const PASSTHROUGH_MAX_BYTES = 256 * 1024;
 

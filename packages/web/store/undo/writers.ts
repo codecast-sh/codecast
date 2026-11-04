@@ -301,7 +301,9 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   migrationBatches:
     "Written only by startResourceOffload and cancelResourceOffload, which start or cancel a migration batch on hosts; machine control is never undoable.",
   opsSources:
-    "Written by createOpsSource, removeOpsSource, setOpsSourceStatus and the replay import's start and stop: a create, a delete, a setting and a running job, none of them undoable.",
+    "Written by createOpsSource, removeOpsSource, setOpsSourceStatus, setOpsSourceProject and the replay import's start and stop: a create, a delete, a setting and a running job, none of them undoable.",
   opsGroups:
-    "Written only by setOpsGroupStatus, triage (resolve, ignore, reopen) on one status control; never undoable.",
+    "Written by setOpsGroupStatus, triage (resolve, ignore, reopen) on one status control, setOpsGroupFix, which records a fix session already started, and setOpsGroupTask, which re-points or unlinks the problem task on the same Fix card; never undoable.",
+  opsWatches:
+    "Written by updateOpsWatch, removeOpsWatch and the history read: a setting changed back on the same editor, a delete, and a running job, none of them undoable.",
 };

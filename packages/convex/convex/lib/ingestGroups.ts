@@ -20,6 +20,7 @@ import {
 import {
   checkFingerprint,
   groupFingerprint,
+  failureMessageKey,
   jobFingerprint,
   metricFingerprint,
   sdkErrorFingerprint,
@@ -68,6 +69,72 @@ export function addToBuckets(buckets: Bucket[], at: number, n: number, now: numb
   if (hit) hit.count += n;
   else out.push({ hour, count: n });
   return out.sort((a, b) => a.hour - b.hour);
+}
+
+// ── Daily counts: an issue's history past the hourly window ──
+
+const DAY_MS_COUNTS = 24 * HOUR_MS;
+
+/** One UTC day's occurrences. `day` is the day's start in ms. */
+export type DayBucket = { day: number; count: number };
+
+export function dayStart(at: number): number {
+  return Math.floor(at / DAY_MS_COUNTS) * DAY_MS_COUNTS;
+}
+
+/** Days inside the window (GROUP_RULES.day_buckets), oldest first. */
+export function pruneDays(days: DayBucket[], now: number): DayBucket[] {
+  const oldest = dayStart(now) - (GROUP_RULES.day_buckets - 1) * DAY_MS_COUNTS;
+  return days.filter((d) => d.day >= oldest);
+}
+
+/**
+ * A group's daily counts as it starts keeping them: its hourly buckets folded
+ * into days, so a group that predates daily counts has its last 72 hours at
+ * once rather than an empty history.
+ */
+export function seedDays(buckets: Bucket[]): DayBucket[] {
+  const byDay = new Map<number, number>();
+  for (const b of buckets) byDay.set(dayStart(b.hour), (byDay.get(dayStart(b.hour)) ?? 0) + b.count);
+  return [...byDay].map(([day, count]) => ({ day, count })).sort((a, b) => a.day - b.day);
+}
+
+/** One thing a job's failures said, how often, and over when (failureMessageKey). */
+export type MessageTally = { key: string; count: number; first_seen: number; last_seen: number };
+
+/** How many distinct failure messages a job group keeps apart; the rest count under OTHER_MESSAGES. */
+export const MESSAGE_KEYS_MAX = 12;
+export const OTHER_MESSAGES = "(other messages)";
+
+/**
+ * A job group's failures by what they said, with a batch's added. Past
+ * MESSAGE_KEYS_MAX distinct keys a new one counts under OTHER_MESSAGES, so the
+ * rows always sum to every failure counted since the tally began.
+ */
+export function tallyMessages(prev: MessageTally[] | undefined, items: { message?: string; at: number }[]): MessageTally[] {
+  const out = (prev ?? []).map((m) => ({ ...m }));
+  for (const it of items) {
+    let key = failureMessageKey(it.message) || "(no message)";
+    if (!out.some((m) => m.key === key) && out.filter((m) => m.key !== OTHER_MESSAGES).length >= MESSAGE_KEYS_MAX) key = OTHER_MESSAGES;
+    const hit = out.find((m) => m.key === key);
+    if (hit) {
+      hit.count += 1;
+      hit.first_seen = Math.min(hit.first_seen, it.at);
+      hit.last_seen = Math.max(hit.last_seen, it.at);
+    } else out.push({ key, count: 1, first_seen: it.at, last_seen: it.at });
+  }
+  return out.sort((a, b) => b.count - a.count);
+}
+
+/** The days with `n` more occurrences on the day of `at`, pruned to the window; a group without days is seeded from its hours first. */
+export function addToDays(days: DayBucket[] | undefined, buckets: Bucket[], at: number, n: number, now: number): DayBucket[] {
+  const out = pruneDays(days ?? seedDays(buckets), now).map((d) => ({ ...d }));
+  const day = dayStart(at);
+  if (n <= 0 || day < dayStart(now) - (GROUP_RULES.day_buckets - 1) * DAY_MS_COUNTS) return out;
+  const hit = out.find((d) => d.day === day);
+  if (hit) hit.count += n;
+  else out.push({ day, count: n });
+  return out.sort((a, b) => a.day - b.day);
 }
 
 // ── Analytics events, counted not stored (X2) ──
@@ -157,14 +224,41 @@ export interface GroupState {
   first_seen: number;
   last_seen: number;
   buckets: Bucket[];
+  /** Daily counts over GROUP_RULES.day_buckets days; absent on a group that predates them. */
+  days?: DayBucket[];
   first_release?: string;
   last_release?: string;
   resolved_at?: number;
   resolved_in?: string;
+  /** What put it to rest: a person's resolve, a check or metric's own recovery, or the vendor's resolve. */
+  resolved_via?: ResolvedVia;
+  /** The person who resolved it (resolved_via "person"); cleared when anything else resolves it. */
+  resolved_by?: string;
   regressed_at?: number;
+  /** The release the regression came back in, stamped when it does. */
+  regressed_in?: string;
+  /** A check or metric's flips to failing over the last FLAP_WINDOW_MS, oldest first: what tells a flapping monitor from a fresh alert. */
+  failed_at?: number[];
   last_transition?: Transition;
   last_transition_at?: number;
   meta?: { ok?: boolean };
+}
+
+export type ResolvedVia = "person" | "recovered" | "vendor";
+
+/** How far back a group keeps its flips to failing, and at most how many. */
+export const FLAP_WINDOW_MS = 7 * 24 * HOUR_MS;
+const FLAP_KEEP = 12;
+
+/** The flips to failing with one more at `at`, inside the window. */
+export function addFailure(failedAt: number[] | undefined, at: number): number[] {
+  return [...(failedAt ?? []).filter((t) => t > at - FLAP_WINDOW_MS && t !== at), at].sort((a, b) => a - b).slice(-FLAP_KEEP);
+}
+
+/** A resolve the rules make themselves (a recovery, the vendor's): it names no person. */
+function resolvedBy(next: GroupState, via: Exclude<ResolvedVia, "person">): void {
+  next.resolved_via = via;
+  next.resolved_by = undefined;
 }
 
 export interface Occurrence {
@@ -223,14 +317,15 @@ function firstOccurrence(occ: Occurrence, now: number): { next: GroupState; tran
     first_seen: occ.at,
     last_seen: occ.at,
     buckets: addToBuckets([], occ.at, 1, now),
+    days: addToDays([], [], occ.at, 1, now),
     ...(occ.release ? { first_release: occ.release, last_release: occ.release } : {}),
   };
   const state = STATE_TRANSITIONS[occ.kind];
   if (state) {
     // A state seen ok first is on record so its first failure is a flip; its
     // count and buckets measure failures only.
-    if (occ.ok !== false) return { next: { ...base, status: "resolved", count: 0, buckets: [], meta: { ok: true } } };
-    return announce({ ...base, meta: { ok: false } }, state.failed, occ.at);
+    if (occ.ok !== false) return { next: { ...base, status: "resolved", count: 0, buckets: [], days: [], meta: { ok: true } } };
+    return announce({ ...base, meta: { ok: false }, failed_at: [occ.at] }, state.failed, occ.at);
   }
   return announce(base, occ.kind === "job" ? "job_failed" : "new", occ.at);
 }
@@ -260,6 +355,7 @@ export function applyOccurrence(prev: GroupState | null, occ: Occurrence, now: n
     if (!ok) {
       next.count += 1;
       next.buckets = addToBuckets(next.buckets, occ.at, 1, now);
+      next.days = addToDays(prev.days, prev.buckets, occ.at, 1, now);
     }
     next.meta = { ...next.meta, ok };
     // A check that stays red (a metric that stays across its line) is counted, not re-announced.
@@ -267,14 +363,17 @@ export function applyOccurrence(prev: GroupState | null, occ: Occurrence, now: n
     if (ok) {
       next.status = "resolved";
       next.resolved_at = occ.at;
+      resolvedBy(next, "recovered");
       return announce(next, state.recovered, occ.at);
     }
     next.status = "open";
+    next.failed_at = addFailure(prev.failed_at, occ.at);
     return announce(next, state.failed, occ.at);
   }
 
   next.count += 1;
   next.buckets = addToBuckets(next.buckets, occ.at, 1, now);
+  next.days = addToDays(prev.days, prev.buckets, occ.at, 1, now);
   if (silenced(prev.status)) return { next };
 
   if (prev.status === "resolved") {
@@ -283,6 +382,7 @@ export function applyOccurrence(prev: GroupState | null, occ: Occurrence, now: n
     if (prev.kind !== "job" && prev.resolved_in && occ.release && isOlderRelease(occ.release, prev.resolved_in)) return { next };
     next.status = "open";
     next.regressed_at = occ.at;
+    next.regressed_in = occ.release;
     return announce(next, prev.kind === "job" ? "job_failed" : "regressed", occ.at);
   }
 
@@ -375,6 +475,8 @@ export function overlayBuckets(buckets: Bucket[], hourly: Bucket[], now: number)
 export function applyMirror(prev: GroupState | null, snap: MirrorSnapshot, now: number, since: number): { next: GroupState; transitions: TransitionAt[] } {
   const delta = Math.max(0, snap.count - (prev?.count ?? 0));
   const buckets = snap.hourly ? overlayBuckets(prev?.buckets ?? [], snap.hourly, now) : addToBuckets(prev?.buckets ?? [], snap.last_seen, delta, now);
+  // A first read's count is the vendor's whole history, which belongs to no one day: its days start from the hours it reports.
+  const days = prev ? addToDays(prev.days, prev.buckets, snap.last_seen, delta, now) : seedDays(buckets);
   const firstRelease = prev?.first_release ?? snap.first_release ?? snap.release;
   const lastRelease = snap.release ?? prev?.last_release;
   const base = {
@@ -383,6 +485,7 @@ export function applyMirror(prev: GroupState | null, snap: MirrorSnapshot, now: 
     first_seen: Math.min(prev?.first_seen ?? snap.first_seen, snap.first_seen),
     last_seen: Math.max(prev?.last_seen ?? snap.last_seen, snap.last_seen),
     buckets,
+    days,
     ...(firstRelease ? { first_release: firstRelease } : {}),
     ...(lastRelease ? { last_release: lastRelease } : {}),
   };
@@ -393,8 +496,8 @@ export function applyMirror(prev: GroupState | null, snap: MirrorSnapshot, now: 
     const next: GroupState = {
       ...base,
       status: snap.status,
-      ...(snap.regressed ? { regressed_at: snap.last_seen } : {}),
-      ...(snap.status === "resolved" ? { resolved_at: now, ...(snap.resolved_in ? { resolved_in: snap.resolved_in } : {}) } : {}),
+      ...(snap.regressed ? { regressed_at: snap.last_seen, ...(snap.release ? { regressed_in: snap.release } : {}) } : {}),
+      ...(snap.status === "resolved" ? { resolved_at: now, resolved_via: "vendor" as const, ...(snap.resolved_in ? { resolved_in: snap.resolved_in } : {}) } : {}),
     };
     return snap.status === "open" && snap.first_seen >= since ? one(next, "new", snap.first_seen) : none(next);
   }
@@ -407,6 +510,7 @@ export function applyMirror(prev: GroupState | null, snap: MirrorSnapshot, now: 
     next.status = "resolved";
     next.resolved_at = now;
     next.resolved_in = snap.resolved_in;
+    resolvedBy(next, "vendor");
     return prev.status === "ignored" ? none(next) : one(next, "resolved", now);
   }
   if (snap.status !== "open") {
@@ -422,6 +526,7 @@ export function applyMirror(prev: GroupState | null, snap: MirrorSnapshot, now: 
     if (!snap.regressed && snap.last_seen <= (prev.resolved_at ?? 0)) return none(next);
     next.status = "open";
     next.regressed_at = snap.last_seen;
+    next.regressed_in = snap.release;
     return one(next, "regressed", snap.last_seen);
   }
   // Open here and open there. A regression the vendor reports that this group
@@ -429,6 +534,7 @@ export function applyMirror(prev: GroupState | null, snap: MirrorSnapshot, now: 
   const announced = prev.regressed_at !== undefined && prev.regressed_at >= (prev.resolved_at ?? 0);
   if (snap.regressed && !announced) {
     next.regressed_at = snap.last_seen;
+    next.regressed_in = snap.release;
     return one(next, "regressed", snap.last_seen);
   }
   const hour = hourStart(now);
@@ -460,6 +566,46 @@ export interface SampleInput {
   replay_external_id?: string;
 }
 
+/**
+ * Why a kept sample is held past the newest few: the group's first, the first
+ * of a release it had not been seen in, the first of a day. The trim takes
+ * unpinned samples first, so a busy group's samples reach back over its life
+ * (and its tag shares cover more than its last minute).
+ */
+export type SamplePin = "first" | "release" | "day";
+const PIN_DAY_MS = 24 * 3600_000;
+
+/** The pin each kept sample carries, in `keep`'s order: the oldest sample of a batch earns each pin once. */
+export function samplePins(keep: readonly Pick<SampleInput, "at" | "release">[], prior: { samples: number; last_release?: string; last_seen?: number } | null): (SamplePin | undefined)[] {
+  const out: (SamplePin | undefined)[] = keep.map(() => undefined);
+  const order = keep.map((k, i) => ({ at: k.at, release: k.release, i })).sort((a, b) => a.at - b.at);
+  const releases = new Set<string>();
+  const days = new Set<number>();
+  for (const [n, k] of order.entries()) {
+    const day = Math.floor(k.at / PIN_DAY_MS);
+    if (n === 0 && (!prior || prior.samples === 0)) out[k.i] = "first";
+    else if (k.release && k.release !== prior?.last_release && !releases.has(k.release)) out[k.i] = "release";
+    else if (prior?.last_seen !== undefined && day > Math.floor(prior.last_seen / PIN_DAY_MS) && !days.has(day)) out[k.i] = "day";
+    if (k.release) releases.add(k.release);
+    days.add(day);
+  }
+  return out;
+}
+
+/** Extra oldest samples the trim reads past the overflow, so it can pass over pinned ones. */
+export const SAMPLE_TRIM_LOOKAHEAD = 8;
+
+/**
+ * Which of a group's oldest samples (oldest first) the trim deletes to drop
+ * `over`: unpinned ones first, then day and release pins, oldest first; the
+ * first sample only when nothing else is left.
+ */
+export function samplesToTrim<T extends { at: number; pin?: string }>(oldest: readonly T[], over: number): T[] {
+  if (over <= 0) return [];
+  const rank = (r: T) => (!r.pin ? 0 : r.pin === "first" ? 2 : 1);
+  return [...oldest].sort((a, b) => rank(a) - rank(b) || a.at - b.at).slice(0, over);
+}
+
 export type ItemPlan =
   | {
       type: "group";
@@ -474,7 +620,7 @@ export type ItemPlan =
       occurrence: Occurrence;
       sample: SampleInput;
       /** Fields the group's meta takes from this occurrence beyond the rules' own (a metric's value and line). */
-      meta?: MetricMeta;
+      meta?: MetricMeta | CheckPassMeta;
     }
   | { type: "deploy"; version: string; sha?: string; environment?: string; at: number; url?: string; actor?: string; previous_sha?: string; commits?: Array<{ sha: string; subject: string; author?: string }> }
   /** Accepted and counted, never grouped: analytics events, logs below warn, replay manifests (X5 owns those). */
@@ -540,6 +686,7 @@ export function planItem(item: IngestItem, envelope: { release?: string; environ
         title: item.title ?? item.id,
         occurrence: occurrence("check", { ok: item.ok }),
         sample: { ...sampleBase, message: item.detail ?? (item.ok ? "ok" : "failed") },
+        ...(item.ok !== false ? { meta: { last_ok_at: item.at } } : {}),
       });
     case "deploy":
       return { type: "deploy", version: item.version, sha: item.sha, environment: item.environment ?? environment, at: item.at, url: item.url, actor: item.actor, previous_sha: item.previous_sha, commits: item.commits };
@@ -580,6 +727,15 @@ export function planReplayIssue(issue: ReplayIssue, replay: ReplayRef): Extract<
 // ── Watched metrics (X7) ──
 
 export type MetricDirection = "above" | "below";
+
+/** A passing check reading on record: what a later failure names as its last green. */
+export interface CheckPassMeta {
+  value?: undefined;
+  threshold?: undefined;
+  last_ok_at: number;
+  last_ok_sha?: string;
+  last_ok_branch?: string;
+}
 
 export interface MetricMeta {
   value: number;
@@ -632,15 +788,20 @@ export type HistorySpan = { now: number; oldest: number | null; interval_ms: num
  * The past instants a backfill reads a watch at, oldest first: a day apart
  * when the query's window is a day or more (a daily count read hourly would
  * repeat itself 24 times), else one poll interval apart. They run back from
- * the oldest point the watch already holds, stay within `days`, and stop at
- * GROUP_RULES.metric_points, all the row keeps.
+ * the oldest point the watch already holds and stay within `days`. One read
+ * per instant, so there are at most METRIC_HISTORY_READS of them: when the
+ * span holds more, the step widens to a whole multiple of the base one that
+ * covers it, and the history is coarser rather than shorter.
  */
+export const METRIC_HISTORY_READS = 100;
+
 export function historyInstants(span: HistorySpan, window_ms: number | null): number[] {
-  const step = window_ms !== null && window_ms >= DAY_MS ? DAY_MS : span.interval_ms;
+  const base = window_ms !== null && window_ms >= DAY_MS ? DAY_MS : span.interval_ms;
   const from = Math.min(span.oldest ?? span.now, span.now);
   const floor = span.now - span.days * DAY_MS;
+  const step = base * Math.max(1, Math.ceil((from - floor) / base / METRIC_HISTORY_READS));
   const out: number[] = [];
-  for (let at = from - step; at > floor && out.length < GROUP_RULES.metric_points; at -= step) out.push(at);
+  for (let at = from - step; at > floor && out.length < METRIC_HISTORY_READS; at -= step) out.push(at);
   return out.reverse();
 }
 
@@ -654,13 +815,15 @@ export function planMetric(
   watch: { short_id: string; name: string; threshold: number; direction: MetricDirection; id?: string },
   value: number,
   at: number,
+  /** The monitor's verdict (contracts/metricMonitor nextMonitorState) when it is more than this one value, and the sample's words when there is no value (missing data). */
+  opts: { ok?: boolean; message?: string } = {},
 ): Extract<ItemPlan, { type: "group" }> {
-  const crossed = metricCrosses(value, watch.threshold, watch.direction);
+  const crossed = opts.ok === undefined ? metricCrosses(value, watch.threshold, watch.direction) : !opts.ok;
   const line = `${watch.direction} ${watch.threshold}`;
   return group("metric", metricFingerprint(watch.short_id), {
     title: titleOf(`${watch.name} ${line}`),
     occurrence: { kind: "metric", at, ok: !crossed },
-    sample: { at, message: `${watch.name} = ${value} (alerts ${line})` },
+    sample: { at, message: opts.message ?? `${watch.name} = ${value} (alerts ${line})` },
     meta: { value, threshold: watch.threshold, direction: watch.direction, ...(watch.id ? { metric_watch_id: watch.id } : {}) },
   }) as Extract<ItemPlan, { type: "group" }>;
 }

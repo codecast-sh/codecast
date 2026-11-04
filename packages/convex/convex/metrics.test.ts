@@ -4,9 +4,9 @@ import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import { GROUP_RULES, METRIC_WATCH_LIMITS } from "@codecast/shared/contracts/ingest";
 import { createSource, sourceConnectionLost } from "./ingest";
-import { createWatch, getWatch, historyInputs, listWatches, loadHistory, pollDue, pollInputs, pollWatch, readHistory, recordHistory, recordPoint, removeWatch, updateWatch } from "./metrics";
+import { createWatch, getWatch, historyInputs, listWatches, loadHistory, pollDue, pollInputs, pollWatch, readHistory, readNow, recordHistory, recordPoint, removeWatch, updateWatch, volumeRead } from "./metrics";
 import { bindHogqlNow, fetchMetricHistory, insightSeries, sourceForPoll } from "./sources/posthog";
-import { historyInstants, mergeMetricHistory } from "./lib/ingestGroups";
+import { METRIC_HISTORY_READS, historyInstants, mergeMetricHistory } from "./lib/ingestGroups";
 import { encryptConnectionSecret, tokenConnectionRow } from "./tokenConnectors";
 
 const h = (fn: any) => fn._handler;
@@ -381,6 +381,24 @@ describe("history", () => {
     expect(w.scheduled.filter((x) => x.name === "metrics:readHistory").map((x) => x.args.watch_id)).toEqual([row._id]);
   });
 
+  test("read now polls each active watch in reach at once and moves its next check a full interval out", async () => {
+    const w = world();
+    const a = await watch(w);
+    const b = (await h(createWatch)(w.as("u1"), { ...TEAM, source: "product", name: "b", query_kind: "insight", query: "42", threshold: 1, direction: "above" })).watch;
+    w.db._tables.metric_watches.find((r: any) => r._id === b._id).status = "paused";
+    w.scheduled.length = 0;
+    const before = Date.now();
+    const out = await h(readNow)(w.as("u1"), { watches: [a.short_id, b.short_id, "mw-999"] });
+    expect(out.scheduled).toEqual([a.short_id]);
+    expect(w.scheduled.filter((x) => x.name === "metrics:pollWatch").map((x) => x.args.watch_id)).toEqual([a._id]);
+    const row = w.db._tables.metric_watches.find((r: any) => r._id === a._id);
+    expect(row.next_check_at).toBeGreaterThanOrEqual(before + row.interval_ms);
+    // Another workspace's caller reaches nothing.
+    w.scheduled.length = 0;
+    expect((await h(readNow)(w.as("u2"), { watches: [a.short_id] })).scheduled).toEqual([]);
+    expect(w.scheduled).toHaveLength(0);
+  });
+
   test("load reads every watch in reach, HogQL ones too, one source's in turn; a paused source says why it has none", async () => {
     const w = world();
     const hog = await watch(w);
@@ -495,9 +513,18 @@ describe("history instants", () => {
     expect(out).toEqual([...out].sort((a, b) => a - b));
   });
 
-  test("a shorter window reads one per interval, capped at metric_points", () => {
+  test("a shorter window reads at most METRIC_HISTORY_READS instants, spread over the whole span", () => {
     const out = historyInstants({ now: NOW, oldest: null, interval_ms: 3600_000, days: 30 }, 3600_000);
-    expect(out).toHaveLength(GROUP_RULES.metric_points);
+    expect(out.length).toBeLessThanOrEqual(METRIC_HISTORY_READS);
+    // 720 hourly instants do not fit, so the step widens to 8h and still reaches back 30 days.
+    expect(out[out.length - 1]).toBe(NOW - 8 * 3600_000);
+    expect(out[0]).toBeGreaterThan(NOW - 30 * DAY);
+    expect(out[0]).toBeLessThanOrEqual(NOW - 29 * DAY);
+  });
+
+  test("a span that fits reads one per interval", () => {
+    const out = historyInstants({ now: NOW, oldest: null, interval_ms: 3600_000, days: 2 }, 3600_000);
+    expect(out).toHaveLength(47);
     expect(out[out.length - 1]).toBe(NOW - 3600_000);
   });
 
@@ -613,5 +640,56 @@ describe("history queue and busy retries", () => {
     const out = await fetchMetricHistory(conn, { query_kind: "hogql", query: "select count() from events where timestamp > now() - interval 1 day" }, { now, oldest: null, interval_ms: 3600_000, days: 2 }, fetchImpl, async (ms) => void waits.push(ms));
     expect(out).toEqual({ ok: true, points: [{ at: now - 86_400_000, value: 7 }] });
     expect(waits).toHaveLength(2);
+  });
+});
+
+describe("volume watches", () => {
+  test("an SDK source's events per hour and new issues poll from codecast's own counters, with their past backfilled", async () => {
+    const w = world();
+    (w.db._tables as any).event_source_stats = [];
+    (w.db._tables as any).metric_points = [];
+    (w.db._tables as any).metric_rollups = [];
+    await h(createSource)(w.as("u1"), { ...TEAM, name: "web", provider: "sdk" });
+    const src = w.db._tables.event_sources[0];
+    const hour = Math.floor(Date.now() / 3600_000) * 3600_000;
+    w.db._tables.event_source_stats.push({ _id: "st1", source_id: src._id, workspace: src.workspace, hours: [{ hour: hour - 2 * 3600_000, events: 40 }, { hour: hour - 3600_000, events: 75 }, { hour, events: 3 }] });
+    w.db._tables.event_groups.push({ _id: "g1", source_id: src._id, workspace: src.workspace, first_seen: Date.now() - 3600_000, last_seen: Date.now(), status: "open", kind: "error" });
+    const made = (await h(createWatch)(w.as("u1"), { ...TEAM, source: "web", name: "Errors per hour", query_kind: "volume", query: "events", threshold: 50, direction: "above" })).watch;
+    await expect(h(createWatch)(w.as("u1"), { ...TEAM, source: "web", name: "x", query_kind: "volume", query: "SELECT 1" })).rejects.toThrow(/volume watch reads/);
+    const handlers: Record<string, any> = { "metrics:pollInputs": pollInputs, "metrics:volumeRead": volumeRead, "metrics:recordPoint": recordPoint, "metrics:historyInputs": historyInputs, "metrics:recordHistory": recordHistory };
+    const route = async (fn: any, args: any) => h(handlers[getFunctionName(fn)])(w.internalCtx, args);
+    globalThis.fetch = (async () => { throw new Error("must not fetch"); }) as any;
+    // The last full hour, not the three events of the hour still running.
+    expect(await h(pollWatch)({ runQuery: route, runMutation: route }, { watch_id: made._id })).toEqual({ value: 75 });
+    expect(w.db._tables.metric_watches[0]).toMatchObject({ state: "alert", points: [{ value: 75 }] });
+    const past = await h(readHistory)({ runQuery: route, runMutation: route, scheduler: w.scheduler }, { watch_id: made._id });
+    expect(past.added).toBeGreaterThan(0);
+    const issues = (await h(createWatch)(w.as("u1"), { ...TEAM, source: "web", name: "New issues", query_kind: "volume", query: "new_issues" })).watch;
+    expect(await h(pollWatch)({ runQuery: route, runMutation: route }, { watch_id: issues._id })).toEqual({ value: 1 });
+  });
+});
+
+describe("a watch's own alert route", () => {
+  test("timeline only keeps a promoting source's alert off the task list; problem task files one where the source would not", async () => {
+    const w = world();
+    await h(createSource)(w.as("u1"), { ...TEAM, name: "product", provider: "posthog", fingerprint_prefix: "union", promote: ["metric_alert"] });
+    const quiet = (await h(createWatch)(w.as("u1"), { ...TEAM, source: "product", name: "Errors", query_kind: "hogql", query: "select 1", threshold: 5, direction: "above" })).watch;
+    await h(updateWatch)(w.as("u1"), { ...TEAM, watch: quiet.short_id, on_alert: "timeline" });
+    expect(w.db._tables.metric_watches[0].on_alert).toBe("timeline");
+    await point(w, quiet._id, 9);
+    expect(w.scheduled.filter((s) => s.name === "ingest:promote")).toHaveLength(0);
+    // The transition still lands on the timeline.
+    expect(w.db._tables.external_events.some((e: any) => e.data?.transition === "metric_alert")).toBe(true);
+    // The source's own rule is untouched.
+    expect(w.db._tables.event_sources[0].promote).toEqual(["metric_alert"]);
+
+    await h(createSource)(w.as("u1"), { ...TEAM, name: "other", provider: "posthog", fingerprint_prefix: "other" });
+    const loud = (await h(createWatch)(w.as("u1"), { ...TEAM, source: "other", name: "Signups", query_kind: "hogql", query: "select 2", threshold: 5, direction: "above" })).watch;
+    await h(updateWatch)(w.as("u1"), { ...TEAM, watch: loud.short_id, on_alert: "task" });
+    await point(w, loud._id, 9);
+    expect(w.scheduled.find((s) => s.name === "ingest:promote")?.args).toMatchObject({ transition: "metric_alert" });
+    // null goes back to the source's rule.
+    await h(updateWatch)(w.as("u1"), { ...TEAM, watch: loud.short_id, on_alert: null });
+    expect(w.db._tables.metric_watches.find((r: any) => r.short_id === loud.short_id).on_alert).toBeUndefined();
   });
 });

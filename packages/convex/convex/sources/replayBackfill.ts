@@ -29,11 +29,13 @@ import { markConnectionLost } from "../lib/sourceHealth";
 import { replayBackfillValidator } from "../ingestSchema";
 import { sourceViewOf } from "../ingest";
 import { VendorCallError } from "./vendorReplay";
+import { TALLY_EVERY_MS } from "./replayRest";
 import { connFor, importFor, posthogRequest, recordingsPath } from "./posthog";
 import { connectionIdForSource, tokenFor } from "../tokenConnectors";
 import { importSentryReplay, nextCursor, replayListIds, replaysListUrl, resolveProjectIds, sentryCall, sentryTarget } from "./sentry";
 import {
   DEFAULT_REPLAY_BACKFILL_WINDOW,
+  REPLAY_BACKFILL_FAILURES_KEPT,
   REPLAY_BACKFILL_LIMITS,
   isReplayBackfillWindow,
   replayBackfillResumes,
@@ -171,6 +173,7 @@ export async function runBackfillPage(
         state.failed++;
         state.failures_in_row = (state.failures_in_row ?? 0) + 1;
         state.last_error = `${id}: ${r.error}`.slice(0, 500);
+        state.failures = [...(state.failures ?? []), { id: id.slice(0, 200), error: r.error.slice(0, 300) }].slice(-REPLAY_BACKFILL_FAILURES_KEPT);
         if (state.failures_in_row >= REPLAY_BACKFILL_LIMITS.failures_in_row) halt ??= { error: r.error };
       }
     }
@@ -358,8 +361,20 @@ export const savePage = internalMutation({
     if (!stoppedMeanwhile && state.status === "running" && args.next_in_ms !== undefined) {
       await ctx.scheduler.runAfter(args.next_in_ms, internal.sources.replayBackfill.runPage, { source_id: source._id, run: args.run });
     }
+    if (source.provider === "posthog") {
+      // New rows get PostHog's length and environment as they land (every 50 imported, and at the end), not at the next tend.
+      const finished = state.status !== "running" && current.status === "running";
+      if (state.imported > current.imported && (finished || Math.floor(state.imported / 50) > Math.floor(current.imported / 50))) {
+        await ctx.scheduler.runAfter(0, internal.sources.replayFacts.run, { source_id: source._id });
+      }
+      // The run is over: the rest of every recording it cut short is read next (sources/replayRest.ts sweep).
+      if (finished && state.status === "done") await ctx.scheduler.runAfter(FACTS_FIRST_MS, internal.sources.replayRest.sweep, { source_id: source._id });
+    }
   },
 });
+
+/** After a run, its facts are read before the sweep looks for cut recordings, so the lengths it compares are PostHog's. */
+const FACTS_FIRST_MS = 60_000;
 
 /** A stopped or dead run picked up from its cursor, as a new run. */
 function resumedState(current: ReplayBackfill, now: number): ReplayBackfill {
@@ -396,7 +411,9 @@ export function tendImport(state: ReplayBackfill | undefined, now: number): Repl
   if (replayBackfillStalled(state, now)) return resumedState(state, now);
   if (state.status === "error" && state.rate_limited_since !== undefined && now - state.updated_at >= REPLAY_FOLLOW.rate_limit_retry_ms) return resumedState(state, now);
   if (state.status !== "done" || now - (state.finished_at ?? state.updated_at) < REPLAY_FOLLOW.after_ms) return null;
-  const next: ReplayBackfill = { ...state, status: "running", since: state.until - REPLAY_FOLLOW.overlap_ms, until: now, started_at: now, updated_at: now };
+  // A follow-up counts its own recordings: the totals live in the recordings themselves (replays.browse), and a run's counts say what that run did.
+  const next: ReplayBackfill = { ...state, status: "running", since: state.until - REPLAY_FOLLOW.overlap_ms, until: now, started_at: now, updated_at: now, listed: 0, imported: 0, skipped: 0, failed: 0 };
+  delete next.failures;
   delete next.cursor;
   delete next.page_seen;
   delete next.finished_at;
@@ -415,6 +432,12 @@ export const tend = internalMutation({
     for (const provider of VENDORS) {
       const sources = await ctx.db.query("event_sources").withIndex("by_provider_status", (q) => q.eq("provider", provider).eq("status", "active")).take(500);
       for (const source of sources) {
+        // PostHog's own length, activity and environment for each recording (sources/replayFacts.ts); a quiet source costs no PostHog call.
+        if (provider === "posthog") await ctx.scheduler.runAfter(0, internal.sources.replayFacts.run, { source_id: source._id });
+        // The rest of every recording an import cut short, one at a time (sources/replayRest.ts sweep); nothing while a chain or this import runs.
+        if (provider === "posthog") await ctx.scheduler.runAfter(0, internal.sources.replayRest.sweep, { source_id: source._id });
+        // How many copies are still cut short, for the Replays tab's import line; recounted hourly.
+        if (provider === "posthog" && now - (source.replay_rest?.at ?? 0) >= TALLY_EVERY_MS) await ctx.scheduler.runAfter(0, internal.sources.replayRest.tally, { source_id: source._id });
         const next = tendImport(source.replay_backfill, now);
         if (!next) continue;
         await launch(ctx, source, next);

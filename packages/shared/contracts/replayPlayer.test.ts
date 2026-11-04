@@ -10,7 +10,9 @@ import {
   replayFrameSeenText,
   replayFrameTimes,
   replayPlayerUrl,
+  replayDomWindow,
   replayRefId,
+  replayWindowHolds,
 } from "./replayPlayer";
 
 describe("the player URL", () => {
@@ -63,5 +65,34 @@ describe("references", () => {
   test("a stretch is sampled at its start, every step, and its end", () => {
     expect(replayFrameTimes({ from_ms: 0, to_ms: 25_000 }, 10_000)).toEqual([0, 10_000, 20_000, 25_000]);
     expect(replayFrameTimes({ from_ms: 0, to_ms: 100_000 }, 10, 3)).toEqual([0, 1_000, 2_000]);
+  });
+});
+
+describe("a long capture's window (replayDomWindow)", () => {
+  const MB = 1024 * 1024;
+  // Ten 10 MB chunks a minute apart from t0 = 1000, full snapshots in chunks 0, 4 and 7.
+  const meta = Array.from({ length: 10 }, (_, i) => ({ first: 1000 + i * 60_000, last: 1000 + i * 60_000 + 59_000, raw: 10 * MB, ...([0, 4, 7].includes(i) ? { full: 1000 + i * 60_000 + 5 } : {}) }));
+
+  test("is null when the whole capture fits one load, or the spans are unknown", () => {
+    expect(replayDomWindow(meta, 1000, 0, 200 * MB)).toBeNull();
+    expect(replayDomWindow(null, 1000, 0)).toBeNull();
+    expect(replayDomWindow([], 1000, 0)).toBeNull();
+  });
+
+  test("starts at the last full snapshot before t and runs forward within the budget", () => {
+    const w = replayDomWindow(meta, 1000, 5 * 60_000 + 30_000, 40 * MB)!;
+    expect(w).toEqual({ from: 4, to: 7, start_ms: 4 * 60_000 + 5, end_ms: 7 * 60_000 + 59_000 });
+    expect(replayWindowHolds(w, 6 * 60_000)).toBe(true);
+    expect(replayWindowHolds(w, 9 * 60_000)).toBe(false);
+    expect(replayWindowHolds(w, 60_000)).toBe(false);
+  });
+
+  test("the first stretch starts at 0 and the last runs to the capture's end", () => {
+    expect(replayDomWindow(meta, 1000, 0, 30 * MB)).toEqual({ from: 0, to: 2, start_ms: 0, end_ms: 2 * 60_000 + 59_000 });
+    expect(replayDomWindow(meta, 1000, 9 * 60_000, 40 * MB)).toMatchObject({ from: 7, to: 9, end_ms: null });
+  });
+
+  test("always reaches the chunk holding t, past the budget if it must", () => {
+    expect(replayDomWindow(meta, 1000, 3 * 60_000 + 10_000, 15 * MB)).toMatchObject({ from: 0, to: 3 });
   });
 });

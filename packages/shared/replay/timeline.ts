@@ -75,7 +75,8 @@ function line(e: ReplayEvent, times: number, from: number): Entry {
     case "click":
       return entry(`click ${target(e)}${e.text && e.text !== e.label ? ` (text ${q(e.text)})` : ""}`);
     case "input":
-      return entry(`type into ${target(e)}: ${plural(e.length, "char")}${x}`);
+      // A field entered and left without typing reads as a focus, as the player's rail shows it.
+      return entry(e.length === 0 ? `focus ${target(e)}${x}` : `type into ${target(e)}: ${plural(e.length, "char")}${x}`);
     case "submit":
       return entry(`submit ${target(e)}`);
     case "key":
@@ -162,3 +163,12 @@ export function renderTimeline(input: readonly ReplayEvent[], opts: TimelineOpti
   return out.join("\n").slice(0, max);
 }
 
+/**
+ * A stored timeline in today's words: one written before an empty field read
+ * as a focus says "type into X: 0 chars", which the player's rail and a fresh
+ * render both call "focus X". Read paths pass stored text through this, so an
+ * agent and a person read the same row.
+ */
+export function currentTimelineText(md: string): string {
+  return md.replace(/^(- \S+ )type into (.+?): 0 chars( x\d+)?$/gm, "$1focus $2$3");
+}

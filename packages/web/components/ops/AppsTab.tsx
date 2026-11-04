@@ -7,35 +7,52 @@
 // open under the row that names them (appsModel.ts works all of it out).
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { ChevronRight, History, ShieldAlert } from "lucide-react";
+import { ChevronRight, History, Pause, Play, RefreshCw, ShieldAlert, Wand2 } from "lucide-react";
 import { activeGrant, grantableActions, parseAppManifest, sourceHasGrants, type AppManifest, type GrantableAction } from "@codecast/shared/contracts/appConnector";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useOpsApp, useOpsAppCalls, useOpsSources, useSyncOpsApp } from "../../hooks/useSyncOps";
+import { useOpsApp, useOpsAppCalls, useOpsSources, useOpsWatches, useSyncOpsApp } from "../../hooks/useSyncOps";
 import { useInboxStore } from "../../store/inboxStore";
 import { relTimeShort } from "../../lib/utils";
 import { Switch } from "../ui/switch";
 import { EntityIdPill } from "../EntityIdPill";
-import { appHealth, callReason, failingNow, groupCalls, groupState, groupTone, lastAnswered, lastFailure, schemaParams, titleLookup, usageByName, watchRows, type AppTone, type CallGroup, type Param, type Usage } from "./appsModel";
-import { opsHref } from "./opsPaths";
+import { appHealth, callActor, callFixFacts, callReason, callsFailing, filterCalls, healthTone, metricWatchRow, grantLedger, groupCalls, groupState, groupTone, lastAnswered, lastFailure, schemaParams, titleLookup, usageByName, watchRowVerdict, watchRows, watchTally, type AppTone, type CallFilter, type CallGroup, type Param, type Usage } from "./appsModel";
+import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
+import { opsHref, sourceConnectHref } from "./opsPaths";
 import { OpsEmpty, OpsFeedEmpty, OpsFeedError, ProviderIcon, SETUP_HREF, SOURCE_PROVIDER_LABEL, useOpsFeed } from "./parts";
-import type { OpsAppCall, OpsSource } from "./opsTypes";
+import type { OpsAppCall, OpsSource, OpsWatch } from "./opsTypes";
+import type { SourceHealth } from "./sourceHealth";
+import { useSourceHealth } from "./useSourceHealth";
+import { formatValue } from "./metricModel";
+import { EntryRun, NoManifest } from "./AppRun";
+import { useAppRunner, type AppRunner } from "./appRunner";
+import { fixLedger } from "./opsHomeModel";
+import { fixSessionPath, startOpsFixSession } from "./startFix";
+import "./sourceView.css";
 
-export function AppsTab({ app }: { app: string | null }) {
+export function AppsTab({ app, source: scope }: { app: string | null; source?: string | null }) {
   const sources = useOpsSources();
   const feed = useOpsFeed("sources");
   const apps = useMemo(() => sources.filter((s) => sourceHasGrants(s.provider)), [sources]);
-  const selected = apps.find((s) => s.short_id === app || s._id === app || s.name === app) ?? apps[0];
+  // The shell's source filter names the page's source: its board, never another source's under its name.
+  const scoped = scope ? sources.find((s) => s.name === scope || s.short_id === scope || s._id === scope) ?? null : null;
+  const selected = scope ? (scoped && sourceHasGrants(scoped.provider) ? scoped : null) : apps.find((s) => s.short_id === app || s._id === app || s.name === app) ?? apps[0];
+
+  if (scope) {
+    if (!scoped) {
+      if (feed?.error || (feed && !feed.ready)) return <OpsFeedEmpty feeds={[feed]} what="sources" title={`Reading ${scope}`} />;
+      return <div className="ops-detail"><OpsEmpty title={`No source named ${scope}`}><Link href={opsHref.tab("apps")} className="ops-btn mt-2">All apps</Link></OpsEmpty></div>;
+    }
+    if (!selected) return <div className="ops-detail"><NoAppActions source={scoped} apps={apps} /></div>;
+    return <div className="ops-detail"><AppDetail key={selected._id} source={selected} /></div>;
+  }
 
   if (apps.length === 0) {
-    return (
-      <OpsFeedEmpty feeds={[feed]} what="sources" title="No app connected">
-        <Link href={SETUP_HREF} className="ops-btn mt-2">Connect an app</Link>
-      </OpsFeedEmpty>
-    );
+    if (feed?.error || (feed && !feed.ready)) return <OpsFeedEmpty feeds={[feed]} what="sources" title="No app connected" />;
+    return <div className="ops-detail"><AppsPreview /></div>;
   }
 
   return (
-    <div className="ops-pad">
+    <div className="ops-detail">
       {apps.length > 1 && (
         <nav className="ops-app-picks" aria-label="Apps">
           {apps.map((s) => (
@@ -53,6 +70,38 @@ export function AppsTab({ app }: { app: string | null }) {
   );
 }
 
+/**
+ * A source with nothing for agents to do through it (a CI, analytics or webhook feed): what agents read from it,
+ * "no actions", and the workspace's apps that do have actions.
+ */
+export function NoAppActions({ source, apps }: { source: OpsSource; apps: OpsSource[] }) {
+  return (
+    <section className="ops-noapp" aria-label={`${source.name} has no app actions`} data-ops-no-app>
+      <div className="ops-noapp-head">
+        <ProviderIcon provider={source.provider} />
+        <b>{source.name} has no app actions</b>
+        <span className="ops-dim">{SOURCE_PROVIDER_LABEL[source.provider] ?? source.provider}</span>
+      </div>
+      <dl className="ops-kv">
+        <dt>Agents read</dt>
+        <dd className="ops-noapp-links">
+          <Link href={opsHref.tab("issues", { source: source.name })} className="ops-link">Issues</Link>
+          <Link href={opsHref.tab("timeline", { source: source.name })} className="ops-link">Timeline</Link>
+        </dd>
+        <dt>Agents do</dt>
+        <dd className="ops-dim">No actions</dd>
+      </dl>
+      {apps.length > 0 && (
+        <div className="ops-noapp-apps">
+          {apps.map((a) => (
+            <Link key={a._id} href={opsHref.tab("apps", { source: a.name })} className="ops-btn"><ProviderIcon provider={a.provider} />Open {a.name}</Link>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /** What is wrong with an app, in a word, for the switcher; nothing when it is fine. */
 function pickState(s: OpsSource): string | null {
   if (s.status === "error") return "Error";
@@ -66,6 +115,11 @@ function AppDetail({ source }: { source: OpsSource }) {
   const calls = useOpsAppCalls(source._id);
   const now = useCoarseNow(60_000);
   const sourcesFeed = useOpsFeed("sources");
+  const runner = useAppRunner(source._id);
+  // The one health reading every surface names (sourceHealth.ts), and the metric watches that read through this app.
+  const health = useSourceHealth(source);
+  const allWatches = useOpsWatches();
+  const metricWatches = useMemo(() => allWatches.filter((w) => w.source_id === source._id).sort((a, b) => a.name.localeCompare(b.name)), [allWatches, source._id]);
   const members = useInboxStore((s) => s.teamMembers);
   const me = useInboxStore((s) => s.currentUser);
   const manifest: AppManifest | null = useMemo(() => {
@@ -88,10 +142,24 @@ function AppDetail({ source }: { source: OpsSource }) {
   };
 
   const isApp = source.provider === "app";
-  if (!app && feed.refused) return <OpsEmpty title={`${source.name} is not readable here`} />;
+  if (!app && feed.refused) {
+    return (
+      <OpsEmpty title={`${source.name} is not readable here`}>
+        <Link href={SETUP_HREF} className="ops-btn mt-2">Sources and access</Link>
+      </OpsEmpty>
+    );
+  }
   if (!app && feed.error) return <OpsFeedError what={`${source.name}'s ${isApp ? "manifest" : "grants"}`} retry={feed.retry} />;
   if (!app) return <div className="ops-quiet text-[12.5px] py-8">Reading {source.name}…</div>;
-  return <AppBoard source={source} manifest={manifest} calls={calls} now={now} fresh={!!sourcesFeed?.ready} nameOf={nameOf} onGrant={setGrant} />;
+  const onWatch = {
+    pause: (key: string, paused: boolean) => useInboxStore.getState().setOpsAppWatchPaused(source._id, key, paused),
+    run: (key: string) => useInboxStore.getState().pollOpsAppWatch(source._id, key),
+  };
+  const onMetric = {
+    run: (id: string) => useInboxStore.getState().readOpsWatchesNow([id]),
+    pause: (id: string, paused: boolean) => useInboxStore.getState().updateOpsWatch(id, { status: paused ? "paused" : "active" }),
+  };
+  return <AppBoard source={source} manifest={manifest} calls={calls} now={now} fresh={!!sourcesFeed?.ready} nameOf={nameOf} onGrant={setGrant} onWatch={onWatch} onMetric={onMetric} runner={runner} health={health} metricWatches={metricWatches} />;
 }
 
 // ── The board ──
@@ -107,12 +175,24 @@ export type AppBoardProps = {
   fresh?: boolean;
   nameOf?: (userId: string) => string | null;
   onGrant: (action: string, on: boolean) => void;
+  /** Pause or resume one watch, and poll one now. Absent: the watches are read-only (a vendor source). */
+  onWatch?: { pause: (key: string, paused: boolean) => void; run: (key: string) => void };
+  /** Read a metric watch now, and pause or resume it. Absent: its rows only link to the watch. */
+  onMetric?: { run: (watchId: string) => void; pause: (watchId: string, paused: boolean) => void };
+  /** Run a reader or an action, and read the manifest again, as the person. Absent: the board only shows. */
+  runner?: AppRunner;
+  /** The source's one health reading (sourceHealth.ts): the verdict and its reason, the same words the overview and the Sources table give. */
+  health?: Pick<SourceHealth, "tone" | "label" | "reason"> & Partial<Pick<SourceHealth, "starves" | "watches" | "checks">>;
+  /** Metric watches that poll through this app's readers (query_kind reader). */
+  metricWatches?: readonly OpsWatch[];
 };
 
 const NONE: never[] = [];
 const ACTOR_LABEL = { watch: "Watch", cli: "CLI", session: "Agent" } as const;
 /** Occurrences a call group lists before it counts the rest. */
 const OCCURRENCES = 8;
+/** Call groups the log shows before "more". */
+const CALL_GROUPS = 12;
 /** Reasons a call row names before it counts the rest. */
 const REASONS = 3;
 
@@ -124,11 +204,15 @@ const ago = (at: number, now: number) => {
 const day = (at: number) => new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 const moment = (at: number) => new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, onGrant }: AppBoardProps) {
+export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, onGrant, onWatch, onMetric, runner, health: shared, metricWatches = NONE }: AppBoardProps) {
   const grants = source.grants ?? NONE;
   const watchState = source.watch_state ?? NONE;
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
-  const [confirming, setConfirming] = useState<string | null>(null);
+  const [callFilter, setCallFilter] = useState<CallFilter>({ status: null, actor: null });
+  const [callsShown, setCallsShown] = useState(CALL_GROUPS);
+  // Run now was pressed: the row says so until its poll lands (polled_at moves past the press).
+  const [ran, setRan] = useState<Record<string, number>>({});
+  const [ranMetric, setRanMetric] = useState<Record<string, number>>({});
   const toggle = (id: string) => setOpen((prev) => {
     const next = new Set(prev);
     if (!next.delete(id)) next.add(id);
@@ -142,22 +226,43 @@ export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, o
   const riskyGranted = granted.filter((a) => a.risk === "high").length;
 
   const watches = useMemo(() => watchRows(manifest?.watches ?? [], watchState, calls, now, fresh), [manifest, watchState, calls, now, fresh]);
-  const groups = useMemo(() => groupCalls(calls, { grants, watchState, watches: manifest?.watches ?? [], now }), [calls, grants, watchState, manifest, now]);
+  const groups = useMemo(() => groupCalls(calls, { grants, watchState, watches: manifest?.watches ?? [], now, metricWatches }), [calls, grants, watchState, manifest, now, metricWatches]);
+  const filteredCalls = useMemo(() => filterCalls(calls, callFilter), [calls, callFilter]);
+  const shownGroups = useMemo(() => groupCalls(filteredCalls, { grants, watchState, watches: manifest?.watches ?? [], now, metricWatches }), [filteredCalls, grants, watchState, manifest, now, metricWatches]);
   const usage = useMemo(() => usageByName(calls), [calls]);
   const titleOf = useMemo(() => titleLookup(manifest, actions), [manifest, actions]);
-  const health = appHealth(source, watches, groups);
-  const failing = failingNow(source, watches, groups);
+  const own = appHealth(source, watches, groups);
+  // One verdict everywhere: the shared reading when the page has it, the board's own words otherwise.
+  const health = shared ? { tone: healthTone(shared.tone), label: shared.label, reason: shared.reason, detail: own.detail } : { ...own, reason: own.detail ? callReason({ status: "error", error: own.detail }) : null };
+  const metricRows = useMemo(() => metricWatches.map(metricWatchRow), [metricWatches]);
+  // The reader every metric watch reads through, when they share one: named once on the group's heading, never on each row.
+  const sharedReader = metricRows.length > 1 && metricRows.every((m) => m.reader && m.reader === metricRows[0].reader) ? metricRows[0].reader : null;
+  // Two counts that never overlap: the watches by the source's one sentence (the overview's header and tile say the same), and the reads and actions failing outside them.
+  const tally = shared?.watches ?? watchTally([...watches.map(watchRowVerdict), ...metricRows.map((m) => m.verdict)]);
+  const failing = callsFailing(groups);
+  // Only the callers the log holds are offered as a filter: a pick that can only answer "None match" is not offered.
+  const actorsSeen = useMemo(() => new Set(calls.map(callActor)), [calls]);
   const lastFailed = useMemo(() => lastFailure(calls), [calls]);
   const answered = useMemo(() => lastAnswered(calls, watchState), [calls, watchState]);
   const live = groups.filter((g) => g.live);
-  const failingCalls = live.filter((g) => g.status === "error");
-  const otherCalls = groups.filter((g) => !failingCalls.includes(g)).sort((a, b) => b.latest - a.latest);
+  // The failing reader behind the health reading, with the metric watches it leaves without an answer.
+  const cause = useMemo(() => {
+    const starves = shared?.starves;
+    const lead = starves ? groups.find((g) => g.kind === starves.reader.kind && g.name === starves.reader.name) : live.find((g) => g.status === "error" && !g.manifestWatch);
+    if (!lead) return null;
+    const blind = starves ? metricRows.filter((m) => starves.watchIds.includes(m.id)) : metricRows.filter((m) => m.reader === lead.name && m.stale);
+    return { group: lead, watches: blind };
+  }, [shared?.starves, groups, live, metricRows]);
+  const failingCalls = shownGroups.filter((g) => g.live && g.status === "error");
+  const otherCalls = shownGroups.filter((g) => !failingCalls.includes(g)).sort((a, b) => b.latest - a.latest);
+  const callsFiltered = !!(callFilter.status || callFilter.actor);
   const watchedEvery = new Map((manifest?.watches ?? []).map((w) => [w.reader, w.every]));
   const viewsLocked = !!manifest?.views.length && actions.some((a) => a.name === "views.token") && !grantOf("views.token");
 
   const callRow = (g: CallGroup) => (
     <Disclosure
       key={g.key}
+      className="ops-dotrow"
       id={`call:${g.key}`}
       open={open}
       toggle={toggle}
@@ -165,17 +270,25 @@ export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, o
       summary={
         <>
           <span className="ops-state ops-tone-tag" data-live={g.live && g.status === "error" ? "true" : undefined}>{groupState(g)}</span>
-          <span className="ops-row-title">{titleOf(g.kind, g.name)}</span>
-          {/* Why it fails is on the row only while it fails; what went wrong before is a count, with the errors behind it. */}
-          {g.live && g.status === "error" && g.reasons.slice(0, REASONS).map((r) => (
-            <span key={r.reason} className="ops-tag" data-tone="bad">{r.reason}{r.count > 1 && <span className="ops-num ops-tag-n">{r.count}</span>}</span>
-          ))}
+          {/* The name takes the room; why it fails sits under it while it fails, each reason with its own count, as the header counts them. */}
+          <span className="ops-call-what">
+            <span className="ops-row-title ops-call-name">{titleOf(g.kind, g.name)}</span>
+            {g.live && g.status === "error" && (
+              <span className="ops-call-reasons">
+                {g.reasons.slice(0, REASONS).map((r) => (
+                  <span key={r.reason} className="ops-tag" data-tone="bad">{r.reason}<span className="ops-num ops-tag-n">{r.count.toLocaleString()}×</span></span>
+                ))}
+              </span>
+            )}
+          </span>
+          {/* What went wrong before is a count, with the errors behind it; a failing row's counts are its reasons. */}
           {!g.live && g.status === "error" && <span className="ops-row-when ops-num">{g.reasons.reduce((n, r) => n + r.count, 0)} failed</span>}
-          <span className="ops-row-fill" />
+          {g.status !== "error" && <span className="ops-row-when ops-num ops-row-n" title={`${g.count} calls`}>{g.count.toLocaleString()}×</span>}
           <span className="ops-row-when ops-row-actor">{ACTOR_LABEL[g.actor]}</span>
           <span className="ops-row-when ops-watch-age" title={moment(g.latest)}>{ago(g.latest, now)}</span>
         </>
       }
+      trail={g.live && g.status === "error" ? <span className="ops-watch-acts"><CallFix source={source} group={g} /></span> : undefined}
     >
       <CallGroupDetail group={g} />
     </Disclosure>
@@ -203,19 +316,22 @@ export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, o
           </>
         }
         lead={
-          confirming === a.name ? (
-            <span className="ops-confirm" onKeyDown={(e) => e.key === "Escape" && setConfirming(null)}>
-              <button type="button" className="ops-btn" data-tone="danger" onClick={() => { setConfirming(null); onGrant(a.name, true); }}>Grant high risk</button>
-              {/* Focus lands on the way out, so a stray Enter never grants. */}
-              <button type="button" className="ops-btn" autoFocus onClick={() => setConfirming(null)}>Cancel</button>
-            </span>
+          a.risk === "high" ? (
+            // A high-risk grant goes through the shared review: what it hands over, to whom, and how to take it back.
+            <ConsequentialSwitch
+              on={!!g}
+              ledger={grantLedger(a, source, usage.get(id))}
+              onTurnOn={() => onGrant(a.name, true)}
+              onTurnOff={() => onGrant(a.name, false)}
+              trigger={({ on, press }) => (
+                <span className="ops-grant">
+                  <Switch checked={on} onCheckedChange={() => press()} aria-label={`${on ? "Revoke" : "Grant"} ${a.title}`} />
+                </span>
+              )}
+            />
           ) : (
             <span className="ops-grant">
-              <Switch
-                checked={!!g}
-                onCheckedChange={(on) => (on && a.risk === "high" ? setConfirming(a.name) : onGrant(a.name, on))}
-                aria-label={`${g ? "Revoke" : "Grant"} ${a.title}`}
-              />
+              <Switch checked={!!g} onCheckedChange={(on) => onGrant(a.name, on)} aria-label={`${g ? "Revoke" : "Grant"} ${a.title}`} />
             </span>
           )
         }
@@ -225,6 +341,9 @@ export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, o
           <dd>{a.idempotent ? "Safe" : <span style={{ color: "var(--sol-orange)" }}>Runs again each time</span>}</dd>
           {g && <><dt>Granted</dt><dd>{moment(g.granted_at)}{nameOf?.(g.granted_by) ? ` · ${nameOf(g.granted_by)}` : ""}</dd></>}
         </EntryDetail>
+        {isApp && runner && manifest?.actions.some((x) => x.name === a.name) && (
+          <EntryRun source={source} runner={runner} kind="do" entry={manifest.actions.find((x) => x.name === a.name)!} granted={!!g} />
+        )}
       </Disclosure>
     );
 };
@@ -247,18 +366,40 @@ export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, o
           </div>
         </div>
         <div className="ops-app-stats">
-          <Stat value={failing} label="failing now" tone={failing ? "bad" : "ok"} />
-          {isApp && manifest && <Stat value={watches.filter((w) => w.tone === "ok").length} of={watches.length} label="watches ok" tone={watches.some((w) => w.tone === "bad") ? "bad" : watches.some((w) => w.tone === "warn") ? "warn" : undefined} />}
+          {isApp && (manifest || metricRows.length > 0) && tally.total > 0 && <Stat value={tally.bad || tally.total} of={tally.total} label={`watches ${tally.word}`} tone={tally.tone} />}
+          {/* The app's own checks, their own noun as in the overview's header and tile: counted beside the metric watches, never folded into them. */}
+          {isApp && !!shared?.checks?.bad && <Stat value={shared.checks.bad} of={shared.checks.total} label={`${shared.checks.total === 1 ? "check" : "checks"} ${shared.checks.word}`} tone={shared.checks.tone === "ok" ? "ok" : "bad"} />}
+          {/* The length of Recent calls' Failing now, and a press that narrows Recent calls to the failed ones. */}
+          <Stat value={failing} label={failing === 1 ? "call failing" : "calls failing"} tone={failing ? "bad" : "ok"} onClick={failing ? () => { setCallFilter({ status: "error", actor: null }); setCallsShown(CALL_GROUPS); document.querySelector("section[aria-label=\"Recent calls\"]")?.scrollIntoView({ block: "start", behavior: "smooth" }); } : undefined} />
         </div>
-        {health.detail && (
-          <Disclosure id="health" open={open} toggle={toggle} className="ops-app-why" summary={<span className="ops-row-title">{callReason({ status: "error", error: health.detail })}</span>}>
-            <pre className="ops-fulltext">{health.detail}</pre>
+        {cause ? (
+          // What fails, as structure: the reader with how it fails and how often, the watches it leaves blind, and the fix.
+          <div className="ops-app-cause" data-ops-health-reason data-ops-cause={cause.group.name}>
+            <span className="ops-app-cause-reader" title={cause.group.reasons.find((r) => r.error)?.error ?? undefined}>
+              <span className="ops-mono">{cause.group.name}</span>
+              {cause.group.reasons.slice(0, 2).map((r) => <span key={r.reason} className="ops-tag" data-tone="bad">{r.reason}<span className="ops-num ops-tag-n">{r.count.toLocaleString()}×</span></span>)}
+              {/* The window the counts cover, in the words every health line uses (failureLine). */}
+              {cause.group.firstFailed && <span className="ops-dim ops-num">in the last {ago(cause.group.firstFailed, now).replace(/ ago$/, "")}</span>}
+            </span>
+            {cause.watches.length > 0 && (
+              <span className="ops-app-cause-blind">
+                <span className="ops-dim">no answer</span>
+                {cause.watches.slice(0, 3).map((w) => <Link key={w.id} href={opsHref.metric(w.ref)} className="ops-app-cause-watch" title={w.error ?? undefined}>{w.name}</Link>)}
+                {cause.watches.length > 3 && <span className="ops-dim ops-num">+{cause.watches.length - 3}</span>}
+              </span>
+            )}
+            <span className="ops-row-fill" />
+            {cause.group.live && <CallFix source={source} group={cause.group} />}
+          </div>
+        ) : health.reason ? (
+          <Disclosure id="health" open={open} toggle={toggle} className="ops-app-why" summary={<span className="ops-row-title" data-ops-health-reason>{health.reason}</span>}>
+            <pre className="ops-fulltext">{health.detail ?? health.reason}</pre>
           </Disclosure>
-        )}
+        ) : null}
       </header>
 
       {isApp && !manifest ? (
-        <OpsEmpty title={`${source.name} has no manifest yet`} />
+        <NoManifest source={source} runner={runner} />
       ) : (
         <div className="ops-app-grid">
           <div className="ops-app-col">
@@ -279,10 +420,13 @@ export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, o
                         id: `read:${r.name}`,
                         label: r.title,
                         detail: (
-                          <EntryDetail entry={r} usage={usage.get(`read:${r.name}`)} now={now}>
-                            {r.output_hint && <><dt>Returns</dt><dd>{r.output_hint}</dd></>}
-                            {watchedEvery.has(r.name) && <><dt>Watched</dt><dd>every {watchedEvery.get(r.name)}</dd></>}
-                          </EntryDetail>
+                          <>
+                            <EntryDetail entry={r} usage={usage.get(`read:${r.name}`)} now={now}>
+                              {r.output_hint && <><dt>Returns</dt><dd>{r.output_hint}</dd></>}
+                              {watchedEvery.has(r.name) && <><dt>Watched</dt><dd>every {watchedEvery.get(r.name)}</dd></>}
+                            </EntryDetail>
+                            {isApp && runner && <EntryRun source={source} runner={runner} kind="read" entry={r} />}
+                          </>
                         ),
                       })),
                     },
@@ -311,28 +455,50 @@ export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, o
           </div>
 
           <div className="ops-app-col">
-            {manifest && manifest.watches.length > 0 && (
-              <Panel title="Watches" count={watches.length}>
+            {/* Two nouns, two panels: the app's own checks, and the metric watches reading through it, each counted as the head counts it. */}
+            {watches.length > 0 && (
+              <Panel title="Checks" count={watches.length}>
                 {watches.map((w) => (
                   <Disclosure
                     key={w.key}
+                    className="ops-dotrow"
                     id={`watch:${w.key}`}
                     open={open}
                     toggle={toggle}
                     tone={w.tone}
                     summary={
                       <>
-                        <span className="ops-state ops-tone-tag" data-live={w.tone === "bad" ? "true" : undefined}>{w.label}</span>
-                        <span className="ops-row-title">{titleOf("read", w.watch.reader)}</span>
-                        <span className="ops-row-fill" />
+                        {/* The shape of a Recent calls row: a Failing pill in the state column, why it fails (and how often) under the name. */}
+                        <span className="ops-state ops-tone-tag" data-live={w.tone === "bad" ? "true" : undefined}>{w.tone === "bad" ? "Failing" : w.label}</span>
+                        <span className="ops-call-what">
+                          <span className="ops-row-title ops-call-name">{titleOf("read", w.watch.reader)}</span>
+                          {w.tone === "bad" && (
+                            <span className="ops-call-reasons" data-ops-watch-reason>
+                              <span className="ops-tag" data-tone="bad" title={w.error ?? undefined}>{w.label}{w.failures ? <span className="ops-num ops-tag-n">{w.failures.toLocaleString()}×</span> : null}</span>
+                            </span>
+                          )}
+                        </span>
                         <span className="ops-row-when ops-watch-every">every {w.watch.every}</span>
-                        <span className="ops-row-when ops-watch-age" title={w.polledAt ? moment(w.polledAt) : undefined}>{w.polledAt ? ago(w.polledAt, now) : "not yet"}</span>
+                        <span className="ops-row-when ops-watch-age" title={w.polledAt ? `${moment(w.polledAt)}${w.nextAt ? `, next ${moment(w.nextAt)}` : ""}` : undefined}>
+                          {ran[w.key] && (!w.polledAt || w.polledAt < ran[w.key]) ? "running" : w.polledAt ? ago(w.polledAt, now) : "not yet"}
+                        </span>
                       </>
                     }
+                    trail={onWatch && isApp ? (
+                      <span className="ops-watch-acts">
+                        <button type="button" className="ops-icon-btn" title="Run now" aria-label={`Run ${w.watch.reader} now`} disabled={source.status !== "active" || (!!ran[w.key] && (!w.polledAt || w.polledAt < ran[w.key]))} onClick={() => { setRan((r) => ({ ...r, [w.key]: Date.now() })); onWatch.run(w.key); }}>
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        </button>
+                        <button type="button" className="ops-icon-btn" title={w.paused ? "Resume" : "Pause"} aria-label={`${w.paused ? "Resume" : "Pause"} ${w.watch.reader}`} onClick={() => onWatch.pause(w.key, !w.paused)}>
+                          {w.paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                        </button>
+                      </span>
+                    ) : undefined}
                   >
                     {w.error && <pre className="ops-fulltext">{w.error}</pre>}
                     <dl className="ops-kv">
                       <dt>Reader</dt><dd className="ops-mono">{w.watch.reader}</dd>
+                      {w.nextAt && <><dt>Next poll</dt><dd>{w.nextAt <= now ? "due now" : `in ${relTimeShort(now, w.nextAt)}`}</dd></>}
                       <dt>Rows become</dt><dd>{w.watch.kind === "check" ? "Checks" : "Failed jobs"}</dd>
                       <dt>Fields</dt><dd className="ops-mono">{Object.entries(w.watch.map).map(([k, v]) => `${k}=${v}`).join("  ")}</dd>
                       {w.lastFailure && <><dt>Failed</dt><dd className="ops-num">{w.failures} of the last {calls.length} calls · last {moment(w.lastFailure)}</dd></>}
@@ -341,12 +507,58 @@ export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, o
                 ))}
               </Panel>
             )}
+            {metricRows.length > 0 && (
+              <Panel title="Watches" count={metricRows.length}>
+                {sharedReader && <div className="ops-sub"><span>Reader</span><span className="ops-mono font-normal" data-ops-metric-reader>{sharedReader}</span></div>}
+                {metricRows.map((w) => {
+                  const running = !!ranMetric[w.id] && Date.now() - ranMetric[w.id] < 45_000 && (!w.at || w.at < ranMetric[w.id]);
+                  return (
+                    <div key={w.id} className="ops-row" data-tone={w.tone} data-ops-metric-watch={w.ref} data-verdict={w.verdict}>
+                      <div className="ops-row-line">
+                        <Link href={opsHref.metric(w.ref)} className="ops-row-main" title={w.error ?? undefined}>
+                          <span className="ops-state ops-tone-tag" data-live={w.tone === "bad" ? "true" : undefined}>{w.label}</span>
+                          <span className="ops-row-title">{w.name}</span>
+                          {w.reader && !sharedReader && <span className="ops-row-when ops-mono ops-mw-reader">{w.reader}</span>}
+                          <span className="ops-row-fill" />
+                          {/* A value from before a failed read is not the current one: dimmed, its age on hover. Narrow, the two drop under the name. */}
+                          <span className="ops-mw-facts">
+                            {w.stale && <span className="ops-row-when ops-watch-cause">{w.label}</span>}
+                            <span className="ops-row-when ops-num" data-stale={w.stale ? "true" : undefined} title={w.stale && w.at ? `From ${moment(w.at)}; the last read failed` : undefined}>{w.value != null ? formatValue(w.value, w.unit) : "—"}</span>
+                            <span className="ops-row-when ops-watch-age" data-stale={w.stale ? "true" : undefined} title={w.at ? moment(w.at) : undefined}>{running ? "running" : w.at ? ago(w.at, now) : "not yet"}</span>
+                          </span>
+                          <ChevronRight className="ops-row-chev" strokeWidth={1.75} />
+                        </Link>
+                        {onMetric && (
+                          <span className="ops-watch-acts">
+                            <button type="button" className="ops-icon-btn" title="Read now" aria-label={`Read ${w.name} now`} disabled={w.paused || running} onClick={() => { setRanMetric((r) => ({ ...r, [w.id]: Date.now() })); onMetric.run(w.id); }} data-ops-metric-run>
+                              <RefreshCw className="w-3.5 h-3.5" />
+                            </button>
+                            <button type="button" className="ops-icon-btn" title={w.paused ? "Resume" : "Pause"} aria-label={`${w.paused ? "Resume" : "Pause"} ${w.name}`} onClick={() => onMetric.pause(w.id, !w.paused)} data-ops-metric-pause>
+                              {w.paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                            </button>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </Panel>
+            )}
 
-            <Panel title="Recent calls" empty={calls.length === 0 && "No calls yet"}>
+            <Panel
+              title="Recent calls"
+              count={calls.length ? `${callsFiltered ? `${filteredCalls.length} of ` : ""}${calls.length}${calls.length >= 100 ? "+" : ""}` : undefined}
+              badge={calls.length > 0 && <CallFilters value={callFilter} actors={actorsSeen} onChange={(f) => { setCallFilter(f); setCallsShown(CALL_GROUPS); }} />}
+              empty={calls.length === 0 && "No calls yet"}
+            >
               {failingCalls.length > 0 && <div className="ops-sub" data-tone="bad"><span>Failing now</span><span className="ops-num">{failingCalls.length}</span></div>}
               {failingCalls.map(callRow)}
               {failingCalls.length > 0 && otherCalls.length > 0 && <div className="ops-sub"><span>Earlier</span><span className="ops-num">{otherCalls.length}</span></div>}
-              {otherCalls.map(callRow)}
+              {otherCalls.slice(0, callsShown).map(callRow)}
+              {otherCalls.length > callsShown && (
+                <button type="button" className="ops-more-btn" onClick={() => setCallsShown((n) => n + CALL_GROUPS)}>{otherCalls.length - callsShown} more</button>
+              )}
+              {callsFiltered && !failingCalls.length && !otherCalls.length && <div className="ops-panel-empty">None match</div>}
             </Panel>
           </div>
         </div>
@@ -357,15 +569,82 @@ export function AppBoard({ source, manifest, calls, now, fresh = true, nameOf, o
 
 // ── Pieces ──
 
-function Stat({ value, of, label, tone, children }: { value: number; of?: number; label: string; tone?: AppTone; children?: ReactNode }) {
+/** A reader or action that keeps failing, handed to an agent: one session starts, seeded with the failures, in the app's project. */
+function CallFix({ source, group }: { source: Pick<OpsSource, "_id" | "name"> & { short_id?: string }; group: CallGroup }) {
+  const facts = callFixFacts({ name: source.name, short_id: source.short_id ?? "" }, group);
+  const folder = useMemo(() => fixSessionPath(useInboxStore.getState() as any, source._id), [source._id]);
   return (
-    <div className="ops-stat" data-tone={tone}>
+    <ConsequentialSwitch
+      on={false}
+      ledger={fixLedger(facts.ref, facts.title, folder)}
+      onTurnOn={() => startOpsFixSession({ groupRefs: [], title: facts.title, failure: facts.failure }, source._id)}
+      onTurnOff={() => {}}
+      trigger={({ press }) => (
+        <button type="button" className="ops-btn ops-call-fix" data-size="sm" data-tone="primary" onClick={press} title="Start a session seeded with these failures" data-ops-call-fix={group.name}>
+          <Wand2 className="w-3.5 h-3.5" /> Start fix
+        </button>
+      )}
+    />
+  );
+}
+
+function Stat({ value, of, label, tone, children, onClick }: { value: number; of?: number; label: string; tone?: AppTone; children?: ReactNode; onClick?: () => void }) {
+  const body = (
+    <>
       <div className="ops-stat-value ops-num">
         {value}
         {of !== undefined && <span className="ops-stat-of">/{of}</span>}
         {children}
       </div>
       <div className="ops-stat-label">{label}</div>
+    </>
+  );
+  return onClick ? <button type="button" className="ops-stat" data-tone={tone} data-press="true" onClick={onClick}>{body}</button> : <div className="ops-stat" data-tone={tone}>{body}</div>;
+}
+
+/** Ghost rows a preview panel holds: a lamp and two bars, at the widths a real row takes. */
+function GhostRows({ widths, toggle }: { widths: number[]; toggle?: boolean }) {
+  return (
+    <div className="ops-app-ghosts">
+      {widths.map((w, i) => (
+        <div key={i} className="ops-app-ghost">
+          {toggle ? <Switch checked={false} onCheckedChange={() => {}} disabled aria-hidden /> : <i className="ops-app-ghost-lamp" />}
+          <i className="ops-app-ghost-bar" style={{ width: `${w}%` }} />
+          <i className="ops-app-ghost-bar ops-app-ghost-short" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The Apps board before any app is connected: its real panels (what agents
+ * can do, what they can read, the watches, the recent calls) drawn empty and
+ * inert, with the connect step in the head where the app's name will sit.
+ */
+function AppsPreview() {
+  return (
+    <div className="ops-app ops-app-preview" data-ops-apps-preview>
+      <header className="ops-app-head" data-tone="off">
+        <div className="ops-app-id">
+          <div className="min-w-0">
+            <div className="ops-app-name"><span className="truncate">Your app</span><span className="ops-app-verdict">Not connected</span></div>
+            <div className="ops-app-meta"><span>Actions</span><span>Readers</span><span>Watches</span><span>Call audit</span></div>
+          </div>
+        </div>
+        <span className="flex-1" />
+        <Link href={sourceConnectHref("app")} className="ops-btn" data-tone="primary" data-ops-connect-app>Connect an app</Link>
+      </header>
+      <div className="ops-app-grid" aria-hidden inert>
+        <div className="ops-app-col">
+          <Panel title="Agents can" count="0 granted"><GhostRows widths={[46, 58, 38]} toggle /></Panel>
+          <Panel title="Agents can read"><GhostRows widths={[52, 40]} /></Panel>
+        </div>
+        <div className="ops-app-col">
+          <Panel title="Watches"><GhostRows widths={[44, 62, 36]} /></Panel>
+          <Panel title="Recent calls"><GhostRows widths={[70, 56, 64, 48]} /></Panel>
+        </div>
+      </div>
     </div>
   );
 }
@@ -427,7 +706,7 @@ function ChipSet({ groups }: { groups: ChipGroup[] }) {
 }
 
 /** A row that names one thing and opens what stands behind it. `lead` holds a control that is not part of the opener. */
-function Disclosure({ id, open, toggle, tone, summary, lead, className, children }: { id: string; open: ReadonlySet<string>; toggle: (id: string) => void; tone?: AppTone; summary: ReactNode; lead?: ReactNode; className?: string; children: ReactNode }) {
+function Disclosure({ id, open, toggle, tone, summary, lead, trail, className, children }: { id: string; open: ReadonlySet<string>; toggle: (id: string) => void; tone?: AppTone; summary: ReactNode; lead?: ReactNode; trail?: ReactNode; className?: string; children: ReactNode }) {
   const on = open.has(id);
   return (
     <div className={`ops-row ${className ?? ""}`} data-open={on ? "true" : undefined} data-tone={tone}>
@@ -437,6 +716,7 @@ function Disclosure({ id, open, toggle, tone, summary, lead, className, children
           {summary}
           <ChevronRight className="ops-row-chev" strokeWidth={1.75} />
         </button>
+        {trail}
       </div>
       {on && <div className="ops-row-detail">{children}</div>}
     </div>
@@ -500,5 +780,21 @@ function CallGroupDetail({ group }: { group: CallGroup }) {
       </table>
       {more > 0 && <div className="ops-dim text-[11px] ops-num">+{more} earlier, back to {day(group.oldest)}</div>}
     </>
+  );
+}
+
+const STATUS_PICKS: { key: CallFilter["status"]; label: string }[] = [{ key: null, label: "All" }, { key: "error", label: "Failed" }, { key: "denied", label: "Refused" }, { key: "ok", label: "OK" }];
+const ACTOR_PICKS: { key: CallFilter["actor"]; label: string }[] = [{ key: null, label: "Anyone" }, { key: "session", label: "Agent" }, { key: "watch", label: "Watch" }, { key: "cli", label: "CLI" }];
+
+function CallFilters({ value, actors, onChange }: { value: CallFilter; actors: ReadonlySet<string>; onChange: (f: CallFilter) => void }) {
+  return (
+    <span className="ops-call-filters">
+      <span className="ops-seg" role="group" aria-label="Outcome">
+        {STATUS_PICKS.map((p) => <button key={p.label} type="button" data-on={value.status === p.key ? "true" : undefined} aria-pressed={value.status === p.key} onClick={() => onChange({ ...value, status: p.key })}>{p.label}</button>)}
+      </span>
+      <span className="ops-seg" role="group" aria-label="Who called">
+        {ACTOR_PICKS.filter((p) => !p.key || actors.has(p.key) || value.actor === p.key).map((p) => <button key={p.label} type="button" data-on={value.actor === p.key ? "true" : undefined} aria-pressed={value.actor === p.key} onClick={() => onChange({ ...value, actor: p.key })}>{p.label}</button>)}
+      </span>
+    </span>
   );
 }

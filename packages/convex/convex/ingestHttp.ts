@@ -130,7 +130,7 @@ function withCors(res: Response, cors: Record<string, string>): Response {
   return new Response(res.body, { status: res.status, headers });
 }
 
-export type AdmittedSource = { _id: Id<"event_sources">; status: string; allowed_origins: string[] | null };
+export type AdmittedSource = { _id: Id<"event_sources">; status: string; allowed_origins: string[] | null; /** Admitted on a rotated-out key inside its grace window. */ old_key?: boolean };
 
 /**
  * Every keyed ingest route's admission, in one order: the key's shape and
@@ -205,6 +205,7 @@ export const ingestServe = httpAction(async (ctx, request) => {
         items_json: JSON.stringify(batch.items),
         ...(batch.envelope.release ? { release: batch.envelope.release } : {}),
         ...(batch.envelope.environment ? { environment: batch.envelope.environment } : {}),
+        ...(source.old_key ? { old_key: true } : {}),
       });
       accepted = result.accepted;
       dropped += result.dropped;

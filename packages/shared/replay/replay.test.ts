@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ReplayEvent } from "../contracts/replay";
-import { fromRrweb, primaryFailure, renderTimeline, replayCounts, toRepro, type RrwebEvent } from "./index";
+import { currentTimelineText, fromRrweb, parseReplayEvents, primaryFailure, renderTimeline, replayCounts, toRepro, type RrwebEvent } from "./index";
 import { formatReplayTime, isFailedRequest } from "./events";
 import { placeholderValue } from "./repro";
 
@@ -51,6 +51,17 @@ describe("renderTimeline", () => {
     expect(md).toContain("- 0:02.0 scroll x3 to 900 of 2000");
     expect(md).toContain("- 0:01.0 type into \"Email\": 16 chars x2");
     expect(md.match(/scroll/g)?.length).toBe(1);
+  });
+
+  test("a field entered without typing reads as a focus, as the rail shows it", () => {
+    const text = renderTimeline([{ t: 0, type: "nav", url: "https://a.example/x" }, { t: 1_700, type: "input", selector: "input", label: "Enter phone number", length: 0 }] as any);
+    expect(text).toContain("- 0:01.7 focus \"Enter phone number\"");
+    expect(text).not.toContain("0 chars");
+  });
+
+  test("a stored timeline from before reads its empty fields as focus too", () => {
+    const old = "replay rp-1 · 2 events\n- 0:01.7 type into \"Enter phone number\": 0 chars\n- 0:02.0 type into (unlabeled): 0 chars x3\n- 0:03.0 type into \"Email\": 10 chars";
+    expect(currentTimelineText(old)).toBe("replay rp-1 · 2 events\n- 0:01.7 focus \"Enter phone number\"\n- 0:02.0 focus (unlabeled) x3\n- 0:03.0 type into \"Email\": 10 chars");
   });
 
   test("highlights failures and cuts the stack", () => {
@@ -230,6 +241,53 @@ describe("fromRrweb", () => {
     expect(events.filter((e) => e.type === "console")).toEqual([{ type: "console", t: 3100, level: "error", message: "Payment failed {\"code\":502}" }]);
   });
 
+  test("an icon-only button reads as its icon and the row it sits in, never as a locator; the recorder's own console lines are dropped", () => {
+    const row = {
+      type: 2, id: 30, tagName: "div", attributes: { class: "call-row" }, childNodes: [
+        { type: 2, id: 31, tagName: "span", attributes: {}, childNodes: [{ type: 3, id: 32, textContent: "Release this call to the queue for another agent" }] },
+        { type: 2, id: 33, tagName: "button", attributes: { class: "shrink-0 p-1" }, childNodes: [
+          { type: 2, id: 34, tagName: "svg", attributes: { class: "lucide lucide-x" }, childNodes: [{ type: 2, id: 35, tagName: "path", attributes: { d: "M1 1" }, childNodes: [] }] },
+        ] },
+        { type: 2, id: 36, tagName: "button", attributes: {}, childNodes: [
+          { type: 2, id: 37, tagName: "svg", attributes: {}, childNodes: [{ type: 2, id: 38, tagName: "use", attributes: { href: "#icon-trash" }, childNodes: [] }] },
+        ] },
+      ],
+    };
+    const page = { type: 0, id: 1, childNodes: [{ type: 2, id: 2, tagName: "html", attributes: {}, childNodes: [{ type: 2, id: 6, tagName: "body", attributes: {}, childNodes: [row] }] }] };
+    const out = fromRrweb([
+      { type: 4, timestamp: T, data: { href: "https://a.test/calls", width: 1280, height: 800 } },
+      { type: 2, timestamp: T + 1, data: { node: page } },
+      { type: 3, timestamp: T + 100, data: { source: 2, type: 2, id: 35 } },
+      { type: 3, timestamp: T + 200, data: { source: 2, type: 2, id: 38 } },
+      { type: 6, timestamp: T + 300, data: { plugin: "rrweb/console@1", payload: { level: "warn", payload: ["\"[SessionRecording] Too many mutations on node 12\""] } } },
+      { type: 6, timestamp: T + 400, data: { plugin: "rrweb/console@1", payload: { level: "error", payload: ["\"[PostHog.js] rate limited\""] } } },
+    ]);
+    const clicks = out.filter((e) => e.type === "click");
+    expect(clicks[0]).toMatchObject({ label: "", role: "button", context: "x icon in Release this call to the queue for…" });
+    expect(clicks[1]).toMatchObject({ label: "", context: "trash icon in Release this call to the queue for…" });
+    expect(out.filter((e) => e.type === "console")).toEqual([]);
+    expect(parseReplayEvents(clicks)[0]).toMatchObject({ context: "x icon in Release this call to the queue for…" });
+  });
+
+  test("a control in a form takes its context from the form's heading, and a click keeps where it landed", () => {
+    const dialog = {
+      type: 2, id: 40, tagName: "div", attributes: { role: "dialog" }, childNodes: [
+        { type: 2, id: 41, tagName: "h2", attributes: {}, childNodes: [{ type: 3, id: 42, textContent: "Invite a colleague" }] },
+        { type: 2, id: 43, tagName: "input", attributes: { name: "email" }, childNodes: [] },
+        { type: 2, id: 44, tagName: "button", attributes: { class: "p-1" }, childNodes: [{ type: 2, id: 45, tagName: "svg", attributes: {}, childNodes: [] }] },
+      ],
+    };
+    const page = { type: 0, id: 1, childNodes: [{ type: 2, id: 2, tagName: "html", attributes: {}, childNodes: [{ type: 2, id: 6, tagName: "body", attributes: {}, childNodes: [dialog] }] }] };
+    const out = fromRrweb([
+      { type: 4, timestamp: T, data: { href: "https://a.test/team", width: 1280, height: 800 } },
+      { type: 2, timestamp: T + 1, data: { node: page } },
+      { type: 3, timestamp: T + 100, data: { source: 2, type: 2, id: 45, x: 812.6, y: 140 } },
+    ]);
+    const click = out.find((e) => e.type === "click");
+    expect(click).toMatchObject({ selector: "button.p-1", context: "in Invite a colleague", x: 813, y: 140 });
+    expect(parseReplayEvents([click])[0]).toMatchObject({ x: 813, y: 140 });
+  });
+
   test("PostHog's network payload shape reads the same; hidden cross-origin resource statuses are not failures", () => {
     const ph = fromRrweb([
       { type: 4, timestamp: T, data: { href: "https://a.test/" } },
@@ -276,6 +334,24 @@ describe("fromRrweb", () => {
       ] } } },
     ]);
     expect(ph.filter((e) => e.type === "network")).toEqual([{ type: "network", t: 10, method: "GET", url: "https://a.test/api/x", status: 500, ms: 40 }]);
+  });
+
+  test("a navigation entry is timed to its response, not to the page's load event", () => {
+    // A navigation entry's duration runs to loadEventEnd: every script, image
+    // and font on the page. The document itself answered at responseEnd. A page
+    // that loaded in 4.8s on a slow connection read as "slow GET /" (rp-4725).
+    const nav = { entryType: "navigation", initiatorType: "navigation", startTime: 0, requestStart: 4, responseStart: 179, responseEnd: 181, domContentLoadedEventEnd: 2900, loadEventEnd: 4841, duration: 4841, responseStatus: 200 };
+    const slowDoc = { ...nav, responseStart: 2400, responseEnd: 2450 };
+    const ph = fromRrweb([
+      { type: 4, timestamp: T, data: { href: "https://a.test/" } },
+      { type: 6, timestamp: T + 10, data: { plugin: "rrweb/network@1", payload: { requests: [
+        { ...nav, name: "https://a.test/" },
+        { ...slowDoc, name: "https://a.test/pricing" },
+      ] } } },
+    ]);
+    expect(ph.filter((e) => e.type === "network")).toEqual([
+      { type: "network", t: 10, method: "GET", url: "https://a.test/pricing", status: 200, ms: 2450 },
+    ]);
   });
 
   test("Sentry's console breadcrumbs and fetch spans read the same", () => {
@@ -336,6 +412,33 @@ describe("fromRrweb", () => {
     const json = JSON.stringify(ev);
     for (const secret of ["diary", "SSN", "typed note"]) expect(json).not.toContain(secret);
     expect(ev.at(-1)).toMatchObject({ type: "click", label: "Read only" });
+  });
+
+  test("a control rendered after the snapshot is named by the text its mutation added beside it", () => {
+    const page = { type: 0, id: 1, childNodes: [{ type: 2, id: 2, tagName: "body", attributes: {}, childNodes: [] }] };
+    const rr: RrwebEvent[] = [
+      { type: 2, timestamp: T, data: { node: page } },
+      // rrweb adds each node on its own, the text after (or before) its button.
+      { type: 3, timestamp: T + 1, data: { source: 0, adds: [
+        { parentId: 20, nextId: null, node: { type: 3, id: 21, textContent: "Clam" } },
+        { parentId: 2, nextId: null, node: { type: 2, id: 20, tagName: "button", attributes: { class: "px-4" }, childNodes: [] } },
+      ], removes: [], texts: [], attributes: [] } },
+      { type: 3, timestamp: T + 2, data: { source: 0, adds: [], removes: [], texts: [{ id: 21, value: "Claim" }], attributes: [{ id: 20, attributes: { "aria-busy": "false" } }] } },
+      { type: 3, timestamp: T + 3, data: { source: 2, type: 2, id: 20 } },
+    ];
+    const before = JSON.stringify(rr);
+    expect(fromRrweb(rr).at(-1)).toMatchObject({ type: "click", label: "Claim", role: "button" });
+    // The player replays the same events after this pass: they are left as they were.
+    expect(JSON.stringify(rr)).toBe(before);
+  });
+
+  test("a card clicked as a whole is named by the start of its text", () => {
+    const words = Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ");
+    const page = { type: 0, id: 1, childNodes: [{ type: 2, id: 2, tagName: "a", attributes: { href: "/x" }, childNodes: [{ type: 3, id: 3, textContent: words }] }] };
+    const click = fromRrweb([{ type: 2, timestamp: T, data: { node: page } }, { type: 3, timestamp: T + 1, data: { source: 2, type: 2, id: 3 } }]).at(-1) as any;
+    expect(click.label.length).toBeLessThanOrEqual(61);
+    expect(click.label.endsWith("…")).toBe(true);
+    expect(click.text).toBeUndefined();
   });
 
   test("garbage in, nothing out", () => {

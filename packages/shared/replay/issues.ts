@@ -74,12 +74,25 @@ const ID_SEGMENT = [
   /^(?=.*\d)[0-9a-f]{8,}$/i,
   // A random token: long, letters and digits mixed (`K6DuuR5T0jm7mXWD...`).
   /^(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9_-]{16,}$/,
+  // A phone number or a date: digits with a leading + and separators (`+447754757715`, `2026-11-04`).
+  /^\+?\d[\d\s().-]{5,}\d$/,
+  // An email address.
+  /^[^@\s]+@[^@\s]+\.[^@\s]+$/,
 ];
 
-/** A path with the segments that name one record folded to `:id`, so every record's page is one route. */
+/** A segment as the record it names, URL-decoded (`%2B447…` is a phone number); a malformed escape stays as written. */
+function decodedSegment(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/** A path with the segments that name one record folded to `:id`, so every record's page is one route, and no caller's number or address reaches a title. */
 export function routeOf(path: string): string {
   const clean = path.split(/[?#]/)[0] || "/";
-  const segments = clean.split("/").map((s) => (s && ID_SEGMENT.some((re) => re.test(s)) ? ":id" : s));
+  const segments = clean.split("/").map((s) => (s && ID_SEGMENT.some((re) => re.test(decodedSegment(s))) ? ":id" : s));
   const out = segments.join("/").replace(/\/+$/, "");
   return out || "/";
 }

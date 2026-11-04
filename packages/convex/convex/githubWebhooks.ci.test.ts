@@ -163,6 +163,18 @@ describe("CI on the default branch files on the github-ci source", () => {
     expect(w.tables.event_groups).toHaveLength(1);
   });
 
+  test("each run is kept on the source's counters with how long it ran, for the run time and failure rate series", async () => {
+    const w = world();
+    const start = clock + 60_000;
+    await w.deliver(workflowRun({ conclusion: "failure", updated_at: new Date(start + 7 * 60_000).toISOString() }));
+    await w.deliver(workflowRun({ conclusion: "success" }));
+    const runs = w.tables.event_source_stats[0]?.ci_runs;
+    expect(runs).toHaveLength(2);
+    expect(runs[0]).toMatchObject({ ok: false, duration_ms: 7 * 60_000 });
+    expect(runs[1].ok).toBe(true);
+    expect(runs[1].duration_ms).toBeUndefined();
+  });
+
   test("a green first run is on record without announcing, so its first red is the flip", async () => {
     const w = world();
     await w.deliver(workflowRun({ conclusion: "success" }));

@@ -26,6 +26,7 @@ import { connectionRowFor } from "./oauthConnectors";
 import { sha256Hex } from "./lib/hash";
 import { nextShortId } from "./counters";
 import { resolveWorkspaceProject } from "./lib/projectRef";
+import { withCiRun } from "@codecast/shared/contracts/volumeWatch";
 import { recordExternalEventOnce } from "./externalEvents";
 import { recordDeployMarker } from "./deploys";
 import { appSourceIn, refreshAppManifestSoon } from "./lib/appSource";
@@ -39,6 +40,7 @@ import { scopeOf, sourceByRef } from "./lib/ingestScope";
 import { deployMarkerOf, promotionSignal } from "./lib/ingestPayloads";
 import { PROMOTE_SPACING_MS, promotionStep, schedulePromotion } from "./ingestPromotions";
 import { commitBySha } from "./commits";
+import { requireTaskByRef } from "./lib/taskGraph";
 import { addableSourceProviderValidator, groupStatusValidator, groupKindValidator, sourceConfigValidator, transitionValidator } from "./ingestSchema";
 import {
   DEFAULT_PROMOTE,
@@ -57,10 +59,14 @@ import {
   type IngestItem,
   type Transition,
 } from "@codecast/shared/contracts/ingest";
-import { ciCheckFingerprint, groupFingerprint } from "@codecast/shared/contracts/signalFingerprint";
+import { ciCheckFingerprint, groupFingerprint, isRecordNotIssue } from "@codecast/shared/contracts/signalFingerprint";
+import { clusterPeople, mergeStoredPeople, userKeys } from "./lib/groupPeople";
 import type { ReplayIssue } from "@codecast/shared/replay";
 import {
   SAMPLES_PER_BATCH,
+  SAMPLE_TRIM_LOOKAHEAD,
+  samplePins,
+  samplesToTrim,
   applyMirror,
   countEventNames,
   foldOccurrences,
@@ -68,6 +74,7 @@ import {
   planItem,
   planReplayIssue,
   pruneBuckets,
+  tallyMessages,
   utcDay,
   type GroupState,
   type ItemPlan,
@@ -106,7 +113,7 @@ export async function groupByRef(ctx: any, userId: Id<"users">, ref: string): Pr
 // ── A source's counters (event_source_stats) ──
 
 /** The fields that move on every batch and poll, kept off the source row. */
-const STAT_KEYS = ["counters_day", "events_today", "dropped_today", "event_names", "groups_open", "last_event_at", "last_poll_at"] as const;
+const STAT_KEYS = ["counters_day", "events_today", "dropped_today", "event_names", "groups_open", "last_event_at", "last_poll_at", "days", "hours", "group_counts", "groups_counted_at", "ci_runs", "old_key_last_at", "old_key_events"] as const;
 export type SourceStats = Partial<Pick<Doc<"event_source_stats">, (typeof STAT_KEYS)[number]>>;
 
 function pickStats(row: Partial<Record<(typeof STAT_KEYS)[number], unknown>>): SourceStats {
@@ -131,23 +138,103 @@ export async function sourceStats(ctx: any, source: Doc<"event_sources">): Promi
  */
 export async function patchSourceStats(ctx: any, source: Doc<"event_sources">, patch: (prev: SourceStats) => SourceStats, now = Date.now()): Promise<SourceStats> {
   const row = await statsRow(ctx, source._id);
-  const prev = rollStats(pickStats(row ?? source), now);
-  const next = patch(prev);
+  const stored = pickStats(row ?? source);
+  const prev = rollStats(stored, now);
+  // A roll is written with the patch: left unwritten, every later write rolls again and today's count restarts at its last batch.
+  const rolled: SourceStats = prev.counters_day !== stored.counters_day ? { counters_day: prev.counters_day, events_today: prev.events_today, dropped_today: prev.dropped_today } : {};
+  const next: SourceStats = { ...rolled, ...patch(prev) };
+  // A move of today's counters is written into the day series too, so volume over time reads from one row.
+  if ("events_today" in next || "dropped_today" in next) next.days = withDayCounters({ ...prev, ...next }, now);
+  // And into the hour series, for a 24 hour chart of the same count; countLanded writes its own hours for dated points.
+  const added = (next.events_today ?? prev.events_today ?? 0) - (prev.events_today ?? 0);
+  if (added > 0 && !("hours" in next)) next.hours = withHourCount(prev.hours, now, added, now);
   if (row) await ctx.db.patch(row._id, next);
   else await ctx.db.insert("event_source_stats", { source_id: source._id, workspace: source.workspace, ...prev, ...next });
   return { ...prev, ...next };
 }
 
-/** The *_today counters start at zero on a new UTC day. */
-function rollStats(stats: SourceStats, now: number): SourceStats {
+/** How many UTC days of counters a source keeps (event_source_stats.days). */
+export const SOURCE_STAT_DAYS = 30;
+
+/** Today's counters folded into the day series, oldest first, cut to SOURCE_STAT_DAYS. */
+export function withDayCounters(stats: SourceStats, now: number): NonNullable<SourceStats["days"]> {
   const day = utcDay(now);
-  return stats.counters_day === day ? stats : { ...stats, counters_day: day, events_today: 0, dropped_today: 0 };
+  const kept = (stats.days ?? []).filter((d) => d.day !== day && d.day < day);
+  return [...kept, { day, events: stats.events_today ?? 0, dropped: stats.dropped_today ?? 0 }].slice(-SOURCE_STAT_DAYS);
+}
+
+/** How many hours of counts a source keeps (event_source_stats.hours): a 24 hour chart and the day before it. */
+export const SOURCE_STAT_HOURS = 48;
+
+/** `n` added to the hour holding `at`, oldest first, cut to the last SOURCE_STAT_HOURS before `now`. */
+export function withHourCount(hours: SourceStats["hours"], at: number, n: number, now: number): NonNullable<SourceStats["hours"]> {
+  const hour = Math.floor(Math.min(at, now) / HOUR_MS) * HOUR_MS;
+  const floor = Math.floor(now / HOUR_MS) * HOUR_MS - (SOURCE_STAT_HOURS - 1) * HOUR_MS;
+  const out = (hours ?? []).filter((h) => h.hour >= floor).map((h) => ({ ...h }));
+  if (hour < floor || n <= 0) return out;
+  const hit = out.find((h) => h.hour === hour);
+  if (hit) hit.events += n;
+  else out.push({ hour, events: n });
+  return out.sort((a, b) => a.hour - b.hour);
+}
+
+/**
+ * What a source sent that did not come through the ingest door, counted where
+ * the door counts its items: a recording imported, the issues a recording
+ * showed, a watch's reading. Each point lands on the day (and, inside
+ * SOURCE_STAT_HOURS, the hour) it happened, so a backfilled recording from
+ * last week adds to last week rather than to today. A patch for
+ * patchSourceStats; points older than SOURCE_STAT_DAYS are not counted.
+ */
+export function countLanded(prev: SourceStats, points: readonly { at: number; n: number }[], now: number): SourceStats {
+  const today = utcDay(now);
+  const floorDay = utcDay(now - (SOURCE_STAT_DAYS - 1) * 86_400_000);
+  let eventsToday = prev.events_today ?? 0;
+  let hours = prev.hours;
+  const days = new Map((prev.days ?? []).map((d) => [d.day, { ...d }]));
+  let last = prev.last_event_at ?? 0;
+  for (const p of points) {
+    if (!(p.n > 0)) continue;
+    const at = Math.min(p.at, now);
+    const day = utcDay(at);
+    if (day < floorDay) continue;
+    hours = withHourCount(hours, at, p.n, now);
+    last = Math.max(last, at);
+    if (day === today) eventsToday += p.n;
+    else {
+      const d = days.get(day) ?? { day, events: 0, dropped: 0 };
+      d.events += p.n;
+      days.set(day, d);
+    }
+  }
+  return {
+    events_today: eventsToday,
+    days: [...days.values()].sort((a, b) => (a.day < b.day ? -1 : 1)),
+    hours: hours ?? [],
+    ...(last ? { last_event_at: last } : {}),
+  };
+}
+
+/**
+ * The *_today counters on a new UTC day start from what today's hour and day
+ * series already hold: nothing on a real new day, and on a row whose roll was
+ * never written (counters_day stuck on an old day) the count the hours kept,
+ * so today's day entry equals the sum of today's hours.
+ */
+export function rollStats(stats: SourceStats, now: number): SourceStats {
+  const day = utcDay(now);
+  if (stats.counters_day === day) return stats;
+  const start = Date.parse(`${day}T00:00:00Z`);
+  const hoursToday = (stats.hours ?? []).reduce((n, h) => (h.hour >= start ? n + h.events : n), 0);
+  const entry = (stats.days ?? []).find((d) => d.day === day);
+  return { ...stats, counters_day: day, events_today: Math.max(hoursToday, entry?.events ?? 0), dropped_today: entry?.dropped ?? 0 };
 }
 
 /** A source as any reader sees it, counters included: never the key hash or the manifest. */
 export function sourceView(row: Doc<"event_sources">, stats: SourceStats = pickStats(row), now = Date.now()) {
-  const { ingest_key_hash: _hash, manifest_json: _manifest, ...rest } = row;
-  return { ...rest, events_today: 0, dropped_today: 0, groups_open: 0, ...rollStats(stats, now), keyed: !!row.ingest_key_hash };
+  const { ingest_key_hash: _hash, manifest_json: _manifest, old_key_hash: _old, old_key_prefix, old_key_until, ...rest } = row;
+  const oldKey = old_key_until && old_key_until > now ? { old_key_prefix, old_key_until } : {};
+  return { ...rest, ...oldKey, events_today: 0, dropped_today: 0, groups_open: 0, ...rollStats(stats, now), keyed: !!row.ingest_key_hash };
 }
 
 export async function sourceViewOf(ctx: any, row: Doc<"event_sources">) {
@@ -251,16 +338,41 @@ async function connectSignedApp(ctx: any, userId: Id<"users">, workspaceKey: str
   if (!stored.ok) invalidScope(`Could not connect the app: ${stored.error}`);
 }
 
-/** A new key for a keyed source; the old one stops working at once. */
+/** How long a rotated-out key keeps working, so the product sending with it can ship the new one first. */
+export const OLD_KEY_GRACE_MS = 24 * 3600_000;
+
+/**
+ * A new key for a keyed source. The old key keeps working for
+ * OLD_KEY_GRACE_MS (or not at all with `end_old`, for a leaked key), so a
+ * deployed SDK is not refused before the new key reaches it.
+ */
 export const rotateKey = mutation({
-  args: { ...scopeArgs, source: v.string() },
+  args: { ...scopeArgs, source: v.string(), end_old: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const { userId, workspaceKey } = await scopeOf(ctx, args);
     const row = await sourceByRef(ctx, userId, workspaceKey, args.source);
     if (!KEYED_SOURCE_PROVIDERS.includes(row.provider)) invalidScope(`${row.short_id} is a ${row.provider} source and has no ingest key`);
     const key = generateIngestKey();
-    await ctx.db.patch(row._id, { ingest_key_hash: await sha256Hex(key), key_prefix: ingestKeyPrefix(key), updated_at: Date.now() });
+    const now = Date.now();
+    const grace = row.ingest_key_hash && !args.end_old ? { old_key_hash: row.ingest_key_hash, old_key_prefix: row.key_prefix, old_key_until: now + OLD_KEY_GRACE_MS } : { old_key_hash: undefined, old_key_prefix: undefined, old_key_until: undefined };
+    await ctx.db.patch(row._id, { ingest_key_hash: await sha256Hex(key), key_prefix: ingestKeyPrefix(key), ...grace, updated_at: now });
+    // The old key's use is counted afresh from this rotation, so ending it early names what it still carries.
+    await patchSourceStats(ctx, row, () => ({ old_key_last_at: undefined, old_key_events: 0 }), now);
     return { source: await sourceViewOf(ctx, (await ctx.db.get(row._id))!), ingest_key: key };
+  },
+});
+
+/** Stop accepting a rotated-out key now rather than when its grace window ends. */
+export const endOldKey = mutation({
+  args: { ...scopeArgs, source: v.string() },
+  handler: async (ctx, args) => {
+    const { userId, workspaceKey } = await scopeOf(ctx, args);
+    const row = await sourceByRef(ctx, userId, workspaceKey, args.source);
+    if (row.old_key_hash) {
+      await ctx.db.patch(row._id, { old_key_hash: undefined, old_key_prefix: undefined, old_key_until: undefined, updated_at: Date.now() });
+      await patchSourceStats(ctx, row, () => ({ old_key_last_at: undefined, old_key_events: 0 }));
+    }
+    return null;
   },
 });
 
@@ -317,6 +429,39 @@ export const removeSource = mutation({
   },
 });
 
+/** Rows removeSourcePreview counts per table before it reports a floor ("1,000+"). */
+const REMOVE_PREVIEW_CAP = 1000;
+
+/**
+ * What removing a source deletes, counted before the person confirms: its
+ * issues (open ones and those a task is filed on), metric watches, replays and
+ * app call audit. Each count stops at REMOVE_PREVIEW_CAP and says so.
+ */
+export const removeSourcePreview = query({
+  args: { ...scopeArgs, source: v.string() },
+  handler: async (ctx, args) => {
+    const { userId, workspaceKey } = await scopeOf(ctx, args);
+    const row = await sourceByRef(ctx, userId, workspaceKey, args.source);
+    const cap = REMOVE_PREVIEW_CAP;
+    const count = (rows: unknown[]) => ({ n: Math.min(rows.length, cap), capped: rows.length > cap });
+    const groups = await ctx.db.query("event_groups").withIndex("by_source_last_seen", (q) => q.eq("source_id", row._id)).take(cap + 1);
+    const open = groups.filter((g) => g.status === "open");
+    const tasked = groups.filter((g) => g.signal_task_id);
+    const watches = await ctx.db.query("metric_watches").withIndex("by_source", (q) => q.eq("source_id", row._id)).take(cap + 1);
+    const replays = await ctx.db.query("replays").withIndex("by_source_started", (q) => q.eq("source_id", row._id)).take(cap + 1);
+    const calls = await ctx.db.query("app_calls").withIndex("by_source_created", (q) => q.eq("source_id", row._id)).take(cap + 1);
+    return {
+      source: row.short_id,
+      issues: count(groups),
+      open: { n: open.length, capped: groups.length > cap },
+      tasked: { n: tasked.length, capped: groups.length > cap },
+      watches: count(watches),
+      replays: count(replays),
+      calls: count(calls),
+    };
+  },
+});
+
 /**
  * Rows one purge transaction deletes. Samples carry stacks and context (tens
  * of KB each at the limits), so the page is counted in rows read, not groups:
@@ -348,6 +493,9 @@ export const purgeSourceRows = internalMutation({
       await del(samples);
       if (budget <= 0) break;
       await del(await ctx.db.query("event_group_tallies").withIndex("by_group", (q) => q.eq("group_id", group._id)).collect());
+      const people = await ctx.db.query("event_group_users").withIndex("by_group_user", (q) => q.eq("group_id", group._id)).take(budget);
+      await del(people);
+      if (budget <= 0) break;
       await del([group]);
     }
     if (budget > 0) await del(await bySource("metric_watches", budget));
@@ -389,10 +537,25 @@ export const webGetSource = query({
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token).catch(() => null);
     if (!userId) return null;
-    const row = await readableRowByRef(ctx, "event_sources", userId, args.ref);
+    const row = await readableRowByRef(ctx, "event_sources", userId, args.ref, (name) => sourceByNameAnywhere(ctx, userId, name));
     return row ? await sourceViewOf(ctx, row) : null;
   },
 });
+
+/**
+ * A source by its name in any workspace the reader belongs to (their own,
+ * then each team's): an Ops link carries the name, and one opened from
+ * another workspace says whose it is. The first match wins.
+ */
+async function sourceByNameAnywhere(ctx: any, userId: Id<"users">, name: string): Promise<Doc<"event_sources"> | null> {
+  const memberships = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", userId)).take(50);
+  const keys = [`user:${userId}`, ...memberships.map((m: Doc<"team_memberships">) => `team:${m.team_id}`)];
+  for (const key of keys) {
+    const row = await ctx.db.query("event_sources").withIndex("by_workspace_name", (q: any) => q.eq("workspace", key).eq("name", name)).first();
+    if (row) return row;
+  }
+  return null;
+}
 
 // ── Groups and the timeline ──
 
@@ -407,23 +570,27 @@ export const listGroups = query({
     status: v.optional(groupStatusValidator),
     kind: v.optional(groupKindValidator),
     limit: v.optional(v.number()),
+    /** Only groups last seen before this: the next page of a list a reader scrolled past. */
+    before: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { userId, workspaceKey } = await scopeOf(ctx, args);
     const limit = Math.min(Math.max(args.limit ?? 50, 1), LIST_CAP);
+    const before = args.before;
     const source = args.source ? await sourceByRef(ctx, userId, workspaceKey, args.source) : null;
     const groups = ctx.db.query("event_groups");
     // The index that takes the most of the filter; a source and a status, or
     // a kind alone, are exact.
+    const upTo = <Q extends { lt: (f: "last_seen", v: number) => any }>(q: Q) => (before !== undefined ? q.lt("last_seen", before) : q);
     const base = source
       ? args.status
-        ? groups.withIndex("by_source_status_last_seen", (q) => q.eq("source_id", source._id).eq("status", args.status!))
-        : groups.withIndex("by_source_last_seen", (q) => q.eq("source_id", source._id))
+        ? groups.withIndex("by_source_status_last_seen", (q) => upTo(q.eq("source_id", source._id).eq("status", args.status!)))
+        : groups.withIndex("by_source_last_seen", (q) => upTo(q.eq("source_id", source._id)))
       : args.status
-        ? groups.withIndex("by_workspace_status_last_seen", (q) => q.eq("workspace", workspaceKey).eq("status", args.status!))
+        ? groups.withIndex("by_workspace_status_last_seen", (q) => upTo(q.eq("workspace", workspaceKey).eq("status", args.status!)))
         : args.kind
-          ? groups.withIndex("by_workspace_kind_last_seen", (q) => q.eq("workspace", workspaceKey).eq("kind", args.kind!))
-          : groups.withIndex("by_workspace_last_seen", (q) => q.eq("workspace", workspaceKey));
+          ? groups.withIndex("by_workspace_kind_last_seen", (q) => upTo(q.eq("workspace", workspaceKey).eq("kind", args.kind!)))
+          : groups.withIndex("by_workspace_last_seen", (q) => upTo(q.eq("workspace", workspaceKey)));
     const out: Doc<"event_groups">[] = [];
     // A filter the index could not take (a kind beside a source or status) is
     // applied while reading, over at most GROUP_SCAN_MAX rows: groups are
@@ -434,11 +601,40 @@ export const listGroups = query({
       if (++scanned > GROUP_SCAN_MAX) break;
       if (args.status && row.status !== args.status) continue;
       if (args.kind && row.kind !== args.kind) continue;
+      if (isRecordNotIssue(row)) continue;
       out.push(row);
       if (out.length >= limit) break;
     }
     const now = Date.now();
     return out.map((row) => groupView(row, now));
+  },
+});
+
+/** How many matches searchGroups returns at most. */
+const SEARCH_CAP = 100;
+
+/**
+ * Groups whose title matches a search, across the whole workspace and not
+ * only the newest windows a device holds, so a person finds an old resolved
+ * issue by name. Optionally one status. Relevance order; the Issues list
+ * sorts them its own way.
+ */
+export const searchGroups = query({
+  args: { ...scopeArgs, q: v.string(), status: v.optional(groupStatusValidator), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const { workspaceKey } = await scopeOf(ctx, args);
+    const q = args.q.trim().slice(0, 200);
+    if (!q) return [];
+    const limit = Math.min(Math.max(args.limit ?? 50, 1), SEARCH_CAP);
+    const rows = await ctx.db
+      .query("event_groups")
+      .withSearchIndex("search_title", (s) => {
+        const base = s.search("title", q).eq("workspace", workspaceKey);
+        return args.status ? base.eq("status", args.status) : base;
+      })
+      .take(limit);
+    const now = Date.now();
+    return rows.filter((row) => !isRecordNotIssue(row)).map((row) => groupView(row, now));
   },
 });
 
@@ -480,42 +676,161 @@ async function groupCommit(ctx: any, userId: Id<"users">, row: Pick<Doc<"event_g
   };
 }
 
-/** Resolve, ignore, mute or reopen a group. Resolving can name the release that carries the fix. */
+/**
+ * Resolve, ignore, mute or reopen a group. Resolving can name the release
+ * that carries the fix. `restore` is an undo: it puts back the resolve stamps
+ * the group held before the gesture it takes back, so a regressed group that
+ * was resolved by mistake reads as regressed again.
+ */
 export const setGroupStatus = mutation({
-  args: { ...scopeArgs, group: v.string(), status: groupStatusValidator, resolved_in: v.optional(v.string()) },
+  args: {
+    ...scopeArgs,
+    group: v.string(),
+    status: groupStatusValidator,
+    resolved_in: v.optional(v.string()),
+    restore: v.optional(v.object({
+      resolved_at: v.union(v.number(), v.null()),
+      resolved_in: v.union(v.string(), v.null()),
+      resolved_via: v.optional(v.union(v.literal("person"), v.literal("recovered"), v.literal("vendor"), v.null())),
+      resolved_by: v.optional(v.union(v.id("users"), v.null())),
+    })),
+  },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
     const row = await groupByRef(ctx, userId, args.group);
     const now = Date.now();
     const patch: Partial<Doc<"event_groups">> = { status: args.status, updated_at: now };
-    if (args.status === "resolved") {
+    if (args.restore) {
+      patch.resolved_at = args.restore.resolved_at ?? undefined;
+      patch.resolved_in = args.restore.resolved_in ?? undefined;
+      // An older client's undo names no resolver: the stamps it puts back are the time and release alone.
+      if (args.restore.resolved_via !== undefined) patch.resolved_via = args.restore.resolved_via ?? undefined;
+      if (args.restore.resolved_by !== undefined) patch.resolved_by = args.restore.resolved_by ?? undefined;
+    } else if (args.status === "resolved") {
       patch.resolved_at = now;
       patch.resolved_in = args.resolved_in?.trim() || undefined;
+      patch.resolved_via = "person";
+      patch.resolved_by = userId as Id<"users">;
     }
     await ctx.db.patch(row._id, patch);
     const delta = openGroupsDelta(row.status, args.status);
-    const source = delta ? await ctx.db.get(row.source_id) : null;
-    if (source) await patchSourceStats(ctx, source, (s) => ({ groups_open: Math.max(0, (s.groups_open ?? 0) + delta) }), now);
+    const moved = row.status !== args.status ? await ctx.db.get(row.source_id) : null;
+    if (moved) await patchSourceStats(ctx, moved, (s) => ({ groups_open: Math.max(0, (s.groups_open ?? 0) + delta), ...(s.group_counts ? { group_counts: moveGroupCount(s.group_counts, row.status, args.status) } : {}) }), now);
     return { group: groupView(await withTally(ctx, (await ctx.db.get(row._id))!), now) };
+  },
+});
+
+/**
+ * The fix session a person started on a group from its page: recorded on the
+ * group, so the page shows it running and a second press opens it instead of
+ * starting another. Only the session's own owner can name it.
+ */
+export const setGroupFix = mutation({
+  args: { ...scopeArgs, group: v.string(), conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const row = await groupByRef(ctx, userId, args.group);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || conversation.user_id !== userId) notFound("No such session");
+    const now = Date.now();
+    await ctx.db.patch(row._id, { fix_conversation_id: args.conversation_id, fix_started_at: now, updated_at: now });
+    return { group: groupView(await withTally(ctx, (await ctx.db.get(row._id))!), now) };
+  },
+});
+
+/**
+ * Re-point a group at the problem task it really is, or unlink a misfiled
+ * one (`task` null). The task is named by short id or id and must be one the
+ * caller can read. A later promotion files a new problem only for a group
+ * with no task, so an unlink lets the next transition file it again.
+ */
+export const setGroupTask = mutation({
+  args: { ...scopeArgs, group: v.string(), task: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const row = await groupByRef(ctx, userId, args.group);
+    const task = args.task ? await requireTaskByRef(ctx, userId, args.task) : null;
+    const now = Date.now();
+    await ctx.db.patch(row._id, { signal_task_id: task?._id, updated_at: now });
+    return { group: groupView(await withTally(ctx, (await ctx.db.get(row._id))!), now), task_id: task?._id ?? null };
+  },
+});
+
+/** How far back a group's transitions are read, and how many transition rows of its source one read walks. */
+const GROUP_TRANSITIONS_MAX_DAYS = 90;
+const GROUP_TRANSITIONS_SCAN_MAX = 3000;
+
+/**
+ * One group's transitions over the last `days` (at most 90), and its
+ * source's deploys in that span, newest first:
+ * what a check or metric's failing and passing spans, and an error's
+ * lifecycle, are drawn from. Read off its source's stream, so a busy source
+ * may stop at the scan cap before the window's start; `complete` says
+ * whether the whole window was read.
+ */
+export const groupTransitions = query({
+  args: { ...scopeArgs, group: v.string(), days: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const row = await groupByRef(ctx, userId, args.group);
+    const days = Math.min(Math.max(args.days ?? 30, 1), GROUP_TRANSITIONS_MAX_DAYS);
+    const since = Math.max(Date.now() - days * 86_400_000, row.first_seen - 3600_000);
+    const out: Doc<"external_events">[] = [];
+    let scanned = 0;
+    let complete = true;
+    for await (const e of ctx.db.query("external_events").withIndex("by_source_created", (q) => q.eq("source_id", row.source_id).gte("created_at", since)).order("desc")) {
+      if (++scanned > GROUP_TRANSITIONS_SCAN_MAX) {
+        complete = false;
+        break;
+      }
+      // The source's deploys ride along: they place the releases on the same axis.
+      if (e.group_id === row._id || e.kind === "deploy") out.push(e);
+    }
+    return { events: out, since, complete };
   },
 });
 
 /** The transitions across a workspace's sources, newest first (the Ops timeline, `cast events ls`). */
 export const listEvents = query({
-  args: { ...scopeArgs, source: v.optional(v.string()), since: v.optional(v.number()), limit: v.optional(v.number()) },
+  args: { ...scopeArgs, source: v.optional(v.string()), since: v.optional(v.number()), before: v.optional(v.number()), limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const { userId, workspaceKey } = await scopeOf(ctx, args);
     const limit = Math.min(Math.max(args.limit ?? 50, 1), LIST_CAP);
     const since = args.since ?? 0;
+    // `before` pages back: the rows strictly older than the oldest a reader holds.
+    const before = args.before ?? Number.MAX_SAFE_INTEGER;
     const source = args.source ? await sourceByRef(ctx, userId, workspaceKey, args.source) : null;
     // Ingestion rows are the only external_events rows that carry a
     // workspace key, so this index is the ingestion timeline and nothing else.
     const rows = await (source
-      ? ctx.db.query("external_events").withIndex("by_source_created", (q) => q.eq("source_id", source._id).gte("created_at", since))
-      : ctx.db.query("external_events").withIndex("by_workspace_created", (q) => q.eq("workspace", workspaceKey).gte("created_at", since)))
+      ? ctx.db.query("external_events").withIndex("by_source_created", (q) => q.eq("source_id", source._id).gte("created_at", since).lt("created_at", before))
+      : ctx.db.query("external_events").withIndex("by_workspace_created", (q) => q.eq("workspace", workspaceKey).gte("created_at", since).lt("created_at", before)))
       .order("desc")
       .take(limit);
     return rows;
+  },
+});
+
+/** A page of the Timeline's occurrences. Small: each sample carries its stack and context. */
+export const SAMPLE_PAGE = 50;
+
+/**
+ * The occurrences groups keep (event_samples, GROUP_RULES.samples_per_group
+ * per group), newest first, for the Timeline's occurrence rows: each with its
+ * message, stack, url, user, release and replay. `before` pages back.
+ */
+export const listSamples = query({
+  args: { ...scopeArgs, source: v.optional(v.string()), before: v.optional(v.number()), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const { userId, workspaceKey } = await scopeOf(ctx, args);
+    const limit = Math.min(Math.max(args.limit ?? SAMPLE_PAGE, 1), 200);
+    const before = args.before ?? Number.MAX_SAFE_INTEGER;
+    const source = args.source ? await sourceByRef(ctx, userId, workspaceKey, args.source) : null;
+    return await (source
+      ? ctx.db.query("event_samples").withIndex("by_source_at", (q) => q.eq("source_id", source._id).lt("at", before))
+      : ctx.db.query("event_samples").withIndex("by_workspace_at", (q) => q.eq("workspace", workspaceKey).lt("at", before)))
+      .order("desc")
+      .take(limit);
   },
 });
 
@@ -537,9 +852,11 @@ export const sourceForKey = internalQuery({
       const wait = await windowSpent(ctx.db, args.guess_guard.key, args.guess_guard.max, args.guess_guard.window_ms);
       if (wait !== null) return { retry_after_ms: wait };
     }
-    const row = await ctx.db.query("event_sources").withIndex("by_ingest_key_hash", (q) => q.eq("ingest_key_hash", args.key_hash)).first();
+    // The current key, or a rotated-out one still inside its grace window.
+    const row = (await ctx.db.query("event_sources").withIndex("by_ingest_key_hash", (q) => q.eq("ingest_key_hash", args.key_hash)).first())
+      ?? (await ctx.db.query("event_sources").withIndex("by_old_key_hash", (q) => q.eq("old_key_hash", args.key_hash)).filter((q) => q.gt(q.field("old_key_until"), Date.now())).first());
     if (!row) return null;
-    return { _id: row._id, status: row.status, allowed_origins: row.config?.allowed_origins ?? null };
+    return { _id: row._id, status: row.status, allowed_origins: row.config?.allowed_origins ?? null, ...(row.ingest_key_hash !== args.key_hash ? { old_key: true } : {}) };
   },
 });
 
@@ -592,7 +909,7 @@ function overflowPlan(plan: GroupPlan): GroupPlan {
 export const GROUP_WRITE_EVERY_MS = 60_000;
 
 /** The group fields a tally may hold ahead of the row: counts and names, never a status a person sets. */
-const TALLY_FIELDS = ["count", "last_seen", "buckets", "last_release", "title", "culprit", "level", "meta", "sample_count", "last_sha"] as const;
+const TALLY_FIELDS = ["count", "last_seen", "buckets", "days", "last_release", "title", "culprit", "level", "meta", "sample_count", "last_sha", "users", "users_since", "messages"] as const;
 
 function stateOf(row: Doc<"event_groups">): GroupState {
   return {
@@ -602,11 +919,16 @@ function stateOf(row: Doc<"event_groups">): GroupState {
     first_seen: row.first_seen,
     last_seen: row.last_seen,
     buckets: row.buckets,
+    days: row.days,
     first_release: row.first_release,
     last_release: row.last_release,
     resolved_at: row.resolved_at,
     resolved_in: row.resolved_in,
+    resolved_via: row.resolved_via,
+    resolved_by: row.resolved_by,
     regressed_at: row.regressed_at,
+    regressed_in: row.regressed_in,
+    failed_at: row.failed_at,
     last_transition: row.last_transition,
     last_transition_at: row.last_transition_at,
     meta: row.meta ? { ok: row.meta.ok } : undefined,
@@ -677,6 +999,7 @@ export async function upsertGroup(
   const newest = plans.reduce((a, b) => (b.occurrence.at >= a.occurrence.at ? b : a));
   const meta = next.meta || newest.meta ? { ...existing?.meta, ...newest.meta, ...next.meta } : existing?.meta;
   const keep = samplesToKeep(plans);
+  const people = await newGroupUsers(ctx, stored?._id ?? null, plans);
   // Samples a group held before sample_count existed are counted once, here.
   const priorSamples = existing ? existing.sample_count ?? (await countSamples(ctx, existing._id)) : 0;
   const fields: Record<string, unknown> = {
@@ -688,6 +1011,9 @@ export async function upsertGroup(
     sample_count: Math.min(priorSamples + keep.length, GROUP_RULES.samples_per_group),
     // A release with no known deploy sha clears the last one: it named another build.
     last_sha: envelope.release ? envelope.sha : existing?.last_sha,
+    ...usersFields(existing, people.added, now),
+    // One job name holds many causes: each failure counts under what it said, so the page splits them by count, not by the kept samples.
+    ...(next.kind === "job" ? { messages: tallyMessages(existing?.messages, plans.map((p) => ({ message: p.sample.message, at: p.occurrence.at }))) } : {}),
   };
 
   let groupId: Id<"event_groups">;
@@ -706,7 +1032,8 @@ export async function upsertGroup(
     ({ group_id: groupId, short_id: shortId } = await writeGroup(ctx, source, stored, plan.fingerprint, { ...fields, updated_at: now }));
     if (tally) await ctx.db.delete(tally._id);
   }
-  await appendSamples(ctx, source, groupId, plans, keep, priorSamples);
+  await appendSamples(ctx, source, groupId, plans, keep, priorSamples, existing ? { samples: priorSamples, last_release: existing.last_release, last_seen: existing.last_seen } : null);
+  for (const key of people.keys) await ctx.db.insert("event_group_users", { group_id: groupId, user_key: key, at: now });
 
   for (const t of folded.transitions) {
     await announceTransition(ctx, source, {
@@ -730,6 +1057,128 @@ export async function upsertGroup(
   }
   return { group_id: groupId, short_id: shortId, open_delta: openGroupsDelta(existing?.status, next.status), transitions: folded.transitions.length };
 }
+
+/** How many distinct people one group counts at most; past it the count stops growing rather than the table. */
+const GROUP_USERS_MAX = 10_000;
+/** New people one batch may add to a group: a bounded number of index reads per batch. */
+const GROUP_USERS_PER_BATCH = 50;
+
+/**
+ * The people in a batch the group has not counted yet, and the alias keys to
+ * store. A person is every identifier their occurrences carry together
+ * (lib/groupPeople): one already held under any of their keys is not new,
+ * and their other keys are stored beside it so the next occurrence matches
+ * whichever key it arrives with.
+ */
+async function newGroupUsers(ctx: any, groupId: Id<"event_groups"> | null, plans: GroupPlan[]): Promise<{ added: number; keys: string[] }> {
+  const clusters = clusterPeople(plans.filter((p) => p.occurrence.ok !== true).map((p) => p.sample.user)).slice(0, GROUP_USERS_PER_BATCH);
+  let added = 0;
+  const keys: string[] = [];
+  for (const c of clusters) {
+    const held = new Set<string>();
+    if (groupId) {
+      for (const key of c) {
+        if (await ctx.db.query("event_group_users").withIndex("by_group_user", (q: any) => q.eq("group_id", groupId).eq("user_key", key)).first()) held.add(key);
+      }
+    }
+    if (!held.size) added++;
+    keys.push(...c.filter((k) => !held.has(k)));
+  }
+  return { added, keys };
+}
+
+/**
+ * The group's people count after a batch. A group that existed before people
+ * were counted starts its count now and says since when (users_since), so a
+ * reader never shows a partial count as the whole.
+ */
+function usersFields(existing: Doc<"event_groups"> | null, added: number, now: number): { users?: number; users_since?: number } {
+  const counting = existing ? existing.users !== undefined || existing.users_since !== undefined : true;
+  const users = Math.min(GROUP_USERS_MAX, (existing?.users ?? 0) + added);
+  const since = existing?.users_since ?? (counting ? undefined : now);
+  return { users: counting || added ? users : existing?.users, users_since: since };
+}
+
+/** Alias rows one recount reads for a group; a group holding more is left as counted. */
+const GROUP_USERS_READ = 1000;
+
+/**
+ * Recounts the people of groups that counted one person twice: before
+ * aliases were stored, a person who arrived once by id and once by email (or
+ * by two ids beside one email) was two rows. Where the group keeps every
+ * occurrence as a sample the count becomes exact; elsewhere each person the
+ * kept samples show under several stored keys counts once. The missing
+ * aliases are stored so the next occurrence matches. One page per run; it
+ * schedules itself until every group has been read:
+ * `npx convex run ingest:recountGroupUsers '{}'` through packages/convex/run.sh.
+ */
+export const recountGroupUsers = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("event_groups").paginate({ cursor: args.cursor ?? null, numItems: BACKFILL_USERS_PAGE });
+    let fixed = 0;
+    for (const g of page.page) {
+      if (!g.users || g.users < 2) continue;
+      if (await ctx.db.query("event_group_tallies").withIndex("by_group", (q) => q.eq("group_id", g._id)).first()) continue;
+      const rows = await ctx.db.query("event_group_users").withIndex("by_group_user", (q) => q.eq("group_id", g._id)).take(GROUP_USERS_READ + 1);
+      if (rows.length > GROUP_USERS_READ) continue;
+      const samples = await ctx.db.query("event_samples").withIndex("by_group_at", (q) => q.eq("group_id", g._id)).order("desc").take(BACKFILL_USERS_SAMPLES);
+      const clusters = clusterPeople(samples.map((s) => s.user));
+      const { over, add } = mergeStoredPeople(clusters, new Set(rows.map((r) => r.user_key)));
+      for (const key of add) await ctx.db.insert("event_group_users", { group_id: g._id, user_key: key, at: Date.now() });
+      // Every occurrence kept: the samples name everyone it hit, so the count is exact and needs no "since".
+      const exact = samples.length >= g.count && clusters.length > 0 ? clusters.length : null;
+      const users = exact ?? Math.max(1, g.users - over);
+      if (users === g.users && !(exact !== null && g.users_since)) continue;
+      await ctx.db.patch(g._id, exact !== null ? { users, users_since: undefined } : { users });
+      fixed++;
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.ingest.recountGroupUsers, { cursor: page.continueCursor });
+    return { fixed, done: page.isDone };
+  },
+});
+
+/** Groups one backfill page reads; each reads at most BACKFILL_USERS_SAMPLES samples. */
+const BACKFILL_USERS_PAGE = 50;
+const BACKFILL_USERS_SAMPLES = 100;
+
+/**
+ * Counts the people a group's kept samples name, for a group that counts
+ * nobody yet: groups that existed before people were counted (or whose
+ * people only rode samples a source sent before) read "–" in the Issues list
+ * while their page names who hit them. The count is a floor, so it says
+ * since when (users_since, the oldest sample counted). A group with a tally
+ * waiting to flush is left to its next batch. One page per run; it schedules
+ * itself until every group has been read. Run once after a deploy:
+ * `npx convex run ingest:backfillGroupUsers '{}'` through packages/convex/run.sh.
+ */
+export const backfillGroupUsers = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("event_groups").paginate({ cursor: args.cursor ?? null, numItems: BACKFILL_USERS_PAGE });
+    let counted = 0;
+    for (const g of page.page) {
+      if ((g.users ?? 0) > 0) continue;
+      if (await ctx.db.query("event_group_tallies").withIndex("by_group", (q) => q.eq("group_id", g._id)).first()) continue;
+      const samples = await ctx.db.query("event_samples").withIndex("by_group_at", (q) => q.eq("group_id", g._id)).order("desc").take(BACKFILL_USERS_SAMPLES);
+      const since = samples.reduce((m, s) => (userKeys(s.user).length ? Math.min(m, s.at) : m), Infinity);
+      const held = new Set((await ctx.db.query("event_group_users").withIndex("by_group_user", (q) => q.eq("group_id", g._id)).take(GROUP_USERS_READ)).map((r) => r.user_key));
+      let added = 0;
+      for (const c of clusterPeople(samples.map((s) => s.user)).slice(0, GROUP_USERS_PER_BATCH)) {
+        if (!c.some((k) => held.has(k))) added++;
+        for (const key of c) if (!held.has(key)) await ctx.db.insert("event_group_users", { group_id: g._id, user_key: key, at: Date.now() });
+      }
+      if (!added) continue;
+      await ctx.db.patch(g._id, {
+        users: Math.min(GROUP_USERS_MAX, (g.users ?? 0) + added),
+        users_since: g.users_since ?? (since > g.first_seen ? since : undefined),
+      });
+      counted++;
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.ingest.backfillGroupUsers, { cursor: page.continueCursor });
+    return { counted, done: page.isDone };
+  },
+});
 
 /** The row write every upsert shares: patch the group, or insert it with its short id. */
 async function writeGroup(
@@ -869,6 +1318,8 @@ export interface CiRun {
   sha?: string;
   branch?: string;
   run_id?: string;
+  /** How long the run took, start to its last update (the CI run series). */
+  duration_ms?: number;
 }
 
 /**
@@ -900,6 +1351,8 @@ async function githubCiSource(ctx: any, teamId: Id<"teams">, now: number): Promi
     created_at: now,
     updated_at: now,
   });
+  // CI history from before this run: the failure rate and run time series start full (ciBackfill.ts).
+  await ctx.scheduler.runAfter(0, internal.ciBackfill.forTeam, { team_id: teamId });
   return await ctx.db.get(id);
 }
 
@@ -934,6 +1387,8 @@ export async function recordCiRun(ctx: any, run: CiRun): Promise<{ transitions: 
       url: run.url,
       context_json: JSON.stringify({ repository: run.repository, branch: run.branch, sha: run.sha, run_id: run.run_id }),
     },
+    // Passing runs are not kept as samples; the last one stays on the group so a red streak names its last green commit.
+    ...(run.ok ? { meta: { last_ok_at: run.at, ...(run.sha ? { last_ok_sha: run.sha } : {}), ...(run.branch ? { last_ok_branch: run.branch } : {}) } } : {}),
   };
   const link: EventLink = { repository: run.repository, url: run.url, sha: run.sha, branch: run.branch };
   const out = await upsertGroup(ctx, source, [plan], {}, now, stored, link);
@@ -941,6 +1396,7 @@ export async function recordCiRun(ctx: any, run: CiRun): Promise<{ transitions: 
     events_today: (s.events_today ?? 0) + 1,
     groups_open: Math.max(0, (s.groups_open ?? 0) + out.open_delta),
     last_event_at: now,
+    ci_runs: withCiRun(s.ci_runs, { at: run.at, ok: run.ok, ...(run.duration_ms !== undefined ? { duration_ms: run.duration_ms } : {}) }),
   }), now);
   return { transitions: out.transitions };
 }
@@ -981,7 +1437,8 @@ export async function recordReplayIssues(ctx: any, source: Doc<"event_sources">,
     groups++;
   }
   if (groups) {
-    await patchSourceStats(ctx, source, (s) => ({ groups_open: Math.max(0, (s.groups_open ?? 0) + openDelta) }), now);
+    // Each wall a recording showed is an occurrence the source sent, on the day it was recorded.
+    await patchSourceStats(ctx, source, (s) => ({ ...countLanded(s, [{ at: replay.started_at, n: groups }], now), groups_open: Math.max(0, (s.groups_open ?? 0) + openDelta) }), now);
   }
   return { groups, transitions };
 }
@@ -1029,6 +1486,8 @@ export const applyBatch = internalMutation({
     items_json: v.string(),
     release: v.optional(v.string()),
     environment: v.optional(v.string()),
+    /** The batch came on a rotated-out key inside its grace window: counted on the source's stats. */
+    old_key: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<{ accepted: number; dropped: number; transitions: number; folded: number }> => {
     const items = JSON.parse(args.items_json) as IngestItem[];
@@ -1085,6 +1544,7 @@ export const applyBatch = internalMutation({
       ...(named.length ? { event_names: countEventNames(s.event_names, named, now) } : {}),
       groups_open: Math.max(0, (s.groups_open ?? 0) + openDelta),
       last_event_at: now,
+      ...(args.old_key ? { old_key_last_at: now, old_key_events: (s.old_key_events ?? 0) + items.length } : {}),
     }), now);
     return { accepted: items.length, dropped: 0, transitions, folded };
   },
@@ -1119,7 +1579,7 @@ async function countSamples(ctx: any, groupId: Id<"event_groups">): Promise<numb
  * removed. `prior` is how many the group held, so the trim reads only the
  * rows it deletes, never the group's whole set of bodies.
  */
-async function appendSamples(ctx: any, source: Doc<"event_sources">, groupId: Id<"event_groups">, plans: GroupPlan[], keep: GroupPlan[], prior: number): Promise<void> {
+async function appendSamples(ctx: any, source: Doc<"event_sources">, groupId: Id<"event_groups">, plans: GroupPlan[], keep: GroupPlan[], prior: number, held: { samples: number; last_release?: string; last_seen?: number } | null): Promise<void> {
   // Every occurrence inside a recording links the recording to its group
   // (X5), sampled or not; a kept sample also names the recording's row.
   const replays = new Map<string, Id<"replays"> | null>();
@@ -1128,14 +1588,16 @@ async function appendSamples(ctx: any, source: Doc<"event_sources">, groupId: Id
     if (ext && !replays.has(ext)) replays.set(ext, await linkReplayToGroup(ctx, source, ext, groupId, p.occurrence.at));
   }
   if (!keep.length) return;
-  for (const p of keep) {
+  const pins = samplePins(keep.map((p) => p.sample), held);
+  for (const [i, p] of keep.entries()) {
     const replayId = p.sample.replay_external_id ? replays.get(p.sample.replay_external_id) : undefined;
-    await ctx.db.insert("event_samples", { ...p.sample, workspace: source.workspace, group_id: groupId, source_id: source._id, ...(replayId ? { replay_id: replayId } : {}) });
+    await ctx.db.insert("event_samples", { ...p.sample, workspace: source.workspace, group_id: groupId, source_id: source._id, ...(replayId ? { replay_id: replayId } : {}), ...(pins[i] ? { pin: pins[i] } : {}) });
   }
   const over = prior + keep.length - GROUP_RULES.samples_per_group;
   if (over <= 0) return;
-  const oldest: Doc<"event_samples">[] = await ctx.db.query("event_samples").withIndex("by_group_at", (q: any) => q.eq("group_id", groupId)).order("asc").take(over);
-  for (const extra of oldest) await ctx.db.delete(extra._id);
+  // The trim reads a few past the overflow so it can pass over pinned samples and keep the group's samples spread over its life.
+  const oldest: Doc<"event_samples">[] = await ctx.db.query("event_samples").withIndex("by_group_at", (q: any) => q.eq("group_id", groupId)).order("asc").take(over + SAMPLE_TRIM_LOOKAHEAD);
+  for (const extra of samplesToTrim(oldest, over)) await ctx.db.delete(extra._id);
 }
 
 interface Announcement {
@@ -1471,5 +1933,83 @@ export const dailyUpkeep = internalMutation({
       if (kept.length !== row.buckets.length) await ctx.db.patch(row._id, { buckets: kept });
     }
     if (!page.isDone) await ctx.scheduler.runAfter(0, internal.ingest.dailyUpkeep, { table: "event_groups", cursor: page.continueCursor });
+  },
+});
+
+// ── Exact group counts per status ──
+
+type GroupCounts = { open: number; resolved: number; ignored: number };
+type GroupStatusName = Doc<"event_groups">["status"];
+
+/** Which count a status lands in: muted is a kind of ignored. */
+function countKey(status: GroupStatusName): keyof GroupCounts {
+  return status === "resolved" ? "resolved" : status === "ignored" || status === "muted" ? "ignored" : "open";
+}
+
+/** A person's triage moved one group from one status to another: the counts follow at once, and the next recount confirms them. */
+export function moveGroupCount(counts: GroupCounts, from: GroupStatusName, to: GroupStatusName): GroupCounts {
+  const a = countKey(from);
+  const b = countKey(to);
+  if (a === b) return counts;
+  return { ...counts, [a]: Math.max(0, counts[a] - 1), [b]: counts[b] + 1 };
+}
+
+/** Groups one recount page reads. */
+const RECOUNT_PAGE = 200;
+/** Sources one sweep page walks. */
+const RECOUNT_SOURCES_PAGE = 25;
+
+/**
+ * Counts a source's groups by status, one page per run, and writes the exact
+ * counts with the time the count began. groups_open is set to the counted
+ * open too: the increments every ingest path adds to it drift (a resolve at
+ * the vendor, a mirror that reopens), and the Issues list reads the counts as
+ * its totals once its own open window is full.
+ */
+export const recountSourceGroups = internalMutation({
+  args: {
+    source_id: v.id("event_sources"),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    acc: v.optional(v.object({ open: v.number(), resolved: v.number(), ignored: v.number() })),
+    started: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const source = await ctx.db.get(args.source_id);
+    if (!source) return { done: true };
+    const started = args.started ?? Date.now();
+    const acc: GroupCounts = { ...(args.acc ?? { open: 0, resolved: 0, ignored: 0 }) };
+    const page = await ctx.db
+      .query("event_groups")
+      .withIndex("by_source_last_seen", (q) => q.eq("source_id", source._id))
+      .paginate({ cursor: args.cursor ?? null, numItems: RECOUNT_PAGE });
+    for (const g of page.page) if (!isRecordNotIssue(g)) acc[countKey(g.status)]++;
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.ingest.recountSourceGroups, { source_id: source._id, cursor: page.continueCursor, acc, started });
+      return { done: false };
+    }
+    await patchSourceStats(ctx, source, () => ({ group_counts: acc, groups_counted_at: started, groups_open: acc.open }));
+    return { done: true, counts: acc };
+  },
+});
+
+/**
+ * The sweep behind the exact counts: every source that took anything since
+ * its last count (an event, a poll, or never counted) is recounted. A quiet
+ * source keeps its count; a person's triage moves it as it happens.
+ */
+export const recountGroups = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("event_sources").paginate({ cursor: args.cursor ?? null, numItems: RECOUNT_SOURCES_PAGE });
+    let queued = 0;
+    for (const source of page.page) {
+      const s = await sourceStats(ctx, source);
+      const moved = Math.max(s.last_event_at ?? 0, s.last_poll_at ?? 0, source.updated_at ?? 0);
+      if (s.group_counts && s.groups_counted_at !== undefined && moved <= s.groups_counted_at) continue;
+      await ctx.scheduler.runAfter(0, internal.ingest.recountSourceGroups, { source_id: source._id });
+      queued++;
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.ingest.recountGroups, { cursor: page.continueCursor });
+    return { queued, done: page.isDone };
   },
 });

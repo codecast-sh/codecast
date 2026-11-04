@@ -7,12 +7,12 @@
 // A number the map has not answered yet shows as a dash, never as a zero that
 // would read as settled.
 import { memo } from "react";
-import { AlertCircle, Inbox, Radar, Rocket, Workflow, type LucideIcon } from "lucide-react";
+import { AlertCircle, Inbox, Rocket, Rss, Workflow, type LucideIcon } from "lucide-react";
 import { KeyCap } from "../../KeyCap";
 import { PIPELINE_KEYS, PIPELINE_LABELS, PIPELINE_RAIL, type PipelineStage, type StageFigure } from "../../../lib/line/pipeline";
 import "./pipeline.css";
 
-const ICONS: Record<PipelineStage, LucideIcon> = { decisions: Inbox, signals: Radar, problems: AlertCircle, flows: Workflow, shipped: Rocket };
+const ICONS: Record<PipelineStage, LucideIcon> = { decisions: Inbox, signals: Rss, problems: AlertCircle, flows: Workflow, shipped: Rocket };
 
 export const PipelineNav = memo(function PipelineNav({ figures, at, open, settling }: { figures: Record<PipelineStage, StageFigure>; at: PipelineStage | null; open: (stage: PipelineStage) => void; settling?: boolean }) {
   const item = (stage: PipelineStage) => {

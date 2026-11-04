@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The rail's three groups (Conversations, Work, Agents) drawn from props: no
+ * The rail's rows (the conversation rows, then the Work and Agents groups) drawn from props: no
  * store reads, no queries. Sidebar fills it from the live app; a surface
  * outside the app (the marketing hero) feeds it fixtures. The rows that carry
  * live counts arrive as their own views, so a heartbeat re-renders one row,
@@ -10,12 +10,12 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { ChevronsDown, ChevronsUp, Flag, FolderGit2, FolderKanban, Globe, KeyRound, Network, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper } from "lucide-react";
+import { ChevronsDown, ChevronsUp, Flag, FolderGit2, FolderKanban, Globe, KeyRound, Network, Radar, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper, Rocket } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
 import { paneDragProps, railRowClass } from "../../lib/railRow";
-import { DEVELOPER_MODE, type SurfaceMode } from "../../lib/surfaceRules";
+import { focusHidesPage } from "../../lib/railFocus";
 
 /** The Threads row: every conversation you are in, with the count of those that moved. */
 export function ThreadsNavRowView({
@@ -90,25 +90,20 @@ export function QuestionsNavRowView({
   isNarrow,
   onMobileClose,
   pending,
-  label = "Questions",
-  tip = "Decisions waiting on you",
 }: {
   isActive: boolean;
   isNarrow: boolean;
   onMobileClose?: () => void;
   pending: number;
-  /** The page's name in this mode (ModeWords.questionsPage). */
-  label?: string;
-  /** The row's tooltip in this mode (ModeWords.questionsTip). */
-  tip?: string;
 }) {
+  const label = "Decisions";
   return (
     <Link
       href="/decisions"
       onClick={onMobileClose}
       {...paneDragProps("/decisions", label)}
       className={railRowClass(isActive, isNarrow, "border-sol-violet")}
-      title={tip}
+      title="Decisions you own, and the team's"
     >
       <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -187,6 +182,8 @@ export type SidebarNavActive = {
   pages: boolean;
   sessions: boolean;
   line: boolean;
+  /** Ops (/ops): the running product's issues, replays, metrics and sources. */
+  ops?: boolean;
   triggers: boolean;
   /** The Org screen (/org and an object opened on it). */
   org: boolean;
@@ -196,7 +193,7 @@ export type SidebarNavActive = {
   projects?: boolean;
   /** Absent where the rail never shows Changes (the marketing hero). */
   changes?: boolean;
-  rootAgent: boolean;
+  deploys?: boolean;
   windows: boolean;
 };
 
@@ -217,7 +214,6 @@ export function SidebarNavView({
   isNarrow,
   scope,
   onMobileClose,
-  inbox,
   threads,
   feed,
   questions,
@@ -229,16 +225,15 @@ export function SidebarNavView({
   docs,
   orgOn,
   orgBadge,
+  opsBadge,
   offers,
   changesOn,
-  agent,
-  mode = DEVELOPER_MODE,
+  flowsOn = true,
   railMore,
 }: {
   isNarrow: boolean;
   scope?: "work";
   onMobileClose?: () => void;
-  inbox: ReactNode;
   threads?: ReactNode;
   feed?: ReactNode;
   questions?: ReactNode;
@@ -252,42 +247,31 @@ export function SidebarNavView({
   orgOn: boolean;
   /** The Org row's count of what waits on you; renders nothing at zero. */
   orgBadge?: ReactNode;
+  /** The Ops row's count of what is wrong now (alerting watches, sources down); renders nothing at zero. */
+  opsBadge?: ReactNode;
   /** Features the workspace's team never decided on (workspaceFeatureState
    *  "offer"): their row stays, marked new, and opens the feature's landing. */
   offers?: { org?: boolean; line?: boolean };
   /** The active team has Changes on (teams.features.changes): its row sits under Feed. */
   changesOn?: boolean;
-  /** The workspace's agent: its name, its hover title and its face. */
-  agent: { label: string; title: string; icon: ReactNode };
-  /** Hosted mode's rows and words (lib/surfaces.ts); developer mode when absent. */
-  mode?: SurfaceMode;
+  /** The workspace has the Flows feature on (teams.features.line). */
+  flowsOn?: boolean;
   /** A solo account's More/Fewer row (lib/railFocus.ts): `focused` while the
    *  team and fleet rows are folded away. Absent for everyone else. */
   railMore?: { focused: boolean; onToggle: () => void };
 }) {
-  const { words, page, showsPage, shows } = mode;
-  const agentsGroup = shows("nav.agentsGroup");
-  const routines = (
-    <NavSection
-      label={page("/triggers", "Triggers")}
-      href="/triggers"
-      isActive={active.triggers}
-      isNarrow={isNarrow}
-      onMobileClose={onMobileClose}
-      icon={<Zap className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-    />
-  );
+  // A solo account's focused rail leaves the team and fleet rows to More (lib/railFocus.ts).
+  const focused = !!railMore?.focused;
+  const shown = (path: string) => !focused || !focusHidesPage(path);
   return (
     <>
       {scope === "work" ? null : (<>
-      <RailHeading label="Conversations" isNarrow={isNarrow} />
       <div className="text-sm">
-        {inbox}
-        {shows("nav.threads") && threads}
-        {shows("nav.feed") && feed}
-        {changesOn && showsPage("/changes") && (
+        {shown("/threads") && threads}
+        {shown("/feed") && feed}
+        {changesOn && shown("/changes") && (
           <NavSection
-            label={page("/changes", "Changes")}
+            label="Changes"
             href="/changes"
             isActive={!!active.changes}
             isNarrow={isNarrow}
@@ -296,7 +280,29 @@ export function SidebarNavView({
             icon={<Newspaper className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
           />
         )}
+        {shown("/deploys") && (
+          <NavSection
+            label="Deploys"
+            href="/deploys"
+            isActive={!!active.deploys}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            title="Deploys: what is live, and what waits to go out"
+            icon={<Rocket className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+          />
+        )}
         {questions}
+        {/* Ops is its own area: the running product, beside the team's own streams, above chat and calls so the live huddles' heading never sits over it. */}
+        <NavSection
+          label="Ops"
+          href="/ops"
+          isActive={!!active.ops}
+          isNarrow={isNarrow}
+          onMobileClose={onMobileClose}
+          title="Ops: what is wrong in the running product right now"
+          badge={opsBadge}
+          icon={<Radar className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+        />
         {chat}
         {calls}
       </div>
@@ -311,8 +317,8 @@ export function SidebarNavView({
       <div className="text-sm">
         {/* Goals and projects are work in their own right: they need no org.
             Org is the people and agent roles who carry them. */}
-        {showsPage("/goals") && <NavSection
-          label={page("/goals", "Goals")}
+        {shown("/goals") && <NavSection
+          label="Goals"
           href="/goals"
           isActive={!!active.goals}
           popped="work"
@@ -321,8 +327,8 @@ export function SidebarNavView({
           title="Goals: what the company is trying to move"
           icon={<Flag className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
-        {showsPage("/projects") && <NavSection
-          label={page("/projects", "Projects")}
+        {shown("/projects") && <NavSection
+          label="Projects"
           href="/projects"
           isActive={!!active.projects}
           popped="work"
@@ -331,8 +337,8 @@ export function SidebarNavView({
           title="Projects: the work that moves the goals"
           icon={<FolderKanban className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
-        {shows("nav.org") && (orgOn || offers?.org) && <NavSection
-          label={page("/org", "Org")}
+        {shown("/org") && (orgOn || offers?.org) && <NavSection
+          label="Org"
           href="/org"
           isActive={active.org}
           popped="work"
@@ -343,7 +349,7 @@ export function SidebarNavView({
           icon={<Network className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         <NavSection
-          label={page("/tasks", "Tasks")}
+          label="Tasks"
           href="/tasks"
           isActive={active.tasks}
           popped="work"
@@ -356,7 +362,7 @@ export function SidebarNavView({
           icon={<TasksNavIcon />}
         />
         <NavSection
-          label={page("/docs", "Docs")}
+          label="Docs"
           href="/docs"
           isActive={active.docs}
           popped="work"
@@ -367,18 +373,16 @@ export function SidebarNavView({
           onToggle={docs.onToggle}
           icon={<DocsNavIcon />}
         />
-        {/* Hosted mode files the routines with the rest of the person's work. */}
-        {!agentsGroup && scope !== "work" && showsPage("/triggers") && routines}
-        {showsPage("/repo") && <NavSection
-          label={page("/repo", "Code")}
+        {shown("/repo") && <NavSection
+          label="Code"
           href="/repo"
           isActive={active.code}
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
           icon={<FolderGit2 className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
-        {showsPage("/files") && <NavSection
-          label={page("/files", "Files")}
+        {shown("/files") && <NavSection
+          label="Files"
           href="/files"
           isActive={active.files}
           isNarrow={isNarrow}
@@ -390,15 +394,15 @@ export function SidebarNavView({
             </svg>
           }
         />}
-        {showsPage("/vault") && <NavSection
+        <NavSection
           label="Vault"
           href="/vault"
           isActive={!!active.vault}
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
           icon={<KeyRound className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        />}
-        {showsPage("/pages") && <NavSection
+        />
+        {shown("/pages") && <NavSection
           label="Pages"
           href="/pages"
           isActive={active.pages}
@@ -412,13 +416,13 @@ export function SidebarNavView({
       {/* The Work window keeps the pinned rail and the Work group, the
           two things its pages are reached through; the rest is the main
           window's. */}
-      {scope === "work" || !agentsGroup ? null : (<>
+      {scope === "work" || focused ? null : (<>
       {/* The machinery that does the work: what is running right now, and the
           standing things that set it running. */}
-      <RailHeading label={words.agentsGroup} isNarrow={isNarrow} />
+      <RailHeading label="Agents" isNarrow={isNarrow} />
       <div data-rail-group="agents" className="text-sm">
-        {(showsPage("/flows") || (offers?.line && !mode.hosted)) && <NavSection
-          label={page("/flows", "Flows")}
+        {((flowsOn && shown("/flows")) || offers?.line) && <NavSection
+          label="Flows"
           href="/flows"
           isActive={active.line}
           isNarrow={isNarrow}
@@ -427,20 +431,16 @@ export function SidebarNavView({
           badge={offers?.line ? <NewMark /> : undefined}
           icon={<Waypoints className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
-        {routines}
-        {orgOn && (
         <NavSection
-          label={agent.label}
-          href="/anchor"
-          isActive={active.rootAgent}
+          label="Triggers"
+          href="/triggers"
+          isActive={active.triggers}
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
-          title={agent.title}
-          icon={agent.icon}
+          icon={<Zap className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />
-        )}
-        {showsPage("/windows") && <NavSection
-          label={page("/windows", "Windows")}
+        <NavSection
+          label="Windows"
           href="/windows"
           isActive={active.windows}
           isNarrow={isNarrow}
@@ -450,7 +450,7 @@ export function SidebarNavView({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zm10-2a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1h-4a1 1 0 01-1-1v-5z" />
           </svg>
           }
-        />}
+        />
       </div>
       </>)}
       {railMore && scope !== "work" && (

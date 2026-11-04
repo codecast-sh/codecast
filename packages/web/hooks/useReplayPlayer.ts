@@ -29,7 +29,8 @@ import { useWatchEffect } from "./useWatchEffect";
 export type ReplayPlayerLinkState =
   | { state: "idle" }
   | { state: "opening" }
-  | { state: "ready"; url: string; origin: string }
+  /** `window`: the stretch of a long capture this player holds (replayDomWindow); null when it holds the whole. */
+  | { state: "ready"; url: string; origin: string; window: { start_ms: number; end_ms: number | null } | null }
   /** The replay keeps no page capture: there is nothing to play, only the text stream. */
   | { state: "no-capture" }
   | { state: "failed"; error: string };
@@ -44,6 +45,8 @@ export function useReplayPlayerLink(
   replay: string | null,
   open: boolean,
   opts: { t_ms?: number | null; controls?: boolean; autoplay?: boolean },
+  /** Raised to mint a new link for the same replay (its capture grew). */
+  gen = 0,
 ): ReplayPlayerLinkState {
   const playerLink = useAction(api.replays.playerLink);
   const [link, setLink] = useState<ReplayPlayerLinkState>({ state: "idle" });
@@ -67,7 +70,7 @@ export function useReplayPlayerLink(
       (res: ReplayPlayerLink) => {
         if (cancelled) return;
         if (!res.has_dom || !res.player_url) return setLink({ state: "no-capture" });
-        setLink({ state: "ready", url: res.player_url, origin: playerOrigin(res.player_url) });
+        setLink({ state: "ready", url: res.player_url, origin: playerOrigin(res.player_url), window: res.window ?? null });
       },
       (e: unknown) => {
         if (!cancelled) setLink({ state: "failed", error: playerLinkError(e) });
@@ -76,7 +79,7 @@ export function useReplayPlayerLink(
     return () => {
       cancelled = true;
     };
-  }, [replay, open]);
+  }, [replay, open, gen]);
   return link;
 }
 

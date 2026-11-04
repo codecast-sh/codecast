@@ -535,9 +535,9 @@ export function sentryStatusAction(status: "resolved" | "ignored" | "unresolved"
   return status === "ignored" ? "issue.ignore" : "issue.resolve";
 }
 
-/** Where a person grants a source's actions: the Apps view under Signals (web opsHref.tab("apps", { app })). */
+/** Where a person grants a source's actions: the Ops Apps tab on that source (web opsHref.tab("apps", { app })). */
 export function grantPagePath(sourceRef: string): string {
-  return `/flows?view=signals&sig=apps&app=${encodeURIComponent(sourceRef)}`;
+  return `/ops/apps?app=${encodeURIComponent(sourceRef)}`;
 }
 
 /**

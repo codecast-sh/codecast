@@ -386,30 +386,30 @@ export function killSessionsLedger(r: { total: number; working: string[] }): Swi
  *  edits, binds them to a task, and its machine runs each step; an agent step starts a session of its own, a check runs
  *  a command that only looks, an automatic step runs one that acts (a rebase, a ship), and a person's step is a
  *  question in their queue. */
-export function flowRunLedger(r: { flow: string; session: string; stations: ReadonlyArray<{ label: string; kind: string }>; asks: ReadonlyArray<string>; ends: ReadonlyArray<string> }): SwitchLedger {
-  const by = (kind: string) => r.stations.filter((s) => s.kind === kind).map((s) => s.label);
+/** Shipping a session's change through a flow: what starts, what comes back to the session, what is asked of you, where it ends. */
+export function flowRunLedger(r: { flow: string; session: string; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; ends: ReadonlyArray<string> }): SwitchLedger {
+  const by = (who: string) => r.stages.filter((s) => s.who === who).map((s) => s.label);
   const agents = by("agent");
-  const checks = by("script");
-  const auto = by("auto");
+  const backs = r.stages.filter((s) => s.loops.length).map((s) => s.label);
   return {
-    name: `Run through ${r.flow}`,
+    name: `Ship through ${r.flow}`,
     subject: r.session,
     shift: null,
     figures: [
-      { value: String(r.stations.length), label: r.stations.length === 1 ? "step" : "steps" },
+      { value: String(r.stages.length), label: r.stages.length === 1 ? "stage" : "stages" },
       { value: String(agents.length), label: agents.length === 1 ? "agent session starts" : "agent sessions start", ...(agents.length ? { tone: "warn" as const } : {}) },
       { value: String(r.asks.length), label: r.asks.length === 1 ? "question for you" : "questions for you" },
     ],
     rows: [
-      { k: "Change", v: "This session's own edits" },
+      { k: "Ships", v: "This session's change" },
+      { k: "Stages", v: r.stages.map((s) => s.label).join(" → ") },
       ...(agents.length ? [{ k: "An agent", v: agents.join(", ") }] : []),
-      ...(checks.length ? [{ k: "A check", v: checks.join(", ") }] : []),
-      ...(auto.length ? [{ k: "Automatic", v: auto.join(", ") }] : []),
       ...r.asks.map((q) => ({ k: "You", v: q })),
-      { k: "Can end", v: `${r.ends.length} ways`, list: [...r.ends] },
+      ...(backs.length ? [{ k: "Back to this session", v: backs.join(", ") }] : []),
+      ...(r.ends.length ? [{ k: "Can stop", v: `${r.ends.length} ways`, list: [...r.ends] }] : []),
     ],
     stop: "Stop on its card",
-    confirm: `Run through ${r.flow}`,
+    confirm: "Ship",
     keep: "Not now",
   };
 }
@@ -557,5 +557,141 @@ export function shareOutLedger(p: ShareOutPreview): SwitchLedger {
     confirm: p.moves.length ? `Share out ${p.moves.length}` : "Share out",
     keep: "Cancel",
     ...(p.moves.length ? {} : { blocked: "Nothing to move" }),
+  };
+}
+
+/** The choice a key rotation asks: how long the key it replaces keeps working. */
+export const OLD_KEY_CHOICES = ["24h more", "Ends now"] as const;
+export type OldKeyChoice = (typeof OLD_KEY_CHOICES)[number];
+
+/**
+ * Rotating a keyed source's ingest key (convex ingest.rotateKey): a new key
+ * shown once, and the old one kept for a day so the product sending with it
+ * can ship the new one first, or ended at once for a leaked key.
+ */
+export function rotateKeyLedger(r: { source: string; prefix?: string | null; events24h: number; choice: OldKeyChoice }): SwitchLedger {
+  const endsNow = r.choice === "Ends now";
+  return {
+    name: "Rotate key",
+    subject: r.source,
+    shift: null,
+    ...(endsNow && r.events24h > 0 ? { alert: "Sends refused until redeploy" } : {}),
+    figures: [
+      { value: r.events24h.toLocaleString(), label: "events in 24h", ...(endsNow && r.events24h > 0 ? { tone: "warn" as const } : {}) },
+      { value: endsNow ? "Now" : "In 24h", label: "old key stops", ...(endsNow ? { tone: "warn" as const } : {}) },
+    ],
+    rows: [
+      ...(r.prefix ? [{ k: "Old key", v: `${r.prefix}…` }] : []),
+      { k: "New key", v: "Shown once" },
+      { k: "Until then", v: endsNow ? "Only the new key works" : "Both keys work", ...(endsNow ? { tone: "warn" as const } : { tone: "ok" as const }) },
+    ],
+    pick: { k: "Old key", options: OLD_KEY_CHOICES, value: r.choice },
+    confirm: "Rotate",
+    keep: "Cancel",
+  };
+}
+
+/** A count that may have stopped at the counter's cap: "1,000+". */
+export type CappedCount = { n: number; capped?: boolean };
+const capped = (c: CappedCount) => `${c.n.toLocaleString()}${c.capped ? "+" : ""}`;
+
+/** Pausing keeps everything and stops reading; removing deletes it. The review opens on Pause, the safe choice. */
+export const REMOVE_SOURCE_CHOICES = ["Pause", "Remove"] as const;
+export type RemoveSourceChoice = (typeof REMOVE_SOURCE_CHOICES)[number];
+
+/**
+ * Removing a source (convex ingest.removeSource then purgeSourceRows): its
+ * issues with their samples, its metric watches, replays and app call audit
+ * are deleted for good. Pause is offered beside it while the source is
+ * active, and the review opens on it.
+ */
+export function removeSourceLedger(r: {
+  source: string; provider: string; issues: CappedCount; open: CappedCount; tasked: CappedCount;
+  watches: CappedCount; replays: CappedCount; calls?: CappedCount; choice: RemoveSourceChoice; canPause: boolean; keyed: boolean;
+}): SwitchLedger {
+  const remove = r.choice === "Remove" || !r.canPause;
+  const n = capped;
+  const warn = remove ? { tone: "warn" as const } : {};
+  return {
+    name: remove ? "Remove source" : "Pause source",
+    subject: `${r.source} · ${r.provider}`,
+    shift: remove ? null : ["Active", "Paused"],
+    ...(remove ? { alert: "Deleted for good, no undo" } : {}),
+    figures: [
+      { value: n(r.issues), label: `issues · ${n(r.open)} open`, ...warn },
+      { value: n(r.replays), label: "replays", ...warn },
+      { value: n(r.watches), label: "metric watches", ...warn },
+    ],
+    rows: remove
+      ? [
+          ...(r.calls && r.calls.n ? [{ k: "App calls", v: `${capped(r.calls)} logged, deleted`, tone: "warn" as const }] : []),
+          { k: "Tasks", v: r.tasked.n ? `${capped(r.tasked)} stay, unlinked` : "None filed" },
+          { k: "Timeline", v: "Past rows stay" },
+          ...(r.keyed ? [{ k: "Its key", v: "Refused at once", tone: "warn" as const }] : []),
+        ]
+      : [
+          { k: "Issues, replays", v: "All kept", tone: "ok" as const },
+          { k: "New events", v: "Refused while paused" },
+          { k: "To undo", v: "Resume" },
+        ],
+    ...(r.canPause ? { pick: { k: "Do", options: REMOVE_SOURCE_CHOICES, value: r.choice } } : {}),
+    confirm: remove ? "Remove for good" : "Pause",
+    keep: "Cancel",
+  };
+}
+
+/** Ending a rotated-out key before its grace window does (convex ingest.endOldKey): every send still on it is refused. */
+export function endOldKeyLedger(r: { source: string; prefix?: string | null; until: number; lastAt: number | null; events: number; ago: (t: number) => string; left: string }): SwitchLedger {
+  const inUse = r.events > 0;
+  return {
+    name: "End old key",
+    subject: r.source,
+    shift: null,
+    ...(inUse ? { alert: "Sends refused until redeploy" } : {}),
+    figures: [
+      { value: r.events.toLocaleString(), label: "events on it since rotating", ...(inUse ? { tone: "warn" as const } : {}) },
+      { value: r.lastAt ? r.ago(r.lastAt) : "Never", label: "last used", ...(inUse ? { tone: "warn" as const } : {}) },
+    ],
+    rows: [
+      ...(r.prefix ? [{ k: "Old key", v: `${r.prefix}…` }] : []),
+      { k: "Ends by itself", v: `in ${r.left}` },
+      { k: "After this", v: "Only the new key works", tone: "warn" as const },
+    ],
+    confirm: "End now",
+    keep: "Keep it",
+  };
+}
+
+/** Sending a deploy target live: what goes out (commits, sessions, CI), from what is live now, where it runs, and how to undo it. */
+export function deployTargetLedger(r: {
+  target: string; repository: string; action: "deploy" | "redeploy" | "rollback";
+  fromSha: string | null; toSha: string | null; commits: number; sessions: string[]; unlinked?: number; ci: string;
+  runsOn: string | null; undo: string | null; blocked?: string;
+}): SwitchLedger {
+  const short = (s: string | null) => (s ? s.slice(0, 7) : "nothing yet");
+  const verb = r.action === "rollback" ? "Roll back" : r.action === "redeploy" ? "Redeploy" : "Deploy";
+  const red = r.ci === "failed";
+  return {
+    name: `${verb} ${r.target}`,
+    subject: r.repository,
+    shift: [short(r.fromSha), short(r.toSha)],
+    ...(red ? { alert: "CI is red on what this sends" } : {}),
+    figures: r.action === "deploy"
+      ? [
+        { value: String(r.commits), label: r.commits === 1 ? "commit" : "commits" },
+        { value: String(r.sessions.length), label: r.sessions.length === 1 ? "session" : "sessions" },
+        { value: r.ci === "passed" ? "✓" : r.ci === "failed" ? "✕" : r.ci === "running" ? "…" : "–", label: `CI ${r.ci === "none" ? "not run" : r.ci}`, ...(r.ci !== "passed" ? { tone: "warn" as const } : {}) },
+      ]
+      : [{ value: short(r.toSha), label: "goes back live" }],
+    rows: [
+      ...(r.sessions.length ? [{ k: "Carries", v: r.sessions.length === 1 ? r.sessions[0] : `${r.sessions.length} sessions`, list: r.sessions.length > 1 ? r.sessions : undefined }] : []),
+      ...(r.unlinked ? [{ k: "Not from a session", v: `${r.unlinked} ${r.unlinked === 1 ? "commit" : "commits"}` }] : []),
+      ...(r.runsOn ? [{ k: "Runs on", v: r.runsOn }] : []),
+      { k: "Goes live", v: "For everyone on it" , tone: "warn" as const },
+      { k: "To undo", v: r.undo ?? "No earlier deploy to go back to", ...(r.undo ? {} : { tone: "warn" as const }) },
+    ],
+    confirm: r.action === "deploy" ? `Deploy ${r.commits} ${r.commits === 1 ? "commit" : "commits"}` : verb,
+    keep: "Not now",
+    ...(r.blocked ? { blocked: r.blocked } : {}),
   };
 }

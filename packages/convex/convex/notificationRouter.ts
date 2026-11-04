@@ -1,6 +1,7 @@
 import { internalMutation } from "./functions";
 import type { MutationCtx } from "./_generated/server";
 import { v, type ObjectType } from "convex/values";
+import { commentIdValidator } from "./lib/conversationCommentRows";
 import { enqueuePush } from "./pushRouter";
 import { isTeamMember } from "./privacy";
 import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
@@ -68,6 +69,8 @@ export const PREFERENCE_MAP: Record<string, string> = {
   // both addressed to one person by name, the same class as a mention.
   team_join_request: "mention",
   team_join_approved: "mention",
+  // A watch that names the person by hand alerting: addressed to them, a mention's class.
+  metric_alert: "mention",
 };
 
 function isNotificationEnabled(
@@ -192,7 +195,7 @@ const EMIT_ARGS = {
   message: v.string(),
   link: v.optional(v.string()),
   conversation_id: v.optional(v.id("conversations")),
-  comment_id: v.optional(v.id("comments")),
+  comment_id: v.optional(commentIdValidator),
   // Chat deep link: entity_id already carries the channel, this names the exact
   // message. Both ride into the push payload so a tap lands on the message
   // rather than on the app.

@@ -50,6 +50,9 @@ export const socialTypes = new Set([
   "team_join_request",
   "team_join_approved",
   "passkey_changed",
+  "weekly_card",
+  // A metric watch that names the person by hand alerting (convex metricAlerts.ts).
+  "metric_alert",
   "artifact_commented",
   "chat_mention",
   "chat_reply",
@@ -118,6 +121,8 @@ export const typeLabels: Record<string, string> = {
   team_join_request: "asked to join your team",
   team_join_approved: "let you into a team",
   passkey_changed: "changed your passkeys",
+  weekly_card: "your week is ready",
+  metric_alert: "metric alert",
 };
 
 export const typeColors: Record<string, string> = {
@@ -162,6 +167,8 @@ export const typeColors: Record<string, string> = {
   team_join_request: "text-sol-violet",
   team_join_approved: "text-sol-violet",
   passkey_changed: "text-red-400",
+  weekly_card: "text-sol-magenta",
+  metric_alert: "text-red-400",
 };
 
 /** Who a notification is FROM. A snapshot on the row (Slack person, anonymous
@@ -258,6 +265,10 @@ export function notificationRoute(
   if (entityType === "team") return "/settings/team";
   // A passkey: the person's passkey list, where one they did not add is removed.
   if (entityType === "passkey") return "/settings/accounts";
+  // A weekly card: its week on /week, ready to share.
+  if (entityType === "weekly_card") return `/week?w=${encodeURIComponent(entityId)}`;
+  // A metric watch by its short id: its page, chart and alert.
+  if (entityType === "metric_watch") return `/ops/metrics/${encodeURIComponent(entityId)}`;
   // A role's page opens on its Scope tab, where a person who reports to it
   // reads their goals with what moved and what stalled.
   if (entityType === "org_role") return `/org/${entityId}`;

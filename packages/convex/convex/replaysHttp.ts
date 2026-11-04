@@ -182,7 +182,7 @@ export const replayPlayerManifest = httpAction(async (ctx, request) => {
   const cap = await openReplayCap(await replayCapKey(), new URL(request.url).searchParams.get("cap"), now);
   const bucket = replaysBucketFromEnv();
   if (!cap || !bucket) return missing();
-  const row = await ctx.runQuery(internal.replays.playerManifestRow, { replay_id: cap.r, user_id: cap.u });
+  const row = await ctx.runQuery(internal.replays.playerManifestRow, { replay_id: cap.r, user_id: cap.u, ...(cap.t !== undefined ? { t_ms: cap.t } : {}) });
   if (!row) return missing();
   const manifest = await signPlayerManifest(row, cap.exp, bucket, now);
   return new Response(JSON.stringify(manifest), { status: 200, headers: { "Content-Type": "application/json", ...headers } });

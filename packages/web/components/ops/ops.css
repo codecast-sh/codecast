@@ -2,7 +2,9 @@
    every theme carries it. Red is the area's accent and is spent on what needs
    a person; the rest stays in the text and border inks. */
 
+/* Every Ops detail page (issue, replay, metric, app) shares one column: one max width, centered, one padding, so the title, actions and tabs stay put on every hop. */
 .ops-area {
+  --ops-page-max: 1480px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -46,7 +48,7 @@
   border-bottom: 2px solid transparent; margin-bottom: -1px;
 }
 .ops-tab:hover { color: var(--sol-text); }
-.ops-tab[data-active="true"] { color: var(--sol-text); border-bottom-color: var(--sol-red); }
+.ops-tab[data-active="true"] { color: var(--sol-text); border-bottom-color: var(--sol-text); }
 .ops-tab-count {
   min-width: 18px; height: 16px; padding: 0 5px; border-radius: 8px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -55,12 +57,14 @@
 }
 .ops-tab[data-active="true"] .ops-tab-count { color: var(--sol-text); }
 /* Red is spent on counts that wait on a person, on every tab, active or not. */
-.ops-tab-count[data-alert="true"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 14%, transparent); }
-/* The shortcut shows when the pointer or focus is on the tab bar, so at rest
-   a tab carries one number, never a count beside a keycap. */
-.ops-tab-key { opacity: 0; transition: opacity 120ms ease; }
-.ops-tabs:hover .ops-tab-key, .ops-tabs:focus-within .ops-tab-key { opacity: 0.55; }
-.ops-tab:hover .ops-tab-key, .ops-tab:focus-visible .ops-tab-key { opacity: 1; }
+.ops-tab-count.ops-tab-count[data-alert="true"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 14%, transparent); }
+/* The number-key hint sits at the bar's end, apart from the counts, and shows while the pointer is on the bar. */
+.ops-tab-keys {
+  margin-left: auto; align-self: center; padding: 0 4px 2px; display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10.5px; color: var(--sol-text-dim); opacity: 0; transition: opacity 120ms ease; flex-shrink: 0;
+}
+.ops-tabs:hover .ops-tab-keys, .ops-tabs:focus-within .ops-tab-keys { opacity: 1; }
+.ops-tabs[data-fit="true"] .ops-tab-keys { display: none; }
 
 .ops-body { flex: 1; min-height: 0; overflow: auto; }
 .ops-pad { padding: 16px 20px 40px; }
@@ -158,7 +162,7 @@
 .ops-filters { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 
 /* ── Detail pages ── */
-.ops-detail { max-width: 1180px; margin: 0 auto; padding: 18px 24px 48px; }
+.ops-detail { max-width: var(--ops-page-max); margin: 0 auto; padding: 18px 24px 48px; }
 .ops-crumb { font-size: 12px; color: var(--sol-text-muted); display: flex; align-items: center; gap: 6px; }
 .ops-crumb a:hover { color: var(--sol-text); }
 .ops-h1 { font-size: 18px; font-weight: 600; line-height: 1.35; letter-spacing: -0.01em; margin: 8px 0 6px; word-break: break-word; }
@@ -185,7 +189,7 @@
 }
 .ops-btn:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 60%, var(--sol-border)); }
 .ops-btn:disabled { opacity: 0.5; cursor: default; }
-.ops-btn[data-tone="primary"] { background: var(--sol-red); border-color: var(--sol-red); color: var(--sol-bg); }
+.ops-btn[data-tone="primary"] { background: var(--sol-blue); border-color: var(--sol-blue); color: var(--sol-bg); }
 .ops-btn[data-tone="primary"]:hover { filter: brightness(1.06); }
 
 /* ── Replay player ── */
@@ -223,7 +227,7 @@
    rows. A row is a name and its state; what stands behind it opens under it.
    A tone (ok, warn, bad, off) sets --tone once and the lamp, the verdict and
    the tags read it. The board sizes to its own width, not the window's. */
-.ops-app { container-type: inline-size; max-width: 1480px; }
+.ops-app { container-type: inline-size; max-width: var(--ops-page-max); margin: 0 auto; }
 .ops-app [data-tone="ok"], .ops-app[data-tone="ok"] { --tone: var(--sol-green); }
 .ops-app [data-tone="warn"] { --tone: var(--sol-orange); }
 .ops-app [data-tone="bad"] { --tone: var(--sol-red); }
@@ -263,6 +267,8 @@
 .ops-stat[data-tone="ok"] .ops-stat-value, .ops-stat[data-tone="bad"] .ops-stat-value { color: var(--tone); }
 .ops-stat-of { font-size: 16px; font-weight: 500; color: var(--sol-text-dim); margin-left: -7px; letter-spacing: 0; }
 .ops-stat-label { font-size: 11.5px; color: var(--sol-text-muted); white-space: nowrap; }
+button.ops-stat { background: none; border: 0; padding: 0; text-align: left; font: inherit; cursor: pointer; }
+button.ops-stat:hover .ops-stat-label { color: var(--sol-text); text-decoration: underline; text-underline-offset: 2px; }
 
 .ops-app-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 14px; align-items: start; }
 .ops-app-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
@@ -286,6 +292,10 @@
 .ops-row[data-open="true"] > .ops-row-line { background: color-mix(in srgb, var(--sol-text) 3%, transparent); }
 .ops-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ops-row-fill { flex: 1; min-width: 4px; }
+/* A call group's name and, while it fails, its reasons on a line of their own: the name takes the row's free room. */
+.ops-call-what { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.ops-call-name { max-width: 100%; overflow-wrap: anywhere; white-space: normal; overflow: visible; }
+.ops-call-reasons { display: flex; flex-wrap: wrap; gap: 4px; }
 .ops-row-when { font-size: 11.5px; color: var(--sol-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ops-row-detail { padding: 4px 12px 12px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
 .ops-row-detail .ops-kv { grid-template-columns: 84px minmax(0, 1fr); gap: 5px 10px; }
@@ -371,3 +381,62 @@
 .ops-stage { position: relative; width: 100%; max-height: 62vh; background: var(--sol-bg); border-bottom: 1px solid var(--sol-border); overflow: hidden; }
 .ops-stage-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; }
 .ops-stage-note { padding: 8px 12px; font-size: 11.5px; color: var(--sol-orange); border-bottom: 1px solid var(--sol-border); }
+
+/* A narrow tab bar sheds weight before it clips a tab: the keycaps go, then padding; every tab keeps its count, and past that the bar folds tabs into More. */
+.ops-tabs { container-type: inline-size; overflow-x: auto; scrollbar-width: none; }
+.ops-tabs::-webkit-scrollbar { display: none; }
+.ops-tab { flex-shrink: 0; }
+@container (max-width: 720px) {
+  .ops-tab-keys { display: none; }
+  .ops-tab { padding: 7px 9px 9px; gap: 5px; }
+}
+
+/* The Apps board before an app is connected: the real panels, empty and inert. */
+.ops-app-preview .ops-app-grid { opacity: 0.6; pointer-events: none; user-select: none; }
+.ops-app-ghosts { display: flex; flex-direction: column; padding: 4px 0; }
+.ops-app-ghost { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+.ops-app-ghost + .ops-app-ghost { border-top: 1px solid var(--sol-border); }
+.ops-app-ghost-lamp { width: 7px; height: 7px; border-radius: 50%; background: var(--sol-text-dim); flex-shrink: 0; }
+.ops-app-ghost-bar { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--sol-text-muted) 18%, transparent); }
+.ops-app-ghost-short { width: 14%; margin-left: auto; }
+
+/* ── Settings, Product sources: one row per source in columns (name, state, 24h, last, open), its actions in a trailing slot that never clips. ── */
+/* One grid for the whole table: every row and the head take its tracks (subgrid), so a column's values sit on one vertical line whatever each row's state or actions. */
+.ops-srows { container: srows / inline-size; font-size: 12.5px; }
+.ops-srows-grid { display: grid; grid-template-columns: minmax(120px, 1fr) max-content max-content max-content max-content max-content; column-gap: 14px; }
+.ops-srows-grid > .ops-srow-head, .ops-srows-grid > .ops-srow-wrap { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }
+.ops-srows-grid > .ops-srow-wrap > .ops-srow { grid-column: 1 / -1; grid-template-columns: subgrid; }
+.ops-srows-grid > .ops-srow-wrap > .ops-srow-sub { grid-column: 1 / -1; }
+.ops-srow { display: grid; align-items: center; min-height: 34px; }
+.ops-srow > [data-num] { text-align: right; white-space: nowrap; }
+.ops-srow-head { min-height: 26px; font-size: 11px; color: var(--sol-text-dim); border-bottom: 1px solid var(--sol-border); }
+.ops-srow-wrap { padding: 2px 6px; margin: 0 -6px; border-radius: 6px; scroll-margin: 24px; }
+.ops-srow-wrap + .ops-srow-wrap { border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); }
+.ops-srow-wrap[data-lit="true"] { background: color-mix(in srgb, var(--sol-blue) 9%, transparent); box-shadow: inset 2px 0 0 var(--sol-blue); }
+.ops-srow-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ops-srow-drop { color: var(--sol-orange); font-size: 11px; }
+.ops-srow-acts { display: inline-flex; align-items: center; justify-content: flex-end; gap: 10px; white-space: nowrap; }
+.ops-srow-act { font-size: 11px; color: var(--sol-text-muted); }
+.ops-srow-act:hover:not(:disabled) { color: var(--sol-text); }
+/* A rotated-out key still accepted: its time left, and the press that ends it. */
+.ops-key-grace { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--sol-orange); white-space: nowrap; }
+.ops-srow-sub { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 0 6px 38px; font-size: 11.5px; }
+/* A source's recordings import in Settings: one row, progress then counts, its action at the right edge. */
+.ops-srow-sub > .rp-import { flex: 1 1 auto; flex-wrap: wrap; row-gap: 4px; }
+.ops-srow-sub > .rp-import .rp-import-nums { flex: 0 1 auto; flex-wrap: wrap; }
+.ops-srow-sub > .rp-import .rp-import-acts { margin-left: auto; flex-shrink: 0; }
+@container srows (max-width: 600px) {
+  .ops-srows-grid { display: flex; flex-direction: column; }
+  .ops-srows-grid > .ops-srow-head, .ops-srows-grid > .ops-srow-wrap { display: block; }
+  .ops-srows-grid .ops-srow, .ops-srows-grid > .ops-srow-head { display: grid; grid-template-columns: minmax(0, 1fr) auto 44px 40px; column-gap: 12px; row-gap: 4px; padding: 4px 0; }
+  .ops-srow > :nth-child(5) { display: none; }
+  .ops-srow-acts { grid-column: 1 / -1; justify-content: flex-start; padding-left: 38px; }
+  .ops-srow-head > :nth-child(6) { display: none; }
+  .ops-srow-sub { padding-left: 38px; }
+}
+
+/* A count the server has not made yet: the cached rows as a floor, dimmed the same on the tab and the list. */
+.ops-tab-count[data-provisional="true"], .rp-total[data-provisional="true"] { opacity: 0.55; }
+
+/* The tab crumb never shrinks to nothing behind its slash: the workspace name and the source crumb give way first. */
+.ops-crumbs > [data-ops-crumb="tab"] { flex-shrink: 0; }

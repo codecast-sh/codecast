@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../../store/inboxStore";
 import { applyCollectionFeed } from "../useSyncCollection";
-import { detailGone, groupSamplesPrune, OPS_LIST_LIMIT, workspaceWindowPrune } from "../useSyncOps";
+import { GROUP_RULES } from "@codecast/shared/contracts/ingest";
+import { detailGone, groupSamplesPrune, OPS_LIST_LIMIT, sourceOpenPrune, workspaceWindowPrune } from "../useSyncOps";
 
 // opsGroups and opsReplays are delta collections: an opened row's detail must
 // survive a list that does not carry it, and the list must still drop a row
@@ -23,6 +24,17 @@ describe("ops list windows", () => {
     useInboxStore.getState().syncTable("opsGroups", [group("x", 5, OTHER)]);
     applyCollectionFeed("opsGroups", [group("b", 20)], undefined, groupsPrune);
     expect(ids("opsGroups")).toEqual([id("b"), id("x")].sort());
+  });
+
+  it("a source's open answer drops its open rows the server resolved, however old, and nothing of another source or status", () => {
+    // Cached as open past the workspace feeder's capped page: run records from weeks ago the server resolved since.
+    const stale = { ...group("old", 1), title: "Deploy e5e60f4 for Samvit on a/b main", kind: "check" };
+    const live = group("e2e", 50);
+    const elsewhere = { ...group("other", 2), source_id: id("src2") };
+    const settled = { ...group("done", 3), status: "resolved" };
+    useInboxStore.getState().syncTable("opsGroups", [stale, live, elsewhere, settled]);
+    applyCollectionFeed("opsGroups", [live], undefined, sourceOpenPrune(id("src")));
+    expect(ids("opsGroups")).toEqual([id("e2e"), id("other"), id("done")].sort());
   });
 
   it("an empty answer prunes nothing", () => {
@@ -49,6 +61,14 @@ describe("ops list windows", () => {
     const answer = { group: group("g1", 2), samples: [sample("s2", id("g1"), 2)] };
     applyCollectionFeed("opsSamples", answer, (d: any) => d.samples, groupSamplesPrune);
     expect(ids("opsSamples")).toEqual([id("s2"), id("s3")].sort());
+  });
+
+  it("a group's full answer drops the samples the server trimmed, older ones included", () => {
+    const sample = (seed: string, at: number) => ({ _id: id(seed), group_id: id("g1"), source_id: id("src"), at });
+    const kept = Array.from({ length: GROUP_RULES.samples_per_group }, (_, i) => sample(`k${String.fromCharCode(97 + i)}`, 100 + i));
+    useInboxStore.getState().syncTable("opsSamples", [sample("old1", 1), sample("old2", 2), ...kept.slice(1)]);
+    applyCollectionFeed("opsSamples", { group: group("g1", 200), samples: kept }, (d: any) => d.samples, groupSamplesPrune);
+    expect(ids("opsSamples")).toEqual(kept.map((k) => k._id).sort());
   });
 });
 

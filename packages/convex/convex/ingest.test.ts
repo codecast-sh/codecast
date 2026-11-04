@@ -10,6 +10,7 @@ import {
   OVERFLOW_FP,
   SOURCE_CAPS,
   applyBatch,
+  backfillGroupUsers,
   createSource,
   dailyUpkeep,
   flushGroupTally,
@@ -24,7 +25,10 @@ import {
   promoteDue,
   promotionInputs,
   rotateKey,
+  setGroupFix,
   setGroupStatus,
+  setGroupTask,
+  groupTransitions,
   sourceForKey,
   updateSource,
 } from "./ingest";
@@ -333,6 +337,18 @@ describe("readers", () => {
     expect(await h(listGroups)(w.as("u2"), { workspace: "personal" })).toEqual([]);
     await expect(h(getGroup)(w.as("u2"), { group: "eg-1" })).rejects.toThrow(/not found/);
     await expect(h(setGroupStatus)(w.as("u2"), { group: "eg-1", status: "ignored" })).rejects.toThrow(/not found/);
+  });
+
+  test("a record is never listed as an issue: a CI run filed as its own group, a check that never failed", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await batch(w, source._id, [err("Boom")]);
+    const base = { ...w.db._tables.event_groups[0] };
+    delete base._id;
+    await w.db.insert("event_groups", { ...base, short_id: "eg-8", kind: "check", fingerprint: "invariant:ci:a/b:Deploy 76f24cd8c", title: "Deploy 76f24cd8c4d1 for Aivery on a/b main", count: 1, status: "resolved" });
+    await w.db.insert("event_groups", { ...base, short_id: "eg-9", kind: "check", fingerprint: "invariant:quiet", title: "Quiet invariant", count: 0, status: "resolved" });
+    expect((await h(listGroups)(w.as("u1"), TEAM)).map((g: any) => g.short_id)).toEqual(["eg-1"]);
+    expect((await h(listGroups)(w.as("u1"), { ...TEAM, status: "resolved" }))).toEqual([]);
   });
 });
 
@@ -734,5 +750,92 @@ describe("the door", () => {
     expect(ingestErrorStatus({ data: { code: "FORBIDDEN" } })).toBe(403);
     expect(ingestErrorStatus({ data: { code: "RATE_LIMITED" } })).toBe(429);
     expect(ingestErrorStatus(new Error("boom"))).toBe(500);
+  });
+});
+
+describe("people and the fix on a group", () => {
+  test("users counts distinct people across batches, the quiet tally included", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await batch(w, source._id, [err("Boom", { user: { email: "a@x.io" } }), err("Boom", { user: { email: "A@x.io" } }), err("Boom", { user: { id: "u-2" } }), err("Boom")]);
+    expect(w.db._tables.event_groups[0].users).toBe(2);
+    expect(w.db._tables.event_groups[0].users_since).toBeUndefined();
+    await batch(w, source._id, [err("Boom", { at: NOW + 1, user: { email: "a@x.io" } }), err("Boom", { at: NOW + 2, user: { email: "c@x.io" } })]);
+    expect(live(w).users).toBe(3);
+    expect(w.db._tables.event_group_users).toHaveLength(3);
+    await h(flushGroupTally)(w.internalCtx, { group_id: w.db._tables.event_groups[0]._id });
+    expect(w.db._tables.event_groups[0].users).toBe(3);
+  });
+
+  test("a group that predates the count starts counting and says since when", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await batch(w, source._id, [err("Boom")]);
+    const g = w.db._tables.event_groups[0];
+    await w.db.patch(g._id, { users: undefined, users_since: undefined, updated_at: 0 });
+    await batch(w, source._id, [err("Boom", { at: NOW + 1, user: { email: "a@x.io" } })]);
+    expect(live(w)).toMatchObject({ users: 1 });
+    expect(typeof live(w).users_since).toBe("number");
+  });
+
+  test("a group that counted nobody counts the people its kept samples name, once", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await batch(w, source._id, [err("Boom", { user: { email: "a@x.io" } }), err("Boom", { at: NOW + 1, user: { email: "b@x.io" } })]);
+    await h(flushGroupTally)(w.internalCtx, { group_id: w.db._tables.event_groups[0]._id });
+    const g = w.db._tables.event_groups[0];
+    // As a group written before people were counted reads: samples name people, the group counts none.
+    await w.db.patch(g._id, { users: undefined, users_since: undefined });
+    for (const row of [...w.db._tables.event_group_users]) await w.db.delete(row._id);
+    await h(backfillGroupUsers)(w.internalCtx, {});
+    expect(w.db._tables.event_groups[0].users).toBe(2);
+    expect(w.db._tables.event_group_users).toHaveLength(2);
+    // A second pass finds the group counted and adds nobody.
+    await h(backfillGroupUsers)(w.internalCtx, {});
+    expect(w.db._tables.event_group_users).toHaveLength(2);
+  });
+
+  test("purging a source takes its people rows with its groups", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await batch(w, source._id, [err("Boom", { user: { email: "a@x.io" } })]);
+    await h(purgeSourceRows)(w.internalCtx, { source_id: source._id });
+    expect(w.db._tables.event_group_users).toHaveLength(0);
+  });
+
+  test("the fix session is recorded by its owner only", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await batch(w, source._id, [err("Boom")]);
+    const mine = await w.db.insert("conversations", { user_id: "u1" });
+    const theirs = await w.db.insert("conversations", { user_id: "u2" });
+    await expect(h(setGroupFix)(w.as("u1"), { group: "eg-1", conversation_id: theirs })).rejects.toThrow();
+    const out = await h(setGroupFix)(w.as("u1"), { group: "eg-1", conversation_id: mine });
+    expect(out.group).toMatchObject({ fix_conversation_id: mine });
+    expect(typeof w.db._tables.event_groups[0].fix_started_at).toBe("number");
+  });
+  test("a misfiled problem task is re-pointed by short id or unlinked, and only to a task the caller reads", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await batch(w, source._id, [err("Boom")]);
+    const mine = await w.db.insert("tasks", { short_id: "ct-7", title: "Real cause", user_id: "u1", team_id: "team_1", workspace: "team:team_1", status: "open", priority: "medium", created_at: NOW, updated_at: NOW });
+    await w.db.insert("tasks", { short_id: "ct-8", title: "Someone else's", user_id: "u2", workspace: "user:u2", status: "open", priority: "medium", created_at: NOW, updated_at: NOW });
+    const out = await h(setGroupTask)(w.as("u1"), { group: "eg-1", task: "ct-7" });
+    expect(out.task_id).toBe(mine);
+    expect(w.db._tables.event_groups[0].signal_task_id).toBe(mine);
+    await expect(h(setGroupTask)(w.as("u1"), { group: "eg-1", task: "ct-8" })).rejects.toThrow();
+    await h(setGroupTask)(w.as("u1"), { group: "eg-1", task: null });
+    expect(w.db._tables.event_groups[0].signal_task_id).toBeUndefined();
+  });
+
+  test("a group's transitions come with its source's deploys and nothing of its siblings", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await batch(w, source._id, [err("Boom"), err("Other")]);
+    const out = await h(groupTransitions)(w.as("u1"), { group: "eg-1", days: 7 });
+    const mine = w.db._tables.event_groups[0]._id;
+    expect(out.complete).toBe(true);
+    expect(out.events.length).toBeGreaterThan(0);
+    expect(out.events.every((e: any) => e.group_id === mine || e.kind === "deploy")).toBe(true);
   });
 });

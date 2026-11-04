@@ -58,6 +58,16 @@ describe("ops dispatch side effects", () => {
     expect(row!.ingest_key_hash).toBeUndefined();
   });
 
+  test("a source is attached to a project of its workspace and detached again", async () => {
+    const { t, team, ana, dispatch } = await seed();
+    const { source_id } = await dispatch(String(ana), "createOpsSource", [{ name: "api", provider: "http", workspace: "team", team_id: String(team) }]);
+    const project = await t.run((ctx) => ctx.db.insert("projects", { user_id: ana, team_id: team, workspace: `team:${team}`, title: "Web", status: "active", project_path: "/src/web" } as any));
+    await dispatch(String(ana), "setOpsSourceProject", [source_id, String(project)]);
+    expect((await t.run((ctx) => ctx.db.get(source_id)))!.project_id).toBe(project);
+    await dispatch(String(ana), "setOpsSourceProject", [source_id, null]);
+    expect((await t.run((ctx) => ctx.db.get(source_id)))!.project_id).toBeUndefined();
+  });
+
   test("pause, triage and remove land through the public functions", async () => {
     const { t, team, ana, dispatch } = await seed();
     const { source_id } = await dispatch(String(ana), "createOpsSource", [{ name: "api", provider: "http", workspace: "team", team_id: String(team) }]);
@@ -129,5 +139,28 @@ describe("ops dispatch side effects", () => {
     await dispatch(String(ana), "revokeOpsAction", [source, "jobs.rerun"]);
     row = await t.run((ctx) => ctx.db.get(source));
     expect(row!.grants).toEqual([]);
+  });
+
+  test("an app watch pauses and resumes, and a run now polls it at once", async () => {
+    const { t, team, ana, dispatch } = await seed();
+    const now = Date.now();
+    const source = await t.run((ctx) =>
+      ctx.db.insert("event_sources", {
+        workspace: `team:${team}`, team_id: team, owner_user_id: ana, short_id: "src-8", provider: "app", name: "union",
+        manifest_json: JSON.stringify({ name: "union", version: "1", readers: [{ name: "invariants", title: "Invariants", method: "GET", path: "/inv", input: {} }], actions: [], watches: [{ reader: "invariants", kind: "check", every: "1h", every_ms: 3_600_000, map: { id: "id", ok: "ok" } }], views: [] }),
+        manifest_fetched_at: now, watch_state: [{ key: "check:invariants", polled_at: now - 60_000 }], promote: [], status: "active", created_at: now, updated_at: now,
+      } as any),
+    );
+    await dispatch(String(ana), "setOpsAppWatchPaused", [source, "check:invariants", true]);
+    let row = await t.run((ctx) => ctx.db.get(source));
+    expect(row!.watch_state).toEqual([{ key: "check:invariants", polled_at: now - 60_000, paused: true }]);
+    await dispatch(String(ana), "setOpsAppWatchPaused", [source, "check:invariants", false]);
+    row = await t.run((ctx) => ctx.db.get(source));
+    expect(row!.watch_state).toEqual([{ key: "check:invariants", polled_at: now - 60_000 }]);
+    await expect(dispatch(String(ana), "setOpsAppWatchPaused", [source, "check:nope", true])).rejects.toThrow(/declares no watch/);
+
+    await dispatch(String(ana), "pollOpsAppWatch", [source, "check:invariants"]);
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(scheduled.find((f: any) => f.name.includes("pollWatchOnce"))?.args[0]).toEqual({ source_id: source, watch: "check:invariants" });
   });
 });

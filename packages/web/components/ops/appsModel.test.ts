@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AppWatch } from "@codecast/shared/contracts/appConnector";
-import { appHealth, callActor, callReason, failingNow, groupCalls, groupState, groupTone, lastFailure, schemaParams, titleLookup, usageByName, watchRows } from "./appsModel";
+import { appHealth, callActor, callReason, callsFailing, failureLine, groupCalls, liveFailures, groupState, groupTone, lastFailure, schemaParams, titleLookup, usageByName, watchRowVerdict, watchRows, watchTally } from "./appsModel";
 import type { OpsAppCall } from "./opsTypes";
 
 const NOW = Date.parse("2026-10-12T22:00:00Z");
@@ -117,19 +117,18 @@ describe("watchRows and health", () => {
     const okWatches = watchRows(WATCHES, [{ key: "job:jobs.failed", polled_at: NOW - MIN }, { key: "check:invariants.list", polled_at: NOW - MIN }], calls, NOW);
     const groups = groupCalls(calls, { grants: [], watchState: [{ key: "job:jobs.failed", polled_at: NOW - MIN }, { key: "check:invariants.list", polled_at: NOW - MIN }], watches: WATCHES, now: NOW });
     expect(appHealth({ status: "active" }, okWatches, groups)).toEqual({ tone: "ok", label: "Healthy", detail: null });
-    expect(failingNow({ status: "active" }, okWatches, groups)).toBe(0);
-    // A source that is itself in error is one thing failing, whatever its watches say.
-    expect(failingNow({ status: "error" }, okWatches, groups)).toBe(1);
+    expect(callsFailing(groups)).toBe(0);
     expect(appHealth({ status: "error", last_error: "manifest: answered 401" }, okWatches, groups)).toEqual({ tone: "bad", label: "Error", detail: "manifest: answered 401" });
     expect(appHealth({ status: "paused" }, okWatches, groups).label).toBe("Paused");
 
     const badWatches = watchRows(WATCHES, [{ key: "job:jobs.failed", polled_at: NOW - MIN, last_error: "no answer in 15s" }], [], NOW);
     expect(appHealth({ status: "active" }, badWatches, []).label).toBe("Failing");
-    expect(failingNow({ status: "active" }, badWatches, [])).toBe(1);
+    // A failing watch is counted among the watches, never again as a failing call.
+    expect(watchTally(badWatches.map(watchRowVerdict)).text).toBe("1 of 2 watches failing");
 
     const liveRead = groupCalls([call({ name: "errors.list", status: "error", error: "answered 500", created_at: NOW - HOUR })], { grants: [], watchState: [], watches: [], now: NOW });
     expect(appHealth({ status: "active" }, [], liveRead).label).toBe("Degraded");
-    expect(failingNow({ status: "active" }, [], liveRead)).toBe(1);
+    expect(callsFailing(liveRead)).toBe(1);
   });
 });
 
@@ -152,4 +151,49 @@ test("titleLookup names a call by its manifest title, else by its own name", () 
   expect(titleOf("read", "jobs.failed")).toBe("Recent job failures");
   expect(titleOf("do", "issue.resolve")).toBe("Resolve an issue");
   expect(titleOf("do", "gone.action")).toBe("gone.action");
+});
+
+describe("one failing-call aggregate for the board and every health line", () => {
+  const NOW2 = Date.UTC(2026, 10, 3, 12);
+  const metricFail = (at: number, error: string, http_status?: number) => ({ _id: `m${at}`, source_id: "s", kind: "read", name: "metrics.read", status: "error", error, http_status, created_at: at, ms: 10, bytes: 0 }) as any;
+  const ctx = { grants: [], watchState: [], watches: [], now: NOW2 };
+
+  test("a metric watch's poll names its reader once, and its reasons read as what the reader does", () => {
+    const calls = [metricFail(NOW2 - 60_000, "metric metrics.read: answered 502", 502), metricFail(NOW2 - 120_000, "metric metrics.read: no answer in 10s"), metricFail(NOW2 - 3 * 3600_000, "metric metrics.read: answered 502", 502)];
+    expect(callReason(calls[1])).toBe("Timed out");
+    expect(callActor(calls[1])).toBe("watch");
+    const [f] = liveFailures(calls, ctx);
+    expect([f.name, f.count, f.since]).toEqual(["metrics.read", 3, NOW2 - 3 * 3600_000]);
+    expect(failureLine(f, NOW2)).toBe("metrics.read returns HTTP 502 or times out, 3× in the last 3h");
+  });
+
+  test("one watch sentence: failing and retrying are failing, alerting is its own noun, a mix names both", () => {
+    expect(watchTally(["ok", "failing", "retrying", "ok"]).text).toBe("2 of 4 watches failing");
+    expect(watchTally(["ok", "retrying"]).tone).toBe("warn");
+    expect(watchTally(["alerting", "ok"]).text).toBe("1 of 2 watches alerting");
+    expect(watchTally(["alerting", "failing", "ok"])).toMatchObject({ bad: 2, word: "alerting or failing", tone: "bad" });
+    expect(watchTally(["ok", "paused"])).toMatchObject({ bad: 0, text: "2 watches ok", tone: "ok" });
+  });
+
+  test("a reader settles once a metric watch reads through it cleanly after the failure", () => {
+    const calls = [metricFail(NOW2 - 55 * 60_000, "metric metrics.read: no answer in 10s")];
+    const watch = (over: object) => ({ query_kind: "reader" as const, query: 'metrics.read {"key":"x"}', last_error: undefined, last_at: NOW2 - 3 * 60_000, updated_at: NOW2 - 3 * 60_000, ...over });
+    const recovered = groupCalls(calls, { ...ctx, metricWatches: [watch({})] })[0];
+    expect([recovered.settled, recovered.live, groupState(recovered), groupTone(recovered)]).toEqual([true, false, "Recovered", "off"]);
+    expect(liveFailures(calls, { ...ctx, metricWatches: [watch({})] })).toEqual([]);
+    // Still failing: the watch's last read failed, it read before the failure, or it reads another reader.
+    for (const w of [watch({ last_error: "no answer in 10s" }), watch({ last_at: NOW2 - 2 * 3600_000, updated_at: NOW2 - 2 * 3600_000 }), watch({ query: "metrics.list" }), watch({ query_kind: "hogql", query: "metrics.read" })]) {
+      expect(groupCalls(calls, { ...ctx, metricWatches: [w as never] })[0].live).toBe(true);
+    }
+  });
+
+  test("a manifest watch's poll failure stays the watch's, out of the live failures", () => {
+    const w = { _id: "w", source_id: "s", kind: "read", name: "jobs.failed", status: "error", error: "watch job:jobs.failed: answered 500", created_at: NOW2 - 60_000, ms: 1, bytes: 0 } as any;
+    expect(liveFailures([w], ctx)).toEqual([]);
+  });
+});
+
+test("a 2xx answer that failed for another reason is named by that reason, not its status", () => {
+  expect(callReason({ status: "error", http_status: 200, error: "watch check:invariants.list: the response is over 256 KB" })).toBe("The response is over 256 KB");
+  expect(callReason({ status: "error", http_status: 502, error: "answered 502" })).toBe("HTTP 502");
 });

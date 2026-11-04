@@ -105,11 +105,26 @@ export interface AppDescriptor {
   tokenConfig?: readonly TokenConfigField[];
   tokenLabel?: string;
   /**
+   * token-paste only: where the person makes the token, as a url template
+   * over the config fields (`{host}`), and the scopes it needs for what the
+   * connector reads and does.
+   */
+  tokenHelp?: { createUrl: string; scopes: readonly string[] };
+  /**
    * token-paste only: the connection works without a token. An app connector
    * is called with codecast's signature on every request (codecastSignature.ts),
    * so a bearer secret is for apps that prefer one.
    */
   tokenOptional?: boolean;
+}
+
+/** A tokenHelp url with the config fields filled in: what the person typed, else the field's default; a trailing slash on a host is dropped. */
+export function tokenCreateUrl(template: string, fields: readonly Pick<TokenConfigField, "key" | "default">[], values: Readonly<Record<string, string>>): string {
+  return template.replace(/\{(\w+)\}/g, (_, key: string) => {
+    const typed = values[key]?.trim();
+    const value = typed || fields.find((f) => f.key === key)?.default || "";
+    return value.replace(/\/+$/, "");
+  });
 }
 
 export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
@@ -184,6 +199,7 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     connectKind: "token-paste",
     scopes: ["team", "personal"],
     tokenLabel: "Auth token",
+    tokenHelp: { createUrl: "{host}/settings/account/api/auth-tokens/", scopes: ["org:read", "project:read", "event:read", "event:write"] },
     tokenConfig: [
       { key: "org", label: "Organization slug", flag: "org", placeholder: "acme" },
       { key: "host", label: "Host", flag: "host", default: "https://sentry.io", placeholder: "https://sentry.io" },
@@ -201,6 +217,7 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     connectKind: "token-paste",
     scopes: ["team", "personal"],
     tokenLabel: "Personal API key",
+    tokenHelp: { createUrl: "{host}/settings/user-api-keys", scopes: ["project:read", "query:read", "insight:read", "session_recording:read"] },
     tokenConfig: [
       { key: "project_id", label: "Project id", flag: "project", placeholder: "12345" },
       { key: "host", label: "Host", flag: "host", default: "https://us.posthog.com", placeholder: "https://us.posthog.com" },

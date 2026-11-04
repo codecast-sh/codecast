@@ -50,7 +50,7 @@ describe("the pipeline nav", () => {
   test("the figures read the map, and For you the viewer's own count", () => {
     const f = pipelineFigures(MAP, 28);
     expect(f.signals.n).toBe(7);
-    expect(f.signals.state.map((s) => s.words)).toEqual(["1 stopped", "2 not filed", "2 off the flow"]);
+    expect(f.signals.state.map((s) => s.words)).toEqual(["1 silent", "2 not filed", "2 off the flow"]);
     expect(f.problems).toMatchObject({ n: 5_013, unit: "open" });
     expect(f.flows.n).toBe(63);
     expect(f.flows.state).toEqual([{ words: "Union fix flow on", tone: "live" }, { words: "13 stalled", tone: "bad" }]);

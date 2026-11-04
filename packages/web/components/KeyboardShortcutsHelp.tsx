@@ -16,12 +16,7 @@ import { isTriageBarCompact, toggleTriageBarCompact } from "./triage/graduation"
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { KeyCap } from "./KeyCap";
-import { MODE_WORDS, Surface, useHostedMode, useSurfaceMode } from "../lib/surfaces";
-
-/** The most keys a chord hint shows with in hosted mode. */
-const HOSTED_CHORD_MAX_KEYS = 2;
-
-const MODE_WORDS_HOSTED = MODE_WORDS.hosted;
+import { useWorkspaceFeature } from "../lib/teamFeatures";
 
 export { KeyCap };
 
@@ -59,18 +54,14 @@ export function KeyboardShortcutsPanel() {
     });
   }, [s.shortcutsPanelOpen]);
 
-  // The palette's own rule (lib/surfaceRules ACTION_SURFACES): an action
-  // hidden there is not listed here, and hosted mode names the rest in its
-  // words. Live bindings: a rebound action shows its own keys, an unbound one
-  // drops out.
-  const mode = useSurfaceMode();
-  const hosted = mode.words === MODE_WORDS_HOSTED;
+  // Live bindings: a rebound action shows its own keys, an unbound one drops out.
+  const flowsOn = useWorkspaceFeature("line");
   const bindingsVersion = useKeyBindingsVersion();
   const changed = new Set((s.clientState.ui?.key_bindings ?? []).map((o) => o.action));
   const sections = useMemo(() => {
     type Row = { key: string; description: string; parts: string[]; action?: ShortcutAction };
     const result: { label: string; accent: string; rows: Row[] }[] = [];
-    for (const sec of visibleShortcutSections(mode, getShortcutsByContext)) {
+    for (const sec of visibleShortcutSections(flowsOn, getShortcutsByContext)) {
       if (sec.actions.length > 0) {
         result.push({ label: sec.label, accent: sec.accent, rows: sec.actions.map((a) => ({ key: a.action, action: a.def.fixed ? undefined : a.action, description: a.label, parts: formatShortcutParts(a.def) })) });
       }
@@ -80,14 +71,14 @@ export function KeyboardShortcutsPanel() {
       if (sec.when === "conversation") {
         result.push({
           label: "Composer",
-          accent: hosted ? "bg-sol-text-dim" : "bg-sol-violet",
-          rows: SEND_CHORDS.filter((c) => !c.surface || mode.shows(c.surface)).map((c) => ({ key: c.accel, description: c.label, parts: formatAcceleratorParts(c.accel) })),
+          accent: "bg-sol-violet",
+          rows: SEND_CHORDS.map((c) => ({ key: c.accel, description: c.label, parts: formatAcceleratorParts(c.accel) })),
         });
       }
     }
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, hosted, bindingsVersion]);
+  }, [flowsOn, bindingsVersion]);
 
   return (
     <div
@@ -150,24 +141,19 @@ export function KeyboardShortcutsPanel() {
               Customize
             </button>
             {triageBarHidden && (
-              <Surface name="triageBar">
-                <button
-                  onClick={toggleTriageBarCompact}
-                  className="text-sol-text-dim hover:text-sol-cyan transition-colors"
-                >
-                  Show triage bar
-                </button>
-              </Surface>
-            )}
-            {/* Tours open from the fleet's actions (ui.openTours). */}
-            <Surface name="actions.fleet">
               <button
-                onClick={() => s.setToursPanelOpen(true)}
+                onClick={toggleTriageBarCompact}
                 className="text-sol-text-dim hover:text-sol-cyan transition-colors"
               >
-                Tours
+                Show triage bar
               </button>
-            </Surface>
+            )}
+            <button
+              onClick={() => s.setToursPanelOpen(true)}
+              className="text-sol-text-dim hover:text-sol-cyan transition-colors"
+            >
+              Tours
+            </button>
           </span>
         </div>
       </div>}
@@ -211,11 +197,7 @@ export function MenuKeyCaps({
   className?: string;
 }) {
   const parts = useShortcutParts(action);
-  const hosted = useHostedMode();
   if (!parts) return null;
-  // Hosted mode teaches the short chords only: a three-key hand is a
-  // power user's, and there it reads as noise beside a row's name.
-  if (hosted && parts.length >= HOSTED_CHORD_MAX_KEYS + 1) return null;
   return (
     <span className={className}>
       {parts.map((part, i) => (

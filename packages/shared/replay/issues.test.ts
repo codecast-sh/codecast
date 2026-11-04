@@ -13,6 +13,13 @@ describe("routes", () => {
     expect(routeOf("/about-us/")).toBe("/about-us");
     expect(routeOf("/settings/notifications")).toBe("/settings/notifications");
     expect(routeOf("")).toBe("/");
+    // A caller's phone number or email, URL-encoded or not, is a record too: one route, and no number in the title.
+    expect(routeOf("/api/contacts/by-phone/%2B447754757715")).toBe("/api/contacts/by-phone/:id");
+    expect(routeOf("/api/contacts/by-phone/+17864864391")).toBe("/api/contacts/by-phone/:id");
+    expect(routeOf("/api/users/by-email/ada%40example.com")).toBe("/api/users/by-email/:id");
+    expect(routeOf("/reports/2026-11-04")).toBe("/reports/:id");
+    expect(routeOf("/api/v1/bills")).toBe("/api/v1/bills");
+    expect(routeOf("/bad/%E0%A4%A")).toBe("/bad/%E0%A4%A");
   });
 
   test("the product's own site includes its sibling hosts, not vendors", () => {

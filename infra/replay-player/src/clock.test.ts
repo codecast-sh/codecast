@@ -37,4 +37,12 @@ describe("the player's clock is the replay's clock", () => {
     expect(c.duration).toBe(32_000);
     expect(c.endOffset).toBe(30_000);
   });
+
+  test("an import that stopped early says where the capture ends, short of the row's length", () => {
+    // rp-5132: PostHog says 1:45:49, the copy reaches 14:28.5.
+    const c = replayClock({ t0: 0, replay: { duration_ms: 6_349_000 } }, { startTime: 0, totalTime: 868_522 });
+    expect(c.duration).toBe(6_349_000);
+    expect(c.captureEnd).toBe(868_522);
+    expect(rp39.captureEnd).toBe(361_115);
+  });
 });

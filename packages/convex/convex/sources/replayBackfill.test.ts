@@ -232,6 +232,8 @@ describe("an import that dies", () => {
     };
     const out = await runBackfillPage(v, fresh(), clock());
     expect(out.state).toMatchObject({ status: "done", imported: 2, failed: 1, listed: 3 });
+    // The failed one is kept by id, so the Replays tab can list it.
+    expect(out.state.failures).toEqual([{ id: "big", error: "the import died: JavaScript execution ran out of memory" }]);
   });
 });
 
@@ -262,7 +264,7 @@ describe("tend", () => {
   test("a finished run is followed by one over what arrived since, with an overlap", () => {
     const done = fresh({ status: "done", until: T - 3600_000, finished_at: T - REPLAY_FOLLOW.after_ms, imported: 7, listed: 9 });
     const next = tendImport(done, T)!;
-    expect(next).toMatchObject({ status: "running", since: T - 3600_000 - REPLAY_FOLLOW.overlap_ms, until: T, imported: 7, listed: 9, started_at: T });
+    expect(next).toMatchObject({ status: "running", since: T - 3600_000 - REPLAY_FOLLOW.overlap_ms, until: T, imported: 0, listed: 0, skipped: 0, failed: 0, started_at: T });
     expect(next.finished_at).toBeUndefined();
     expect(next.cursor).toBeUndefined();
     expect(tendImport({ ...done, finished_at: T - 60_000 }, T)).toBeNull();
@@ -285,6 +287,7 @@ describe("tend", () => {
     expect(out).toEqual({ tended: 1 });
     const row = (await db.get("s1" as any))!;
     expect(row.replay_backfill.status).toBe("running");
-    expect(scheduled).toEqual([{ source_id: "s1", run: row.replay_backfill.started_at }]);
+    // The active PostHog source also gets its facts pass (sources/replayFacts.ts), its rest sweep and its hourly tally of cut copies (sources/replayRest.ts), then its tended import.
+    expect(scheduled).toEqual([{ source_id: "s1" }, { source_id: "s1" }, { source_id: "s1" }, { source_id: "s1", run: row.replay_backfill.started_at }]);
   });
 });

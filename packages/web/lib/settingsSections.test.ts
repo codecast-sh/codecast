@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { settingsSectionForPath } from "./settingsSections";
+import { clearSettingsAnchor, peekSettingsAnchor, rememberSettingsAnchor, settingsSectionForPath } from "./settingsSections";
 
 describe("settingsSectionForPath", () => {
   it("maps every section URL to its modal section", () => {
@@ -47,5 +47,17 @@ describe("settingsSectionForPath", () => {
     expect(settingsSectionForPath("/inbox")).toBeNull();
     expect(settingsSectionForPath("/")).toBeNull();
     expect(settingsSectionForPath("/settingsfoo")).toBeNull();
+  });
+});
+
+describe("an in-app settings link hands its fragment to the panel", () => {
+  it("the fragment is held until the panel clears it, and a link without one clears it", () => {
+    rememberSettingsAnchor("/settings/integrations#source-src-4");
+    expect(peekSettingsAnchor()).toBe("#source-src-4");
+    clearSettingsAnchor();
+    expect(peekSettingsAnchor()).toBeNull();
+    rememberSettingsAnchor("/settings/integrations#product-sources");
+    rememberSettingsAnchor("/settings/integrations");
+    expect(peekSettingsAnchor()).toBeNull();
   });
 });

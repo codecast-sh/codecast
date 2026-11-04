@@ -27,9 +27,10 @@ import { useNearViewport } from "../../hooks/useNearViewport";
 import { ReplayPlayerIframe } from "./ReplayPlayerFrame";
 import { useReplayPlayerChannel, useReplayPlayerLink } from "../../hooks/useReplayPlayer";
 import { replayTitle } from "./opsModel";
+import { importedUntil } from "./replayModel";
+import { ReplayMiniBar } from "./ReplayMiniBar";
+import { replayWindowHolds } from "@codecast/shared/contracts/replayPlayer";
 
-/** The player's own bar under the page (infra/replay-player CONTROLS_H). */
-const PLAYER_BAR_PX = 44;
 /** Until the player says how big the recording is. */
 const DEFAULT_SIZE = { width: 1600, height: 1000 };
 
@@ -96,15 +97,42 @@ export function ReplayMomentEmbed({
   const slot = useLivePlayerSlot(near && playable);
   const [clicked, setClicked] = useState(false);
   const open = playable && (slot || clicked);
-  const link = useReplayPlayerLink(entity?._id ?? null, open, { t_ms: atMs });
+  // The page's own bar (ReplayMiniBar) drives the player, whose bar is hidden: the clock lives here.
+  const [clock, setClock] = useState({ t: atMs, playing: false, speed: 1, length: 0 });
+  const here = useRef(clock);
+  here.current = clock;
+  // A long capture plays a stretch at a time: leaving it opens the player again where the clock stands.
+  const [hop, setHop] = useState(0);
+  const link = useReplayPlayerLink(entity?._id ?? null, open, { t_ms: hop > 0 ? clock.t : atMs, controls: false }, hop);
+  const win = link.state === "ready" ? link.window : null;
   const [size, setSize] = useState<{ width: number; height: number; below: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const channel = useReplayPlayerChannel(link.state === "ready" ? link.origin : null, (msg) => {
     if (msg.type === "ready") {
-      setSize({ width: msg.width, height: msg.height, below: msg.below_px ?? PLAYER_BAR_PX });
+      setSize({ width: msg.width, height: msg.height, below: msg.below_px ?? 0 });
       setError(null);
-    } else if (msg.type === "error") setError(msg.message);
+      setClock((c) => ({ ...c, length: msg.duration_ms }));
+      const cur = here.current;
+      if (cur.speed !== 1) channel.send({ type: "speed", speed: cur.speed });
+      if (hop > 0) channel.send({ type: "seek", t_ms: cur.t, ...(cur.playing ? { play: true } : {}) });
+    } else if (msg.type === "size") setSize((prev) => (prev ? { ...prev, width: msg.width, height: msg.height } : prev));
+    else if (msg.type === "time") {
+      setClock((c) => ({ ...c, t: msg.t_ms, playing: msg.playing }));
+      if (win && win.end_ms !== null && msg.playing && msg.t_ms >= win.end_ms - 400) setHop((n) => n + 1);
+    } else if (msg.type === "state") setClock((c) => ({ ...c, playing: msg.playing, speed: msg.speed }));
+    else if (msg.type === "error") setError(msg.message);
   });
+  const seek = (to: number) => {
+    setClock((c) => ({ ...c, t: to }));
+    if (!replayWindowHolds(win, to)) return setHop((n) => n + 1);
+    channel.send({ type: "seek", t_ms: to, ...(here.current.playing ? { play: true } : {}) });
+  };
+  const toggle = () => channel.send({ type: here.current.playing ? "pause" : "play" });
+  const pickSpeed = (s: number) => {
+    setClock((c) => ({ ...c, speed: s }));
+    channel.send({ type: "speed", speed: s });
+  };
+  const cut = entity ? importedUntil(entity.captured_ms, entity.duration_ms) : null;
 
   if (served && !entity) {
     return (
@@ -114,7 +142,7 @@ export function ReplayMomentEmbed({
     );
   }
 
-  const box = size ?? { ...DEFAULT_SIZE, below: PLAYER_BAR_PX };
+  const box = size ?? { ...DEFAULT_SIZE, below: 0 };
   const noCapture = knownNoCapture || link.state === "no-capture";
   const problem = link.state === "failed" ? link.error : error;
   return (
@@ -164,6 +192,19 @@ export function ReplayMomentEmbed({
             </div>
           ) : null}
         </div>
+      )}
+      {size && !problem && !noCapture && (
+        <ReplayMiniBar
+          t={clock.t}
+          length={clock.length || entity?.duration_ms || 1}
+          playing={clock.playing}
+          speed={clock.speed}
+          moment={{ t: atMs, label: `${ref?.replay ?? rawId} at ${time}` }}
+          cut={cut}
+          onSeek={seek}
+          onToggle={toggle}
+          onSpeed={pickSpeed}
+        />
       )}
       <Link href={href} className="group flex items-center gap-2 px-2.5 py-1.5 hover:bg-sol-bg-highlight/40" title={`Open ${title} at ${time}`}>
         <Film className="h-3.5 w-3.5 shrink-0 text-sol-magenta" />

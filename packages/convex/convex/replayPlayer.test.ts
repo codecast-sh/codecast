@@ -8,7 +8,7 @@ import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import { parseReplayDomChunkKey, replayDomChunkKey } from "./lib/r2";
 import { mintReplayCap, openReplayCap, replayCapKey } from "./lib/replayCap";
-import { chunkDomEvents, chunkObject, playerLink, playerManifestRow, playerTarget, recordReplayChunk, saveImported, saveSummary, storeReplayDom } from "./replays";
+import { chunkDomEvents, chunkObject, playerLink, playerManifestRow, playerTarget, recordReplayChunk, saveDomSpans, saveImported, saveSummary, storeReplayDom } from "./replays";
 import { replayFrameAdmit, replayPlayerManifest, validateReplaySign } from "./replaysHttp";
 import { bump } from "./ipRateLimit";
 import { importVendorRecording } from "./sources/vendorReplay";
@@ -127,6 +127,52 @@ describe("DOM chunks", () => {
     expect(out.dom_t0).toBe(5_000);
     expect(out.dom_bytes).toBeGreaterThan(0);
     expect(calls.map((c) => c.split(" ")[0])).toEqual(["HEAD", "PUT"]);
+    // Each chunk's span rides beside its key, so the player can open a long capture a stretch at a time.
+    expect(out.dom_chunk_meta).toEqual([{ first: 5_000, last: 5_001, full: 5_001, raw: expect.any(Number) }]);
+  });
+});
+
+describe("a long capture plays a stretch at a time", () => {
+  const MB = 1024 * 1024;
+  const keys = Array.from({ length: 10 }, (_, i) => domKey(i));
+  const meta = keys.map((_, i) => ({ first: 1000 + i * 60_000, last: 1000 + i * 60_000 + 59_000, raw: 20 * MB, ...(i % 3 === 0 ? { full: 1000 + i * 60_000 } : {}) }));
+
+  test("the link names the stretch around its time, and the manifest serves only those chunks", async () => {
+    withBucket();
+    const w = world([{ _id: "r1", short_id: "rp-1", dom_chunk_keys: keys, dom_chunk_meta: meta, dom_t0: 1000 }]);
+    const actionCtx = { runQuery: async (_fn: any, args: any) => h(playerTarget)(w.as("u1"), args), scheduler: { runAfter: async () => {} } } as any;
+    const link = await h(playerLink)(actionCtx, { replay: "rp-1", t_ms: 4 * 60_000 + 10_000 });
+    expect(link.window).toEqual({ start_ms: 3 * 60_000, end_ms: 5 * 60_000 + 59_000 });
+    const cap = await openReplayCap((await replayCapKey())!, link.cap, Date.now());
+    expect(cap?.t).toBe(4 * 60_000 + 10_000);
+    const row = await h(playerManifestRow)(w.internalCtx, { replay_id: "r1", user_id: "u1", t_ms: cap!.t });
+    expect(row?.dom_chunk_keys).toEqual(keys.slice(3, 6));
+    // The frame renderer seeks anywhere with one capability: it reads the whole.
+    const frame = await h(playerLink)(actionCtx, { replay: "rp-1", t_ms: 4 * 60_000, mode: "frame" });
+    expect(frame.window).toBeNull();
+    expect((await openReplayCap((await replayCapKey())!, frame.cap, Date.now()))?.t).toBeUndefined();
+  });
+
+  test("spans read while a long recording's rest adds chunks keep the leading ones, never misaligned", async () => {
+    const w = world([{ _id: "r1", short_id: "rp-1", dom_chunk_keys: keys, dom_t0: 1000 }]);
+    // Read for the first six keys while the row already holds ten: kept, as the first six.
+    expect(await h(saveDomSpans)(w.internalCtx, { replay_id: "r1", keys: keys.slice(0, 6), meta: meta.slice(0, 6) })).toBe(true);
+    expect(w.db._tables.replays[0].dom_chunk_meta).toHaveLength(6);
+    // Keys that are not the row's leading keys are refused.
+    expect(await h(saveDomSpans)(w.internalCtx, { replay_id: "r1", keys: keys.slice(1, 7), meta: meta.slice(1, 7) })).toBe(false);
+    // A shorter read never shortens what is kept.
+    expect(await h(saveDomSpans)(w.internalCtx, { replay_id: "r1", keys: keys.slice(0, 3), meta: meta.slice(0, 3) })).toBe(true);
+    expect(w.db._tables.replays[0].dom_chunk_meta).toHaveLength(6);
+  });
+
+  test("spans that no longer match the keys are ignored, and a long capture without them is queued to be read", async () => {
+    withBucket();
+    const queued: unknown[] = [];
+    const w = world([{ _id: "r1", short_id: "rp-1", dom_chunk_keys: keys, dom_chunk_meta: meta.slice(1), dom_t0: 1000 }]);
+    const actionCtx = { runQuery: async (_fn: any, args: any) => h(playerTarget)(w.as("u1"), args), scheduler: { runAfter: async (_ms: number, fn: any, args: any) => void queued.push([getFunctionName(fn), args]) } } as any;
+    const link = await h(playerLink)(actionCtx, { replay: "rp-1", t_ms: 0 });
+    expect(link.window).toBeNull();
+    expect(queued).toEqual([["replays:domMetaOne", { replay_id: "r1" }]]);
   });
 });
 
@@ -172,6 +218,8 @@ describe("what an import records", () => {
     expect(actions[0].name).toBe("replays:importExternal");
     expect(args.dom_chunk_keys).toHaveLength(1);
     expect(args.dom_t0).toBe(1_000);
+    // Nothing was cut: the copy reaches the vendor's length though its events stop sooner.
+    expect(args.whole).toBe(true);
     // The stream was read before the masking: the nav keeps its path.
     expect(args.events.find((e: any) => e.type === "nav")?.url).toContain("shop.test/cart");
     expect(JSON.stringify(rrweb)).not.toContain("hunter2");
@@ -186,6 +234,7 @@ describe("what an import records", () => {
     const ctx = { runQuery: async () => ({}), runAction: async (_fn: any, args: any) => (actions.push(args), { replay_id: "r1", short_id: "rp-1", chunks: 0 }) };
     await importVendorRecording(ctx as any, { source_id: "src_row" as any, provider: "sentry", external_id: "rec" }, async () => ({ events: [{ type: 4, timestamp: 1, data: { href: "https://x.test/" } }], truncated: true }));
     expect(actions[0].dom_chunk_keys).toBeUndefined();
+    expect(actions[0].whole).toBeUndefined();
   });
 });
 

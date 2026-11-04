@@ -1,11 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { grantPagePath } from "@codecast/shared/contracts/appConnector";
-import { OPS_TABS, isOpsPath, opsHref, opsTabLabel, opsViewHref, opsViewOf, parseOpsPath } from "./opsPaths";
+import { OPS_TABS, isOpsPath, opsHref, opsRefHref, opsTabLabel, opsUpHref, opsViewHref, opsViewOf, parseOpsPath, sourceConnectHref } from "./opsPaths";
 
 describe("parseOpsPath", () => {
-  test("/ops is the timeline; each tab has its own segment", () => {
-    expect(parseOpsPath("/ops")).toEqual({ view: "tab", tab: "timeline", source: null, app: null });
-    expect(parseOpsPath("/ops/")).toEqual({ view: "tab", tab: "timeline", source: null, app: null });
+  test("/ops is the home; each tab has its own segment", () => {
+    expect(parseOpsPath("/ops")).toEqual({ view: "home", source: null, show: null });
+    expect(parseOpsPath("/ops/")).toEqual({ view: "home", source: null, show: null });
+    expect(parseOpsPath("/ops", "show=alerting&source=web")).toEqual({ view: "home", source: "web", show: "alerting" });
+    expect(parseOpsPath("/ops", "show=bogus")).toEqual({ view: "home", source: null, show: null });
+    // An older link's `spiking` is the Escalating filter, and links are written with the new name.
+    expect(parseOpsPath("/ops", "show=spiking")).toEqual({ view: "home", source: null, show: "escalating" });
+    expect(opsHref.home({ show: "escalating" })).toBe("/ops?show=escalating");
+    // An unknown page under /ops is said, never the home under a wrong address.
+    expect(parseOpsPath("/ops/bogus")).toEqual({ view: "not-found", path: "/ops/bogus" });
+    expect(parseOpsPath("/ops/timeline")).toEqual({ view: "tab", tab: "timeline", source: null, app: null });
     expect(parseOpsPath("/ops/issues", "source=union")).toEqual({ view: "tab", tab: "issues", source: "union", app: null });
     expect(parseOpsPath("/ops/apps", "app=src-4")).toEqual({ view: "tab", tab: "apps", source: null, app: "src-4" });
   });
@@ -19,33 +27,39 @@ describe("parseOpsPath", () => {
     expect(parseOpsPath("/ops/replays/rp-3", "t=4200")).toEqual({ view: "replay", id: "rp-3", t: 4200 });
     expect(parseOpsPath("/ops/replays/rp-3", "t=-1")).toEqual({ view: "replay", id: "rp-3", t: null });
     expect(parseOpsPath("/ops/replays/rp-3")).toEqual({ view: "replay", id: "rp-3", t: null });
+    expect(parseOpsPath("/ops/metrics/mw-8")).toEqual({ view: "metric", id: "mw-8" });
   });
 
   test("anything else names no view", () => {
-    expect(parseOpsPath("/ops/timeline").view).toBe("not-found");
     expect(parseOpsPath("/ops/nope").view).toBe("not-found");
+    expect(parseOpsPath("/ops/timeline/x").view).toBe("not-found");
     expect(parseOpsPath("/ops/issues/eg-1/extra").view).toBe("not-found");
-    expect(parseOpsPath("/ops/metrics/x").view).toBe("not-found");
+    expect(parseOpsPath("/ops/metrics/mw-1/extra").view).toBe("not-found");
     expect(parseOpsPath("/ops/issues/%E0%A4%A").view).toBe("not-found");
     expect(parseOpsPath("/line").view).toBe("not-found");
   });
 });
 
 describe("opsHref", () => {
-  test("every view lives under Signals, and its address reads back as the same view", () => {
+  test("every view's address reads back as that view", () => {
     for (const tab of OPS_TABS) {
       expect(read(opsHref.tab(tab, { source: "web" }))).toEqual({ view: "tab", tab, source: "web", app: null });
     }
+    expect(read(opsHref.home({ show: "new" }))).toEqual({ view: "home", source: null, show: "new" });
     expect(read(opsHref.issue("eg-7"))).toEqual({ view: "issue", id: "eg-7" });
     expect(read(opsHref.replay("rp 9", 1500))).toEqual({ view: "replay", id: "rp 9", t: 1500 });
-    expect(opsHref.tab("issues", { source: "web" })).toBe("/flows?view=signals&sig=issues&source=web");
+    expect(read(opsHref.metric("mw-8"))).toEqual({ view: "metric", id: "mw-8" });
+    expect(opsHref.metric("mw-8")).toBe("/ops/metrics/mw-8");
+    expect(opsHref.tab("issues", { source: "web" })).toBe("/ops/issues?source=web");
+    expect(opsHref.home()).toBe("/ops");
   });
 
-  test("an old /ops address goes to the same view under Signals", () => {
-    expect(opsViewHref(parseOpsPath("/ops/issues", "source=union"))).toBe(opsHref.tab("issues", { source: "union" }));
-    expect(opsViewHref(parseOpsPath("/ops/issues/eg-3"))).toBe(opsHref.issue("eg-3"));
-    expect(opsViewHref(parseOpsPath("/ops/replays/rp-1", "t=20"))).toBe(opsHref.replay("rp-1", 20));
-    expect(opsViewHref(parseOpsPath("/ops/nope"))).toBe("/flows?view=signals");
+  test("an old Signals address goes to the same view under /ops", () => {
+    expect(opsViewHref(oldView("sig=issues&source=union"))).toBe("/ops/issues?source=union");
+    expect(opsViewHref(oldView("sig=issues&item=eg-3"))).toBe("/ops/issues/eg-3");
+    expect(opsViewHref(oldView("sig=replays&item=rp-1&t=20"))).toBe("/ops/replays/rp-1?t=20");
+    expect(opsViewHref(oldView("sig=metrics&item=mw-8"))).toBe("/ops/metrics/mw-8");
+    expect(opsViewHref(parseOpsPath("/ops/nope"))).toBe("/ops");
   });
 
   test("Signals' own list names no source view", () => {
@@ -53,23 +67,61 @@ describe("opsHref", () => {
     expect(opsViewOf({ sig: "nope", source: null, app: null, item: null, t: null })).toBeNull();
   });
 
-  test("tab labels name the place", () => {
-    expect(opsTabLabel("/ops/issues?source=x")).toBe("Signals · Issues");
-    expect(opsTabLabel(opsHref.tab("replays"))).toBe("Signals · Replays");
-    expect(opsTabLabel("/ops/issues/eg-3")).toBe("eg-3");
-    expect(opsTabLabel(opsHref.issue("eg-4"))).toBe("eg-4");
+  test("tab labels name the item, its tab and Ops", () => {
+    expect(opsTabLabel("/ops")).toBe("Ops");
+    expect(opsTabLabel("/ops/issues?source=x")).toBe("Issues · Ops");
+    expect(opsTabLabel(opsHref.tab("replays"))).toBe("Replays · Ops");
+    expect(opsTabLabel("/ops/issues/eg-3")).toBe("eg-3 · Issues · Ops");
+    expect(opsTabLabel("/flows?view=signals&sig=issues&item=eg-4")).toBe("eg-4 · Issues · Ops");
+    expect(opsTabLabel(opsHref.metric("mw-2"))).toBe("mw-2 · Metrics · Ops");
+  });
+});
+
+describe("opsUpHref", () => {
+  test("up follows the crumbs: item to tab, tab to its source, source to Ops", () => {
+    expect(opsUpHref(parseOpsPath("/ops/issues/eg-3"))).toBe("/ops/issues");
+    expect(opsUpHref(parseOpsPath("/ops/metrics/mw-3"))).toBe("/ops/metrics");
+    expect(opsUpHref(parseOpsPath("/ops/issues", "source=web"))).toBe("/ops?source=web");
+    expect(opsUpHref(parseOpsPath("/ops/apps", "app=src-4&source=web"))).toBe("/ops/apps?source=web");
+    expect(opsUpHref(parseOpsPath("/ops/issues"))).toBe("/ops");
+    expect(opsUpHref(parseOpsPath("/ops", "show=new&source=web"))).toBe("/ops?source=web");
+    expect(opsUpHref(parseOpsPath("/ops", "source=web"))).toBe("/ops");
+    expect(opsUpHref(parseOpsPath("/ops", "show=new"))).toBe("/ops");
+    expect(opsUpHref(parseOpsPath("/ops"))).toBeNull();
   });
 });
 
 function read(href: string) {
-  const q = new URL(href, "https://x").searchParams;
-  return opsViewOf({ sig: q.get("sig"), source: q.get("source"), app: q.get("app"), item: q.get("item"), t: q.get("t") });
+  const [pathname, query] = href.split("?");
+  return parseOpsPath(pathname, query ?? "");
+}
+
+function oldView(query: string) {
+  const q = new URLSearchParams(query);
+  return opsViewOf({ sig: q.get("sig"), source: q.get("source"), app: q.get("app"), item: q.get("item"), t: q.get("t") })!;
 }
 
 describe("isOpsPath", () => {
   test("the area and nothing that only starts with its letters", () => {
-    expect(["/ops", "/ops/issues", "/ops?source=x", "/ops/replays/rp-1", opsHref.tab("metrics")].every(isOpsPath)).toBe(true);
+    expect(["/ops", "/ops/issues", "/ops?source=x", "/ops/replays/rp-1", opsHref.tab("metrics"), "/flows?view=signals&sig=issues"].every(isOpsPath)).toBe(true);
     expect(["/flows", "/flows?view=signals"].some((p) => isOpsPath(p))).toBe(false);
     expect(["/opsx", "/optics", "/", "", null].some((p) => isOpsPath(p))).toBe(false);
   });
+});
+
+describe("opsRefHref", () => {
+  test("a typed eg-N, mw-N, rp-N or src-N opens its item; anything else is not a ref", () => {
+    expect(opsRefHref(" EG-884 ")).toEqual({ ref: "eg-884", kind: "issue", href: "/ops/issues/eg-884" });
+    expect(opsRefHref("mw-3")?.href).toBe("/ops/metrics/mw-3");
+    expect(opsRefHref("rp-12")?.href).toBe("/ops/replays/rp-12");
+    expect(opsRefHref("src-2")?.href).toBe("/ops?source=src-2");
+    expect(opsRefHref("ct-2")).toBeNull();
+    expect(opsRefHref("eg-")).toBeNull();
+  });
+});
+
+test("each provider's connect tile opens its own add form; GitHub opens its connection", () => {
+  expect(sourceConnectHref("sentry")).toBe("/settings/integrations?add=sentry#product-sources");
+  expect(sourceConnectHref("sdk")).toBe("/settings/integrations?add=sdk#product-sources");
+  expect(sourceConnectHref("github")).toBe("/settings/integrations");
 });

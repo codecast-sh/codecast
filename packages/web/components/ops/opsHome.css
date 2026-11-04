@@ -1,0 +1,485 @@
+/* Ops navigation (the shell's crumbs, workspace and source filter) and the
+   Ops home. Sol tokens only. Red is spent on what needs a person. */
+
+/* ── Shell header ── */
+.ops-crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.ops-crumb { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--sol-text-muted); white-space: nowrap; }
+.ops-crumb:hover { color: var(--sol-text); }
+.ops-crumb[aria-current="page"] { color: var(--sol-text); }
+.ops-crumb-root { color: var(--sol-text); }
+.ops-crumb-root svg { color: var(--sol-red); }
+.ops-crumb-sep { color: var(--sol-text-dim); font-weight: 400; }
+.ops-crumbs .ops-crumb:not(.ops-crumb-root) { font-weight: 500; }
+
+.ops-ws {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 160px; flex-shrink: 1; min-width: 0;
+  height: 20px; padding: 0 7px; border-radius: 5px; font-size: 11px; color: var(--sol-text-muted);
+  background: color-mix(in srgb, var(--sol-text-muted) 10%, transparent);
+}
+.ops-head-r { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* ── Source filter ── */
+.ops-filter { display: inline-flex; align-items: center; }
+.ops-filter-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; max-width: 220px;
+  border-radius: 6px; font-size: 12px; color: var(--sol-text);
+  border: 1px solid var(--sol-border); background: var(--sol-bg-alt);
+}
+.ops-filter-btn:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 60%, var(--sol-border)); }
+/* A picked source is an ordinary "on" state, not an alarm: neutral ink, never red. */
+.ops-filter-btn[data-on="true"] { border-color: color-mix(in srgb, var(--sol-text-muted) 55%, var(--sol-border)); background: color-mix(in srgb, var(--sol-text-muted) 10%, var(--sol-bg-alt)); border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ops-filter-n { font-size: 10.5px; color: var(--sol-text-dim); }
+.ops-filter-clear {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 28px;
+  border: 1px solid color-mix(in srgb, var(--sol-text-muted) 55%, var(--sol-border)); border-left: 0; border-radius: 0 6px 6px 0; color: var(--sol-text-muted);
+  background: color-mix(in srgb, var(--sol-text-muted) 10%, var(--sol-bg-alt));
+}
+.ops-filter-clear:hover { color: var(--sol-text); }
+.ops-filter-pop.ops-filter-pop { width: 280px; padding: 0; background: var(--sol-bg); border-color: var(--sol-border); color: var(--sol-text); }
+.ops-filter-search { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--sol-border); }
+.ops-filter-search input { flex: 1; min-width: 0; background: transparent; outline: none; font-size: 12.5px; color: var(--sol-text); }
+.ops-filter-search input::placeholder { color: var(--sol-text-dim); }
+.ops-filter-list { max-height: 340px; overflow: auto; padding: 4px 0; }
+.ops-filter-group { display: flex; align-items: center; gap: 6px; padding: 8px 12px 3px; font-size: 10.5px; font-weight: 600; color: var(--sol-text-dim); }
+.ops-filter-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 12px; font-size: 12.5px; text-align: left; color: var(--sol-text-muted); }
+.ops-filter-row:hover, .ops-filter-row[data-cursor="true"] { background: var(--sol-bg-alt); color: var(--sol-text); }
+.ops-filter-row[aria-selected="true"] { color: var(--sol-text); font-weight: 500; }
+.ops-filter-name { flex: 1; min-width: 0; }
+.ops-filter-health { font-size: 10.5px; color: var(--sol-red); white-space: nowrap; }
+.ops-filter-open { font-size: 10.5px; color: var(--sol-red); min-width: 18px; text-align: right; }
+.ops-filter-none { padding: 14px 12px; font-size: 12px; color: var(--sol-text-dim); }
+
+/* ── Freshness and the item's workspace (shell) ── */
+.ops-fresh { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
+.ops-fresh i { width: 6px; height: 6px; border-radius: 50%; background: var(--sol-green); }
+.ops-fresh[data-state="stale"] { color: var(--sol-orange); }
+.ops-fresh[data-state="stale"] i { background: var(--sol-orange); }
+.ops-ws[data-foreign="true"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
+.ops-wsbar {
+  display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 7px 10px; border-radius: 6px; font-size: 12.5px;
+  border: 1px solid color-mix(in srgb, var(--sol-orange) 45%, var(--sol-border)); background: color-mix(in srgb, var(--sol-orange) 8%, transparent);
+}
+.ops-wsbar b { font-weight: 600; }
+.ops-wsbar .ops-btn { margin-left: auto; }
+.ops-step { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; }
+.ops-step button, .ops-step a {
+  display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0 5px; border-radius: 5px;
+  color: var(--sol-text-muted); font-size: 11px; font-weight: 400;
+}
+.ops-step button:hover:not(:disabled) { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 10%, transparent); }
+.ops-step button:disabled { opacity: 0.35; cursor: default; }
+.ops-step-pos { font-size: 11px; color: var(--sol-text-dim); font-weight: 400; padding: 0 2px; }
+
+/* ── The home ── */
+.ops-home { display: flex; flex-direction: column; gap: 18px; container: ops-home / inline-size; }
+.ops-link { color: var(--sol-text-muted); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--sol-text-muted) 40%, transparent); text-underline-offset: 2px; }
+.ops-link:hover { color: var(--sol-text); }
+.ops-link[data-tone="bad"] { color: var(--sol-red); }
+
+.ops-home-strip { display: flex; gap: 10px; align-items: stretch; }
+/* Each group is a row of equal tiles; the strip shares its width by tile count, so every tile is the same width. */
+.ops-home-tilegroup { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; flex-basis: 0; min-width: 0; }
+/* The counts that page a person (the Overview tab's and the sidebar's number) sit inside one red outline. */
+.ops-home-tilegroup[data-paging="true"] {
+  padding: 4px; margin: -5px 0; border-radius: 11px;
+  border: 1px solid color-mix(in srgb, var(--sol-red) 35%, var(--sol-border));
+  background: color-mix(in srgb, var(--sol-red) 5%, transparent);
+}
+/* "Nobody on it" and "Snoozed" overlap the kinds (an item can be under one of them and a kind), so they sit apart. */
+.ops-home-count[data-overlap="true"] { border-style: dashed; }
+.ops-home-count[data-ops-count="unassigned"] { margin-left: 6px; }
+.ops-home-count {
+  display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; min-width: 0;
+  border: 1px solid var(--sol-border); background: var(--sol-bg-alt); color: var(--sol-text-muted);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.ops-home-count b { font-size: 22px; font-weight: 600; line-height: 1.1; color: var(--sol-text); }
+.ops-home-count span { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ops-home-count[data-tone="zero"] b { color: var(--sol-text-dim); }
+.ops-home-count[data-tone="bad"] b { color: var(--sol-red); }
+.ops-home-count[data-tone="warn"] b { color: var(--sol-orange); }
+.ops-home-count:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 50%, var(--sol-border)); }
+/* The filter that is on is filled, so it reads as pressed from across the page. */
+.ops-home-count[data-on="true"] { border-style: solid; border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 16%, var(--sol-bg-alt)); }
+.ops-home-count[data-on="true"] span { color: var(--sol-text); }
+/* Under 1200px the tiles turn into chips, number beside label, that wrap to a second row: a label is never cut. */
+@container ops-home (max-width: 1200px) {
+  .ops-home-strip { flex-wrap: wrap; gap: 6px 10px; }
+  .ops-home-strip .ops-home-tilegroup { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 1 auto !important; }
+  .ops-home-tilegroup[data-paging="true"] { margin: 0; padding: 3px; }
+  .ops-home-count { flex: 0 0 auto; flex-direction: row; align-items: baseline; gap: 6px; padding: 6px 11px; }
+  .ops-home-count b { font-size: 15px; }
+  .ops-home-count span { overflow: visible; }
+}
+
+/* The filter that is on, beside the list's count: pressing it shows everything. */
+.ops-home-headtitle { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.ops-home-token {
+  display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 4px 0 8px; margin-left: 4px; border-radius: 5px;
+  font-size: 11px; font-weight: 500; color: var(--sol-text); background: color-mix(in srgb, var(--sol-blue) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-blue) 45%, transparent);
+}
+.ops-home-token:hover { background: color-mix(in srgb, var(--sol-blue) 24%, transparent); }
+.ops-home-token svg { color: var(--sol-text-muted); }
+.ops-home-clear .ops-home-token { margin-left: auto; }
+
+/* A failing reader's row: the count of watches it blinds opens them under the row. */
+button.ops-home-blind { display: inline-flex; align-items: center; gap: 3px; padding: 0 5px; margin: 0 -2px; border-radius: 4px; color: var(--sol-text); font-weight: 500; cursor: pointer; }
+button.ops-home-blind:hover { background: color-mix(in srgb, var(--sol-text-muted) 12%, transparent); }
+button.ops-home-blind svg { color: var(--sol-text-dim); transition: transform 120ms ease; }
+button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
+.ops-home-sub { grid-column: 2 / -1; list-style: none; margin: 8px 0 0; padding: 4px 0 0; border-top: 1px dashed color-mix(in srgb, var(--sol-border) 80%, transparent); cursor: default; }
+.ops-home-subrow { display: grid; grid-template-columns: 12px auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; font-size: 12px; color: var(--sol-text); }
+.ops-home-subrow svg { color: var(--sol-orange); }
+.ops-home-subrow .ops-mono { font-size: 11px; }
+.ops-home-subrow:hover { background: color-mix(in srgb, var(--sol-text-muted) 8%, transparent); }
+
+/* One grid for the head and every row (the list and each row are subgrids of it), so Events, Users, Since and
+   the three action columns line up down the list, and each action column is as wide as its widest row: no label is ever cut. */
+.ops-home-table { --ops-home-cols: 26px minmax(0, 1fr) 76px 56px 48px 40px auto auto; display: grid; grid-template-columns: var(--ops-home-cols); column-gap: 12px; }
+/* The column head and the selection bar take the same 32px, so selecting a row moves nothing. */
+.ops-home-head, .ops-home-bulk.ops-home-bulk { height: 32px; box-sizing: border-box; margin-bottom: 4px; }
+.ops-home-head {
+  grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: end; padding: 0 12px 6px 14px;
+  font-size: 10.5px; font-weight: 600; color: var(--sol-text-dim);
+}
+.ops-home-head .ops-home-keys { grid-column: -3 / -1; display: inline-flex; justify-content: flex-end; gap: 3px; opacity: 0.8; }
+.ops-home-paging { font-weight: 500; color: var(--sol-text-muted); }
+.ops-home-paging b { color: var(--sol-red); font-weight: 600; }
+.ops-home-newcount { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; font-weight: 500; color: var(--sol-blue); }
+.ops-home-bulk.ops-home-bulk { grid-column: 1 / -1; flex-wrap: nowrap; overflow: hidden; padding-top: 0; padding-bottom: 0; }
+.ops-home-bulk .ops-btn { gap: 5px; }
+.ops-home-head [data-col="num"] { text-align: right; }
+.ops-home-head [data-col="spark"] { text-align: right; }
+.ops-home-list { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; list-style: none; margin: 0; padding: 0; border: 1px solid var(--sol-border); border-radius: 8px; overflow: hidden; background: var(--sol-bg-alt); }
+.ops-home-row {
+  position: relative; grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; row-gap: 0;
+  padding: 6px 12px 6px 14px; cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  /* The row's own fill, opaque, so the press that shows over its numbers covers them cleanly. */
+  --ops-row-bg: var(--sol-bg-alt); background: var(--ops-row-bg);
+}
+/* The keyboard cursor and the selection: a ring and a tint, never red. */
+.ops-home-row[data-cursor="true"] { --ops-row-bg: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg-alt)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-blue) 45%, transparent); }
+.ops-home-row[data-selected="true"] { --ops-row-bg: color-mix(in srgb, var(--sol-blue) 11%, var(--sol-bg-alt)); }
+.ops-home-glyph { position: relative; display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; }
+.ops-home-check { position: absolute; inset: 3px; width: 16px; height: 16px; margin: 0; opacity: 0; cursor: pointer; accent-color: var(--sol-blue); }
+.ops-home-row:hover .ops-home-check, .ops-home-row[data-selected="true"] .ops-home-check, .ops-home-list[data-selecting="true"] .ops-home-check { opacity: 1; }
+.ops-home-row:hover .ops-home-glyph-ico, .ops-home-row[data-selected="true"] .ops-home-glyph-ico, .ops-home-list[data-selecting="true"] .ops-home-glyph-ico { opacity: 0; }
+.ops-home-glyph-ico { display: inline-flex; }
+.ops-home-newdot { display: inline-block; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--sol-blue); align-self: center; }
+.ops-home-row:last-child { border-bottom: 0; }
+.ops-home-row:hover, .ops-home-row:focus-visible { --ops-row-bg: color-mix(in srgb, var(--sol-text-muted) 6%, var(--sol-bg-alt)); outline: none; }
+.ops-home-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; }
+.ops-home-row[data-sev="3"]::before { background: var(--sol-red); }
+.ops-home-row[data-sev="2"]::before { background: var(--sol-orange); }
+.ops-home-ico[data-k="watch"] { color: var(--sol-violet); background: color-mix(in srgb, var(--sol-violet) 12%, transparent); }
+.ops-home-ico[data-k="replay"] { color: var(--sol-magenta); background: color-mix(in srgb, var(--sol-magenta) 12%, transparent); }
+.ops-home-ico[data-k="source"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
+.ops-home-ico[data-k="source-degraded"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
+.ops-home-ico[data-k="watch-error"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
+/* One line a row: the id and title, then the state and the facts that say how bad in what room the title leaves (at least
+   two fifths), so a screen holds a stream of rows the way an issue list does. A phone stacks them (the 600px rule). */
+.ops-home-main { display: flex; flex-direction: row; align-items: center; gap: 10px; min-width: 0; }
+.ops-home-line1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 0 1 auto; max-width: 60%; }
+.ops-home-main > .ops-home-line2 { flex: 1 1 0; }
+.ops-home-ref { font-size: 11px; flex-shrink: 0; }
+.ops-home-title { font-size: 13px; color: var(--sol-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Line two is one line tall and wraps: a fact that does not fit moves to the hidden second line whole,
+   taking every fact after it, so facts drop from the tail by rank order and none is ever cut mid-word. */
+.ops-home-line2 {
+  display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 6px; min-width: 0;
+  height: 18px; overflow: hidden; font-size: 11.5px; color: var(--sol-text-muted);
+}
+.ops-home-line2 > * { flex-shrink: 0; white-space: nowrap; line-height: 18px; }
+.ops-home-state { font-weight: 600; font-size: 10.5px; padding: 0 6px; border-radius: 4px; line-height: 17px !important; color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
+.ops-home-state[data-state="alerting"], .ops-home-state[data-state="regressed"], .ops-home-state[data-state="escalating"], .ops-home-state[data-state="source"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
+/* A second state the row also holds (an alerting watch whose issue regressed): the same ink, outlined rather than filled. */
+.ops-home-state.ops-home-also { background: transparent; box-shadow: inset 0 0 0 1px currentColor; font-weight: 500; }
+.ops-home-state[data-state="errors"] { color: var(--sol-magenta); background: color-mix(in srgb, var(--sol-magenta) 12%, transparent); }
+.ops-home-fact[data-rank="1"] { color: var(--sol-text); }
+.ops-home-fact[data-mono="true"] { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; }
+.ops-home-fact[data-narrow="true"] { display: none; }
+/* The lead fact is the reason (an error, a failing reader, a rate): it shortens with an ellipsis rather than wrap out of sight. */
+.ops-home-line2 > .ops-home-fact[data-lead="true"] { flex-shrink: 1; min-width: 0; max-width: calc(100% - 100px); overflow: hidden; text-overflow: ellipsis; }
+.ops-home-line2 > .ops-home-blind ~ .ops-home-fact[data-lead="true"] { max-width: calc(100% - 210px); }
+.ops-home-src { display: inline-flex; align-items: center; gap: 4px; }
+.ops-home-snz { display: inline-flex; align-items: center; gap: 4px; color: var(--sol-text-muted) !important; }
+.ops-home-spark { display: flex; justify-content: flex-end; }
+.ops-home-numcol { font-size: 12px; text-align: right; color: var(--sol-text); }
+.ops-home-age { font-size: 11px; text-align: right; }
+
+/* The three action columns: task, primary, menu. The wrapper steps aside so each slot is a column of the shared grid. */
+.ops-home-acts { display: contents; cursor: default; }
+.ops-home-slot { display: flex; align-items: center; cursor: default; }
+.ops-home-slot[data-slot="task"] { justify-content: flex-end; }
+/* The primary press lives in the task's column and shows over the numbers to its left while the row is pointed at,
+   holds the cursor or has focus: the list stays rows, and every row still offers its act in one move. */
+.ops-home-slot[data-slot="task"] { position: relative; }
+.ops-home-slot[data-slot="primary"] {
+  position: absolute; right: 100%; top: 50%; transform: translateY(-50%); z-index: 1; gap: 6px;
+  padding: 0 8px 0 22px; background: linear-gradient(90deg, transparent, var(--ops-row-bg) 20px);
+  opacity: 0; pointer-events: none; transition: opacity 90ms ease;
+}
+.ops-home-row:hover .ops-home-slot[data-slot="primary"], .ops-home-row[data-cursor="true"] .ops-home-slot[data-slot="primary"], .ops-home-row:focus-within .ops-home-slot[data-slot="primary"] { opacity: 1; pointer-events: auto; }
+.ops-home-acts .ops-btn { height: 24px; padding: 0 8px; font-size: 11.5px; gap: 4px; white-space: nowrap; }
+.ops-home-acts .ops-home-menu-btn { width: 24px; padding: 0; justify-content: center; border-color: transparent; background: transparent; color: var(--sol-text-dim); }
+.ops-home-row:hover .ops-home-menu-btn, .ops-home-menu-btn[data-state="open"], .ops-home-menu-btn:focus-visible { border-color: var(--sol-border); color: var(--sol-text); }
+/* Red is for state (the rail, the counts), never for an act: a row's one act is a plain outline that fills on hover. */
+.ops-home-acts .ops-btn[data-tone="primary"] { background: transparent; color: var(--sol-text); border-color: var(--sol-border); }
+.ops-home-row:hover .ops-home-acts .ops-btn[data-tone="primary"] { border-color: color-mix(in srgb, var(--sol-text-muted) 60%, var(--sol-border)); }
+.ops-home-acts .ops-btn[data-tone="primary"]:hover { background: color-mix(in srgb, var(--sol-text) 10%, transparent); color: var(--sol-text); filter: none; }
+
+.ops-home-menu.ops-home-menu { background: var(--sol-bg); border-color: var(--sol-border); color: var(--sol-text); min-width: 190px; font-size: 12.5px; }
+.ops-home-menu [role="menuitem"] { font-size: 12.5px; }
+.ops-home-menu [role="menuitem"] svg { width: 14px; height: 14px; color: var(--sol-text-muted); }
+.ops-home-menu-label { font-size: 10.5px !important; font-weight: 600; color: var(--sol-text-dim); padding-top: 6px; padding-bottom: 2px; }
+.ops-home-menu-key { margin-left: auto; padding-left: 12px; display: inline-flex; }
+
+/* The task a fix is filed under: id, status, who has it. */
+.ops-home-task {
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px; white-space: nowrap;
+  border-radius: 5px; font-size: 11.5px; line-height: 1; color: var(--sol-text-dim);
+}
+.ops-home-task:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 10%, transparent); }
+.ops-home-task .ops-mono { font-size: 11px; }
+/* Nobody on it: the face's slot stays empty, so the ids line up and the rows someone is on stand out. */
+.ops-home-task-none { display: inline-block; width: 14px; height: 14px; }
+.ops-home-task-who { font-size: 11px; color: var(--sol-orange); }
+/* The fix act is one style wherever an issue or app sits (the home, a source's Open issues, the Timeline): a plain outline that fills on hover. */
+.ops-btn.ops-btn[data-ops-fix-start][data-tone="primary"] { background: transparent; color: var(--sol-text); border-color: var(--sol-border); }
+.ops-btn.ops-btn[data-ops-fix-start][data-tone="primary"]:hover { background: color-mix(in srgb, var(--sol-text) 10%, transparent); color: var(--sol-text); filter: none; }
+/* A source's test-event check, opened under its row. */
+.ops-home-check-sub { padding-top: 8px; }
+
+.ops-home-more { grid-column: 1 / -1; justify-self: start; margin-top: 8px; font-size: 12px; color: var(--sol-text-muted); }
+.ops-home-more:hover { color: var(--sol-text); }
+
+.ops-home-clear { display: flex; align-items: center; gap: 10px; padding: 14px 16px; font-size: 13px; border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); }
+.ops-home-clear i { width: 8px; height: 8px; border-radius: 50%; background: var(--sol-green); }
+
+/* ── Sources table, edge to edge ── */
+.ops-home-sources { display: flex; flex-direction: column; }
+.ops-home-sources-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ops-home-sources-head .ops-btn { height: 24px; padding: 0 8px; font-size: 11.5px; gap: 4px; }
+.ops-home-srctable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.ops-home-srctable th, .ops-home-srctable td { padding: 7px 10px; text-align: left; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent); white-space: nowrap; vertical-align: middle; }
+.ops-home-srctable thead th { font-size: 10.5px; font-weight: 600; color: var(--sol-text-dim); }
+.ops-home-srctable [data-num] { text-align: right; width: 1%; }
+.ops-home-srctable [data-col="week"] { width: 1%; }
+.ops-home-srctable [data-col="acts"] { width: 1%; padding-right: 0; }
+.ops-home-srctable td[data-col="state"] { max-width: 0; width: 40%; }
+.ops-home-srctable tbody th { font-weight: 500; max-width: 240px; }
+.ops-home-srctable tr[data-bad="true"] { background: color-mix(in srgb, var(--sol-red) 5%, transparent); }
+.ops-home-srcname { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; color: var(--sol-text); }
+.ops-home-srcname:hover { text-decoration: underline; }
+.ops-home-srcacts { display: flex; justify-content: flex-end; gap: 6px; min-width: 96px; }
+.ops-home-srcacts .ops-btn { height: 24px; padding: 0 8px; font-size: 11.5px; gap: 4px; }
+.ops-home-health { display: inline-flex; align-items: center; gap: 6px; color: var(--sol-text-muted); }
+.ops-home-health i { width: 6px; height: 6px; border-radius: 50%; }
+.ops-home-health[data-tone="bad"] { color: var(--sol-red); }
+.ops-home-health[data-tone="warn"] { color: var(--sol-orange); }
+.ops-home-reason { display: block; margin-top: 2px; font-size: 11px; color: var(--sol-text-muted); overflow: hidden; text-overflow: ellipsis; }
+
+/* ── First run ── */
+.ops-home-first { max-width: 1180px; }
+.ops-home-first-head { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.ops-home-first-head svg { color: var(--sol-text-dim); }
+/* Fixed tracks: opening a provider's sheet below (and the scrollbar it brings) never resizes the tiles under the pointer. */
+.ops-home-tiles { display: grid; grid-template-columns: repeat(auto-fill, 176px); gap: 10px; }
+@container ops-home (max-width: 600px) { .ops-home-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.ops-home-tile {
+  display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 8px;
+  border: 1px solid var(--sol-border); background: var(--sol-bg-alt); font-size: 12.5px;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.ops-home-tile { text-align: left; color: var(--sol-text); cursor: pointer; }
+.ops-home-tile span { font-size: 11.5px; }
+.ops-home-tile:hover { border-color: var(--sol-text-muted); transform: translateY(-1px); }
+.ops-home-tile[data-on="true"] { border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg-alt)); transform: none; }
+/* Opening a sheet leaves the tiles where they are: the picked one is marked, nothing reflows. */
+
+/* Connecting a source, in place: connectSheet.css, loaded by the sheet itself (it opens in Settings too). */
+
+/* ── The watch band: what is not fine as tiles, the healthy behind their count ── */
+button.ops-band-ok { cursor: pointer; border-radius: 5px; padding: 1px 5px; margin: -1px -5px; }
+button.ops-band-ok:hover { background: color-mix(in srgb, var(--sol-text-muted) 10%, transparent); color: var(--sol-text); }
+.ops-band-ok .ops-dim { margin-left: 2px; }
+.ops-band-chev { transition: transform 120ms ease; color: var(--sol-text-dim); }
+.ops-band-n[aria-expanded="true"] .ops-band-chev { transform: rotate(180deg); }
+.ops-band { display: flex; flex-direction: column; gap: 8px; }
+.ops-band-head { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.ops-band-title { font-size: 12px; font-weight: 600; color: var(--sol-text); white-space: nowrap; }
+.ops-band-title:hover { text-decoration: underline; }
+.ops-band-sum { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; }
+.ops-band-n { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-muted); white-space: nowrap; }
+.ops-band-n i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink); }
+.ops-band-n b { font-weight: 600; color: var(--sol-text); }
+.ops-band-series { display: inline-flex; align-items: center; gap: 5px; margin-left: 7px; }
+.ops-band-all { margin-left: auto; font-size: 11.5px; white-space: nowrap; }
+.ops-band-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 6px; }
+.ops-band-tile {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 3px;
+  padding: 7px 10px; border-radius: 7px; border: 1px solid var(--sol-border); background: var(--sol-bg-alt); color: var(--sol-text);
+  border-left: 3px solid var(--ink); transition: border-color 120ms ease;
+}
+.ops-band-tile:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 50%, var(--sol-border)); border-left-color: var(--ink); }
+.ops-band-tile[data-health="ok"], .ops-band-tile[data-health="series"] { border-left-color: color-mix(in srgb, var(--ink) 55%, var(--sol-border)); }
+.ops-band-name { font-size: 11.5px; color: var(--sol-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ops-band-val { font-size: 12.5px; font-weight: 600; text-align: right; white-space: nowrap; }
+.ops-band-tile[data-health="alert"] .ops-band-val, .ops-band-tile[data-health="error"] .ops-band-val, .ops-band-tile[data-health="warn"] .ops-band-val { color: var(--ink); }
+.ops-band-spark { grid-column: 1 / -1; display: flex; }
+.ops-band-spark svg { width: 100%; }
+
+/* ── Shell: freshness that names the source behind, dimmed tabs before any source, and the area held to its cell ── */
+a.ops-fresh:hover span { text-decoration: underline; }
+.ops-tab[data-empty="true"] { opacity: 0.4; pointer-events: none; }
+/* A programmatic scroll (scrollIntoView) must never move the area inside its stage cell: only .ops-body scrolls. */
+.ops-area { overflow: clip; }
+
+/* ── Narrow ── */
+/* By the area's own width, not the window's: an open sidebar narrows Ops as much as a small window does. */
+.ops-head { container: ops-head / inline-size; }
+.ops-tab { white-space: nowrap; flex-shrink: 0; }
+.ops-tabs::-webkit-scrollbar { display: none; }
+@container ops-head (max-width: 900px) {
+  /* The tabs scroll sideways; the fade on the right says there is more, and the end padding lets the last tab clear it. */
+  .ops-tabs { overflow-x: auto; scrollbar-width: none; mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); padding-right: 28px; }
+  .ops-tab { margin-bottom: 0; }
+  /* The Live label goes before the stepper's "4 of 30": where you are in the walk outlasts how fresh the page is. */
+  .ops-ws, .ops-hide-narrow, .ops-tab-keys, .ops-fresh span { display: none; }
+  .ops-tab { padding-left: 9px; padding-right: 9px; }
+}
+/* A bar that folds its tail into More draws whole tabs only: no scroll, no fade. */
+.ops-tab[data-folded="true"] { display: none; }
+.ops-tabs[data-fit="true"] { overflow: visible; mask-image: none; padding-right: 0; }
+.ops-tab-more { display: inline-flex; align-items: center; gap: 4px; position: relative; }
+.ops-tab-more-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--sol-red); }
+@container ops-head (max-width: 600px) {
+  .ops-step-pos { display: none; }
+  .ops-crumbs { font-size: 13px; }
+}
+@media (max-width: 900px) {
+  .ops-head { padding: 10px 12px 0; }
+}
+@container ops-home (max-width: 1060px) {
+  /* Events and Users go first (line two repeats them), then the sparkline; the reason on line two is the last to go. */
+  .ops-home-table { --ops-home-cols: 26px minmax(0, 1fr) 76px 40px auto auto auto; }
+  .ops-home-numcol, .ops-home-head [data-h] { display: none; }
+  .ops-home-fact[data-narrow="true"] { display: inline; }
+}
+@container ops-home (max-width: 900px) {
+  /* The sparkline goes too (the facts carry the counts); a row stays one line: id, title, state and facts, start, task, menu. */
+  .ops-home-table { --ops-home-cols: 26px minmax(0, 1fr) 40px auto auto; }
+  .ops-home-spark, .ops-home-head [data-col="spark"] { display: none; }
+  .ops-home-head { height: auto; }
+  .ops-home-headtitle { flex-wrap: wrap; row-gap: 4px; white-space: normal; }
+  .ops-home-fact[data-narrow="true"] { display: inline; }
+  .ops-band-tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .ops-home-count[data-ops-count="unassigned"] { margin-left: 0; }
+  /* The chips wrap (the 1200px rule above): every count is on screen, none cut at an edge nobody can scroll. */
+  .ops-home-strip .ops-home-tilegroup { max-width: 100%; min-width: 0; }
+  .ops-home-count { white-space: nowrap; }
+  .ops-home-srctable [data-col="week"] { display: none; }
+}
+@container ops-home (max-width: 600px) {
+  /* A phone opened from an alert, or a pane squeezed beside the inbox: the counts are pills that wrap, and each row
+     stacks its title over its state and facts, with its acts on a line of their own (no pointer to reveal them). */
+  .ops-home { gap: 12px; }
+  .ops-home-count { padding: 5px 9px; border-radius: 999px; }
+  .ops-home-count b { font-size: 13px; }
+  .ops-home-count[data-tone="zero"] { display: none; }
+  .ops-home-count[data-on="true"] { display: flex; }
+  .ops-home-table, .ops-home-list { display: flex; flex-direction: column; }
+  /* The head keeps the list's count and the filter that is on (with its x), so a filtered list always says so; the column heads go. */
+  .ops-home-head { display: flex; align-items: center; padding: 0 2px 6px; }
+  .ops-home-head > :not(.ops-home-headtitle) { display: none; }
+  .ops-home-row { grid-template-columns: 26px minmax(0, 1fr) 40px; column-gap: 10px; row-gap: 6px; }
+  .ops-home-main { flex-direction: column; align-items: stretch; gap: 3px; }
+  .ops-home-line1 { max-width: none; }
+  .ops-home-acts { grid-column: 2 / -1; display: flex; gap: 6px; align-items: center; }
+  .ops-home-slot:empty { display: none; }
+  .ops-home-slot[data-slot="task"] { gap: 6px; }
+  .ops-home-slot[data-slot="primary"] { position: static; transform: none; opacity: 1; pointer-events: auto; background: none; padding: 0; }
+  /* A row's acts wrap under each other rather than past the edge; the menu keeps the line's end, the task chip keeps its id and face. */
+  .ops-home-acts { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+  .ops-home-slot { min-width: 0; max-width: 100%; }
+  .ops-home-slot[data-slot="more"] { margin-left: auto; }
+  .ops-home-task-who { display: none; }
+  .ops-home-acts .ops-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  /* The source stays on line two before the event counts that line one's columns repeat: it is how two like errors tell apart. */
+  .ops-home-line2 > .ops-home-fact[data-narrow="true"]:not([data-lead="true"]) { order: 2; }
+  .ops-home-row { padding: 9px 10px 9px 12px; gap: 10px; }
+  /* A phone gives the title two lines and the lead fact a line of its own above the pill, so the words a person triages by
+     are whole; the pill's line still drops facts from its tail, and the third line is hidden. */
+  .ops-home-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+  .ops-home-line1 { align-items: flex-start; }
+  .ops-home-line2 { height: 42px; }
+  .ops-home-line2 > .ops-home-fact[data-lead="true"] { order: -1; flex-basis: 100%; max-width: 100% !important; }
+  .ops-home-fact[data-rank="3"] { display: none !important; }
+  .ops-home-srctable thead th:nth-child(4), .ops-home-srctable td:nth-child(4) { display: none; }
+  /* A phone's Sources table keeps name, state, open issues and the fix: the 24h count goes, and a long name truncates, so the table never widens the page. */
+  .ops-home-srctable thead th:nth-child(5), .ops-home-srctable td:nth-child(5) { display: none; }
+  .ops-home-srctable tbody th { max-width: 110px; overflow: hidden; }
+  .ops-home-srctable th, .ops-home-srctable td { padding-left: 6px; padding-right: 6px; }
+  /* The state is what a person reads the table for: it wraps to a second line, never cuts to "Stoppe". */
+  .ops-home-srctable td[data-col="state"] { white-space: normal; max-width: none; width: auto; min-width: 84px; word-break: normal; overflow-wrap: normal; }
+  /* The fix sits on the source's own row in the list above and on its overview; the table keeps its room for the state. */
+  .ops-home-srctable thead th:nth-child(7), .ops-home-srctable td:nth-child(7) { display: none; }
+  .ops-home-srctable td[data-col="state"] .ops-home-health { white-space: normal; }
+  .ops-home-reason { display: none; }
+  /* A reader row's title already says it is failing: on a phone its line two keeps the blind watches' expander instead. */
+  .ops-home-state[data-reader="true"] { display: none; }
+  .ops-home-line2 > .ops-home-blind ~ .ops-home-fact[data-lead="true"] { max-width: calc(100% - 140px); }
+  /* A phone keeps the band to its count line; the OK count opens the tiles. */
+  .ops-band:not([data-open]) .ops-band-tiles { display: none; }
+  .ops-band-head { flex-wrap: wrap; row-gap: 4px; }
+}
+
+/* A phone keeps the counts to one line that scrolls sideways, the paging group first, the edge faded where more follow.
+   By the window, not the pane: a pane narrowed by the inbox beside it wraps its counts, so none hides past an edge. */
+@media (max-width: 600px) {
+  .ops-home-strip {
+    flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; min-width: 0; max-width: 100%;
+    gap: 8px; padding: 1px 0; mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+  .ops-home-strip::-webkit-scrollbar { display: none; }
+  .ops-home-strip .ops-home-tilegroup { flex-wrap: nowrap; flex: 0 0 auto !important; max-width: none; gap: 4px; }
+  .ops-home-strip .ops-home-tilegroup:last-child { padding-right: 28px; }
+}
+
+/* An id this workspace does not hold: what it is, then the ways on. */
+.ops-notfound { max-width: 560px; margin: 64px auto; display: flex; flex-direction: column; gap: 14px; align-items: center; font-size: 13px; }
+.ops-notfound-title { display: flex; align-items: center; gap: 8px; color: var(--sol-text); }
+.ops-notfound-title .ops-mono { font-weight: 600; }
+.ops-notfound-title b { font-weight: 600; }
+.ops-notfound-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center; }
+.ops-notfound-search { display: inline-flex; gap: 4px; align-items: center; }
+.ops-notfound-search input {
+  height: 28px; width: 180px; padding: 0 8px; border-radius: 6px; font-size: 12.5px;
+  border: 1px solid var(--sol-border); background: var(--sol-bg-alt); color: var(--sol-text);
+}
+.ops-notfound-spin {
+  width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--sol-text-dim); border-top-color: transparent;
+  animation: ops-notfound-spin 900ms linear infinite;
+}
+@keyframes ops-notfound-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ops-notfound-spin { animation: none; } }
+/* The other workspaces still being asked, beside a finished verdict: a small mark, not the page's spinner. */
+.ops-notfound-elsewhere { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; }
+.ops-notfound-elsewhere .ops-notfound-spin { width: 10px; height: 10px; }
+
+/* A source overview's folded issue row (one root cause, several issues): the count opens them, each to its own page. */
+.sov-variants {
+  display: inline-flex; align-items: center; gap: 2px; margin-right: 6px; padding: 0 4px; border-radius: 4px;
+  color: var(--sol-text-muted); font: inherit; cursor: pointer;
+}
+.sov-variants:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 10%, transparent); }
+.sov-variants[aria-expanded="true"] svg { transform: rotate(180deg); }
+.sov-variant-list { list-style: none; margin: 0 0 4px 24px; padding: 0; display: flex; flex-direction: column; }
+.sov-variant {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: baseline;
+  padding: 3px 6px; border-radius: 5px; font-size: 12px; color: var(--sol-text-muted); text-decoration: none;
+}
+.sov-variant:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); color: var(--sol-text); }
+/* A count of nothing is not a press. */
+.ops-home-count[aria-disabled="true"]:hover { border-color: var(--sol-border); }

@@ -28,7 +28,7 @@ import { connectionIdForSource, tokenFor, type FetchLike } from "../tokenConnect
 import { isTokenRefusal } from "../lib/sourceHealth";
 import { tokenHttp } from "../lib/tokenHttp";
 import { historyInstants, type HistorySpan } from "../lib/ingestGroups";
-import { METRIC_NO_HISTORY, METRIC_WATCH_LIMITS, PASSTHROUGH_MAX_BYTES, POSTHOG_PROJECT_ID } from "@codecast/shared/contracts/ingest";
+import { METRIC_NO_HISTORY, PASSTHROUGH_MAX_BYTES, POSTHOG_PROJECT_ID, validWatchQuery } from "@codecast/shared/contracts/ingest";
 import type { RrwebEvent } from "@codecast/shared/replay";
 import { cleanUrl } from "@codecast/shared/contracts/replay";
 
@@ -52,7 +52,6 @@ export const RECORDINGS_LIST_MAX = 100;
 // PostHog recording ids are UUIDs; insight refs are numeric ids or 8 character
 // short ids. Checked so a value can never steer a request to another path.
 const RECORDING_ID = /^[A-Za-z0-9_-]{1,128}$/;
-const INSIGHT_REF = /^(\d{1,12}|[A-Za-z0-9_-]{1,32})$/;
 /** A relative PostHog date ("-7d", "-24h", "mStart") or an ISO date. */
 const DATE_FILTER = /^(-?\d{1,4}[hdwmy]|[a-zA-Z]{1,12}|\d{4}-\d{2}-\d{2}([T ][\d:.]+Z?)?)$/;
 
@@ -204,13 +203,8 @@ export function insightPath(ref: string): string {
     : `/insights/?short_id=${encodeURIComponent(r)}&refresh=blocking`;
 }
 
-export function validWatchQuery(kind: "hogql" | "insight", query: string): string | null {
-  const q = query.trim();
-  if (!q) return kind === "hogql" ? "A HogQL watch needs a query" : "An insight watch needs an insight id";
-  if (q.length > METRIC_WATCH_LIMITS.query_chars) return `The query is over ${METRIC_WATCH_LIMITS.query_chars} characters`;
-  if (kind === "insight" && !INSIGHT_REF.test(q)) return `"${q.slice(0, 40)}" is not a PostHog insight id or short id`;
-  return null;
-}
+// The watch query check lives with the contract, so the web form says what the server would.
+export { validWatchQuery };
 
 /** A watch's current value, or why there is none. */
 export async function fetchMetricValue(
@@ -502,6 +496,28 @@ export function snapshotSources(body: any): { source: string; blob_key?: string 
   return [];
 }
 
+/**
+ * The first blob (as snapshotSources lists them) that runs past epoch ms `t`,
+ * and how many there are: where a read goes on from a copy that reaches `t`
+ * but never kept where its read stopped. Null when PostHog gave no end times.
+ */
+export function blobAfter(body: any, t: number): { next_blob: number; blobs: number } | null {
+  const picked = snapshotSources(body);
+  if (!picked.length || picked[0].source === "realtime") return null;
+  const all: any[] = (Array.isArray(body?.sources) ? body.sources : []).filter((s: any) => s && s.source === picked[0].source);
+  const ends = all.map((s) => Date.parse(String(s.end_timestamp ?? "")));
+  if (ends.length !== picked.length || ends.some((e) => !Number.isFinite(e))) return null;
+  const i = ends.findIndex((end) => end > t);
+  return { next_blob: i < 0 ? ends.length : i, blobs: ends.length };
+}
+
+/** blobAfter, asked of PostHog for one recording. */
+export async function locateBlobAfter(conn: PostHogConn, recordingId: string, t: number, fetchImpl: FetchLike = fetch): Promise<{ next_blob: number; blobs: number } | null> {
+  const listed = parseJson(await posthogRequest(conn, `/session_recordings/${recordingId}/snapshots`, { maxBytes: LIST_READ_MAX_BYTES }, fetchImpl));
+  if (!listed.ok) throw new VendorCallError(listed);
+  return blobAfter(listed.body, t);
+}
+
 /** One snapshot call: a single blob, or for blob_v2 an inclusive key range. */
 export type SnapshotRead = { source: string; blob_key?: string; end_blob_key?: string };
 
@@ -620,23 +636,35 @@ export function parseSnapshotJsonl(text: string, inflate: Inflate = inflateCappe
   return out;
 }
 
+/** How many blobs one read covers: a blob_v2 range is every key in it. */
+function blobsIn(read: SnapshotRead): number {
+  if (read.end_blob_key === undefined || read.blob_key === undefined) return 1;
+  return Number(read.end_blob_key) - Number(read.blob_key) + 1;
+}
+
 /**
- * Every rrweb event of one recording, read blob by blob up to the byte and
- * blob caps. A recording past the caps imports its beginning, and says so.
+ * The rrweb events of one part of a recording: blob by blob from `from`, up to
+ * the byte and blob caps. A recording past the caps is read part by part
+ * (sources/replayRest.ts): `next_blob` is where the next part starts, and
+ * `blobs` how many the recording has. A recording still in progress
+ * (realtime, not flushed to blobs) has no later parts to read.
  */
 export async function fetchRecordingEvents(
   conn: PostHogConn,
   recordingId: string,
   fetchImpl: FetchLike = fetch,
-): Promise<{ ok: true; events: RrwebEvent[]; truncated: boolean } | PostHogFailure> {
+  from = 0,
+): Promise<{ ok: true; events: RrwebEvent[]; truncated: boolean; next_blob: number; blobs: number; realtime: boolean } | PostHogFailure> {
   const listed = parseJson(await posthogRequest(conn, `/session_recordings/${recordingId}/snapshots`, { maxBytes: LIST_READ_MAX_BYTES }, fetchImpl));
   if (!listed.ok) return listed;
   const sources = snapshotSources(listed.body);
   if (!sources.length) return { ok: false, error: `PostHog has no snapshots for recording ${recordingId}` };
+  const realtime = sources.some((src) => src.source === "realtime");
   const events: RrwebEvent[] = [];
   let budget = SNAPSHOT_MAX_BYTES;
-  let truncated = sources.length > SNAPSHOT_MAX_BLOBS;
-  const queue = snapshotReads(sources.slice(0, SNAPSHOT_MAX_BLOBS));
+  let truncated = sources.length > from + SNAPSHOT_MAX_BLOBS;
+  let read_blobs = 0;
+  const queue = snapshotReads(sources.slice(from, from + SNAPSHOT_MAX_BLOBS));
   while (queue.length) {
     const read = queue.shift()!;
     if (budget <= 0) {
@@ -659,9 +687,10 @@ export async function fetchRecordingEvents(
       return answer;
     }
     budget -= answer.text.length;
+    read_blobs += blobsIn(read);
     events.push(...parseSnapshotJsonl(answer.text));
   }
-  return { ok: true, events, truncated };
+  return { ok: true, events, truncated, next_blob: from + read_blobs, blobs: sources.length, realtime };
 }
 
 // ── Convex functions ──
@@ -721,6 +750,32 @@ export const query = action({
   },
 });
 
+/** One saved insight as a picker lists it. */
+export type InsightRow = { id: number; short_id: string; name: string; kind: string | null };
+
+/** A saved insight from PostHog's list answer, or null when it is not one. */
+export function insightRow(raw: any): InsightRow | null {
+  if (!raw || typeof raw.id !== "number" || typeof raw.short_id !== "string") return null;
+  const name = String(raw.name || raw.derived_name || "").trim() || `Insight ${raw.short_id}`;
+  const kind = typeof raw.query?.source?.kind === "string" ? raw.query.source.kind.replace(/Query$/, "") : typeof raw.filters?.insight === "string" ? raw.filters.insight.toLowerCase() : null;
+  return { id: raw.id, short_id: raw.short_id, name: name.slice(0, 200), kind };
+}
+
+/** The project's saved insights, newest edit first: what the New watch sheet offers for an insight watch. */
+export const listInsights = action({
+  args: { ...scopeArgs, source: v.string(), search: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ insights: InsightRow[] }> => {
+    const { source, search, ...scope } = args;
+    const input = await ctx.runQuery(internal.sources.posthog.sourceForCaller, { ...scope, source });
+    const conn = await connFor(ctx, input);
+    if ("error" in conn) throw new Error(conn.error);
+    const q = new URLSearchParams({ saved: "true", basic: "true", limit: "100", order: "-last_modified_at", ...(search?.trim() ? { search: search.trim().slice(0, 100) } : {}) });
+    const parsed = parseJson(await posthogRequest(conn, `/insights/?${q.toString()}`, { maxBytes: LIST_READ_MAX_BYTES }));
+    if (!parsed.ok) throw new Error(parsed.error);
+    return { insights: (Array.isArray(parsed.body?.results) ? parsed.body.results : []).map(insightRow).filter((r: InsightRow | null): r is InsightRow => !!r) };
+  },
+});
+
 /** `cast replay ls --source <posthog>`: recordings from the API, each named by its replay short id once imported. */
 export const listRecordings = action({
   args: {
@@ -755,18 +810,28 @@ export async function readPostHogRecording(conn: PostHogConn, recordingId: strin
   return {
     events: read.events,
     truncated: read.truncated,
+    // A finished recording past the caps: its later parts can be read after this one.
+    ...(read.truncated && !read.realtime && read.next_blob > 0 ? { rest: { next_blob: read.next_blob, blobs: read.blobs } } : {}),
+    ...(!read.realtime && read.next_blob > 0 ? { read_to: { next_blob: read.next_blob, blobs: read.blobs } } : {}),
+    ...(read.realtime ? { realtime: true } : {}),
     ...(row?.started_at ? { started_at: row.started_at } : {}),
     ...(row && (row.distinct_id || row.email) ? { user: { id: row.distinct_id ?? undefined, email: row.email ?? undefined } } : {}),
+    ...(row?.duration_ms ? { length_ms: row.duration_ms } : {}),
   };
 }
 
-/** Import (or find) one recording of a source, as the source: access was checked by the caller (vendorReplay.importLinked, the bulk import). */
-export async function importFor(ctx: Pick<ActionCtx, "runQuery" | "runAction">, input: { source_id: Id<"event_sources">; config: { project_id?: string } | null; connection_id: string | null }, recordingId: string): Promise<ImportOutcome> {
+/**
+ * Import (or find) one recording of a source, as the source: access was
+ * checked by the caller (vendorReplay.importLinked, the bulk import). With
+ * `rest`, a recording past the read caps goes on to read its later parts
+ * (sources/replayRest.ts); `force` reads it again though a copy exists.
+ */
+export async function importFor(ctx: Pick<ActionCtx, "runQuery" | "runAction" | "runMutation">, input: { source_id: Id<"event_sources">; config: { project_id?: string } | null; connection_id: string | null }, recordingId: string, opts: { rest?: boolean; force?: boolean } = {}): Promise<ImportOutcome> {
   return importVendorRecording(ctx, { source_id: input.source_id, provider: "posthog", external_id: recordingId }, async () => {
     const conn = await connFor(ctx, input);
     if ("error" in conn) throw new VendorCallError({ error: conn.error, lost: true });
     return readPostHogRecording(conn, recordingId);
-  });
+  }, opts);
 }
 
 /**
@@ -780,17 +845,17 @@ export const importRecording = action({
     if (!RECORDING_ID.test(recordingId)) invalidScope("That is not a PostHog recording id");
     const { source, recording: _r, ...scope } = args;
     const input = await ctx.runQuery(internal.sources.posthog.sourceForCaller, { ...scope, source });
-    return importFor(ctx, input, recordingId);
+    return importFor(ctx, input, recordingId, { rest: true });
   },
 });
 
 /** A linked recording of a source the caller may read (vendorReplay.importLinked). */
 export const importForSource = internalAction({
-  args: { source_id: v.id("event_sources"), external_id: v.string() },
+  args: { source_id: v.id("event_sources"), external_id: v.string(), rest: v.optional(v.boolean()), force: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<ImportOutcome> => {
     if (!RECORDING_ID.test(args.external_id)) throw new Error("That is not a PostHog recording id");
     const input = await ctx.runQuery(internal.sources.posthog.sourceForPoll, { source_id: args.source_id });
     if (!input) throw new Error("The recording's source was removed");
-    return importFor(ctx, input, args.external_id);
+    return importFor(ctx, input, args.external_id, { rest: args.rest, force: args.force });
   },
 });

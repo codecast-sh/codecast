@@ -609,6 +609,7 @@ const WATCH_SLACK_MS = 60_000;
 export function dueWatches(manifest: AppManifest | null, state: Doc<"event_sources">["watch_state"], now: number): AppWatch[] {
   return (manifest?.watches ?? []).filter((w) => {
     const s = state?.find((x) => x.key === watchKey(w));
+    if (s?.paused) return false;
     return !s || now - s.polled_at >= w.every_ms - WATCH_SLACK_MS;
   });
 }
@@ -618,7 +619,8 @@ export function dueWatches(manifest: AppManifest | null, state: Doc<"event_sourc
  * manifest with no watches is looked at again after its next refresh.
  */
 export function nextWatchAt(manifest: AppManifest | null, state: Doc<"event_sources">["watch_state"], now: number): number {
-  const watches = manifest?.watches ?? [];
+  // A paused watch is never due, so it never holds the next poll.
+  const watches = (manifest?.watches ?? []).filter((w) => !state?.find((x) => x.key === watchKey(w))?.paused);
   if (!watches.length) return now + APP_LIMITS.manifest_max_age_ms;
   return Math.min(
     ...watches.map((w) => {
@@ -677,7 +679,8 @@ export const recordWatchPolls = internalMutation({
     for (const s of args.states) {
       // A failed poll keeps the cursor it had, so the failures it missed still count next time.
       const cursor = s.cursor ?? byKey.get(s.key)?.cursor;
-      byKey.set(s.key, { key: s.key, polled_at: s.polled_at, ...(cursor !== undefined ? { cursor } : {}), ...(s.last_error ? { last_error: s.last_error.slice(0, 500) } : {}) });
+      const paused = byKey.get(s.key)?.paused;
+      byKey.set(s.key, { key: s.key, polled_at: s.polled_at, ...(cursor !== undefined ? { cursor } : {}), ...(s.last_error ? { last_error: s.last_error.slice(0, 500) } : {}), ...(paused ? { paused } : {}) });
     }
     const now = Date.now();
     const watchState = [...byKey.values()];
@@ -694,7 +697,7 @@ export const recordWatchPolls = internalMutation({
  * be. Successful polls write no app_calls row (one every few minutes per
  * watch would bury the people's calls); a failed one does, as the owner.
  */
-export async function pollSourceWatches(ctx: RunCtx, sourceId: Id<"event_sources">, fetchImpl: FetchLike, now = Date.now()) {
+export async function pollSourceWatches(ctx: RunCtx, sourceId: Id<"event_sources">, fetchImpl: FetchLike, now = Date.now(), opts: { only?: string } = {}) {
   const found = await ctx.runQuery(internal.sources.app.sourceForPoll, { source_id: sourceId });
   if (!found || found.source.status !== "active") return { polled: 0 };
   const source: Doc<"event_sources"> = found.source;
@@ -708,7 +711,8 @@ export async function pollSourceWatches(ctx: RunCtx, sourceId: Id<"event_sources
   if (!cred.ok) return lost(cred.error);
   const m = await freshManifest(ctx, source, found.connection_id, fetchImpl, now);
   if (!m.ok) return { polled: 0, error: m.error };
-  const due = dueWatches(m.manifest, source.watch_state, now);
+  // A person's "Run now" polls the one watch they named, due or not, paused or not.
+  const due = opts.only ? m.manifest.watches.filter((w) => watchKey(w) === opts.only) : dueWatches(m.manifest, source.watch_state, now);
   if (!due.length) {
     // Nothing due after all (the cron read an unset next_watch_at): record
     // when something will be, so the cron stops reading this source.
@@ -785,6 +789,50 @@ export async function pollSourceWatches(ctx: RunCtx, sourceId: Id<"event_sources
 export const pollSource = internalAction({
   args: { source_id: v.id("event_sources") },
   handler: async (ctx, args) => pollSourceWatches(ctx, args.source_id, fetch),
+});
+
+/** A watch as a person names it on the Apps tab: the source must hold it in its manifest. */
+async function personWatch(ctx: any, args: ScopeArgs & { source: string; watch: string }) {
+  if (args.api_token) forbidden("Watches are run and paused by a person in the browser, under Signals, Apps");
+  await requireUser(ctx);
+  const { row } = await grantSource(ctx, args);
+  const manifest = cachedManifest(await withManifest(ctx, row));
+  if (!manifest?.watches.some((w) => watchKey(w) === args.watch)) invalidScope(`${row.name} declares no watch ${args.watch}`);
+  return row;
+}
+
+/** "Run now" on the Apps tab: poll one watch at once, outside its schedule. The poll runs as an action. */
+export const pollWatchNow = mutation({
+  args: { ...scopeArgs, source: v.string(), watch: v.string() },
+  handler: async (ctx, args) => {
+    const row = await personWatch(ctx, args);
+    if (row.status !== "active") invalidScope(`${row.name} is ${row.status}: resume it first`);
+    await ctx.scheduler.runAfter(0, internal.sources.app.pollWatchOnce, { source_id: row._id, watch: args.watch });
+    return { scheduled: true };
+  },
+});
+
+export const pollWatchOnce = internalAction({
+  args: { source_id: v.id("event_sources"), watch: v.string() },
+  handler: async (ctx, args) => pollSourceWatches(ctx, args.source_id, fetch, Date.now(), { only: args.watch }),
+});
+
+/** Pause or resume one watch: a paused watch is never due, so the poller skips it. */
+export const setWatchPaused = mutation({
+  args: { ...scopeArgs, source: v.string(), watch: v.string(), paused: v.boolean() },
+  handler: async (ctx, args) => {
+    const row = await personWatch(ctx, args);
+    const state = [...(row.watch_state ?? [])];
+    const i = state.findIndex((s) => s.key === args.watch);
+    const { paused: _was, ...prev } = i >= 0 ? state[i] : { key: args.watch, polled_at: 0 };
+    const next = { ...prev, ...(args.paused ? { paused: true } : {}) };
+    if (i >= 0) state[i] = next;
+    else state.push(next);
+    const manifest = cachedManifest(await withManifest(ctx, row));
+    const now = Date.now();
+    await ctx.db.patch(row._id, { watch_state: state, next_watch_at: nextWatchAt(manifest, state, now), updated_at: now });
+    return { paused: args.paused };
+  },
 });
 
 /** Daily: every app source whose manifest is a day old refetches it, even with nobody calling. */

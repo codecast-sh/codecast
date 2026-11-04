@@ -52,7 +52,73 @@ export const REPLAY_DOM_LIMITS = {
   /** What one DOM chunk may inflate to when read back. */
   chunk_max_inflated_bytes: 48 * 1024 * 1024,
   max_chunks_per_replay: 60,
+  /**
+   * What one player load reads of a capture whose chunks carry their spans
+   * (ReplayDomChunkMeta): a window around the asked time, starting at a full
+   * snapshot. The player refuses a load past 4 x chunk_max_inflated_bytes, so
+   * an eight hour recording plays a stretch at a time, the way PostHog and
+   * LogRocket stream theirs, and the page opens the next stretch as it nears.
+   */
+  window_raw_bytes: 64 * 1024 * 1024,
+  /** A capture with this many chunks may pass the window: its chunks' spans are read and kept (replays.domMetaOne). */
+  window_min_chunks: 6,
 } as const;
+
+/** One stored DOM chunk: its first and last rrweb timestamps, its first full snapshot's (absent when it holds none), and its JSON size. */
+export interface ReplayDomChunkMeta {
+  first: number;
+  last: number;
+  full?: number;
+  raw: number;
+}
+
+/** The stretch of a capture one player load plays, on the replay clock: chunks [from, to], and `end_ms` null when it runs to the capture's end. */
+export interface ReplayDomWindow {
+  from: number;
+  to: number;
+  start_ms: number;
+  end_ms: number | null;
+}
+
+/**
+ * The chunks a player opened at `t_ms` reads: null when the whole capture
+ * fits one load (or its chunks' spans are not known). Otherwise it starts at
+ * the last chunk whose full snapshot is at or before t (rrweb draws only
+ * from a full snapshot) and runs forward while the budget holds, always
+ * through the chunk holding t.
+ */
+export function replayDomWindow(
+  meta: readonly ReplayDomChunkMeta[] | null | undefined,
+  t0: number,
+  t_ms: number,
+  budget: number = REPLAY_DOM_LIMITS.window_raw_bytes,
+): ReplayDomWindow | null {
+  if (!meta?.length) return null;
+  let total = 0;
+  for (const m of meta) total += m.raw;
+  if (total <= budget) return null;
+  const at = t0 + Math.max(0, t_ms);
+  let from = -1;
+  for (let i = 0; i < meta.length; i++) if (meta[i].full !== undefined && meta[i].full! <= at) from = i;
+  if (from < 0) from = Math.max(0, meta.findIndex((m) => m.full !== undefined));
+  let holding = from;
+  while (holding + 1 < meta.length && meta[holding + 1].first <= at) holding++;
+  let to = from;
+  let sum = meta[from].raw;
+  while (to + 1 < meta.length && (to + 1 <= holding || sum + meta[to + 1].raw <= budget)) sum += meta[++to].raw;
+  return {
+    from,
+    to,
+    start_ms: from === 0 ? 0 : Math.max(0, Math.round((meta[from].full ?? meta[from].first) - t0)),
+    end_ms: to === meta.length - 1 ? null : Math.max(0, Math.round(meta[to].last - t0)),
+  };
+}
+
+/** Whether a player load holding `w` can show replay time t without opening another stretch. */
+export function replayWindowHolds(w: Pick<ReplayDomWindow, "start_ms" | "end_ms"> | null | undefined, t: number): boolean {
+  if (!w) return true;
+  return t >= w.start_ms && (w.end_ms === null || t <= w.end_ms);
+}
 
 /** What the SDK sends on replay-sign to say which stream a chunk belongs to. Absent means "events". */
 export const REPLAY_CHUNK_KINDS = ["events", "dom"] as const;
@@ -178,6 +244,8 @@ export interface ReplayPlayerLink {
   /** Where frames are rendered (REPLAY_PLAYER_ORIGIN + REPLAY_FRAME_PATH). */
   frame_url: string;
   expires_at: number;
+  /** The stretch this link's player plays, when the capture is too long for one load (replayDomWindow); absent or null when it plays whole. */
+  window?: { start_ms: number; end_ms: number | null } | null;
 }
 
 // ── postMessage between the player and the page embedding it ───────────────
@@ -205,9 +273,13 @@ export type ReplayPlayerMessage =
    * `duration_ms` is the replay's length on its clock (the row's duration).
    * `below_px` is what the player draws under the recorded page (its control
    * bar, the remote-assets strip): a host sizing the iframe to the page's
-   * shape adds it. Absent from players older than the field.
+   * shape adds it. `capture_end_ms` is where the page capture ends on the
+   * replay clock, which can fall well short of `duration_ms` when an import
+   * stopped early. Both are absent from players older than the field.
    */
-  | { source: typeof REPLAY_PLAYER_SOURCE; type: "ready"; duration_ms: number; width: number; height: number; t_ms: number; below_px?: number }
+  | { source: typeof REPLAY_PLAYER_SOURCE; type: "ready"; duration_ms: number; width: number; height: number; t_ms: number; below_px?: number; capture_end_ms?: number }
+  /** The recorded window changed size during playback (an rrweb viewport resize or a new page's Meta): the host refits the stage. */
+  | { source: typeof REPLAY_PLAYER_SOURCE; type: "size"; width: number; height: number }
   /** Posted on every seek, and about four times a second while playing. */
   | { source: typeof REPLAY_PLAYER_SOURCE; type: "time"; t_ms: number; playing: boolean }
   | { source: typeof REPLAY_PLAYER_SOURCE; type: "state"; playing: boolean; speed: number }

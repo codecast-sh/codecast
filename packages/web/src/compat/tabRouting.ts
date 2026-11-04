@@ -1,7 +1,7 @@
 import { useInboxStore } from "../../store/inboxStore";
 import { pathLabel } from "../../lib/pathLabel";
 import { borrowsTabShell } from "../../lib/desktop";
-import { settingsSectionForPath } from "../../lib/settingsSections";
+import { rememberSettingsAnchor, settingsSectionForPath } from "../../lib/settingsSections";
 import { isNonTabRoute, routerNavigate } from "../../lib/tabRoutes";
 import { tabSafePath } from "../../lib/tabSafePath";
 
@@ -24,6 +24,8 @@ export { isNonTabRoute };
 export function interceptSettingsNav(path: string): { carryUrl: string | null } | null {
   const hit = settingsSectionForPath(path);
   if (!hit) return null;
+  // The URL stays where it is, so a fragment naming a row inside the panel is handed over here.
+  rememberSettingsAnchor(path);
   useInboxStore.getState().openSettingsModal(hit.section);
   return { carryUrl: hit.search ? `${window.location.pathname}?${hit.search}` : null };
 }

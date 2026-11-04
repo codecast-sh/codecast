@@ -20,7 +20,9 @@ interface At {
 
 export type ReplayEvent =
   | (At & { type: "nav"; url: string; title?: string })
-  | (At & { type: "click"; label: string; role?: string; selector: string; text?: string })
+  // `context` is for display only, never a locator: when the control has no name or text, what it shows (an icon) and where it sits ("x icon in Release this call").
+  // `x`/`y`: where the pointer landed, CSS px in the recorded viewport.
+  | (At & { type: "click"; label: string; role?: string; selector: string; text?: string; context?: string; x?: number; y?: number })
   // Only the length of what was typed, never the value.
   | (At & { type: "input"; label: string; selector: string; length: number; redacted: true })
   | (At & { type: "submit"; label: string; selector: string })
@@ -63,9 +65,21 @@ export type ReplayProvider = (typeof REPLAY_PROVIDERS)[number];
  * no status field (Safari) is a failed request only when its timings show no
  * response arrived. 5: a PostHog mobile recording (wireframes, not a DOM) is
  * converted into a page the player draws, its taps become clicks and its
- * screens' text outlines; a capture rrweb could not draw is not kept.
+ * screens' text outlines; a capture rrweb could not draw is not kept. 6: a
+ * request is timed to its responseEnd, so a navigation's duration (the whole
+ * page load, to loadEventEnd) no longer reads as a slow document request.
+ * 7: an event the vendor sent twice is read once (capture.ts dedupeRrweb).
+ * 8: a click on a control with no name or text carries a `context` (its icon
+ * and the nearest labelled container), and the recording SDK's own console
+ * lines ("[SessionRecording] …", "[PostHog.js] …") are dropped.
+ * 9: a click keeps where it landed (x, y), and a control inside a form takes
+ * its context from the nearest heading, legend or labelled dialog, since a
+ * container holding a field has no readable text.
+ * 10: nodes a mutation adds join their parent's tree, and text and attribute
+ * changes apply, so a control rendered after page load is named by its text
+ * (most "unlabeled" clicks); a card clicked whole is named by its first words.
  */
-export const VENDOR_CONVERTER_VERSION = 5;
+export const VENDOR_CONVERTER_VERSION = 10;
 
 /**
  * How long a copy whose refresh failed waits before the vendor is asked
@@ -74,7 +88,74 @@ export const VENDOR_CONVERTER_VERSION = 5;
  * recording is gone. Without it every read of an older copy would call the
  * vendor again, against PostHog's ~60 snapshot reads an hour.
  */
-export const VENDOR_REFRESH_RETRY = { failed_ms: 60 * 60_000, gone_ms: 30 * 24 * 60 * 60_000 } as const;
+export const VENDOR_REFRESH_RETRY = {
+  failed_ms: 60 * 60_000,
+  gone_ms: 30 * 24 * 60 * 60_000,
+  /** A recording PostHog is still writing (realtime, not yet flushed to blobs): its later parts exist in minutes. */
+  realtime_ms: 10 * 60_000,
+} as const;
+
+/**
+ * Why the vendor is not asked again before `vendor_refresh_after`, kept
+ * beside it so a page can say so: still being recorded, rate limited, gone
+ * from the vendor, or a read that failed.
+ */
+/** `unsplittable`: a start whose later parts cannot be read part by part (a mobile capture). */
+export const VENDOR_REFRESH_WHYS = ["realtime", "rate_limit", "gone", "failed", "unsplittable"] as const;
+export type VendorRefreshWhy = (typeof VENDOR_REFRESH_WHYS)[number];
+
+/** Reading the rest of a long vendor recording (convex sources/replayRest.ts); the server and the replay page read these same numbers. */
+export const REPLAY_REST = {
+  /** A chain that has not stepped in this long has stopped (an action that ran out of memory leaves no word). */
+  stall_ms: 10 * 60_000,
+  /** A shortfall under this, or under cut_min_share of the length, is two clocks disagreeing (an idle tail the vendor counts), not a missing part. */
+  cut_min_ms: 60_000,
+  cut_min_share: 0.05,
+  /** A copy with no stored reach this long or longer may hold only its start. */
+  reach_unknown_ms: 10 * 60_000,
+} as const;
+
+/**
+ * Where an imported copy stops when the recording runs well past it (from
+ * there on nothing was imported), or null when it covers the recording or
+ * nobody knows how far it reaches. The list's mark, the player's cut and the
+ * server's sweep all read this one rule.
+ */
+export function replayCutAt(capturedMs: number | null | undefined, lengthMs: number | null | undefined): number | null {
+  if (!capturedMs || !lengthMs) return null;
+  return lengthMs - capturedMs > Math.max(REPLAY_REST.cut_min_ms, lengthMs * REPLAY_REST.cut_min_share) ? capturedMs : null;
+}
+
+/**
+ * Whether asking for a copy now starts reading the rest of its recording: it
+ * stops well short of the vendor's length (or its reach was never stored and
+ * it is long), the vendor is not being waited out, and no chain is reading it
+ * (none, one that failed, or one gone quiet). A chain waiting out a rate limit
+ * is alive. The server's importLinked and sweep, and the page's "Import the
+ * rest", all decide with this, so the page never offers a press the server
+ * would decline.
+ */
+export function needsRest(
+  r: {
+    captured_ms?: number | null;
+    duration_ms?: number | null;
+    imported_at?: number | null;
+    vendor_refresh_after?: number | null;
+    import_rest?: { retry_at?: number | null; error?: string | null; updated_at: number } | null;
+  },
+  now: number,
+): boolean {
+  const captured = r.captured_ms ?? null;
+  const duration = r.duration_ms ?? null;
+  const unknownReach = captured === null && !!r.imported_at && (duration ?? 0) >= REPLAY_REST.reach_unknown_ms;
+  if (!unknownReach && replayCutAt(captured, duration) === null) return false;
+  if (r.vendor_refresh_after && r.vendor_refresh_after > now) return false;
+  const chain = r.import_rest;
+  if (!chain) return true;
+  if (chain.error) return true;
+  if (chain.retry_at && chain.retry_at > now) return false;
+  return now - chain.updated_at > REPLAY_REST.stall_ms;
+}
 
 /**
  * A mirrored recording that has not been imported, or was imported by an
@@ -168,10 +249,15 @@ export interface ReplayBackfill {
   /** When the vendor began answering 429 without a recording landing since; past REPLAY_BACKFILL_LIMITS.rate_limited_max_ms the import stops. */
   rate_limited_since?: number;
   last_error?: string;
+  /** The run's failed recordings, newest last, at most REPLAY_BACKFILL_FAILURES_KEPT: the vendor's id and why. A new run tries them again. */
+  failures?: { id: string; error: string }[];
   started_at: number;
   updated_at: number;
   finished_at?: number;
 }
+
+/** Failed recordings a run keeps by id (ReplayBackfill.failures); `failed` still counts them all. */
+export const REPLAY_BACKFILL_FAILURES_KEPT = 25;
 
 export const REPLAY_BACKFILL_LIMITS = {
   /**

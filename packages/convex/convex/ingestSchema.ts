@@ -15,7 +15,7 @@
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
 import { ADDABLE_SOURCE_PROVIDERS, GROUP_KINDS, GROUP_STATUSES, SOURCE_PROVIDERS, SOURCE_STATUSES, TRANSITIONS, WATCH_DIRECTIONS, WATCH_KINDS } from "@codecast/shared/contracts/ingest";
-import { REPLAY_BACKFILL_STATUSES, REPLAY_BACKFILL_WINDOWS, REPLAY_PROVIDERS } from "@codecast/shared/contracts/replay";
+import { REPLAY_BACKFILL_STATUSES, REPLAY_BACKFILL_WINDOWS, REPLAY_PROVIDERS, VENDOR_REFRESH_WHYS } from "@codecast/shared/contracts/replay";
 
 // The literal lists derive from the shared contract, the way openTaskValidator does, so the two cannot drift.
 const literals = <T extends string>(values: readonly T[]) => v.union(...values.map((value) => v.literal(value)));
@@ -29,7 +29,67 @@ export const groupStatusValidator = literals(GROUP_STATUSES);
 export const transitionValidator = literals(TRANSITIONS);
 export const watchKindValidator = literals(WATCH_KINDS);
 export const watchDirectionValidator = literals(WATCH_DIRECTIONS);
+/** shared/replay/list.ts ReplayShape. */
+/** A long vendor recording's import still reading its later parts (replays.import_rest, sources/replayRest.ts). */
+export const replayImportRestValidator = v.object({
+  /** The chain's id: a new import starts a new one, and a step of an older chain stops. */
+  gen: v.number(),
+  next_blob: v.number(),
+  blobs: v.number(),
+  /** The R2 object holding the converter's state where the last part ended (shared/replay/capture.ts CaptureCarry). */
+  carry_key: v.string(),
+  /** The vendor asked to wait (a rate limit): the next part is read at this time. */
+  retry_at: v.optional(v.number()),
+  /** The last part failed: why, in the adapter's words. The chain stops; reopening the replay starts it again. */
+  error: v.optional(v.string()),
+  /** A resumed chain's first part re-reads a blob the copy already holds: its rrweb events at or before this epoch ms are dropped. */
+  after_t: v.optional(v.number()),
+  updated_at: v.number(),
+});
+
+/** Where an imported copy's read stopped (replays.read_to): a resumed read continues here instead of reading the recording again from its start. */
+export const replayReadToValidator = v.object({
+  next_blob: v.number(),
+  blobs: v.number(),
+  /** The converter's state at next_blob, when kept (shared CaptureCarry); else it is rebuilt from the stored capture. */
+  carry_key: v.optional(v.string()),
+  at: v.number(),
+});
+
+/** shared/contracts/replayPlayer.ts ReplayDomChunkMeta. */
+export const replayDomChunkMetaValidator = v.object({ first: v.number(), last: v.number(), full: v.optional(v.number()), raw: v.number() });
+
+export const replayShapeValidator = v.object({
+  v: v.number(),
+  active_ms: v.number(),
+  pages: v.number(),
+  rage_clicks: v.number(),
+  strip: v.string(),
+  marks: v.array(v.number()),
+  paths: v.optional(v.array(v.string())),
+  endpoints: v.optional(v.array(v.string())),
+});
+
 export const replayProviderValidator = literals(REPLAY_PROVIDERS);
+
+/**
+ * shared/replay/list.ts ReplayFacts: what the vendor itself says of a
+ * recording (sources/replayFacts.ts). `at` alone means the vendor was asked
+ * and knew nothing.
+ */
+export const replayFactsValidator = v.object({
+  at: v.number(),
+  length_ms: v.optional(v.number()),
+  active_ms: v.optional(v.number()),
+  clicks: v.optional(v.number()),
+  console_errors: v.optional(v.number()),
+  rage_clicks: v.optional(v.number()),
+  browser: v.optional(v.string()),
+  os: v.optional(v.string()),
+  device: v.optional(v.string()),
+  country: v.optional(v.string()),
+  referrer: v.optional(v.string()),
+});
 
 /** A source's bulk import of its vendor's recordings (X5; contracts/replay.ts ReplayBackfill). */
 export const replayBackfillValidator = v.object({
@@ -46,6 +106,7 @@ export const replayBackfillValidator = v.object({
   failures_in_row: v.optional(v.number()),
   rate_limited_since: v.optional(v.number()),
   last_error: v.optional(v.string()),
+  failures: v.optional(v.array(v.object({ id: v.string(), error: v.string() }))),
   started_at: v.number(),
   updated_at: v.number(),
   finished_at: v.optional(v.number()),
@@ -100,6 +161,8 @@ export const appWatchStateValidator = v.object({
   /** The newest row time a job watch has seen, so a listed failure counts once. */
   cursor: v.optional(v.number()),
   last_error: v.optional(v.string()),
+  /** A person paused this watch on the Apps tab: the poller skips it until resumed. */
+  paused: v.optional(v.boolean()),
 });
 
 /**
@@ -137,6 +200,10 @@ export const ingestTables = {
     ingest_key_hash: v.optional(v.string()),
     /** ingestKeyPrefix(key): what the UI shows once the key is gone. */
     key_prefix: v.optional(v.string()),
+    /** The key a rotation replaced, still accepted until old_key_until so a deployed SDK keeps sending while the new key ships (ingest.rotateKey). */
+    old_key_hash: v.optional(v.string()),
+    old_key_prefix: v.optional(v.string()),
+    old_key_until: v.optional(v.number()),
     /** "union" makes signal fingerprints union:<segment>:<fp> (X6). */
     fingerprint_prefix: v.optional(v.string()),
     config: v.optional(sourceConfigValidator),
@@ -162,11 +229,20 @@ export const ingestTables = {
     groups_open: v.optional(v.number()),
     /** The bulk import of a PostHog or Sentry source's recordings (sources/replayBackfill.ts). Written once per page. */
     replay_backfill: v.optional(replayBackfillValidator),
+    /** Where the vendor's own app shows this source's project (PostHog: `<host>/project/<id>`), for "Open in" links. Written by sources/replayFacts.ts. */
+    vendor_web_url: v.optional(v.string()),
+    /**
+     * How this source's imported recordings stand against their vendor lengths (sources/replayRest.ts tally): cut short, of unknown reach, and the one being read.
+     * The tend cron recounts it; between recounts `cut` moves with each recording that crosses the line (lib/replayIndex.ts) and `reading` with each chain that starts or ends.
+     * `counted` is what the recount at `at` found and `prev` the recount before it, so the import line can say whether the backlog drains; `queue` the next recordings the sweep reads, in its order.
+     */
+    replay_rest: v.optional(v.object({ cut: v.number(), unknown: v.number(), reading: v.optional(v.string()), waiting_until: v.optional(v.number()), at: v.number(), counted: v.optional(v.number()), prev: v.optional(v.object({ cut: v.number(), at: v.number() })), queue: v.optional(v.array(v.string())) })),
     created_at: v.number(),
     updated_at: v.number(),
   })
     .index("by_workspace_name", ["workspace", "name"])
     .index("by_ingest_key_hash", ["ingest_key_hash"])
+    .index("by_old_key_hash", ["old_key_hash"])
     .index("by_short_id", ["short_id"])
     .index("by_provider_status", ["provider", "status"])
     // The app crons read only what is due: the watch poll by next_watch_at,
@@ -189,7 +265,49 @@ export const ingestTables = {
     groups_open: v.optional(v.number()),
     last_event_at: v.optional(v.number()),
     last_poll_at: v.optional(v.number()),
+    /** The last SOURCE_STAT_DAYS UTC days' counters, oldest first, today's included: a source's volume over time. */
+    days: v.optional(v.array(v.object({ day: v.string(), events: v.number(), dropped: v.number() }))),
+    /** The last SOURCE_STAT_HOURS hours of the same count (hour = its start, epoch ms), oldest first: the 24 hour chart. */
+    hours: v.optional(v.array(v.object({ hour: v.number(), events: v.number() }))),
+    /** The source's groups by status as of groups_counted_at (ingest.ts recountSourceGroups); ignored holds muted too. A person's triage moves it between counts. */
+    group_counts: v.optional(v.object({ open: v.number(), resolved: v.number(), ignored: v.number() })),
+    groups_counted_at: v.optional(v.number()),
+    /** A CI source's finished runs, oldest first (contracts/volumeWatch withCiRun): its failure rate and run time series. */
+    ci_runs: v.optional(v.array(v.object({ at: v.number(), ok: v.boolean(), duration_ms: v.optional(v.number()) }))),
+    /** A rotated-out key still inside its grace window: when it last carried a batch, and the events it carried since the rotation (ingest.rotateKey resets both). */
+    old_key_last_at: v.optional(v.number()),
+    old_key_events: v.optional(v.number()),
   }).index("by_source", ["source_id"]),
+
+  // One GitHub Actions run read back from GitHub for a CI check issue
+  // (ciRuns.ts): the run's jobs and steps, the failed jobs' annotations and
+  // the tail of the first failed job's log. The webhook carries none of this;
+  // the issue page asks for it when it shows a run. `error` says why a read
+  // came back short (no installation, no Actions read permission).
+  ci_run_details: defineTable({
+    repository: v.string(),
+    run_id: v.string(),
+    fetched_at: v.number(),
+    title: v.optional(v.string()),
+    event: v.optional(v.string()),
+    actor: v.optional(v.string()),
+    attempt: v.optional(v.number()),
+    started_at: v.optional(v.number()),
+    duration_ms: v.optional(v.number()),
+    jobs: v.array(v.object({
+      id: v.string(),
+      name: v.string(),
+      conclusion: v.optional(v.string()),
+      duration_ms: v.optional(v.number()),
+      url: v.optional(v.string()),
+      steps: v.array(v.object({ number: v.number(), name: v.string(), conclusion: v.optional(v.string()) })),
+    })),
+    annotations: v.array(v.object({ job: v.string(), level: v.string(), message: v.string(), title: v.optional(v.string()), path: v.optional(v.string()), line: v.optional(v.number()) })),
+    log_job: v.optional(v.string()),
+    log_tail: v.optional(v.string()),
+    log_error: v.optional(v.string()),
+    error: v.optional(v.string()),
+  }).index("by_repo_run", ["repository", "run_id"]),
 
   // X8. An app connector's manifest (up to APP_LIMITS.response_bytes of JSON),
   // in its own table because Convex reads whole documents: on the source row
@@ -229,19 +347,33 @@ export const ingestTables = {
     last_seen: v.number(),
     count: v.number(),
     users: v.optional(v.number()),
+    /** When distinct people began to be counted (event_group_users) on a group that predates the count; absent = since first seen. */
+    users_since: v.optional(v.number()),
     /** Hourly counts, oldest first, at most GROUP_RULES.bucket_hours. `hour` is the hour's start in ms. */
     buckets: v.array(v.object({ hour: v.number(), count: v.number() })),
+    /** Daily counts, oldest first, at most GROUP_RULES.day_buckets. `day` is the UTC day's start in ms. Absent on groups not written since they began. */
+    days: v.optional(v.array(v.object({ day: v.number(), count: v.number() }))),
     first_release: v.optional(v.string()),
     last_release: v.optional(v.string()),
     last_sha: v.optional(v.string()),
     regressed_at: v.optional(v.number()),
+    /** The release the regression came back in (lib/ingestGroups), so every surface names the same one. */
+    regressed_in: v.optional(v.string()),
     resolved_at: v.optional(v.number()),
     resolved_in: v.optional(v.string()),
+    /** What resolved it: a person (resolved_by), a check or metric's own recovery, or the vendor. Absent on older rows. */
+    resolved_via: v.optional(v.union(v.literal("person"), v.literal("recovered"), v.literal("vendor"))),
+    resolved_by: v.optional(v.id("users")),
+    /** A check or metric's flips to failing over the last 7 days (lib/ingestGroups FLAP_WINDOW_MS): a flapping monitor. */
+    failed_at: v.optional(v.array(v.number())),
     /** The last announced transition, for the spike and job cooldowns. */
     last_transition: v.optional(transitionValidator),
     last_transition_at: v.optional(v.number()),
     external: v.optional(v.object({ provider: v.string(), id: v.string(), url: v.optional(v.string()) })),
     signal_task_id: v.optional(v.id("tasks")),
+    /** The session a person started on this group from its page (ingest.setGroupFix), and when. */
+    fix_conversation_id: v.optional(v.id("conversations")),
+    fix_started_at: v.optional(v.number()),
     /**
      * A promotion not yet filed: one the source's hourly cap refused
      * (SOURCE_CAPS.promotions_per_hour), filed by ingest.promoteDue once the
@@ -259,6 +391,8 @@ export const ingestTables = {
     })),
     /** How many event_samples rows the group holds, so the trim deletes only the overflow. Absent on older rows. */
     sample_count: v.optional(v.number()),
+    /** A job's failures by what they said (lib/ingestGroups tallyMessages), since its first failure after the tally began. Absent on other kinds and on jobs not failed since. */
+    messages: v.optional(v.array(v.object({ key: v.string(), count: v.number(), first_seen: v.number(), last_seen: v.number() }))),
     meta: v.optional(v.object({
       /** check */
       ok: v.optional(v.boolean()),
@@ -267,6 +401,10 @@ export const ingestTables = {
       threshold: v.optional(v.number()),
       direction: v.optional(watchDirectionValidator),
       metric_watch_id: v.optional(v.id("metric_watches")),
+      /** check: its last passing reading, and for a CI run the commit and branch it passed at, so a failing check names its last green. */
+      last_ok_at: v.optional(v.number()),
+      last_ok_sha: v.optional(v.string()),
+      last_ok_branch: v.optional(v.string()),
     })),
     updated_at: v.number(),
   })
@@ -279,7 +417,19 @@ export const ingestTables = {
     // The daily bucket prune reads only groups whose buckets can still change.
     .index("by_last_seen", ["last_seen"])
     .index("by_short_id", ["short_id"])
-    .index("by_promotion_due", ["promotion_due.at"]),
+    .index("by_promotion_due", ["promotion_due.at"])
+    // The Issues list's search reaches every group, not only the windows a device holds.
+    .searchIndex("search_title", { searchField: "title", filterFields: ["workspace", "status"] }),
+
+  // X3. The distinct people a group has reached, one row each (ingest.ts
+  // countGroupUsers), so `users` on the group is a count and not a guess.
+  // Keyed by the occurrence's user id, else email, else name. Read only by
+  // group and key; deleted with the group.
+  event_group_users: defineTable({
+    group_id: v.id("event_groups"),
+    user_key: v.string(),
+    at: v.number(),
+  }).index("by_group_user", ["group_id", "user_key"]),
 
   // X3. Recent occurrences of a group, at most GROUP_RULES.samples_per_group,
   // pruned by a cron. Bodies never ride list queries.
@@ -300,10 +450,15 @@ export const ingestTables = {
     /** The recording this occurrence happened in, by the source's own replay id. */
     replay_external_id: v.optional(v.string()),
     replay_id: v.optional(v.id("replays")),
+    /** Why it is held past the newest few (lib/ingestGroups samplePins): first, release, day. The trim takes unpinned ones first. */
+    pin: v.optional(v.string()),
   })
     .index("by_group_at", ["group_id", "at"])
     // The 30 day prune (ingest.pruneSamples) reads oldest first across groups.
-    .index("by_at", ["at"]),
+    .index("by_at", ["at"])
+    // The Timeline's occurrences (ingest.listSamples): a workspace's, or one source's, newest first.
+    .index("by_workspace_at", ["workspace", "at"])
+    .index("by_source_at", ["source_id", "at"]),
 
   // X5. One manifest row per recording. Chunks live in R2 (codecast-replays).
   replays: defineTable({
@@ -333,19 +488,47 @@ export const ingestTables = {
     converter_version: v.optional(v.number()),
     /** A refresh of an older copy failed: the vendor is not asked again before this (VENDOR_REFRESH_RETRY). */
     vendor_refresh_after: v.optional(v.number()),
+    /** Why the vendor is waited out until vendor_refresh_after (shared VENDOR_REFRESH_WHYS), so the page can say so. */
+    vendor_refresh_why: v.optional(v.union(...VENDOR_REFRESH_WHYS.map((w) => v.literal(w)))),
     /** R2 keys of the DOM capture (raw rrweb events, masked), in order: what the player plays. Absent or empty: no capture. */
     dom_chunk_keys: v.optional(v.array(v.string())),
+    /** Each DOM chunk's span and JSON size, parallel to dom_chunk_keys (shared ReplayDomChunkMeta): how the player opens a long capture a stretch at a time. Ignored when its length differs. */
+    dom_chunk_meta: v.optional(v.array(replayDomChunkMetaValidator)),
     /** The capture's gzipped size in bytes. */
     dom_bytes: v.optional(v.number()),
     /** The epoch ms of the replay clock's zero (the stream's first event), which the player maps rrweb timestamps against. */
     dom_t0: v.optional(v.number()),
+    /** How far an imported copy reaches on the replay clock (its stream or capture, whichever runs longer). Shorter than the vendor's length when the read stopped at a size cap. */
+    captured_ms: v.optional(v.number()),
+    /** What a list row draws (shared/replay/list.ts replayShape): written with the summary, absent until the stream is read. */
+    shape: v.optional(replayShapeValidator),
+    /** The vendor's own facts (length, activity, browser, OS, device, country, referrer); absent until asked. */
+    facts: v.optional(replayFactsValidator),
+    /**
+     * A long vendor recording whose import holds only its start, being read
+     * part by part (sources/replayRest.ts): the chain's id, the next blob to
+     * read of how many, where the converter's state is kept in R2, and when
+     * the next part is due after a rate limit. Absent once the whole
+     * recording is in, or when no chain runs.
+     */
+    import_rest: v.optional(replayImportRestValidator),
+    /** Where the last read of a vendor recording stopped, kept after a chain ends so a recording PostHog keeps writing is read on from there (sources/replayRest.ts resume). */
+    read_to: v.optional(replayReadToValidator),
+    /** shared personKey(user), kept by lib/replayIndex.ts patchReplay: one person's recordings read by index, so their count is exact. */
+    person_key: v.optional(v.string()),
+    /** True while the copy stops well short of the recording (shared replayCutAt), kept by patchReplay: the partly imported list and tally read it by index. */
+    rest_cut: v.optional(v.boolean()),
     created_at: v.number(),
     updated_at: v.number(),
   })
     .index("by_source_external", ["source_id", "external_id"])
     .index("by_workspace_started", ["workspace", "started_at"])
     .index("by_source_started", ["source_id", "started_at"])
-    .index("by_short_id", ["short_id"]),
+    .index("by_short_id", ["short_id"])
+    .index("by_workspace_person", ["workspace", "person_key", "started_at"])
+    .index("by_source_person", ["source_id", "person_key", "started_at"])
+    .index("by_workspace_cut", ["workspace", "rest_cut", "started_at"])
+    .index("by_source_cut", ["source_id", "rest_cut", "started_at"]),
 
   // X5. A replay's renderTimeline output (at most REPLAY_LIMITS.timeline_md_max_chars),
   // kept off the manifest row so list reads never carry it; read only for one replay's detail.
@@ -386,6 +569,36 @@ export const ingestTables = {
      * while the read is on its way.
      */
     history: v.optional(v.object({ at: v.number(), added: v.number(), note: v.optional(v.string()), reading: v.optional(v.boolean()) })),
+    /** The monitor (contracts/metricMonitor.ts): reads in a row that flip the state (absent: 1), a warning level short of the line, failed reads in a row that count as missing data (absent: ignored), a mute. */
+    eval_reads: v.optional(v.number()),
+    warn: v.optional(v.number()),
+    no_data_after: v.optional(v.number()),
+    muted_until: v.optional(v.number()),
+    /** What its alert does (contracts/metricMonitor alertRoute): files a problem task, or the timeline and triggers only. Absent: the source's rule. */
+    on_alert: v.optional(v.union(v.literal("task"), v.literal("timeline"))),
+    /** Who else the alert reaches and what more it does (contracts/metricMonitor AlertNotify, metricAlerts.ts). */
+    notify: v.optional(v.object({
+      users: v.optional(v.array(v.id("users"))),
+      roles: v.optional(v.array(v.id("org_roles"))),
+      channel: v.optional(v.id("chat_channels")),
+      fix: v.optional(v.boolean()),
+      renotify_ms: v.optional(v.number()),
+      recovery: v.optional(v.boolean()),
+      by: v.id("users"),
+    })),
+    /** The running alert's delivery state: when it began, when it was last said, the chat thread its lines reply in. */
+    alert_episode: v.optional(v.object({ at: v.number(), notified_at: v.number(), thread_root: v.optional(v.id("chat_messages")) })),
+    /** What each alert did, newest last (contracts/metricMonitor DELIVERIES_KEPT). */
+    deliveries: v.optional(v.array(v.object({
+      at: v.number(),
+      kind: v.union(v.literal("crossed"), v.literal("still"), v.literal("recovered")),
+      to: v.string(),
+      ok: v.boolean(),
+      href: v.optional(v.string()),
+      note: v.optional(v.string()),
+    }))),
+    /** Failed reads in a row, for no_data_after. */
+    missed: v.optional(v.number()),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -394,6 +607,25 @@ export const ingestTables = {
     // `cast metrics ls` and the Metrics tab list a workspace's watches; refs resolve by short id.
     .index("by_workspace", ["workspace"])
     .index("by_short_id", ["short_id"]),
+
+  // X7. Every value a watch has read (lib/metricPoints.ts), one row each; the
+  // watch row keeps only its newest few. Read by watch and time window.
+  metric_points: defineTable({
+    watch_id: v.id("metric_watches"),
+    at: v.number(),
+    value: v.number(),
+  }).index("by_watch_at", ["watch_id", "at"]),
+
+  // X7. A watch's values per hour (count, sum, min, max), recounted whenever
+  // a value in that hour is written: what a chart wider than a few days reads.
+  metric_rollups: defineTable({
+    watch_id: v.id("metric_watches"),
+    hour: v.number(),
+    n: v.number(),
+    sum: v.number(),
+    min: v.number(),
+    max: v.number(),
+  }).index("by_watch_hour", ["watch_id", "hour"]),
 
   // X8. The audit of every app connector call. Bodies are never stored.
   app_calls: defineTable({

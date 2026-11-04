@@ -4,44 +4,57 @@
 // once, when it is minted, beside a snippet that already carries it; after
 // that the server holds only its hash.
 //
-// Sentry and PostHog connect on the token cards above this section, and a
-// connection alone mirrors nothing: a source names what to read through it.
-// So a connected vendor with no source gets its own "add a source" step here,
-// and the add form takes it as a kind beside SDK and HTTP.
+// Adding a source here is the Ops connect sheet (ConnectSheet), the one setup
+// path: every provider in one picker, a vendor's token step inline, GitHub CI
+// through its app. A connected vendor with no source gets its own step here.
 //
-// An app source is added here with its base url, which makes the workspace's
-// app connection in the same step with no secret: codecast signs every call,
-// and the app commits the codecast.json shown once it exists.
+// An app source is added with its base url, which makes the workspace's app
+// connection in the same step with no secret: codecast signs every call, and
+// the app commits the codecast.json shown once it exists.
+//
+// A link can land on one source's row (`#source-<short id>`, the overview's
+// Settings button) or on the section (`#product-sources`): it scrolls there,
+// and a row it names is lit.
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Check, Copy, Plus, Radio } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useOpsScope, useOpsSources, useSyncOpsSources } from "../../hooks/useSyncOps";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useOpsGroups, useOpsReplays, useOpsScope, useOpsSources, useSyncOpsGroups, useSyncOpsReplays, useSyncOpsSources, useSyncOpsWatches } from "../../hooks/useSyncOps";
 import { useSettingsData } from "../../hooks/useSyncSettings";
 import type { CreateOpsSourceInput } from "../../store/opsSlice";
 import type { AppConnectionsResult } from "@codecast/shared/contracts";
 import { CONVEX_URL } from "../../lib/convexUrl";
 import { copyText } from "../../lib/copyText";
-import { formatRelative } from "../../lib/utils";
+import { relTimeShort } from "../../lib/utils";
 import { SettingsSection } from "../settings/ui";
-import { ConfirmButton } from "../integrations/parts";
+import { RemoveSourceButton } from "./RemoveSource";
+import { VendorProjectPicker } from "./VendorProjects";
 import { eventNameRows, KEYED_SOURCE_PROVIDERS, sourceConfigProblem } from "@codecast/shared/contracts/ingest";
+import { ConnectSheet, type SheetKind } from "./ConnectSheet";
+import { openIssueCount } from "./issuesModel";
+import { eventsLast24h, settingsAnchor } from "./sourceViewModel";
+import { clearSettingsAnchor, peekSettingsAnchor } from "../../lib/settingsSections";
 import { appSourceSnippets, sourceSnippets, type ConfigSource } from "./opsModel";
 import { opsHref } from "./opsPaths";
 import { ProviderIcon, SOURCE_PROVIDER_LABEL } from "./parts";
 import { ReplayImportLine, hasVendorRecordings } from "./ReplayImport";
+import { useSourceHealthMap } from "./useSourceHealth";
+import { HealthBadge, HealthFixButton } from "./SourceHealthParts";
+import { RotateKeyButton } from "./RotateKey";
+import type { SourceHealth } from "./sourceHealth";
 import type { OpsSource } from "./opsTypes";
 import "./ops.css";
 
 /** What is shown once after a create or rotate: a keyed source's key, or an app source's setup. */
-type Reveal = { name: string; key?: string; rotated: boolean; id?: string; workspace?: string };
-type Kind = CreateOpsSourceInput["provider"];
-type Vendor = Extract<Kind, "sentry" | "posthog">;
+export type Reveal = { name: string; key?: string; rotated: boolean; id?: string; workspace?: string; /** A rotation that kept the old key: when it stops working. */ oldUntil?: number };
+export type Kind = CreateOpsSourceInput["provider"];
+export type Vendor = Extract<Kind, "sentry" | "posthog">;
 
 const VENDORS: Vendor[] = ["sentry", "posthog"];
+const isVendorKind = (k: Kind): k is Vendor => (VENDORS as Kind[]).includes(k);
 const KIND_LABEL: Record<Kind, string> = SOURCE_PROVIDER_LABEL;
-const VENDOR_READS: Record<Vendor, string> = { sentry: "its unresolved issues", posthog: "its recordings and the metrics you watch" };
 
 /** Sources that read through a connection rather than a key: the connection's card above has to say connected. */
 type Connected = Extract<OpsSource["provider"], Vendor | "app">;
@@ -59,21 +72,56 @@ function useConnections(): Set<Connected> | null {
   return useMemo(() => (apps ? new Set(CONNECTED_PROVIDERS.filter((p) => apps.some((a) => a.id === p && a.status === "connected"))) : null), [apps]);
 }
 
+const ADDABLE: readonly SheetKind[] = ["sdk", "http", "app", "sentry", "posthog", "github"];
+function addFromUrl(): SheetKind | null {
+  if (typeof window === "undefined") return null;
+  const add = new URLSearchParams(window.location.search).get("add");
+  return add && (ADDABLE as readonly string[]).includes(add) ? (add as SheetKind) : null;
+}
+
+/** The row (or the section) a link names in its hash: scrolled to once its rows exist, the row lit. */
+function useSettingsAnchor(ready: boolean, rowIds: readonly string[]): string | null {
+  const [lit, setLit] = useState<string | null>(null);
+  // An in-app link hands its fragment over (the modal opens without a URL change); a hard load keeps it in the location.
+  const [anchor] = useState(() => peekSettingsAnchor() ?? (typeof window === "undefined" ? "" : window.location.hash));
+  useWatchEffect(() => {
+    if (!ready || typeof window === "undefined") return;
+    const at = settingsAnchor(anchor);
+    if (!at) return;
+    clearSettingsAnchor();
+    const id = at.kind === "source" && rowIds.includes(at.id) ? `source-${at.id}` : "product-sources";
+    // The settings dialog mounts its panel a frame after the route: scroll once it is there.
+    const t = window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ block: at.kind === "source" ? "center" : "start" }), 60);
+    if (at.kind === "source") setLit(at.id);
+    return () => window.clearTimeout(t);
+  }, [ready, rowIds.join(",")]);
+  return lit;
+}
+
 export function SourcesSection() {
   useSyncOpsSources();
+  // A source's health reads everything it leaves (sourceHealth.ts): its groups, replays and watches, not only its counters.
+  useSyncOpsGroups();
+  useSyncOpsReplays();
+  useSyncOpsWatches();
+  const health = useSourceHealthMap();
   const sources = useOpsSources();
+  const groups = useOpsGroups();
+  const replays = useOpsReplays();
   const connections = useConnections();
   const connected = useMemo(() => VENDORS.filter((v) => connections?.has(v)), [connections]);
-  const [adding, setAdding] = useState<Kind | null>(null);
+  // `?add=<provider>` (the Ops home's connect tiles) opens the sheet on that kind.
+  const [adding, setAdding] = useState<SheetKind | null>(addFromUrl);
   const [reveal, setReveal] = useState<Reveal | null>(null);
   // A connection with no source reads nothing yet: offer the step that does.
   const unsourced = connected.filter((v) => !sources.some((s) => s.provider === v));
+  const lit = useSettingsAnchor(sources.length > 0, sources.map((s) => s.short_id));
+  const now = useCoarseNow(60_000);
 
   return (
     <SettingsSection
       title={<span id="product-sources">Product sources</span>}
       icon={Radio}
-      description="What your running product sends: errors, failed jobs, checks, deploys and replays. They show on the Ops page, wake triggers and file problems into flows."
       actions={
         !adding && (
           <button type="button" className="ops-btn" onClick={() => { setAdding("sdk"); setReveal(null); }}>
@@ -84,50 +132,64 @@ export function SourcesSection() {
       padded
     >
       <div className="flex flex-col gap-3">
-        {adding && <AddSourceForm initial={adding} vendors={connected} onCancel={() => setAdding(null)} onCreated={(r) => { setAdding(null); setReveal(r); }} />}
+        {adding && <ConnectSheet key={adding} kind={adding} onClose={() => setAdding(null)} />}
         {reveal && (reveal.key ? <KeyReveal reveal={{ ...reveal, key: reveal.key }} onDone={() => setReveal(null)} /> : <AppReveal reveal={reveal} onDone={() => setReveal(null)} />)}
         {!adding && unsourced.map((v) => (
           <div key={v} className="ops-card ops-card-body flex items-center gap-3 text-[12.5px]" data-ops-unsourced={v}>
             <ProviderIcon provider={v} className="w-3.5 h-3.5" />
-            <span className="text-sol-text-muted flex-1">
-              {KIND_LABEL[v]} is connected, but nothing reads through it yet. Add a source to mirror {VENDOR_READS[v]} into Ops.
-            </span>
+            <b className="font-medium">{KIND_LABEL[v]}</b>
+            <span className="ops-tag">connected · no source</span>
+            <span className="flex-1" />
             <button type="button" className="ops-btn" data-tone="primary" onClick={() => { setAdding(v); setReveal(null); }}>
               <Plus className="w-3.5 h-3.5" /> Add {KIND_LABEL[v]} source
             </button>
           </div>
         ))}
         {sources.length === 0 && !adding && !reveal ? (
-          <div className="text-[12.5px] text-sol-text-muted">
-            No sources in this workspace yet. An SDK source takes a write-only key that is safe to ship in a browser bundle.
-            Connect Sentry or PostHog above to mirror what they already collect, or from a terminal run{" "}
-            <span className="ops-mono">cast sources add sentry --projects web,api</span>.
-          </div>
-        ) : (
-          sources.map((s) => (
-            <SourceRow
-              key={s._id}
-              source={s}
-              onRotated={setReveal}
-              unconnected={!!connections && (CONNECTED_PROVIDERS as string[]).includes(s.provider) && !connections.has(s.provider as Connected)}
-            />
-          ))
-        )}
+          <ProviderCards onPick={(k) => { setAdding(k); setReveal(null); }} connected={connected} />
+        ) : sources.length > 0 ? (
+          <div className="ops-srows" role="table" aria-label="Product sources"><div className="ops-srows-grid">
+            <div className="ops-srow ops-srow-head" role="row">
+              <span role="columnheader">Source</span>
+              <span role="columnheader">State</span>
+              <span role="columnheader" data-num title="Events over the last 24 hours, rolling">24h</span>
+              <span role="columnheader" data-num>Last</span>
+              <span role="columnheader" data-num>Open</span>
+              <span role="columnheader"><span className="sr-only">Actions</span></span>
+            </div>
+            {sources.map((s) => (
+              <SourceRow
+                key={s._id}
+                source={s}
+                health={health.get(s._id)}
+                last24={eventsLast24h(s, groups, replays, now)}
+                open={openIssueCount(groups, s._id)}
+                now={now}
+                lit={lit === s.short_id}
+                onRotated={setReveal}
+                unconnected={!!connections && (CONNECTED_PROVIDERS as string[]).includes(s.provider) && !connections.has(s.provider as Connected)}
+              />
+            ))}
+          </div></div>
+        ) : null}
       </div>
     </SettingsSection>
   );
 }
 
-function AddSourceForm({ initial, vendors, onCancel, onCreated }: { initial: Kind; vendors: Vendor[]; onCancel: () => void; onCreated: (r: Reveal | null) => void }) {
+export function AddSourceForm({ initial, vendors, onCancel, onCreated, kindPicked, takenProjects }: { initial: Kind; vendors: Vendor[]; onCancel: () => void; onCreated: (r: Reveal | null) => void; /** The kind was picked outside the form (the Ops connect sheet's own picker): no second picker here. */ kindPicked?: boolean; /** A PostHog source already reads the connection's project: another must name a project, and not one of these. */ takenProjects?: readonly string[] }) {
   const scope = useOpsScope();
   const [provider, setProvider] = useState<Kind>(initial);
   const keyed = KEYED_SOURCE_PROVIDERS.includes(provider);
   // A vendor source is usually named for the vendor; a keyed one names the product.
   const [name, setName] = useState(keyed ? "" : provider);
   const [projects, setProjects] = useState("");
+  const [projectId, setProjectId] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The vendor's project list could not be read: the form falls back to typing slugs or an id.
+  const [listError, setListError] = useState<string | null>(null);
   const kinds: Kind[] = ["sdk", "http", "app", ...VENDORS.filter((v) => vendors.includes(v) || v === initial)];
   const needsUrl = provider === "app" && !baseUrl.trim();
   const pick = (k: Kind) => {
@@ -135,10 +197,13 @@ function AddSourceForm({ initial, vendors, onCancel, onCreated }: { initial: Kin
     setProvider(k);
   };
   const projectList = projects.split(",").map((p) => p.trim()).filter(Boolean);
-  const config = provider === "sentry" && projectList.length ? { projects: projectList } : undefined;
-  const problem = sourceConfigProblem(provider, config);
+  const posthogProject = provider === "posthog" ? projectId.trim() : "";
+  const config = provider === "sentry" && projectList.length ? { projects: projectList } : posthogProject ? { project_id: posthogProject } : undefined;
+  // A second PostHog source on the same connection reads the same project unless it names another.
+  const projectNeeded = provider === "posthog" && !!takenProjects && (!posthogProject || takenProjects.includes(posthogProject));
+  const problem = sourceConfigProblem(provider, config) ?? (projectNeeded && posthogProject ? `Project ${posthogProject} already has a source` : null);
   const submit = async () => {
-    if (!name.trim() || scope === "skip" || problem || needsUrl) return;
+    if (!name.trim() || scope === "skip" || problem || needsUrl || projectNeeded) return;
     setBusy(true);
     setError(null);
     try {
@@ -177,14 +242,15 @@ function AddSourceForm({ initial, vendors, onCancel, onCreated }: { initial: Kin
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="web, api, mobile"
+            title={`How triggers and the CLI pick it: --source ${name.trim().toLowerCase() || "web"}`}
             className="h-8 rounded-md border border-sol-border bg-sol-bg px-2.5 text-[13px] text-sol-text outline-none focus:border-sol-text-muted"
           />
         </label>
-        <div className="ops-seg" role="group" aria-label="Kind">
+        {!kindPicked && <div className="ops-seg" role="group" aria-label="Kind">
           {kinds.map((k) => (
             <button key={k} type="button" data-on={provider === k ? "true" : undefined} aria-pressed={provider === k} onClick={() => pick(k)}>{KIND_LABEL[k]}</button>
           ))}
-        </div>
+        </div>}
         {provider === "app" && (
           <label className="flex flex-col gap-1 text-[11.5px] text-sol-text-muted min-w-[260px] flex-1">
             Base URL
@@ -196,28 +262,45 @@ function AddSourceForm({ initial, vendors, onCancel, onCreated }: { initial: Kin
             />
           </label>
         )}
-        {provider === "sentry" && (
+        {provider === "posthog" && takenProjects && listError && (
+          <label className="flex flex-col gap-1 text-[11.5px] text-sol-text-muted min-w-[160px]">
+            Project id
+            <input
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              inputMode="numeric"
+              placeholder="12345"
+              aria-invalid={projectNeeded && !!posthogProject}
+              className="h-8 rounded-md border border-sol-border bg-sol-bg px-2.5 text-[13px] text-sol-text outline-none focus:border-sol-text-muted ops-mono"
+              data-ops-posthog-project
+            />
+          </label>
+        )}
+        {provider === "sentry" && listError && (
           <label className="flex flex-col gap-1 text-[11.5px] text-sol-text-muted min-w-[200px]">
             Projects
             <input
               value={projects}
               onChange={(e) => setProjects(e.target.value)}
-              placeholder="every project"
+              placeholder="every project, or slugs: web, api"
               className="h-8 rounded-md border border-sol-border bg-sol-bg px-2.5 text-[13px] text-sol-text outline-none focus:border-sol-text-muted ops-mono"
             />
           </label>
         )}
-        <button type="submit" className="ops-btn" data-tone="primary" disabled={busy || !name.trim() || !!problem || needsUrl}>{busy ? "Adding" : keyed ? "Add and show key" : "Add source"}</button>
+        <button type="submit" className="ops-btn" data-tone="primary" disabled={busy || !name.trim() || !!problem || needsUrl || projectNeeded}>{busy ? "Adding" : keyed ? "Add and show key" : "Add source"}</button>
         <button type="button" className="ops-btn" onClick={onCancel}>Cancel</button>
       </div>
-      <div className="text-[11.5px] text-sol-text-dim">
-        The name is how triggers and the CLI pick it (<span className="ops-mono">--source {name.trim().toLowerCase() || "web"}</span>). New and regressed errors file problems into flows by default.
-        {provider === "sentry" && " It reads the organization of the Sentry connection; list project slugs to narrow it, comma separated."}
-        {provider === "posthog" && " It reads the project of the PostHog connection."}
-        {provider === "app" && " Codecast calls the routes the app declares at <base url>/codecast/manifest and signs every call, so there is no secret to paste or set. Next you commit a codecast.json to the app."}
-        {!keyed && provider !== "app" && !vendors.includes(provider as Vendor) && ` Connect ${KIND_LABEL[provider]} above first, or it has nothing to read through.`}
-      </div>
-      {problem && projects.trim() && <div className="text-[12px]" style={{ color: "var(--sol-red)" }}>{problem}</div>}
+      {isVendorKind(provider) && !listError && (
+        <VendorProjectPicker
+          key={provider}
+          provider={provider}
+          picked={provider === "sentry" ? projectList : posthogProject ? [posthogProject] : []}
+          onPick={(next) => (provider === "sentry" ? setProjects(next.join(", ")) : setProjectId(next[0] ?? ""))}
+          onUnavailable={setListError}
+        />
+      )}
+      {listError && isVendorKind(provider) && <div className="text-[12px]" style={{ color: "var(--sol-orange)" }} title={listError} data-ops-vendor-projects-error>Projects unlisted: {listError}</div>}
+      {problem && (projects.trim() || posthogProject) && <div className="text-[12px]" style={{ color: "var(--sol-red)" }}>{problem}</div>}
       {error && <div className="text-[12px]" style={{ color: "var(--sol-red)" }}>{error}</div>}
     </form>
   );
@@ -226,7 +309,7 @@ function AddSourceForm({ initial, vendors, onCancel, onCreated }: { initial: Kin
 /** The source a reveal is for, as codecast.json records it, once the server has answered with its id. */
 const configSource = (r: Reveal): ConfigSource | undefined => (r.id && r.workspace ? { name: r.name, id: r.id, workspace: r.workspace } : undefined);
 
-function KeyReveal({ reveal, onDone }: { reveal: Reveal & { key: string }; onDone: () => void }) {
+export function KeyReveal({ reveal, onDone }: { reveal: Reveal & { key: string }; onDone: () => void }) {
   const snippets = sourceSnippets(reveal.key, CONVEX_URL, configSource(reveal));
   const [tab, setTab] = useState<"config" | "sdk" | "curl">("config");
   const [copied, setCopied] = useState(false);
@@ -234,7 +317,7 @@ function KeyReveal({ reveal, onDone }: { reveal: Reveal & { key: string }; onDon
     <div className="ops-card ops-card-body flex flex-col gap-3" data-ops-key-reveal>
       <div className="text-[13px] text-sol-text font-medium">
         {reveal.rotated ? `New key for ${reveal.name}` : `${reveal.name} is ready`}
-        <span className="text-sol-text-muted font-normal">: copy the key now, it is not shown again{reveal.rotated ? ". The old key already stopped working." : "."}</span>
+        <span className="text-sol-text-muted font-normal">: copy the key now, it is not shown again{!reveal.rotated ? "." : reveal.oldUntil ? `. The old key works until ${new Date(reveal.oldUntil).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}.` : ". The old key already stopped working."}</span>
       </div>
       <div className="ops-key ops-mono">
         <span className="flex-1">{reveal.key}</span>
@@ -262,7 +345,7 @@ function KeyReveal({ reveal, onDone }: { reveal: Reveal & { key: string }; onDon
 }
 
 /** An app source's setup: the codecast.json the app commits, and the verifier that reads it. Nothing in it is secret. */
-function AppReveal({ reveal, onDone }: { reveal: Reveal; onDone: () => void }) {
+export function AppReveal({ reveal, onDone }: { reveal: Reveal; onDone: () => void }) {
   const source = configSource(reveal);
   const [tab, setTab] = useState<"config" | "verify">("config");
   if (!source) return null;
@@ -291,59 +374,49 @@ function AppReveal({ reveal, onDone }: { reveal: Reveal; onDone: () => void }) {
   );
 }
 
-function SourceRow({ source: s, onRotated, unconnected }: { source: OpsSource; onRotated: (r: Reveal) => void; unconnected: boolean }) {
-  const now = useCoarseNow(60_000);
-  const [rotating, setRotating] = useState(false);
+function SourceRow({ source: s, health, last24, open, now, lit, onRotated, unconnected }: { source: OpsSource; health?: SourceHealth; last24: number; open: number; now: number; lit: boolean; onRotated: (r: Reveal) => void; unconnected: boolean }) {
   const store = () => useInboxStore.getState();
   const stub = !s.short_id;
-  const rotate = async () => {
-    setRotating(true);
-    try {
-      const res = await store().rotateOpsSourceKey(s._id);
-      if (res?.ingest_key) onRotated({ name: s.name, key: res.ingest_key, rotated: true, id: s.short_id, workspace: s.workspace });
-    } finally {
-      setRotating(false);
-    }
-  };
+  const lastAt = health?.lastAt ?? s.last_event_at ?? null;
+  // Pausing a source that sends nothing changes nothing: the overview's rule, so a silent source offers no Pause here either.
+  const silent = health?.state === "stopped" || health?.state === "quiet" || health?.state === "waiting";
+  const problem = unconnected ? `Reads nothing: connect ${CONNECTION_LABEL[s.provider as Connected]} above` : s.last_error ?? null;
   return (
-    <div className="py-1.5 border-b last:border-b-0 border-[color:color-mix(in_srgb,var(--sol-border)_60%,transparent)]">
-      <div className="flex items-center gap-3 text-[12.5px] whitespace-nowrap">
-        <span className="ops-dot" data-status={unconnected && s.status === "active" ? "error" : s.status} />
-        <ProviderIcon provider={s.provider} className="w-3.5 h-3.5" />
-        <Link href={opsHref.tab("timeline", { source: s.name })} className="text-sol-text font-medium hover:underline shrink-0">{s.name}</Link>
-        <span className="ops-mono text-sol-text-dim text-[11px] shrink-0">{s.short_id}</span>
-        {s.key_prefix && <span className="ops-mono text-sol-text-dim text-[11px]" title="The key's first characters">{s.key_prefix}…</span>}
-        <span className="text-sol-text-muted text-[11.5px] ops-num shrink-0">
-          {s.events_today ?? 0} today{(s.dropped_today ?? 0) > 0 ? `, ${s.dropped_today} dropped` : ""}
-          {s.last_event_at ? `, last ${formatRelative(s.last_event_at, now)}` : ", nothing yet"}
+    <div id={s.short_id ? `source-${s.short_id}` : undefined} className="ops-srow-wrap" data-lit={lit ? "true" : undefined} data-ops-settings-source={s.name} role="rowgroup">
+      <div className="ops-srow" role="row">
+        <span className="ops-srow-name" role="cell">
+          <span className="ops-dot" data-status={unconnected && s.status === "active" ? "error" : s.status} data-health={health?.tone} />
+          <ProviderIcon provider={s.provider} className="w-3.5 h-3.5 shrink-0" />
+          <Link href={opsHref.home({ source: s.name })} className="text-sol-text font-medium hover:underline truncate" title={`${SOURCE_PROVIDER_LABEL[s.provider]} · ${s.short_id}`}>{s.name}</Link>
         </span>
-        {/* What is left of the line: the busiest event names, or the error. It truncates; the controls never wrap. */}
-        <span className="flex-1 min-w-0 flex items-center gap-3 overflow-hidden">
-          <SourceEventNames source={s} now={now} />
-          {unconnected && (
-            <span className="text-[11.5px] truncate" style={{ color: "var(--sol-orange)" }} title="Its connection is gone, so every read through it fails until it is connected again">
-              Reads nothing: connect {CONNECTION_LABEL[s.provider as Connected]} above
-            </span>
+        <span role="cell" className="min-w-0">{health ? <HealthBadge health={health} /> : <span className="ops-dim">—</span>}</span>
+        <span role="cell" data-num className="ops-num" title={(s.dropped_today ?? 0) > 0 ? `${s.dropped_today} dropped today` : undefined}>{last24.toLocaleString()}{(s.dropped_today ?? 0) > 0 ? <span className="ops-srow-drop"> −{s.dropped_today}</span> : null}</span>
+        <span role="cell" data-num className="ops-num ops-dim" title={lastAt ? new Date(lastAt).toLocaleString() : undefined}>{lastAt ? relTimeShort(lastAt, now) : "never"}</span>
+        <span role="cell" data-num className="ops-num">{open ? <Link href={opsHref.tab("issues", { source: s.name })} className="ops-link">{open.toLocaleString()}</Link> : <span className="ops-dim">0</span>}</span>
+        <span role="cell" className="ops-srow-acts">
+          {health?.fix && health.fix !== "resume" && health.fix !== "setup" && health.fix !== "resume_import" && <HealthFixButton source={s} health={health} />}
+          {!stub && (
+            <>
+              {/* A source stopped on a lost connection resumes like a paused one. */}
+              {(s.status !== "active" || !silent) && (
+                <button type="button" className="ops-srow-act" onClick={() => store().setOpsSourceStatus(s._id, s.status === "active" ? "paused" : "active")}>
+                  {s.status === "active" ? "Pause" : "Resume"}
+                </button>
+              )}
+              {s.keyed && <RotateKeyButton source={s} events24h={last24} onRotated={onRotated} className="ops-srow-act" />}
+              <RemoveSourceButton source={s} className="ops-srow-act" />
+            </>
           )}
-          {s.last_error && <span className="text-[11.5px] truncate" style={{ color: "var(--sol-red)" }} title={s.last_error}>{s.last_error}</span>}
         </span>
-        {!stub && (
-          <>
-            {/* A source stopped on a lost connection resumes like a paused one. */}
-            <button type="button" className="text-[11px] text-sol-text-muted hover:text-sol-text" onClick={() => store().setOpsSourceStatus(s._id, s.status === "active" ? "paused" : "active")}>
-              {s.status === "active" ? "Pause" : "Resume"}
-            </button>
-            {s.keyed && (
-              <button type="button" className="text-[11px] text-sol-text-muted hover:text-sol-text" disabled={rotating} onClick={() => void rotate()}>
-                {rotating ? "Rotating" : "Rotate key"}
-              </button>
-            )}
-            <ConfirmButton label="Remove" question="Its issues go too; the timeline keeps its rows." onConfirm={() => store().removeOpsSource(s._id)} />
-          </>
-        )}
       </div>
+      {/* What is left to say: the error or the lost connection, else the busiest event names. */}
+      {(problem || (s.event_names?.length ?? 0) > 0) && (
+        <div className="ops-srow-sub">
+          {problem ? <span className="truncate" style={{ color: unconnected ? "var(--sol-orange)" : "var(--sol-red)" }} title={problem}>{problem}</span> : <SourceEventNames source={s} now={now} />}
+        </div>
+      )}
       {hasVendorRecordings(s) && (
-        <div className="pl-[38px] pt-1">
+        <div className="ops-srow-sub">
           <ReplayImportLine source={s} />
         </div>
       )}
@@ -361,5 +434,34 @@ function SourceEventNames({ source, now }: { source: OpsSource; now: number }) {
       {shown.length ? shown.map((r) => `${r.name} ${r.day}`).join(", ") : `${rows.length} event name${rows.length === 1 ? "" : "s"}, none in 24h`}
       {rows.length > shown.length && shown.length ? `, +${rows.length - shown.length}` : ""}
     </span>
+  );
+}
+
+const PROVIDER_CARDS: { kind: SheetKind; label: string; what: string }[] = [
+  { kind: "posthog", label: "PostHog", what: "Replays, metrics" },
+  { kind: "sentry", label: "Sentry", what: "Errors" },
+  { kind: "github", label: "GitHub CI", what: "Failed runs, deploys" },
+  { kind: "app", label: "Your app", what: "Readers, actions, watches" },
+  { kind: "sdk", label: "SDK", what: "Errors, jobs, checks" },
+  { kind: "http", label: "HTTP", what: "Any HTTP client" },
+];
+
+/** No sources yet: one card per kind, each opening the add form on that kind. */
+function ProviderCards({ onPick, connected }: { onPick: (k: SheetKind) => void; connected: Vendor[] }) {
+  return (
+    <div className="ops-provider-cards" data-ops-provider-cards>
+      {PROVIDER_CARDS.map((c) => {
+        const vendor = (VENDORS as string[]).includes(c.kind);
+        const ready = !vendor || connected.includes(c.kind as Vendor);
+        return (
+          <button key={c.kind} type="button" className="ops-provider-card" onClick={() => onPick(c.kind)} data-ready={ready ? "true" : undefined}>
+            <ProviderIcon provider={c.kind} className="w-4 h-4" />
+            <b>{c.label}</b>
+            <span>{c.what}</span>
+            <span className="ops-provider-cta">{vendor && !ready ? "Connect" : c.kind === "github" ? "Install" : "Add"}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }

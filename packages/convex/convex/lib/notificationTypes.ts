@@ -31,7 +31,11 @@ export const ENTITY_TYPE = v.union(
   v.literal("machine"),
   // One of the person's passkeys, added or removed (passkeys.ts). Direct
   // recipients only: it goes to the passkey's owner.
-  v.literal("passkey")
+  v.literal("passkey"),
+  // A weekly card, by its week key (weeklyCards.ts). Direct recipients only.
+  v.literal("weekly_card"),
+  // A metric watch, by its short id (metricAlerts.ts). Direct recipients only.
+  v.literal("metric_watch")
 );
 
 export const NOTIFICATION_TYPE = v.union(
@@ -95,5 +99,11 @@ export const NOTIFICATION_TYPE = v.union(
   // A passkey was added to or removed from the recipient's account. Mapped to
   // no preference, so no switch mutes it: it is how a passkey an agent set up
   // with the person's sign-in reaches their phone.
-  v.literal("passkey_changed")
+  v.literal("passkey_changed"),
+  // The recipient's weekly card for the week just ended is built (weeklyCards.ts).
+  // Quiet: a bell row to find on Monday, never a push.
+  v.literal("weekly_card"),
+  // A metric watch that names the recipient crossed its line, is still past
+  // it, or recovered (metricAlerts.ts).
+  v.literal("metric_alert")
 );

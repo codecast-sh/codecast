@@ -1,0 +1,612 @@
+/* The source overview, the event stream and the volume chart (components/ops
+   SourceOverview, TimelineTab, VolumeChart). Theme variables only. */
+
+/* ── health ── */
+.ops-health { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.ops-health i { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--tone, var(--sol-text-dim)); }
+[data-health="ok"] { --tone: var(--sol-green); }
+[data-health="calm"] { --tone: var(--sol-text-muted); }
+[data-health="warn"] { --tone: var(--sol-orange); }
+[data-health="bad"] { --tone: var(--sol-red); }
+[data-health="off"] { --tone: var(--sol-text-dim); }
+.ops-health[data-health="warn"] i, .ops-health[data-health="bad"] i { box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 22%, transparent); }
+.ops-health[data-health="warn"], .ops-health[data-health="bad"] { color: var(--tone); }
+.ops-dot.ops-dot[data-health] { background: var(--tone); box-shadow: none; }
+.ops-dot.ops-dot[data-health="warn"], .ops-dot.ops-dot[data-health="bad"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 22%, transparent); }
+
+/* ── volume chart ── */
+.ovc { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ovc-plot { position: relative; user-select: none; touch-action: none; border-bottom: 1px solid var(--sol-border); }
+.ovc-plot[data-brush="true"] { cursor: crosshair; }
+.ovc-bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 1px; }
+.ovc-col { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column-reverse; }
+.ovc-col i { display: block; width: 100%; min-height: 1px; opacity: 0.82; }
+.ovc-col i:last-child { border-radius: 2px 2px 0 0; }
+.ovc-col[data-hover="true"] i { opacity: 1; }
+.ovc-col[data-hover="true"] { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.ovc-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--sol-text-dim); }
+.ovc-mark { position: absolute; top: -2px; bottom: 0; border-left: 1px dashed var(--sol-green); pointer-events: none; }
+.ovc-mark-label {
+  position: absolute; top: 0; left: 3px; font-size: 10px; line-height: 15px; padding: 0 4px; border-radius: 3px; white-space: nowrap;
+  color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 13%, var(--sol-bg-alt)); pointer-events: auto; text-decoration: none;
+}
+a.ovc-mark-label:hover { background: color-mix(in srgb, var(--sol-green) 24%, var(--sol-bg-alt)); }
+.ovc-mark[data-edge="end"] .ovc-mark-label { left: auto; right: 3px; }
+.ovc-brush { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--sol-blue) 16%, transparent); border-left: 1px solid var(--sol-blue); border-right: 1px solid var(--sol-blue); pointer-events: none; }
+.ovc-tip {
+  position: absolute; bottom: calc(100% + 6px); transform: translateX(-50%); z-index: 5; pointer-events: none;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; min-width: 120px; font-size: 11px;
+  background: var(--sol-bg); border: 1px solid var(--sol-border); border-radius: 6px; box-shadow: 0 4px 14px color-mix(in srgb, black 18%, transparent);
+}
+.ovc-tip[data-edge="end"] { transform: translateX(-90%); }
+.ovc-tip-row { display: flex; align-items: center; gap: 6px; }
+.ovc-tip-row i, .ovc-legend i { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
+.ovc-tip-row b { margin-left: auto; font-weight: 500; }
+.ovc-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--sol-text-muted); }
+.ovc-grid { position: absolute; inset: -8px 0 0 0; pointer-events: none; }
+.ovc-y { position: absolute; left: 0; transform: translateY(-50%); font-size: 9.5px; line-height: 12px; padding-right: 4px; color: var(--sol-text-dim); background: var(--sol-bg-alt); z-index: 2; }
+.ovc-y::after { content: ""; position: absolute; left: 100%; top: 50%; width: 9999px; border-top: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent); }
+.ovc-grid { overflow: hidden; }
+.ovc-x { position: relative; height: 13px; margin-top: 2px; }
+.ovc-tick { position: absolute; top: 0; transform: translateX(-50%); font-size: 10px; color: var(--sol-text-dim); white-space: nowrap; }
+.ovc-tick:first-child { transform: none; }
+.ovc-nodata {
+  position: absolute; top: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 1;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--sol-text-dim) 13%, transparent) 0 1px, transparent 1px 7px);
+  border-right: 1px dashed var(--sol-text-dim);
+}
+.ovc-nodata span { font-size: 10.5px; color: var(--sol-text-dim); background: var(--sol-bg-alt); padding: 1px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.ovc-col[data-unknown="true"] i { display: none; }
+.ovc-mark-label { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+.ovc-mark-label[data-many="true"] { font-weight: 600; }
+.ovc-tip[data-edge="start"] { transform: translateX(-10%); }
+.ovc-legend span { display: inline-flex; align-items: center; gap: 5px; }
+
+/* ── the stream ── */
+.otl { display: flex; flex-direction: column; min-height: 100%; }
+.otl-bar {
+  position: sticky; top: 0; z-index: 6; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 20px; background: var(--sol-bg); border-bottom: 1px solid var(--sol-border);
+}
+.otl-query { flex: 1 1 320px; min-width: 200px; display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 9px; border: 1px solid var(--sol-border); border-radius: 6px; background: var(--sol-bg-alt); }
+.otl-query:focus-within { border-color: var(--sol-text-muted); }
+.otl-query input { flex: 1; min-width: 0; background: transparent; outline: none; font-size: 12.5px; color: var(--sol-text); font-family: var(--font-mono, ui-monospace, monospace); }
+.otl-query input::placeholder { color: var(--sol-text-dim); font-family: inherit; }
+.otl-clear { display: inline-flex; color: var(--sol-text-dim); }
+.otl-clear:hover { color: var(--sol-text); }
+.otl-key { opacity: 0.6; }
+.otl-count { font-size: 11.5px; white-space: nowrap; }
+.otl-live { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 6px; font-size: 11.5px; border: 1px solid var(--sol-border); color: var(--sol-text-muted); }
+.otl-live[data-on="true"] { color: var(--sol-green); border-color: color-mix(in srgb, var(--sol-green) 50%, var(--sol-border)); background: color-mix(in srgb, var(--sol-green) 9%, transparent); }
+.otl-live[data-on="true"] svg { animation: otl-pulse 2.4s ease-in-out 3; }
+@keyframes otl-pulse { 50% { opacity: 0.4; } }
+.otl-span { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; padding: 3px 4px 3px 9px; border-radius: 6px; background: color-mix(in srgb, var(--sol-blue) 12%, transparent); color: var(--sol-text); white-space: nowrap; }
+.otl-span button { display: inline-flex; padding: 2px; border-radius: 4px; color: var(--sol-text-muted); }
+.otl-span button:hover { color: var(--sol-text); }
+.otl-jump { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; border: 1px solid var(--sol-border); border-radius: 6px; color: var(--sol-text-muted); cursor: pointer; }
+.otl-jump:hover { color: var(--sol-text); }
+.otl-jump input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+
+/* The lanes leave room past the track's right end, so a pill at the window's edge is drawn whole; the chart's plot stops at the same edge. */
+.otl-lanes .ops-tl-axis, .otl-lanes .ops-tl-track { margin-right: 14px; }
+/* What the lanes' counts count, in the gutter over the names: the list's unit, as the facets name it. */
+.otl-lanes-unit { position: absolute; right: 100%; top: 0; bottom: 0; width: var(--otl-gutter); display: flex; align-items: center; padding: 0 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; }
+
+.otl-body { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 18px; padding: 14px 20px 40px; flex: 1; }
+.otl[data-open="true"] .otl-body { grid-template-columns: 200px minmax(0, 1fr) 340px; }
+.otl-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+.otl-facets { display: flex; flex-direction: column; gap: 14px; min-width: 0; align-self: start; position: sticky; top: 64px; }
+.otl-facets-unit { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: -8px; }
+.otl-facet-head { display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 600; color: var(--sol-text-muted); margin-bottom: 4px; }
+.otl-facet-head button { font-size: 10.5px; font-weight: 400; }
+.otl-facet-row { position: relative; display: flex; align-items: center; border-radius: 5px; }
+.otl-facet-row:hover { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.otl-facet-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 3px 6px; font-size: 12px; color: var(--sol-text-muted); text-align: left; }
+.otl-facet-row[data-on="true"] .otl-facet-pick { color: var(--sol-text); }
+.otl-check { width: 11px; height: 11px; border-radius: 3px; border: 1px solid color-mix(in srgb, var(--sol-text-muted) 60%, transparent); flex-shrink: 0; }
+.otl-facet-row[data-on="true"] .otl-check { background: var(--sol-blue); border-color: var(--sol-blue); }
+.otl-swatch { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
+.otl-facet-n { margin-left: auto; font-size: 11px; color: var(--sol-text-dim); }
+.otl-only { display: none; position: absolute; right: 4px; font-size: 10.5px; padding: 1px 5px; border-radius: 4px; color: var(--sol-text-muted); background: var(--sol-bg-alt); border: 1px solid var(--sol-border); }
+.otl-facet-row:hover .otl-only { display: block; }
+.otl-facet-row:hover .otl-facet-n { visibility: hidden; }
+.otl-more { font-size: 11px; color: var(--sol-text-dim); padding: 2px 6px; }
+.otl-more:hover { color: var(--sol-text); }
+
+.otl-chart { border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); padding: 10px 12px 10px; }
+/* A narrow chart (the event panel open, a phone) wraps its header rather than cutting a control. */
+.otl-chart-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 26px; }
+.otl-chart-head > .ops-seg { flex-shrink: 0; }
+.otl-chart .ops-seg button:disabled { opacity: 0.45; cursor: default; }
+
+.otl-lanes { overflow: visible; }
+/* One time axis through the chart and the lanes: the chart's plot starts where the lane tracks start (after the
+   lanes' name column) and ends at the same edge, its count labels sitting in that gutter. */
+.otl-main { --otl-gutter: 140px; }
+.otl-lanes .ops-tl-name { width: var(--otl-gutter); }
+.otl-lanes .ops-tl-axis { margin-left: var(--otl-gutter); }
+.otl-lanes .ops-tl-overlay { left: var(--otl-gutter); }
+.otl-chart > .ovc { margin-left: calc(var(--otl-gutter) - 12px); margin-right: 2px; }
+.otl-chart .ovc-grid { left: calc(12px - var(--otl-gutter)); }
+.otl-chart .ovc-y { left: calc(var(--otl-gutter) - 12px); transform: translate(-100%, -50%); background: none; padding-right: 6px; }
+.otl-chart .ovc-legend { margin-right: 12px; }
+.otl-lane-name { text-align: left; cursor: pointer; }
+.otl-lane-name:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+.otl-cluster-wrap { position: absolute; top: 50%; z-index: 1; }
+.otl-cluster-wrap:hover, .otl-cluster-wrap:focus-within { z-index: 8; }
+.otl-mark { position: absolute; top: 0; left: 0; }
+.otl-pop {
+  position: absolute; top: 14px; left: -12px; z-index: 9; width: 340px; max-width: 70vw; display: flex; flex-direction: column; padding: 4px;
+  background: var(--sol-bg); border: 1px solid var(--sol-border); border-radius: 8px; box-shadow: 0 8px 24px color-mix(in srgb, black 22%, transparent);
+}
+.otl-cluster-wrap[data-edge="end"] .otl-pop { left: auto; right: -12px; }
+.otl-pop-row { display: grid; grid-template-columns: 7px 70px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 4px 6px; font-size: 11.5px; border-radius: 5px; color: var(--sol-text); text-decoration: none; }
+a.otl-pop-row:hover { background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.otl-pop-row i { width: 7px; height: 7px; border-radius: 2px; }
+.otl-pop-st { color: var(--sol-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.otl-pop-more { font-size: 11px; padding: 3px 6px; }
+.otl-pop-zoom { margin: 4px 2px 2px; font-size: 11.5px; padding: 4px 8px; border-radius: 5px; border: 1px solid var(--sol-border); text-align: center; color: var(--sol-text); }
+.otl-pop-zoom:hover { background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+
+.otl-rows { position: relative; display: flex; flex-direction: column; border: 1px solid var(--sol-border); border-radius: 8px; overflow: clip; }
+.otl-row {
+  display: grid; grid-template-columns: var(--otl-t, 86px) minmax(90px, 140px) minmax(120px, 190px) minmax(0, 1fr) 64px minmax(80px, 170px);
+  align-items: center; gap: 10px; height: 34px; padding: 0 12px; font-size: 12.5px; cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+}
+.otl-row:last-of-type { border-bottom: 0; }
+.otl-row:hover, .otl-row:focus-visible { background: color-mix(in srgb, var(--sol-text) 4%, transparent); outline: none; }
+.otl-row[data-on="true"] { background: color-mix(in srgb, var(--sol-blue) 9%, transparent); box-shadow: inset 2px 0 0 var(--sol-blue); }
+.otl-row-head { height: 28px; cursor: default; font-size: 10.5px; font-weight: 600; color: var(--sol-text-dim); background: var(--sol-bg-alt); }
+.otl-row-head:hover { background: var(--sol-bg-alt); }
+.otl-time { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Past two days a time carries its date ("Nov 13, 12:28 PM"): the column takes the longest of them. */
+.otl-rows[data-span="long"] { --otl-t: 118px; }
+/* With the side panel open the title keeps its room: What and Codecast step aside first. */
+.otl[data-open="true"] .otl-row { grid-template-columns: var(--otl-t, 86px) minmax(80px, 120px) minmax(200px, 1fr) 64px; }
+.otl[data-open="true"] .otl-row > :nth-child(3), .otl[data-open="true"] .otl-row > :nth-child(6) { display: none; }
+.otl-row[data-cursor="true"]:not([data-on="true"]) { box-shadow: inset 2px 0 0 var(--sol-text-muted); }
+/* The message carries the row: Where is a dim aside that takes what is left, never as much as the message. */
+.otl-orow { grid-template-columns: var(--otl-t, 86px) minmax(80px, 120px) 64px minmax(240px, 3fr) 64px minmax(0, 1fr); }
+.otl-where { font-size: 11.5px; min-width: 0; text-align: right; }
+.otl-rows-bar { display: flex; align-items: center; gap: 8px; margin-bottom: -6px; }
+.otl-keys { display: inline-flex; gap: 3px; opacity: 0.75; }
+.otl-pre { margin: 0; max-height: 320px; overflow: auto; font-size: 11px; white-space: pre; }
+details.otl-panel-group > summary { cursor: pointer; list-style: revert; }
+/* Outranks .ops-btn (ops.css loads later at the same specificity): the toggle exists only on narrow windows. */
+.otl .otl-filters-btn { display: none; }
+.otl-src { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--sol-text-muted); font-size: 12px; }
+.otl-what { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
+.otl-st { font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+.otl-kind, .otl-level { font-size: 10.5px; color: var(--sol-text-dim); white-space: nowrap; }
+.otl-level[data-level="fatal"], .otl-level[data-level="error"] { color: var(--sol-red); }
+.otl-level[data-level="warning"], .otl-level[data-level="warn"] { color: var(--sol-orange); }
+.otl-title { min-width: 0; color: var(--sol-text); }
+.otl-id { font-size: 11px; white-space: nowrap; overflow: hidden; }
+.otl-id a { color: var(--sol-text-muted); }
+.otl-id a:hover { color: var(--sol-text); text-decoration: underline; }
+.otl-outcome { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; justify-content: flex-end; }
+.otl-pill { font-size: 11px; padding: 1px 6px; border-radius: 4px; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text-muted) 12%, transparent); white-space: nowrap; }
+.otl-pill[data-tone="ok"] { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 12%, transparent); }
+.otl-sentinel { display: flex; justify-content: center; padding: 10px; font-size: 12px; }
+.otl-fresh {
+  position: sticky; top: 60px; z-index: 4; align-self: center; margin-bottom: -26px; font-size: 11.5px; padding: 3px 10px; border-radius: 999px;
+  color: var(--sol-bg); background: var(--sol-blue); box-shadow: 0 2px 8px color-mix(in srgb, black 20%, transparent);
+}
+.otl-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 0; font-size: 13px; }
+.otl-empty-acts { display: flex; gap: 8px; }
+
+.otl-panel { position: sticky; top: 64px; align-self: start; max-height: calc(100vh - 160px); overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); }
+.otl-panel-head { display: flex; align-items: center; gap: 8px; }
+.otl-panel-title { font-size: 13.5px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.otl-panel-group { display: flex; flex-direction: column; gap: 6px; }
+.otl-panel-group .ops-section-label { margin: 0; }
+.otl-panel-issue { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--sol-border); font-size: 12px; color: var(--sol-text); }
+.otl-panel-issue:hover { border-color: var(--sol-text-muted); }
+.otl-panel-facts { font-size: 11px; }
+.otl-panel-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+@media (max-width: 1100px) {
+  .otl-body, .otl[data-open="true"] .otl-body { grid-template-columns: minmax(0, 1fr); }
+  /* Narrow: the facets fold behind a Filters button so the chart and rows lead. */
+  .otl .otl-filters-btn { display: inline-flex; justify-self: start; }
+  .otl-facets[data-folded="true"] { display: none; }
+  .otl[data-open="true"] .otl-row { grid-template-columns: var(--otl-t, 86px) minmax(80px, 120px) minmax(120px, 1fr) 64px; }
+  .otl-facets { position: static; flex-direction: row; flex-wrap: wrap; gap: 6px 18px; }
+  .otl-facet { min-width: 150px; }
+  /* The open event leads the column, held under the bar while the rows scroll: it stays inside Ops, never over the sidebar. */
+  .otl-panel { order: -1; position: sticky; top: 56px; max-height: 55vh; z-index: 5; box-shadow: 0 8px 22px color-mix(in srgb, black 18%, transparent); }
+}
+/* A narrow stream gives the title the room: the source shrinks to its icon. */
+.otl-main { container: otlmain / inline-size; }
+@container otlmain (min-width: 641px) and (max-width: 820px) {
+  .otl .otl-row { grid-template-columns: var(--otl-t, 86px) 16px minmax(84px, 130px) minmax(0, 1fr) 64px minmax(0, 120px); }
+  .otl .otl-orow { grid-template-columns: var(--otl-t, 86px) 16px minmax(50px, 80px) minmax(0, 1fr) 64px minmax(0, 140px); }
+  .otl[data-open="true"] .otl-row { grid-template-columns: var(--otl-t, 86px) 16px minmax(0, 1fr) 64px; }
+  .otl-row > .otl-src > .truncate { display: none; }
+  .otl-row-head > :nth-child(2) { visibility: hidden; }
+}
+.otl-time-age { display: none; }
+/* A narrow list (a phone, a 900px window, the event panel open): the message takes the whole first line and wraps
+   to two; the age (with the level dot or the transition beside it), the issue and what was done about it share the second.
+   Keyed to the list's own width, so the panel opening never squeezes the message to a few characters. */
+@container otlmain (max-width: 640px) {
+  .otl-row, .otl[data-open="true"] .otl-row, .otl .otl-orow { grid-template-columns: auto minmax(0, 1fr) auto; grid-auto-rows: auto; height: auto; min-height: 34px; padding: 7px 10px; row-gap: 3px; column-gap: 8px; }
+  .otl-time-full { display: none; }
+  .otl-time-age { display: inline; }
+  .otl-row > .otl-src, .otl-row > .otl-id, .otl-row-head, .otl-orow > .otl-where, .otl-what > svg { display: none; }
+  .otl-what .otl-kind { display: none; }
+  .otl-row > .otl-title { grid-column: 2 / -1; grid-row: 1; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; line-height: 1.35; }
+  .otl-row > .otl-what { grid-column: 1; grid-row: 1; align-self: start; margin-top: 1px; }
+  .otl-row > .otl-time { grid-column: 1; grid-row: 2; }
+  .otl-what .otl-level { display: none; }
+  .otl-outcome { grid-column: 2 / -1; grid-row: 2; justify-content: flex-start; flex-wrap: wrap; row-gap: 4px; }
+  .otl-outcome:empty { display: none; }
+  /* Occurrences: the level is a dot before the message; the issue id sits at the end of the second line. */
+  .otl .otl-orow > .otl-what { align-self: start; margin-top: 5px; }
+  .otl .otl-orow .otl-what .otl-level { display: block; font-size: 0; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .otl .otl-orow > .otl-id { display: block; grid-column: 3; grid-row: 2; justify-self: end; }
+  .otl .otl-orow > .otl-time { grid-column: 2; }
+  .otl-hint { display: none; }
+  /* Stacked, the open panel takes no column from the row: its level dot and what was done about it stay. */
+  .otl[data-open="true"] .otl-row > .otl-what { display: inline-flex; }
+  .otl[data-open="true"] .otl-row:not(.otl-row-head) > .otl-outcome { display: flex; }
+}
+
+/* ── the source overview ── */
+.sov { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 0; container-type: inline-size; }
+/* Needs attention sits right under the header, as on the home: the source view already pads the page. */
+.sov > .ops-home { padding: 0; }
+.sov-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.sov-state { display: flex; flex-direction: column; gap: 3px; min-width: 220px; flex: 1 1 260px; }
+.sov-state-line { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; font-size: 16px; font-weight: 600; }
+.sov-state-line > span { white-space: nowrap; }
+.sov-state-line i { width: 9px; height: 9px; border-radius: 50%; background: var(--tone); flex-shrink: 0; }
+.sov-state[data-health="warn"] .sov-state-line, .sov-state[data-health="bad"] .sov-state-line { color: var(--tone); }
+.sov-reason { font-size: 12px; color: var(--sol-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 640px; }
+.sov-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* One row of equal facts in the same order on every source (last event, 24h, open issues, watches, delivery); the 1px gap over the border color draws the rules. */
+.sov-facts { display: grid; grid-template-columns: repeat(var(--sov-n, 5), minmax(0, 1fr)); gap: 1px; background: var(--sol-border); border: 1px solid var(--sol-border); border-radius: 8px; overflow: hidden; }
+.sov-fact { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 9px 14px; background: var(--sol-bg-alt); color: var(--sol-text); text-decoration: none; }
+button.sov-fact { font: inherit; text-align: left; border: 0; cursor: pointer; }
+button.sov-fact .sov-fact-v { color: var(--sol-text-muted); }
+button.sov-fact small { color: var(--sol-blue); }
+a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--sol-text) 4%, var(--sol-bg-alt)); }
+/* The number never cuts; its comparison wraps under it when the tile is narrow. */
+.sov-fact-v { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 7px; font-size: 19px; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; min-width: 0; }
+.sov-fact-v small { flex-basis: 100%; font-size: 11.5px; font-weight: 400; letter-spacing: 0; color: var(--sol-text-muted); min-width: 0; white-space: normal; }
+/* On a phone the facts sit two to a row, an odd last one across both. */
+@container (max-width: 560px) {
+  .sov-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sov-fact:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+.sov-fact-l { font-size: 11px; color: var(--sol-text-dim); }
+.sov-fact[data-tone="bad"] .sov-fact-v { color: var(--sol-red); }
+.sov-fact[data-tone="warn"] .sov-fact-v { color: var(--sol-orange); }
+.sov-fact[data-tone="ok"] .sov-fact-v { color: var(--sol-green); }
+.sov-issue { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.sov-issue-title { color: var(--sol-text); text-decoration: none; }
+.sov-issue-title:hover { text-decoration: underline; }
+.sov-regressed { color: var(--sol-red); }
+.sov-flapping { color: var(--sol-orange); }
+.sov-work { display: inline-flex; align-items: center; gap: 4px; }
+.sov-work .ops-btn { height: 22px; padding: 0 7px; font-size: 11px; gap: 4px; }
+.sov-work .ops-btn[data-tone="primary"] { background: transparent; color: var(--sol-red); border-color: color-mix(in srgb, var(--sol-red) 30%, var(--sol-border)); }
+.sov-work .ops-btn[data-tone="primary"]:hover { background: var(--sol-red); color: var(--sol-bg); }
+.sov-work .ops-home-slot:empty { display: none; }
+.sov-work .ops-home-menu-btn { width: 22px; padding: 0; justify-content: center; }
+.sov-chart { border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); padding: 10px 12px; }
+.sov-chart-head { display: flex; align-items: center; gap: 8px; margin-bottom: 26px; font-size: 12px; font-weight: 600; }
+.sov-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.sov-panel { display: flex; flex-direction: column; min-width: 0; }
+.sov-panel .ops-card-head a { font-weight: 400; color: var(--sol-text-muted); font-size: 11.5px; }
+.sov-panel .ops-card-head a:hover { color: var(--sol-text); }
+.sov-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12.5px; color: var(--sol-text); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent); }
+.sov-item:last-child { border-bottom: 0; }
+.sov-item:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+.sov-item-meta { font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
+.sov-none { padding: 14px 12px; font-size: 12px; color: var(--sol-text-dim); }
+.sov-watch { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.sov-spark { display: inline-flex; width: 56px; }
+.sov-watch-v { font-weight: 500; color: var(--sol-text-muted); }
+.sov-watch-v[data-alert="true"] { color: var(--sol-red); }
+.sov-check { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); }
+.sov-check-head { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.sov-check .ops-code { margin: 0; }
+.sov-check-wait { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sol-text-muted); }
+.sov-check[data-arrived="true"] .sov-check-wait { color: var(--sol-green); }
+.sov-needs { display: flex; flex-direction: column; gap: 6px; padding-bottom: 32px; }
+/* Linked tasks and sessions on Ops rows take the row's meta size, in a capped slot, never the size of the title they sit beside. */
+.ops-home-acts .entity-ref, .otl-panel-acts .entity-ref, .otl-outcome .entity-ref { font-size: 11.5px; max-width: 180px; }
+.ops-home-acts .entity-ref > .self-baseline, .otl-panel-acts .entity-ref > .self-baseline { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sov-setup { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; font-size: 12px; border: 1px solid var(--sol-border); border-radius: 8px; }
+.sov-setup .ops-mono { color: var(--sol-text-muted); }
+@container (max-width: 860px) {
+  .sov-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── apps: watch controls and the call log's filters ── */
+.ops-watch-acts { display: inline-flex; align-items: center; gap: 2px; padding-right: 6px; flex-shrink: 0; }
+.ops-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 5px; color: var(--sol-text-muted); }
+.ops-icon-btn:hover:not(:disabled) { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 7%, transparent); }
+.ops-icon-btn:disabled { opacity: 0.4; cursor: default; }
+.ops-call-filters { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; font-weight: 400; }
+.ops-call-filters .ops-seg button { font-size: 10.5px; padding: 2px 7px; }
+.ops-more-btn { display: block; width: 100%; padding: 7px 12px; font-size: 11.5px; color: var(--sol-text-muted); text-align: left; }
+.ops-more-btn:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+
+/* ── settings: the first source ── */
+.ops-provider-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.ops-provider-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px; border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); text-align: left; font-size: 12px; color: var(--sol-text-muted); }
+.ops-provider-card b { color: var(--sol-text); font-size: 13px; font-weight: 600; }
+.ops-provider-card:hover { border-color: var(--sol-text-muted); }
+.ops-provider-cta { margin-top: 6px; font-size: 11.5px; color: var(--sol-blue); }
+.ops-provider-card:not([data-ready]) .ops-provider-cta { color: var(--sol-text-dim); }
+
+/* ── apps: run a reader or an action, and the no-manifest step ── */
+.ops-run { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--sol-border); }
+.ops-run-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.ops-run-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--sol-text-muted); min-width: 0; }
+.ops-run-field b { color: var(--sol-red); font-weight: 500; }
+.ops-run-field input:not([type="checkbox"]), .ops-run-field select, .ops-run-field textarea {
+  height: 28px; padding: 0 8px; font-size: 12px; color: var(--sol-text); background: var(--sol-bg); border: 1px solid var(--sol-border); border-radius: 5px; min-width: 0;
+}
+.ops-run-field textarea { height: auto; padding: 6px 8px; resize: vertical; }
+.ops-run-field input[type="checkbox"] { align-self: flex-start; margin-top: 4px; }
+.ops-run-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ops-run-status { font-size: 12px; font-weight: 500; }
+.ops-run-status[data-tone="ok"] { color: var(--sol-green); }
+.ops-run-status[data-tone="bad"] { color: var(--sol-red); }
+.ops-run-out { max-height: 280px; overflow: auto; }
+.ops-nomanifest { max-width: 640px; margin: 8px 0; }
+.ops-nomanifest .ops-kv, .ops-nomanifest .ops-run-acts { padding: 10px 12px; }
+.ops-call-fix.ops-btn { height: 22px; padding: 0 7px; font-size: 11px; gap: 4px; background: transparent; color: var(--sol-red); border-color: color-mix(in srgb, var(--sol-red) 30%, var(--sol-border)); }
+.ops-call-fix.ops-btn:hover { background: var(--sol-red); color: var(--sol-bg); }
+.otl-source-list { flex-wrap: wrap; justify-content: center; max-width: 640px; }
+
+/* ── overview rows: the title takes the free width; count, age and the work sit in fixed columns on the same line ── */
+.sov-item.sov-issue { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.sov-item.sov-issue .sov-issue-title { justify-self: start; max-width: 100%; }
+.sov-item.sov-watch { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.sov-panel { container-type: inline-size; }
+@container (max-width: 320px) {
+  .sov-watch-line, .sov-spark { display: none; }
+  .sov-item.sov-watch { grid-template-columns: auto minmax(0, 1fr) auto; }
+}
+/* A narrow panel gives the watch's name its line: why it fails, or its value, wraps under it rather than cutting the name. */
+@container (max-width: 420px) {
+  .sov-item.sov-watch { grid-template-columns: auto minmax(0, 1fr); row-gap: 1px; }
+  .sov-item.sov-watch > .sov-spark { display: none; }
+  .sov-item.sov-watch > .sov-item-meta { grid-column: 2; grid-row: 2; white-space: normal; overflow-wrap: anywhere; }
+}
+@container (max-width: 420px) {
+  .sov-item.sov-issue .sov-work .ops-btn:not([data-tone="primary"]) { display: none; }
+}
+/* A panel too narrow to give a title its first 60 characters beside count, a task chip and the fix: the title takes the whole first line and wraps to two;
+   count, age, the task chip and the fix share the second. */
+@container (max-width: 860px) {
+  .sov-item.sov-issue { grid-template-columns: auto auto minmax(0, 1fr); row-gap: 3px; }
+  .sov-item.sov-issue > :first-child { grid-row: 1 / span 2; align-self: start; margin-top: 2px; }
+  .sov-item.sov-issue .sov-issue-title { grid-column: 2 / -1; grid-row: 1; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+  .sov-item.sov-issue > .sov-item-meta { grid-column: 2; grid-row: 2; }
+  .sov-item.sov-issue > .sov-work { grid-column: 3; grid-row: 2; justify-self: end; flex-wrap: wrap; justify-content: flex-end; row-gap: 4px; min-width: 0; }
+}
+.sov-grid[data-cols="2"] { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); }
+.sov-grid[data-cols="1"] { grid-template-columns: minmax(0, 1fr); }
+@container (max-width: 860px) {
+  .sov-grid[data-cols] { grid-template-columns: minmax(0, 1fr); }
+}
+.sov-head-btn { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; font-weight: 400; color: var(--sol-text-muted); margin-right: 10px; }
+.sov-head-btn:hover { color: var(--sol-text); }
+.sov-none-act { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ovc-empty { z-index: 2; pointer-events: none; }
+
+/* ── stream: an open row folds the facets behind the Filters button, so the chart and rows keep their width ── */
+@media (min-width: 1101px) {
+  .otl[data-open="true"] .otl-body { grid-template-columns: minmax(0, 1fr) 360px; }
+  .otl[data-open="true"] .otl-filters-btn { display: inline-flex; justify-self: start; grid-column: 1 / -1; }
+  .otl[data-open="true"] .otl-facets { grid-column: 1 / -1; position: static; flex-direction: row; flex-wrap: wrap; gap: 6px 18px; }
+  .otl[data-open="true"] .otl-facets[data-folded="true"] { display: none; }
+  .otl[data-open="true"] .otl-facet { min-width: 150px; }
+}
+.otl-chart-head > * { white-space: nowrap; }
+
+/* The Codecast column: the task chip (id, state, owner), a live dot while a session fixes it, Fix while nobody is on it. */
+.otl-outcome .ops-home-task { flex-shrink: 1; min-width: 0; }
+.otl-fix .ops-btn { height: 22px; padding: 0 7px; font-size: 11px; gap: 4px; background: transparent; color: var(--sol-red); border-color: color-mix(in srgb, var(--sol-red) 30%, var(--sol-border)); }
+.otl-fix .ops-btn:hover { background: var(--sol-red); color: var(--sol-bg); }
+.otl-live-fix { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-green); white-space: nowrap; text-decoration: none; }
+.otl-live-fix i { width: 6px; height: 6px; border-radius: 50%; background: var(--sol-green); }
+.otl-live-fix:hover { text-decoration: underline; }
+.otl-id-dot { display: none; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; background: var(--sol-text-dim); }
+.otl-id-dot[data-state="fixing"] { background: var(--sol-green); }
+.otl-id-dot[data-state="tracked"] { background: var(--sol-blue); }
+.otl-id-dot[data-state="open"] { background: var(--sol-red); }
+@container otlmain (min-width: 641px) and (max-width: 900px) {
+  .otl:not([data-open="true"]) .otl-row:not(.otl-orow) { grid-template-columns: var(--otl-t, 86px) 16px minmax(84px, 130px) minmax(0, 1fr) 72px; }
+  .otl:not([data-open="true"]) .otl-row:not(.otl-orow) > :nth-child(6) { display: none; }
+  .otl-row > .otl-src > .truncate { display: none; }
+  .otl-row-head > :nth-child(2) { visibility: hidden; }
+  .otl-id-dot { display: inline-block; }
+}
+/* With the panel open the Codecast column steps aside; the Issue cell's dot carries its state. */
+.otl[data-open="true"] .otl-id-dot { display: inline-block; }
+.otl-gap { gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* ── apps: a failing call row keeps its count, caller and age whole; the reason tags give way first ── */
+.ops-app .ops-row-main { overflow: hidden; }
+.ops-app .ops-row-main > .ops-tag { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ops-app .ops-row-main > .ops-row-when, .ops-app .ops-row-main > .ops-state, .ops-app .ops-row-main > .ops-row-chev { flex-shrink: 0; }
+.ops-app .ops-row-main > .ops-row-title { flex-shrink: 1; min-width: 48px; }
+
+/* ── shell header, narrow: the crumbs clip before they reach the freshness chip, and the chip truncates rather than overlap ── */
+@container ops-head (max-width: 900px) {
+  .ops-crumbs { overflow: hidden; }
+  .ops-fresh { min-width: 0; max-width: 150px; }
+  .ops-fresh span { overflow: hidden; text-overflow: ellipsis; }
+}
+/* At a phone width, a source's page or tab crumbs to the Ops mark and the source's name: the tab row already says which tab. */
+@container ops-head (max-width: 520px) {
+  .ops-area:is([data-ops-view="home"], [data-ops-view="tab"]):has([data-ops-crumb="source"]) .ops-crumb-root { font-size: 0; gap: 0; }
+  .ops-area:is([data-ops-view="home"], [data-ops-view="tab"]) [data-ops-crumb="tab"],
+  .ops-area:is([data-ops-view="home"], [data-ops-view="tab"]) [data-ops-crumb="source"] + .ops-crumb-sep { display: none; }
+  .ops-area:is([data-ops-view="home"], [data-ops-view="tab"]) [data-ops-crumb="source"] { flex-shrink: 1; }
+}
+
+/* ── volume: a bar the counter has no record of, drawn from kept rows, reads as an estimate (striped, lighter) ── */
+.ovc-legend i[data-estimated="true"], .ovc-col[data-estimated="true"] i { background-image: repeating-linear-gradient(135deg, transparent 0 3px, color-mix(in srgb, var(--sol-bg) 45%, transparent) 3px 5px); }
+
+/* ── occurrences: a failed request reads as its method, path and coloured status ── */
+.otl-req { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; min-width: 0; white-space: nowrap; vertical-align: bottom; }
+.otl-req > * { flex-shrink: 0; }
+.otl-req > .otl-req-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.otl-req-m { font-size: 10.5px; font-weight: 600; color: var(--sol-text-muted); }
+.otl-req-arrow { color: var(--sol-text-dim); }
+.otl-req-st { font-weight: 600; }
+.otl-req-st[data-level="error"] { color: var(--sol-red); }
+.otl-req-st[data-level="warning"] { color: var(--sol-orange); }
+.otl-req-st[data-level="info"] { color: var(--sol-green); }
+.otl-panel-title .otl-req { display: inline; white-space: normal; overflow-wrap: anywhere; }
+.otl-panel-title .otl-req > * + * { margin-left: 6px; }
+.otl-panel-title .otl-req > .otl-req-path { overflow: visible; }
+/* A facet value the list leaves out until picked: offered, dimmed, its count outside the listed total. */
+.otl-facet-row[data-off="true"] .otl-facet-pick { opacity: 0.55; }
+.otl-facet-row[data-none="true"] .otl-check { visibility: hidden; }
+.otl-facet-row[data-none="true"] .otl-facet-pick { cursor: default; }
+.otl-rows-gap { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; }
+/* Folding repeats: the toggle beside the rows' views, a folded run as one line (chevron, its count, its newest message), its rows indented when opened. */
+.otl-fold { height: 24px; padding: 0 9px; border: 1px solid var(--sol-border); border-radius: 6px; font-size: 11px; color: var(--sol-text-muted); white-space: nowrap; }
+.otl-fold[data-on="true"] { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 12%, transparent); }
+.otl-run .otl-run-title { display: flex; align-items: center; gap: 6px; overflow: hidden; }
+.otl-run .otl-run-title > .truncate { min-width: 0; }
+.otl-run-chev { flex-shrink: 0; color: var(--sol-text-dim); transition: transform 120ms ease-out; }
+.otl-run[data-open="true"] .otl-run-chev { transform: rotate(90deg); }
+.otl-run-n { flex-shrink: 0; padding: 0 5px; border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 16%, transparent); }
+.otl-orow[data-in-run="true"] { background: color-mix(in srgb, var(--sol-text-muted) 4%, transparent); }
+.otl-orow[data-in-run="true"] > .otl-title { padding-left: 18px; }
+
+/* ── Overview panels: watches under one reading, replays with who and what broke ── */
+.sov-more { display: block; padding: 6px 12px; font-size: 11.5px; color: var(--sol-text-muted); text-decoration: none; }
+.sov-more:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+.sov-watch-v[data-stale="true"] { color: var(--sol-text-dim); font-weight: 400; }
+.sov-watch-why[data-verdict="failing"] { color: var(--sol-red); }
+.sov-watch-why[data-verdict="retrying"] { color: var(--sol-orange); }
+.sov-item-meta[data-verdict="failing"] { color: var(--sol-red); }
+.sov-item-meta[data-verdict="paused"], .sov-item-meta[data-verdict="waiting"] { color: var(--sol-text-dim); }
+.sov-item.sov-replay { grid-template-columns: auto minmax(0, 1fr) auto; }
+.sov-replay-main { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.sov-replay-who { font-size: 11px; color: var(--sol-text-dim); }
+.sov-replay-facts { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; white-space: nowrap; }
+.sov-replay-n { padding: 0 5px; border-radius: 4px; font-weight: 500; }
+.sov-replay-n[data-tone="bad"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
+.sov-replay-n[data-tone="warn"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
+/* A source known to be silent: a flat stretch from its last event to now, named, distinct from missing data. */
+.ovc-silence { position: absolute; top: 0; bottom: 0; right: 0; display: flex; align-items: flex-end; justify-content: center; pointer-events: none; z-index: 1; border-left: 1px dashed var(--sol-red); background: color-mix(in srgb, var(--sol-red) 5%, transparent); }
+.ovc-silence::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; border-bottom: 2px solid color-mix(in srgb, var(--sol-red) 55%, transparent); }
+.ovc-silence span { margin-bottom: 8px; font-size: 10.5px; color: var(--sol-red); background: var(--sol-bg-alt); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+
+/* ── Apps board: a failing reader as structure (reader, how it fails, the watches it blinds, Fix) ── */
+.ops-app-cause { flex: 1 1 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; padding: 8px 10px; font-size: 12px; border-radius: 6px; background: color-mix(in srgb, var(--sol-red) 6%, transparent); border: 1px solid color-mix(in srgb, var(--sol-red) 22%, transparent); }
+.ops-app-cause-reader, .ops-app-cause-blind { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.ops-app-cause-watch { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 6px; border-radius: 4px; color: var(--sol-text); text-decoration: none; background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.ops-app-cause-watch:hover { background: color-mix(in srgb, var(--sol-text) 11%, transparent); }
+.ops-row-when[data-stale="true"] { color: var(--sol-text-dim); opacity: 0.7; }
+.ops-row[data-ops-metric-watch] .ops-watch-acts { padding-right: 8px; }
+.ops-app-why { min-width: 0; max-width: calc(100% + 32px); }
+.ops-app-why .ops-row-title { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.sov-reason { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.sov-reason.sov-cause { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.sov-cause-tag { padding: 0 5px; border-radius: 4px; font-size: 11px; color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 11%, transparent); }
+.sov-cause-blind { color: var(--sol-text-muted); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--sol-text-dim) 50%, transparent); text-underline-offset: 2px; }
+.sov-cause-blind:hover { color: var(--sol-text); }
+
+/* ── occurrences, narrow: the message takes the row. Where steps aside, the level folds into a coloured dot, and a stream fixed to one source drops its Source column. ── */
+@container otlmain (min-width: 641px) and (max-width: 900px) {
+  .otl .otl-orow { grid-template-columns: var(--otl-t, 86px) 16px 8px minmax(0, 1fr) 64px; }
+  .otl .otl-rows[data-scoped="true"] .otl-orow { grid-template-columns: var(--otl-t, 86px) 8px minmax(0, 1fr) 64px; }
+  .otl-rows[data-scoped="true"] .otl-orow > .otl-src { display: none; }
+  .otl-orow > .otl-where, .otl-orow > .otl-what > svg { display: none; }
+  .otl-orow .otl-what .otl-level { font-size: 0; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .otl-orow .otl-what .otl-level:not([data-level]) { background: var(--sol-text-dim); }
+  .otl-orow.otl-row-head > :nth-child(3) { visibility: hidden; }
+  .otl-orow.otl-row-head > :nth-child(6), .otl-rows[data-scoped="true"] .otl-orow.otl-row-head > :nth-child(2) { display: none; }
+  .otl[data-open="true"] .otl-rows[data-scoped="true"] .otl-orow { grid-template-columns: var(--otl-t, 86px) minmax(0, 1fr) 64px; }
+}
+/* A stack keeps its frames whole: long ones wrap rather than run off the panel. */
+.otl-pre[data-ops-stack] { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Live is the stream's state, not a source's health: a plain ring, never the green a healthy source wears beside a red one. */
+.ops-fresh[data-state="live"] i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--sol-text-dim); }
+/* The recordings import on an overview: one line, its button at the end of it. */
+.sov-setup { padding: 6px 10px; }
+.sov-setup > .rp-import { flex: 1 1 auto; flex-wrap: nowrap; }
+.sov-setup .rp-import-acts { margin-left: auto; flex-shrink: 0; }
+.sov-setup .rp-import-nums { flex-wrap: wrap; min-width: 0; }
+.sov-setup .rp-import-nums > * { white-space: nowrap; }
+@container (max-width: 760px) { .sov-setup > .rp-import { flex-wrap: wrap; } }
+
+/* A pill near the right edge keeps its digits on one line; a lane's count never breaks. */
+.otl-cluster-wrap, .otl-cluster-wrap .ops-tl-cluster, .otl-lanes .ops-tl-name > .ops-num { white-space: nowrap; }
+.sov-chart-head { flex-wrap: wrap; row-gap: 6px; }
+.sov-chart-head > * { white-space: nowrap; }
+@media (max-width: 600px) {
+  .otl-main { --otl-gutter: 76px; }
+  /* A phone's filter bar wraps to several lines: it scrolls away with the page rather than holding a quarter of the screen. */
+  .otl-bar { position: static; padding: 8px 12px; }
+  .otl-lanes .ops-tl-name { padding: 0 8px; }
+  .otl-lanes-unit { padding: 0 8px; text-overflow: ellipsis; }
+  .sov-chart-head .ops-btn { margin-left: auto; }
+}
+/* The rows toggle never cuts: on a narrow stream the kept count wraps under it. */
+.otl-rows-bar { flex-wrap: wrap; row-gap: 6px; }
+.otl-rows-bar > .ops-seg { flex-shrink: 0; }
+
+/* ── Apps: metric watch rows. Narrow, the state folds into a dot, the name takes line one and value · age line two; Run and Pause live on the watch's page a tap away. ── */
+.ops-mw-facts { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ops-app .ops-panel-title .ops-num { white-space: nowrap; }
+.ops-sub [data-ops-metric-reader] { color: var(--sol-text-dim); }
+@container (max-width: 560px) {
+  .ops-mw-reader { display: none; }
+  .ops-row[data-ops-metric-watch] .ops-row-main { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; column-gap: 10px; row-gap: 1px; }
+  .ops-row[data-ops-metric-watch] .ops-state { grid-row: 1 / span 2; min-width: 0; width: 8px; height: 8px; padding: 0; border-radius: 50%; font-size: 0; background: var(--tone); }
+  .ops-row[data-ops-metric-watch] .ops-row-title { grid-column: 2; grid-row: 1; }
+  .ops-row[data-ops-metric-watch] .ops-mw-facts { grid-column: 2; grid-row: 2; gap: 0; }
+  .ops-row[data-ops-metric-watch] .ops-mw-facts .ops-watch-age { width: auto; text-align: left; }
+  .ops-row[data-ops-metric-watch] .ops-mw-facts > * + *::before { content: "\00a0·\00a0"; }
+  .ops-row[data-ops-metric-watch] .ops-row-fill { display: none; }
+  .ops-row[data-ops-metric-watch] .ops-row-chev { grid-column: 3; grid-row: 1 / span 2; }
+  .ops-row[data-ops-metric-watch] .ops-watch-acts { display: none; }
+  .ops-app .ops-row-main > .ops-tag { display: none; }
+}
+/* Why a watch fails, in red: the state pill says it on a wide board; narrow, where the pill is a dot, this line does. */
+.ops-row-when.ops-watch-cause { display: none; color: var(--sol-red); }
+@container (max-width: 560px) {
+  .ops-app .ops-row-when.ops-watch-cause { display: inline; }
+  .ops-dotrow .ops-watch-cause ~ .ops-watch-every { display: none; }
+  /* A failing app watch: the name keeps its room, the cause gives way, and Run and Pause step aside as they do on metric rows. */
+  .ops-dotrow:has(.ops-watch-cause) .ops-watch-acts { display: none; }
+  .ops-dotrow .ops-row-when.ops-watch-cause { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+  .ops-dotrow:has(.ops-watch-cause) .ops-row-title { flex-shrink: 0; max-width: 50%; }
+  .ops-dotrow:has(.ops-watch-cause) .ops-watch-age { display: none; }
+}
+/* Narrow, a watch's or a call's state pill folds into its coloured dot (its word on hover stays in the row's detail), so the name keeps the width. */
+@container (max-width: 560px) {
+  .ops-dotrow .ops-row-main > .ops-state { min-width: 0; width: 8px; height: 8px; padding: 0; border-radius: 50%; font-size: 0; background: var(--tone); }
+  .ops-dotrow .ops-row-main > .ops-row-n { display: none; }
+  .ops-app .ops-panel .ops-card-head { flex-wrap: wrap; row-gap: 4px; }
+  .ops-app .ops-panel-title { white-space: nowrap; }
+}
+
+/* ── apps: a source with no actions (CI, analytics, a webhook), scoped from the source filter ── */
+.ops-noapp { max-width: 560px; margin: 24px auto; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); }
+.ops-noapp-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.ops-noapp-head > .ops-dim { margin-left: auto; font-size: 11.5px; }
+.ops-noapp-links { display: flex; gap: 12px; }
+.ops-noapp-apps { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 10px; border-top: 1px dashed var(--sol-border); }
+/* A mark at the track's very edge sits inside it: pinned left or right instead of centred on the frame. */
+.otl-cluster-wrap[data-pin="start"] .ops-tl-cluster { transform: translate(-2px, -50%); }
+.otl-cluster-wrap[data-pin="end"] .ops-tl-cluster { transform: translate(calc(-100% + 2px), -50%); }
+.otl-cluster-wrap[data-pin="start"] .ops-tl-mark { transform: translate(0, -50%) rotate(45deg); }
+.otl-cluster-wrap[data-pin="end"] .ops-tl-mark { transform: translate(-100%, -50%) rotate(45deg); }
+.otl-cluster-wrap[data-pin="start"] .ops-tl-cluster:hover { transform: translate(-2px, -50%) scale(1.15); }
+.otl-cluster-wrap[data-pin="end"] .ops-tl-cluster:hover { transform: translate(calc(-100% + 2px), -50%) scale(1.15); }

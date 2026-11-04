@@ -10,6 +10,7 @@ import { accentSoft, accentVar, type ExternalEventAccent } from "../../lib/exter
 import { APP_LOOK } from "../../lib/integrations";
 import { formatRelative } from "../../lib/utils";
 import type { OpsSource } from "./opsTypes";
+import type { SourceHealth } from "./sourceHealth";
 
 export const KIND_LOOK: Record<GroupKind, { icon: LucideIcon; accent: ExternalEventAccent; label: string }> = {
   error: { icon: Bug, accent: "red", label: "error" },
@@ -17,7 +18,7 @@ export const KIND_LOOK: Record<GroupKind, { icon: LucideIcon; accent: ExternalEv
   job: { icon: Workflow, accent: "orange", label: "job" },
   check: { icon: ShieldCheck, accent: "cyan", label: "check" },
   metric: { icon: Gauge, accent: "violet", label: "metric" },
-  replay_issue: { icon: Film, accent: "magenta", label: "replay" },
+  replay_issue: { icon: Film, accent: "magenta", label: "replay issue" },
 };
 
 export function KindGlyph({ kind }: { kind: GroupKind }) {
@@ -80,16 +81,21 @@ export function ProviderIcon({ provider, className = "w-3 h-3" }: { provider: So
   return <Glyph className={className} style={{ color: look.accent }} strokeWidth={1.75} />;
 }
 
-export function SourceChip({ source, href, on, children }: { source: Pick<OpsSource, "name" | "provider" | "status" | "last_error">; href?: string; on?: boolean; children?: ReactNode }) {
+/** Each source's one health reading (sourceHealth.ts), keyed by _id: OpsShell provides it, so every chip agrees. */
+export const SourceHealthContext = createContext<ReadonlyMap<string, SourceHealth> | null>(null);
+
+export function SourceChip({ source, href, on, children }: { source: Pick<OpsSource, "name" | "provider" | "status" | "last_error"> & { _id?: string }; href?: string; on?: boolean; children?: ReactNode }) {
+  const health = useContext(SourceHealthContext)?.get(source._id ?? "");
   const body = (
     <>
-      <span className="ops-dot" data-status={source.status} />
+      <span className="ops-dot" data-status={source.status} data-health={health?.tone} />
       <ProviderIcon provider={source.provider} />
       <span className="truncate min-w-0">{source.name}</span>
       {children}
     </>
   );
-  const title = source.last_error ? `${source.name}: ${source.last_error}` : `${source.name} (${source.provider}, ${source.status})`;
+  const state = health ? `${health.label}${health.reason ? `: ${health.reason}` : ""}` : source.last_error ?? source.status;
+  const title = `${source.name} (${source.provider}): ${state}`;
   return href ? (
     <Link href={href} className="ops-source-chip" data-on={on ? "true" : undefined} title={title}>{body}</Link>
   ) : (

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { replayIndexFields } from "./lib/replayIndex";
 import { getFunctionName } from "convex/server";
 import { gunzipSync, gzipSync, strFromU8, strToU8 } from "fflate";
 import schema from "./schema";
@@ -15,6 +16,9 @@ import {
   gunzipCapped,
   linkReplayToGroup,
   list,
+  browse,
+  REPLAY_BROWSE_SCAN_MAX,
+  saveShape,
   readBodyCapped,
   putChunk,
   readReplayChunks,
@@ -23,6 +27,7 @@ import {
   REPLAY_GROUP_LINKS_MAX,
   REPLAY_GROUP_SCAN_MAX,
   saveImported,
+  saveCaptureLength,
   saveSummary,
   signReplayChunks,
   upsertReplayManifest,
@@ -30,6 +35,7 @@ import {
   CHUNK_LANDING_MS,
   REPLAYS_NEW_PER_HOUR,
   shouldQueueAssembly,
+  withCaptureLength,
 } from "./replays";
 import { handleReplaySign, replaySignKey, validateReplaySign } from "./replaysHttp";
 import { classifyStatus } from "@platform/analytics/codecast";
@@ -263,6 +269,64 @@ describe("reads", () => {
     const { w, id } = await seeded();
     await h(saveImported)(w.internalCtx, { replay_id: id, provider: "posthog", chunk_keys: [], timeline_md: "imported", counts: { clicks: 0, errors: 0, failed_requests: 0 }, duration_ms: 0 });
     expect(w.db._tables.replay_timelines.map((t: any) => t.timeline_md)).toEqual(["imported"]);
+  });
+
+  test("an import keeps how far its copy reaches beside the vendor's longer length, and a capture read only ever extends it", async () => {
+    const { w, id } = await seeded();
+    // rp-5132: PostHog says 1:45:49; the read stopped at the size cap 14:28.5 in.
+    await h(saveImported)(w.internalCtx, { replay_id: id, provider: "posthog", chunk_keys: [], timeline_md: "imported", counts: { clicks: 0, errors: 0, failed_requests: 0 }, duration_ms: 868_500, vendor_length_ms: 6_349_000, dom_chunk_keys: ["k1"], dom_bytes: 1, dom_t0: 0 });
+    const row = () => w.db._tables.replays.find((r: any) => r._id === id);
+    expect(row().duration_ms).toBe(6_349_000);
+    expect(row().captured_ms).toBe(868_500);
+    // The capture's own end runs a little past the last event: the reach grows, the length stays.
+    await h(saveCaptureLength)(w.internalCtx, { replay_id: id, last_key: "k1", duration_ms: 870_000 });
+    expect(row().captured_ms).toBe(870_000);
+    expect(row().duration_ms).toBe(6_349_000);
+    // A shorter read never shrinks it, and a stale key writes nothing.
+    await h(saveCaptureLength)(w.internalCtx, { replay_id: id, last_key: "k1", duration_ms: 600_000 });
+    await h(saveCaptureLength)(w.internalCtx, { replay_id: id, last_key: "old", duration_ms: 9_000_000 });
+    expect(row().captured_ms).toBe(870_000);
+    expect(row().duration_ms).toBe(6_349_000);
+  });
+
+  test("a read that left nothing of the vendor's recording reaches its whole length; a later part of an older chain saves nothing", async () => {
+    const { w, id } = await seeded();
+    const base = { replay_id: id, provider: "posthog" as const, chunk_keys: [], timeline_md: "imported", counts: { clicks: 0, errors: 0, failed_requests: 0 } };
+    const row = () => w.db._tables.replays.find((r: any) => r._id === id);
+    // rp-5132 read whole: its events stop at 1:04:59, PostHog's length runs on through an idle tab.
+    await h(saveImported)(w.internalCtx, { ...base, duration_ms: 3_899_384, vendor_length_ms: 6_349_000, whole: true });
+    expect(row().captured_ms).toBe(6_349_000);
+    // A chain's part saves only while the row carries that chain.
+    const chain = { gen: 7, next_blob: 120, blobs: 253, carry_key: "c", updated_at: 1 };
+    await h(saveImported)(w.internalCtx, { ...base, duration_ms: 868_500, vendor_length_ms: 6_349_000, import_rest: chain });
+    expect(row().import_rest.gen).toBe(7);
+    expect(await h(saveImported)(w.internalCtx, { ...base, timeline_md: "stale", duration_ms: 2_000_000, expect_gen: 6 })).toEqual({ saved: false });
+    expect(row().captured_ms).toBe(868_500);
+    expect(await h(saveImported)(w.internalCtx, { ...base, duration_ms: 2_000_000, expect_gen: 7 })).toEqual({ saved: true });
+    // The last part clears the chain.
+    expect(row().import_rest).toBeUndefined();
+  });
+
+  test("a fresh read of a recording that kept growing never shrinks the copy already held (rp-5212, rp-5200)", async () => {
+    const { w, id } = await seeded();
+    const base = { replay_id: id, provider: "posthog" as const, chunk_keys: [], timeline_md: "imported", counts: { clicks: 0, errors: 0, failed_requests: 0 } };
+    const row = () => w.db._tables.replays.find((r: any) => r._id === id);
+    // rp-5200 held 1:13:03 in 34 chunks, read on by its chain.
+    const held = Array.from({ length: 34 }, (_, i) => `k${i}`);
+    await h(saveImported)(w.internalCtx, { ...base, counts: { clicks: 107, errors: 4, failed_requests: 11 }, duration_ms: 4_383_000, vendor_length_ms: 11_400_000, dom_chunk_keys: held, dom_bytes: 1, dom_t0: 0, read_to: { next_blob: 160, blobs: 428, carry_key: "c", at: 1 } });
+    // PostHog's length grew, and a read from the start came back with its first 14:26.
+    expect(await h(saveImported)(w.internalCtx, { ...base, counts: { clicks: 3, errors: 0, failed_requests: 0 }, duration_ms: 866_000, vendor_length_ms: 12_000_000, dom_chunk_keys: ["s0", "s1", "s2"], dom_bytes: 1, dom_t0: 0 })).toEqual({ saved: false });
+    expect(row().captured_ms).toBe(4_383_000);
+    expect(row().dom_chunk_keys).toHaveLength(34);
+    expect(row().counts.clicks).toBe(107);
+    expect(row().read_to.next_blob).toBe(160);
+    // The row's own chain still appends past it.
+    await h(saveImported)(w.internalCtx, { ...base, duration_ms: 4_383_000, dom_chunk_keys: held, dom_bytes: 1, import_rest: { gen: 9, next_blob: 160, blobs: 428, carry_key: "c", updated_at: 1 } });
+    expect(await h(saveImported)(w.internalCtx, { ...base, duration_ms: 5_000_000, dom_chunk_keys: [...held, "k34"], dom_bytes: 1, expect_gen: 9 })).toEqual({ saved: true });
+    expect(row().dom_chunk_keys).toHaveLength(35);
+    // A copy by an older converter is what a refresh replaces, shorter or not.
+    row().converter_version = 1;
+    expect(await h(saveImported)(w.internalCtx, { ...base, duration_ms: 866_000, dom_chunk_keys: ["s0"], dom_bytes: 1 })).toEqual({ saved: true });
   });
 
   test("a source filter reads that source's index; a group filter looks through a bounded window", async () => {
@@ -506,5 +570,146 @@ describe("cliGet", () => {
   test("refuses a bad token", async () => {
     const w = world();
     await expect(h(cliGet)(w.internalCtx, { api_token: "nope", replay: "rp-1" })).rejects.toThrow();
+  });
+});
+
+describe("browse", () => {
+  async function many(n: number, at: (i: number) => Record<string, unknown> = () => ({})) {
+    const w = world();
+    const { source } = await teamSource(w);
+    for (let i = 0; i < n; i++) {
+      await upsertReplayManifest(w.internalCtx, source, replayItem({ replay_id: `r${i}`, started_at: NOW - i * 60_000 }), NOW);
+      await w.db.patch(w.db._tables.replays[i]._id, { started_at: NOW - i * 60_000, ...at(i) });
+      // The index fields every real writer stamps (lib/replayIndex.ts patchReplay).
+      await w.db.patch(w.db._tables.replays[i]._id, replayIndexFields(w.db._tables.replays[i]));
+    }
+    return { w, source };
+  }
+  const scope = { workspace: "team", team_id: "team_1" };
+
+  test("a page of the newest, with the true total past it", async () => {
+    const { w } = await many(30);
+    const res = await h(browse)(w.as("u1"), { ...scope, limit: 10 });
+    expect(res.rows).toHaveLength(10);
+    expect(res.total).toBe(30);
+    expect(res.capped).toBe(false);
+    expect(res.rows[0].short_id).toBe("rp-1");
+    expect(JSON.stringify(res)).not.toContain("replays/");
+  });
+
+  test("filters, search and sort run over every recording, not one page", async () => {
+    const { w } = await many(40, (i) => ({
+      duration_ms: i === 39 ? null : i * 1_000,
+      counts: { clicks: i, errors: i % 10 === 0 ? 1 : 0, failed_requests: 0 },
+      user: i < 3 ? { email: "ada@example.com" } : { id: `anon-${i}` },
+      url: i === 35 ? "https://shop.example.com/refund" : "https://shop.example.com/",
+    }));
+    const errs = await h(browse)(w.as("u1"), { ...scope, has: ["errors"], limit: 2 });
+    expect(errs.total).toBe(4);
+    expect(errs.rows.map((r: any) => r.short_id)).toEqual(["rp-1", "rp-11"]);
+    const found = await h(browse)(w.as("u1"), { ...scope, q: "REFUND", limit: 5 });
+    expect(found.rows.map((r: any) => r.short_id)).toEqual(["rp-36"]);
+    const longest = await h(browse)(w.as("u1"), { ...scope, sort: "longest", limit: 40 });
+    expect(longest.rows[0].short_id).toBe("rp-39");
+    expect(longest.rows[39].short_id).toBe("rp-40");
+    const ada = await h(browse)(w.as("u1"), { ...scope, person: "ada@example.com", people: true, limit: 5 });
+    expect(ada.total).toBe(3);
+    expect(ada.people.map((p: any) => [p.key, p.sessions])).toEqual([["ada@example.com", 3]]);
+    const recent = await h(browse)(w.as("u1"), { ...scope, since: NOW - 5 * 60_000 });
+    expect(recent.total).toBe(6);
+  });
+
+  test("one person and the partly imported are read by their own index: exact, with when the oldest started", async () => {
+    const { w } = await many(12, (i) => ({
+      user: i % 3 === 0 ? { email: "Ada@Example.com" } : { id: `anon-${i}` },
+      ...(i < 5 ? { captured_ms: 60_000, duration_ms: 3_600_000 } : { duration_ms: 60_000 }),
+    }));
+    const ada = await h(browse)(w.as("u1"), { ...scope, person: "ada@example.com" });
+    expect([ada.total, ada.capped]).toEqual([4, false]);
+    expect(ada.oldest_at).toBe(NOW - 9 * 60_000);
+    const partial = await h(browse)(w.as("u1"), { ...scope, has: ["partial"] });
+    expect(partial.rows.map((r: any) => r.short_id)).toEqual(["rp-1", "rp-2", "rp-3", "rp-4", "rp-5"]);
+    // A row whose flag was never stamped is not in the cut index: the backfill is what puts it there.
+    await w.db.patch(w.db._tables.replays[0]._id, { rest_cut: undefined });
+    expect((await h(browse)(w.as("u1"), { ...scope, has: ["partial"] })).total).toBe(4);
+  });
+
+  test("an exact rp-N is read by its index: found past every other filter, counted exactly", async () => {
+    const { w } = await many(8, (i) => ({ counts: { clicks: 0, errors: 0, failed_requests: 0 }, facts: { at: NOW, active_ms: i === 6 ? 1_000 : 60_000 } }));
+    const res = await h(browse)(w.as("u1"), { ...scope, q: " RP-7 ", has: ["errors"], active_min_ms: 5_000, since: NOW - 60_000, limit: 5 });
+    expect(res.rows.map((r: any) => r.short_id)).toEqual(["rp-7"]);
+    expect(res.total).toBe(1);
+    expect(res.capped).toBe(false);
+    const none = await h(browse)(w.as("u1"), { ...scope, q: "rp-999" });
+    expect([none.total, none.capped]).toEqual([0, false]);
+  });
+
+  test("the active-time floor says how many it leaves out; an issue-linked short one is kept and not counted", async () => {
+    const { w } = await many(6, (i) => ({ facts: { at: NOW, active_ms: i < 3 ? 1_000 : 60_000 }, ...(i === 0 ? { group_ids: ["g1"] } : {}) }));
+    const res = await h(browse)(w.as("u1"), { ...scope, active_min_ms: 5_000 });
+    expect([res.total, res.below_active]).toEqual([4, 2]);
+    const any = await h(browse)(w.as("u1"), { ...scope });
+    expect([any.total, any.below_active]).toEqual([6, 0]);
+  });
+
+  test("people page, sort by failures, leave out the anonymous; rage says what it could not test", async () => {
+    const { w } = await many(12, (i) => ({
+      counts: { clicks: 0, errors: i === 5 ? 3 : 0, failed_requests: 0 },
+      user: i < 2 ? { email: "ada@example.com" } : { id: `anon-${i}` },
+      shape: i < 4 ? { v: 1, active_ms: 0, pages: 1, rage_clicks: i === 0 ? 1 : 0, strip: "0", marks: [] } : undefined,
+    }));
+    const all = await h(browse)(w.as("u1"), { ...scope, people: true, people_sort: "failures", people_limit: 3 });
+    expect(all.people_total).toBe(11);
+    expect(all.people).toHaveLength(3);
+    expect(all.people[0].key).toBe("anon-5");
+    expect(all.people_anonymous).toBe(10);
+    const known = await h(browse)(w.as("u1"), { ...scope, people: true, identified: true });
+    expect(known.people.map((p: any) => p.key)).toEqual(["ada@example.com"]);
+    const rage = await h(browse)(w.as("u1"), { ...scope, has: ["rage"] });
+    expect(rage.total).toBe(1);
+    expect(rage.rage_unchecked).toBe(8);
+  });
+
+  test("the vendor's facts filter by environment, count the pickers' options, and answer rage for unread rows", async () => {
+    const { w } = await many(6, (i) => ({
+      facts: i < 5 ? { at: NOW, browser: i < 3 ? "Chrome" : "Safari", os: i === 0 ? "Windows" : "Mac OS X", country: "US", rage_clicks: i === 4 ? 2 : 0 } : undefined,
+    }));
+    const chrome = await h(browse)(w.as("u1"), { ...scope, browser: "Chrome" });
+    expect(chrome.total).toBe(3);
+    // A picker's options count what every other filter keeps, its own aside.
+    expect(chrome.facets.browser).toEqual([["Chrome", 3], ["Safari", 2]]);
+    expect(chrome.facets.os).toEqual([["Mac OS X", 2], ["Windows", 1]]);
+    const rage = await h(browse)(w.as("u1"), { ...scope, has: ["rage"] });
+    expect(rage.total).toBe(1);
+    expect(rage.rage_unchecked).toBe(1);
+  });
+
+  test("an imported length runs to the end of its capture, never shorter than its events", () => {
+    expect(withCaptureLength({ duration_ms: 0, first_t: 2_000 }, 302_000).duration_ms).toBe(300_000);
+    expect(withCaptureLength({ duration_ms: 900_000, first_t: 0 }, 300_000).duration_ms).toBe(900_000);
+    expect(withCaptureLength({ duration_ms: 5, first_t: 0 }, undefined).duration_ms).toBe(5);
+  });
+
+  test("someone outside the workspace browses nothing", async () => {
+    const { w } = await many(3);
+    const res = await h(browse)(w.as("u2"), { workspace: "personal" });
+    expect(res.total).toBe(0);
+  });
+
+  test("the scan is bounded, and says so", () => {
+    expect(REPLAY_BROWSE_SCAN_MAX).toBeGreaterThanOrEqual(1000);
+  });
+
+  test("a shape lands once, only on the chunks it was read from", async () => {
+    const { w, source } = await many(1);
+    const row = w.db._tables.replays[0];
+    await recordReplayChunk(w.internalCtx, source, "r0", 0, key(source, 0), NOW);
+    const shape = { v: 1, active_ms: 5, pages: 1, rage_clicks: 0, strip: "9", marks: [] };
+    await h(saveShape)(w.internalCtx, { replay_id: row._id, chunk_keys: ["stale"], shape });
+    expect(w.db._tables.replays[0].shape).toBeUndefined();
+    await h(saveShape)(w.internalCtx, { replay_id: row._id, chunk_keys: w.db._tables.replays[0].chunk_keys, shape });
+    expect(w.db._tables.replays[0].shape).toEqual(shape);
+    const res = await h(browse)(w.as("u1"), scope);
+    expect(res.rows[0].shape).toEqual(shape);
   });
 });

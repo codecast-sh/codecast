@@ -1,18 +1,24 @@
 "use client";
-// /ops and everything under it: the Ops views live under the flows app's
-// Signals stage now (doc "Signals to shipped: one pipeline"). Each old address
-// goes to the same view there (opsPaths opsViewHref); bare /ops opens Signals.
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { opsViewHref, parseOpsPath } from "../../components/ops/opsPaths";
+// /ops and everything under it: the Ops area (components/ops/OpsArea.tsx).
+// The address is the view (components/ops/opsPaths.ts parseOpsPath); the data
+// is the workspace the app's switcher has active.
+import { useMemo } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { AuthGuard } from "../../components/AuthGuard";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
+import { OpsArea } from "../../components/ops/OpsArea";
+import { parseOpsPath } from "../../components/ops/opsPaths";
 
-export default function OpsRedirect() {
+export default function OpsRoute() {
   const pathname = usePathname();
   const search = useSearchParams();
-  const router = useRouter();
   const query = search?.toString() ?? "";
-  const bare = !query && /^\/ops\/?$/.test(pathname ?? "");
-  const to = bare ? "/flows?view=signals" : opsViewHref(parseOpsPath(pathname, query));
-  useWatchEffect(() => { router.replace(to); }, [router, to]);
-  return null;
+  const view = useMemo(() => parseOpsPath(pathname, query), [pathname, query]);
+  return (
+    <AuthGuard>
+      <ErrorBoundary name="Ops">
+        <OpsArea view={view} />
+      </ErrorBoundary>
+    </AuthGuard>
+  );
 }

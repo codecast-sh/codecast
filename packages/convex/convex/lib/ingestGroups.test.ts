@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { GROUP_RULES, type IngestItem } from "@codecast/shared/contracts/ingest";
 import {
+  FLAP_WINDOW_MS,
   HOUR_MS,
+  addFailure,
   addToBuckets,
   appendMetricPoint,
+  applyMirror,
   applyOccurrence,
   bucketCount,
   countEventNames,
@@ -12,6 +15,9 @@ import {
   foldOccurrences,
   hourStart,
   isOlderRelease,
+  MESSAGE_KEYS_MAX,
+  OTHER_MESSAGES,
+  tallyMessages,
   metricCrosses,
   openGroupsDelta,
   planItem,
@@ -321,6 +327,10 @@ describe("planItem", () => {
     expect(check.type === "group" && check.fingerprint).toBe("invariant:orders-balance");
     expect(check.type === "group" && check.occurrence.ok).toBe(false);
     expect(check.type === "group" && check.title).toBe("Orders balance");
+    // A failing reading leaves the last pass alone; a passing one records it, so a later failure names its last green.
+    expect(check.type === "group" && check.meta).toBeUndefined();
+    const pass = planItem({ type: "check", id: "orders-balance", ok: true, at: NOW }, {});
+    expect(pass.type === "group" && pass.meta).toEqual({ last_ok_at: NOW });
   });
 
   test("a deploy takes the envelope's environment when it names none", () => {
@@ -376,5 +386,90 @@ describe("watched metrics", () => {
     for (let i = 0; i < GROUP_RULES.metric_points + 3; i++) points = appendMetricPoint(points, { at: i, value: i });
     expect(points).toHaveLength(GROUP_RULES.metric_points);
     expect(points[0].at).toBe(3);
+  });
+});
+
+describe("who resolved it, what it came back in, how often it flipped", () => {
+  test("a check's recovery is its own, and clears a person who resolved it before", () => {
+    const red = group({ kind: "check", status: "open", meta: { ok: false }, resolved_via: "person", resolved_by: "u1" });
+    const back = applyOccurrence(red, occ({ kind: "check", ok: true }), NOW).next;
+    expect(back.resolved_via).toBe("recovered");
+    expect("resolved_by" in back && back.resolved_by === undefined).toBe(true);
+  });
+
+  test("each flip to failing is kept for a week, oldest first", () => {
+    let g = group({ kind: "metric", status: "resolved", meta: { ok: true } });
+    for (let i = 0; i < 3; i++) {
+      g = applyOccurrence(g, occ({ kind: "metric", ok: false, at: NOW + i * 2 * HOUR_MS }), NOW + i * 2 * HOUR_MS).next;
+      g = applyOccurrence(g, occ({ kind: "metric", ok: true, at: NOW + (i * 2 + 1) * HOUR_MS }), NOW + (i * 2 + 1) * HOUR_MS).next;
+    }
+    expect(g.failed_at).toEqual([NOW, NOW + 2 * HOUR_MS, NOW + 4 * HOUR_MS]);
+    expect(addFailure([NOW - FLAP_WINDOW_MS - 1, NOW - HOUR_MS], NOW)).toEqual([NOW - HOUR_MS, NOW]);
+  });
+
+  test("a regression names the release it came back in, or none", () => {
+    const resolved = group({ status: "resolved", resolved_at: NOW - HOUR_MS, regressed_in: "old" });
+    expect(applyOccurrence(resolved, occ({ release: "7a2025238" }), NOW).next.regressed_in).toBe("7a2025238");
+    expect(applyOccurrence(resolved, occ(), NOW).next.regressed_in).toBeUndefined();
+  });
+
+  test("a vendor's resolve is the vendor's, and its regression names the vendor's release", () => {
+    const snap = { kind: "error" as const, status: "resolved" as const, count: 3, first_seen: NOW - 5 * HOUR_MS, last_seen: NOW - 2 * HOUR_MS };
+    const open = group({ status: "open", count: 3, resolved_via: "person", resolved_by: "u1" });
+    const r = applyMirror(open, snap, NOW, 0).next;
+    expect(r.resolved_via).toBe("vendor");
+    expect(r.resolved_by).toBeUndefined();
+    const back = applyMirror(r, { ...snap, status: "open", count: 4, last_seen: NOW + HOUR_MS, release: "2.0" }, NOW + HOUR_MS, 0).next;
+    expect(back.regressed_in).toBe("2.0");
+  });
+});
+
+describe("tallyMessages", () => {
+  test("counts a job's failures by what they said, ids and times folded", () => {
+    const t = tallyMessages(undefined, [
+      { message: "CONNECT_TIMEOUT host:6432", at: 1 },
+      { message: "Provider unavailable since 2026-10-27T15:24:38.879Z", at: 2 },
+      { message: "CONNECT_TIMEOUT host:6432\n  at db.ts:4", at: 3 },
+      { message: "Provider unavailable since 2026-10-28T01:00:00Z", at: 4 },
+      { message: "CONNECT_TIMEOUT host:6432", at: 5 },
+    ]);
+    expect(t).toEqual([
+      { key: "CONNECT_TIMEOUT host:6432", count: 3, first_seen: 1, last_seen: 5 },
+      { key: "Provider unavailable since #", count: 2, first_seen: 2, last_seen: 4 },
+    ]);
+  });
+
+  test("past the key cap new messages count together, so the rows still sum to every failure", () => {
+    const items = Array.from({ length: MESSAGE_KEYS_MAX + 3 }, (_, i) => ({ message: `cause ${String.fromCharCode(97 + i)}`, at: i }));
+    const t = tallyMessages(undefined, items);
+    expect(t.length).toBe(MESSAGE_KEYS_MAX + 1);
+    expect(t.find((m) => m.key === OTHER_MESSAGES)?.count).toBe(3);
+    expect(t.reduce((a, m) => a + m.count, 0)).toBe(items.length);
+  });
+});
+
+describe("samples kept spread over a group's life", () => {
+  const { samplePins, samplesToTrim } = require("./ingestGroups") as typeof import("./ingestGroups");
+  const DAY = 24 * 3600_000;
+  const T = Date.UTC(2026, 10, 4, 12);
+
+  test("a group's first sample, the first of a new release and the first of a new day are pinned, once each", () => {
+    expect(samplePins([{ at: T + 2 }, { at: T + 1 }], null)).toEqual([undefined, "first"]);
+    expect(samplePins([{ at: T, release: "r2" }, { at: T + 1, release: "r2" }], { samples: 20, last_release: "r1", last_seen: T - 60_000 })).toEqual(["release", undefined]);
+    expect(samplePins([{ at: T, release: "r1" }], { samples: 20, last_release: "r1", last_seen: T - DAY })).toEqual(["day"]);
+    expect(samplePins([{ at: T, release: "r1" }], { samples: 20, last_release: "r1", last_seen: T - 60_000 })).toEqual([undefined]);
+  });
+
+  test("the trim takes unpinned samples first, then day and release pins, and the first sample last", () => {
+    const rows = [
+      { id: "a", at: 1, pin: "first" },
+      { id: "b", at: 2, pin: "day" },
+      { id: "c", at: 3 },
+      { id: "d", at: 4, pin: "release" },
+      { id: "e", at: 5 },
+    ];
+    expect(samplesToTrim(rows, 2).map((r) => r.id)).toEqual(["c", "e"]);
+    expect(samplesToTrim(rows, 4).map((r) => r.id)).toEqual(["c", "e", "b", "d"]);
+    expect(samplesToTrim(rows, 0)).toEqual([]);
   });
 });

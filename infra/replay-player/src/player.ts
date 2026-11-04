@@ -245,7 +245,7 @@ async function main() {
     ],
   });
   const meta = replayer.getMetaData();
-  const { duration, toOffset, toClock, endOffset } = replayClock(manifest, meta);
+  const { duration, toOffset, toClock, endOffset, captureEnd } = replayClock(manifest, meta);
   // rrweb draws the events strictly before the offset it is given; a moment
   // includes what happened at it, so it is drawn a millisecond past.
   const drawAt = (offset: number) => offset + 1;
@@ -278,8 +278,14 @@ async function main() {
     document.body.dataset.frameWidth = String(w);
     document.body.dataset.frameHeight = String(h);
   };
+  // Set once the host has the first size: from then on a change of the recorded
+  // window (a viewport resize, a new page) is posted so the host refits its stage.
+  let announced = false;
   replayer.on("resize", (d: any) => {
-    if (d?.width && d?.height) size = { width: d.width, height: d.height };
+    if (d?.width && d?.height && (d.width !== size.width || d.height !== size.height)) {
+      size = { width: d.width, height: d.height };
+      if (announced) post({ type: "size", width: size.width, height: size.height });
+    }
     layout();
   });
   window.addEventListener("resize", layout);
@@ -408,7 +414,8 @@ async function main() {
   replayer.pause(drawAt(toOffset(start)));
   paint();
   window.__codecastReplay = { state: "ready", t_ms: now(), url: urlAt(events, meta.startTime, toOffset(start)), width: size.width, height: size.height, outline: "" };
-  post({ type: "ready", duration_ms: duration, width: size.width, height: size.height, t_ms: now(), below_px: belowH });
+  post({ type: "ready", duration_ms: duration, width: size.width, height: size.height, t_ms: now(), below_px: belowH, capture_end_ms: Math.min(duration, captureEnd) });
+  announced = true;
   if (params.autoplay) setPlaying(true);
 }
 

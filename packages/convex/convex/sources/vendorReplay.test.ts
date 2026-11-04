@@ -6,7 +6,7 @@ import { getFunctionName } from "convex/server";
 import schema from "../schema";
 import { makeFakeDb, schemaIndexes } from "../testDb";
 import { deferVendorRefresh, recordingForImport } from "../replays";
-import { VendorCallError, importLinked, vendorRefreshRetryAt } from "./vendorReplay";
+import { REST_STALL_MS, VendorCallError, importLinked, needsRest, vendorRefreshHold, vendorRefreshRetryAt } from "./vendorReplay";
 import { VENDOR_CONVERTER_VERSION, VENDOR_REFRESH_RETRY, needsVendorImport } from "@codecast/shared/contracts/replay";
 
 const h = (fn: any) => fn._handler;
@@ -35,6 +35,9 @@ function world() {
         replay({ _id: "r_done", short_id: "rp-3", provider: "sentry", external_id: "ffff", imported_at: 5, converter_version: VENDOR_CONVERTER_VERSION, chunk_keys: ["k"] }),
         replay({ _id: "r_old", short_id: "rp-5", provider: "posthog", external_id: "0ld", imported_at: 5, chunk_keys: ["k"] }),
         replay({ _id: "r_sdk", short_id: "rp-4", provider: "sdk", external_id: "own" }),
+        // Copies holding only the start of a long recording: one with nothing reading the rest, one with a chain at work.
+        replay({ _id: "r_cut", short_id: "rp-6", provider: "posthog", external_id: "cut", imported_at: 5, converter_version: VENDOR_CONVERTER_VERSION, chunk_keys: ["k"], captured_ms: 868_000, duration_ms: 6_349_000 }),
+        replay({ _id: "r_chain", short_id: "rp-7", provider: "posthog", external_id: "chain", imported_at: 5, converter_version: VENDOR_CONVERTER_VERSION, chunk_keys: ["k"], captured_ms: 868_000, duration_ms: 6_349_000, import_rest: { gen: 1, next_blob: 60, blobs: 300, carry_key: "c", updated_at: Date.now() } }),
       ],
     },
     { indexes: schemaIndexes(schema as any) },
@@ -67,13 +70,13 @@ describe("importLinked", () => {
     await h(importLinked)(w.ctx("u1"), { replay: "rp-2" });
     expect(w.actions).toEqual([
       { name: "sources/sentry:importReplay", args: { source_id: "src_row", external_id: "a1b2c3d4e5f60718293a4b5c6d7e8f90" } },
-      { name: "sources/posthog:importForSource", args: { source_id: "src_row", external_id: "0193abc" } },
+      { name: "sources/posthog:importForSource", args: { source_id: "src_row", external_id: "0193abc", rest: true } },
     ]);
   });
 
   test("an imported recording and our own SDK recording are answered without a vendor call", async () => {
     const w = world();
-    expect(await h(importLinked)(w.ctx("u1"), { replay: "rp-3" })).toEqual({ replay_id: "r_done", short_id: "rp-3", imported: false, truncated: false });
+    expect(await h(importLinked)(w.ctx("u1"), { replay: "rp-3" })).toEqual({ replay_id: "r_done", short_id: "rp-3", imported: false, truncated: false, declined: { why: "whole" } });
     expect(await h(importLinked)(w.ctx("u1"), { replay: "rp-4" })).toMatchObject({ short_id: "rp-4", imported: false });
     expect(w.actions).toEqual([]);
   });
@@ -100,12 +103,47 @@ describe("importLinked", () => {
     expect(vendorRefreshRetryAt(new VendorCallError({ error: "x", status: 410 }), 0)).toBe(VENDOR_REFRESH_RETRY.gone_ms);
     expect(vendorRefreshRetryAt(new VendorCallError({ error: "slow down", status: 429, retry_after_ms: 3 * 60 * 60_000 }), 0)).toBe(3 * 60 * 60_000);
     expect(vendorRefreshRetryAt(new Error("PostHog answered 503"), 0)).toBe(VENDOR_REFRESH_RETRY.failed_ms);
+    expect(vendorRefreshHold(new Error("PostHog answered 429: slow down"), 0).why).toBe("rate_limit");
+    expect(vendorRefreshHold(new Error("PostHog answered 404"), 0).why).toBe("gone");
+    expect(vendorRefreshHold(new Error("PostHog answered 503"), 0).why).toBe("failed");
+  });
+
+  test("a copy waited out says why and until when, so the page shows it instead of a press that does nothing", async () => {
+    const w = world();
+    w.failActions = true;
+    await h(importLinked)(w.ctx("u1"), { replay: "rp-5" });
+    const again = await h(importLinked)(w.ctx("u1"), { replay: "rp-5" });
+    expect(again.declined?.why).toBe("rate_limit");
+    expect(again.declined?.until).toBeGreaterThan(Date.now());
   });
 
   test("a copy made by an older converter is imported again", async () => {
     const w = world();
     await h(importLinked)(w.ctx("u1"), { replay: "rp-5" });
-    expect(w.actions).toEqual([{ name: "sources/posthog:importForSource", args: { source_id: "src_row", external_id: "0ld" } }]);
+    expect(w.actions).toEqual([{ name: "sources/posthog:importForSource", args: { source_id: "src_row", external_id: "0ld", rest: true } }]);
+  });
+
+  test("a copy cut short with nothing reading its rest is read again and goes on to the rest; a live chain is left alone", async () => {
+    const w = world();
+    await h(importLinked)(w.ctx("u1"), { replay: "rp-6" });
+    await h(importLinked)(w.ctx("u1"), { replay: "rp-7" });
+    expect(w.actions).toEqual([{ name: "sources/posthog:importForSource", args: { source_id: "src_row", external_id: "cut", rest: true, force: true } }]);
+  });
+
+  test("needsRest: short by more than a few seconds, and no live chain", () => {
+    const now = 1_000_000_000;
+    const cut = { captured_ms: 60_000, duration_ms: 600_000, import_rest: null };
+    expect(needsRest(cut, now)).toBe(true);
+    expect(needsRest({ ...cut, captured_ms: 598_000 }, now)).toBe(false);
+    expect(needsRest({ ...cut, captured_ms: null }, now)).toBe(false);
+    // Imported before rows kept their reach, and longer than one read holds: read again to learn whether it is cut.
+    expect(needsRest({ ...cut, captured_ms: null, duration_ms: 300_000, imported_at: now - 1000 }, now)).toBe(false);
+    expect(needsRest({ ...cut, captured_ms: null, duration_ms: 3_600_000, imported_at: now - 1000 }, now)).toBe(true);
+    expect(needsRest({ ...cut, vendor_refresh_after: now + 1 }, now)).toBe(false);
+    expect(needsRest({ ...cut, import_rest: { updated_at: now - 1000 } }, now)).toBe(false);
+    expect(needsRest({ ...cut, import_rest: { updated_at: now - 1000, retry_at: now + 60_000 } }, now)).toBe(false);
+    expect(needsRest({ ...cut, import_rest: { updated_at: now - REST_STALL_MS - 1 } }, now)).toBe(true);
+    expect(needsRest({ ...cut, import_rest: { updated_at: now, error: "PostHog answered 404" } }, now)).toBe(true);
   });
 
   test("someone outside the replay's workspace reads it as missing, and nothing is imported", async () => {

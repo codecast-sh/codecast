@@ -27,6 +27,7 @@ import {
   recordingsPath,
   snapshotReads,
   snapshotSources,
+  blobAfter,
   SNAPSHOT_BLOBS_PER_READ,
   sourceForCaller,
 } from "./posthog";
@@ -203,6 +204,17 @@ describe("recordings", () => {
     expect(snapshotSources({})).toEqual([]);
   });
 
+  test("blobAfter finds the first blob past a copy's last moment, so a read goes on from there", () => {
+    const at = (m: number) => new Date(Date.UTC(2026, 10, 4, 8, m)).toISOString();
+    const body = { sources: [0, 1, 2, 3].map((i) => ({ source: "blob_v2", blob_key: String(i), start_timestamp: at(i * 10), end_timestamp: at(i * 10 + 9) })) };
+    // The copy reaches 08:25: blob 2 (08:20 to 08:29) is read again, past that moment only.
+    expect(blobAfter(body, Date.UTC(2026, 10, 4, 8, 25))).toEqual({ next_blob: 2, blobs: 4 });
+    expect(blobAfter(body, Date.UTC(2026, 10, 4, 9, 0))).toEqual({ next_blob: 4, blobs: 4 });
+    // No end times, or a recording PostHog is still writing: nothing to locate by.
+    expect(blobAfter({ sources: [{ source: "blob_v2", blob_key: "0" }] }, 0)).toBeNull();
+    expect(blobAfter({ sources: [{ source: "realtime" }] }, 0)).toBeNull();
+  });
+
   test("JSONL: blob_v2 tuples, older window objects and bare events; a torn line is skipped", () => {
     const text = [
       JSON.stringify(["w1", META]),
@@ -277,6 +289,18 @@ describe("recordings", () => {
     expect(urls.slice(1)).toEqual([path("start_blob_key=0&end_blob_key=19"), path("start_blob_key=20&end_blob_key=24")]);
   });
 
+  test("a recording past the blob cap is read in parts: each says where the next starts", async () => {
+    const urls: string[] = [];
+    const blobs = Array.from({ length: 75 }, (_, i) => [JSON.stringify(["w", { ...CLICK, timestamp: CLICK.timestamp + i }])]);
+    const first = await fetchRecordingEvents(conn, "rec-1", blobServer(blobs, urls));
+    expect(first.ok && [first.events.length, first.truncated, first.next_blob, first.blobs]).toEqual([60, true, 60, 75]);
+    urls.length = 0;
+    const rest = await fetchRecordingEvents(conn, "rec-1", blobServer(blobs, urls), 60);
+    expect(rest.ok && [rest.events.length, rest.truncated, rest.next_blob]).toEqual([15, false, 75]);
+    expect(rest.ok && rest.events[0].timestamp).toBe(CLICK.timestamp + 60);
+    expect(urls.slice(1)).toEqual([path("start_blob_key=60&end_blob_key=74")]);
+  });
+
   test("a range over the byte budget is read again blob by blob, keeping the blobs that fit", async () => {
     const urls: string[] = [];
     const big = (i: number) => [JSON.stringify(["w", { ...CLICK, timestamp: CLICK.timestamp + i, pad: "x".repeat(13 * 1024 * 1024) }])];
@@ -285,6 +309,8 @@ describe("recordings", () => {
     if (!read.ok) return;
     expect(read.events.length).toBe(1);
     expect(read.truncated).toBe(true);
+    // The next part starts at the blob that did not fit.
+    expect(read.next_blob).toBe(1);
     expect(urls.slice(1)).toEqual([path("start_blob_key=0&end_blob_key=1"), path("start_blob_key=0&end_blob_key=0"), path("start_blob_key=1&end_blob_key=1")]);
   });
 });
@@ -339,7 +365,7 @@ function actionCtx(w: ReturnType<typeof world>, userId: string, actions: Array<{
     runQuery: async (fn: any, args: any) => h(handlers[getFunctionName(fn)])(w.as(userId), args),
     runAction: async (fn: any, args: any) => {
       actions.push({ name: getFunctionName(fn), args });
-      return { replay_id: "rp_row", short_id: "rp-1", chunks: 1 };
+      return { replay_id: "rp_row", short_id: "rp-1", chunks: 1, saved: true };
     },
   } as any;
 }

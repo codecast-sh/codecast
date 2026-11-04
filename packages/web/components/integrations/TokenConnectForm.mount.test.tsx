@@ -1,5 +1,6 @@
 // Mounts the token connect form in jsdom: the fields come from the
-// descriptor's tokenConfig, the token sits in a password field, Connect waits
+// descriptor's tokenConfig, the token sits in a masked field no browser
+// reads as a login (so nothing autofills an email or a saved password), Connect waits
 // for every required setting and the token, an empty defaulted field is left
 // for the server to fill, and a stored token is cleared from the field while
 // a refused one stays for a retry.
@@ -53,11 +54,26 @@ test("token connect form", async () => {
       document.querySelector("form")!.dispatchEvent(new (dom.window as any).Event("submit", { bubbles: true, cancelable: true }));
     });
 
-  // Org, host, then the token: the token is the only password field.
+  // Org, host, then the token. No field is type=password and every one opts
+  // out of autofill and the password managers, so a browser cannot pair them
+  // as a login and fill an email and a saved password.
   const [org, host, token] = inputs();
   assert.equal(inputs().length, 3);
-  assert.equal(token.type, "password");
+  assert.equal(document.querySelector("input[type=password]"), null);
+  assert.equal(token.dataset.masked, "true");
+  for (const input of inputs()) {
+    assert.equal(input.getAttribute("autocomplete"), "off");
+    assert.equal(input.getAttribute("data-1p-ignore"), "true");
+    assert.doesNotMatch(input.name, /user|email|login|pass/i);
+  }
   assert.equal(org.type, "text");
+  assert.match(document.body.textContent!, /encrypted/);
+  // The eye shows the token and hides it again.
+  const eye = document.querySelector<HTMLButtonElement>("button[aria-label=Show]")!;
+  await act(async () => eye.click());
+  assert.equal(token.dataset.masked, undefined);
+  await act(async () => document.querySelector<HTMLButtonElement>("button[aria-label=Hide]")!.click());
+  assert.equal(token.dataset.masked, "true");
   assert.equal(host.placeholder, "https://sentry.io");
   assert.match(document.body.textContent!, /Auth token/);
 

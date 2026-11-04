@@ -57,6 +57,17 @@ class Scrubber {
     this.textareas.clear();
   }
 
+  save(): DomScrubState {
+    return { private_text: [...this.privateText], private_parents: [...this.privateParents], fields: [...this.fields], textareas: [...this.textareas] };
+  }
+
+  load(state: DomScrubState) {
+    for (const id of state.private_text) this.privateText.add(id);
+    for (const id of state.private_parents) this.privateParents.add(id);
+    for (const id of state.fields) this.fields.add(id);
+    for (const id of state.textareas) this.textareas.add(id);
+  }
+
   /** Walk a serialized node (a snapshot's tree, or an added node), masking as it goes. */
   node(n: any, inPrivate: boolean, inTextarea: boolean) {
     if (!n || typeof n !== "object") return;
@@ -104,9 +115,23 @@ class Scrubber {
  * returned is a new one.
  */
 export function prepareDomCapture(input: readonly RrwebEvent[]): RrwebEvent[] {
+  return prepareDomCapturePart(input).events;
+}
+
+/** What the masking knows of the page when a part ends (which nodes are private, fields, textareas), so the next part masks the same. */
+export interface DomScrubState {
+  private_text: number[];
+  private_parents: number[];
+  fields: number[];
+  textareas: number[];
+}
+
+/** prepareDomCapture for one part of a recording, continuing from where the part before left the masking. */
+export function prepareDomCapturePart(input: readonly RrwebEvent[], state?: DomScrubState | null): { events: RrwebEvent[]; state: DomScrubState } {
   const events = input.filter((e) => e && typeof e === "object" && typeof e.type === "number" && typeof e.timestamp === "number" && Number.isFinite(e.timestamp));
   events.sort((a, b) => a.timestamp - b.timestamp);
   const s = new Scrubber();
+  if (state) s.load(state);
   for (const e of events) {
     const d = e.data;
     if (!d || typeof d !== "object") continue;
@@ -119,7 +144,7 @@ export function prepareDomCapture(input: readonly RrwebEvent[]): RrwebEvent[] {
       else if (d.source === Source.Mutation) s.mutation(d);
     }
   }
-  return events;
+  return { events, state: s.save() };
 }
 
 /** Whether a capture can be played at all: rrweb needs a full snapshot of a document to draw anything. */

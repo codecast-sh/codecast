@@ -1,0 +1,44 @@
+/* ── Connecting a source, in place: on the Ops home and in Settings, so the sheet loads its own styles ── */
+.ops-connect { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); container-type: inline-size; min-width: 0; }
+/* Title and step on the left, close pinned top right; the step drops under the title when the sheet is narrow. */
+.ops-connect-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 2px; font-size: 13.5px; }
+.ops-connect-title { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 10px; row-gap: 2px; min-width: 0; }
+.ops-connect-title b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.ops-connect-step { font-size: 11.5px; white-space: nowrap; }
+.ops-connect-x { align-self: start; height: 26px; width: auto; gap: 5px; padding: 0 6px; justify-content: center; }
+.ops-connect-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.ops-connect-ok { color: var(--sol-green); }
+.ops-connect-vendor { display: flex; flex-direction: column; gap: 4px; max-width: 520px; }
+.ops-connect-where { font-size: 11.5px; }
+.ops-connect-err { font-size: 11.5px; color: var(--sol-red); overflow-wrap: anywhere; }
+.ops-connect .ops-card { border: 0; padding: 0; background: transparent; }
+/* The kinds are their own row; narrow, the row scrolls sideways rather than wrapping under itself. */
+.ops-connect-kinds { align-self: flex-start; flex-wrap: wrap; max-width: 100%; }
+.ops-connect-kinds button { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex-shrink: 0; }
+.ops-connect-kinds button[data-on="true"] { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 14%, transparent); }
+@container (max-width: 520px) {
+  .ops-connect-title { flex-direction: column; align-items: flex-start; }
+  .ops-connect-step { white-space: normal; }
+  .ops-connect-x kbd { display: none; }
+  .ops-connect-kinds { flex-wrap: nowrap; overflow-x: auto; align-self: stretch; scrollbar-width: none; }
+  .ops-connect-kinds::-webkit-scrollbar { display: none; }
+}
+/* A vendor already connected: its sources, what each reads, Open; adding another sits under them. */
+.ops-connect-existing { display: flex; flex-direction: column; gap: 8px; }
+.ops-connect-name { font-weight: 500; white-space: nowrap; }
+.ops-connect-reads { font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ops-connect-bad { color: var(--sol-red); flex-shrink: 0; }
+.ops-connect-wait-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ops-connect-wait-label [data-tone="bad"] { color: var(--sol-red); font-weight: 500; }
+.ops-connect-reason { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 640px) { .ops-connect-row[data-ops-connect-wait] { flex-wrap: wrap; } }
+/* A vendor's projects as rows to pick (VendorProjects.tsx): a box, the name, its slug or id, the source already reading it. */
+.ops-vproj { display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; border: 1px solid var(--sol-border); border-radius: 6px; background: var(--sol-bg); }
+.ops-vproj-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 10px; font-size: 12.5px; text-align: left; color: var(--sol-text); border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); }
+.ops-vproj-row:last-child { border-bottom: 0; }
+button.ops-vproj-row:hover:not(:disabled) { background: color-mix(in srgb, var(--sol-text-muted) 8%, transparent); }
+button.ops-vproj-row:disabled { color: var(--sol-text-dim); cursor: default; }
+.ops-vproj-box { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; border: 1px solid var(--sol-text-dim); border-radius: 3px; }
+.ops-vproj-box[data-round="true"] { border-radius: 50%; }
+.ops-vproj-box[data-on="true"] { background: var(--sol-blue); border-color: var(--sol-blue); color: var(--sol-bg); }
+.ops-vproj-name { min-width: 0; }
