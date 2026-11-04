@@ -28,12 +28,13 @@ import { canViewTask } from "./agentTasks";
 import { canReadRun } from "./workflow_runs";
 import { CALL_LINK_REFUSED_WORDS, isRecRoomKey } from "@codecast/shared/contracts";
 import { publicName } from "./lib/displayNames";
+import { publicWeekCard, weeklyCardAllowed, type WeekCardStats } from "@codecast/shared/contracts/weeklyCard";
 
 export const SHARE_TOKEN_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 type ShareTable =
   | "conversations" | "docs" | "plans" | "tasks" | "transcripts" | "projects" | "initiatives"
-  | "session_decisions" | "decision_stacks" | "agent_tasks" | "workflow_runs";
+  | "session_decisions" | "decision_stacks" | "agent_tasks" | "workflow_runs" | "weekly_cards";
 
 /** Point `row`'s share token at `token` (null clears it). A token already
  *  serving another row of the table is refused, so one link can never be
@@ -133,6 +134,11 @@ const SHARE_KINDS = {
   stack: { table: "decision_stacks", canManage: (ctx: any, u: Id<"users">, row: any) => canReadStack(ctx, u, row) },
   trigger: { table: "agent_tasks", canManage: (ctx: any, u: Id<"users">, row: any) => canViewTask(ctx, u, row) },
   run: { table: "workflow_runs", canManage: (ctx: any, u: Id<"users">, row: any) => canReadRun(ctx, u, row) },
+  // A weekly card is its owner's alone, and only while the card is allowed to them (weeklyCardAllowed).
+  card: {
+    table: "weekly_cards",
+    canManage: async (ctx: any, u: Id<"users">, row: any) => String(row.user_id) === String(u) && weeklyCardAllowed(await ctx.db.get(u)),
+  },
 } as const satisfies Record<string, { table: TableNames; canManage: (ctx: any, userId: Id<"users">, row: any, token?: string | null) => Promise<boolean> }>;
 
 export type ObjectShareKind = keyof typeof SHARE_KINDS;
@@ -426,6 +432,19 @@ export const getSharedTrigger = query({
       last_run_failed: t.last_run_failed ?? false,
       created_at: t.created_at,
       user: await author(ctx, t.user_id),
+    };
+  },
+});
+
+/** A weekly card as a stranger reads it: the owner's name and the numbers, without the parts they left off. */
+export const getSharedCard = query({
+  args: { share_token: v.string() },
+  handler: async (ctx, args) => {
+    const card = await byShareToken(ctx, "weekly_cards", args.share_token);
+    if (!card) return null;
+    return {
+      stats: publicWeekCard(card.stats as WeekCardStats, card),
+      user: await author(ctx, card.user_id),
     };
   },
 });

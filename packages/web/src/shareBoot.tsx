@@ -15,6 +15,7 @@ import SharedDecision from "../app/share/decision/[token]/page";
 import SharedStack from "../app/share/stack/[token]/page";
 import SharedTrigger from "../app/share/trigger/[token]/page";
 import SharedRun from "../app/share/run/[token]/page";
+import SharedCard from "../app/share/card/[token]/page";
 import type { ComponentType } from "react";
 
 // A guest's meeting page (/meet/<token>) rides this boot for the same reason
@@ -55,6 +56,7 @@ const SHARE_PAGES: Record<SharedObjectKind, ComponentType> = {
   stack: SharedStack,
   trigger: SharedTrigger,
   run: SharedRun,
+  card: SharedCard,
 };
 
 const convex = new ConvexReactClient(CONVEX_URL, { webSocketConstructor: recoveringWebSocket() });

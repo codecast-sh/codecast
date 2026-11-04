@@ -112,6 +112,8 @@
   max-width: 720px;
   margin: 0 auto;
 }
+/* A picture rather than prose (a weekly card): the column takes the page. */
+.share-layout[data-wide] .share-col { max-width: 1040px; }
 
 /* The page arrives in order, a beat apart. */
 .share-col > * {

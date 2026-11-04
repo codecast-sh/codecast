@@ -5,6 +5,7 @@ import { sharePath, type ShareKind } from "@codecast/shared/entities";
 import { CONVEX_URL } from "./convexUrl";
 import { GUEST_LINK_REFUSAL_TEXT, guestJoinPath, guestNoticeSentence, type GuestLinkRefusal } from "@codecast/shared/contracts";
 import { meetingTitle } from "../lib/calls/roomGuests";
+import { weekRangeLabel, type WeekCardStats } from "@codecast/shared/contracts/weeklyCard";
 
 /**
  * The server's view of shared objects: one Convex client, one query per share
@@ -56,6 +57,7 @@ const SHARE_QUERIES: Record<ShareKind, (token: string) => Promise<unknown>> = {
   stack: (t) => convex.query(api.publicShare.getSharedStack, { share_token: t }),
   trigger: (t) => convex.query(api.publicShare.getSharedTrigger, { share_token: t }),
   run: (t) => convex.query(api.publicShare.getSharedRun, { share_token: t }),
+  card: (t) => convex.query(api.publicShare.getSharedCard, { share_token: t }),
 };
 
 /** The shared object behind a token, through the cache. `null` = query failed;
@@ -73,6 +75,8 @@ export interface ShareMeta {
   description: string;
   url: string;
   type?: string;
+  /** A large image of the object itself (a weekly card), in place of the site logo. */
+  image?: string;
 }
 
 export function shareMeta(
@@ -146,6 +150,19 @@ export function shareMeta(
     case "trigger": {
       const description = cleanNotificationBody(d.summary || d.prompt || "", 200) || "A standing instruction to an agent";
       return { title: `Codecast: ${d.title || "Shared trigger"}`, description, url, type: "article" };
+    }
+    case "card": {
+      const s = d.stats as WeekCardStats | undefined;
+      if (!s) return null;
+      const who = d.user?.name ? `${d.user.name}'s` : "A";
+      const agents = s.agents.slice(0, 3).map((a) => a.name).join(", ");
+      return {
+        title: `${who} week with coding agents · ${weekRangeLabel(s)}`,
+        description: `${s.sessions} sessions, ${s.agent_hours}h with agents working, ${s.active_days} active days${agents ? `. ${agents}` : ""}`,
+        url,
+        type: "article",
+        image: `${baseUrl}/og/card/${token}.png`,
+      };
     }
     case "run": {
       const nodes: any[] = Array.isArray(d.nodes) ? d.nodes : [];

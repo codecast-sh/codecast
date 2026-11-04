@@ -77,6 +77,7 @@ export function SharedObjectPage<T>({
   query,
   noun,
   aside,
+  wide,
   children,
 }: {
   kind: SharedObjectKind;
@@ -86,6 +87,8 @@ export function SharedObjectPage<T>({
   noun: string;
   /** A rail beside the column on wide screens (a doc's outline). */
   aside?: (data: T) => ReactNode;
+  /** The object is a picture, not prose: the column widens to the page. */
+  wide?: boolean;
   children: (data: T) => ReactNode;
 }) {
   const token = useParams().token as string;
@@ -110,7 +113,7 @@ export function SharedObjectPage<T>({
         <span className="share-kind">shared {noun}</span>
         <CopyPageLink />
       </header>
-      <div className="share-layout" data-aside={rail ? "" : undefined}>
+      <div className="share-layout" data-aside={rail ? "" : undefined} data-wide={wide ? "" : undefined}>
         {rail}
         <article className="share-col">{children(data)}</article>
       </div>

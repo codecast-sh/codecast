@@ -53,6 +53,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("docs", "documents index"),
   dash("capabilities", "capability registry"),
   dash("agent-features", "what codecast teaches your agents: features by category, switched per machine"),
+  dash("week", "the weekly card: your week with coding agents, its publish review and share buttons (staff only)"),
   dash("files", "local markdown notes and files (?f=<path> opens one; old /vault?f= links land here)"),
   dash("vault", "the team Vault: passwords, keys and sign-ins shared with agents (?s=sec-N opens one)"),
   dash("pages", "published pages (alias /artifacts)"),

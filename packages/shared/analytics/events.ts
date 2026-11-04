@@ -62,8 +62,26 @@ export const CODECAST_EVENTS = defineCatalog({
   early_access_requested: { what: { type: "string", values: ["team", "org"] }, location: LOCATION },
 
   // Install and activation funnel (web server, personless).
-  install_script_downloaded: { script: { type: "string", values: ["sh", "ps1"] } },
+  // `source` is the channel an install link was handed out on (codecast.sh/i/<source>):
+  // a lowercase slug from the URL, so a terminal install that never loads the site
+  // still says which post, listing or sponsor sent it.
+  install_script_downloaded: {
+    script: { type: "string", values: ["sh", "ps1"] },
+    source: { type: "string", max: 32, optional: true },
+  },
   desktop_dmg_downloaded: { version: { type: "string", max: 32 } },
+
+  // The weekly card (convex weeklyCards.ts): built (Convex, by the person or the
+  // Monday sweep), published and shared (client), and its public page opened
+  // by a person (web server, personless). Footer clicks arrive as
+  // utm_source=scorecard visits and /i/scorecard installs.
+  weekly_card_generated: {
+    which: { type: "string", values: ["last", "current"] },
+    trigger: { type: "string", values: ["manual", "monday"] },
+  },
+  weekly_card_published: { show_projects: { type: "boolean" }, show_tokens: { type: "boolean" } },
+  weekly_card_share_pressed: { target: { type: "string", values: ["copy", "x", "bluesky", "reddit"] } },
+  weekly_card_viewed: {},
 
   // Install and activation funnel (Convex, identified by users._id).
   setup_token_generated: {},

@@ -102,6 +102,7 @@ export async function prerenderedRouteCount(): Promise<number> {
 
 function ogHtml(meta: { title: string; description: string; url: string; image?: string; type?: string }) {
   const img = meta.image || `${BASE_URL}/logo-final.png`;
+  const size = meta.image ? `\n  <meta property="og:image:width" content="1200" />\n  <meta property="og:image:height" content="630" />` : "";
   return `<!DOCTYPE html>
 <html><head>
   <meta charset="utf-8" />
@@ -113,8 +114,8 @@ function ogHtml(meta: { title: string; description: string; url: string; image?:
   <meta property="og:url" content="${esc(meta.url)}" />
   <meta property="og:site_name" content="codecast" />
   <meta property="og:type" content="${meta.type ?? "website"}" />
-  <meta property="og:image" content="${esc(img)}" />
-  <meta name="twitter:card" content="summary" />
+  <meta property="og:image" content="${esc(img)}" />${size}
+  <meta name="twitter:card" content="${meta.image ? "summary_large_image" : "summary"}" />
   <meta name="twitter:title" content="${esc(meta.title)}" />
   <meta name="twitter:description" content="${esc(meta.description)}" />
   <meta name="twitter:image" content="${esc(img)}" />
