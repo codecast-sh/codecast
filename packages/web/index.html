@@ -54,25 +54,15 @@
         if (visualStyle === 'minimal' || visualStyle === 'codex') {
           document.documentElement.classList.add('minimal-style');
         }
-        // Hosted mode in its Minimal look (ThemeProvider stores the flag):
-        // the first frame is already the family's paper, not the developer
-        // default the app would correct a moment later.
-        // A device last seen in hosted mode (laneBoot.ts LANE_HINT_KEY) with
-        // no look stored yet, as after a first signup, starts there too.
-        var hostedLook = localStorage.getItem('codecast-hosted-look');
-        if (hostedLook === '1' || (hostedLook === null && localStorage.getItem('codecast-lane') === 'simple')) {
-          document.documentElement.classList.add('minimal-style', 'hosted-mode');
-        } else {
-          // The color theme, as ThemeProvider cached it (lib/theme/colorTheme.ts),
-          // or the default one when nothing is cached (plugins/colorThemeBoot.ts).
-          try {
-            var cachedTheme = localStorage.getItem('codecast-color-theme');
-            var themeVars = (cachedTheme ? JSON.parse(cachedTheme) : window.__ccDefaultColorTheme || {})[theme] || {};
-            var names = Object.keys(themeVars);
-            for (var i = 0; i < names.length; i++) document.documentElement.style.setProperty(names[i], themeVars[names[i]]);
-            if (names.length) document.documentElement.setAttribute('data-theme-vars', names.join(' '));
-          } catch (e) {}
-        }
+        // The color theme, as ThemeProvider cached it (lib/theme/colorTheme.ts),
+        // or the default one when nothing is cached (plugins/colorThemeBoot.ts).
+        try {
+          var cachedTheme = localStorage.getItem('codecast-color-theme');
+          var themeVars = (cachedTheme ? JSON.parse(cachedTheme) : window.__ccDefaultColorTheme || {})[theme] || {};
+          var names = Object.keys(themeVars);
+          for (var i = 0; i < names.length; i++) document.documentElement.style.setProperty(names[i], themeVars[names[i]]);
+          if (names.length) document.documentElement.setAttribute('data-theme-vars', names.join(' '));
+        } catch (e) {}
       })();
     </script>
     <script>
@@ -187,31 +177,6 @@
          invisible full-window layer stays composited for the life of the app
          and its bar animation keeps running on the main thread. */
       #root:not(:empty) ~ #boot-shell { display: none; }
-
-      /* A hosted boot (<html data-lane> on /welcome, <html data-hosted-boot>
-         on an app page for a device last seen in hosted mode, both set in
-         <head> by plugins/laneBoot.ts, or the hosted look) opens on the
-         family's paper with the assistant's solid disc over the bar, drawn
-         from the --pd-* sheet that plugin also injects. AppLoader takes the
-         same form (data-hosted on its root), so the static to React hand-off
-         stays invisible there too. */
-      html[data-lane] #boot-shell#boot-shell,
-      html[data-hosted-boot] #boot-shell#boot-shell,
-      .app-loader[data-hosted] { background: var(--pd-bg); color: var(--pd-ink-faint); }
-      html[data-lane] #boot-shell .mark,
-      html[data-hosted-boot] #boot-shell .mark,
-      html.hosted-mode.minimal-style #boot-shell .mark,
-      .hosted-orb {
-        box-sizing: border-box;
-        width: 44px;
-        height: 44px;
-        padding: 10px 8px;
-        border-radius: 999px;
-        background: var(--pd-ink);
-        color: var(--pd-bg-raised);
-        opacity: 1;
-      }
-      .hosted-orb { display: grid; place-items: center; padding: 0; }
 
       /* Desktop hand-off screen. Shown when the page is sent to the desktop
          app (lib/desktopHandoff.ts showHandoffScreen): on the pre-boot path the

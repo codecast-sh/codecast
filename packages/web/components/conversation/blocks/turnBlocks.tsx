@@ -75,8 +75,8 @@ import { linkifyMentions } from "../../../lib/conversationMarkdown";
 import { renderAssistantBody } from "../../../lib/renderAssistantBody";
 import { PENDING_BOOT_GRACE_MS, PENDING_HOSTED_STALL_MS, PENDING_IDLE_GRACE_MS, PENDING_RESUME_GRACE_MS, PENDING_RETRY_AFTER_MS } from "../pendingSend";
 import { ApiErrorCard } from "../sessionChrome";
+import { MessageDecisionReview } from "../../decisions/MessageDecisionReview";
 import { followRestoredConversation } from "../../../lib/followRestoredConversation";
-import { useSurface } from "../../../lib/surfaces";
 import type { CondensedReceipt, ImageData, MessageFeedDensity, ParsedContextBlock, ReceiptEntry, StoryBeat, TaskRecordMaps, ToolCall, ToolCallChangeSelection, ToolResult } from "../types";
 import { COMPACT_TAIL_HEIGHT } from "../../../lib/conversationTurnDefaults";
 
@@ -182,7 +182,7 @@ function HostedStuckLine({ onRetry, sending, onCancel, cancelling }: { onRetry: 
   );
 }
 
-/** `quiet`: hosted mode's ink hover rather than the developer's orange. */
+/** `quiet`: an ink hover rather than the orange one. */
 function CancelPendingButton({ onClick, disabled, quiet = false }: { onClick: () => void; disabled?: boolean; quiet?: boolean }) {
   return (
     <button
@@ -465,9 +465,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
   const chatOn = useTeamFeature("chat");
-  // Linking to, sharing and bookmarking single messages are a developer's
-  // tools; hosted mode keeps Copy.
-  const messageTools = useSurface("conversation.internals");
   const handleForwardToChat = () => forwardMessageToChat(conversationId, messageId);
 
   const handleToggleExpand = () => {
@@ -484,17 +481,17 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         {() => (
           <>
             <CtxItem icon={CopyIcon} onSelect={handleCopy}>Copy message</CtxItem>
-            {messageTools && <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>}
+            <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>
             {chatOn && <CtxItem icon={Forward} onSelect={handleForwardToChat}>Send to chat…</CtxItem>}
-            {messageTools && <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
+            <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
               {isBookmarked ? "Remove bookmark" : "Bookmark message"}
-            </CtxItem>}
-            {(onForkFromMessage && messageUuid) || (messageTools && onStartShareSelection) ? <CtxSeparator /> : null}
+            </CtxItem>
+            {(onForkFromMessage && messageUuid) || onStartShareSelection ? <CtxSeparator /> : null}
             {onForkFromMessage && messageUuid && (
               <CtxItem icon={Split} onSelect={() => onForkFromMessage(messageUuid)}>Fork from here</CtxItem>
             )}
             {onStartShareSelection && (
-              messageTools && <CtxItem icon={SquareDashedMousePointer} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
+              <CtxItem icon={SquareDashedMousePointer} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
             )}
             {isPending && (
               <>
@@ -510,7 +507,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         )}
       </ContextMenu>
       <div data-cc-user-message-toolbar className={`absolute -top-2 right-0 transition-opacity duration-150 ${TOOLBAR_SHELL} ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto"}`}>
-        {messageTools && onStartShareSelection && (
+        {onStartShareSelection && (
           <button
             onClick={() => onStartShareSelection(messageId)}
             className={TOOLBAR_BTN}
@@ -520,7 +517,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             <SquareDashedMousePointer className="w-4 h-4" />
           </button>
         )}
-        {messageTools && <button
+        <button
           onClick={handleCopyLink}
           className={TOOLBAR_BTN}
           title="Copy link to message"
@@ -529,7 +526,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
           </svg>
-        </button>}
+        </button>
         {chatOn && (
           <button
             onClick={handleForwardToChat}
@@ -540,7 +537,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             <Forward className="w-4 h-4" />
           </button>
         )}
-        {messageTools && <button
+        <button
           onClick={handleToggleBookmark}
           className={`${TOOLBAR_BTN_BASE} ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
           title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
@@ -549,7 +546,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           <svg className="w-4 h-4" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
           </svg>
-        </button>}
+        </button>
         {onForkFromMessage && messageUuid && (
           <button
             onClick={() => onForkFromMessage(messageUuid)}
@@ -1008,9 +1005,8 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   const carriedBrowserRows = useContext(CastBrowserRowContext);
   const hostedAsking = useContext(HostedAskingContext);
   const hostedCardShown = useContext(HostedCardShownContext);
-  // A hosted conversation opens onto its steps in the assistant's words; the
-  // tools behind them show only where a conversation's internals do.
-  const internalsShown = useSurface("conversation.internals");
+  // A hosted conversation opens onto its steps in the assistant's words, each
+  // with the tool behind it.
   const hostedSteps = isHostedAgentType(agentType);
   const { summary, counted, created, madeLine, sources, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
     const actions: { name: string; input: string }[] = [];
@@ -1121,7 +1117,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
             {entries.flatMap((entry) => entry.tools.map((tc) => (
               <li key={tc.id} className="text-[13px] leading-snug text-sol-text-muted">
                 <span>{stepText(tc, resultFor(tc), { asking: hostedAsking })}</span>
-                {internalsShown ? renderTool(tc, entry) : null}
+                {renderTool(tc, entry)}
               </li>
             )))}
             {sources.length > 0 && <li><HostedSources sources={sources} /></li>}
@@ -1252,8 +1248,6 @@ function AssistantBlockImpl({
   globalFileMap?: Record<string, SentFileData[]>;
 }) {
   const relativeTime = useRelativeTime();
-  // The model behind a reply is a developer fact; where the picker hides, so does this hover.
-  const modelShown = useSurface("modelPicker");
   const CONTENT_MAX_HEIGHT = 800;
 
   // Condensed feed: this message's segment tools fold into one receipt row
@@ -1385,9 +1379,6 @@ function AssistantBlockImpl({
   const chatOn = useTeamFeature("chat");
   const commentsEnabled = useCommentTools();
   const ctxMenu = useContextMenu<void>();
-  // Linking to, sharing and bookmarking single messages are a developer's
-  // tools; hosted mode keeps Copy.
-  const messageTools = useSurface("conversation.internals");
 
   if (!hasContent && !hasThinking && !hasToolCalls && !hasImages) {
     return null;
@@ -1430,16 +1421,16 @@ function AssistantBlockImpl({
         {() => (
           <>
             <CtxItem icon={CopyIcon} onSelect={handleCopy}>Copy message</CtxItem>
-            {messageTools && <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>}
+            <CtxItem icon={Link2} onSelect={handleCopyLink}>Copy link to message</CtxItem>
             {chatOn && <CtxItem icon={Forward} onSelect={handleForwardToChat}>Send to chat…</CtxItem>}
-            {messageTools && <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
+            <CtxItem icon={BookmarkIcon} onSelect={handleToggleBookmark}>
               {isBookmarked ? "Remove bookmark" : "Bookmark message"}
-            </CtxItem>}
-            {((onForkFromMessage && messageUuid && !onlyToolCalls) || (messageTools && onStartShareSelection)) && <CtxSeparator />}
+            </CtxItem>
+            {((onForkFromMessage && messageUuid && !onlyToolCalls) || onStartShareSelection) && <CtxSeparator />}
             {onForkFromMessage && messageUuid && !onlyToolCalls && (
               <CtxItem icon={Split} onSelect={() => onForkFromMessage(messageUuid)}>Fork from here</CtxItem>
             )}
-            {messageTools && onStartShareSelection && (
+            {onStartShareSelection && (
               <CtxItem icon={SquareDashedMousePointer} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
             )}
             {onCollapseTurn && (
@@ -1474,7 +1465,7 @@ function AssistantBlockImpl({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
-          {messageTools && <button
+          <button
             onClick={handleCopyLink}
             className={TOOLBAR_BTN}
             title="Copy link to this message"
@@ -1483,7 +1474,7 @@ function AssistantBlockImpl({
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
             </svg>
-          </button>}
+          </button>
           {commentsEnabled && (
             <button
               onClick={() => useInboxStore.getState().openCommentThread(messageId)}
@@ -1504,7 +1495,7 @@ function AssistantBlockImpl({
               <Forward className="w-4 h-4" />
             </button>
           )}
-          {messageTools && onStartShareSelection && (
+          {onStartShareSelection && (
             <button
               onClick={() => onStartShareSelection(messageId)}
               className={TOOLBAR_BTN}
@@ -1514,7 +1505,7 @@ function AssistantBlockImpl({
               <SquareDashedMousePointer className="w-4 h-4" />
             </button>
           )}
-          {messageTools && <button
+          <button
             onClick={handleToggleBookmark}
             className={`${TOOLBAR_BTN_BASE} ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
             title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
@@ -1523,13 +1514,13 @@ function AssistantBlockImpl({
             <svg className="w-4 h-4" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
             </svg>
-          </button>}
+          </button>
         </div>
       )}
 
       {shouldShowHeader && (
         <div data-cc-message-who className="flex items-center gap-2 mb-2 mt-4">
-          <span className="flex items-center gap-2 cursor-default" title={model && modelShown ? `Model: ${model}` : undefined}>
+          <span className="flex items-center gap-2 cursor-default" title={model ? `Model: ${model}` : undefined}>
             <AssistantWho conversationId={conversationId} agentType={agentType} />
           </span>
           {/* The hosted assistant is the author, whatever model answered; its
@@ -1599,6 +1590,7 @@ function AssistantBlockImpl({
                 </div>
               )}
             </div>
+            {!parsedApiError && <MessageDecisionReview content={displayContent} />}
             {/* A hosted reply shows in full with no icons under it; folded
                 from its menu, it offers the way back in a word. Fullscreen
                 and folding stay in the message's menu. */}
