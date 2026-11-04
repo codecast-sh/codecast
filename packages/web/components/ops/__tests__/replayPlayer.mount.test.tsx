@@ -440,9 +440,9 @@ test("while the rest of a long recording is read, the notice shows how far, and 
   // The scrubber keeps only the hatched region; its state is in words where there is room for them.
   expect(document.querySelector(".rp-cut")?.textContent).toBe("");
   // How far is said in time, never as a share of the vendor's blobs (a recording still being written grows them).
-  expect(document.querySelector(".rp-cut")!.getAttribute("title")).toBe("14:28 of 1:45:49 imported · reading");
-  expect(document.querySelector(".rp-past-cut")!.textContent).toContain("not read in yet (14:28 of 1:45:49 imported)");
-  expect(document.querySelector(".rp-past-cut .rp-rest")!.textContent).toBe("reading");
+  expect(document.querySelector(".rp-cut")!.getAttribute("title")).toBe("14:28 of 1:45:49 imported · reading now");
+  expect(document.querySelector(".rp-past-cut")!.textContent).toContain("not imported yet · 14:28 of 1:45:49 imported");
+  expect(document.querySelector(".rp-past-cut .rp-rest")!.textContent).toBe("reading now");
   // The rest lands past the asked time: the notice goes and the clock moves there, playing.
   const more = [...events, { t: 3_700_000, type: "click", label: "Save", selector: "button" }];
   React.act(() => root.render(React.createElement(Player, { ...props, events: more, replay: { ...cutRow, captured_ms: 3_700_000, import_rest: { ...reading, next_blob: 150 } } })));
@@ -458,7 +458,7 @@ test("reading the rest stopped: a press asks for it again", async () => {
   const cutRow = { ...REPLAY, duration_ms: 6_349_000, captured_ms: 868_500, dom_chunks: 0, import_rest: { next_blob: 60, blobs: 240, retry_at: null, error: "PostHog answered 500", updated_at: Date.now() } };
   const root = mount(React.createElement(Player, { replay: cutRow, events: EVENTS, initialT: 3_600_000, issueMarks: [], readRest: () => asked++ }));
   await flush();
-  expect(document.querySelector(".rp-past-cut")!.textContent).toContain("is past the import (14:28 of 1:45:49 imported)");
+  expect(document.querySelector(".rp-past-cut")!.textContent).toContain("1:00:00 not imported yet · 14:28 of 1:45:49 imported");
   expect(document.querySelector(".rp-past-cut .rp-rest")!.textContent).toContain("stopped");
   const btn = document.querySelector(".rp-past-cut .rp-rest button") as HTMLButtonElement;
   expect(btn.textContent).toBe("Read again");

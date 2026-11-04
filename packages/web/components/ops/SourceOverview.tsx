@@ -40,7 +40,7 @@ import { KeyReveal, type Reveal } from "./SourcesSection";
 import { RotateKeyButton } from "./RotateKey";
 import { fillEstimates, histogram, occurrencePoints, STACK_INK, type HistBin, type TrailPoint } from "./timelineModel";
 import { useSourceHealth } from "./useSourceHealth";
-import { replayTotalText, useReplayTotal } from "./useReplayTotals";
+import { replayCountShown, replayTotalText, useReplayTotal } from "./useReplayTotals";
 import { VolumeChart, type ChartMark } from "./VolumeChart";
 import type { OpsGroup, OpsSource, OpsWatch } from "./opsTypes";
 import "./sourceView.css";
@@ -330,7 +330,7 @@ export function SourceOverview({ source, needs }: { source: OpsSource; /** What 
               </Link>
             );
           }) : <div className="sov-none">No replays yet</div>}
-          {replayTotal && myReplays.length > 0 && replayTotal.total > myReplays.length && <Link href={opsHref.tab("replays", { source: source.name })} className="sov-more" data-ops-replays-more>+{(replayTotal.total - myReplays.length).toLocaleString()}{replayTotal.capped ? "+" : ""} more</Link>}
+          {replayTotal && myReplays.length > 0 && replayCountShown(replayTotal) > myReplays.length && <Link href={opsHref.tab("replays", { source: source.name })} className="sov-more" data-ops-replays-more>{replayTotal.capped ? `${(replayCountShown(replayTotal) - myReplays.length).toLocaleString()}+` : `+${(replayTotal.total - myReplays.length).toLocaleString()}`} more</Link>}
         </section>}
         {showWatches && <section className="ops-card sov-panel" aria-label="Watches">
           <div className="ops-card-head">

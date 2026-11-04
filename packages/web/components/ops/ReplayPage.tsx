@@ -67,9 +67,9 @@ import { OpsFeedError, ProviderIcon, pressable } from "./parts";
 import { OpsNotFound } from "./OpsShellParts";
 import { fixFolderChoices, fixSessionPath, startOpsFixSession } from "./startFix";
 import { folderName } from "./issueFix";
-import { FIX_STAGE_LABEL, creditedTask, taskFixStage, taskStateWord } from "./issuesModel";
-import { FixStageGlyph } from "./issueParts";
-import { useProblemTask } from "./useIssueFix";
+import { FIX_STAGE_LABEL, fixActionLabel, taskFixStage, taskMatchesIssue, taskStateWord, type FixStage } from "./issuesModel";
+import { FixReview, FixStageGlyph } from "./issueParts";
+import { useIssueFix, useProblemTask } from "./useIssueFix";
 import { setTaskStatusUndoable } from "./issueUndo";
 import type { OpsGroup, OpsReplay, OpsSource } from "./opsTypes";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -471,8 +471,6 @@ function IssuesAndFixes({ issues, moments, onSeek }: { issues: ReturnType<typeof
 function IssueFixRow({ issue: i, at, onSeek }: { issue: ReturnType<typeof useLinkedIssues>[number]; at: number | undefined; onSeek: ((t: number) => void) | null }) {
   const task = useProblemTask(i.group?.signal_task_id);
   const stage = i.group ? taskFixStage(i.group, task ?? undefined) : "none";
-  const credited = i.group ? creditedTask(i.group, task) : undefined;
-  const closed = !!credited?.short_id && (credited.status === "done" || credited.status === "dropped" || !!credited.cause?.dissolved);
   const word = taskStateWord(task);
   return (
     <div className="rp-issue-row">
@@ -486,17 +484,14 @@ function IssueFixRow({ issue: i, at, onSeek }: { issue: ReturnType<typeof useLin
             <Play className="w-3 h-3" aria-hidden /> {formatReplayTime(at).replace(/\.\d$/, "")}
           </button>
         )}
-        <span className="rp-issue-status" data-status={i.status}>{i.status}</span>
+        {/* Two states, each named for what it is: the issue's status, and where its fix stands. */}
+        <span className="rp-issue-status" data-status={i.status}><span className="ops-dim">Issue</span> {i.status}</span>
         <Link href={opsHref.issue(i.short_id)} className="rp-fix-stage" data-stage={stage} title={`Fix: ${FIX_STAGE_LABEL[stage]}${task?.short_id ? ` · ${task.short_id}${word ? ` ${word}` : ""}` : ""}`}>
-          <FixStageGlyph stage={stage} word />
+          <span className="ops-dim">Fix</span> <FixStageGlyph stage={stage} word />
         </Link>
         {i.group?.fix_conversation_id && <EntityIdPill type="session" id={i.group.fix_conversation_id} />}
         {i.group?.signal_task_id && <EntityIdPill type="task" id={i.group.signal_task_id} />}
-        {closed && (
-          <button type="button" className="ops-btn rp-issue-reopen" onClick={() => setTaskStatusUndoable({ short_id: credited!.short_id!, status: credited!.status }, "open")} title={`Set ${credited!.short_id} back to open; z undoes it`}>
-            <RotateCcw className="w-3 h-3" aria-hidden /> Reopen {credited!.short_id}
-          </button>
-        )}
+        {i.group && <IssueFixActions group={i.group} stage={stage} />}
       </div>
     </div>
   );
@@ -552,6 +547,38 @@ function PersonRecordings({ replay, personKey: who, now }: { replay: OpsReplay; 
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The fix press the issue page's Fix card leads with, read from the same plan
+ * (useIssueFix, fixActionLabel): one primary, the same words, and for a
+ * dropped task the same "Reopen only" beside it. A start goes through the
+ * same fix review, which shows what starts before anything does.
+ */
+function IssueFixActions({ group, stage }: { group: OpsGroup; stage: FixStage }) {
+  const now = useCoarseNow(60_000);
+  const { task, plan } = useIssueFix(group, stage, now);
+  const source = useOpsSources().find((s) => s._id === group.source_id);
+  const [fixing, setFixing] = useState(false);
+  const mismatch = !!task?.title && !taskMatchesIssue(task.title, group.title);
+  const reopen = () => task?.short_id && setTaskStatusUndoable({ short_id: task.short_id, status: task.status }, "open");
+  const review = fixing ? <FixReview groups={[group]} source={source} onClose={() => setFixing(false)} /> : null;
+  if ((plan.primary === "open" || plan.primary === "continue") && plan.live) {
+    return <Link className="ops-btn rp-issue-fix" data-tone="primary" href={`/conversation/${plan.live}`}>{fixActionLabel(plan.primary, null, false)}</Link>;
+  }
+  if (plan.primary !== "start" && plan.primary !== "refile" && plan.primary !== "followup") return null;
+  const label = fixActionLabel(plan.primary, task?.short_id, mismatch);
+  return (
+    <>
+      <button type="button" className="ops-btn rp-issue-fix" data-tone="primary" onClick={() => setFixing(true)}><Wand2 className="w-3 h-3" aria-hidden /> {label}</button>
+      {plan.primary === "refile" && !mismatch && task?.short_id && (
+        <button type="button" className="ops-btn rp-issue-reopen" onClick={reopen} title={`Set ${task.short_id} back to open without starting a session; z undoes it`}>
+          <RotateCcw className="w-3 h-3" aria-hidden /> Reopen only
+        </button>
+      )}
+      {review}
+    </>
   );
 }
 
@@ -1019,7 +1046,7 @@ function RecordingPlayer({ replay, events, reading = false, initialT, issueMarks
           )}
           {pastCut !== null && cut !== null && (
             <div className="rp-past-cut" role="status">
-              <span className="rp-past-cut-fact ops-num"><b>{formatReplayTime(pastCut).replace(/\.\d$/, "")}</b> not imported yet <span className="ops-dim">· {formatReplayTime(cut).replace(/\.\d$/, "")} of {formatReplayTime(length).replace(/\.\d$/, "")} in</span></span>
+              <span className="rp-past-cut-fact ops-num"><b>{formatReplayTime(pastCut).replace(/\.\d$/, "")}</b> not imported yet <span className="ops-dim">· {formatReplayTime(cut).replace(/\.\d$/, "")} of {formatReplayTime(length).replace(/\.\d$/, "")} imported</span></span>
               <RestStatus rest={rest} starting={starting} readRest={readRest} hold={hold} vendorName={vendor?.name ?? null} queued={queued} />
               {vendor && (
                 <a className="ops-btn" data-tone="primary" href={vendorUrlAt(vendor.href, pastCut)} target="_blank" rel="noreferrer noopener">

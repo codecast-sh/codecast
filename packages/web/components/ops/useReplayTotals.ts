@@ -13,8 +13,11 @@ import { REPLAY_PAGE } from "./replayModel";
 /** provisional: the server has not counted yet, so this is the cached rows that match, a floor every surface marks the same way. */
 export type ReplayTotal = { total: number; capped: boolean; provisional?: boolean };
 
-/** A count as every surface writes it: "1,516+" when it is a floor. */
-export const replayTotalText = (t: ReplayTotal) => `${t.total.toLocaleString()}${t.capped && t.total > 0 ? "+" : ""}`;
+/** The number a count shows: a floor of 100 or more rounds down to the hundred, as the Replays tab badge does, so it stops flipping between 1,501+ and 1,500+ and every surface shows the same floor. */
+export const replayCountShown = (t: ReplayTotal) => (t.capped && t.total >= 100 ? Math.floor(t.total / 100) * 100 : t.total);
+
+/** A count as every surface writes it: "1,400+" when it is a floor. */
+export const replayTotalText = (t: ReplayTotal) => `${replayCountShown(t).toLocaleString()}${t.capped && t.total > 0 ? "+" : ""}`;
 
 function useBrowseTotal(source: string | null, match: ReturnType<typeof resolveReplayFilter>, on: boolean): ReplayTotal | null {
   const browse = useMemo(() => (on ? { source, match, sort: "newest" as const, limit: REPLAY_PAGE } : null), [on, source, match]);

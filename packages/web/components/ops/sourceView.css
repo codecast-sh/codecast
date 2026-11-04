@@ -3,6 +3,7 @@
 
 /* ── health ── */
 .ops-health { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.ops-health-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ops-health i { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--tone, var(--sol-text-dim)); }
 [data-health="ok"] { --tone: var(--sol-green); }
 [data-health="calm"] { --tone: var(--sol-text-muted); }

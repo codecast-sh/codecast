@@ -18,7 +18,7 @@ import { AlertTriangle, BellOff } from "lucide-react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import type { OpsWatch } from "./opsTypes";
 import {
-  COARSE_STEP, HEALTH_LOOK, alertBands, cutHoles, dataHoles, clipRunToWindow, bandsFromTransitions, clusterShips, alertSince, bandAt, crosses, durationShort, formatValue, isMutedAt, watchHealth, inWindow, lineRuns, niceTicks, roundToScale, spanLabel, stampLabel, tickLabels, ticksOf, timeTicks, valueNear, yDomain,
+  COARSE_STEP, HEALTH_LOOK, alertBands, cutHoles, dataHoles, splitAtHoles, clipRunToWindow, bandsFromTransitions, clusterShips, alertSince, bandAt, crosses, durationShort, formatValue, isMutedAt, watchHealth, inWindow, lineRuns, niceTicks, roundToScale, spanLabel, stampLabel, tickLabels, ticksOf, timeTicks, valueNear, yDomain,
   type ChartMark, type DataHole, type Direction, type Pt, type SeriesPt, type ShipCluster, type Win,
 } from "./metricModel";
 
@@ -118,22 +118,30 @@ export function MetricChart({
   const joinAt = full ? undefined : CARD_JOIN;
   const runs = useMemo(() => lineRuns(visible, interval_ms, joinAt), [visible, interval_ms, joinAt]);
   // The runs keep the neighbours just outside the window (so a hole is judged against them), and each is drawn cut at the window's edges: nothing paints past the plot.
-  const segs = useMemo(() => runs.filter((r) => !r.sparse).map((r) => clipRunToWindow(r.points, win)).filter((s) => s.length > 0), [runs, win]);
+  // Stretches the source sent nothing for, several times its own spacing: hatched, named on hover, and never shaded as alerting.
+  const holes = useMemo(() => (full && !loading ? dataHoles(visible, interval_ms, poll_ms ?? interval_ms).filter((h) => h.to > win.from && h.from < win.to) : []), [full, loading, visible, interval_ms, poll_ms, win.from, win.to]);
+  const segs = useMemo(() => runs.filter((r) => !r.sparse).flatMap((r) => splitAtHoles(r.points, holes)).map((pts) => clipRunToWindow(pts, win)).filter((s) => s.length > 0), [runs, holes, win]);
   const sparse = useMemo(() => runs.filter((r) => r.sparse), [runs]);
   const within = (p: Pt) => p.at >= win.from && p.at <= win.to;
   // A run read far apart on screen (a daily or weekly series) marks each value on its line, as a trend chart does.
   const marked = useMemo(() => runs.filter((r) => !r.sparse && (r.step / (win.to - win.from || 1)) * W >= 9).flatMap((r) => r.points).filter((p) => p.at >= win.from && p.at <= win.to), [runs, win.from, win.to]);
   // A value standing alone is a tick, never joined: the same rule for the value, the previous period and a query's preview.
   const minHalf = span * 0.004;
-  const ticks = useMemo(() => ticksOf(sparse.flatMap((r) => r.points).filter((p) => p.at >= win.from && p.at <= win.to), minHalf, visible), [sparse, minHalf, visible, win.from, win.to]);
+  // A lone value's dash stops at the edge of a hole beside it, so it never reads as values held across the stretch.
+  const ticks = useMemo(
+    () => ticksOf(sparse.flatMap((r) => r.points).filter((p) => p.at >= win.from && p.at <= win.to), minHalf, visible).map((t) => ({
+      ...t,
+      from: holes.some((h) => h.to === t.pt.at) ? Math.max(t.from, t.pt.at - minHalf) : t.from,
+      to: holes.some((h) => h.from === t.pt.at) ? Math.min(t.to, t.pt.at + minHalf) : t.to,
+    })),
+    [sparse, minHalf, visible, win.from, win.to, holes],
+  );
   const prevRuns = useMemo(() => lineRuns(prev, interval_ms), [prev, interval_ms]);
   const prevSegs = useMemo(() => prevRuns.filter((r) => !r.sparse).map((r) => r.points), [prevRuns]);
   const prevTicks = useMemo(() => ticksOf(prevRuns.filter((r) => r.sparse).flatMap((r) => r.points), minHalf, prev), [prevRuns, minHalf, prev]);
   const previewRuns = useMemo(() => lineRuns(shownPreview, interval_ms), [shownPreview, interval_ms]);
   const previewSegs = useMemo(() => previewRuns.filter((r) => !r.sparse).map((r) => clipRunToWindow(r.points, win)).filter((s) => s.length > 0), [previewRuns, win]);
   const previewTicks = useMemo(() => ticksOf(previewRuns.filter((r) => r.sparse).flatMap((r) => r.points).filter((p) => p.at >= win.from && p.at <= win.to), minHalf, shownPreview), [previewRuns, minHalf, shownPreview, win.from, win.to]);
-  // Stretches the source sent nothing for, several times its own spacing: hatched, named on hover, and never shaded as alerting.
-  const holes = useMemo(() => (full && !loading ? dataHoles(visible, interval_ms, poll_ms ?? interval_ms).filter((h) => h.to > win.from && h.from < win.to) : []), [full, loading, visible, interval_ms, poll_ms, win.from, win.to]);
   // With the page's transitions, the bands run from a crossing to the recovery the list names, so the shading and the list agree on when an episode ended; a window that opens past the line with nothing listed before it still shades that stretch.
   const valueBands = useMemo(() => {
     const own = alertBands(visible, threshold, direction, win.to);

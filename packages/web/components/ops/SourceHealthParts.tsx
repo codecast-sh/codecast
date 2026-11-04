@@ -15,7 +15,7 @@ export function HealthBadge({ health, title }: { health: Pick<SourceHealth, "ton
   return (
     <span className="ops-health" data-health={health.tone} title={title ?? health.reason ?? undefined}>
       <i aria-hidden />
-      {health.label}
+      <span className="ops-health-label">{health.label}</span>
     </span>
   );
 }

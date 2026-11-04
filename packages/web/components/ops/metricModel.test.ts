@@ -781,8 +781,21 @@ describe("missing data and a count's precision", () => {
     const weekly = [0, 1, 2, 3].map((w) => ({ at: w * 168 * H, value: 1 }));
     expect(dataHoles(weekly, H)).toEqual([]);
     // A daily backfill running into hourly polls is a change of cadence, not a hole.
-    const mixed = [...[0, 1, 2].map((d) => ({ at: d * 24 * H, value: 1 })), ...[0, 1, 2, 3].map((h) => ({ at: 3 * 24 * H + h * H, value: 1 }))];
+    const mixed = [...[0, 1, 2, 3, 4, 5].map((d) => ({ at: d * 24 * H, value: 1 })), ...[0, 1, 2, 3].map((h) => ({ at: 6 * 24 * H + h * H, value: 1 }))];
     expect(dataHoles(mixed, H)).toEqual([]);
+  });
+  test("lone values and pairs inside an outage do not hide it", () => {
+    // Hourly polls, then a pair a day apart and a lone value, then hourly again.
+    const pts = [0, 1, 2, 3, 20, 50, 62, 90, 91, 92, 93].map((h) => ({ at: h * H, value: 1 }));
+    const holes = dataHoles(pts, H);
+    expect(holes.length).toBeGreaterThan(0);
+    expect(holes[holes.length - 1].to).toBe(90 * H);
+  });
+  test("daily values running into hourly polls are not holes; the stretch after the last one is", () => {
+    // Daily at 11:30, a lone value 36h later, then hourly 12h after it.
+    const daily = [0, 24, 48, 72].map((h) => ({ at: h * H, value: 120 }));
+    const pts = [...daily, { at: 108 * H, value: 57 }, ...[120, 121, 122, 123].map((h) => ({ at: h * H, value: 20 }))];
+    expect(dataHoles(pts, H, H)).toEqual([{ from: 108 * H, to: 120 * H, missed: 11 }]);
   });
   test("an alert band is cut where a hole runs through it", () => {
     expect(cutHoles([{ from: 0, to: 10 }], [{ from: 3, to: 6 }])).toEqual([{ from: 0, to: 3 }, { from: 6, to: 10 }]);

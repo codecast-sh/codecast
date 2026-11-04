@@ -610,3 +610,31 @@ a.rp-fix-stage .iss-fix svg { width: 12px; height: 12px; }
 .rp-rest-trend[data-tone="down"] { color: var(--sol-green); }
 .rp-rest-trend[data-tone="up"] { color: var(--sol-orange); }
 .rp-run[data-rage="true"] { color: var(--sol-magenta); background: color-mix(in srgb, var(--sol-magenta) 16%, transparent); }
+/* The issue card names its two states: "Issue open", "Fix dropped". */
+.rp-issue-status { text-transform: none; white-space: nowrap; }
+a.rp-fix-stage { gap: 4px; }
+.rp-issue-fix, .rp-issue-reopen { height: 24px; font-size: 11.5px; }
+/* A phone: the title and facts take the whole width; the person's mark already leads the title as their name. */
+@container rppage (max-width: 500px) {
+  .rp-title-row > .rp-mark { display: none; }
+  .rp-title-row > .min-w-0 { flex-basis: 100%; }
+}
+/* A phone: Length, Active and Sort move behind the Filters toggle, so the first recording is on the first screen. */
+.rp-wide-only { display: contents; }
+.rp-narrow-only { display: none; }
+@media (max-width: 640px) {
+  .rp-wide-only { display: none; }
+  .rp-narrow-only { display: contents; }
+  .rp-more-row[data-wide-empty="true"] { display: flex; }
+}
+@media (min-width: 641px) {
+  .rp-more-row[data-wide-empty="true"] { display: none; }
+}
+.rp-rest-trend::before { content: "· "; color: var(--sol-text-dim); }
+/* A phone row: the figures already count the failures, so the unfiled summary that wraps a letter a line leaves. */
+@container rp (max-width: 520px) {
+  .rp-c-issue .rp-issue[data-unfiled] { display: none; }
+}
+/* The notice's dismiss sits in its corner, so the wrapped lines are only the state and the press. */
+.rp-past-cut { padding-right: 34px; }
+.rp-past-cut > .rp-icon-btn { position: absolute; top: 4px; right: 4px; }

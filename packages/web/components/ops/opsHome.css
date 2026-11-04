@@ -180,8 +180,8 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 /* One line a row: the id and title, then the state and the facts that say how bad in what room the title leaves (at least
    two fifths), so a screen holds a stream of rows the way an issue list does. A phone stacks them (the 600px rule). */
 .ops-home-main { display: flex; flex-direction: row; align-items: center; gap: 10px; min-width: 0; }
-.ops-home-line1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 0 1 auto; max-width: 60%; }
-.ops-home-main > .ops-home-line2 { flex: 1 1 0; }
+.ops-home-line1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 0 1 auto; }
+.ops-home-main > .ops-home-line2 { flex: 1 1 0; min-width: min(38%, 320px); }
 .ops-home-ref { font-size: 11px; flex-shrink: 0; }
 .ops-home-title { font-size: 13px; color: var(--sol-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 /* Line two is one line tall and wraps: a fact that does not fit moves to the hidden second line whole,
@@ -200,7 +200,8 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-fact[data-mono="true"] { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; }
 .ops-home-fact[data-narrow="true"] { display: none; }
 /* The lead fact is the reason (an error, a failing reader, a rate): it shortens with an ellipsis rather than wrap out of sight. */
-.ops-home-line2 > .ops-home-fact[data-lead="true"] { flex-shrink: 1; min-width: 0; max-width: calc(100% - 100px); overflow: hidden; text-overflow: ellipsis; }
+/* It takes a sliver to stay on the line beside the pill, then whatever room is left up to its full width. */
+.ops-home-line2 > .ops-home-fact[data-lead="true"] { flex: 1 1 0%; min-width: 48px; max-width: max-content; overflow: hidden; text-overflow: ellipsis; }
 .ops-home-line2 > .ops-home-blind ~ .ops-home-fact[data-lead="true"] { max-width: calc(100% - 210px); }
 .ops-home-src { display: inline-flex; align-items: center; gap: 4px; }
 .ops-home-snz { display: inline-flex; align-items: center; gap: 4px; color: var(--sol-text-muted) !important; }
@@ -383,38 +384,38 @@ a.ops-fresh:hover span { text-decoration: underline; }
 }
 @container ops-home (max-width: 600px) {
   /* A phone opened from an alert, or a pane squeezed beside the inbox: the counts are pills that wrap, and each row
-     stacks its title over its state and facts, with its acts on a line of their own (no pointer to reveal them). */
+     stacks its title over its state and facts. With a pointer the row's press still shows on hover over its start time. */
   .ops-home { gap: 12px; }
   .ops-home-count { padding: 5px 9px; border-radius: 999px; }
   .ops-home-count b { font-size: 13px; }
   .ops-home-count[data-tone="zero"] { display: none; }
   .ops-home-count[data-on="true"] { display: flex; }
-  .ops-home-table, .ops-home-list { display: flex; flex-direction: column; }
-  /* The head keeps the list's count and the filter that is on (with its x), so a filtered list always says so; the column heads go. */
-  .ops-home-head { display: flex; align-items: center; padding: 0 2px 6px; }
-  .ops-home-head > :not(.ops-home-headtitle) { display: none; }
-  .ops-home-row { grid-template-columns: 26px minmax(0, 1fr) 40px; column-gap: 10px; row-gap: 6px; }
   .ops-home-main { flex-direction: column; align-items: stretch; gap: 3px; }
-  .ops-home-line1 { max-width: none; }
-  .ops-home-acts { grid-column: 2 / -1; display: flex; gap: 6px; align-items: center; }
-  .ops-home-slot:empty { display: none; }
-  .ops-home-slot[data-slot="task"] { gap: 6px; }
-  .ops-home-slot[data-slot="primary"] { position: static; transform: none; opacity: 1; pointer-events: auto; background: none; padding: 0; }
-  /* A row's acts wrap under each other rather than past the edge; the menu keeps the line's end, the task chip keeps its id and face. */
-  .ops-home-acts { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
-  .ops-home-slot { min-width: 0; max-width: 100%; }
-  .ops-home-slot[data-slot="more"] { margin-left: auto; }
-  .ops-home-task-who { display: none; }
-  .ops-home-acts .ops-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .ops-home-main > .ops-home-line2 { flex: none; min-width: 0; }
   /* The source stays on line two before the event counts that line one's columns repeat: it is how two like errors tell apart. */
   .ops-home-line2 > .ops-home-fact[data-narrow="true"]:not([data-lead="true"]) { order: 2; }
-  .ops-home-row { padding: 9px 10px 9px 12px; gap: 10px; }
-  /* A phone gives the title two lines and the lead fact a line of its own above the pill, so the words a person triages by
-     are whole; the pill's line still drops facts from its tail, and the third line is hidden. */
-  .ops-home-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
-  .ops-home-line1 { align-items: flex-start; }
-  .ops-home-line2 { height: 42px; }
-  .ops-home-line2 > .ops-home-fact[data-lead="true"] { order: -1; flex-basis: 100%; max-width: 100% !important; }
+  /* The press shown on hover sits on the facts' line, so the title it would cover stays readable. */
+  .ops-home-slot[data-slot="primary"] { top: auto; bottom: -11px; transform: none; }
+  /* A touch screen (or a phone-sized window) has no hover to reveal a press: the acts take a line of their own, the title
+     two lines and the lead fact a line above the pill, so the words a person triages by are whole. */
+  @media (hover: none), (max-width: 600px) {
+    .ops-home-table, .ops-home-list { display: flex; flex-direction: column; }
+    /* The head keeps the list's count and the filter that is on (with its x), so a filtered list always says so; the column heads go. */
+    .ops-home-head { display: flex; align-items: center; padding: 0 2px 6px; }
+    .ops-home-head > :not(.ops-home-headtitle) { display: none; }
+    .ops-home-row { grid-template-columns: 26px minmax(0, 1fr) 40px; column-gap: 10px; row-gap: 6px; padding: 9px 10px 9px 12px; }
+    .ops-home-acts { grid-column: 2 / -1; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+    .ops-home-slot:empty { display: none; }
+    .ops-home-slot { min-width: 0; max-width: 100%; }
+    .ops-home-slot[data-slot="task"] { gap: 6px; }
+    .ops-home-slot[data-slot="primary"] { position: static; transform: none; opacity: 1; pointer-events: auto; background: none; padding: 0; }
+    .ops-home-slot[data-slot="more"] { margin-left: auto; }
+    .ops-home-acts .ops-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+    .ops-home-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+    .ops-home-line1 { align-items: flex-start; }
+    .ops-home-line2 { height: 42px; }
+    .ops-home-line2 > .ops-home-fact[data-lead="true"] { order: -1; flex-basis: 100%; max-width: 100% !important; }
+  }
   .ops-home-fact[data-rank="3"] { display: none !important; }
   .ops-home-srctable thead th:nth-child(4), .ops-home-srctable td:nth-child(4) { display: none; }
   /* A phone's Sources table keeps name, state, open issues and the fix: the 24h count goes, and a long name truncates, so the table never widens the page. */

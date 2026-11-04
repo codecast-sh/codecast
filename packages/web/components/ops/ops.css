@@ -403,7 +403,9 @@ button.ops-stat:hover .ops-stat-label { color: var(--sol-text); text-decoration:
 /* ── Settings, Product sources: one row per source in columns (name, state, 24h, last, open), its actions in a trailing slot that never clips. ── */
 /* One grid for the whole table: every row and the head take its tracks (subgrid), so a column's values sit on one vertical line whatever each row's state or actions. */
 .ops-srows { container: srows / inline-size; font-size: 12.5px; }
-.ops-srows-grid { display: grid; grid-template-columns: minmax(120px, 1fr) max-content max-content max-content max-content max-content; column-gap: 14px; }
+.ops-srows-grid { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, max-content) max-content max-content max-content max-content; column-gap: 14px; }
+/* A long state ("Invariants check failing · 5 of 11 watches retrying") gives way before the numbers and actions do: it truncates, whole in its title. */
+.ops-srow .ops-health { max-width: 100%; min-width: 0; }
 .ops-srows-grid > .ops-srow-head, .ops-srows-grid > .ops-srow-wrap { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }
 .ops-srows-grid > .ops-srow-wrap > .ops-srow { grid-column: 1 / -1; grid-template-columns: subgrid; }
 .ops-srows-grid > .ops-srow-wrap > .ops-srow-sub { grid-column: 1 / -1; }
@@ -428,11 +430,17 @@ button.ops-stat:hover .ops-stat-label { color: var(--sol-text); text-decoration:
 @container srows (max-width: 600px) {
   .ops-srows-grid { display: flex; flex-direction: column; }
   .ops-srows-grid > .ops-srow-head, .ops-srows-grid > .ops-srow-wrap { display: block; }
-  .ops-srows-grid .ops-srow, .ops-srows-grid > .ops-srow-head { display: grid; grid-template-columns: minmax(0, 1fr) auto 44px 40px; column-gap: 12px; row-gap: 4px; padding: 4px 0; }
+  .ops-srows-grid > .ops-srow-wrap > .ops-srow, .ops-srows-grid > .ops-srow-head { display: grid; grid-template-columns: minmax(84px, 1fr) minmax(0, max-content) 44px 40px; column-gap: 12px; row-gap: 4px; padding: 4px 0; }
   .ops-srow > :nth-child(5) { display: none; }
-  .ops-srow-acts { grid-column: 1 / -1; justify-content: flex-start; padding-left: 38px; }
+  .ops-srow-acts { grid-column: 1 / -1; justify-content: flex-start; flex-wrap: wrap; row-gap: 4px; padding-left: 38px; }
   .ops-srow-head > :nth-child(6) { display: none; }
   .ops-srow-sub { padding-left: 38px; }
+}
+/* Phone: the name keeps the row, the state takes the line under it. */
+@container srows (max-width: 360px) {
+  .ops-srows-grid > .ops-srow-wrap > .ops-srow, .ops-srows-grid > .ops-srow-head { grid-template-columns: minmax(0, 1fr) 44px 40px; }
+  .ops-srow > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; padding-left: 38px; }
+  .ops-srow-head > :nth-child(2) { display: none; }
 }
 
 /* A count the server has not made yet: the cached rows as a floor, dimmed the same on the tab and the list. */

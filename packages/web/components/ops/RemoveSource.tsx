@@ -15,7 +15,7 @@ import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { removeSourceLedger, REMOVE_SOURCE_CHOICES, type RemoveSourceChoice } from "../consequential/ledgers";
 import { openIssueCount } from "./issuesModel";
 import { SOURCE_PROVIDER_LABEL } from "./parts";
-import { useReplayTotal } from "./useReplayTotals";
+import { replayCountShown, useReplayTotal } from "./useReplayTotals";
 import type { OpsSource } from "./opsTypes";
 
 export function RemoveSourceButton({ source, className, icon, onRemoved }: { source: Pick<OpsSource, "_id" | "name" | "provider" | "status" | "keyed">; className: string; icon?: boolean; onRemoved?: () => void }) {
@@ -48,8 +48,10 @@ function RemoveReview({ source, onClose, onRemoved }: { source: Pick<OpsSource, 
       watches: { n: watches.filter((w) => w.source_id === source._id).length, capped: true },
     };
   }, [groups, watches, source._id]);
-  const counts = data ?? { ...local, replays: { n: replays?.total ?? 0, capped: true }, calls: undefined };
-  const ledger = removeSourceLedger({ source: source.name, provider: SOURCE_PROVIDER_LABEL[source.provider], ...counts, choice, canPause, keyed: source.keyed });
+  const { source: _ref, ...counted } = data ?? { source: null, ...local, calls: undefined };
+  // Replays are the Replays tab badge's own count (useReplayTotal), so the review and the tab say the same number.
+  const replayCount = replays ? { n: replayCountShown(replays), capped: replays.capped } : data?.replays ?? { n: 0, capped: true };
+  const ledger = removeSourceLedger({ ...counted, replays: replayCount, source: source.name, provider: SOURCE_PROVIDER_LABEL[source.provider], choice, canPause, keyed: source.keyed });
   const confirm = () => {
     onClose();
     const store = useInboxStore.getState();

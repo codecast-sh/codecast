@@ -311,7 +311,8 @@ function IssueBody({ group, source, samples, samplesState, retry, events, now }:
 
       <div className="iss-phone-fix">
         {stage !== "none" && <a href="#iss-fix" className="iss-phone-fix-stage" title="The Fix card"><FixStageGlyph stage={stage} word /></a>}
-        {fKey && <button type="button" className="ops-btn" data-tone="primary" onClick={startOrOpenFix}>{fKey}</button>}
+        {/* Known noise is left out of the watch, the Fix card's lead too; otherwise the press is f's. */}
+        {leading && lead?.noise && lead.leaveOut ? <button type="button" className="ops-btn" data-tone="primary" onClick={lead.leaveOut}>Leave it out</button> : fKey && <button type="button" className="ops-btn" data-tone="primary" onClick={startOrOpenFix}>{fKey}</button>}
       </div>
 
       {regressed && <RegressedBanner group={group} release={backRelease} task={credited ?? null} events={events} now={now} />}
@@ -685,7 +686,7 @@ function EventCard({ group, samples, all, index, state, retry, go, filter, clear
         {who && <span className="text-sol-text truncate max-w-[240px]" title={who}>{who}</span>}
         <span className="ops-mono ops-dim text-[10.5px] ml-auto" title="sample id">{s._id.slice(-8)}</span>
       </div>
-      {s.message && s.message !== group.title && s.message.trim() !== exceptionValue(s, group.title) ? <div className="px-3 pb-2 text-[12.5px] text-sol-text break-words">{s.message}</div> : group.kind === "job" ? <div className="px-3 pb-2 text-[12px] ops-dim">{source?.name ?? "The source"} sent no error message with this run</div> : null}
+      {s.message && s.message !== group.title && s.message.trim() !== exceptionValue(s, group.title) ? <div className="px-3 pb-2 text-[12.5px] text-sol-text break-words">{s.message}</div> : group.kind === "job" && !s.message?.trim() ? <div className="px-3 pb-2 text-[12px] ops-dim">no error message sent</div> : null}
       {s.url && <div className="px-3 pb-2 text-[11.5px] ops-mono ops-quiet break-all">{s.url}</div>}
       {s.replay_id && <SampleReplay sample={s} />}
     </div>

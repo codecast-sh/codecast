@@ -172,25 +172,48 @@ export type DataHole = Win & { missed: number };
 export const HOLE_FACTOR = 4;
 
 /**
- * Where the drawn line stops for want of values: each break between the
- * runs lineRuns joins, kept when it is at least HOLE_FACTOR times the
- * spacing beside it (the wider of the gaps either side, so a daily backfill
- * running into hourly polls is not a hole). `poll_ms` counts the polls it
- * missed.
+ * The stretches with no values: each gap between neighbouring values at
+ * least HOLE_FACTOR times the spacing the series keeps there, which is the
+ * cadence of the nearest run (lineRuns) of three or more values on either
+ * side, or two equal gaps in a row just beside it (a daily backfill, which
+ * lineRuns may cut into lone values where it meets hourly polls), the
+ * coarser, never under `step_ms`. So daily values running into hourly polls
+ * are not holes, and lone values or pairs inside an outage, which keep no
+ * cadence, are looked past. `poll_ms` counts the polls it missed.
  */
 export function dataHoles(points: readonly Pt[], step_ms: number, poll_ms: number = step_ms): DataHole[] {
   const runs = lineRuns(points, step_ms);
+  const cad = runs.map((r) => (r.points.length >= 3 ? cadenceOf(r.points) : null));
   const pts = runs.flatMap((r) => r.points);
+  const runOf = runs.flatMap((r, i) => r.points.map(() => i));
+  const overall = cadenceOf(pts);
+  const gaps = pts.slice(1).map((p, i) => p.at - pts[i].at);
+  // A gap that repeats beside it (within 5%) is a cadence the series keeps.
+  const steady = (i: number, j: number) => (gaps[i] !== undefined && gaps[j] !== undefined && Math.abs(gaps[i] - gaps[j]) <= 0.05 * Math.max(gaps[i], gaps[j]) ? gaps[i] : 0);
   const out: DataHole[] = [];
-  let k = 0;
-  for (let i = 1; i < runs.length; i++) {
-    k += runs[i - 1].points.length;
+  for (let k = 1; k < pts.length; k++) {
     const a = pts[k - 1].at;
     const b = pts[k].at;
-    // The spacing beside the hole: the gap into its first edge and out of its last, the wider one.
-    const spacing = Math.max(step_ms, k >= 2 ? a - pts[k - 2].at : 0, k + 1 < pts.length ? pts[k + 1].at - b : 0);
+    if (b - a < HOLE_FACTOR * Math.max(1, step_ms)) continue;
+    let left: number | null = null;
+    for (let j = runOf[k - 1]; j >= 0 && left === null; j--) left = cad[j];
+    let right: number | null = null;
+    for (let j = runOf[k]; j < runs.length && right === null; j++) right = cad[j];
+    const i = k - 1;
+    const spacing = Math.max(step_ms, left ?? 0, right ?? 0, steady(i - 1, i - 2), steady(i + 1, i + 2), left === null && right === null ? overall : 0);
     if (b - a < HOLE_FACTOR * spacing) continue;
     out.push({ from: a, to: b, missed: Math.max(0, Math.round((b - a) / Math.max(1, poll_ms)) - 1) });
+  }
+  return out;
+}
+
+/** A run's points split where a hole runs between two of them, so a line never crosses a stretch with no values. */
+export function splitAtHoles<P extends Pt>(points: readonly P[], holes: readonly Win[]): P[][] {
+  if (!holes.length) return [points.slice()];
+  const out: P[][] = [[]];
+  for (let i = 0; i < points.length; i++) {
+    if (i > 0 && holes.some((h) => h.from === points[i - 1].at && h.to === points[i].at)) out.push([]);
+    out[out.length - 1].push(points[i]);
   }
   return out;
 }

@@ -235,6 +235,11 @@ export function ReplaysTab({ source }: { source: string | null }) {
 
   const personToken = query.person ? rows.find((r) => personKey(r.user) === query.person)?.user ?? null : null;
   const moreSet = [query.issue, query.date, ...REPLAY_ENV_KEYS.map((k) => query[k])].filter(Boolean).length;
+  // On a phone Length, Active and Sort sit behind the same toggle (replays.css rp-narrow-only): their set count joins its badge there.
+  const narrowSet = [query.dur, active !== REPLAY_ACTIVE_DEFAULT, sort !== "newest"].filter(Boolean).length;
+  const lengthPicker = <Picker label="Length" value={query.dur ?? ""} options={REPLAY_DURATIONS.map((d) => ({ value: d, label: DUR_LABEL[d] }))} onChange={(v) => setQuery({ dur: (v || undefined) as ReplayListQuery["dur"] })} />;
+  const activePicker = <Picker label="Active" value={active} always on={active !== REPLAY_ACTIVE_DEFAULT} options={REPLAY_ACTIVE.map((a) => ({ value: a, label: ACTIVE_LABEL[a] }))} onChange={(v) => setQuery({ active: v as ReplayActive })} />;
+  const sortPicker = <Picker label="Sort" value={sort} always options={REPLAY_SORTS.map((s) => ({ value: s, label: SORT_LABEL[s] }))} onChange={(v) => setQuery({ sort: v as ReplaySort })} />;
 
   return (
     <div className="ops-pad rp-list" data-ops-replays>
@@ -263,15 +268,15 @@ export function ReplaysTab({ source }: { source: string | null }) {
             );
           })}
         </div>
-        <Picker label="Length" value={query.dur ?? ""} options={REPLAY_DURATIONS.map((d) => ({ value: d, label: DUR_LABEL[d] }))} onChange={(v) => setQuery({ dur: (v || undefined) as ReplayListQuery["dur"] })} />
-        <Picker label="Active" value={active} always on={active !== REPLAY_ACTIVE_DEFAULT} options={REPLAY_ACTIVE.map((a) => ({ value: a, label: ACTIVE_LABEL[a] }))} onChange={(v) => setQuery({ active: v as ReplayActive })} />
+        <span className="rp-wide-only">{lengthPicker}{activePicker}</span>
         {/* The rarer filters (issue, date, where it ran) wait behind one toggle; any that is set stays out, so the list's state is always on screen. */}
         <button type="button" className="rp-chip rp-more" aria-expanded={moreOpen} data-on={moreOpen ? "true" : undefined} onClick={() => setMoreOpen((v) => !v)}>
-          <SlidersHorizontal className="w-3 h-3" aria-hidden /> More
-          {moreSet > 0 && <span className="ops-num rp-more-n">{moreSet}</span>}
+          <SlidersHorizontal className="w-3 h-3" aria-hidden /> <span className="rp-wide-only">More</span><span className="rp-narrow-only">Filters</span>
+          {moreSet > 0 && <span className="ops-num rp-more-n rp-wide-only">{moreSet}</span>}
+          {moreSet + narrowSet > 0 && <span className="ops-num rp-more-n rp-narrow-only">{moreSet + narrowSet}</span>}
           {moreOpen ? <ChevronUp className="w-3 h-3" aria-hidden /> : <ChevronDown className="w-3 h-3" aria-hidden />}
         </button>
-        <Picker label="Sort" value={sort} always options={REPLAY_SORTS.map((s) => ({ value: s, label: SORT_LABEL[s] }))} onChange={(v) => setQuery({ sort: v as ReplaySort })} />
+        <span className="rp-wide-only">{sortPicker}</span>
         <div className="ops-seg rp-group" role="radiogroup" aria-label="Show">
           <button type="button" role="radio" aria-checked={!grouped} data-on={!grouped ? "true" : undefined} onClick={() => setQuery({ group: null })}>Recordings</button>
           <button type="button" role="radio" aria-checked={grouped} data-on={grouped ? "true" : undefined} disabled={!!query.person} onClick={() => setQuery({ group: "person" })}><Users className="w-3 h-3 inline -mt-px mr-1" aria-hidden />People</button>
@@ -286,8 +291,9 @@ export function ReplaysTab({ source }: { source: string | null }) {
             </button>
           )}
         </span>
-        {(moreOpen || moreSet > 0) && (
-          <div className="rp-more-row" role="group" aria-label="More filters">
+        {(moreOpen || moreSet > 0 || narrowSet > 0) && (
+          <div className="rp-more-row" role="group" aria-label="More filters" data-wide-empty={!moreOpen && moreSet === 0 ? "true" : undefined}>
+            {(moreOpen || narrowSet > 0) && <span className="rp-narrow-only">{lengthPicker}{activePicker}{sortPicker}</span>}
             {(issueOptions.length > 0 || query.issue) && (moreOpen || !!query.issue) && (
               <Picker label="Issue" value={query.issue ?? ""} options={query.issue && !issueOptions.some((o) => o.value === query.issue) ? [{ value: query.issue, label: query.issue }, ...issueOptions] : issueOptions} onChange={(v) => setQuery({ issue: v || undefined })} />
             )}

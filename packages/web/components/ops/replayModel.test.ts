@@ -15,6 +15,8 @@ import {
   compactCount,
   railRowAt,
   restLine,
+  restQueued,
+  restTrend,
   replayPagePath,
   pagePathParts,
   shortBrowser,
@@ -228,7 +230,12 @@ describe("the event rail", () => {
     expect(runs[0].lead[1]).toBe(0);
     // A different status is a different row.
     expect(railRunKey({ ...fail(0), status: 502 } as ReplayEvent)).not.toBe(railRunKey(fail(0)));
-    expect(railRunKey(rows[5][0])).toBeNull();
+    expect(railRunKey({ t: 0, type: "nav", url: "https://x.test/a" } as ReplayEvent)).toBeNull();
+  });
+  test("clicks on one element with the same text fold into one run; another target breaks it", () => {
+    const click = (t: number, selector = "button.cta", text = "Great, Union will"): ReplayEvent => ({ t, type: "click", label: "", selector, text } as ReplayEvent);
+    const rows = [click(0), click(700), click(1_400), click(2_000), click(2_600, "a.back", "Back"), click(3_000)].map((e, i) => [e, i] as const);
+    expect(foldRail(rows).map((r) => r.members.length)).toEqual([4, 1, 1]);
   });
   test("a moment is a reference that plays in a message", () => {
     expect(momentRef("rp-12", 83_400)).toBe("rp-12@1:23");
@@ -490,5 +497,23 @@ describe("the page a recording is named by", () => {
     expect(pagePathParts("/book/54333ea0")).toEqual({ head: "/book", tail: "/54333ea0" });
     expect(pagePathParts("/book/")).toEqual({ head: "/book/", tail: "" });
     expect(pagePathParts("/")).toEqual({ head: "/", tail: "" });
+  });
+});
+
+describe("the rest backlog", () => {
+  const now = 2_000_000_000_000;
+  test("a cut copy nothing reads waits in the sweep's queue at its place", () => {
+    const r = { short_id: "rp-7", provider: "posthog" as const, captured_ms: 60_000, duration_ms: 3_600_000, import_rest: null, vendor_refresh_after: null, imported_at: now - 1 } as any;
+    const source = { replay_rest: { cut: 3, unknown: 0, at: now, queue: ["rp-1", "rp-7"], reading: "rp-0" } };
+    expect(restQueued(r, source, now)).toEqual({ pos: 2, reading: "rp-0" });
+    expect(restQueued(r, { replay_rest: { cut: 3, unknown: 0, at: now } }, now)).toEqual({ pos: null, reading: null });
+    // A whole copy, or one held after a failure, is not queued.
+    expect(restQueued({ ...r, captured_ms: 3_600_000 }, source, now)).toBeUndefined();
+    expect(restQueued({ ...r, vendor_refresh_after: now + 1 }, source, now)).toBeUndefined();
+  });
+  test("the trend compares the live count with the recount before the last", () => {
+    expect(restTrend({ cut: 863, unknown: 0, at: now, prev: { cut: 875, at: now - 3_600_000 } }, now)).toEqual({ text: "−12 in 1h", tone: "down" });
+    expect(restTrend({ cut: 875, unknown: 0, at: now, prev: { cut: 875, at: now - 3_600_000 } }, now)?.tone).toBe("flat");
+    expect(restTrend({ cut: 875, unknown: 0, at: now }, now)).toBeNull();
   });
 });

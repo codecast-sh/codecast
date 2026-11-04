@@ -224,9 +224,9 @@ const CLOSED_TASK = new Set(["done", "dropped"]);
  * assigned. A task filed and left open with nobody on it is not. The Ops
  * home's Nobody on it, the list's filter and its Fix cell read this one rule.
  */
-export function someoneOnIt(sessionId: string | null | undefined, taskIn: FixTask | string | null | undefined): boolean {
+export function someoneOnIt(sessionId: string | null | undefined, taskIn: { status?: string; assignee?: string | null } | string | null | undefined): boolean {
   if (sessionId) return true;
-  const t = asTask(taskIn ?? undefined);
+  const t = typeof taskIn === "string" ? { status: taskIn, assignee: null } : taskIn;
   if (!t) return false;
   if (WORKING_TASK.has(t.status ?? "")) return true;
   return !!t.assignee && !CLOSED_TASK.has(t.status ?? "");

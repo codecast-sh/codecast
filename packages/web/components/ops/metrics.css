@@ -488,3 +488,7 @@ a.mx-starter-v { text-decoration: underline dotted color-mix(in srgb, var(--sol-
   .mx-trans td:first-child { overflow: hidden; text-overflow: ellipsis; }
   .mx-trans tr.mx-sent td { grid-column: 1 / -1; padding-top: 0; }
 }
+/* The sheet's head and its Add/Cancel stay in view; only the form scrolls. */
+.mx-sheet { display: flex; flex-direction: column; overflow: hidden; }
+.mx-sheet-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.mx-sheet-head, .mx-sheet-foot { flex: none; }
