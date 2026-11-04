@@ -155,4 +155,19 @@ describe("liveness hold", () => {
     r.wake();
     expect(r.held()).toBe(T0 + 5 * 70_000);
   });
+
+  it("stopping drops the hold it placed, since nothing else will read to release it", async () => {
+    // Every window boots as sync host and holds from its cache; the election
+    // then demotes it to follower, which stops this machine and cancels the
+    // read in flight. A follower never runs it again, so a hold left behind
+    // froze that window's placement clock at boot and every session that ran
+    // afterwards read as Working until a reload (2026-11-04).
+    const r = rig({ heartbeats: [T0 - 600_000] });
+    expect(r.held()).toBe(T0 - 600_000);
+    r.stop();
+    expect(r.held()).toBeNull();
+    r.reads[0].resolve(true);
+    await settle();
+    expect(r.held()).toBeNull();
+  });
 });

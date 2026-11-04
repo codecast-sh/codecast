@@ -104,10 +104,16 @@ export function startLivenessHold(io: LivenessHoldIO): () => void {
   boot();
   if (booted) offStore();
   const offs = [io.onTick(check), io.onConnection(check), io.onWake(check)];
+  // Stopping ends the only reader that can release a hold, so the hold goes
+  // with it. A window boots as sync host and holds from its cache, then the
+  // election demotes it and stops this; a hold left behind froze that
+  // follower's placement clock and every session that ran since read as
+  // Working until a reload.
   return () => {
     offStore();
     for (const off of offs) off();
     probing?.abort();
     probing = null;
+    if (io.heldAt() != null) io.release(io.holdSeq());
   };
 }
