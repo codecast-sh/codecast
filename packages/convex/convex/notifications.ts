@@ -8,6 +8,7 @@ import {
   isHostedAgentType,
 } from "@codecast/shared/contracts";
 import { v } from "convex/values";
+import { commentIdValidator } from "./lib/conversationCommentRows";
 import { internal } from "./_generated/api";
 import { enqueuePush, readMissedSince } from "./pushRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -148,8 +149,11 @@ export const notifyTeamSessionStart = internalMutation({
       return;
     }
 
-    // Never notify about agent-spawned sessions — only human-initiated ones.
-    if (isAgentSpawnedConversation(conversation)) {
+    // Never notify about machine-started sessions, only human-initiated ones:
+    // agent fan-out, and trigger runs (agent_task_id). A repeating run with no
+    // session to nest under is born stashed rather than nested, so the
+    // spawned check alone lets it through.
+    if (isAgentSpawnedConversation(conversation) || conversation.agent_task_id) {
       return;
     }
 
@@ -258,7 +262,7 @@ export const create = internalMutation({
     recipient_user_id: v.id("users"),
     type: NOTIFICATION_TYPE,
     actor_user_id: v.optional(v.id("users")),
-    comment_id: v.optional(v.id("comments")),
+    comment_id: v.optional(commentIdValidator),
     conversation_id: v.optional(v.id("conversations")),
     entity_type: v.optional(ENTITY_TYPE),
     entity_id: v.optional(v.string()),
