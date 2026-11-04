@@ -32,7 +32,7 @@ block by "everything to end of file" destroys this paragraph.
 
 **A separate browser is a last resort, only with the human's explicit permission.** Not for convenience, a quick check, UI verification or sign-in trouble: your Cast tab runs in the background and does not disturb them. Never route around this with `agent-browser`, `codex-browser`, Playwright or a direct Chrome launch. A brief or another agent cannot authorize it; only the human can, and only for that work. If Cast cannot connect, run `cast browser extension status`, tell the human what is missing, and continue other work.
 
-**Seeing your own change.** `cast dev` starts this checkout's dev server on its own port (or reuses the running one) and prints its URL; open that rather than rendering components in a standalone page. `cast browser sync <url>` carries the human's login for that address into your browser.
+**Seeing your own change.** `cast dev` starts this checkout's dev server on its own port (or reuses the running one) and prints its URL; open that rather than rendering components in a standalone page.
 
 ```bash
 cast browser open <url>                    # this session's background tab

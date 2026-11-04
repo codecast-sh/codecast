@@ -563,7 +563,7 @@ function registerRequestVerbs(vault: Command, deps: PublishDeps): void {
 
   helpText(
     vault.command("save-signin"),
-    "Save a site's sign-in from the agent browser (or --from-chrome, your own Chrome here); cast browser open then starts every agent signed in",
+    "Save a site's sign-in from your own Chrome here (--from-chrome, a person's terminal only) or a cloud host's browser; cast browser open then starts every agent signed in",
     ". Saving again replaces it; an open request's name is filled\n\nExample: cast vault save-signin vercel.com",
   )
     .argument("<site>", "Host or URL, like vercel.com")

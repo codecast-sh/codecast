@@ -639,7 +639,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // what was asked for, and if it left the allowlist, say so loudly.
         const landed = auditLanding({ url: snap.url, tab: targetId, session: me(), via: "open", policy });
         if (landed) console.log(`${WARN} ${landed}`);
-        const signIn = isRemoteDevice() ? cloudHostSignInHint(snap.url) : signInLandingNote(snap.url, keepsOwnLogin, realModeHint(me()));
+        const signIn = isRemoteDevice() ? cloudHostSignInHint(snap.url) : signInLandingNote(snap.url, keepsOwnLogin, { real: false, realHint: realModeHint(me()) });
         if (signIn) console.log(`${WARN} ${signIn}`);
         console.log(fmt.muted(`  ${tabLine(targetId, "next: cast browser snapshot")}`));
         await emitAutoShot(page, o.shot);

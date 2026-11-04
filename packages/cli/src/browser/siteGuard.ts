@@ -184,19 +184,27 @@ export function signInHost(url: string): string | null {
 
 /**
  * The advisory an agent reads after landing on a sign-in page: what happened
- * and the one command that fixes it. `keepsOwn` says whether this host's
- * login is one the agent browser holds for itself (profile.ts) — then it was
- * never carried from the human's Chrome, and a person signing in once is the
- * whole answer.
+ * and who fixes it. In the human's own Chrome (`real`) the sign-in is theirs:
+ * `login` and `sync` refuse there (cliEngine CLONE_ONLY), so the note must
+ * never name them. In the agent browser, `keepsOwn` says whether this host's
+ * login is one it holds for itself (profile.ts); then it was never carried
+ * from the human's Chrome, and a person signing in once is the whole answer.
  */
-export function signInLandingNote(url: string, keepsOwn: (host: string) => boolean, realHint: string | null = null): string | null {
+export function signInLandingNote(
+  url: string,
+  keepsOwn: (host: string) => boolean,
+  o: { real: boolean; realHint?: string | null },
+): string | null {
   const host = signInHost(url);
   if (!host) return null;
+  if (o.real) {
+    return `landed on a sign-in page (${host}) in the human's own Chrome: they are signed out of this site there, and signing in is theirs. Tell them which site and account, run \`cast browser show\` once so the tab is in front, then continue in this same tab after they say it is done. Never type their credentials, copy cookies or move to another browser.`;
+  }
   const why = keepsOwn(host)
     ? "the agent browser keeps its own login for this site (never copied from your Chrome — a shared one signs both out; Chrome normally signs it in from your account on launch)"
     : "your Chrome's cookies for it were carried, so this site keeps its session elsewhere or you are signed out there too";
-  const fix = realHint ? `Or ${realHint}` : "";
-  return `landed on a sign-in page (${host}) — ${why}. Run \`cast browser login\` yourself now: it brings this tab to the front for the human and waits while they sign in. Report blocked only if it times out.${fix ? ` ${fix}` : ""}`;
+  const fix = o.realHint ? ` Or ${o.realHint}` : "";
+  return `landed on a sign-in page (${host}) — ${why}. Run \`cast browser login\` yourself now: it brings this tab to the front for the human and waits while they sign in. Report blocked only if it times out.${fix}`;
 }
 
 // ---------------------------------------------------------------------------

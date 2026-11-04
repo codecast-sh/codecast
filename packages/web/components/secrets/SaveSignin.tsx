@@ -34,11 +34,11 @@ import { useSampleVault, type SampleVault } from "./sampleVault";
 type Team = { id: string; name: string } | null;
 type Saved = { short_id: string; name: string; host: string; cookies: number; action: "created" | "rotated" | "filled"; account_hint?: string };
 
-/** The command a person runs to save it through the agent browser instead. */
-function agentBrowserLines(host: string, name: string, team: Team): string {
+/** The command a person runs in their own terminal to save it from their Chrome there (agents are refused this read). */
+function terminalLine(host: string, name: string, team: Team): string {
   const site = host || "<site>";
   const where = team ? ` --team ${/^[\w.-]+$/.test(team.name) ? team.name : `"${team.name.replace(/"/g, '\\"')}"`}` : " --personal";
-  return `cast browser login ${site}\ncast vault save-signin ${site}${name && name !== signinName(host) ? ` --name ${name}` : ""}${where}`;
+  return `cast vault save-signin ${site} --from-chrome${name && name !== signinName(host) ? ` --name ${name}` : ""}${where}`;
 }
 
 /** The command's outcome in words a person can act on. */
@@ -265,9 +265,9 @@ function Outcome({ ways: w }: { ways: SigninWaysState }) {
   return null;
 }
 
-/** The agent-browser commands, folded behind "For agents". */
-function ForAgents({ ways: w }: { ways: SigninWaysState }) {
-  return <CommandDisclosure label="For agents" text={agentBrowserLines(w.host, w.name, w.team)} data-vault-signin-agents />;
+/** The same save from a terminal on the laptop, folded behind "In a terminal". */
+function InTerminal({ ways: w }: { ways: SigninWaysState }) {
+  return <CommandDisclosure label="In a terminal" text={terminalLine(w.host, w.name, w.team)} data-vault-signin-terminal />;
 }
 
 /** Add > Sign-in on the Vault page: the site, its name and who can use it, then the laptop button; the share review replaces the dialog while it is open. */
@@ -309,7 +309,7 @@ export function SaveSigninDialog({ scope, rows, onClose, onSaved }: { scope: Vau
           </Row>
           <div className="flex min-w-0 flex-col gap-1.5 pt-2" data-vault-signin-ways>
             <Outcome ways={ways} />
-            <ForAgents ways={ways} />
+            <InTerminal ways={ways} />
           </div>
         </div>
         <footer className="flex items-center justify-between gap-2 border-t border-sol-border/60 bg-sol-bg-alt/40 px-5 py-3">
@@ -337,7 +337,7 @@ export function SigninRequestFill({ row }: { row: SecretMeta }) {
         <ChromeButton ways={ways} />
       </div>
       <Outcome ways={ways} />
-      <ForAgents ways={ways} />
+      <InTerminal ways={ways} />
       {ways.review}
     </div>
   );

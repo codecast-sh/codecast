@@ -99,7 +99,7 @@ function runsUnderAgent(): boolean {
  */
 export function chromeReadRefusal(env: NodeJS.ProcessEnv = process.env, underAgent: () => boolean = runsUnderAgent): string | null {
   return sessionIdFromEnv(env) || underAgent()
-    ? "Reading your own Chrome's cookies is for a person: press Save sign-in on the Vault page and pick this laptop, or run it in your own terminal. An agent saves the agent browser's sign-in without --from-chrome"
+    ? "Reading your own Chrome's cookies is for a person: press Save sign-in on the Vault page and pick this laptop, or run it in your own terminal."
     : null;
 }
 
