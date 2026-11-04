@@ -453,7 +453,7 @@ describe("replays", () => {
         const name = getFunctionName(fn);
         actions.push({ name, args });
         imported = true;
-        return { replay_id: "rp_row", short_id: "rp-4", chunks: 1 };
+        return { replay_id: "rp_row", short_id: "rp-4", chunks: 1, saved: true };
       },
     } as any;
     const real = globalThis.fetch;
