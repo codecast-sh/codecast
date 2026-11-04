@@ -2,7 +2,19 @@
 // shown by the recent-projects picker. Pure (shared contracts only) so it can be unit
 // tested with `bun test` (see projectPaths.test.ts).
 
-import { isHomeDirectoryPath } from "@codecast/shared/contracts";
+import { isHomeDirectoryPath, worktreeOfPath } from "@codecast/shared/contracts";
+
+/** Temp dirs and bare home directories or shallower: never a real project. */
+function isPhantomProjectPath(p: string): boolean {
+  if (/^\/(tmp|var|private\/tmp|private\/var)\//.test(p)) return true;
+  // A cwd that fell back to $HOME (or shallower) is not a real project — drop it
+  // here rather than relying on the recent-projects local-root filter, which
+  // only runs when the daemon heartbeat is fresh and so lets phantoms flicker in.
+  const segs = p.split('/').filter(Boolean);
+  if (segs.length === 0) return true; // "/" or ""
+  if (isHomeDirectoryPath(p)) return true; // /root, /Users/<name>, /home/<name>
+  return (segs[0] === 'Users' || segs[0] === 'home') && segs.length === 1; // /Users, /home
+}
 
 /**
  * Collapse a raw cwd/git_root into a canonical project root, or return null if
@@ -19,15 +31,7 @@ export function normalizeProjectPath(raw: string): string | null {
   let p = raw;
   p = p.replace(/\/\.conductor\/[^/]+$/, '');
   p = p.replace(/\/\.codecast\/worktrees\/[^/]+$/, '');
-  if (/^\/(tmp|var|private\/tmp|private\/var)\//.test(p)) return null;
-
-  // A cwd that fell back to $HOME (or shallower) is not a real project — drop it
-  // here rather than relying on the recent-projects local-root filter, which
-  // only runs when the daemon heartbeat is fresh and so lets phantoms flicker in.
-  const segs = p.split('/').filter(Boolean);
-  if (segs.length === 0) return null; // "/" or ""
-  if (isHomeDirectoryPath(p)) return null; // /root, /Users/<name>, /home/<name>
-  if ((segs[0] === 'Users' || segs[0] === 'home') && segs.length === 1) return null; // /Users, /home
+  if (isPhantomProjectPath(p)) return null;
 
   const parts = p.split('/');
   const srcIdx = parts.findIndex(s => s === 'src' || s === 'projects' || s === 'repos' || s === 'code');
@@ -35,6 +39,68 @@ export function normalizeProjectPath(raw: string): string | null {
     return parts.slice(0, srcIdx + 2).join('/');
   }
   return p;
+}
+
+/**
+ * The project folder a session belongs to, for the recent-projects picker.
+ *
+ * A git_root already names the checkout, so it is taken as it stands: trimming
+ * it to one level below a code parent files every repo in
+ * ~/code/work/GitHub/<repo> under ~/code/work, a folder that is not a checkout
+ * at all. Only a bare cwd, which may be anywhere inside a repo, gets the trim.
+ */
+export function conversationProjectRoot(conv: {
+  git_root?: string | null;
+  project_path?: string | null;
+}): string | null {
+  if (!conv.git_root) return conv.project_path ? normalizeProjectPath(conv.project_path) : null;
+  const root = (worktreeOfPath(conv.git_root)?.root || conv.git_root).replace(/\/+$/, '');
+  return isPhantomProjectPath(root) ? null : root;
+}
+
+export type ProjectTally = {
+  path: string;
+  count: number;
+  lastActive: number;
+  /** repositoryKeyOfRemote of the checkout; absent for a plain folder. */
+  repository?: string;
+};
+
+/**
+ * One entry per repository per home directory, carrying the sessions of all its
+ * checkouts: a repo worked on through a thousand worktrees is one project, and
+ * as separate rows it would push every other project off a capped list.
+ *
+ * The home directory stays in the key so the same repo on differently laid out
+ * machines keeps a path for each; the unscoped list is narrowed per machine and
+ * deduped by the client afterwards. The entry opens the checkout named after the
+ * repo, the main one by convention, and failing that the most used. Worktrees
+ * kept under a dot folder (~/.codex/worktrees/<id>/<repo>) borrow the repo's name
+ * without being its main checkout, so they don't count as named after it.
+ */
+export function foldCheckoutsByRepository(tallies: ProjectTally[]): ProjectTally[] {
+  const groups = new Map<string, ProjectTally[]>();
+  for (const tally of tallies) {
+    const key = tally.repository
+      ? `repo:${tally.repository}:${tally.path.match(/^\/(?:Users|home)\/[^/]+/)?.[0] ?? ""}`
+      : `path:${tally.path}`;
+    const group = groups.get(key);
+    if (group) group.push(tally);
+    else groups.set(key, [tally]);
+  }
+  return Array.from(groups.values(), (group) => {
+    const repoName = group[0].repository?.split("/").pop()?.toLowerCase();
+    const named = (p: ProjectTally) =>
+      p.path.split("/").pop()?.toLowerCase() === repoName && !/\/\.[^/]+\//.test(p.path) ? 1 : 0;
+    const [chosen] = [...group].sort(
+      (a, b) => named(b) - named(a) || b.count - a.count || b.lastActive - a.lastActive,
+    );
+    return {
+      ...chosen,
+      count: group.reduce((sum, p) => sum + p.count, 0),
+      lastActive: Math.max(...group.map((p) => p.lastActive)),
+    };
+  });
 }
 
 /**
