@@ -1,5 +1,7 @@
 import { parseInsightBlocks } from "../components/insightBlocks";
 import { MessageMarkdown, InsightCard } from "../components/conversation/markdown";
+import { structuredMessageInput } from "@codecast/shared/render";
+import { StructuredResultBlock } from "../components/conversation/blocks/toolBlocks";
 
 // Renders an assistant message body as a flat run of block elements: ★ Insight
 // fences become InsightCards, everything else is markdown, emitted as a FRAGMENT
@@ -8,6 +10,8 @@ import { MessageMarkdown, InsightCard } from "../components/conversation/markdow
 // whole message into one un-quotable block. Module-level const so MessageReview's
 // memo holds (a fresh inline arrow at the call site would defeat it).
 export const renderAssistantBody = (content: string) => {
+  const input = structuredMessageInput(content);
+  if (input) return <StructuredResultBlock tool={{ id: "message-result", name: "StructuredOutput", input }} />;
   const parts = parseInsightBlocks(content);
   if (!parts.some((p) => p.type === "insight")) return <MessageMarkdown content={content} />;
   return (
