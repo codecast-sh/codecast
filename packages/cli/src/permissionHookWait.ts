@@ -28,6 +28,8 @@ export interface PermissionHookInput {
   preview: string;
   permissionMode?: string;
   suggestions: unknown[];
+  /** The launch that raised the prompt, so the status it reports passes the launch fence. */
+  launchToken?: string;
 }
 
 export interface PermissionAnswer {
@@ -142,5 +144,7 @@ export class PermissionHookWaiters {
 
 /** The daemon's loopback route the hook waits on. */
 export const PERMISSION_HOOK_PATH = "/hook/permission";
+/** Carries the pane's launch token (the body is Claude Code's own payload). */
+export const PERMISSION_LAUNCH_TOKEN_HEADER = "X-Codecast-Launch-Token";
 /** A Write's whole file can ride in tool_input. */
 export const PERMISSION_HOOK_MAX_BODY = 4 * 1024 * 1024;

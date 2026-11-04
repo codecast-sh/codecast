@@ -11,7 +11,7 @@
 // python3 remains only for the AskUserQuestion sidecar (nested JSON dump).
 import { HOOK_FIELDS_READ } from "./hookJson.js";
 import { HOOK_TOKEN_READ } from "./hookIdentity.js";
-import { PERMISSION_HOOK_PATH, PERMISSION_HOOK_WAIT_MS } from "./permissionHookWait.js";
+import { PERMISSION_HOOK_PATH, PERMISSION_HOOK_WAIT_MS, PERMISSION_LAUNCH_TOKEN_HEADER } from "./permissionHookWait.js";
 
 /** Hold a permission prompt for a web answer (permissionHookWait.ts). The
  *  daemon reports the session blocked and opens the card; its decision, if one
@@ -27,6 +27,9 @@ ${HOOK_TOKEN_READ}
 set -- -s -f -X POST "http://127.0.0.1:$PORT${PERMISSION_HOOK_PATH}" --connect-timeout 1 --max-time ${PERMISSION_HOOK_WAIT_MS / 1000 + 10}
 set -- "$@" -H "Content-Type: application/json" --data-binary @-
 [ -n "\$CODECAST_HOOK_TOKEN" ] && set -- "$@" -H "Authorization: Bearer \$CODECAST_HOOK_TOKEN"
+# The pane's launch token, as on a status post: the daemon fences a post that
+# lacks one, and a dropped prompt left the session reading as working.
+[ -n "\${CODECAST_LAUNCH_TOKEN:-}" ] && set -- "$@" -H "${PERMISSION_LAUNCH_TOKEN_HEADER}: \$CODECAST_LAUNCH_TOKEN"
 OUT=$(printf '%s' "$INPUT" | curl "$@" 2>/dev/null)
 rc=$?
 [ $rc -eq 0 ] && [ -n "$OUT" ] && printf '%s\\n' "$OUT"

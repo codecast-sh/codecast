@@ -13,6 +13,7 @@ import {
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { handleHookIngressHttp, type HookIngressDeps, type HookStatusData } from "./daemon.js";
 
+const LAUNCH_TOKEN = "0123456789abcdef01234567";
 const RULE = { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "bun test:*" }], behavior: "allow", destination: "localSettings" };
 const PAYLOAD = {
   session_id: "perm-1",
@@ -112,9 +113,9 @@ describe("codecast-status.sh on a PermissionRequest", () => {
     }),
   });
 
-  const runHook = (payload: object) =>
+  const runHook = (payload: object, env: Record<string, string> = {}) =>
     new Promise<string>((resolve, reject) => {
-      const child = execFile("bash", [hookFile], { env: { ...process.env, HOME: home } }, (err, stdout) =>
+      const child = execFile("bash", [hookFile], { env: { ...process.env, HOME: home, ...env } }, (err, stdout) =>
         err ? reject(err) : resolve(stdout),
       );
       child.stdin!.end(JSON.stringify(payload));
@@ -145,6 +146,15 @@ describe("codecast-status.sh on a PermissionRequest", () => {
     expect(held.at(-1)).toMatchObject({ sessionId: "perm-1", toolName: "Write", preview: "/tmp/a", suggestions: [RULE] });
     // The route reported the status itself; the script did not post it twice.
     expect(statuses).toHaveLength(0);
+  });
+
+  test("forwards the pane's launch token, so the blocked status it reports passes the launch fence", async () => {
+    mode = "answer";
+    await runHook(PAYLOAD, { CODECAST_LAUNCH_TOKEN: LAUNCH_TOKEN });
+    expect(held.at(-1)?.launchToken).toBe(LAUNCH_TOKEN);
+    // Without one (a pane the daemon did not launch) the input carries none.
+    await runHook(PAYLOAD, { CODECAST_LAUNCH_TOKEN: "" });
+    expect(held.at(-1)?.launchToken).toBeUndefined();
   });
 
   test("a daemon without the route gets an ordinary status report and no output", async () => {

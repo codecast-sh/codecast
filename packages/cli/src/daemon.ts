@@ -294,6 +294,7 @@ import {
   PermissionHookWaiters,
   parsePermissionHookInput,
   PERMISSION_HOOK_PATH,
+  PERMISSION_LAUNCH_TOKEN_HEADER,
   PERMISSION_HOOK_MAX_BODY,
   type PermissionHookInput,
 } from "./permissionHookWait.js";
@@ -2771,7 +2772,8 @@ export function handleHookIngressHttp(
         res.writeHead(503, { "Content-Type": "application/json" });
         res.end('{"status":"warming"}');
       } else {
-        deps.permission(input, res);
+        const launchToken = req.headers[PERMISSION_LAUNCH_TOKEN_HEADER.toLowerCase()];
+        deps.permission(typeof launchToken === "string" && launchToken ? { ...input, launchToken } : input, res);
       }
     });
     return true;
@@ -31004,6 +31006,7 @@ async function main(): Promise<void> {
       status: "permission_blocked",
       ts: Math.floor(Date.now() / 1000),
       ...(input.permissionMode && { permission_mode: input.permissionMode as PermissionMode }),
+      ...(input.launchToken && { launch_token: input.launchToken }),
       message: preview ? `${toolName}: ${preview}` : toolName,
     }));
     const idPromise = record?.id ?? opened;
