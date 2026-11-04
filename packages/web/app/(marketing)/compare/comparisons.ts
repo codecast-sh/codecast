@@ -1171,6 +1171,192 @@ export const COMPARISONS: Comparison[] = [
     ],
   },
   {
+    slug: "codecast-vs-claude-squad",
+    competitor: "Claude Squad",
+    competitorUrl: "https://github.com/smtg-ai/claude-squad",
+    title: "Codecast vs Claude Squad",
+    dek: "Claude Squad runs several terminal agents side by side in one terminal window, each in its own git worktree. Codecast records every agent session you run, wherever you start it, and lets you read, search and steer them from web, desktop or phone.",
+    verifiedOn: "2026-11-03",
+    codecastIs:
+      "Codecast is a workspace for your coding agents. A daemon reads the history files your agents already write, so every session on Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok or Muse Spark syncs live from every machine you use. You read, search, message and steer those sessions from web, desktop or phone. It works for one person; a team layer is there when you share a project.",
+    competitorIs:
+      "Claude Squad is an open source (AGPL-3.0) terminal app, run as cs, that manages several agents in separate workspaces: it starts each one in its own tmux session and git worktree, lets you attach to reprompt it, shows a preview and a diff tab, and can commit and push a session's branch to GitHub. Claude Code is the default program; its README names Codex, Gemini and Aider, and any command can be set as the program.",
+    bottomLine:
+      "If you want to run several agents at once from one terminal, each on its own branch, with nothing to sign up for, Claude Squad does exactly that. If you want every session you run, in Claude Squad or anywhere else, kept as a record you can search later and steer from another device, that is Codecast. The two compose: Claude Squad starts real agent sessions, and Codecast records them.",
+    rows: [
+      {
+        ...SHARED_ROWS.model,
+        competitor: "Starts and manages agent instances itself, each in a tmux session on its own worktree",
+      },
+      {
+        ...SHARED_ROWS.agents,
+        competitor:
+          "Claude Code by default; Codex, Gemini and Aider are named in its README, and any terminal agent can be set as the program",
+      },
+      {
+        dimension: "Where it runs",
+        codecast: "A daemon on each machine where agents run; clients on web, macOS desktop and iOS",
+        competitor: "A terminal UI on the machine running the agents; needs tmux and gh installed",
+      },
+      {
+        dimension: "Parallel work",
+        codecast:
+          "Forks and workers started from a session (cast fork, cast spawn), each optionally in its own git worktree, on this machine or a cloud host",
+        competitor: "The core job: one worktree and branch per task, reviewed in a diff tab, then committed and pushed from the UI",
+      },
+      { ...SHARED_ROWS.team, competitor: "Not stated; it manages the agents on one machine" },
+      {
+        ...SHARED_ROWS.memory,
+        competitor: "Not stated; instances persist until you delete them, and cs reset clears them",
+      },
+      { ...SHARED_ROWS.blame, competitor: "Not stated" },
+      { ...SHARED_ROWS.remote, competitor: "Not stated; you attach to sessions in the terminal running cs" },
+      { dimension: "Pricing", codecast: "Free for one person, per seat for teams", competitor: "Not stated on its site" },
+      { ...SHARED_ROWS.oss, competitor: "Open source, AGPL-3.0" },
+    ],
+    whenCompetitor: [
+      "You live in the terminal and want to run several agents at once without managing worktrees and branches by hand.",
+      "You want a small local tool with no account, no service and no other app, installed from Homebrew.",
+    ],
+    whenCodecast: [
+      "You want every session kept after it ends, searchable months later and readable by your agents.",
+      "You want to check on a long run or answer a permission prompt from your phone or another computer.",
+      "You run agents on more than one machine, or start them from more than one tool, and want one record of all of it.",
+    ],
+    together:
+      "They compose: Claude Squad's instances are ordinary Claude Code, Codex or Gemini sessions running in tmux, so a Codecast daemon on the same machine records them like any other session. Claude Squad runs the parallel tasks; Codecast keeps the record and the remote steering.",
+  },
+  {
+    slug: "codecast-vs-paradev",
+    competitor: "Paradev (formerly Superset)",
+    competitorUrl: "https://paradev.com",
+    title: "Codecast vs Paradev (formerly Superset)",
+    dek: "Paradev, the desktop app formerly called Superset, runs CLI coding agents in parallel, one git worktree per task, with terminals, diffs, pull requests and a browser in the same window. Codecast records every agent session you run, wherever you start it, and lets you read, search and steer them from web, desktop or phone.",
+    verifiedOn: "2026-11-03",
+    codecastIs:
+      "Codecast is a workspace for your coding agents. A daemon reads the history files your agents already write, so every session on Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok or Muse Spark syncs live from every machine you use, whichever terminal, IDE or app started it. You read, search, message and steer those sessions from web, desktop or phone, and cast blame names the session behind each line of code. It works for one person; a team layer is there when you share a project.",
+    competitorIs:
+      "Paradev (formerly Superset) is a source available desktop app, under the Elastic License 2.0, for running CLI coding agents in parallel. Each task gets a workspace: its own git worktree, branch and persistent terminals. Around the agents it adds a Changes pane, pull requests with checks and review threads, an in-app browser, a file editor, automations that start agents on a schedule or an event, and Pages for sharing agent reports with a team. It runs on macOS, with an experimental Linux build, and has an iPhone and iPad app on its Pro plan.",
+    bottomLine:
+      "If you want one app to launch many agents at once, keep each on its own branch, and review, preview and merge their work in the same window, Paradev is built for that. If you want every session recorded no matter which tool or machine started it, kept and searchable afterward, traced from a line of code back to its conversation, and steerable from a browser or a phone, that is Codecast. They compose: sessions Paradev starts are real Claude Code or Codex sessions, and Codecast records them.",
+    rows: [
+      {
+        ...SHARED_ROWS.model,
+        competitor: "Launches agents itself, one workspace (git worktree and branch) per task, and wraps their launch commands to track status",
+      },
+      {
+        ...SHARED_ROWS.agents,
+        competitor:
+          "Claude Code, Codex, OpenCode, Gemini, Cursor Agent, Amp and others listed on its site, plus any CLI agent and a built in chat",
+      },
+      {
+        dimension: "Where it runs",
+        codecast: "A daemon on each machine where agents run; clients on web, macOS desktop and iOS",
+        competitor: "A macOS desktop app (Linux AppImage experimental, Windows not yet available), plus remote hosts and cloud workspaces",
+      },
+      {
+        dimension: "Parallel work",
+        codecast:
+          "Forks and workers started from a session (cast fork, cast spawn), each optionally in its own git worktree, on this machine or a cloud host",
+        competitor: "The core job: a worktree per task, diffs and pull requests in the app, and recipes for racing agents or fanning out a refactor",
+      },
+      {
+        ...SHARED_ROWS.team,
+        competitor: "Organizations, Pages that teammates comment on, and a Tasks view over Linear and GitHub issues",
+      },
+      {
+        ...SHARED_ROWS.memory,
+        competitor: "Sessions resume after a crash and can be forked or handed to another agent; search across past sessions is not stated",
+      },
+      { ...SHARED_ROWS.blame, competitor: "Not stated" },
+      {
+        ...SHARED_ROWS.remote,
+        competitor:
+          "iPhone and iPad app on Paradev Pro (iOS 26 or later) reaching cloud workspaces or a connected computer; no web dashboard, Android on a waitlist",
+      },
+      {
+        dimension: "Pricing",
+        codecast: "Free for one person, per seat for teams",
+        competitor: "A free tier; remote access, mobile and automations need Pro",
+      },
+      { ...SHARED_ROWS.oss, competitor: "Source available under the Elastic License 2.0, which its site notes is not OSI approved" },
+    ],
+    whenCompetitor: [
+      "You want to run many agents at once on one repository and do the whole loop (prompt, review, preview, pull request, merge) inside one desktop app.",
+      "You want automations that start an agent in a fresh workspace on a schedule or when a review is requested, a Sentry issue opens or a Slack message arrives.",
+    ],
+    whenCodecast: [
+      "Your sessions start in many places (a terminal, an IDE, another app, another machine) and you want all of them in one record without changing how you start them.",
+      "You want sessions kept after they end: searchable months later, readable by your agents, and traceable from a line of code back to the conversation that wrote it.",
+      "You want to steer sessions from a browser or a phone without a paid plan, including answering their permission prompts.",
+    ],
+    together:
+      "They compose: Paradev runs agents like Claude Code and Codex in ordinary terminals inside its worktrees, so a Codecast daemon on the same machine records those sessions like any other. Paradev runs the parallel work; Codecast keeps the record across every tool you use.",
+  },
+  {
+    slug: "codecast-vs-omnara",
+    competitor: "Omnara",
+    competitorUrl: "https://www.omnara.com",
+    title: "Codecast vs Omnara",
+    dek: "Omnara is an open source platform for running AI agents you define, on any model and any machine, through an API. Codecast records and steers the coding agent sessions you already run, like Claude Code and Codex. They do different jobs.",
+    verifiedOn: "2026-11-03",
+    codecastIs:
+      "Codecast is a workspace for your coding agents. A daemon reads the history files your agents already write, so every session on Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok or Muse Spark syncs live from every machine you use. You read, search, message and steer those sessions from web, desktop or phone. It works for one person; a team layer is there when you share a project.",
+    competitorIs:
+      "Omnara is an open source (Apache-2.0) managed agent platform, which its site calls a self-hostable alternative to Claude Managed Agents and OpenAI's Agents API. You describe an agent in a config (instruction, model, machines, tools) and launch, steer and watch it through a REST API, a TypeScript SDK, a CLI or a dashboard. Agents run on any model provider, on sandboxes from providers such as Daytona, E2B or Modal, or on your own machine through its omnarad daemon, with approvals for risky tool calls, scoped secrets and an audit history. Its changelog says it relaunched in this form on September 2, 2026.",
+    bottomLine:
+      "If you are building agents for your users or your team and want an open source runtime with an API, sandboxes, permissions and an audit trail, Omnara is built for that, and Codecast is not. If you use coding agents like Claude Code and Codex yourself and want every session recorded, searchable and steerable from your phone, that is Codecast. Most people looking at both need only one of them.",
+    rows: [
+      {
+        ...SHARED_ROWS.model,
+        competitor: "Runs agents you define in a config, launched and observed through its API, SDK, CLI or dashboard",
+      },
+      {
+        ...SHARED_ROWS.agents,
+        competitor:
+          "Its own agents on any model through OpenAI, Anthropic, OpenRouter, LiteLLM, Bedrock or a compatible endpoint; running coding agent CLIs like Claude Code is not stated",
+      },
+      {
+        dimension: "Where agents run",
+        codecast: "Wherever you already run them; a daemon on each machine syncs the sessions",
+        competitor: "Omnara Cloud or a self-hosted deployment, on pooled sandboxes or your own machine through the omnarad daemon",
+      },
+      {
+        dimension: "Who it is for",
+        codecast: "People who use coding agents, alone or as a team",
+        competitor: "Developers deploying agents for their users or team, with Slack, Discord and GitHub integrations",
+      },
+      {
+        ...SHARED_ROWS.team,
+        competitor: "Role based access for people and API keys, and an append only audit history of agent actions",
+      },
+      {
+        ...SHARED_ROWS.memory,
+        competitor: "Each agent's state is a durable event log; memory stores are listed in its changelog",
+      },
+      { ...SHARED_ROWS.blame, competitor: "Not stated" },
+      {
+        ...SHARED_ROWS.remote,
+        competitor: "Steer agents through the API, CLI or dashboard, with approval requests for risky tool calls; mobile apps are not stated",
+      },
+      {
+        dimension: "Pricing",
+        codecast: "Free for one person, per seat for teams",
+        competitor: "No platform fee and free to self-host; optional pay as you go credits for models and machines",
+      },
+      { ...SHARED_ROWS.oss, competitor: "Open source, Apache-2.0, self-hostable with Docker Compose" },
+    ],
+    whenCompetitor: [
+      "You are shipping agents inside your own product or to your team, and want an API, sandboxes, permissions and an audit trail you can self-host.",
+      "You want to choose the model and the machine per agent, and change an agent's behavior mid-conversation without redeploying.",
+    ],
+    whenCodecast: [
+      "You already use Claude Code, Codex, Cursor or Gemini and want every one of those sessions recorded and searchable.",
+      "You want to read and steer your own coding sessions from a browser or a phone, including answering permission prompts.",
+      "You want to trace a line of code back to the conversation that wrote it.",
+    ],
+  },
+  {
     slug: "codecast-vs-happy",
     competitor: "Happy",
     competitorUrl: "https://github.com/slopus/happy",
