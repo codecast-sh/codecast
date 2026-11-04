@@ -26,6 +26,8 @@ import {
   withdraw,
   reroutePendingDecisionsForConversation,
   handUpLapsedCore,
+  rehearSilentCore,
+  LEAD_ACT_DEADLINE_MS,
   HOP_DEADLINE_MS,
 } from "./sessionDecisions";
 import { passCore } from "./decisionHandoff";
@@ -1126,6 +1128,30 @@ describe("a decision goes up the reporting line", () => {
     await recommendCore(ctx, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-standing", recommendation: 0 });
     await handUpLapsedCore(ctx, lapse[0].args.decision_id, NOW + HOP_DEADLINE_MS);
     expect(tables.decision_inbox).toHaveLength(3);
+  });
+
+  // A lead that cannot act (its session refuses every card command) writes
+  // nothing, so after the hour the next lead up the ladder hears the card.
+  test("a lead silent for an hour hands the card to the next lead, which may recommend", async () => {
+    const { ctx, tables, scheduled } = await seated();
+    await askApproach(ctx);
+    const silent = scheduled.filter((j) => j.ms === LEAD_ACT_DEADLINE_MS);
+    expect(silent.map((j) => j.args.role_id)).toEqual(["org_roles_lead"]);
+    expect(linesIn(tables, "conversations_head")).toEqual([]);
+    const next = await rehearSilentCore(ctx, silent[0].args.decision_id, "org_roles_lead" as any, NOW + LEAD_ACT_DEADLINE_MS);
+    expect(next).toBe("org_roles_head");
+    expect(linesIn(tables, "conversations_head").length).toBe(1);
+    const r = await recommendCore(ctx, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-head", recommendation: 0, note: "the lead below went quiet" });
+    expect(r.error).toBeUndefined();
+    expect(tables.session_decisions[0].hops.find((h: any) => h.role_id === "org_roles_head")?.recommendation).toBe(0);
+  });
+
+  test("a lead that wrote on the card keeps it: nobody else is told", async () => {
+    const { ctx, tables } = await seated();
+    await askApproach(ctx);
+    await recommendCore(ctx, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-standing", recommendation: 1 });
+    expect(await rehearSilentCore(ctx, tables.session_decisions[0]._id, "org_roles_lead" as any, NOW + LEAD_ACT_DEADLINE_MS)).toBeNull();
+    expect(linesIn(tables, "conversations_head")).toEqual([]);
   });
 
   test("the lapse leaves an answered decision alone", async () => {

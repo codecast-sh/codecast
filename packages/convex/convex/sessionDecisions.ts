@@ -30,7 +30,7 @@ import { internal } from "./_generated/api";
 import { enqueuePendingMessage, reachableRole, tellRole, wakeHostedConversation } from "./pendingMessages";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { roleOfConversation } from "./lib/actor";
-import { projectLeadRole, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
+import { headOfPeopleIn, projectLeadRole, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { gateResponseOf } from "./lib/gateChoices";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
@@ -87,6 +87,10 @@ type Ctx = { db: any; scheduler?: any };
 const RESOLVED_WINDOW_MS = 24 * 60 * 60 * 1000;
 // A role's recommendation is expected within this; a later one still lands.
 export const HOP_DEADLINE_MS = 5 * 60 * 1000;
+// A lead told about a card that writes nothing on it within this window may
+// be unable to act at all (a broken session refuses every card command), so
+// the next lead hears it (rehearSilentCore).
+export const LEAD_ACT_DEADLINE_MS = 60 * 60 * 1000;
 // A grant expires after this (D2).
 export const GRANT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // "Handled without you" looks back this far.
@@ -559,6 +563,7 @@ export async function tellHearingRole(
   }, `decision:${row._id}:${role._id}`);
   if (!id) return [];
   await ctx.scheduler.runAfter(HOP_DEADLINE_MS, internal.sessionDecisions.handUpLapsed, { decision_id: row._id });
+  await ctx.scheduler.runAfter(LEAD_ACT_DEADLINE_MS, internal.sessionDecisions.rehearSilent, { decision_id: row._id, role_id: role._id });
   return [role._id];
 }
 
@@ -581,6 +586,41 @@ export async function handUpLapsedCore(ctx: Ctx, decisionId: Id<"session_decisio
 export const handUpLapsed = internalMutation({
   args: { decision_id: v.id("session_decisions") },
   handler: (ctx, args) => handUpLapsedCore(ctx, args.decision_id, Date.now()),
+});
+
+const wroteOnHop = (h: Hop) => h.recommendation !== undefined || !!h.note || !!h.passed_at;
+
+// The told lead's hour passed and its ladder line is still blank: the next
+// lead hears the same card and may recommend on it. That is the next active
+// role up the ladder that can be told, else the workspace's head of people.
+// Nothing moves once any lead has written on the card.
+export async function rehearSilentCore(ctx: Ctx, decisionId: Id<"session_decisions">, roleId: Id<"org_roles">, now: number): Promise<Id<"org_roles"> | null> {
+  const row: DecisionRow | null = await ctx.db.get(decisionId);
+  if (!row || row.status !== "pending") return null;
+  const hops: Hop[] = row.hops ?? [];
+  const at = hops.findIndex((h) => String(h.role_id) === String(roleId));
+  if (at === -1 || hops.some(wroteOnHop)) return null;
+  const candidates: Doc<"org_roles">[] = [];
+  for (const h of hops.slice(at + 1)) {
+    const r = await ctx.db.get(h.role_id);
+    if (r?.status === "active") candidates.push(r);
+  }
+  const people = await headOfPeopleIn(ctx, { team_id: row.team_id });
+  if (people) candidates.push(people);
+  for (const next of candidates) {
+    if (String(next._id) === String(roleId) || !(await reachableRole(ctx, next._id))) continue;
+    if (!(await tellHearingRole(ctx, next, row, now)).length) continue;
+    if (!hops.some((h) => String(h.role_id) === String(next._id))) {
+      await ctx.db.patch(row._id, { hops: [...hops, { role_id: next._id, at: now }] });
+    }
+    return next._id;
+  }
+  return null;
+}
+
+export const rehearSilent = internalMutation({
+  args: { decision_id: v.id("session_decisions"), role_id: v.id("org_roles") },
+  handler: (ctx, args) => rehearSilentCore(ctx, args.decision_id, args.role_id, Date.now()),
 });
 
 // Repair for decisions asked before a lapse was scheduled: an open one a role
