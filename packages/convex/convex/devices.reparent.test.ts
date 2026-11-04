@@ -69,6 +69,41 @@ describe("performReparentSessionToDevice", () => {
     expect(cmds[1].target_device_id).toBe("jasondev");
   });
 
+  // ct-85423: a prompt typed in the runner's own terminal names no sender, so
+  // readers attribute it to user_id. The move changes user_id, so before the
+  // fix every earlier prompt read as the new owner's and only the web-sent
+  // ones (stamped) stayed with the person who wrote them.
+  test("prompts written before a cross-account move keep their author", async () => {
+    const db = fixtures();
+    const t0 = Date.now() - 60_000;
+    db._tables.messages = [
+      { _id: "m1", conversation_id: "conv1", role: "user", content: "first ask, sent from the web", from_user_id: JASON, timestamp: t0 },
+      { _id: "m2", conversation_id: "conv1", role: "assistant", content: "on it", timestamp: t0 + 1 },
+      { _id: "m3", conversation_id: "conv1", role: "user", content: "second ask, typed in the terminal", timestamp: t0 + 2 },
+      { _id: "m4", conversation_id: "conv1", role: "user", content: "", tool_results: [{ tool_use_id: "t1", content: "ok" }], timestamp: t0 + 3 },
+      { _id: "m5", conversation_id: "conv1", role: "user", content: "third ask, typed in the terminal", timestamp: t0 + 4 },
+    ];
+    await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+
+    const row = (id: string) => db._tables.messages.find((m: any) => m._id === id);
+    expect(conv(db).user_id).toBe(ME);
+    expect(row("m1").from_user_id).toBe(JASON);
+    expect(row("m3").from_user_id).toBe(JASON);
+    expect(row("m5").from_user_id).toBe(JASON);
+    expect(row("m4").from_user_id).toBeUndefined(); // a tool result has no author to keep
+    expect(row("m2").from_user_id).toBeUndefined();
+    // Open windows refetch the stamped rows behind their tail.
+    expect(conv(db).transcript_revision).toBeGreaterThan(0);
+  });
+
+  test("a same-account move stamps nothing", async () => {
+    const db = fixtures({ user_id: ME, owner_device_id: "mydev2" });
+    db._tables.devices.push({ _id: "d4", user_id: ME, device_id: "mydev2", label: "Other" });
+    db._tables.messages = [{ _id: "m1", conversation_id: "conv1", role: "user", content: "typed here", timestamp: Date.now() - 1000 }];
+    await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+    expect(db._tables.messages[0].from_user_id).toBeUndefined();
+  });
+
   test("the managed-session row is handed over: stale source-account rows are dropped", async () => {
     const db = fixtures();
     db._tables.managed_sessions = [

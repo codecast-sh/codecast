@@ -22,6 +22,7 @@ import { activeTokenProfile } from "./ccAccountsShared";
 import { bucketTs } from "./presenceState";
 import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
+import { navPromptField } from "./userMessagesFilter";
 import { localAgentTypeOf, findModelOption, deviceDisplayName, formatMachineSwitchNotice, type DeviceNameSource,
   checkoutInUseMessage,
   deviceWakesOnUse,
@@ -35,6 +36,7 @@ import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 import { queueMoveContinueIfMidTurn } from "./moveContinue";
 import { rehomeUndeliveredMessages } from "./pendingMessages";
+import { stampPriorOwnerPage } from "./ownerAttribution";
 import { deviceManagementFor } from "./lib/teamPolicyGuard";
 
 async function getAuthenticatedUserId(
@@ -494,6 +496,7 @@ async function insertMachineSwitchDivider(
     subtype: "machine_switch",
     message_uuid: crypto.randomUUID(),
     timestamp: Date.now(),
+    ...navPromptField({ role: "user", content: notice, subtype: "machine_switch" }),
   });
   await ctx.db.patch(conv._id, {
     message_count: (conv.message_count ?? 0) + 1,
@@ -989,6 +992,8 @@ export async function performReparentSessionToDevice(
   }
   await ctx.db.patch(conv._id, patch);
   if (crossUser) await rehomeUndeliveredMessages(ctx, conv._id, runnerId);
+  // The prompts written so far keep their author once user_id names someone else.
+  if (crossUser) await stampPriorOwnerPage(ctx, { conversation_id: conv._id, user_id: previousConversation.user_id, until: patch.updated_at });
   // Moved onto a team machine: the caller keeps the session as an owner.
   if (onTeamMachine) await retainSessionCreator(ctx, conv._id, userId, runnerId);
 
