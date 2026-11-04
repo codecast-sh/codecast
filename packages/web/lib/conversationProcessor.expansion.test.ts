@@ -60,6 +60,15 @@ describe("commandExpansionName", () => {
     expect(commandExpansionName(INVOCATION, { content: "go", timestamp: T0 })).toBeNull();
   });
 
+  test("a command sent from the app keeps its typed form and still folds its expansion", () => {
+    expect(commandExpansionName({ content: "/deploy", timestamp: T0 }, { content: EXPANSION, timestamp: T0 })).toBe("deploy");
+    expect(commandExpansionName({ content: "/migrate if you can", timestamp: T0 }, { content: EXPANSION, timestamp: T0 })).toBe("migrate");
+  });
+
+  test("a typed path or prose starting with a slash is not an invocation", () => {
+    expect(commandExpansionName({ content: "/Users/me/file.ts is broken", timestamp: T0 }, { content: LONG_PROSE, timestamp: T0 })).toBeNull();
+  });
+
   test("missing prev or timestamps never classify", () => {
     expect(commandExpansionName(null, { content: EXPANSION, timestamp: T0 })).toBeNull();
     expect(commandExpansionName({ content: INVOCATION.content }, { content: EXPANSION, timestamp: T0 })).toBeNull();

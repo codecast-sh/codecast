@@ -13,7 +13,7 @@ export type MessageAlternate = {
 };
 
 import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
-import { classifyApiErrorBanner, isAgentContextMessage, isAgentSwitchNotice, isMachineSwitchNotice, stripMentionContext } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, isAgentContextMessage, isCompactionSummaryMessage, isAgentSwitchNotice, isMachineSwitchNotice, parseSlashCommand, stripMentionContext } from "@codecast/shared/contracts";
 import { stripTeammateFraming, parseSpawnedTaskPrompt, parseChatWakePrompt, chatWakePlace, isSkillExpansion, extractSkillInfo } from "../components/sessionMessage";
 export { isSkillExpansion, extractSkillInfo };
 
@@ -148,15 +148,16 @@ export function commandExpansionName(
 ): string | null {
   const prevContent = prev?.content?.trim();
   if (!prevContent || !msg.content || msg.content.trim().length <= 200) return null;
-  // The invocation record leads with its tags (name/message order varies by CC version).
-  const cmdMatch = /^<command-(?:name|message)>/.test(prevContent)
-    ? prevContent.match(/<command-name>([^<]*)<\/command-name>/) ||
-      prevContent.match(/<command-message>([^<]*)<\/command-message>/)
+  // The invocation leads with its tags (name/message order varies by CC
+  // version), or, when it was sent from the app, holds the typed "/cmd args"
+  // the pending row adopted onto Claude Code's tagged echo.
+  const command = /^<command-(?:name|message)>/.test(prevContent) || prevContent.startsWith("/")
+    ? parseSlashCommand(prevContent)
     : null;
-  if (!cmdMatch?.[1]) return null;
+  if (!command) return null;
   if (prev?.timestamp == null || msg.timestamp == null) return null;
   if (Math.abs(msg.timestamp - prev.timestamp) >= 10_000) return null;
-  return cmdMatch[1].replace(/^\//, "");
+  return command.name;
 }
 
 export function getCommandType(content: string): string | undefined {
@@ -259,10 +260,7 @@ const TOOL_OUTPUT_POINTER_PREFIXES = [
   "Read the output file to retrieve the result:",
   "Full transcript available at:",
 ];
-const CONTINUATION_PREFIXES = [
-  "This session is being continued",
-  "Please continue the conversation",
-];
+const CONTINUATION_PREFIXES = ["Please continue the conversation"];
 const INTERRUPT_PREFIXES = ["[Request interrupted", "[Request cancelled"];
 
 /** Claude Code's "[Request interrupted by user]" notice: a control event, not
@@ -341,7 +339,7 @@ export function isNoiseUserMessage(content: string | null | undefined): boolean 
   if (isInterruptNotice(raw)) return true;
   if (TOOL_OUTPUT_POINTER_PREFIXES.some((p) => raw.startsWith(p))) return true;
   const noReminders = stripSystemTags(raw);
-  if (CONTINUATION_PREFIXES.some((p) => noReminders.startsWith(p))) return true;
+  if (isCompactionSummaryMessage(raw) || CONTINUATION_PREFIXES.some((p) => noReminders.startsWith(p))) return true;
   // Nothing a person wrote survives stripping the wrappers/tags.
   if (!cleanContent(raw)) return true;
   if (isSystemMessage(noReminders)) return true;
