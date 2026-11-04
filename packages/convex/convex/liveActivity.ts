@@ -13,7 +13,7 @@
 //
 // How a picture reaches the phone is one decision (resolveLiveActivityPush,
 // pure and tested): START through the push-to-start token when nothing runs
-// and something should; UPDATE through the activity's own token, coalesced to
+// and something should, once the person is away from their desktop; UPDATE through the activity's own token, coalesced to
 // one per interval unless a status changed; END when the strip goes quiet,
 // with a linger before the system removes it; WAIT out the start grace while
 // the device has not yet reported the activity id. Every write site that can
@@ -37,6 +37,7 @@ import { deriveConversationVerdict, auqQuestionPreview, notifPreview } from "./n
 import { needsInputKind, HEARTBEAT_ALIVE_MS } from "./inboxFilters";
 import { isAgentSpawnedConversation } from "./ccAccountsShared";
 import { APNS_BUNDLE_ID, apnsTokenIsDead, sendApns, type ApnsEnvironment } from "./apns";
+import { readPresence } from "./pushRouter";
 import {
   LIVE_ACTIVITY_ATTRIBUTES_TYPE,
   LIVE_ACTIVITY_DETAIL_LIMIT,
@@ -321,6 +322,10 @@ export interface LiveActivityConditions {
   lastStateKey: string | null;
   lastStatusKey: string | null;
   dismissedStatusKey: string | null;
+  // The person is at a desktop right now (readPresence, the same signal that
+  // holds ordinary pushes). A start is the one push that alerts, and the
+  // likeliest cause of one is the person's own message starting a session.
+  present: boolean;
 }
 
 // Pure. Tested directly; performLiveActivityRefresh only executes it.
@@ -344,6 +349,8 @@ export function resolveLiveActivityPush(c: LiveActivityConditions): LiveActivity
   if (!c.hasStartToken) return { action: "none" };
   // The person swiped this exact picture away. A new event earns a new strip.
   if (c.dismissedStatusKey !== null && c.dismissedStatusKey === c.statusKey) return { action: "none" };
+  // At the desktop: the strip waits until they step away, checked each sweep.
+  if (c.present) return { action: "wait", at: c.now + LIVE_ACTIVITY_SWEEP_INTERVAL_MS };
   return { action: "start" };
 }
 
@@ -368,6 +375,11 @@ export async function performLiveActivityRefresh(
   const stateKey = liveActivityStateKey(state);
   const statusKey = liveActivityStatusKey(state);
   const activityBound = !!row.activity_id && !!row.activity_token;
+  // Presence only matters for a start, so it is read only when one could follow.
+  const present =
+    !quiet && !activityBound && !!user && !!row.push_to_start_token
+      ? (await readPresence(ctx, user, now)).active
+      : false;
 
   const decision = resolveLiveActivityPush({
     now,
@@ -381,6 +393,7 @@ export async function performLiveActivityRefresh(
     lastStateKey: row.last_state_key ?? null,
     lastStatusKey: row.last_status_key ?? null,
     dismissedStatusKey: row.dismissed_status_key ?? null,
+    present,
   });
 
   // Captured before the patches below: a row read is a snapshot in Convex,

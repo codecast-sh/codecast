@@ -133,8 +133,12 @@ function world(over: {
   conversations?: Rec[];
   messages?: Rec[];
   user?: Rec;
+  presence?: Rec[];
+  devices?: Rec[];
 } = {}) {
   return createCtx({
+    user_presence: over.presence ?? [],
+    devices: over.devices ?? [],
     users: [{ _id: "u1", notifications_enabled: true, push_token: "tok", ...(over.user ?? {}) }],
     live_activities:
       over.row === null
@@ -194,9 +198,21 @@ describe("resolveLiveActivityPush", () => {
     lastStateKey: null,
     lastStatusKey: null,
     dismissedStatusKey: null,
+    present: false,
   };
   test("something live and nothing running starts", () => {
     expect(resolveLiveActivityPush(base)).toEqual({ action: "start" });
+  });
+  test("a person at their desktop gets no start (it alerts their phone); the sweep re-checks", () => {
+    expect(resolveLiveActivityPush({ ...base, present: true })).toEqual({
+      action: "wait",
+      at: NOW + LIVE_ACTIVITY_SWEEP_INTERVAL_MS,
+    });
+  });
+  test("presence never holds an update or an end", () => {
+    const bound = { ...base, present: true, activityBound: true, lastStateKey: "S0", lastStatusKey: "conv1:waiting|0" };
+    expect(resolveLiveActivityPush(bound)).toEqual({ action: "update", urgent: true });
+    expect(resolveLiveActivityPush({ ...bound, quiet: true })).toEqual({ action: "end" });
   });
   test("no start token and nothing bound does nothing", () => {
     expect(resolveLiveActivityPush({ ...base, hasStartToken: false })).toEqual({ action: "none" });
@@ -359,6 +375,23 @@ describe("performLiveActivityRefresh", () => {
     expect(row.last_status_key).toBe("conv1:working|0");
     expect(sweeps(w)).toHaveLength(1);
     expect(sweeps(w)[0].delay).toBe(LIVE_ACTIVITY_SWEEP_INTERVAL_MS);
+  });
+
+  test("the person's own message from an active desktop starts no strip; stepping away does", async () => {
+    freezeTime(NOW);
+    const presence = [{ _id: "p1", user_id: "u1", surface: "desktop", focused: true, last_seen: NOW - 5_000, last_input_at: NOW - 2_000 }];
+    const w = world({ presence });
+    expect(await performLiveActivityRefresh(w.ctx, "u1" as any)).toEqual({ action: "wait" });
+    expect(pushes(w)).toHaveLength(0);
+    expect(w.tables.live_activities[0].refresh_due_at).toBe(NOW + LIVE_ACTIVITY_SWEEP_INTERVAL_MS);
+
+    // Four minutes on, no input: the desktop no longer reads as active.
+    const later = NOW + 4 * 60_000;
+    freezeTime(later);
+    w.tables.managed_sessions[0].last_heartbeat = later - 5_000;
+    w.tables.user_presence[0].last_seen = later - 5_000;
+    expect(await performLiveActivityRefresh(w.ctx, "u1" as any)).toEqual({ action: "start" });
+    expect(pushes(w)).toHaveLength(1);
   });
 
   test("before the device reports the id, a second refresh waits instead of starting again", async () => {

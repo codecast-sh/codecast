@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { GOVERNOR_STATE_STALE_MS, LoadGovernor, OVER_HOLD_MS, RELEASE_HOLD_MS, RELEASE_STEP_MS, busyBetween, cloudFirstReason, type CageCandidate, type GovernorState } from "./loadGovernor";
+import { GOVERNOR_STATE_STALE_MS, LoadGovernor, MAX_RESTART_HOLD_MS, OVER_HOLD_MS, RELEASE_HOLD_MS, RELEASE_STEP_MS, busyBetween, cloudFirstReason, type CageCandidate, type GovernorState } from "./loadGovernor";
 
 const feed = (g: LoadGovernor, from: number, to: number, busy: number, loadPerCore = 1, candidates: readonly CageCandidate[] = []) => {
   for (let at = from; at <= to; at += 5_000) g.observe({ at, busy, loadPerCore }, candidates);
@@ -17,6 +17,23 @@ describe("LoadGovernor", () => {
     const g = new LoadGovernor();
     expect(feed(g, 0, OVER_HOLD_MS, 0.95)).toBe("over");
     for (const kind of ["revive", "workflow_resume", "warm_pool", "trigger"] as const) expect(g.admit(kind)).toBe(false);
+  });
+
+  test("a machine that stays over holds a dead session's restart only so long", () => {
+    const g = new LoadGovernor();
+    feed(g, 0, OVER_HOLD_MS, 0.95);
+    const t0 = 1_000_000;
+    expect(g.admit("revive", "sess-a", t0)).toBe(false);
+    expect(g.admit("workflow_resume", "run-1", t0)).toBe(false);
+    // The next watchdog pass, still over: held under the bound, admitted past it.
+    expect(g.admit("revive", "sess-a", t0 + MAX_RESTART_HOLD_MS - 1)).toBe(false);
+    expect(g.admit("revive", "sess-a", t0 + MAX_RESTART_HOLD_MS)).toBe(true);
+    expect(g.admit("workflow_resume", "run-1", t0 + MAX_RESTART_HOLD_MS)).toBe(true);
+    // Each restart has its own clock: one that just died starts a fresh hold.
+    expect(g.admit("revive", "sess-b", t0 + MAX_RESTART_HOLD_MS)).toBe(false);
+    // Work that starts new load is never let through by waiting.
+    expect(g.admit("trigger", "t", t0 + 10 * MAX_RESTART_HOLD_MS)).toBe(false);
+    expect(g.admit("warm_pool", "w", t0 + 10 * MAX_RESTART_HOLD_MS)).toBe(false);
   });
 
   test("a deep run queue on busy CPUs is over at once", () => {

@@ -71,6 +71,16 @@ export const SAMPLE_INTERVAL_MS = 5_000;
 /** What would add load here; each is held at "over". Human messages are never held. */
 export type AdmitKind = "revive" | "workflow_resume" | "warm_pool" | "trigger";
 
+/** The longest "over" holds a restart of one session or run. A revive or a
+ *  workflow resume brings back work that was running here when its process
+ *  died, so the machine already carried that load; the hold only spaces
+ *  restarts out during a spike, and an unattended restart is confined like any
+ *  other session. A machine that stays "over" for hours (a Mac Studio at
+ *  95-100% CPU all day, 2026-10-26) otherwise holds a dead session the whole
+ *  time: one waited 30 minutes. */
+export const MAX_RESTART_HOLD_MS = 3 * 60_000;
+const RESTARTS: ReadonlySet<AdmitKind> = new Set(["revive", "workflow_resume"]);
+
 export class LoadGovernor {
   level: LoadLevel = "calm";
   /** When the level last changed. */
@@ -81,6 +91,8 @@ export class LoadGovernor {
   private highSince: number | null = null;
   private quietSince: number | null = null;
   private roomSince: number | null = null;
+  /** When "over" first held each restart, by the session or run it restarts. */
+  private readonly restartHeldSince = new Map<string, number>();
 
   constructor(private readonly cores = os.cpus().length || 1) {}
 
@@ -145,9 +157,18 @@ export class LoadGovernor {
     this.roomSince = s.at;
   }
 
-  /** Whether work of this kind may start here now. */
-  admit(kind: AdmitKind): boolean {
-    if (this.level === "over") return false;
+  /** Whether work of this kind may start here now. A restart names what it
+   *  restarts (`key`), so its hold is bounded by MAX_RESTART_HOLD_MS. */
+  admit(kind: AdmitKind, key?: string, now = Date.now()): boolean {
+    if (this.level === "over") {
+      if (!key || !RESTARTS.has(kind)) return false;
+      const since = this.restartHeldSince.get(key) ?? now;
+      if (now - since < MAX_RESTART_HOLD_MS) {
+        this.restartHeldSince.set(key, since);
+        return false;
+      }
+    }
+    if (key) this.restartHeldSince.delete(key);
     // A warm pool exists to save a cold start, which only matters with room to spare.
     if (kind === "warm_pool") return this.level === "calm";
     return true;
