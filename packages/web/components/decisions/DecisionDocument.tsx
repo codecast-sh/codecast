@@ -131,15 +131,17 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {/* The doubt the record raised about the cause, where a reviewer cannot miss it. */}
         {doubt && <DoubtChip doubt={doubt} className="mt-3" />}
 
-        {/* Discuss sits by the status as a real button, saying where it goes. */}
+        {/* Two ways to discuss, each saying where the words go: into the
+            session that asked (its transcript, where a message brings it to
+            the inbox), or onto the decision for the team. */}
         <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-discuss>
           <button
             type="button"
             onClick={() => void jumpToAsk()}
-            className="inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12.5px] text-sol-text hover:border-sol-blue/60 hover:text-sol-blue transition-colors"
+            className="inline-flex items-center gap-1.5 rounded-md border border-sol-blue/50 px-2.5 py-1 text-[12.5px] text-sol-blue hover:bg-sol-blue/10 transition-colors"
             data-decision-open-thread
           >
-            <MessagesSquare className="w-3.5 h-3.5" />Thread
+            <MessagesSquare className="w-3.5 h-3.5" />Talk to the session
           </button>
           <button
             type="button"
@@ -147,7 +149,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             className="inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12.5px] text-sol-text hover:border-sol-cyan/60 hover:text-sol-cyan transition-colors"
             data-decision-discuss-button
           >
-            <MessageSquare className="w-3.5 h-3.5" />Comment{discussion.rows.length > 0 && <span className="text-sol-text-dim">{discussion.rows.length}</span>}
+            <MessageSquare className="w-3.5 h-3.5" />Comment for the team{discussion.rows.length > 0 && <span className="text-sol-text-dim">{discussion.rows.length}</span>}
           </button>
         </div>
 
@@ -225,7 +227,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {(discussOpen || discussion.rows.length > 0) && (
           <section className="mt-8" id="discuss" data-decision-discuss-section>
             <h2 className="decision-kicker mb-3">Comments</h2>
-            <DecisionDiscussion decisionId={decision._id} open={discussOpen} onOpenChange={setDiscussOpen} bare />
+            <DecisionDiscussion decisionId={decision._id} open={discussOpen} onOpenChange={setDiscussOpen} bare noAsk />
           </section>
         )}
 

@@ -29,6 +29,7 @@ import {
   legacyConversationAcceptsDaemonWork,
 } from "./executionBindings";
 import { requestRemoteWake } from "./cloud";
+import { restoreNestingParent } from "./inboxFilters";
 import { hostedInputWaits } from "./assistant/input";
 import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
@@ -568,6 +569,8 @@ export async function enqueuePendingMessage(
     // New input opens a new turn, which owes its own report (workerSettle.ts).
     ...(conversation.reported_to_parent_at ? { reported_to_parent_at: undefined } : {}),
   });
+  // "I messaged it, show it to me" reaches a nested session only through its parent.
+  if (fields.human === true) await restoreNestingParent(ctx, conversation);
 
   // A line into a standing session is one of the role's wakes today (the
   // number `cast brief` and org.health show against its cap).

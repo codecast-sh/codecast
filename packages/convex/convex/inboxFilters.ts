@@ -19,7 +19,7 @@ export type ConversationDoc = Doc<"conversations">;
 // server scan and every replica's working-set selection (sync-convergence C4).
 // Re-exported so existing `from "./inboxFilters"` importers keep working.
 export { NOISE_TITLE_PREFIXES, isNoiseTitle, isOrphanOrSubagent, isRunLog, shouldShowInInbox } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isCompactionSummaryMessage } from "@codecast/shared/contracts";
+import { shouldShowInInbox, isCompactionSummaryMessage, isOrphanOrSubagent } from "@codecast/shared/contracts";
 
 // The three DISTINCT ways a session leaves the active inbox. They were reported
 // as a single "dismissed" figure back when kill was an event rather than a
@@ -73,6 +73,20 @@ export async function restoreToInbox(
   if (conv.inbox_killed_at || !(conv.inbox_stashed_at || conv.inbox_dismissed_at)) return false;
   await ctx.db.patch(conv._id, { inbox_stashed_at: undefined, inbox_dismissed_at: undefined });
   return true;
+}
+
+// A person wrote into a nested session (a subagent, a flow station): the
+// inbox shows such a row only under its parent, and only while that parent is
+// itself shown, so a stashed or dismissed parent would swallow the thread the
+// person just spoke into. Bring the parent back so the conversation they are
+// waiting on is in their inbox. A killed parent stays killed.
+export async function restoreNestingParent(
+  ctx: { db: { get: (id: any) => Promise<any>; patch: (id: any, patch: Record<string, unknown>) => Promise<void> } },
+  conv: Pick<ConversationDoc, "parent_conversation_id" | "parent_message_uuid" | "is_subagent" | "is_workflow_sub">,
+): Promise<boolean> {
+  if (!conv.parent_conversation_id || !isOrphanOrSubagent(conv)) return false;
+  const parent = await ctx.db.get(conv.parent_conversation_id);
+  return parent ? restoreToInbox(ctx, parent) : false;
 }
 
 // Whether `parent` is a conversation an orchestration worker can safely be

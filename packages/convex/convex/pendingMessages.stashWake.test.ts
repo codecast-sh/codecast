@@ -102,3 +102,52 @@ describe("the pinned thread state at enqueue", () => {
     expect("thread_state" in conv).toBe(false);
   });
 });
+
+describe("a person writing into a nested session", () => {
+  // The inbox shows a subagent or flow station only under its parent, and
+  // only while that parent is shown, so the send brings a hidden parent back.
+  function nested(parent: Record<string, any>, child: Record<string, any> = {}) {
+    const tables: Record<string, any[]> = {
+      conversations: [
+        { _id: "parent1", user_id: "u1", short_id: "jxp", session_id: "sp", status: "completed", ...parent },
+        { _id: "conv1", user_id: "u1", short_id: "jx1", session_id: "s1", status: "active", is_subagent: true, parent_conversation_id: "parent1", ...child },
+      ],
+      pending_messages: [],
+      session_owners: [],
+      managed_sessions: [],
+    };
+    return { ctx: { db: makeFakeDb(tables) }, parent: tables.conversations[0], conv: tables.conversations[1] };
+  }
+
+  test("a human send restores a stashed parent", async () => {
+    const { ctx, parent, conv } = nested({ inbox_stashed_at: 100 });
+    await enqueuePendingMessage(ctx as any, conv, "u1" as any, { content: "why this one?", human: true });
+    expect(parent.inbox_stashed_at).toBeUndefined();
+  });
+
+  test("a human send restores a dismissed parent of a flow station", async () => {
+    const { ctx, parent, conv } = nested({ inbox_dismissed_at: 100 }, { is_subagent: undefined, is_workflow_sub: true });
+    await enqueuePendingMessage(ctx as any, conv, "u1" as any, { content: "why this one?", human: true });
+    expect(parent.inbox_dismissed_at).toBeUndefined();
+  });
+
+  test("a killed parent stays killed", async () => {
+    const { ctx, parent, conv } = nested({ inbox_stashed_at: 100, inbox_killed_at: 200 });
+    await enqueuePendingMessage(ctx as any, conv, "u1" as any, { content: "hi", human: true });
+    expect(parent.inbox_killed_at).toBe(200);
+    expect(parent.inbox_stashed_at).toBe(100);
+  });
+
+  test("a session relay or a trigger leaves the parent hidden", async () => {
+    const { ctx, parent, conv } = nested({ inbox_stashed_at: 100 });
+    await enqueuePendingMessage(ctx as any, conv, "u1" as any, { content: "tick", origin: "scheduler" });
+    await enqueuePendingMessage(ctx as any, conv, "u1" as any, { content: "<session-message from=\"jx2\">done</session-message>" });
+    expect(parent.inbox_stashed_at).toBe(100);
+  });
+
+  test("a plan handoff is its own inbox row and leaves its parent alone", async () => {
+    const { ctx, parent, conv } = nested({ inbox_stashed_at: 100 }, { is_subagent: undefined, parent_message_uuid: "plan-handoff" });
+    await enqueuePendingMessage(ctx as any, conv, "u1" as any, { content: "hi", human: true });
+    expect(parent.inbox_stashed_at).toBe(100);
+  });
+});
