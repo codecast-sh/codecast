@@ -1590,7 +1590,7 @@ function AssistantBlockImpl({
                 </div>
               )}
             </div>
-            {!parsedApiError && <MessageDecisionReview content={displayContent} />}
+            {!parsedApiError && <MessageDecisionReview content={displayContent} conversationId={conversationId ? String(conversationId) : undefined} messageId={messageId} />}
             {/* A hosted reply shows in full with no icons under it; folded
                 from its menu, it offers the way back in a word. Fullscreen
                 and folding stay in the message's menu. */}

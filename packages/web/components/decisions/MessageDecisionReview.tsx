@@ -7,7 +7,7 @@ import { decisionAnswerLabel } from "@codecast/shared/contracts";
 import { useInboxStore, type SessionDecisionItem } from "../../store/inboxStore";
 import { askedOfViewer } from "../../lib/decisionQueue";
 import { decisionHref } from "../../lib/decisionLinks";
-import { messageDecisionRefs } from "../../lib/messageDecisionRefs";
+import { latestDecisionNamers, messageDecisionRefs } from "../../lib/messageDecisionRefs";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { hasOpenModal } from "../../shortcuts";
@@ -18,7 +18,8 @@ import { DecisionCompactCard } from "./DecisionCompactCard";
 // A message that names several open decisions gets one review under it: a
 // bar with the count, which opens a run through them one card at a time in
 // the order the message names them. Each card is the queue's compact card,
-// so every answer kind works and answering is the same store action.
+// so every answer kind works and answering is the same store action. A
+// decision the conversation names again later belongs to that later message.
 const REVIEW_MIN = 2;
 
 // sessionDecisions is keyed by Convex id; a message names short ids. One
@@ -34,8 +35,20 @@ function shortIdIndex(rows: Record<string, SessionDecisionItem>): Map<string, Se
   return idx;
 }
 
-export function MessageDecisionReview({ content }: { content: string }) {
-  const refs = useMemo(() => messageDecisionRefs(content), [content]);
+export function MessageDecisionReview({ content, conversationId, messageId }: { content: string; conversationId?: string; messageId: string }) {
+  const named = useMemo(() => messageDecisionRefs(content), [content]);
+  if (named.length < REVIEW_MIN) return null;
+  return <OwnedRefs named={named} conversationId={conversationId} messageId={messageId} />;
+}
+
+function OwnedRefs({ named, conversationId, messageId }: { named: string[]; conversationId?: string; messageId: string }) {
+  const owned = useInboxStore((s) => {
+    const messages = conversationId ? s.messages[conversationId] : undefined;
+    if (!messages) return named.join(",");
+    const latest = latestDecisionNamers(messages);
+    return named.filter((r) => (latest.get(r) ?? messageId) === messageId).join(",");
+  });
+  const refs = useMemo(() => (owned ? owned.split(",") : []), [owned]);
   if (refs.length < REVIEW_MIN) return null;
   return <Review refs={refs} />;
 }

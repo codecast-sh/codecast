@@ -47,6 +47,9 @@ export const GALLERY_ORG = {
   proposalShort: "op-90001",
   decision: "gallerydecision000000001",
   decisionShort: "sd-90001",
+  /** A second open decision, so a message naming both gets its review bar. */
+  decision2: "gallerydecision000000002",
+  decision2Short: "sd-90002",
 } as const;
 
 export const GALLERY_FLOW = {
@@ -145,6 +148,10 @@ export function renderGalleryRecords(now: number, viewerId: string, workspace: s
       question: "Ship the mobile renderer behind a flag?", kind: "single", status: "pending", blocking: true, created_at: now - 120_000, updated_at: now - 120_000,
       context_md: "The renderer replaces the line parser. **Flagging** it keeps staff on it for a week before everyone gets it.",
       options: [{ label: "Ship now", description: "Everyone gets it on the next OTA" }, { label: "Flag it", description: "Only staff see it for a week" }],
+    }, {
+      _id: GALLERY_ORG.decision2, short_id: GALLERY_ORG.decision2Short, conversation_id: conversationId, user_id: viewerId, workspace,
+      question: "Keep the old parser for a release as a fallback?", kind: "single", status: "pending", blocking: false, default_option: 0, created_at: now - 60_000, updated_at: now - 60_000,
+      options: [{ label: "Keep it", description: "One release, then delete" }, { label: "Delete now", description: "No fallback" }],
     }],
     sessionFlows: [{ _id: GALLERY_FLOW.sessionFlow, workspace, graph_hash: GALLERY_FLOW.hash, from: "graph", name: GALLERY_FLOW.slug, label: "Spine, flaky test", kind: null, base: "spine", fills: ["implement"], nodes: FLOW_NODES, edges: FLOW_EDGES, runs: [GALLERY_FLOW.liveRun], run_count: 1, more: false, last_at: now, sessions: [], by: [viewerId], saved: null }],
   };
@@ -374,6 +381,7 @@ export function renderGalleryMessages(now: number): Row[] {
   user("> Replays your commits on top of main\n\nCan we rebase instead of merging here?");
   asst(REFS);
   asst(`A proposal and a decision alone on their lines draw with their answers, and one change of a proposal is its pill.\n\n${GALLERY_ORG.proposalShort}\n\n${GALLERY_ORG.decisionShort}\n\nThe role in ${GALLERY_ORG.proposalShort}#1 is new.\n\n${GALLERY_ORG.proposalShort}#2`);
+  asst(`A message naming two open decisions gets one review under it: ${GALLERY_ORG.decisionShort} first, then ${GALLERY_ORG.decision2Short}.`);
   asst(FENCES);
   asst(`<div style="padding:8px"><h3>A whole-HTML reply</h3><p>An agent wrote raw HTML without a fence.</p></div>`);
 
