@@ -1474,19 +1474,24 @@ export const withdraw = mutation({
     if (row.status !== "pending") {
       return { error: `Decision is already ${row.status}`, ...resolvedSummary(row) };
     }
-    return withdrawCore(ctx, row, Date.now(), row.conversation_id);
+    return withdrawCore(ctx, row, Date.now(), row.conversation_id, undefined, { presentAgain: true });
   },
 });
 
+/** A gate card taken back with `cast decide cancel`: its run's runner sends the run back to the station that presents the card (runner.ts pollGate). */
+export const GATE_PRESENT_AGAIN = "gate withdrawn: back to the presenter";
+
 // The one withdraw for every path (`cast decide cancel`, workflow_runs.cancel
 // taking back its open gate). A gate decision (the-line.md L4) fails its run
-// with "gate withdrawn" unless the run is already past it.
-export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?: Id<"conversations">, reason?: string) {
+// with "gate withdrawn" unless the run is already past it. A card its asker
+// or a person took back (`presentAgain`) asks for a card in its place, so the
+// run's runner returns it to the presenting station instead of ending it.
+export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?: Id<"conversations">, reason?: string, opts?: { presentAgain?: boolean }) {
   await ctx.db.patch(row._id, { status: "withdrawn", resolved_at: now, ...(reason ? { withdrawn_reason: reason.slice(0, 2000) } : {}) });
   if (row.workflow_run_id) {
     const run = await ctx.db.get(row.workflow_run_id);
     if (run && run.status === "paused" && String(run.gate_decision_id ?? "") === String(row._id)) {
-      await ctx.db.patch(run._id, { status: "failed", fail_reason: "gate withdrawn", updated_at: now });
+      await ctx.db.patch(run._id, { status: "failed", fail_reason: opts?.presentAgain ? GATE_PRESENT_AGAIN : "gate withdrawn", updated_at: now });
     }
   }
   // The same settle every resolution takes (the-line.md L4): inbox rows

@@ -1009,13 +1009,13 @@ async function executeRemoteHumanGate(
 
   if (choices.length === 0) {
     const response = await ask([{ key: "ok", label: "Continue", target: "" }]);
-    if (response === PRESENT_AGAIN) return presentAgain(node, graph, context);
+    if (response === PRESENT_AGAIN) return presentAgain(node, graph, context, options);
     if (response && !resumed?.response) await continueFreshIfStale(graph, options, node);
     return response ? "success" : "failure";
   }
 
   let response = await ask(choices);
-  if (response === PRESENT_AGAIN) return presentAgain(node, graph, context);
+  if (response === PRESENT_AGAIN) return presentAgain(node, graph, context, options);
   if (!response) return "failure";
   if (!resumed?.response) await continueFreshIfStale(graph, options, node);
   // A question the presenting station answered is spent once the gate asks again.
@@ -1581,9 +1581,11 @@ async function reportProgress(options: RunOptions, payload: Record<string, any>)
 // is asked, and the run goes back to the station to present one.
 const PRESENT_AGAIN = "\0present again";
 
-function presentAgain(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>): NodeOutcome {
+async function presentAgain(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, options: RunOptions): Promise<NodeOutcome> {
   const asker = node.asker ? graph.nodes.get(node.asker) : undefined;
   if (!asker) return "failure";
+  // A card taken back failed the run's row on the server; the run goes on, so it reads as running again.
+  if (options.runId && !options.dryRun) await reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "completed", outcome: "success", run_status: "running" });
   context["human.gate.target"] = asker.id;
   // Nobody answered, so this is no new attempt: the station's visits keep counting.
   context["human.gate.no_card"] = node.label;
@@ -1664,8 +1666,10 @@ async function pollGate(options: RunOptions): Promise<string | null> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ api_token: options.apiToken, run_id: options.runId }),
       });
-      const data = await resp.json() as { status?: string; gate_response?: string | null; gate_answer?: string | null };
+      const data = await resp.json() as { status?: string; gate_response?: string | null; gate_answer?: string | null; present_again?: boolean };
       if (data.gate_response) return withOptionWords(data.gate_response, data.gate_answer);
+      // The card was taken back (`cast decide cancel`): it asks for a card in its place, not an end.
+      if (resp.ok && data.present_again) return PRESENT_AGAIN;
       // Only the run's own status ends the wait. A refused or errored poll (an
       // overloaded backend answers {error} with no status) is a poll that
       // failed, not a gate taken back: four trial gates died that way at once.

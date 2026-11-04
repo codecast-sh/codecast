@@ -6,7 +6,7 @@ import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { killConversation } from "./conversations";
-import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, userMayRead, withdrawCore, type AnsweredBy } from "./sessionDecisions";
+import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, userMayRead, withdrawCore, GATE_PRESENT_AGAIN, type AnsweredBy } from "./sessionDecisions";
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, costParts, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
@@ -1434,6 +1434,7 @@ export const pollGateResponse = mutation({
       status: run.status,
       gate_response: run.gate_response ?? null,
       ...(answer ? { gate_answer: answer } : {}),
+      ...(run.status === "failed" && run.fail_reason === GATE_PRESENT_AGAIN ? { present_again: true } : {}),
     };
   },
 });

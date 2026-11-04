@@ -36,6 +36,8 @@ describe("workflow/runner (a presenter sent back its brief)", () => {
   let gates: number;
   // What the first presenter does once the run comes back to it.
   let onReturn: (hand: Hand) => void;
+  // What the gate's poll answers, one reply per poll (the last repeats).
+  let polls: unknown[];
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-wf-presenter-"));
@@ -47,6 +49,7 @@ describe("workflow/runner (a presenter sent back its brief)", () => {
     spawned = 0;
     gates = 0;
     onReturn = () => {};
+    polls = [{ status: "running", gate_response: "S" }];
     globalThis.fetch = (async (url: any, init: any) => {
       const route = String(url).replace(/^https?:\/\/[^/]+/, "");
       const body = JSON.parse(init?.body || "{}");
@@ -81,7 +84,7 @@ describe("workflow/runner (a presenter sent back its brief)", () => {
       }
       // The first card is refused, so the run goes back to its presenter; the second is taken.
       if (route === "/cli/workflow-runs/gate") return reply(++gates === 1 ? { present_again: true } : { ok: true });
-      if (route === "/cli/workflow-runs/poll-gate") return reply({ status: "running", gate_response: "S" });
+      if (route === "/cli/workflow-runs/poll-gate") return reply(polls.length > 1 ? polls.shift() : polls[0]);
       return reply({ ok: true });
     }) as typeof fetch;
   });
@@ -112,6 +115,22 @@ describe("workflow/runner (a presenter sent back its brief)", () => {
     expect(spawned).toBe(2);
     expect(routed("/cli/sessions/kill", (b) => b.session === "conv_hand1")).toHaveLength(1);
     expect(routed("/cli/decide", (b) => b.action === "cancel").map((c) => c.body.decision_id)).toEqual(["sd-1"]);
+  }, 20000);
+
+  test("a card taken back with cast decide cancel returns the run to its presenter, which posts the next card", async () => {
+    onReturn = (h) => { h.live = true; h.pinnedAt = 5000; };
+    // The first card is taken; the second is withdrawn while it waits, then the third is answered Ship.
+    let asked = 0;
+    const base = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).endsWith("/cli/workflow-runs/gate")) { calls.push({ route: "/cli/workflow-runs/gate", body: {} }); asked++; return new Response(JSON.stringify({ ok: true }), { status: 200 }); }
+      return base(url, init);
+    }) as typeof fetch;
+    polls = [{ status: "failed", gate_response: null, present_again: true }, { status: "running", gate_response: "S" }];
+    expect(await run()).toBe("completed");
+    expect(asked).toBe(2);
+    expect(routed("/cli/messages/send").length).toBeGreaterThan(0);
+    expect(routed("/cli/workflow-runs/progress", (b) => b.node_id === "decide" && b.run_status === "running")).toHaveLength(1);
   }, 20000);
 
   test("a presenter that comes back keeps the station: nothing is retired and no second hand starts", async () => {

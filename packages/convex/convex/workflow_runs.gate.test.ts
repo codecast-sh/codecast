@@ -14,7 +14,7 @@ import {
   graphOfRun,
   pollGateResponse,
 } from "./workflow_runs";
-import { resolve, withdraw, answerCore, askCore, settleClientResolution } from "./sessionDecisions";
+import { resolve, withdraw, withdrawCore, GATE_PRESENT_AGAIN, answerCore, askCore, settleClientResolution } from "./sessionDecisions";
 import { hashToken } from "./apiTokens";
 
 const HOST = "users_host" as any; // owns the run and the asking session
@@ -335,13 +335,25 @@ describe("withdrawing a gate (the-line.md L4)", () => {
     expect(row((proposal as any).id).status).toBe("pending");
   });
 
-  test("withdraw on the gate decision fails the run with 'gate withdrawn'", async () => {
+  test("a card taken back with cast decide cancel sends its run back to the presenter", async () => {
     const { ctx, tables } = await seed();
     await pause(ctx);
     const r = await (withdraw as any)._handler(ctx, { api_token: TOKEN, decision_id: "sd-1" });
     expect(r.status).toBe("withdrawn");
     expect(tables.workflow_runs[0].status).toBe("failed");
+    expect(tables.workflow_runs[0].fail_reason).toBe(GATE_PRESENT_AGAIN);
+    const polled = await (pollGateResponse as any)._handler(ctx, { api_token: TOKEN, run_id: RUN });
+    expect(polled).toMatchObject({ status: "failed", present_again: true });
+  });
+
+  test("a card withdrawn because its problem closed ends the run", async () => {
+    const { ctx, tables } = await seed();
+    await pause(ctx);
+    const decision = tables.session_decisions.find((d) => d.short_id === "sd-1");
+    await withdrawCore(ctx, decision, Date.now(), undefined, "the problem was dropped");
     expect(tables.workflow_runs[0].fail_reason).toBe("gate withdrawn");
+    const polled = await (pollGateResponse as any)._handler(ctx, { api_token: TOKEN, run_id: RUN });
+    expect(polled.present_again).toBeUndefined();
   });
 });
 
