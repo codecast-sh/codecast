@@ -28,6 +28,18 @@ describe("findEchoedPendingMessage", () => {
     expect(findEchoedPendingMessage([a], `<pasted_content id="a83d">\n${body}\n</pasted_content>`, 3_000)?._id).toBe("cmd-a");
   });
 
+  test("a slash command matches the tagged record Claude Code writes for it", () => {
+    // Alex Green's /mcp (2026-10-30): the panel closed, Claude Code recorded the
+    // command, and no row adopted it, so its bubble stayed at the tail for good.
+    const mcp = row("cmd-mcp", "/mcp", 1_000, "injected");
+    const model = row("cmd-model", "/model opus", 1_500, "pending");
+    const recorded = (name: string, args = "") => `<command-name>/${name}</command-name>\n            <command-message>${name}</command-message>\n            <command-args>${args}</command-args>`;
+    expect(findEchoedPendingMessage([mcp, model], recorded("mcp"), 3_000)?._id).toBe("cmd-mcp");
+    expect(findEchoedPendingMessage([mcp, model], recorded("model", "opus"), 3_000)?._id).toBe("cmd-model");
+    expect(findEchoedPendingMessage([mcp], recorded("model", "opus"), 3_000)).toBeUndefined();
+    expect(findEchoedPendingMessage([row("plain", "mcp", 1_000, "injected")], recorded("mcp"), 3_000)).toBeUndefined();
+  });
+
   test("ABA regression: the echo matches the OLDER in-flight row, not the newest", () => {
     const a = row("cmd-a", "continue", 1_000, "injected");
     const b = row("cmd-b", "continue", 2_000, "pending");

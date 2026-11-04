@@ -20,6 +20,7 @@
 // message at the composer instead.
 
 import { isUsageLimitDialog } from "@codecast/shared/contracts";
+import { isAskUserQuestionMenu } from "./interactivePrompt.js";
 
 type TypedPrompt = { options: Array<{ label: string }>; isConfirmation?: boolean };
 
@@ -54,4 +55,21 @@ export function typedPollAnswer(prompt: TypedPrompt, content: string): string | 
   }
   if (idx < 0) return null;
   return JSON.stringify({ __cc_poll: true, keys: [String(idx + 1)], display: prompt.options[idx].label });
+}
+
+// A person's message while the agent's question menu is open answers it.
+// Text that names an option picks it; any other text is a free-text answer,
+// the one the card's own text box sends: the menu is declined and the words
+// typed at the prompt (pollDeclineText). Held instead, the message waited on a
+// card the person had chosen not to use, and everything queued behind it
+// waited too (Alex Green: "Sorry typo I meant do all your suggestions" on
+// 2026-10-25, then "Update" and "Latest?" for 17 hours on 2026-10-31). The
+// terminal's own dialogs (a permission confirmation, the safeguards
+// interstitial, a limit park) are not the agent asking, and keep their hold.
+export function typedMenuReply(prompt: TypedPrompt & { unnumbered?: boolean }, content: string): string | null {
+  if (!isAskUserQuestionMenu(prompt)) return null;
+  const named = typedPollAnswer(prompt, content);
+  if (named) return named;
+  const text = content.trim();
+  return text ? JSON.stringify({ __cc_poll: true, text }) : null;
 }

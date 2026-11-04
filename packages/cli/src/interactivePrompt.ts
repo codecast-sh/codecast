@@ -40,6 +40,13 @@ const CHECKBOX_PREFIX = /^\s*(?:\[[ xX*✓✔·]?\]|[□☐☑☒▢▣◻◼◽
 // that must not be scraped as its description.
 const SYNTHETIC_OPTION = /^(?:type something\.?|chat about this)$/i;
 
+// The agent's own question (AskUserQuestion), told from the terminal's dialogs
+// (a permission confirmation, the safeguards interstitial, a select list) by
+// the free-text rows only Claude Code's question menu draws.
+export function isAskUserQuestionMenu(prompt: { options: Array<{ label: string }>; isConfirmation?: boolean; unnumbered?: boolean }): boolean {
+  return !prompt.isConfirmation && !prompt.unnumbered && prompt.options.some((o) => SYNTHETIC_OPTION.test(o.label.replace(CHECKBOX_PREFIX, "").trim()));
+}
+
 // Key-hint rows of a real interactive dialog footer ("Enter to select · ↑/↓ to
 // navigate · Esc to cancel"). A row qualifies only on a STRONG hint or two weaker
 // ones together: these sessions talk ABOUT terminal UIs, so prose like "←/→ to

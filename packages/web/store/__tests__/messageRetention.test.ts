@@ -69,3 +69,31 @@ test("hiding a local session cannot discard the input waiting for its creation",
   store.stashSession("stub-awaiting-create");
   expect(useInboxStore.getState().pendingMessages["stub-awaiting-create"]).toMatchObject([{ _clientId: clientId, content: "keep my input when I leave" }]);
 });
+
+// Alex Green's "Update" (2026-10-26) and "/mcp" (2026-10-30): the server held
+// each send, but no transcript row ever carried its client id, so the bubble
+// sat at the tail of the conversation for days of later turns.
+test("a settled send whose echo never paired leaves once the transcript passes it", () => {
+  const now = Date.now();
+  const sent = { ...pending(), content: "Update", timestamp: now - 600_000 };
+  useInboxStore.setState({ pendingMessages: { c: [sent] }, messages: {} } as any);
+  useInboxStore.getState().settleOptimisticMessage("c", "outgoing");
+  const settled = useInboxStore.getState().pendingMessages.c[0];
+  expect(settled._isSettled).toBe(true);
+  expect(settled._settledAt).toBeGreaterThanOrEqual(now);
+
+  // Rows written before the settle (the turn the message waited behind) prove nothing.
+  useInboxStore.getState().setMessages("c", [{ _id: "before", role: "assistant", content: "still on the old turn", timestamp: now - 60_000 }] as any);
+  expect(useInboxStore.getState().pendingMessages.c).toHaveLength(1);
+
+  // A row stamped well after the settle: the echo is on screen as a plain row or never coming.
+  useInboxStore.getState().setMessages("c", [{ _id: "later", role: "assistant", content: "a later turn", timestamp: now + 10 * 60_000 }] as any);
+  expect(useInboxStore.getState().pendingMessages.c ?? []).toEqual([]);
+});
+
+test("an unsettled send never leaves on transcript movement alone", () => {
+  const input = pending();
+  useInboxStore.setState({ pendingMessages: { c: [input] }, messages: {} } as any);
+  useInboxStore.getState().setMessages("c", [{ _id: "later", role: "assistant", content: "a later turn", timestamp: Date.now() + 10 * 60_000 }] as any);
+  expect(useInboxStore.getState().pendingMessages.c).toEqual([input]);
+});

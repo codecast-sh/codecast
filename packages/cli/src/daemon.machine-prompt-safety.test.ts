@@ -14,7 +14,8 @@ import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor,
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice, parseDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
-import { typedPollAnswer } from "./typedPollAnswer";
+import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer";
+import { closeOwnCommandPanel, mayOpenPanel, paneDialogQuestion, rememberCommandPanel } from "./commandPanel";
 import { redactSecrets } from "./redact";
 import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
@@ -161,7 +162,8 @@ function fixture(transport = "tmux", cached = true) {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
     isMachineDeliveredMessage, AGENT_CLIENTS, localAgentClient, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
     LaunchPromptCarriedError, transcriptHasUserPrompt, launchPromptCarries,
-    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer, isForcedPastDialog, setForcedPastDialog,
+    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer, typedMenuReply, isForcedPastDialog, setForcedPastDialog,
+    closeOwnCommandPanel, mayOpenPanel, paneDialogQuestion, rememberCommandPanel,
     clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END,
     tmuxExec, execAsync, redactSecrets,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
