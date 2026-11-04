@@ -33,6 +33,7 @@ import "./team/teamFlow.css";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useViewerIdentity } from "../hooks/useTeamRoster";
 import { TeamShareChip } from "./feed/TeamShareChip";
+import { FEED_CARD_ATTR, feedCardOpened, feedCardSelect, useFeedCardTriage } from "./feed/FeedCardTriage";
 import { useTeamFeed, inboxSessionToConv } from "../hooks/useTeamFeed";
 import { settingsDataKey } from "../lib/settingsData";
 import { LivePulseDot } from "./SessionActivityLine";
@@ -215,13 +216,26 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor, shareTeamI
     setClamped(el.scrollHeight > el.clientHeight + 1);
   }, [summary, expanded]);
 
+  const open = () => {
+    feedCardOpened(conv._id);
+    if (onNavigate) onNavigate(conv._id);
+    else router.push(`/conversation/${conv._id}`);
+  };
+  // Your live inbox sessions select, right-click and clear like inbox cards.
+  const triage = useFeedCardTriage(conv._id, conv.is_own !== false, open);
+
   return (
     <div
       data-flip-key={conv._id}
-      onClick={() => (onNavigate ? onNavigate(conv._id) : router.push(`/conversation/${conv._id}`))}
+      {...{ [FEED_CARD_ATTR]: conv._id }}
+      onClick={(e) => { if (!feedCardSelect(conv._id, e)) open(); }}
+      onContextMenu={triage.onContextMenu}
       data-hidden-from-team={hiddenFromTeam || undefined}
+      aria-selected={triage.ticked || undefined}
       className={`group relative cursor-pointer rounded-lg border transition-all overflow-hidden ${
-        hiddenFromTeam
+        triage.ticked
+          ? "border-sol-cyan/70 bg-[color-mix(in_srgb,var(--sol-cyan)_10%,var(--sol-card))] shadow-sm"
+          : hiddenFromTeam
           // Yours alone: on the board only for you, so it sits back from the
           // shared rows and comes forward under the pointer.
           ? "border-dashed border-sol-border/40 bg-sol-bg-alt/20 opacity-55 hover:opacity-100 hover:bg-sol-card-hover hover:border-sol-border/50"
@@ -289,6 +303,7 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor, shareTeamI
         <ImageLightbox src={thumbUrl} onClose={() => setThumbZoom(false)} />
       )}
       </div>
+      {triage.overlay}
     </div>
   );
 }
