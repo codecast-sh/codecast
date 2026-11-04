@@ -1,4 +1,4 @@
-import { isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
+import { canonicalSlashCommand, isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { claimShareToken } from "./publicShare";
 import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
@@ -42,7 +42,7 @@ import {
 import { onFreshApiErrorPark } from "./accountSwitch";
 import { isCurrentBlock } from "./ccAccountsShared";
 import { safetyBlockPatch } from "./conversationSafety";
-import { stripContextTags } from "./userMessagesFilter";
+import { stripContextTags, navPromptField, navPromptPatch } from "./userMessagesFilter";
 import { dropMirroredMessage } from "./searchMirror";
 import { countMatches, parseSearchTerms } from "@codecast/shared/search";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
@@ -81,6 +81,7 @@ export function buildExistingMessagePatch(
     files?: unknown;
     subtype?: string;
     model?: string;
+    nav_prompt?: true;
   },
   incoming: {
     role: string;
@@ -129,7 +130,9 @@ export function buildExistingMessagePatch(
     patch.files = incoming.files;
   }
 
-  return Object.keys(patch).length > 0 ? patch : null;
+  if (Object.keys(patch).length === 0) return null;
+  // The navigator's index flag follows whatever this patch changed.
+  return { ...patch, ...navPromptPatch(existing as Parameters<typeof navPromptPatch>[0], patch) };
 }
 
 // A /model switch emits a user line `<local-command-stdout>Set model to <Name>`
@@ -241,12 +244,20 @@ export const getMessageCoverageV2 = query({
       const message = await ctx.db.query("pending_messages")
         .withIndex("by_conversation_client_id", q => q.eq("conversation_id", args.conversation_id).eq("client_id", commandId))
         .first();
-      return message ? { commandId, status: message.status } : null;
+      return message ? { commandId, status: message.status, merged: !!message.merged_into } : null;
     }));
     const settled = deliveries.filter(message => message?.status === "delivered" || message?.status === "cancelled")
       .map(message => message!.commandId);
+    // Cancelled outright (not folded into another row's turn): no echo will
+    // ever come, so the sender's bubble goes rather than waiting for one.
+    const cancelled = deliveries.filter(message => message?.status === "cancelled" && !message.merged)
+      .map(message => message!.commandId);
     const failed = deliveries.filter(message => message?.status === "failed" || message?.status === "undeliverable")
       .map(message => message!.commandId);
+    // Neither a transcript row nor a queue row: the server never received
+    // this send. The client decides whether it is still on its way (its
+    // outbox holds it) or was lost.
+    const unknown = commandIds.filter((id, index) => !matches[index] && !deliveries.some(d => d?.commandId === id));
     // Command-id coverage, not a revision-covered row set — outside grantedView.
     return {
       ...identity,
@@ -256,7 +267,7 @@ export const getMessageCoverageV2 = query({
         kind: "command-ids" as const,
         commandIds: coveredCommandIds,
       },
-      ...(settled.length || failed.length ? { delivery: { settled, failed } } : {}),
+      ...(settled.length || failed.length || unknown.length ? { delivery: { settled, failed, cancelled, unknown } } : {}),
     };
   },
 });
@@ -951,7 +962,12 @@ export function findEchoedPendingMessage<
     .replace(ECHO_CONTROL_CHARS_RE, "")
     .trim();
   const cFlat = c.replace(/\s+/g, " ").trim();
+  // A slash command echoes as Claude Code's tagged record of it, never as the
+  // "/cmd args" the row holds (parseSlashCommand). Without this no command
+  // sent from the app was ever adopted, and its bubble stayed at the tail.
+  const cCommand = canonicalSlashCommand(c);
   const contentMatches = (pm: T) => {
+    if (cCommand) return canonicalSlashCommand(stripPastedContent(pm.content)) === cCommand;
     // Strip image tokens from BOTH sides: the composer stamps "[Image N]" into
     // the draft text for each attachment, so the pending content carries the
     // token exactly like the echo does. Stripping only the echo side left a
@@ -1313,6 +1329,7 @@ export const addMessage = mutation({
       usage: args.usage,
       client_id: clientIdToStore,
       timestamp: msgTimestamp,
+      ...navPromptField({ role: args.role, content: contentToStore, tool_results: safeToolResults, images, subtype: args.subtype }),
     });
     if (matchingPending) await settleEchoedPending(ctx, matchingPending, messageId);
     await scheduleUserSend(ctx, conversation, { _id: messageId, role: args.role, content: contentToStore, tool_results: safeToolResults, from_user_id: fromUserIdToStore, queued: queuedBy(matchingPending) }, msgTimestamp);
@@ -1940,7 +1957,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
             patch.tool_results = safeToolResults;
           }
           if (Object.keys(patch).length > 0) {
-            await ctx.db.patch(dup._id, patch);
+            await ctx.db.patch(dup._id, { ...patch, ...navPromptPatch(dup, patch) });
           }
           if (matchingPending) {
             consumedPendingIds.add(matchingPending._id);
@@ -1997,6 +2014,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
       usage: msg.usage,
       client_id: clientIdToStore,
       timestamp: msgTimestamp,
+      ...navPromptField({ role: msg.role, content: contentToStore, tool_results: safeToolResults, images, subtype: msg.subtype }),
     });
     if (matchingPending) await settleEchoedPending(ctx, matchingPending, messageId);
     if (hosted) await storeHostedReplay(ctx, args.conversation_id, messageId, msg, { thinking: safeThinking, tool_calls: safeToolCalls });

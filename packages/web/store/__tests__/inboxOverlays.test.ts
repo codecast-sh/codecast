@@ -3,6 +3,7 @@ import {
   BLOCKED_REVIVE_TTL_MS,
   DECLARED_INBOX_OVERLAYS,
   HIDDEN_OVERRIDE_SETTLE_MS,
+  PENDING_SEND_WORKING_TTL_MS,
   anyOverlayActive,
   collectInboxOverlayDeps,
   collectTriagePendingIds,
@@ -155,6 +156,17 @@ describe("collectInboxOverlayDeps + anyOverlayActive — the digest short-circui
     expect(anyOverlayActive(collectInboxOverlayDeps(
       state({ pending: { [`sessions:${CID}:inbox_pinned_at`]: { type: "field", ts: NOW - 1 } } }), NOW,
     ))).toBe(true);
+  });
+
+  // A window inherits the host's persisted pendingMessages at boot, so it can
+  // hold a send it never dispatched and never sees confirmed. That copy once
+  // kept its session in Working for days; past the bound it no longer moves
+  // the placement, while the entry itself stays for the bubble and redrive.
+  it("an unconfirmed send moves placement only inside PENDING_SEND_WORKING_TTL_MS", () => {
+    const sent = (age: number) => state({ pendingMessages: { [CID]: [{ _isOptimistic: true, content: "hi", timestamp: NOW - age } as any] } });
+    expect(overlaysAffecting(CID, collectInboxOverlayDeps(sent(60_000), NOW))).toEqual(["pending_send"]);
+    expect(overlaysAffecting(CID, collectInboxOverlayDeps(sent(PENDING_SEND_WORKING_TTL_MS), NOW))).toEqual([]);
+    expect(anyOverlayActive(collectInboxOverlayDeps(sent(5 * 24 * 3600_000), NOW))).toBe(false);
   });
 
   it("an expired revive stamp does not hold the gate open", () => {

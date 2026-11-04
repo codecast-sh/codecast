@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { useSyncDeliveryReceipts } from "./useSyncDeliveryReceipts";
+import { usePendingMessageCoverage } from "./usePendingMessageCoverage";
 import { useAction, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
@@ -33,8 +34,12 @@ function deepMerge(target: any, source: any): any {
 // useSyncInboxSessions so a screen can guarantee dispatch is wired (e.g. a cold
 // deep-link into a session before the inbox tab has mounted) WITHOUT also
 // spinning up the inbox subscriptions/recovery polling/soundIdle that hook owns.
+// A window that sends also confirms its sends: the receipts and the coverage
+// pass mount with the dispatch, so no window holds a send it cannot settle
+// or report lost.
 export function useEnsureDispatch() {
   useSyncDeliveryReceipts();
+  usePendingMessageCoverage();
   const _setDispatch = useInboxStore((s) => s._setDispatch);
   const _clearDispatch = useInboxStore((s) => s._clearDispatch);
   const _setDispatchError = useInboxStore((s) => s._setDispatchError);

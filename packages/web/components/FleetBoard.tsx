@@ -354,7 +354,7 @@ export function FleetBoard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showOld, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.pendingSessionCreates, s.blockedReviveRequestedAt, coarseNow],
   );
-  const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
+  const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages, coarseNow), [s.pendingMessages, coarseNow]);
   const bands: FleetBands = useMemo(
     () => splitFleetBands(categorized, { queued: s.sessionsWithQueuedMessages, pendingSendIds, now: coarseNow }),
     [categorized, s.sessionsWithQueuedMessages, pendingSendIds, coarseNow],

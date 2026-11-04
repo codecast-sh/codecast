@@ -47,6 +47,24 @@ describe("sendMessage takes the pinned thread state down", () => {
     }
   });
 
+  // The server's feeds spell a cleared pin `null` (`thread_state_status ??
+  // null`), while the send wrote undefined. When that echo did not retire the
+  // locks, every later pin the agent declared was masked for good, and a
+  // session that had said done/dormant/blocked sat in Working until a reload.
+  it("lets the agent's next pin land once the server echoes the clear as null", () => {
+    seed(PIN);
+    useInboxStore.getState().sendMessage(CONV, "one more thing", undefined, "client-3");
+    const base = { ...useInboxStore.getState().sessions[CONV] } as any;
+    const cleared = { thread_state: null, thread_state_at: null, thread_state_msg_count: null, thread_state_status: null };
+    useInboxStore.getState().syncTable("sessions", [{ ...base, ...cleared }]);
+    const repinned = { thread_state: "Fixed it\nStatus: shipped", thread_state_at: 2_000, thread_state_msg_count: 53, thread_state_status: "dormant" };
+    useInboxStore.getState().syncTable("sessions", [{ ...base, ...repinned }]);
+    const s = useInboxStore.getState();
+    expect((s.sessions[CONV] as any).thread_state_status).toBe("dormant");
+    expect((s.sessions[CONV] as any).thread_state).toBe(repinned.thread_state);
+    expect(Object.keys(s.pending).filter((k) => k.startsWith(`sessions:${CONV}:thread_state`))).toEqual([]);
+  });
+
   it("leaves a row with no pin alone", () => {
     seed({});
     useInboxStore.getState().sendMessage(CONV, "hi", undefined, "client-2");

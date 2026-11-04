@@ -414,6 +414,7 @@ describe("messages.byConversation/v2 command coverage", () => {
       pending_messages: [
         pending("control", { status: "delivered", delivered_at: 2 }),
         pending("cancelled", { status: "cancelled" }),
+        pending("merged", { status: "cancelled", merged_into: "control" }),
         pending("failed", { status: "undeliverable" }),
         pending("injected", { status: "injected" }),
         pending("other", { status: "delivered", conversation_id: OTHER_CONVERSATION }),
@@ -421,10 +422,12 @@ describe("messages.byConversation/v2 command coverage", () => {
     });
     const result = await (getMessageCoverageV2 as any)._handler(ctx, {
       conversation_id: CONVERSATION,
-      command_ids: ["control", "cancelled", "failed", "injected", "other"],
+      command_ids: ["control", "cancelled", "merged", "failed", "injected", "other"],
     });
     expect(result.coverage.commandIds).toEqual([]);
-    expect(result.delivery).toEqual({ settled: ["cancelled", "control"], failed: ["failed"] });
+    // A row folded into another's turn echoes there; only an outright cancel never echoes.
+    // "other" has a queue row only in another conversation, so this one never received it.
+    expect(result.delivery).toEqual({ settled: ["cancelled", "control", "merged"], failed: ["failed"], cancelled: ["cancelled"], unknown: ["other"] });
     expect(JSON.stringify(result)).not.toContain("hello from durable intent");
   });
 
@@ -447,6 +450,9 @@ describe("messages.byConversation/v2 command coverage", () => {
       access: "granted",
       grantKeys: [GRANT],
       coverage: { kind: "command-ids", commandIds: ["covered-two"] },
+      // A queued send (COMMAND) is held, not unknown; only an id the server
+      // has no row for at all is reported as never received.
+      delivery: { settled: [], failed: [], cancelled: [], unknown: ["uncovered"] },
     });
 
     rows(ctx, "messages").push(transcript(COMMAND));

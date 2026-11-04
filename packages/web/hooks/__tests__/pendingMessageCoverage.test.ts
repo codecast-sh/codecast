@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { reconcilePendingMessageCoverage } from "../pendingMessageCoverage";
+import { LOST_SEND_GRACE_MS, reconcilePendingMessageCoverage } from "../pendingMessageCoverage";
 
 const conversation = "a".repeat(32);
 const rows = (count: number) => Array.from({ length: count }, (_, i) => ({ _id: `local-${i}`, _clientId: `command-${i}` }));
@@ -16,6 +16,19 @@ test("settles confirmed control deliveries and exposes rejected sends without dr
   });
   expect(settled).toEqual([["command-0"]]);
   expect(failed).toEqual([["command-1"]]);
+});
+
+test("drops a send cancelled outright, which no echo will ever retire", async () => {
+  const dropped: string[][] = [];
+  await reconcilePendingMessageCoverage({
+    pending: { [conversation]: rows(3) },
+    query: async () => ({ access: "granted", coverage: { kind: "command-ids", commandIds: ["command-2"] }, delivery: { settled: ["command-0", "command-1"], failed: [], cancelled: ["command-1", "command-2"] } }),
+    settle: () => {},
+    drop: (_id, ids) => { dropped.push(ids); },
+    isCurrent: () => true,
+  });
+  // command-2's transcript row exists, so its bubble retires through the echo instead.
+  expect(dropped).toEqual([["command-1"]]);
 });
 
 test("reconciles unopened conversations only with exact server command coverage", async () => {
@@ -79,4 +92,40 @@ test("reports a conversation the server no longer has, once, without settling or
     isCurrent: () => true,
   });
   expect(gone).toEqual([conversation]);
+});
+
+test("fails a send the server never received once it is past the grace and in no outbox", async () => {
+  const NOW = 10_000_000;
+  const old = NOW - LOST_SEND_GRACE_MS;
+  const failed: string[][] = [];
+  await reconcilePendingMessageCoverage({
+    pending: {
+      [conversation]: [
+        { _id: "l-lost", _clientId: "lost", timestamp: old },
+        { _id: "l-fresh", _clientId: "fresh", timestamp: NOW - 1_000 },
+        { _id: "l-outbox", _clientId: "outbox", timestamp: old },
+        { _id: "l-queued", _clientId: "queued", timestamp: old, _isQueued: true },
+        { _id: "l-upload", _clientId: "upload", timestamp: old, images: [{ uploading: true }] },
+      ],
+    },
+    query: async () => ({ access: "granted", coverage: { kind: "command-ids", commandIds: [] }, delivery: { settled: [], failed: [], unknown: ["lost", "fresh", "outbox", "queued", "upload"] } }),
+    settle: () => {},
+    fail: (_id, ids) => { failed.push(ids); },
+    stillQueued: async () => (id) => id === "outbox",
+    now: () => NOW,
+    isCurrent: () => true,
+  });
+  expect(failed).toEqual([["lost"]]);
+});
+
+test("never reads the outbox when the server knows every send", async () => {
+  let reads = 0;
+  await reconcilePendingMessageCoverage({
+    pending: { [conversation]: rows(2) },
+    query: async () => ({ access: "granted", coverage: { kind: "command-ids", commandIds: ["command-0", "command-1"] } }),
+    settle: () => {},
+    stillQueued: async () => { reads++; return () => false; },
+    isCurrent: () => true,
+  });
+  expect(reads).toBe(0);
 });

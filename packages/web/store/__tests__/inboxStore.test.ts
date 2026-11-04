@@ -2204,7 +2204,7 @@ describe("syncTable sessions — stale optimistic pending-send reconcile", () =>
       message_count: 3, agent_status: "working" as const, is_idle: false, updated_at: 10,
     }]);
     expect(useInboxStore.getState().pendingMessages["conv-model"]).toMatchObject([{ content: "/model", _isSettled: true }]);
-    expect(sessionsWithPendingSend(useInboxStore.getState().pendingMessages).has("conv-model")).toBe(false);
+    expect(sessionsWithPendingSend(useInboxStore.getState().pendingMessages, Date.now()).has("conv-model")).toBe(false);
   });
 
   it("retains unconfirmed input when the session stops", () => {
@@ -2808,7 +2808,7 @@ describe("inboxStore.beginOptimisticSession", () => {
     const cat = placeSections(
       state.sessions,
       new Set(),
-      sessionsWithPendingSend(state.pendingMessages),
+      sessionsWithPendingSend(state.pendingMessages, Date.now()),
     );
     expect(cat.working.map((s) => s._id)).toEqual([REAL_ID]);
     expect(cat.newSessions.map((s) => s._id)).not.toContain(stubId);

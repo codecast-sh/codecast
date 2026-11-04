@@ -1,8 +1,8 @@
-import { useRef } from "react";
 import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { queryWithSignal } from "../lib/queryWithSignal";
+import { loadOutbox } from "../store/idbCache";
 import { useRecoveryPoll } from "./useRecoveryPoll";
 import { reconcilePendingMessageCoverage } from "./pendingMessageCoverage";
 
@@ -26,16 +26,29 @@ export function reconcileStorePendingCoverage(query: CoverageQuery, isCurrent: (
     fail: (conversationId, commandIds) => {
       for (const clientId of commandIds) useInboxStore.getState().markOptimisticAsFailed(conversationId, clientId);
     },
+    drop: (conversationId, commandIds) => {
+      for (const clientId of commandIds) useInboxStore.getState().removeOptimisticMessage(conversationId, clientId);
+    },
     // Deleted server-side (an explicit delete, or the empty GC): drop the
     // cached session rather than holding its unsendable bubbles forever.
     gone: (conversationId) => useInboxStore.getState().pruneGhostSessions([conversationId], { serverDeleted: true }),
+    // The outbox is one table every window shares, so a send another window
+    // still holds is on its way, not lost.
+    stillQueued: async () => {
+      const args = (await loadOutbox()).map(entry => JSON.stringify(entry.args ?? null));
+      return (clientId) => args.some(a => a.includes(JSON.stringify(clientId)));
+    },
     isCurrent,
   });
 }
 
+// One clock per window: every dispatch mount runs this hook (useEnsureDispatch),
+// and a window can hold several, so they share when the last pass ran and the
+// recovery poll skips while it is fresh.
+const lastCheck = { current: 0 };
+
 export function usePendingMessageCoverage() {
   const client = useConvex();
-  const lastCheck = useRef(0);
   useRecoveryPoll(lastCheck, async signal => {
     const userId = useInboxStore.getState().currentUser?._id;
     if (!userId || !client.connectionState().isWebSocketConnected) return;

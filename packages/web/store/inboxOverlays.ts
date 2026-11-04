@@ -63,12 +63,29 @@ export const HIDDEN_OVERRIDE_SETTLE_MS = 5 * 60 * 1000;
 // buckets.
 export const TRIAGE_PENDING_FIELDS: readonly string[] = TRIAGE_CONVERSATION_FIELDS;
 
+// How long an unconfirmed send keeps its session placed as WORKING. A send's
+// receipt lands within seconds, but only in the window that dispatched it:
+// every window boots from the host's persisted pendingMessages, so a window
+// can hold a send it never dispatched and whose transcript it never opens,
+// and that copy never settles. Unbounded, it kept a finished session in
+// Working for days (2026-11-04: 42 rows in a desktop window, one 5 days old).
+// The bound applies to placement only; the bubble, its redrive and the
+// composer still read the entry as unsent. This is the `pending_send`
+// overlay's bound.
+export const PENDING_SEND_WORKING_TTL_MS = 10 * 60 * 1000;
+
+type PendingSendRow = { _isFailed?: boolean; _isSettled?: boolean; _isLocalQueue?: boolean; content?: string; timestamp?: number };
+
 // A queued/optimistic outbound message is a "pending send" until the server
 // echoes it back (which prunes it) or it fails. This is the durable,
 // persisted, local-first signal that we've sent something and are waiting to
 // confirm delivery — independent of whether ConversationView is mounted.
-export function convHasPendingSend(pending?: Array<{ _isFailed?: boolean; _isSettled?: boolean; _isLocalQueue?: boolean; content?: string }>): boolean {
-  return !!pending?.some((m) => !m._isFailed && !m._isSettled && !m._isLocalQueue && !isInterruptControlMessage(m.content));
+// With `now`, only sends inside PENDING_SEND_WORKING_TTL_MS count: the
+// question placement asks ("is my send still landing?").
+export function convHasPendingSend(pending?: PendingSendRow[], now?: number): boolean {
+  return !!pending?.some((m) =>
+    !m._isFailed && !m._isSettled && !m._isLocalQueue && !isInterruptControlMessage(m.content) &&
+    (now == null || m.timestamp == null || now - m.timestamp < PENDING_SEND_WORKING_TTL_MS));
 }
 
 // Whether a conversation still holds a row this window alone knows about: an
@@ -83,18 +100,20 @@ export function pendingRowsUnsettled(pending?: Array<{ _isSettled?: boolean }>):
 // a queued (Ctrl+Enter) send or an optimistic outbox entry.
 export function pendingSendIdsOf(state: {
   sessionsWithQueuedMessages: ReadonlySet<string>;
-  pendingMessages?: Record<string, Array<{ _isFailed?: boolean }>>;
-}): Set<string> {
-  return new Set([...state.sessionsWithQueuedMessages, ...sessionsWithPendingSend(state.pendingMessages ?? {})]);
+  pendingMessages?: Record<string, PendingSendRow[]>;
+}, now: number): Set<string> {
+  return new Set([...state.sessionsWithQueuedMessages, ...sessionsWithPendingSend(state.pendingMessages ?? {}, now)]);
 }
 
-// Conversation ids that currently have an unconfirmed outbound message.
+// Conversation ids with an outbound message sent inside the placement bound
+// and not yet confirmed.
 export function sessionsWithPendingSend(
-  pendingMessages: Record<string, Array<{ _isFailed?: boolean }>>,
+  pendingMessages: Record<string, PendingSendRow[]>,
+  now: number,
 ): Set<string> {
   const ids = new Set<string>();
   for (const id in pendingMessages) {
-    if (convHasPendingSend(pendingMessages[id])) ids.add(id);
+    if (convHasPendingSend(pendingMessages[id], now)) ids.add(id);
   }
   return ids;
 }
@@ -180,7 +199,7 @@ export function collectInboxOverlayDeps(
   }
   // The pending_send members: a queued (Ctrl+Enter) send and an optimistic
   // outbox entry are the same "the user already acted" signal.
-  const pendingSendIds = opts?.pendingSendIds ?? pendingSendIdsOf(state);
+  const pendingSendIds = opts?.pendingSendIds ?? pendingSendIdsOf(state, now);
   return {
     now,
     focusedId: state.currentSessionId ?? null,

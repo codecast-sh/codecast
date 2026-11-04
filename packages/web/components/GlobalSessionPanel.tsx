@@ -1,6 +1,6 @@
 import { HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { cliNeverConnected } from "../lib/cliConnected";
-import React, { Fragment, useState, useCallback, useRef, memo, useMemo } from "react";
+import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -25,10 +25,9 @@ import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { awaitingOkIds } from "../lib/decisionQueue";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, sessionsWithPendingSend, pendingSendIdsOf, freshReviveRequestIds, hostedStatusSections, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, hostedOnlyInbox, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated, HOSTED_UNFOLDABLE_SECTIONS } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -49,11 +48,6 @@ import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
 import { useOpenWatchMessage } from "../hooks/useOpenWatchMessage";
 import { partitionTriggerInbox, groupSessionsByTrigger, groupTriggerRowsByHome, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
 import { rowScrollDelta, scrollMarginTopOf } from "../lib/rowScroll";
-import { firstRunWords } from "./triggers/hostedSchedule";
-import { sameNameSuffixes } from "../lib/sameNameSuffix";
-import { sessionCardTitle } from "../lib/sessionCard";
-
-const NO_SUFFIXES: ReadonlyMap<string, string> = new Map();
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { TriggerRowItem, TriggerHomeHeader, SchedChildArrow, SchedHealthDot, SchedFireBadge } from "./TriggerRow";
@@ -80,14 +74,11 @@ import { X, ChevronsRight, ChevronRight, ChevronDown, Star, Workflow, Play, Paus
 import { InboxViewPicker } from "./InboxViewPicker";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
 import { inboxViewModes } from "../store/inboxViewModes";
-import { SessionCard, hostedRowTitle } from "./inbox/SessionCard";
+import { SessionCard } from "./inbox/SessionCard";
 import { SectionHeader } from "./inbox/SectionHeader";
-import { AssistantScopeSwitch, MoreInEverything } from "./AssistantScopeSwitch";
-import { bySessionAgent, isAssistantRoutine, withinScope } from "../lib/assistantScope";
 import { hostedStopOf, hostedStopsSig, lastAskOf, lastNoticeKind, splitHostedStops } from "../lib/hostedNotice";
 import { actionFor } from "./conversation/HostedNotice";
 import { useThinkingAvailable } from "./simple/assistantPromise";
-import { LANE_COPY } from "./simple/lane";
 import { useUpgradesOpen } from "./simple/billing";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { LabelChipsRow } from "./LabelChipsRow";
@@ -95,8 +86,6 @@ import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { PaneControls } from "./stage/PaneControls";
 import { useMountEffect } from "../hooks/useMountEffect";
-import { useAssistantScope, useHostedMode, useModeWords, useSurface } from "../lib/surfaces";
-import type { ModeWords } from "../lib/surfaceRules";
 const ConversationDiffLayout = React.lazy(() =>
   import("./ConversationDiffLayout").then((module) => ({ default: module.ConversationDiffLayout })),
 );
@@ -1163,10 +1152,8 @@ function RunningBadge({ label }: { label: string }) {
   );
 }
 
-const CardBarStrip = memo(function CardBarStrip({ session, words, rows, activeSessionId, onOpen, onOpenSession }: {
+const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId, onOpen, onOpenSession }: {
   session: InboxSession;
-  /** The panel's mode words, passed down so a row holds no subscription for them. */
-  words: ModeWords;
   rows: TriggerRow[];
   activeSessionId?: string | null;
   onOpen: (row: TriggerRow) => void;
@@ -1186,8 +1173,8 @@ const CardBarStrip = memo(function CardBarStrip({ session, words, rows, activeSe
   const monCount = watching.length - bgCount;
   const label = primary
     ? rows.length === 1
-      ? `${words.trigger}: fires into ${words.thisConversation}`
-      : `${rows.length} ${words.triggersPlural} fire into ${words.thisConversation}`
+      ? "Trigger: fires into this session"
+      : `${rows.length} triggers fire into this session`
     : workflow
       ? "Workflow — running inside this session"
       : "Background work — running inside this session";
@@ -1212,7 +1199,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, words, rows, activeSe
           <Zap className="w-2.5 h-2.5 shrink-0 text-sol-amber/70" fill="currentColor" strokeWidth={0} />
           <SchedHealthDot accent={schedAccent(primary.task)} task={primary.task} />
           <span className="text-[11px] text-gray-400 truncate min-w-0">
-            {rows.length === 1 ? taskDisplayTitle(primary.task) : `${rows.length} ${words.triggersPlural}`}
+            {rows.length === 1 ? taskDisplayTitle(primary.task) : `${rows.length} triggers`}
           </span>
           {rows.length > 1 && (
             <span className="text-[10px] text-sol-text-dim truncate min-w-0">
@@ -1635,21 +1622,8 @@ function RetryStoppedButton({ rows }: { rows: InboxSession[] }) {
   );
 }
 
-/** Hosted mode's panel title, as Whisk titles its inbox, and what it lists:
- *  the assistant's conversations, or everything (AssistantScopeSwitch). */
-function HostedInboxHead({ outOfScope }: { outOfScope: number }) {
-  // Holds its width, so the head's tools never paint over the switch.
-  return (
-    <div className="flex flex-shrink-0 items-baseline gap-3">
-      <h2 data-cc-panel-title className="text-[15px] font-semibold text-sol-text">Inbox</h2>
-      <AssistantScopeSwitch label="What the inbox lists" hidden={outOfScope} />
-    </div>
-  );
-}
-
-function CardBars({ session, words, mode, scheduleRows, activeSessionId, wake, onOpen, onOpenSchedule }: {
+function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, onOpenSchedule }: {
   session: InboxSession;
-  words: ModeWords;
   mode: CardBarsMode;
   scheduleRows: TriggerRow[];
   activeSessionId?: string | null;
@@ -1677,7 +1651,7 @@ function CardBars({ session, words, mode, scheduleRows, activeSessionId, wake, o
   if (mode === "strip") {
     return (
       <>
-        <CardBarStrip session={session} words={words} rows={bound} activeSessionId={activeSessionId} onOpen={onOpenSchedule} onOpenSession={onOpen} />
+        <CardBarStrip session={session} rows={bound} activeSessionId={activeSessionId} onOpen={onOpenSchedule} onOpenSession={onOpen} />
         {dormantRow}
       </>
     );
@@ -1716,10 +1690,6 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
   onOpenSession: (session: InboxSession) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const words = useModeWords();
-  // Hosted mode's foot is one quiet line naming the next routine; the
-  // counts, running, overdue and attention chips are the developer's.
-  const fullFoot = useSurface("triageFooter");
   // Keyboard cursor into the roster: −1 = nothing selected (mouse mode).
   const [cursor, setCursor] = useState(-1);
   const now = useCoarseNow(30_000);
@@ -1799,22 +1769,6 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
   const nextTask = rows.find((r) => r.task.status === "scheduled" && r.task.run_at === nextRunAt)?.task;
   const attention = rows.some((r) => r.task.last_run_failed || r.task.last_run_needs_attention);
   const toggle = () => (open ? close() : setOpen(true));
-  if (!fullFoot) {
-    // Nothing scheduled: no line at all, rather than a bare link.
-    if (nextRunAt === undefined) return null;
-    return (
-      <div data-sv-triggers-foot className="shrink-0 border-t border-sol-border/40">
-        <Link href="/triggers" className="flex w-full items-center px-3 py-1.5 text-[11px] text-sol-text-dim no-underline transition-colors hover:text-sol-text-muted">
-          {/* One wording with the routine's row and page (hostedSchedule
-              firstRunWords) and the home's line: "Coming up: Morning review,
-              tomorrow at 8:00 AM". */}
-          <span className="truncate">
-            {`${LANE_COPY.home.comingUp}: ${nextTask ? `${taskDisplayTitle(nextTask)}, ` : ""}${firstRunWords(nextRunAt, now)}`}
-          </span>
-        </Link>
-      </div>
-    );
-  }
   return (
     <div data-sv-triggers-foot className="relative shrink-0 border-t border-sol-border/40">
       {open && (
@@ -1836,7 +1790,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
               <span className="ml-auto flex items-center gap-3">
                 <Link href="/triggers?new=1" onClick={close} className="text-sol-text-muted hover:text-sol-text no-underline">+ New</Link>
                 <Link href="/triggers" onClick={close} className="inline-flex items-center gap-0.5 font-medium text-sol-amber no-underline hover:underline underline-offset-2">
-                  All {words.triggersPlural} <ArrowUpRight className="w-3 h-3" />
+                  All triggers <ArrowUpRight className="w-3 h-3" />
                 </Link>
               </span>
             </div>
@@ -1883,7 +1837,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
         onClick={toggle}
         aria-expanded={open}
         aria-haspopup="true"
-        aria-label={`${words.triggers}: ${rows.length} armed`}
+        aria-label={`Triggers: ${rows.length} armed`}
         className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-sol-bg hover:bg-sol-bg-alt/60 transition-colors"
       >
         <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-amber"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -1891,7 +1845,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
           <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         <span className="shrink-0 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wider text-sol-amber">
-          {words.triggers} <span className="text-sol-amber/60 tabular-nums">{rows.length}</span>
+          Triggers <span className="text-sol-amber/60 tabular-nums">{rows.length}</span>
         </span>
         {nextIn !== undefined && (
           <span className="text-[10px] text-sol-text-dim truncate min-w-0">
@@ -2104,7 +2058,6 @@ function SessionBeacon({
     inViewRef.current = false;
   });
 
-  const words = useModeWords();
   const handleJump = useCallback(() => {
     const container = containerRef.current;
     const el = observedRef.current;
@@ -2112,8 +2065,7 @@ function SessionBeacon({
   }, [containerRef]);
 
   if (!dir) return null;
-  const noun = words.conversation.toLowerCase();
-  const label = tone === "new" ? `Scroll to the ${noun} you just started` : `Scroll to the open ${noun}`;
+  const label = tone === "new" ? "Scroll to the session you just started" : "Scroll to the open session";
   return (
     <button
       // Keyed by target, so a switch to another target replays the entrance.
@@ -2128,7 +2080,7 @@ function SessionBeacon({
     >
       {dir === "up" ? <ArrowUp className="cc-session-beacon__arrow h-3 w-3" /> : <ArrowDown className="cc-session-beacon__arrow h-3 w-3" />}
       <span className="cc-session-beacon__dot" aria-hidden />
-      <span className="max-w-[150px] truncate">{title || (tone === "new" ? words.newConversation : `Open ${noun}`)}</span>
+      <span className="max-w-[150px] truncate">{title || (tone === "new" ? "New session" : "Open session")}</span>
     </button>
   );
 }
@@ -2199,9 +2151,6 @@ function SessionListPanelImpl({
     // task collection churns far more than the few facts a lens reads).
     s => orgLensWakeSig(s),
   ]);
-  // Hosted mode lists the assistant's conversations unless widened
-  // (hostedOnlyInbox); chipFilterOpts carries it into every list below.
-  const hostedOnly = hostedOnlyInbox(s.clientState.ui);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
   const handleKillDismissed = useCallback((id: string) => {
@@ -2272,15 +2221,9 @@ function SessionListPanelImpl({
   // One-shot queries (the schedule-row click's run-list lookup) — not a
   // subscription, so a resting panel costs nothing.
   const convex = useConvex();
-  const words = useModeWords();
-  const hostedMode = useHostedMode();
   // No machine has ever connected: nothing can have been killed yet.
   const noMachineYet = useInboxStore((st) => cliNeverConnected(st.currentUser));
-  // The Assistant scope's fold is fixed (Your turn, Working on it, Done,
-  // Scheduled), so its head carries no view controls.
-  const { only: assistantOnly } = useAssistantScope();
 
-  const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
   // The blank you're viewing (or one mid-create) stays visible in NEW; all
   // other never-engaged pre-warm blanks are hidden by placeInboxRows.
   const blankOpts = useMemo(
@@ -2317,7 +2260,7 @@ function SessionListPanelImpl({
     // Structural change + the view keys + the question inputs + the epoch tick
     // (coarseNow drives the deadline signature).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow],
+    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow],
   );
   // The section a held row is headed for, as its accent: the fuse and the
   // landing wash speak in the color of where the row is going.
@@ -2347,10 +2290,7 @@ function SessionListPanelImpl({
   // Store-fed (hooks/useSyncTriggers): the schedule rows paint from the
   // cached roster at boot instead of waiting a round-trip.
   const { tasks: scheduleTaskRows, ready: schedulesReady } = useTriggers();
-  // In the Assistant scope the routines are the assistant's too (lib/assistantScope),
-  // so the foot never names a developer's trigger.
-  const scopedScheduleRows = useMemo(() => withinScope(scheduleTaskRows as TaskRow[], hostedOnly, isAssistantRoutine) as TaskRow[], [scheduleTaskRows, hostedOnly]);
-  const scheduleTasks = (schedulesReady || scopedScheduleRows.length > 0 ? scopedScheduleRows : undefined) as TaskRow[] | undefined;
+  const scheduleTasks = (schedulesReady || scheduleTaskRows.length > 0 ? scheduleTaskRows : undefined) as TaskRow[] | undefined;
   const schedulesSeenAt = s.clientState.ui?.schedules_seen_at ?? 0;
   const schedulePartition = useMemo(
     () => partitionTriggerInbox(scheduleTasks, visibleSessions, {
@@ -2384,8 +2324,6 @@ function SessionListPanelImpl({
   );
 
   const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...done, ...dormant, ...working], [pinned, newSessions, needsInput, done, dormant, working]);
-  // What the Assistant scope leaves out, said once under the list.
-  const outOfScope = useMemo(() => (hostedOnly ? activeSessions.filter((r) => !bySessionAgent(r)).length : 0), [hostedOnly, activeSessions]);
 
   const bucketByConv = useMemo(() => convBucketMap(s.bucketAssignments), [s.bucketAssignments]);
   const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
@@ -2427,7 +2365,7 @@ function SessionListPanelImpl({
       items.filter((sess) =>
         chipMatchesSession(sess, chipFilterOpts(s, bucketByConv)),
       ),
-    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv, hostedOnly],
+    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
   );
 
   // The Stashed / Killed buckets' open state is ephemeral and CLOSED by
@@ -2475,7 +2413,7 @@ function SessionListPanelImpl({
   // members nested under a same-bucket lead — what the tally and the CLI
   // report) while no chip narrows the list and the nested rows are on screen;
   // shared sectionHeaderCount, so this panel and mobile can't drift.
-  const showSubagents = s.clientState.ui?.show_subagents ?? true;
+  const showSubagents = resolveShowSubagents(s.clientState.ui);
   const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
     sectionHeaderCount(shown, full, n, showSubagents);
   const statusPinned = filteredPinned;
@@ -2484,38 +2422,9 @@ function SessionListPanelImpl({
   const statusDone = filteredDone;
   const statusDormant = filteredDormant;
   const statusWorking = filteredWorking;
-  // A New row the person opens stays in New while it is open, so the list
-  // does not reflow under the pointer the moment it is read; it settles into
-  // Earlier once they move on. Whether it was unread is read from the render
-  // before the open, since opening is what marks it read.
-  const prevUnreadRef = useRef(unreadByConv);
-  const heldNewRef = useRef<{ openId: string | null; held: string | null }>({ openId: null, held: null });
-  if (heldNewRef.current.openId !== (focusedId ?? null)) {
-    const id = focusedId ?? null;
-    heldNewRef.current = { openId: id, held: id && (unreadByConv[id] || prevUnreadRef.current[id]) ? id : null };
-  }
-  prevUnreadRef.current = unreadByConv;
-  const heldNewId = heldNewRef.current.held;
   // The label / plan lenses dissolve the status sections back to one flat
   // active set; questions rows rejoin it so an asking session still shows
   // under its label.
-  const hostedSections = useMemo(
-    () => {
-      const awaiting = awaitingOkIds(s.sessionDecisions);
-      const sending = pendingSendIdsOf(s);
-      return hostedStatusSections({ pinned: statusPinned, questions: statusQuestions, needsInput: filteredNeedsInput, newSessions: statusNew, working: statusWorking, done: statusDone, dormant: statusDormant }, (id) => awaiting.has(id), (id) => sending.has(id), (id) => !!unreadByConv[id] || id === heldNewId);
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [statusPinned, statusQuestions, filteredNeedsInput, statusNew, statusWorking, statusDone, statusDormant, s.sessionDecisions, s.pendingMessages, s.sessionsWithQueuedMessages, unreadByConv, heldNewId],
-  );
-  // Two hosted rows that read the same name get a muted day (or time) after
-  // the title, by the name the card draws (hostedRowTitle), so the suffix
-  // follows what the rows actually say.
-  const hostedTitleSuffixes = useMemo(() => {
-    if (!hostedOnly) return NO_SUFFIXES;
-    const st = useInboxStore.getState();
-    return sameNameSuffixes(hostedSections.flatMap(([items]) => items), (row) => hostedRowTitle(st, row._id) || sessionCardTitle(row));
-  }, [hostedOnly, hostedSections]);
   const lensSettled = useMemo(
     () => [...statusQuestions, ...filteredNeedsInput, ...filteredStopped, ...filteredDone, ...filteredDormant],
     [statusQuestions, filteredNeedsInput, filteredStopped, filteredDone, filteredDormant],
@@ -2650,14 +2559,7 @@ function SessionListPanelImpl({
   // folded to one strip (default), one full row per bar, or hidden entirely.
   // The legacy show_triggers boolean seeds the default so an existing
   // "expanded" choice survives the upgrade to the three-way mode.
-  // Hosted mode draws a conversation as one row: the workflow, monitor and
-  // trigger bars under a card are a fleet's machinery (inbox.rowInternals).
-  const rowInternals = useSurface("inbox.rowInternals");
-  // The panel head's team board, old-sessions and favorites toggles.
-  const panelInternals = useSurface("inbox.internals");
-  const labelStrip = useSurface("inbox.labelStrip");
-  const cardBars: CardBarsMode = !rowInternals ? "hidden" :
-    s.clientState.ui?.card_bars ?? ((s.clientState.ui?.show_triggers ?? false) ? "full" : "strip");
+  const cardBars: CardBarsMode = s.clientState.ui?.card_bars ?? ((s.clientState.ui?.show_triggers ?? false) ? "full" : "strip");
   // "By trigger" lens — the roster's rows promoted to first-class rows, each
   // with the sessions it drives as sub rows beneath (home conversation /
   // runs), the rest falling to project groups. Grouped over the UNabsorbed
@@ -2819,7 +2721,6 @@ function SessionListPanelImpl({
   // window with a "show more" expander; the active row is always force-mounted
   // so auto-scroll and the currently-viewed session never fall off the cap.
   const SECTION_RENDER_CAP = 50;
-  const HOSTED_DONE_CAP = 6;
   const SECTION_RENDER_STEP = 100;
   // Global ceiling on cards mounted across ALL sections combined. The per-section
   // cap alone doesn't bound the total — with thousands of sessions spread across
@@ -2861,7 +2762,7 @@ function SessionListPanelImpl({
         chipMatches: (sess) =>
           chipMatchesSession(sess, chipFilterOpts(s, bucketByConv)),
       }),
-    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv, hostedOnly],
+    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
   );
   const totalSubagentCount = useMemo(() => {
     let count = 0;
@@ -2954,7 +2855,7 @@ function SessionListPanelImpl({
   );
 
   // The groupings offered as tabs, published so Ctrl+, cycles exactly these.
-  const showViewTabs = (!hostedMode || !assistantOnly) && !favoritesView;
+  const showViewTabs = !favoritesView;
   const viewModes = useMemo(
     () => inboxViewModes({ hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0 }),
     [visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length],
@@ -3204,7 +3105,6 @@ function SessionListPanelImpl({
             // so only the project fallthrough tier can need a reveal here.
             ...triggerView.projectGroups.map(({ name, items }) => [items, `trigproj_${name}`] as [InboxSession[], string]),
           ]
-        : hostedOnly ? hostedSections
         : [
             [statusQuestions, "questions"],
             [statusPinned, "pinned"], [statusNew, "new"], [statusNeedsInput, "needs_input"],
@@ -3274,9 +3174,8 @@ function SessionListPanelImpl({
             className="flex-1 min-w-0 pl-3 py-1.5 flex items-center text-left"
           >
             <span data-sv-hidden-label className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
-              {/* The count wears the section headers' markup, so hosted mode
-                  sets it bare in mono like Done's (SectionHeader). */}
-              {label}{items.length > 0 ? <> <span data-cc-sec-count><span data-cc-bracket>(</span>{items.length}<span data-cc-bracket>)</span></span></> : null}
+              {/* The count wears the section headers' markup (SectionHeader). */}
+              {label}{items.length > 0 ? ` (${items.length})` : null}
             </span>
             {liveCount > 0 && (
               <span className="ml-1.5 shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30 normal-case tracking-normal">
@@ -3331,7 +3230,6 @@ function SessionListPanelImpl({
                     them an expanded bucket hides that a card is a loop. */}
                 <CardBars
                   session={session}
-                  words={words}
                   mode={cardBars}
                   scheduleRows={scheduleBarRowsFor(session)}
                   activeSessionId={activeSessionId}
@@ -3407,9 +3305,6 @@ function SessionListPanelImpl({
       onSelect?: (session: InboxSession) => void;
       // One text action in the header (Couldn't finish's Try again).
       headerAction?: React.ReactNode;
-      // Never folds, whatever an old click stored (hosted mode's New: the
-      // rows the Inbox count counts are the one group that exists to be seen).
-      fixed?: boolean;
       // The org lenses: a role's face before the label, and the group's
       // work-state tallies.
       icon?: React.ReactNode;
@@ -3419,7 +3314,7 @@ function SessionListPanelImpl({
     const isDropTarget = !!opts?.onDropSession;
     if (items.length === 0 && !(isDropTarget && sessionDragActive)) return null;
     const key = opts?.key ?? label.toLowerCase().replace(/\s+/g, "_");
-    const collapsed = !opts?.fixed && !!s.collapsedSections[key];
+    const collapsed = !!s.collapsedSections[key];
     const isDragOverSection = dragOverSectionKey === key;
     const dropProps = isDropTarget
       ? {
@@ -3463,15 +3358,11 @@ function SessionListPanelImpl({
           landedColor={collapsed ? holdDestColor(items.find((i) => landedIds.has(i._id))) : undefined}
           onToggle={() => s.toggleCollapsedSection(key)}
           action={opts?.headerAction}
-          fixed={opts?.fixed}
           icon={opts?.icon}
           states={opts?.states}
         />
         {!collapsed && (() => {
-          // The Assistant scope's Done shows its newest few and folds the rest
-          // behind the same "show more" as the cap, so finished work never
-          // outweighs what is live.
-          const sectionCap = sectionLimits[key] ?? (hostedOnly && key === "done" ? HOSTED_DONE_CAP : SECTION_RENDER_CAP);
+          const sectionCap = sectionLimits[key] ?? SECTION_RENDER_CAP;
           // Take from the shared global budget (consumed in render order, so the
           // top-priority sections fill first); the active row is force-kept below
           // even when the budget is spent.
@@ -3565,7 +3456,6 @@ function SessionListPanelImpl({
                   sessionLabel={labelByConv[session._id] ?? null}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
-                  titleSuffix={hostedTitleSuffixes.get(session._id)}
                 />
                 {/* The bars stack under their card the way subagent rows do —
                     schedule rows keep the dock roster's full anatomy (name,
@@ -3580,7 +3470,6 @@ function SessionListPanelImpl({
                     is an explicit "hidden". */}
                 <CardBars
                   session={session}
-                  words={words}
                   mode={cardBars}
                   scheduleRows={viewMode !== "trigger" ? scheduleBarRowsFor(session) : []}
                   activeSessionId={activeSessionId}
@@ -3633,7 +3522,7 @@ function SessionListPanelImpl({
               data-sv-show-more
               className="w-full px-3 py-1.5 text-[10px] font-medium text-sol-text-dim hover:text-sol-cyan transition-colors text-left border-b border-sol-border/30"
             >
-              {hostedOnly ? `Show ${hiddenCount} more` : <>Show {Math.min(hiddenCount, SECTION_RENDER_STEP)} more · {hiddenCount} hidden</>}
+              Show {Math.min(hiddenCount, SECTION_RENDER_STEP)} more · {hiddenCount} hidden
             </button>
           )}
           </>);
@@ -3653,7 +3542,6 @@ function SessionListPanelImpl({
         />
       )}
       <div ref={titlebarRef} className="cc-panel__head min-w-0">
-        {hostedMode && !favoritesView && <HostedInboxHead outOfScope={outOfScope} />}
         {favoritesView && (
           <button
             type="button"
@@ -3670,12 +3558,12 @@ function SessionListPanelImpl({
           </button>
         )}
         {showViewTabs && <InboxViewPicker value={viewMode} onChange={s.setInboxViewMode} modes={viewModes} />}
-        {labelStrip && <LabelChipsRow
+        <LabelChipsRow
           bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
           projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
           projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
           dropSessionOnLabel={dropSessionOnLabel}
-        />}
+        />
         {/* The rail header's tools: the blocked-fleet alert when there is
             one, then one menu for how the list is shown (team scope,
             subagents, old sessions, the bars under cards, favorites). The
@@ -3698,33 +3586,31 @@ function SessionListPanelImpl({
               {blockedSessions.length}
             </button>
           )}
-          {(!hostedMode || !assistantOnly || favoritesView) && <InboxViewOptions
-            showTeam={!favoritesView && panelInternals}
+          <InboxViewOptions
+            showTeam={!favoritesView}
             teamScope={inboxScope === "team"}
             onTeamScope={(on) => s.updateClientUI({ inbox_scope: on ? "team" : "mine" })}
-            subagentCount={!favoritesView && rowInternals ? totalSubagentCount : 0}
+            subagentCount={!favoritesView ? totalSubagentCount : 0}
             showSubagents={showSubagents}
             onShowSubagents={(on) => s.updateClientUI({ show_subagents: on })}
-            oldCount={!favoritesView && panelInternals ? oldCount : 0}
+            oldCount={!favoritesView ? oldCount : 0}
             showOld={showAllSessions}
             onShowOld={(on) => s.setShowOldSessions(on)}
-            showCardBars={!favoritesView && rowInternals && (scheduleRowsView.length > 0 || anyLiveBars)}
+            showCardBars={!favoritesView && (scheduleRowsView.length > 0 || anyLiveBars)}
             cardBars={cardBars}
             onCardBars={(value) => s.updateClientUI({ card_bars: value })}
-            showFavorites={panelInternals || favoritesView}
+            showFavorites
             favorites={favoritesView}
             onFavorites={(on) => useInboxStore.getState().setShowFavorites(on)}
-          />}
+          />
         </div>
       </div>
       {/* Relative wrapper so the out-of-view beacon can float over the list
           edges without joining the scroll flow. */}
       <div className="relative flex-1 min-h-0">
       {/* Rows keep the sticky section heading's height clear when scrolled
-          to. Hosted mode's short rail also turns off scroll anchoring, so a
-          row moving into a section above never scrolls a list that sat at
-          the top. */}
-      <div ref={scrollContainerRef} className={`h-full overflow-y-auto scrollbar-auto [&_[data-session-id]]:scroll-mt-8${hostedMode ? " [overflow-anchor:none]" : ""}`}>
+          to. */}
+      <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-auto [&_[data-session-id]]:scroll-mt-8">
         {favoritesView ? (
           favoriteGroups && favoriteGroups.count > 0 ? (
             <>
@@ -3932,45 +3818,18 @@ function SessionListPanelImpl({
             before anything else, pinned or not. One move: clicking a card
             opens the full-width answer view anchored on that question, and
             answering advances to the next — same flow for one or many. */}
-        {hostedOnly ? (
-          // The Assistant scope's three words (hostedStatusSections): Your
-          // turn holds an approval with a reply, Working on it holds a new
-          // conversation with a running one, and Done reads newest first.
-          // Drafts (nothing sent yet) wait in a quiet line under Done.
-          <>
-            {hostedSections.map(([items, key]) => key === "needs_input" ? (
-              <Fragment key={key}>
-                {renderSection(words.sectionNeedsInput, items, "text-sol-yellow", undefined, undefined, { key, onDropSession: dropSessionOnRest.needs_input })}
-                {renderSection(STOPPED_SECTION.label, filteredStopped, "text-sol-red", undefined, undefined, {
-                  key: "hosted_stopped",
-                  headerAction: <RetryStoppedButton rows={filteredStopped} />,
-                })}
-              </Fragment>
-            ) : (
-              <Fragment key={key}>
-                {key === "pinned" && renderSection("Pinned", items, "text-sol-magenta")}
-                {key === "working" && renderSection(words.sectionWorking, items, "text-sol-green", "working", undefined, { key })}
-                {/* Unread results lead, every row shown; what was read
-                    folds under Earlier (or Done, when nothing is new). */}
-                {key === "new_results" && renderSection("New", items, "text-sol-cyan", undefined, undefined, { key, fixed: HOSTED_UNFOLDABLE_SECTIONS.has(key) })}
-                {key === "done" && renderSection(hostedSections.some(([rows, k]) => k === "new_results" && rows.length > 0) ? "Earlier" : "Done", items, "text-sol-cyan", undefined, undefined, { key: "done", onDropSession: dropSessionOnRest.done })}
-                {key === "drafts" && renderSection("Drafts", items, "text-sol-text-dim", undefined, undefined, { key })}
-              </Fragment>
-            ))}
-          </>
-        ) : (<>
-        {renderSection(words.sectionQuestions, statusQuestions, "text-sol-violet", undefined, undefined, {
+        {renderSection("Decisions", statusQuestions, "text-sol-violet", undefined, undefined, {
           key: "questions",
           count: countOf(statusQuestions, placedQuestions, placed.counts.questions),
           onSelect: (session) => router.push(`/decisions?s=${session._id}`),
         })}
         {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { count: countOf(statusPinned, pinned, placed.counts.pinned) })}
-        {renderSection(words.sectionNew, statusNew, "text-sol-blue", undefined, undefined, { key: "new", count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
+        {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
         {/* Needs Input, Done and Dormant take a dragged card: the drop is the
             user's rest verdict (setSessionRest), the same stamp the context
             menu and the dormant chord write. Working is not a target — nobody
             can file a row as "the agent is producing". */}
-        {renderSection(words.sectionNeedsInput, statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
+        {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
         {renderSection(STOPPED_SECTION.label, filteredStopped, "text-sol-red", undefined, undefined, {
           key: "hosted_stopped",
           headerAction: <RetryStoppedButton rows={filteredStopped} />,
@@ -3979,39 +3838,15 @@ function SessionListPanelImpl({
             Input, Done to review), the agent right now (Working), then a
             machine event (Dormant). Nothing below Dormant is anyone's move. */}
         {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { count: countOf(statusDone, done, placed.counts.done), onDropSession: dropSessionOnRest.done })}
-        {(statusWorking.length > 0 || statusDormant.length > 0) && (
-          <div data-sv-not-on-you className="flex items-center gap-2 px-3 pt-3 pb-1 text-[10px] text-sol-text-dim">
-            <span className="h-px flex-1 bg-sol-border/50" />
-            <span className="shrink-0">{words.notOnYou}</span>
-            <span className="h-px flex-1 bg-sol-border/50" />
-          </div>
-        )}
         {renderSection("Working", statusWorking, "text-sol-green", "working", undefined, { count: countOf(statusWorking, working, placed.counts.working) })}
-        {renderSection(words.sectionDormant, statusDormant, "text-sol-blue", undefined, undefined, { key: "dormant", count: countOf(statusDormant, dormant, placed.counts.dormant), onDropSession: dropSessionOnRest.dormant })}
-        </>)}
+        {renderSection("Dormant", statusDormant, "text-sol-blue", undefined, undefined, { key: "dormant", count: countOf(statusDormant, dormant, placed.counts.dormant), onDropSession: dropSessionOnRest.dormant })}
         </>
         )}
         {sortedSessions.length === 0 && (
           <div className="px-3 py-8 text-center text-sm text-sol-text-dim">
-            {words.noActive}
-            {/* An empty scoped list still says what Everything holds. */}
-            {hostedOnly && <MoreInEverything hidden={outOfScope} centered />}
+            No active sessions
           </div>
         )}
-        {/* A list with rows says nothing more about Everything: the rail's
-            header holds that tab one click away, and a second "more" line
-            under Earlier's own "Show N more" read as two different lists. */}
-        {/* The Assistant scope keeps what was put away in one quiet place:
-            snoozed, set aside and closed read alike to someone who only asks
-            the assistant for things. Everything keeps the three buckets. */}
-        {hostedOnly ? renderHiddenBucket({
-          label: words.putAway,
-          items: [...filteredSnoozed, ...filteredStashed, ...filteredDismissed].sort((x, y) => (y.updated_at || 0) - (x.updated_at || 0)),
-          expanded: openBuckets.stashed,
-          onToggle: () => setOpenBuckets((o) => ({ ...o, stashed: !o.stashed })),
-          variant: "stashed",
-          onKill: handleKillStashed,
-        }) : (<>
         {renderHiddenBucket({
           label: "Snoozed",
           items: filteredSnoozed,
@@ -4021,15 +3856,13 @@ function SessionListPanelImpl({
           onKill: handleKillStashed,
         })}
         {renderHiddenBucket({
-          label: words.stashed,
+          label: "Stashed",
           items: filteredStashed,
           expanded: openBuckets.stashed,
           onToggle: () => setOpenBuckets((o) => ({ ...o, stashed: !o.stashed })),
           variant: "stashed",
           onKill: handleKillStashed,
-          // Closing everything set aside at once is fleet triage; hosted mode
-          // closes a conversation by its own menu.
-          headerAction: hostedMode ? undefined : (
+          headerAction: (
             <button
               onClick={handleKillAllStashed}
               className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider transition-all shrink-0 ${
@@ -4037,9 +3870,9 @@ function SessionListPanelImpl({
                   ? "text-sol-bg bg-sol-red hover:bg-sol-red/90"
                   : "text-sol-text-dim opacity-40 hover:opacity-100 hover:text-sol-red hover:bg-sol-red/10"
               }`}
-              title={words.killAllStashed}
+              title="Kill all stashed"
             >
-              {killAllArmed ? `${words.killConfirm} ${filteredStashed.length}?` : `${words.killConfirm} all`}
+              {killAllArmed ? `Kill ${filteredStashed.length}?` : "Kill all"}
             </button>
           ),
         })}
@@ -4057,7 +3890,7 @@ function SessionListPanelImpl({
           // pressing Kill, reading a "Killed" toast, and watching the row drop
           // into "Dismissed". See inboxFilters.ts on why conflating the two
           // loses the one difference that matters operationally.
-          label: words.killed,
+          label: "Killed",
           items: filteredDismissed,
           expanded: openBuckets.dismissed,
           onToggle: () => setOpenBuckets((o) => ({ ...o, dismissed: !o.dismissed })),
@@ -4066,12 +3899,12 @@ function SessionListPanelImpl({
           // The rows above are this replica's cached kills (recent by kill time)
           // plus what the shelf already paged in; older or never-cached kills
           // are one click away. Chip filters apply to shelf rows like any other.
-          // In hosted mode, and for an account no machine has connected to
-          // yet, the list waits for something to hold: an empty "Closed" or
-          // "Killed" under a newcomer's first screen offers nothing.
-          footer: (hostedMode || noMachineYet) && filteredDismissed.length === 0 && s.killedShelf.ids.length === 0 ? undefined : s.killedShelf.complete ? (
+          // For an account no machine has connected to yet, the list waits for
+          // something to hold: an empty "Killed" under a newcomer's first
+          // screen offers nothing.
+          footer: noMachineYet && filteredDismissed.length === 0 && s.killedShelf.ids.length === 0 ? undefined : s.killedShelf.complete ? (
             s.killedShelf.ids.length > 0 && (
-              <div className="w-full px-3 py-1.5 text-[10px] text-sol-text-dim/60 border-b border-sol-border/30">{words.noOlderKilled}</div>
+              <div className="w-full px-3 py-1.5 text-[10px] text-sol-text-dim/60 border-b border-sol-border/30">No older kills</div>
             )
           ) : (
             <button
@@ -4079,11 +3912,10 @@ function SessionListPanelImpl({
               disabled={s.killedShelf.loading}
               className="w-full px-3 py-1.5 text-[10px] font-medium text-sol-text-dim hover:text-sol-cyan disabled:hover:text-sol-text-dim disabled:opacity-60 transition-colors text-left border-b border-sol-border/30"
             >
-              {s.killedShelf.loading ? words.loadingOlderKilled : words.loadOlderKilled}
+              {s.killedShelf.loading ? "Loading older kills…" : "Load older kills"}
             </button>
           ),
         })}
-        </>)}
         </>)}
       </div>
       {heldBeaconId ? (

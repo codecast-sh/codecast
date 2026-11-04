@@ -26,6 +26,11 @@ export type { PendingEntry } from "@platform/engine";
 // it). The set is every stamp inboxVisibilityFields (convex inboxProjection.ts)
 // spells `?? null`. The undo guard reads the same set (mutativeMiddleware's
 // optionalClearFields), so a lock and an undo never disagree about a clear.
+// The four pinned thread state fields clear the same way: a human's send
+// takes the pin down as undefined, the panel's clear writes null, and the
+// server echoes either spelling depending on the feed. Without the
+// equivalence a send's lock outlived its echo and masked every pin the agent
+// declared afterwards, so a finished session read as Working until a reload.
 export const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
   "inbox_dismissed_at",
   "inbox_stashed_at",
@@ -33,6 +38,10 @@ export const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
   "inbox_stash_hidden",
   "inbox_pinned_at",
   "inbox_killed_at",
+  "thread_state",
+  "thread_state_at",
+  "thread_state_msg_count",
+  "thread_state_status",
 ]);
 
 /**

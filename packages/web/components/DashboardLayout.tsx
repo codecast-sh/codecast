@@ -1,12 +1,12 @@
 import { SeatKillDialog } from "./org/SeatKillDialog";
 import { useSyncMetricSeries } from "../hooks/useMetricSeries";
+import { useSyncOpsSources } from "../hooks/useSyncOps";
 import { useSyncSessionIndex } from "../hooks/useSyncSessionIndex";
 import { HuddleStartHost } from "./calls/HuddleStartHost";
 import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, lazy, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { preloadHostedPages } from "../lib/hostedPreload";
 import { useIsPhone } from "../hooks/useIsPhone";
 import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
@@ -25,15 +25,13 @@ import { MobileDrawer } from "./MobileDrawer";
 import { GlobalSearch } from "./GlobalSearch";
 import { NotificationBell } from "./NotificationBell";
 import { TeamSwitcher } from "./TeamSwitcher";
-import { useBarlessShell } from "../hooks/useBarlessShell";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ComposeHost } from "./ComposeHost";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { SquarePen, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
+import { PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TeamDomainBanner } from "./TeamDomainBanner";
-import { PasskeyProbationBanner } from "./PasskeyProbationBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
 import { TourLayer, ToursPanel } from "../tours";
@@ -55,7 +53,6 @@ import { StatusNoticeStack } from "./StatusNoticeStack";
 import { DaemonStatusChip } from "./DaemonStatusChip";
 import { LocalDeviceProbe } from "../hooks/useLocalDeviceId";
 import { AccountUsageChip } from "./AccountUsageChip";
-import { useWallet } from "../hooks/useWallet";
 import { TopbarButton, TopbarChip, TopbarTray } from "./TopbarButton";
 import { NewMenu } from "./NewMenu";
 import { TopbarRow } from "./TopbarRow";
@@ -72,12 +69,11 @@ import { useSyncSecrets } from "../hooks/useSyncSecrets";
 import { useSyncInitiatives } from "../hooks/useInitiatives";
 import { useSyncOrgProposals } from "../hooks/useSyncOrgProposals";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
-import { useWorkspaceFeature } from "../lib/teamFeatures";
+import { featurePageRedirect, useWorkspaceFeature } from "../lib/teamFeatures";
 import { useSyncSettings } from "../hooks/useSyncSettings";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useSessionCommandResults } from "../hooks/useSessionCommands";
 import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
-import { usePendingMessageCoverage } from "../hooks/usePendingMessageCoverage";
 import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
@@ -86,9 +82,7 @@ import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
 import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, filterInboxScope, isSub } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
-import { ConnectToast } from "./simple/ConnectNotice";
-import { Surface, hiddenPageRedirect, useHostedMode, useModeWords, useSurface, useSurfaceMode } from "../lib/surfaces";
-import { useNewResultsCount } from "../hooks/useNeedsInputCount";
+import { ConnectToast } from "./simple/ConnectToast";
 import { agentFleetCounts } from "../lib/liveness";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
@@ -105,7 +99,7 @@ import { LinkMenuHost } from "./LinkMenuHost";
 import { EdgePeek } from "./EdgePeek";
 import { useSyncCore } from "../hooks/useSyncCore";
 import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
-import { useThreadUnreadSync } from "../hooks/useThreadsSync";
+import { useThreadUnreadSync, useThreadUnreadByWorkspaceSync } from "../hooks/useThreadsSync";
 import { ProfileSignInDialogHost } from "./ProfileSignInDialog";
 import { useChatToasts } from "../hooks/useChatToasts";
 import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
@@ -116,7 +110,6 @@ import { RecentSwitcherHost } from "./RecentSwitcher";
 import { UndoTimelineHost } from "./undo/UndoTimeline";
 import { TabBar, AttachTabButton } from "./TabBar";
 import { AppWindowBar } from "./desktop/AppWindowBar";
-import { HostedSectionKeys } from "./HostedSectionKeys";
 import { useAppWindowRegistry } from "../hooks/useAppWindowRegistry";
 import { DESKTOP_APPS, desktopAppWindow, routeElsewhere } from "../lib/desktopApps";
 import { routerNavigate } from "../lib/tabRoutes";
@@ -331,6 +324,8 @@ function HostFeeders() {
   // The Threads badge: one scalar, every workspace, not chat-gated — comment
   // and task threads exist whether or not the team has chat on.
   useThreadUnreadSync();
+  // The switcher's badges: unread threads in the workspaces not on screen.
+  useThreadUnreadByWorkspaceSync();
   // The anchors collection feeds the header chip, the slide-over, the inbox's
   // anchor marks and chat's DM naming — one subscription for the whole shell.
   useSyncAnchors();
@@ -349,14 +344,13 @@ function HostFeeders() {
   // The workspace's metric series: the live numbers goals and projects read
   // wherever they are drawn (hooks/useMetricSeries), one subscription for all.
   useSyncMetricSeries();
+  // The workspace's Ops sources (a handful of rows): the sidebar's Ops count
+  // reads their health beside the alerting watches above, in every window.
+  useSyncOpsSources();
   // Every session the viewer owns, small, for the palette to search on the device.
   useSyncSessionIndex();
   // A profile with no timezone takes this device's (team day cuts, local clocks).
   useAdoptTimezone();
-  // Hosted mode's wallet: the rail's meter, Plan and the composer's held
-  // month all read it, in every window, so the host feeds it whether or not
-  // its own rail shows the meter.
-  useWallet(useHostedMode());
   // The workspace's agent definitions and chains: the compose "as" chooser,
   // the settings library and the spawn actions all read them.
   useSyncAgentDefinitions();
@@ -379,10 +373,9 @@ function HostFeeders() {
   return null;
 }
 
-/** The store's feeders and write wiring for one window. Every shell that
- *  renders store data mounts this: the dashboard, and /welcome
- *  (components/simple/LaneSync), which passes `windowEffects={false}` because
- *  call rings, chat toasts and mods belong to the full app's window. */
+/** The store's feeders and write wiring for one window. An embedded pane
+ *  (PANE_EMBED) skips the window-only effects: call rings, chat toasts and
+ *  mods belong to the full app's window. */
 export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEffects?: boolean } = {}) {
   // Cross-window replication: elect a sync host, follow one, or run solo.
   // Everything below the feeder gate still runs in every window — toasts,
@@ -393,7 +386,6 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
   // without this a follower's actions would park in the outbox until the
   // window happened to be promoted.
   useEnsureDispatch();
-  usePendingMessageCoverage();
   const isSyncHost = useIsSyncHost();
   return <>
     {/* A browser pane's page shows a route; it is not a window. Toasts, the
@@ -438,12 +430,8 @@ function WindowOnlyEffects() {
 // thing worth interrupting a different app for.
 function useWindowTitle(path: string) {
   const { mentions } = useChatUnread();
-  // Hosted mode also leads with results not yet read: a count that reaches
-  // zero as the person reads them, unlike a developer's busy fleet.
-  const hosted = useHostedMode();
-  const newResults = useNewResultsCount(hosted && !PANE_EMBED);
   const title = useInboxStore((s) => {
-    const label = pathLabel(path, s.clientState.ui);
+    const label = pathLabel(path);
     // An inbox window titles by the session it is SHOWING (the store pointer);
     // the URL's ?s= deep link is the fallback inside tabTitle.
     const inboxish = path.startsWith("/inbox") || path.startsWith("/conversation");
@@ -455,15 +443,13 @@ function useWindowTitle(path: string) {
     // known ("Codecast Org | Win the private network"); its kind and handle
     // ("Goal in-1") stand in only until the store holds the row.
     const surface = path.startsWith("/org/") && rest !== label ? "Org" : label;
-    // Hosted mode names an open conversation by its title alone, as a
-    // browser tab names a page; the surface name is developer framing.
-    return appDocumentTitle(surface, rest, PANE_EMBED || (hosted && inboxish && !!rest));
+    return appDocumentTitle(surface, rest, PANE_EMBED);
   });
   useWatchEffect(() => {
-    const lead = PANE_EMBED ? 0 : mentions + newResults;
+    const lead = PANE_EMBED ? 0 : mentions;
     const next = lead > 0 ? `(${lead}) ${title}` : title;
     if (document.title !== next) document.title = next;
-  }, [title, mentions, newResults]);
+  }, [title, mentions]);
 }
 
 function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
@@ -535,13 +521,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // its page. A hook: a window made from the warm spare becomes one after
   // it has mounted.
   const appWindow = useAppWindowRegistry();
-  // Hosted mode's surfaces and words (lib/surfaces.ts).
-  const terminalShown = useSurface("terminal");
-  const hostedMode = useHostedMode();
-  const words = useModeWords();
   // Shell display modes, as classes on the shell root and on anything that
   // portals out of it (the phone drawers), so the mode's scoped rules apply.
-  const shellModeClass = `${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}${hostedMode ? " hosted-mode" : ""}`;
+  const shellModeClass = `${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}`;
   // The nav slot owns the sidebar's width (so a workbench restores it with the
   // rest of the chrome); the legacy layouts.dashboard value seeds it once for
   // users whose width predates the slot taking ownership.
@@ -554,9 +536,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Phone width (below 768px) as a live media query: the side rails become
   // slide-over drawers and the resizable panels stand down.
   const isMobile = useIsPhone();
-  const barless = useBarlessShell();
-  const phoneHosted = hostedMode && isMobile;
-  const tabStripShown = useSurface("tabStrip");
   const pathname = usePathname();
   // The real browser URL from react-router. `pathname` (usePathname compat) can
   // report the active in-app tab's route instead — e.g. on Settings it returns a
@@ -568,18 +547,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // directly, and react-router's location does not hear it; the active tab's
   // path is a dep above, so this render sees the address the window shows.
   useWindowTitle(typeof window === "undefined" ? routerLocation.pathname + routerLocation.search : window.location.pathname + window.location.search);
-  // The one route guard for pages a mode hides: the rail and the palette
-  // already leave them out (SurfaceMode.showsPage), and a typed address, an
-  // old link or the back button lands on the hosted page that does the job.
-  const surfaceMode = useSurfaceMode();
-  const hiddenRedirect = hiddenPageRedirect(routerLocation.pathname, surfaceMode);
+  // The route guard for the Flows app's pages while the workspace has Flows
+  // off: the rail and the palette already leave them out, and a typed
+  // address, an old link or the back button lands on the Flows landing.
+  const flowsOn = useWorkspaceFeature("line");
+  const hiddenRedirect = featurePageRedirect(routerLocation.pathname, flowsOn);
   useWatchEffect(() => {
     if (hiddenRedirect) router.replace(hiddenRedirect);
   }, [hiddenRedirect, routerLocation.pathname]);
-  // Hosted mode's pages load on idle, so moving between them is instant.
-  useWatchEffect(() => {
-    if (hostedMode) preloadHostedPages();
-  }, [hostedMode]);
 
   const [desktopClass, setDesktopClass] = useState("");
   const [isDesktopApp, setIsDesktopApp] = useState(false);
@@ -885,7 +860,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
     const store = useInboxStore.getState();
     // The selected conversation's agent carries over; the default
-    // (lib/defaultAgent) fills in, the hosted assistant in hosted mode.
+    // (lib/defaultAgent) fills in.
     const agentType = newConversationAgentType(store, rawAgent);
     const { stubId } = store.beginOptimisticSession({
       agentType,
@@ -1125,7 +1100,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // pane holds the edge — a percent for the session list, pixels for the
   // comment rail — so only a plausibly-percent value is read here.
   const ctxSize = s.workspace.context.size;
-  const HOSTED_RAIL_MAX_PX = 420;
   const railSize = ctxSize !== undefined && ctxSize >= 5 && ctxSize <= 50 ? ctxSize : resolveVisualStyle(s.clientState.ui) === "minimal" ? 22 : 30;
   const railDragEchoRef = useRef<number | null>(railSize);
   const railGroupElRef = useRef<HTMLDivElement | null>(null);
@@ -1220,7 +1194,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           corner button with no layout height. Own boundary: a bar crash must
           cost the bar, never the stage. */}
       <ErrorBoundary name="TriageBar" level="inline">
-        <Surface name="triageBar"><TriageBar /></Surface>
+        <TriageBar />
       </ErrorBoundary>
     </div>
   );
@@ -1239,11 +1213,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             id="session-list"
             panelRef={sessionListPanelRef}
             minSize={200}
-            // Hosted mode's list sits beside the conversation, not over it: a
-            // width nobody chose stops at 420px (Whisk keeps a side list under
-            // about 380), so title and time stay close. A width the person
-            // dragged to is theirs.
-            maxSize={hostedMode && ctxSize === undefined ? HOSTED_RAIL_MAX_PX : "50%"}
+            maxSize="50%"
             defaultSize={showSessionList ? railSize : 0}
             collapsible
             collapsedSize={0}
@@ -1276,13 +1246,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           the titlebar (drag region + an inset past the zen corner) via
           useTitlebarHead, and the zen toggle stays in that corner on every
           page. An app window (Chat, Work) replaces it with the app's own bar. */}
-      {isZenMode && !appWindow && !barless && <ZenCorner />}
+      {isZenMode && !appWindow && <ZenCorner />}
       {appWindow && <AppWindowBar app={appWindow} />}
-      {hostedMode && !appWindow && <HostedSectionKeys />}
       {/* Header spans full width */}
-      {/* Hosted mode's desktop shell has no top bar (useBarlessShell): the
-          sidebar carries its search, workspace, bell and account. */}
-      {!barless && <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode || appWindow ? "hidden" : ""} relative`}>
+      <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode || appWindow ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
           <div data-cc-local-corner className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
@@ -1331,14 +1298,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 </ShortcutTooltip>
               </div>
             )}
-            {/* Hosted mode's bar keeps room for New conversation: the
-                conversations panel and the palette already list what is
-                recent, so the history clock is the developer's. */}
-            {!hostedMode && (
-              <ErrorBoundary name="RecentlyViewedMenu" level="inline">
-                <RecentlyViewedMenu onSelectSession={sessionListOnSelect} />
-              </ErrorBoundary>
-            )}
+            <ErrorBoundary name="RecentlyViewedMenu" level="inline">
+              <RecentlyViewedMenu onSelectSession={sessionListOnSelect} />
+            </ErrorBoundary>
           </>}
           workspace={<>
             <ErrorBoundary name="TeamSwitcher" level="inline">
@@ -1368,37 +1330,16 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ErrorBoundary name="SyncStatusChip" level="inline">
               <SyncStatusChip />
             </ErrorBoundary>
-            {/* The Claude Code account behind agent sessions: a machine fact.
-                Hosted mode's spend is the rail's meter. */}
-            <Surface name="machineChips">
-              <ErrorBoundary name="AccountUsageChip" level="inline">
-                <AccountUsageChip />
-              </ErrorBoundary>
-            </Surface>
-            {/* The running-agents pill counts a fleet; the assistant's own
-                work is the inbox's Working on it. */}
-            <Surface name="machineChips">
-              <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
-            </Surface>
-            <Surface name="machineChips">
-              <ErrorBoundary name="DaemonStatusChip" level="inline">
-                <DaemonStatusChip />
-              </ErrorBoundary>
-            </Surface>
+            {/* The Claude Code account behind agent sessions. */}
+            <ErrorBoundary name="AccountUsageChip" level="inline">
+              <AccountUsageChip />
+            </ErrorBoundary>
+            <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
+            <ErrorBoundary name="DaemonStatusChip" level="inline">
+              <DaemonStatusChip />
+            </ErrorBoundary>
           </TopbarTray>}
           actions={<>
-            {/* Below sm the search slot, and the pill in it, fold away;
-                hosted mode keeps starting a conversation on the phone. */}
-            {hostedMode && (
-              <TopbarButton
-                onClick={() => handleNewFullSession()}
-                aria-label={words.newConversation}
-                className="sm:hidden"
-                data-cc-compose=""
-              >
-                <SquarePen />
-              </TopbarButton>
-            )}
             <ErrorBoundary name="HeaderPins" level="inline">
               <HeaderPins />
             </ErrorBoundary>
@@ -1413,7 +1354,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </ErrorBoundary>
           </>}
           panels={<>
-            {showCommentsToggle && !hostedMode && (
+            {showCommentsToggle && (
               <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
                 <TopbarButton
                   onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
@@ -1424,7 +1365,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 </TopbarButton>
               </ShortcutTooltip>
             )}
-            {!isMobile && terminalShown && (
+            {!isMobile && (
               <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
                 <TopbarButton
                   onClick={(e) => { s.setDockOpen(s.workspace.dock.pane == null); tipActions.whisper('terminal.toggle', e); }}
@@ -1439,23 +1380,21 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             {/* Detached tab window only: merge this surface back into the
                 main window as a tab (renders null everywhere else). */}
             <AttachTabButton />
-            {/* On a hosted phone the conversations panel is its own screen,
-                reached from the inbox, so the bar drops its toggle. */}
-            {!phoneHosted && <ShortcutTooltip label={words.conversationsPanel} action="sidebar.toggleRight">
+            <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
               <TopbarButton
                 onClick={(e) => {
                   if (isMobile) setIsMobileSessionListOpen((open) => !open);
                   else s.toggleSidePanel();
                   tipActions.whisper('sidebar.toggleRight', e);
                 }}
-                aria-label={words.conversationsPanel}
+                aria-label="Toggle sessions panel"
               >
                 <PanelRight />
               </TopbarButton>
-            </ShortcutTooltip>}
+            </ShortcutTooltip>
           </>}
         />
-      </header>}
+      </header>
       {/* A phone's top bar has no face row, so a call's card has its own line. */}
       <PhoneCallStrip />
 
@@ -1468,19 +1407,18 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <StatusNoticeStack />
         <ConnectionBanner />
         <StorageHealthBanner />
-        <PasskeyProbationBanner />
-        <Surface name="banner.setup"><SetupPromptBanner /></Surface>
+        <SetupPromptBanner />
         <NewSnippetsBanner />
         <OrgIntroAnywhere />
         <FeatureOfferAnywhere />
         <ThemeIntroAnywhere />
-        <Surface name="banner.cliOffline"><CliOfflineBanner /></Surface>
-        <Surface name="banner.tmuxMissing"><TmuxMissingBanner /></Surface>
+        <CliOfflineBanner />
+        <TmuxMissingBanner />
         {/* The nudges share one slot, in priority order: only the first that
             renders shows (globals.css [data-nudge-slot]), and dismissing it
             brings up the next. Stacked, a new account met four at once. */}
         <div data-nudge-slot>
-          <Surface name="banner.nativeApp"><NativeAppBanner /></Surface>
+          <NativeAppBanner />
           <TeamDomainBanner />
           <NotificationNudgeBanner />
           <SharingSetupBanner />
@@ -1489,11 +1427,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <DeviceSetupDialog />
       </ErrorBoundary>
 
-      {tabStripShown && (
-        <ErrorBoundary name="TabBar" level="inline">
-          <TabBar />
-        </ErrorBoundary>
-      )}
+      <ErrorBoundary name="TabBar" level="inline">
+        <TabBar />
+      </ErrorBoundary>
 
       {/* Content area with sidebar and main. Group is always mounted; sidebar Panel
           collapses imperatively so toggling zen/sidebar/mobile doesn't remount {rightArea}. */}
@@ -1578,7 +1514,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {/* Integrated terminal, docked across the bottom (ctrl+`). Mounts lazily
           on first open, then stays mounted (hidden) so terminals survive
           close/reopen. Desktop-only surface. */}
-      {!isMobile && terminalShown && (
+      {!isMobile && (
         <ErrorBoundary name="TerminalPanel" level="panel">
           <TerminalDock />
         </ErrorBoundary>
@@ -1619,7 +1555,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </ErrorBoundary>
         </MobileDrawer>
       )}
-      <MobileDrawer open={showMobileSessionList} onOpenChange={setIsMobileSessionListOpen} side="right" title={words.conversations} className={shellModeClass}>
+      <MobileDrawer open={showMobileSessionList} onOpenChange={setIsMobileSessionListOpen} side="right" title="Sessions" className={shellModeClass}>
         <ErrorBoundary name="SessionList" level="panel">
           <SessionListPanel
             onSessionSelect={selectFromMobileSessionList}

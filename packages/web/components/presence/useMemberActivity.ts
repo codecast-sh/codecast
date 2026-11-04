@@ -59,7 +59,7 @@ export function useFleetSummaries(): Map<string, FleetSummary> {
     const st = useInboxStore.getState();
     const opts = {
       queued: st.sessionsWithQueuedMessages ?? new Set<string>(),
-      pendingSendIds: sessionsWithPendingSend(st.pendingMessages),
+      pendingSendIds: sessionsWithPendingSend(st.pendingMessages, now),
       now,
     };
     const counted = fleetCountedSessions(st, opts);
