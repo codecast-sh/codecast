@@ -127,12 +127,14 @@ export function ComposerTextRow({
     <div ref={rowRef} className="flex flex-wrap items-end gap-x-2 gap-y-1">
       {/* One grid cell for the textarea and the ghost suggestion: the
           cell takes the taller of the two, so a wrapped suggestion
-          grows the box and the textarea stretches to cover it. */}
-      <div className="grid flex-1 min-w-0">
+          grows the box and the textarea stretches to cover it. The 12rem
+          basis is the narrowest the field may get beside the cluster: below
+          it the cluster wraps under, whatever the fit measurement said. */}
+      <div className="grid flex-[1_1_12rem] min-w-0">
         {children}
       </div>
       {(actions || send) && (
-        <div ref={sendRef} className={`shrink-0 flex items-center gap-1 ${tucked ? "basis-full justify-end" : ""}`}>
+        <div ref={sendRef} className={`shrink-0 ml-auto flex items-center gap-1 ${tucked ? "basis-full justify-end" : ""}`}>
           {actions}
           {send}
         </div>

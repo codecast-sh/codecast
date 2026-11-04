@@ -299,7 +299,7 @@ export function StableContextPicker({ conversationId, trailing, className = "w-f
           type="button"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
-          className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors min-w-0"
+          className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-sol-text-dim hover:text-sol-text transition-colors min-w-0"
         >
           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           <Layers className="w-3 h-3 text-sol-cyan" />

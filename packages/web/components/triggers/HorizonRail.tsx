@@ -167,7 +167,7 @@ export function HorizonRail({ tasks, now, onOpenPastRun }: {
         {AXIS.map(([p, text]) => (
           <span
             key={p}
-            className={`absolute ${p === 0 ? "" : p === 1 ? "-translate-x-full" : "-translate-x-1/2"} ${p === 0.5 ? "text-sol-cyan" : ""}`}
+            className={`absolute whitespace-nowrap ${p === 0 ? "" : p === 1 ? "-translate-x-full" : "-translate-x-1/2"} ${p === 0.5 ? "text-sol-cyan" : ""}`}
             style={{ left: `${railLeft(p)}%` }}
           >
             {text}

@@ -47,12 +47,14 @@ export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
   // Composer holds text/images — keep hooks alive but render nothing.
   hidden: boolean;
   onAccept: (text: string) => void;
-  // The composer blanks its own placeholder while the ghost is showing.
-  onVisibleChange?: (visible: boolean) => void;
-}>(function ComposerSuggestion({ conversationId, idle, hidden, onAccept, onVisibleChange }, ref) {
+  // The ghost text on show, null on hide: the composer blanks its own
+  // placeholder while the ghost is showing and lays its row out for the
+  // ghost's words as it would for typed ones.
+  onShownChange?: (text: string | null) => void;
+}>(function ComposerSuggestion({ conversationId, idle, hidden, onAccept, onShownChange }, ref) {
   const { text, index, count, accept: take, cycle, settleSend } = useComposerSuggestion({ conversationId, idle, hidden });
   const visible = text !== null;
-  useWatchEffect(() => { onVisibleChange?.(visible); }, [visible, onVisibleChange]);
+  useWatchEffect(() => { onShownChange?.(text); }, [text, onShownChange]);
 
   const accept = useCallback(() => {
     const t = take();
