@@ -564,6 +564,20 @@ export function registrySupersedesCachedPid(
   return reg.ts * 1000 > cachedFilledAtMs;
 }
 
+// The terminal a session's own SessionStart claim names for `pid` (its
+// TERM_PROGRAM: "herdr", "ghostty", "iTerm.app", …), for a cache fill that
+// knows only the pid. Delivery picks its injector from the cached terminal, and
+// a fill without one is sent down the AppleScript route, which is iTerm2. Only
+// the hook speaks for the process, as in registrySupersedesCachedPid: a daemon
+// write, a different pid or an "unknown" terminal names nothing.
+export function registeredTerminalFor(registration: unknown, pid: number): string | undefined {
+  if (!registration || typeof registration !== "object") return undefined;
+  const reg = registration as { pid?: unknown; term?: unknown; src?: unknown };
+  if (reg.pid !== pid || reg.src === "daemon") return undefined;
+  if (typeof reg.term !== "string" || !reg.term || reg.term === "unknown") return undefined;
+  return reg.term;
+}
+
 /**
  * The agent processes running on this machine right now (Claude Code and
  * Codex), each matched to its session id, for `cast resume`'s live picker.
