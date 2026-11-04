@@ -581,13 +581,14 @@
   overflow-wrap: anywhere;
   /* Prose gets a measure. Unbounded, a message ran 150 characters a line at
    * 1600px and past 200 on a 27" display, where the eye loses the line return.
-   * Code, tables and images stay free to use the whole column. */
+   * Code and tables stay free to use the whole column. Images size themselves
+   * (markdown images, attachments, card thumbnails each carry their own caps),
+   * so no rule here may override an img's max-width. */
   max-width: 78ch;
 }
 
 .ch-msg-body pre,
-.ch-msg-body table,
-.ch-msg-body img {
+.ch-msg-body table {
   max-width: none;
 }
 
