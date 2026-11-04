@@ -482,7 +482,16 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 interface FormatOptions {
   full?: boolean;
   targetLine?: number;
+  /**
+   * Stop the page once its messages pass this many characters and name the
+   * command that reads on. An agent's shell tool keeps only a short preview of
+   * output past ~30K characters, so a read meant for one must fit under that.
+   */
+  maxChars?: number;
 }
+
+/** A page `cast read` hands an agent: under the ~30K characters an agent's shell tool shows whole. */
+export const READ_PAGE_CHARS = 24_000;
 
 /** The part of `cast read <id> --ask`'s answer the formatter reads (the shared AskResult contract). */
 export type ReadAskResult = Omit<AskResult, "citations" | "terms" | "prompt">;
@@ -546,69 +555,100 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
   }
   lines.push("");
 
+  const blocks: Array<{ line: number; text: string }> = [];
   for (const msg of result.messages) {
-    // Skip empty messages (streaming artifacts)
     const hasContent = msg.content && msg.content.trim();
     const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
     const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
-    if (!hasContent && !hasToolCalls && !hasToolResults) {
+    // Streaming artifacts carry nothing; a turn holding only tool results shows
+    // nothing but its header unless --full prints the results.
+    if (!hasContent && !hasToolCalls && !(hasToolResults && options.full)) {
       continue;
     }
+    const block: string[] = [];
 
     const isTarget = targetLine !== undefined && msg.line === targetLine;
     const lineNum = String(msg.line).padStart(4);
     const role = formatRole(msg.role);
-    lines.push(isTarget ? `${fmt.accent("►")}${lineNum.slice(1)}: ${role} ${fmt.accent("← linked")}` : `${lineNum}: ${role}`);
+    block.push(isTarget ? `${fmt.accent("►")}${lineNum.slice(1)}: ${role} ${fmt.accent("← linked")}` : `${lineNum}: ${role}`);
 
     if (hasContent) {
       const indentedContent = msg.content.split("\n").map((l) => "       " + l).join("\n");
-      lines.push(indentedContent);
+      block.push(indentedContent);
     }
 
     if (hasToolCalls && msg.tool_calls) {
       if (options.full) {
-        lines.push(`       <TOOL_CALLS>`);
+        block.push(`       <TOOL_CALLS>`);
         for (const tc of msg.tool_calls as Array<{ name?: string; input?: unknown }>) {
-          lines.push(`       - ${tc.name || "unknown"}`);
+          block.push(`       - ${tc.name || "unknown"}`);
           if (tc.input) {
             let parsed = tc.input;
             try { if (typeof parsed === "string") parsed = JSON.parse(parsed); } catch {}
             const inputStr = typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2);
             const indented = inputStr.split("\n").map((l: string) => "         " + l).join("\n");
-            lines.push(indented);
+            block.push(indented);
           }
         }
-        lines.push(`       </TOOL_CALLS>`);
+        block.push(`       </TOOL_CALLS>`);
       } else {
         const calls = msg.tool_calls as Array<{ name?: string; input?: unknown }>;
         const first = summarizeToolCall(calls[0]);
         const more = calls.length > 1 ? ` ...(${calls.length - 1} more)` : "";
-        lines.push(`       ${fmt.muted(`${first}${more}`)}`);
+        block.push(`       ${fmt.muted(`${first}${more}`)}`);
         // A StructuredOutput call's INPUT is the agent's whole deliverable, and
         // this collapsed line is all a non-full read shows of it — readers have
         // mistaken that for an empty result. Point at the exact command.
         if (calls.some((tc) => tc.name === "StructuredOutput")) {
-          lines.push(`       ${fmt.muted(`↳ full payload: cast read ${truncateId(conv.id)} ${msg.line < 0 ? `-n ${-msg.line}` : msg.line} --full`)}`);
+          block.push(`       ${fmt.muted(`↳ full payload: cast read ${truncateId(conv.id)} ${msg.line < 0 ? `-n ${-msg.line}` : msg.line} --full`)}`);
         }
       }
     }
 
     if (hasToolResults && msg.tool_results && options.full) {
-      lines.push(`       <TOOL_RESULTS>`);
+      block.push(`       <TOOL_RESULTS>`);
       for (const tr of msg.tool_results as Array<{ content?: string; isError?: boolean }>) {
         const prefix = tr.isError ? "[ERROR] " : "";
         const content = tr.content || "(empty)";
         const truncated = content.length > 2000 ? content.slice(0, 2000) + "\n... (truncated)" : content;
         const indented = truncated.split("\n").map((l) => "         " + prefix + l).join("\n");
-        lines.push(indented);
+        block.push(indented);
       }
-      lines.push(`       </TOOL_RESULTS>`);
+      block.push(`       </TOOL_RESULTS>`);
     }
 
-    lines.push("");
+    blocks.push({ line: msg.line, text: block.join("\n") + "\n" });
   }
 
+  lines.push(...fitReadPage(blocks, options.maxChars, truncateId(conv.id)));
   return lines.join("\n");
+}
+
+/**
+ * The blocks that fit in maxChars, always at least one. A forward read keeps
+ * its start and names the range that continues it; a tail read (negative
+ * lines count back from the end) keeps its newest messages.
+ */
+function fitReadPage(blocks: Array<{ line: number; text: string }>, maxChars: number | undefined, id: string): string[] {
+  const total = blocks.reduce((n, b) => n + b.text.length, 0);
+  if (!maxChars || total <= maxChars) return blocks.map((b) => b.text);
+  const fromEnd = blocks.some((b) => b.line < 0);
+  const ordered = fromEnd ? [...blocks].reverse() : blocks;
+  const kept: typeof blocks = [];
+  let used = 0;
+  for (const b of ordered) {
+    if (kept.length > 0 && used + b.text.length > maxChars) break;
+    kept.push(b);
+    used += b.text.length;
+  }
+  const cut = blocks.length - kept.length;
+  const limit = `${Math.round(maxChars / 1000)}K-character page`;
+  if (fromEnd) {
+    return [fmt.muted(`… ${cut} older message${cut === 1 ? "" : "s"} cut to fit a ${limit}; read further back with a line range`) + "\n", ...kept.reverse().map((b) => b.text)];
+  }
+  const next = blocks[kept.length].line;
+  const last = blocks[blocks.length - 1].line;
+  return [...kept.map((b) => b.text), fmt.muted(`… page ends here (${limit}); continue: cast read ${id} ${next}:${last}`)];
 }
 
 // One message rendered for the `cast sessions <id> -w` live follow: a timestamped

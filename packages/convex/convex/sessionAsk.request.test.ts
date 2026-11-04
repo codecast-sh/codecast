@@ -68,6 +68,27 @@ export const askFixtures: Array<{ name: string; title: string; question: string;
   },
 ];
 
+/** A convex-test deployment holding one fixture session, and the id to ask about. */
+async function seedAsk(fx: (typeof askFixtures)[number]) {
+  const t = convexTest(schema, {
+    "./_generated/server.ts": () => import("./_generated/server"),
+    "./syncOutbox.ts": () => import("./syncOutbox"),
+    "./sessionAsk.ts": () => import("./sessionAsk"),
+    "./ipRateLimit.ts": () => import("./ipRateLimit"),
+  });
+  const conversation_id = await t.run(async (ctx) => {
+    const user_id = await ctx.db.insert("users", { name: "Fixture" } as any);
+    await ctx.db.insert("api_tokens", { user_id, token_hash: await hashToken(TOKEN), name: "cli", created_at: S0, last_used_at: S0 } as any);
+    const id = await ctx.db.insert("conversations", {
+      user_id, agent_type: "claude_code", session_id: `s-${fx.name}`, started_at: S0, updated_at: S0, title: fx.title,
+      message_count: fx.rows.length, is_private: true, status: "active",
+    } as any);
+    for (const [i, row] of fx.rows.entries()) await ctx.db.insert("messages", { conversation_id: id, timestamp: S0 + i * 1000, ...row } as any);
+    return id;
+  });
+  return { t, conversation_id: String(conversation_id) };
+}
+
 describe("ask request golden", () => {
   const fetchStub = captureFetch(REPLY);
   beforeEach(() => fetchStub.install());
@@ -76,24 +97,9 @@ describe("ask request golden", () => {
   test("the ask action posts the recorded terms and answer bodies", async () => {
     const actual: GoldenCase[] = [];
     for (const fx of askFixtures) {
-      const t = convexTest(schema, {
-        "./_generated/server.ts": () => import("./_generated/server"),
-  "./syncOutbox.ts": () => import("./syncOutbox"),
-        "./sessionAsk.ts": () => import("./sessionAsk"),
-        "./ipRateLimit.ts": () => import("./ipRateLimit"),
-      });
-      const conversation_id = await t.run(async (ctx) => {
-        const user_id = await ctx.db.insert("users", { name: "Fixture" } as any);
-        await ctx.db.insert("api_tokens", { user_id, token_hash: await hashToken(TOKEN), name: "cli", created_at: S0, last_used_at: S0 } as any);
-        const id = await ctx.db.insert("conversations", {
-          user_id, agent_type: "claude_code", session_id: `s-${fx.name}`, started_at: S0, updated_at: S0, title: fx.title,
-          message_count: fx.rows.length, is_private: true, status: "active",
-        } as any);
-        for (const [i, row] of fx.rows.entries()) await ctx.db.insert("messages", { conversation_id: id, timestamp: S0 + i * 1000, ...row } as any);
-        return id;
-      });
+      const { t, conversation_id } = await seedAsk(fx);
       fetchStub.bodies.length = 0;
-      await t.action(internal.sessionAsk.ask, { api_token: TOKEN, conversation_id: String(conversation_id), question: fx.question });
+      await t.action(internal.sessionAsk.ask, { api_token: TOKEN, conversation_id, question: fx.question });
       expect(fetchStub.bodies.length).toBe(2);
       actual.push({ case: `${fx.name}:terms`, body: fetchStub.bodies[0] }, { case: `${fx.name}:answer`, body: fetchStub.bodies[1] });
     }
@@ -116,5 +122,31 @@ describe("ask requests from rows", () => {
       const { request } = askAnswerRequest({ question: fx.question, title: fx.title, read, termCount: terms.length });
       expect(goldenBody(request)).toBe(body(`${fx.name}:answer`));
     }
+  });
+});
+
+// A refused model call (an empty credit balance on 2026-10-28..11-03) answered
+// "retry in a moment", and agents retried instead of reporting it. The API's
+// own reason reaches the caller.
+describe("ask when the model API refuses", () => {
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.ANTHROPIC_API_KEY;
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API." } }),
+      { status: 400 },
+    )) as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = realKey;
+  });
+
+  test("the error names the API's reason", async () => {
+    const { t, conversation_id } = await seedAsk(askFixtures[0]);
+    const failure = await t.action(internal.sessionAsk.ask, { api_token: TOKEN, conversation_id, question: "anything" }).then(() => null, (e) => e);
+    expect(failure?.data?.message).toContain("credit balance is too low");
   });
 });

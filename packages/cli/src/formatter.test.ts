@@ -491,3 +491,47 @@ describe("formatReadResult names what any client's tool did", () => {
     expect(out).toContain("commandExecution cat README");
   });
 });
+
+// An agent's shell tool keeps only a 2KB preview of output past ~30K
+// characters, and a session read past that left the agent paging a saved file
+// with sed. A page fits the budget and names the range that continues it, and
+// turns that hold only tool results stop printing as bare headers.
+describe("formatReadResult fits a page an agent can read whole", () => {
+  const conversation = { id: "jx7abcd1234", title: "Long", project_path: "/p", message_count: 40, updated_at: new Date().toISOString() };
+  const at = new Date().toISOString();
+  const said = (line: number, text: string) => ({ line, role: "assistant", content: text, timestamp: at });
+  const resultOnly = (line: number) => ({ line, role: "user", content: "", timestamp: at, tool_results: [{ content: "ok" }] });
+
+  test("a turn holding only tool results prints nothing unless --full", () => {
+    const result = { conversation, messages: [said(1, "hello"), resultOnly(2)] };
+    expect(strip(formatReadResult(result))).not.toContain("2: [user]");
+    expect(strip(formatReadResult(result, { full: true }))).toContain("<TOOL_RESULTS>");
+  });
+
+  test("a forward read stops at the budget and names the rest", () => {
+    const messages = Array.from({ length: 10 }, (_, i) => said(i + 1, "x".repeat(1000)));
+    const out = strip(formatReadResult({ conversation, messages }, { maxChars: 3500 }));
+    expect(out).toContain("   3: ");
+    expect(out).not.toContain("   4: ");
+    expect(out).toContain("continue: cast read jx7abcd 4:10");
+  });
+
+  test("a tail read keeps its newest messages", () => {
+    const messages = Array.from({ length: 10 }, (_, i) => said(i - 10, "x".repeat(1000)));
+    const out = strip(formatReadResult({ conversation, messages }, { maxChars: 3500 }));
+    expect(out).toContain("  -1: ");
+    expect(out).not.toContain("  -4: ");
+    expect(out).toContain("7 older messages cut");
+  });
+
+  test("one message larger than the budget still prints", () => {
+    const out = strip(formatReadResult({ conversation, messages: [said(1, "y".repeat(5000)), said(2, "z")] }, { maxChars: 100 }));
+    expect(out).toContain("y".repeat(5000));
+    expect(out).toContain("continue: cast read jx7abcd 2:2");
+  });
+
+  test("no budget prints everything", () => {
+    const messages = Array.from({ length: 10 }, (_, i) => said(i + 1, "x".repeat(1000)));
+    expect(strip(formatReadResult({ conversation, messages }))).toContain("  10: ");
+  });
+});
