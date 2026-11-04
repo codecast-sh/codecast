@@ -3,14 +3,15 @@ import { makeFakeDb } from "./testDb";
 import { EXECUTIVE_ASSISTANT_HANDLE, HEAD_OF_PEOPLE_HANDLE, LEGACY_HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
 import { executiveAssistantCharter, defaultAssistantHandle, ensureRoleRoutine, headOfPeopleCharter, performCreateRole, performHireAssistant, performProvisionRole, performStaff } from "./orgRoles";
 import { liveRoleByHandle } from "./lib/orgAccess";
-import { findExistingAnchor, isWorkspaceAgentRole, roleBootstrapOf } from "./anchors";
+import { findExistingAnchor, performSetWorkspaceAgent, roleBootstrapOf, workspaceAgentRoleOf } from "./anchors";
 import { performRenameHeadOfPeople, performSeatExecutiveAssistant, rewriteCharterDoc } from "./migrations";
 import { resolveChatMentions } from "./lib/mentionResolve";
 
 // The Head of People rename and the Executive Assistant as the person's right hand
 // (docs/architecture/org-staffing.md S30): the old handle keeps naming the
-// Head of People, an assistant owns no work and lives in its own boundary, the
-// workspace's agent is the assistant when one stands, and the migrations
+// Head of People, an assistant owns no work and lives in its own boundary, a
+// person's own workspace agent is their global assistant, a team's is the role
+// its admins chose else its Head of People, and the migrations
 // convert a personal root or seat a named role, and put everything back on
 // reverse.
 
@@ -94,7 +95,7 @@ describe("hiring an Executive Assistant", () => {
     // The seat is the personal workspace's agent now.
     const seat = await findExistingAnchor(ctx, { scope_type: "user", scope_user_id: ME as any });
     expect(String(seat?.org_role_id)).toBe(String(role._id));
-    expect(isWorkspaceAgentRole(role, undefined)).toBe(true);
+    expect(workspaceAgentRoleOf([role], {})).toBe(role);
     // Hiring again is the same seat.
     const again = await performHireAssistant(ctx, ME as any, { reach: { reach: "global" }, project_path: "/repo" });
     expect(again.already_existed).toBe(true);
@@ -109,26 +110,41 @@ describe("hiring an Executive Assistant", () => {
     expect(role.scope_type).toBe("user");
     expect(role.assistant).toEqual({ reach: "team", team_id: TEAM });
     expect(role.handle).toBe("executive-assistant-acme");
-    expect(isWorkspaceAgentRole(role, TEAM)).toBe(false);
-    expect(isWorkspaceAgentRole(role, undefined)).toBe(false);
+    expect(workspaceAgentRoleOf([role], { team_id: TEAM })).toBeNull();
+    expect(workspaceAgentRoleOf([role], {})).toBeNull();
     const boot = await roleBootstrapOf(ctx, role);
     expect(boot.assistantOpening).toContain("Executive Assistant for Acme");
     expect(boot.assistantOpening).toContain("--team Acme");
   });
 
-  test("a team assistant lives in the team, is the team's agent over the Head of People, and answers @anchor", async () => {
+  test("a team assistant lives in the team; the Head of People answers for the team until an admin chooses the assistant", async () => {
     const { ctx, tables } = world();
     await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "jxmine1" });
     const head = tables.org_roles[0];
-    expect(isWorkspaceAgentRole(head, TEAM)).toBe(true);
     const out = await performHireAssistant(ctx, ME as any, { reach: { reach: "team", team_id: TEAM }, project_path: "/repo" });
     const assistant = tables.org_roles.find((r) => String(r._id) === String(out.role._id))!;
     expect(assistant.scope_type).toBe("team");
     expect(assistant.team_id).toBe(TEAM);
-    const seat = await findExistingAnchor(ctx, { scope_type: "team", team_id: TEAM });
-    expect(String(seat?.org_role_id)).toBe(String(assistant._id));
-    const mentions = await resolveChatMentions(ctx, TEAM, "@anchor what is the plan?", ME as any);
-    expect(mentions.roles.map((r: any) => String(r._id))).toEqual([String(assistant._id)]);
+    // Hiring moves nothing: the Head of People still answers @anchor.
+    const answering = async () => String((await findExistingAnchor(ctx, { scope_type: "team", team_id: TEAM }))?.org_role_id);
+    const anchorMention = async () => (await resolveChatMentions(ctx, TEAM, "@anchor what is the plan?", ME as any)).roles.map((r: any) => String(r._id));
+    expect(await answering()).toBe(String(head._id));
+    expect(await anchorMention()).toEqual([String(head._id)]);
+    // An admin's choice moves it, and clearing it moves it back.
+    await performSetWorkspaceAgent(ctx, ME as any, { team_id: TEAM, role_id: assistant._id });
+    expect(await answering()).toBe(String(assistant._id));
+    expect(await anchorMention()).toEqual([String(assistant._id)]);
+    await performSetWorkspaceAgent(ctx, ME as any, { team_id: TEAM, role_id: null });
+    expect(await answering()).toBe(String(head._id));
+  });
+
+  test("only a team admin may choose, and only one of the team's seated roles", async () => {
+    const { ctx, tables } = world();
+    await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "jxmine1" });
+    const own = await performHireAssistant(ctx, ME as any, { reach: { reach: "team", team_id: TEAM }, personal: true, project_path: "/repo" });
+    await expect(performSetWorkspaceAgent(ctx, ME as any, { team_id: TEAM, role_id: own.role._id })).rejects.toThrow(/not one of this team's/);
+    tables.team_memberships[0].role = "member";
+    await expect(performSetWorkspaceAgent(ctx, ME as any, { team_id: TEAM, role_id: null })).rejects.toThrow(/Only a team admin/);
   });
 
   test("an assistant refuses a scope", async () => {
@@ -364,7 +380,7 @@ describe("migrations.seatExecutiveAssistant", () => {
     expect(JSON.stringify([row.name, row.handle, row.anchor_id, row.brief_doc_id, row.charter_doc_id, tables.agent_tasks, tables.conversations])).toBe(kept);
     // It is the person's global assistant to every reader: the personal
     // workspace's agent, and the seat a hire finds instead of making another.
-    expect(isWorkspaceAgentRole(row, undefined)).toBe(true);
+    expect(workspaceAgentRoleOf([row], {})).toBe(row);
     const hire = await performHireAssistant(ctx, ME as any, { reach: { reach: "global" }, project_path: "/repo" });
     expect(hire.already_existed).toBe(true);
     expect(String(hire.role._id)).toBe(String(row._id));

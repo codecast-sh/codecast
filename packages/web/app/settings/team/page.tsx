@@ -34,6 +34,7 @@ import {
   SettingsField, SettingsPanel, SettingsSection, SettingsRow,
 } from "../../../components/settings/ui";
 import { TeamMachines } from "../../../components/settings/TeamMachines";
+import { TeamWorkspaceAgent } from "../../../components/settings/TeamWorkspaceAgent";
 
 export default function TeamPage() {
   const router = useRouter();
@@ -307,6 +308,7 @@ export default function TeamPage() {
             </div>
           )}
         </SettingsRow>
+        <TeamWorkspaceAgent teamId={String(effectiveTeamId)} isAdmin={isAdmin} />
         {isAdmin && (
           <SettingsField label="Team icon">
             <TeamIdentityPicker

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { rootAgentOf, type AnchorRow } from "./useSyncAnchors";
 
-// S22: the shell's chip, sidebar entry and /anchor page all draw the root role
-// from the anchor rows. Every role's standing session is such a row, so the
-// picker must take the row the server marks as the root, never the oldest lead.
+// The header's default pin draws the workspace's agent from the anchor rows.
+// Every role's standing session is such a row, so the picker must take the
+// row the server marks as the root (anchors.workspaceAgentRoleOf), never the
+// oldest lead.
 const row = (o: Partial<AnchorRow>): AnchorRow => ({ _id: o._id ?? "a", scope_type: "team", team_id: "t1", bot_user_id: "b", host_user_id: "h", name: o.name ?? "x", bot_name: o.name ?? "x", bot_avatar: null, team_name: "Union", ...o } as AnchorRow);
 
 describe("rootAgentOf", () => {
@@ -23,16 +24,9 @@ describe("rootAgentOf", () => {
     expect(rootAgentOf([infra], "t1")).toBeNull();
   });
 
-  test("rows from before the server mark still find the head of people by handle", () => {
-    const unmarked = row({ _id: "head-old", name: "Anchor", role: { _id: "r10", short_id: "or-10", name: "Head of People", handle: "head-of-people", avatar: null, status: "active" } as any });
-    expect(rootAgentOf([infra, unmarked], "t1")?._id).toBe("head-old");
-  });
-
-  // S30: a workspace's Executive Assistant answers as its agent ahead of the Head of People.
-  test("an Executive Assistant is the root over the Head of People", () => {
-    const assistant = row({ _id: "ea", scope_type: "user", team_id: null, name: "Executive Assistant", is_root: true, role: { _id: "r44", short_id: "or-44", name: "Executive Assistant", handle: "executive-assistant", avatar: "bear", status: "active", assistant: { reach: "global" } } as any });
-    expect(rootAgentOf([infra, head, personal, assistant], null)?._id).toBe("ea");
-    expect(rootAgentOf([infra, head, personal, assistant], "t1")?._id).toBe("head");
+  test("whichever row the server marks wins, an assistant included", () => {
+    const assistant = row({ _id: "ea", name: "Executive Assistant", is_root: true, role: { _id: "r44", short_id: "or-44", name: "Executive Assistant", handle: "executive-assistant", avatar: "bear", status: "active", assistant: { reach: "team", team_id: "t1" } } as any });
+    expect(rootAgentOf([infra, { ...head, is_root: false }, assistant], "t1")?._id).toBe("ea");
   });
 
   test("a seat that is no role's yet stands in for a root that is not hired", () => {

@@ -30,6 +30,7 @@ import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../or
 import { type RoleCaps, type RoleCounters, type ScopeOverlap } from "./scopeTypes";
 import { AUTONOMY_LABEL, autonomyOn, autonomySentence, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 import { isHeadOfPeopleRole } from "../orgStaffingTypes";
+import { useRootAgent } from "../../../hooks/useSyncAnchors";
 import { SlackConnect } from "../../anchor/SlackConnect";
 import { OrgObjectLink } from "../company/OrgObjectLink";
 import { ConsequentialSwitch } from "../../consequential/ConsequentialSwitch";
@@ -189,6 +190,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   const startsOnItsOwn = autonomyOn(role.trust);
   const runCost = useRunCost(role.scope.project_ids[0] ?? null);
   const isRoot = isHeadOfPeopleRole(role);
+  const answersForWorkspace = String(useRootAgent()?.role?._id ?? "") === String(role._id);
   const channels = useInboxStore((s) => (s as any).chatChannels as Record<string, any> | undefined);
   const followed = useMemo(() => (role.follow_channel_ids ?? []).map((id) => ({ id, name: channels?.[id]?.name ?? "a channel" })), [role.follow_channel_ids, channels]);
   // The channels it could follow: this workspace's rooms, never a direct message.
@@ -400,8 +402,8 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         </Section>
       )}
 
-      {/* The Head of People is the workspace's agent (S22): its Slack lives here. */}
-      {isHeadOfPeopleRole(role) && canEdit && (
+      {/* The role that answers for the workspace carries its Slack. */}
+      {answersForWorkspace && canEdit && (
         <Section title="Slack" hint="Connect a Slack workspace so a mention there reaches it, and it can post as itself.">
           <SlackConnect scope={tree.workspace.kind} teamId={tree.workspace.kind === "team" ? tree.workspace.id : null} agentName={role.name} />
         </Section>

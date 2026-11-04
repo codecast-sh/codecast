@@ -19,7 +19,7 @@ import {
 import { entityMentionRegex } from "@codecast/shared/entities";
 import { emailLocalHandle } from "../chatText";
 import { liveRoleByHandle } from "./orgAccess";
-import { EXECUTIVE_ASSISTANT_HANDLE, HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
+import { workspaceAnchorFor } from "../anchors";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
 import { canSendProductMessage } from "../pendingMessages";
 
@@ -197,17 +197,15 @@ export async function resolveChatMentions(
   };
   const workspaceAgentRole = async (): Promise<Doc<"org_roles"> | null> => {
     for (const boundary of [{ team_id: teamId }, { scope_user_id: senderId }]) {
-      for (const h of [EXECUTIVE_ASSISTANT_HANDLE, HEAD_OF_PEOPLE_HANDLE]) {
-        const role = await liveRoleByHandle(ctx, boundary, h);
-        if (role) return role;
-      }
+      const seat = await workspaceAnchorFor(ctx, boundary);
+      const role = seat?.org_role_id ? ((await ctx.db.get(seat.org_role_id)) as Doc<"org_roles"> | null) : null;
+      if (role) return role;
     }
     return null;
   };
   for (const written of handles) {
-    // `@anchor` names the workspace's agent once one stands (org-staffing.md
-    // S12, S30): the team's Executive Assistant when one does, else the Head of
-    // People. The bot named Anchor is its identity, so the mention reaches
+    // `@anchor` names the workspace's agent once one stands
+    // (anchors.workspaceAgentRoleOf). The bot named Anchor is its identity, so the mention reaches
     // the seat, not the bot. `@chief-of-staff` reaches the Head of People
     // through rolesByHandle's legacy rule.
     const handle = written.toLowerCase() === ANCHOR_ALIAS ? (await workspaceAgentRole())?.handle ?? written : written;

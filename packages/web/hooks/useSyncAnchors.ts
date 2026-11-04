@@ -4,7 +4,6 @@
 // entry, the inbox's marking, and chat's DM naming for personal bots. A row
 // is the seat of the workspace's root role (org-staffing.md S22): `role` is
 // that role's identity, and every surface draws the role, never the row.
-import { isHeadOfPeopleRole } from "../components/org/orgStaffingTypes";
 import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import type { AssistantReach } from "@codecast/shared/contracts/orgLead";
 import { useMemo } from "react";
@@ -21,7 +20,7 @@ const api = _api as any;
 
 export type AnchorRow = {
   _id: string;
-  /** The workspace's root: the head of people's seat (S22). Set by listAnchors. */
+  /** The workspace's agent: the seat of the role that answers for it (anchors.workspaceAgentRoleOf). Set by listAnchors. */
   is_root?: boolean;
   scope_type: "team" | "user";
   team_id?: string | null;
@@ -122,12 +121,9 @@ export function rootAgentOf(anchors: AnchorRow[], activeTeamId: string | null | 
     ? a.scope_type === "team" && a.team_id === activeTeamId
     : a.scope_type === "user");
   // Every role's standing session is a row, so the root is the row the server
-  // marks (the workspace's Executive Assistant, else the Head of People's seat,
-  // S30), else a seat that is no role's yet (a workspace still waiting for
-  // its root); a lead is never the root.
-  return inWorkspace.find((a) => a.is_root && a.role?.assistant)
-    ?? inWorkspace.find((a) => a.is_root)
-    ?? inWorkspace.find((a) => (!!a.role && isHeadOfPeopleRole(a.role)))
+  // marks (anchors.workspaceAgentRoleOf), else a seat that is no role's yet (a
+  // workspace still waiting for its root); a lead is never the root.
+  return inWorkspace.find((a) => a.is_root)
     ?? inWorkspace.find((a) => !a.role)
     ?? null;
 }

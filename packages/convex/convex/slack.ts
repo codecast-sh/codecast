@@ -294,7 +294,7 @@ export const getInstallUrl = action({
 // a slash in http URLs (`/\evil` becomes `//evil`), so both are refused, as is
 // anything with whitespace or angle brackets.
 export function safeReturnTo(raw: string | undefined): string {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || /[\s<>\\]/.test(raw)) return "/anchor";
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || /[\s<>\\]/.test(raw)) return "/org/workspace";
   return raw.slice(0, 400);
 }
 
@@ -307,7 +307,7 @@ export const completeSlackInstall = action({
   args: { api_token: v.optional(v.string()), code: v.string(), state: v.string() },
   handler: async (ctx, args): Promise<{ ok: boolean; error?: string; scope_type?: string; team_id?: string; return_to: string }> => {
     const st = await verifyState(args.state);
-    if (!st) return { ok: false, error: "bad_state", return_to: "/anchor" };
+    if (!st) return { ok: false, error: "bad_state", return_to: "/org/workspace" };
     const returnTo = safeReturnTo(typeof st.return_to === "string" ? st.return_to : undefined);
     const scopeType = st.scope_type === "team" ? ("team" as const) : st.scope_type === "self" ? ("self" as const) : ("user" as const);
     const scope = await ctx.runQuery(internal.slack.resolveInstallScope, {

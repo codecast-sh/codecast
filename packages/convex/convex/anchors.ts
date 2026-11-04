@@ -260,30 +260,60 @@ export async function findExistingAnchor(
   if (scope.org_role_id) return live.find((a: any) => String(a.org_role_id ?? "") === String(scope.org_role_id)) ?? null;
   const plain = live.find((a: any) => !a.org_role_id);
   if (plain) return plain;
-  // The workspace's standing agent (org-staffing.md S12, S30): the boundary's
-  // own Executive Assistant when one stands (a team's assistant, or the global one in
-  // a personal boundary), else the Head of People. Its row carries the role
-  // pointer and still answers as the workspace anchor, so Slack, chat and
-  // `cast anchor say` keep working as aliases of whichever stands.
-  let head: any = null;
+  // The workspace's standing agent is a role's seat. Its row still answers as
+  // the workspace anchor, so Slack, chat and `cast anchor say` keep working as
+  // aliases of whichever role answers.
+  const seated: { seat: any; role: any }[] = [];
   for (const a of live) {
     const role = a.org_role_id ? await ctx.db.get(a.org_role_id) : null;
-    if (!role || role.status === "retired") continue;
-    if (isWorkspaceAgentRole(role, a.team_id)) { if (role.assistant) return a; if (!head) head = a; }
+    if (role && role.status !== "retired") seated.push({ seat: a, role });
   }
-  return head;
+  const team = scope.scope_type === "team" && scope.team_id ? await ctx.db.get(scope.team_id) : null;
+  const role = workspaceAgentRoleOf(seated.map((s) => s.role), { team_id: scope.scope_type === "team" ? scope.team_id : undefined, chosen_role_id: team?.workspace_agent_role_id });
+  return role ? seated.find((s) => s.role === role)!.seat : null;
 }
 
-/** The workspace agent rule as a predicate over a seat's role: an assistant for
- *  this boundary, or the Head of People (listAnchors' `is_root`). */
-export function isWorkspaceAgentRole(role: any, teamId: unknown): boolean {
-  if (!role || role.status === "retired") return false;
-  // An assistant speaks for the boundary its row lives in: the global one for the
-  // person's own workspace, a team's assistant for that team. A person's own
-  // assistant for a team lives in their boundary and is nobody's workspace agent.
-  if (role.assistant) return role.assistant.reach === "global" ? !teamId && role.scope_type === "user" : role.scope_type === "team" && String(role.assistant.team_id) === String(teamId ?? "");
-  return isHeadOfPeopleRole(role);
+/** The workspace agent rule (org-staffing.md S12, S30): which of a boundary's
+ *  seated roles answers for it (Slack, team chat, @anchor, decision talk).
+ *  A team's is the role its admins chose, else its Head of People, else the
+ *  team's own assistant. A person's own boundary is their global assistant,
+ *  else their Head of People. Hiring a role never moves it; only a choice does. */
+export function workspaceAgentRoleOf(roles: any[], boundary: { team_id?: unknown; chosen_role_id?: unknown }): any | null {
+  const live = roles.filter((r) => r && r.status !== "retired");
+  if (!boundary.team_id) {
+    return live.find((r) => r.scope_type === "user" && r.assistant?.reach === "global")
+      ?? live.find(isHeadOfPeopleRole)
+      ?? null;
+  }
+  // A person's own assistant for a team lives in their boundary and is never
+  // the team's agent.
+  const team = live.filter((r) => r.scope_type === "team");
+  return (boundary.chosen_role_id ? team.find((r) => String(r._id) === String(boundary.chosen_role_id)) : undefined)
+    ?? team.find(isHeadOfPeopleRole)
+    ?? team.find((r) => r.assistant?.reach === "team" && String(r.assistant.team_id) === String(boundary.team_id))
+    ?? null;
 }
+
+/** Choose the role that answers for a team (workspaceAgentRoleOf). An admin's;
+ *  null goes back to the Head of People. */
+export async function performSetWorkspaceAgent(ctx: { db: any }, userId: Id<"users">, args: { team_id: Id<"teams">; role_id: Id<"org_roles"> | null }) {
+  if (!(await userCanAdminAnchor(ctx, userId, { team_id: args.team_id }))) throw new Error("Only a team admin can choose who answers for the team");
+  if (args.role_id) {
+    const role: any = await ctx.db.get(args.role_id);
+    if (!role || role.status === "retired" || role.scope_type !== "team" || String(role.team_id) !== String(args.team_id)) throw new Error("That role is not one of this team's");
+    if (!(await findExistingAnchor(ctx, { scope_type: "team", team_id: args.team_id, org_role_id: args.role_id }))) throw new Error("That role has no standing session to answer with");
+  }
+  await ctx.db.patch(args.team_id, { workspace_agent_role_id: args.role_id ?? undefined });
+}
+
+export const setWorkspaceAgent = mutation({
+  args: { team_id: v.id("teams"), role_id: v.union(v.id("org_roles"), v.null()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    await performSetWorkspaceAgent(ctx, userId, args);
+  },
+});
 
 // The workspace anchor of a boundary (a team's, or a person's own), or null.
 export async function workspaceAnchorFor(ctx: { db: any }, boundary: { team_id?: Id<"teams">; scope_user_id?: Id<"users"> }): Promise<any | null> {
@@ -773,6 +803,14 @@ export const listAnchors = query({
     const teamIds = new Set(memberships.map((m: any) => m.team_id.toString()));
 
     const anchors = await visibleAnchorsForUser(ctx, userId);
+    // One workspace agent per boundary, looked up once each.
+    const roots = new Map<string, Promise<any>>();
+    const rootSeatId = (a: any) => {
+      const team = a.scope_type === "team";
+      const key = team ? `team:${a.team_id}` : `user:${a.scope_user_id}`;
+      if (!roots.has(key)) roots.set(key, workspaceAnchorFor(ctx, team ? { team_id: a.team_id } : { scope_user_id: a.scope_user_id }).then((r) => r?._id ?? null));
+      return roots.get(key)!;
+    };
     // Enrich with the bot's display name/avatar, the scope's name, and the
     // session's coarse state — everything a picker or a status chip needs
     // without a second query per anchor.
@@ -795,11 +833,10 @@ export const listAnchors = query({
         role: role && role.status !== "retired"
           ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, icon: role.icon ?? null, status: role.status, given_name: role.given_name ?? null, assistant: role.assistant ?? null, scope_type: role.scope_type }
           : null,
-        // The workspace's root (org-staffing.md S22, S30): the seat of its
-        // Executive Assistant when one stands, else of its Head of People. Every
-        // other role's standing session is a row here too, so a picker that
-        // takes the first row of a workspace lands on whichever lead is oldest.
-        is_root: isWorkspaceAgentRole(role, a.team_id),
+        // The workspace's root (workspaceAgentRoleOf). Every other role's
+        // standing session is a row here too, so a picker that takes the
+        // first row of a workspace lands on whichever lead is oldest.
+        is_root: String(await rootSeatId(a)) === String(a._id),
         bot_avatar: bot?.image ?? null,
         team_name: (team as any)?.name ?? null,
         in_my_team: a.team_id ? teamIds.has(a.team_id.toString()) : false,

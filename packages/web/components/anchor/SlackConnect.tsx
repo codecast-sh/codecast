@@ -24,7 +24,7 @@ export function SlackConnect({ scope, teamId, agentName }: { scope: "team" | "us
     setBusy(true);
     setErr(null);
     try {
-      const returnTo = "/anchor";
+      const returnTo = "/org/workspace";
       const res = await getInstallUrl({ scope_type: scope, team_id: teamId ?? undefined, return_to: returnTo, origin: window.location.origin } as any);
       if (res?.ok && res.url) {
         window.location.href = res.url;

@@ -9,7 +9,6 @@
 // first header pin: the person's global Executive Assistant by default, else the
 // active workspace's agent.
 
-import { useAssistantScope } from "../../lib/surfaces";
 import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { TopbarButton } from "../TopbarButton";
 import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
@@ -254,11 +253,8 @@ export function HeaderPins() {
   const root = useRootAgent();
   const orgOn = useWorkspaceFeature("org");
   const menu = useContextMenu<ResolvedPin | null>();
-  // In hosted mode's Assistant scope the assistant is the one face: a pinned
-  // agent beside it would read as a second assistant.
-  const assistantOnly = useAssistantScope().only;
   const reorder = usePinReorder(pins);
-  if (!orgOn || assistantOnly || (chosen && !pins.length)) return null;
+  if (!orgOn || (chosen && !pins.length)) return null;
   return (
     // The whole row takes drops, not just its faces: in the desktop app the
     // header is the window's drag handle, and the gaps between faces would
@@ -276,8 +272,8 @@ export function HeaderPins() {
 /** Where a pin's full page lives: a role's page, else the session. */
 function pagePathOf(pin: ResolvedPin | null): string {
   const role = pin?.anchor?.role;
-  if (pin?.anchor) return role ? `/org/${role.short_id}` : "/anchor";
-  return pin?.conversationId ? `/conversation/${pin.conversationId}` : "/anchor";
+  if (pin?.anchor) return role ? `/org/${role.short_id}` : "/org/workspace";
+  return pin?.conversationId ? `/conversation/${pin.conversationId}` : "/org/workspace";
 }
 
 /** What the panel opens for a pin. */
