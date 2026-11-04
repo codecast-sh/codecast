@@ -36,6 +36,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { mapLimit } from "@codecast/shared/async";
 import { SECRET_REDACTION_MAX, SECRET_REDACTION_MIN, isCredentialName, parseDotenv } from "@codecast/shared/contracts/secretRules";
 
 /** `vault`: a Vault value, held to SECRET_REDACTION_MIN only (qualifiesAsKnownValue). */
@@ -376,6 +377,9 @@ export function envFilesIn(dir: string): string[] {
   }
 }
 
+// Directories listed concurrently by the periodic relist (async, off the loop).
+const RELIST_CONCURRENCY = 16;
+
 export class KnownValueStore {
   private cwds = new Set<string>();
   private watched = new Set<string>();
@@ -387,24 +391,60 @@ export class KnownValueStore {
   // Parsed values per file, reused while the file's mtime and size hold, so a
   // boot that tracks many cwds one by one rereads only what changed.
   private parsed = new Map<string, { mtimeMs: number; size: number; values: KnownValue[] }>();
-  private roots = new Map<string, string | null>();
+  // The .env files of each tracked directory (a cwd and its git root), as last
+  // listed. A daemon tracks every cwd any transcript ever recorded, thousands
+  // for a heavy user, so a rebuild reads this map and never lists a directory:
+  // a new directory is listed once when tracked, and refreshDirs relists the
+  // set asynchronously on the poll.
+  private envFiles = new Map<string, string[]>();
+  private relisting: Promise<void> | null = null;
 
   constructor(private readonly src: KnownValueSources) {}
 
-  /** Files this store reads: credential files, codecast config, and session .env files. */
+  /** Files this store reads: credential files, codecast config, and session .env files. No directory is listed here. */
   files(): Array<{ file: string; collect: Collector }> {
     const files = CREDENTIAL_FILES.map(({ rel, collect }) => ({ file: path.join(this.src.home, rel), collect }));
     files.push({ file: path.join(this.src.configDir, "config.json"), collect: collectFromJson });
     files.push({ file: path.join(this.src.configDir, "provider-keys.json"), collect: collectFromProviderKeys });
-    const dirs = new Set<string>();
-    for (const cwd of this.cwds) {
-      dirs.add(cwd);
-      if (!this.roots.has(cwd)) this.roots.set(cwd, gitRoot(cwd));
-      const root = this.roots.get(cwd);
-      if (root) dirs.add(root);
-    }
-    for (const dir of dirs) for (const file of envFilesIn(dir)) files.push({ file, collect: collectFromDotenv });
+    for (const list of this.envFiles.values()) for (const file of list) files.push({ file, collect: collectFromDotenv });
     return files;
+  }
+
+  /** Track a cwd and its git root; lists only directories not seen before. True if that found a .env file. */
+  private addCwd(cwd: string): boolean {
+    if (this.cwds.has(cwd)) return false;
+    this.cwds.add(cwd);
+    const root = gitRoot(cwd);
+    let found = false;
+    for (const dir of root && root !== cwd ? [cwd, root] : [cwd]) {
+      if (this.envFiles.has(dir)) continue;
+      const list = envFilesIn(dir);
+      this.envFiles.set(dir, list);
+      if (list.length) found = true;
+    }
+    return found;
+  }
+
+  /** Relist every tracked directory without blocking the loop, and rebuild if any .env file came or went. */
+  refreshDirs(): Promise<void> {
+    if (this.relisting) return this.relisting;
+    const dirs = [...this.envFiles.keys()];
+    const run = async () => {
+      let changed = false;
+      await mapLimit(dirs, RELIST_CONCURRENCY, async (dir) => {
+        let names: string[];
+        try { names = await fs.promises.readdir(dir); } catch { names = []; }
+        const list = names.filter((f) => ENV_FILE_RE.test(f)).map((f) => path.join(dir, f));
+        const prev = this.envFiles.get(dir) ?? [];
+        if (prev.length !== list.length || prev.some((f, i) => f !== list[i])) {
+          this.envFiles.set(dir, list);
+          changed = true;
+        }
+      });
+      if (changed && !this.stopped) this.rebuild();
+    };
+    this.relisting = run().finally(() => { this.relisting = null; });
+    return this.relisting;
   }
 
   collect(): KnownValue[] {
@@ -448,9 +488,7 @@ export class KnownValueStore {
 
   /** A session's working directory. Loads its .env files now, so its first message is covered. */
   trackCwd(cwd: string | undefined | null): void {
-    if (!cwd || this.cwds.has(cwd)) return;
-    this.cwds.add(cwd);
-    this.rebuild();
+    if (cwd && this.addCwd(cwd)) this.rebuild();
   }
 
   start(intervalMs = 60_000): void {
@@ -458,8 +496,11 @@ export class KnownValueStore {
     this.rebuild();
     this.refreshVault();
     this.timer = setInterval(() => {
-      for (const cwd of this.src.cwds?.() ?? []) if (cwd) this.cwds.add(cwd);
+      for (const cwd of this.src.cwds?.() ?? []) if (cwd) this.addCwd(cwd);
+      // Only a cwd new since the last tick is listed on the loop; the async
+      // relist catches .env files created or removed in the rest.
       this.rebuild();
+      void this.refreshDirs();
       this.refreshVault();
     }, intervalMs);
     (this.timer as any).unref?.();

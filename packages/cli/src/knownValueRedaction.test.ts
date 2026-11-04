@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -190,6 +190,40 @@ describe("store", () => {
       expect(redactKnownValues("rotatedPw-000111 repoEnvPw-776655")).toBe("[redacted:known:SERVICE_PASSWORD] repoEnvPw-776655");
     } finally {
       store.stop();
+    }
+  });
+
+  // A daemon tracks every cwd any transcript ever recorded (thousands for a
+  // heavy Claude user). Listing all of them again on each new cwd, and every
+  // minute on the event loop, froze one person's daemon for 3585s of an hour
+  // (2026-11-02, readdirSync under files()).
+  test("tracking many cwds lists each directory once, and the periodic relist never blocks the loop", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "kv-many-"));
+    const configDir = path.join(home, ".codecast");
+    fs.mkdirSync(configDir);
+    const cwds = Array.from({ length: 300 }, (_, i) => path.join(home, `wt-${i}`));
+    for (const dir of cwds) fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(cwds[7], ".env"), "API_TOKEN=wtSeven-tok-998877\n");
+
+    const lists = spyOn(fs, "readdirSync");
+    const store = new KnownValueStore({ home, configDir, env: () => ({}), cwds: () => cwds });
+    try {
+      store.rebuild();
+      for (const cwd of cwds) store.trackCwd(cwd);
+      // One listing per new directory, not one per directory per new cwd (was 45,150).
+      expect(lists.mock.calls.length).toBeLessThanOrEqual(cwds.length);
+      expect(redactKnownValues("wtSeven-tok-998877")).toBe("[redacted:known:API_TOKEN]");
+
+      lists.mockClear();
+      fs.writeFileSync(path.join(cwds[200], ".env.local"), "DB_PASSWORD=wt200-pw-445566\n");
+      fs.rmSync(cwds[7], { recursive: true });
+      await store.refreshDirs();
+      expect(lists.mock.calls.length).toBe(0);
+      expect(redactKnownValues("wt200-pw-445566 wtSeven-tok-998877")).toBe("[redacted:known:DB_PASSWORD] wtSeven-tok-998877");
+    } finally {
+      lists.mockRestore();
+      store.stop();
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 });
