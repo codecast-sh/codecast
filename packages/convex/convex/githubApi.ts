@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { commentIdValidator } from "./lib/conversationCommentRows";
 import { action, internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { belongsToSearchRepository, scopedRepoSearch } from "./lib/repoSearch";
@@ -418,7 +419,7 @@ export const postCommentToGitHub = internalAction({
     file_path: v.optional(v.string()),
     line_number: v.optional(v.number()),
     github_access_token: v.string(),
-    comment_id: v.id("comments"),
+    comment_id: commentIdValidator,
   },
   handler: async (ctx, args) => {
     const [owner, repo] = args.repository.split('/');

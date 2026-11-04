@@ -36,6 +36,12 @@ import {
   patchCommentWithRevision,
   runCommentViewTransition,
 } from "./commentViewWrites";
+import { findCommentByClientId, getComment, listConversationComments } from "./commentStore";
+import {
+  commentIdValidator,
+  type CommentId,
+  type ConversationComment,
+} from "./lib/conversationCommentRows";
 
 export {
   COMMENTS_VIEW_CONTRACT_ID,
@@ -69,24 +75,14 @@ export function isInCommentThread(
   return !comment.message_id && !comment.file_path;
 }
 
-/** Every comment of one thread in one conversation, oldest first. A message
- *  anchor reads its own index; the other anchors filter the conversation. */
+/** Every comment of one thread in one conversation, oldest first. */
 export async function commentsForAnchor(
   ctx: CommentReadCtx,
   conversationId: Id<"conversations">,
   anchor: CommentThreadAnchor,
-): Promise<Doc<"comments">[]> {
-  const rows = anchor.message_id
-    ? await ctx.db
-      .query("comments")
-      .withIndex("by_message_id", (q) => q.eq("message_id", anchor.message_id as Id<"messages">))
-      .collect()
-    : await ctx.db
-      .query("comments")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
-      .collect();
-  return rows
-    .filter((c) => String(c.conversation_id) === String(conversationId) && isInCommentThread(c, anchor))
+): Promise<ConversationComment[]> {
+  return (await listConversationComments(ctx, conversationId))
+    .filter((c) => isInCommentThread(c, anchor))
     .sort((a, b) => a.created_at - b.created_at || String(a._id).localeCompare(String(b._id)));
 }
 
@@ -135,7 +131,7 @@ export function countOpenCommentThreads(
 }
 
 // Recompute the conversation row's denormalized comment signal (schema:
-// unresolved_comment_count + last_comment_*) from the comments table, so the
+// unresolved_comment_count + last_comment_*) from the conversation's comments, so the
 // inbox card can show "who said what" with no per-row query. Called after
 // every mutation that changes what is open — create, edit, resolve/reopen,
 // delete, agent mirror. Full recompute, not incremental bookkeeping: a
@@ -147,10 +143,7 @@ export async function refreshCommentSignal(
   // Comments can outlive their conversation (delete flows, old orphans) — a
   // signal for a row that no longer exists is a no-op, not an error.
   if (!(await ctx.db.get(conversationId))) return;
-  const all = await ctx.db
-    .query("comments")
-    .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
-    .collect();
+  const all = await listConversationComments(ctx, conversationId);
   const open = all.filter((c) => !c.resolved_at);
   const count = countOpenCommentThreads(all);
   if (count === 0) {
@@ -228,7 +221,7 @@ type CreateCommentArgs = {
   conversation_id: Id<"conversations">;
   message_id?: Id<"messages">;
   content: string;
-  parent_comment_id?: Id<"comments">;
+  parent_comment_id?: CommentId;
   pr_id?: Id<"pull_requests">;
   file_path?: string;
   line_number?: number;
@@ -239,7 +232,7 @@ type CreateCommentArgs = {
 type ValidatedCreate = {
   conversation: Doc<"conversations">;
   message?: Doc<"messages">;
-  parent?: Doc<"comments">;
+  parent?: ConversationComment;
   pullRequest?: Doc<"pull_requests">;
 };
 
@@ -267,9 +260,9 @@ async function validateCreateComment(
     message = candidate;
   }
 
-  let parent: Doc<"comments"> | undefined;
+  let parent: ConversationComment | undefined;
   if (args.parent_comment_id) {
-    const candidate = await ctx.db.get(args.parent_comment_id);
+    const candidate = await getComment(ctx, args.parent_comment_id);
     if (!candidate || String(candidate.conversation_id) !== String(args.conversation_id)) {
       return {
         ok: false,
@@ -318,25 +311,13 @@ function throwLegacyCommentFailure(failure: CommentFailure): never {
   throw new Error(failure.message);
 }
 
-async function findCommentByClientId(
-  ctx: CommentReadCtx,
-  conversationId: Id<"conversations">,
-  clientId: string,
-): Promise<Doc<"comments"> | null> {
-  return await ctx.db
-    .query("comments")
-    .withIndex("by_conversation_client_id", (q: any) =>
-      q.eq("conversation_id", conversationId).eq("client_id", clientId))
-    .first();
-}
-
 function sameOptionalId(left: unknown, right: unknown): boolean {
   return left === undefined && right === undefined
     || left !== undefined && right !== undefined && String(left) === String(right);
 }
 
 function existingCreateMatches(
-  comment: Doc<"comments">,
+  comment: ConversationComment,
   userId: Id<"users">,
   args: CreateCommentArgs,
 ): boolean {
@@ -351,7 +332,7 @@ function existingCreateMatches(
 
 async function projectComments(
   ctx: CommentReadCtx,
-  comments: Doc<"comments">[],
+  comments: ConversationComment[],
 ) {
   const projected = await Promise.all(comments.map(async (comment) => {
     const user = await ctx.db.get(comment.user_id);
@@ -389,10 +370,7 @@ export const getCommentsV2 = query({
     }
 
     const [comments, viewRevision, commandIds] = await Promise.all([
-      ctx.db
-        .query("comments")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-        .collect(),
+      listConversationComments(ctx, args.conversation_id),
       readLocalViewRevision(ctx, conversation.user_id, identity.contractId, identity.viewKey),
       // Caller-scoped write-reconciliation echo for stamped-log-ts clients:
       // same snapshot as the rows, so inclusion proves the write is in them.
@@ -415,7 +393,7 @@ function requiredClientIdFailure(): CommentFailure {
 }
 
 type CreateCommentExecution =
-  | { ok: true; commentId: Id<"comments">; coverageTarget?: ReturnType<typeof commentsCoverageTarget> }
+  | { ok: true; commentId: CommentId; coverageTarget?: ReturnType<typeof commentsCoverageTarget> }
   | { ok: false; failure: CommentFailure };
 
 async function executeCreateComment(
@@ -607,7 +585,7 @@ const createCommentValidators = {
   conversation_id: v.id("conversations"),
   message_id: v.optional(v.id("messages")),
   content: v.string(),
-  parent_comment_id: v.optional(v.id("comments")),
+  parent_comment_id: v.optional(commentIdValidator),
   pr_id: v.optional(v.id("pull_requests")),
   file_path: v.optional(v.string()),
   line_number: v.optional(v.number()),
@@ -680,25 +658,13 @@ export const getComments = query({
 
     if (!(await canAccessConversation(ctx, userId, conversation))) return [];
 
-    let comments;
     if (args.message_id) {
       const message = await ctx.db.get(args.message_id);
       if (!message || String(message.conversation_id) !== String(args.conversation_id)) return [];
-      comments = await ctx.db
-        .query("comments")
-        .withIndex("by_message_id", (q) => q.eq("message_id", args.message_id))
-        .collect();
-    } else {
-      // The global thread: anchored to neither a message nor a code line.
-      comments = await ctx.db
-        .query("comments")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-        .filter((q) => q.and(
-          q.eq(q.field("message_id"), undefined),
-          q.eq(q.field("file_path"), undefined),
-        ))
-        .collect();
     }
+    // A message's thread, or the global one: anchored to neither a message
+    // nor a code line.
+    const comments = await commentsForAnchor(ctx, args.conversation_id, { message_id: args.message_id });
 
     const commentsWithUsers = await Promise.all(
       comments.map(async (comment) => {
@@ -735,24 +701,21 @@ export const getCommentCount = query({
     const conversation = await ctx.db.get(message.conversation_id);
     if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) return 0;
 
-    const comments = await ctx.db
-      .query("comments")
-      .withIndex("by_message_id", (q) => q.eq("message_id", args.message_id))
-      .collect();
-
-    return comments.length;
+    return (await listConversationComments(ctx, message.conversation_id))
+      .filter((comment) => String(comment.message_id) === String(args.message_id))
+      .length;
   },
 });
 
 type CommentReferenceArgs = {
   conversation_id: Id<"conversations">;
-  comment_id?: Id<"comments">;
+  comment_id?: CommentId;
   client_id?: string;
 };
 
 type ValidatedOwnedComment = {
   conversation: Doc<"conversations">;
-  comment: Doc<"comments">;
+  comment: ConversationComment;
 };
 
 async function validateOwnedComment(
@@ -773,7 +736,7 @@ async function validateOwnedComment(
     };
   }
 
-  let comment = args.comment_id ? await ctx.db.get(args.comment_id) : null;
+  let comment = args.comment_id ? await getComment(ctx, args.comment_id) : null;
   if (!comment && args.client_id) {
     comment = await findCommentByClientId(ctx, args.conversation_id, args.client_id);
   }
@@ -818,7 +781,7 @@ async function validateOwnedComment(
 
 export const updateComment = mutation({
   args: {
-    comment_id: v.id("comments"),
+    comment_id: commentIdValidator,
     content: v.string(),
   },
   handler: async (ctx, args) => {
@@ -827,7 +790,7 @@ export const updateComment = mutation({
       throw new Error("Unauthorized");
     }
 
-    const comment = await ctx.db.get(args.comment_id);
+    const comment = await getComment(ctx, args.comment_id);
     if (!comment) {
       throw new Error("Comment not found");
     }
@@ -848,7 +811,7 @@ export const updateComment = mutation({
 
 export const deleteComment = mutation({
   args: {
-    comment_id: v.id("comments"),
+    comment_id: commentIdValidator,
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -856,7 +819,7 @@ export const deleteComment = mutation({
       throw new Error("Unauthorized");
     }
 
-    const comment = await ctx.db.get(args.comment_id);
+    const comment = await getComment(ctx, args.comment_id);
     if (!comment) {
       throw new Error("Comment not found");
     }
@@ -878,7 +841,7 @@ export const deleteComment = mutation({
 
 const commandCommentReferenceValidators = {
   conversation_id: v.id("conversations"),
-  comment_id: v.optional(v.id("comments")),
+  comment_id: v.optional(commentIdValidator),
   client_id: v.optional(v.string()),
 };
 
@@ -991,10 +954,7 @@ export const resolveThread = mutation({
     const access = await validateConversationAccess(ctx, userId, args.conversation_id);
     if (!access.ok) throwLegacyCommentFailure(access.failure);
 
-    const all = await ctx.db
-      .query("comments")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-      .collect();
+    const all = await listConversationComments(ctx, args.conversation_id);
     const thread = all.filter((comment) => isInCommentThread(comment, args));
     if (thread.length === 0) return 0;
 
@@ -1016,29 +976,26 @@ export const getConversationCommentSummary = query({
   args: {
     conversation_id: v.id("conversations"),
   },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) return [];
-
-    if (!(await canAccessConversation(ctx, userId, conversation))) return [];
-
-    const comments = await ctx.db
-      .query("comments")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-      .collect();
-
-    return await commentSummaryRows(ctx, comments);
-  },
+  handler: async (ctx, args) => await getConversationCommentSummaryRows(ctx, args.conversation_id),
 });
 
-/** One conversation's comments as the conversation surfaces receive them:
- *  each with its author's name and avatar, oldest first. Shared by
- *  getConversationCommentSummary and the review_comments read of the same
- *  rows (commentTwins.conversationComments), so both answer alike. */
-export async function commentSummaryRows(ctx: CommentReadCtx, comments: Doc<"comments">[]) {
+/** One conversation's comments as the conversation surfaces receive them,
+ *  for a caller who may read the conversation (else none). Shared by
+ *  getConversationCommentSummary and commentTwins.conversationComments. */
+export async function getConversationCommentSummaryRows(
+  ctx: Pick<QueryCtx, "db" | "auth">,
+  conversationId: Id<"conversations">,
+) {
+  const userId = await getAuthUserId(ctx as QueryCtx);
+  if (!userId) return [];
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) return [];
+  if (!(await canAccessConversation(ctx, userId, conversation))) return [];
+  return await commentSummaryRows(ctx, await listConversationComments(ctx, conversationId));
+}
+
+/** Comments with their author's name and avatar, oldest first. */
+export async function commentSummaryRows(ctx: CommentReadCtx, comments: ConversationComment[]) {
   const commentsWithUsers = await Promise.all(
     comments.map(async (comment) => {
       const user = await ctx.db.get(comment.user_id);
@@ -1062,11 +1019,11 @@ export async function commentSummaryRows(ctx: CommentReadCtx, comments: Doc<"com
 // arbitrary github_comment_id onto any comment.
 export const updateGitHubCommentId = internalMutation({
   args: {
-    comment_id: v.id("comments"),
+    comment_id: commentIdValidator,
     github_comment_id: v.number(),
   },
   handler: async (ctx, args) => {
-    const comment = await ctx.db.get(args.comment_id);
+    const comment = await getComment(ctx, args.comment_id);
     if (!comment) return false;
     return await patchCommentWithRevision(ctx, comment, {
       github_comment_id: args.github_comment_id,
@@ -1143,7 +1100,7 @@ type AskAgentArgs = {
 type AskAgentExecution =
   | {
       ok: true;
-      commentId: Id<"comments">;
+      commentId: CommentId;
       forkConversationId?: Id<"conversations">;
       coverageTarget?: ReturnType<typeof commentsCoverageTarget>;
     }
@@ -1159,10 +1116,7 @@ async function executeAskAgentInThread(
   validated: ValidatedCreate,
   revisionMode: CommentRevisionMode,
 ): Promise<AskAgentExecution> {
-  const allInConversation = await ctx.db
-    .query("comments")
-    .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-    .collect();
+  const allInConversation = await listConversationComments(ctx, args.conversation_id);
   if (args.client_id) {
     const duplicate = allInConversation.find((comment) => comment.client_id === args.client_id);
     if (duplicate) {
@@ -1382,7 +1336,7 @@ export const mirrorAgentReply = internalMutation({
   handler: async (ctx, args) => {
     const fork = await ctx.db.get(args.fork_conversation_id);
     if (!fork || !fork.comment_fork_comment_id) return;
-    const comment = await ctx.db.get(fork.comment_fork_comment_id);
+    const comment = await getComment(ctx, fork.comment_fork_comment_id);
     if (!comment) return;
     // The fork back-link is untrusted persisted relationship data. Both sides
     // must agree before an assistant message may mutate the root projection.
@@ -1415,20 +1369,5 @@ export const mirrorAgentReply = internalMutation({
     if (conversation) {
       await touchCommentThread(ctx, conversation, comment, { activityAt: landingAt });
     }
-  },
-});
-
-// One-time backfill: stamp the denormalized comment signal onto every
-// conversation that already has comments. Safe to re-run (full recompute).
-// Run with: npx convex run comments:backfillCommentSignals
-export const backfillCommentSignals = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const all = await ctx.db.query("comments").collect();
-    const conversationIds = new Set(all.map((c) => String(c.conversation_id)));
-    for (const id of conversationIds) {
-      await refreshCommentSignal(ctx, id as Id<"conversations">);
-    }
-    return conversationIds.size;
   },
 });

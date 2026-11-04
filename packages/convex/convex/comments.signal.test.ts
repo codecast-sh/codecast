@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { refreshCommentSignal } from "./comments";
+import { commentRow } from "./testComments";
 
 const OWNER = "user-owner" as any;
 const TEAMMATE = "user-teammate" as any;
@@ -24,7 +25,7 @@ function ctx(comments: any[]) {
       { _id: TEAMMATE, name: "Mattie Doe" },
     ],
     conversations: [{ _id: CONV, user_id: OWNER, title: "Session" }],
-    comments,
+    review_comments: comments.map(commentRow),
   });
   return { db } as any;
 }

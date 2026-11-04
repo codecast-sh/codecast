@@ -7,9 +7,16 @@ import {
 import {
   runViewTransition,
   type RevisionMode,
-  type ViewWriter,
 } from "./lib/viewWriters";
-import { mirrorCommentTwins } from "./commentTwinWrites";
+import { commentRowById } from "./commentStore";
+import {
+  isConversationComment,
+  rowFromComment,
+  rowPatchFromComment,
+  type CommentId,
+  type ConversationComment,
+  type ConversationCommentValue,
+} from "./lib/conversationCommentRows";
 
 export const COMMENTS_VIEW_CONTRACT_ID = "comments.byConversation/v2";
 /** The stamped-log-ts client contract; same envelope, deeper coverage. */
@@ -39,7 +46,13 @@ export function commentsCoverageTarget(
   };
 }
 
-export type CommentViewWriter = ViewWriter<"comments">;
+/** Writes on conversation comments, in the comment shape and by comment id
+ *  of either kind (lib/conversationCommentRows). */
+export type CommentViewWriter = {
+  insert(value: ConversationCommentValue): Promise<CommentId>;
+  patch(id: CommentId, value: Partial<ConversationCommentValue>): Promise<void>;
+  delete(id: CommentId): Promise<void>;
+};
 
 /**
  * Receipt coverage for stamped-log-ts clients (design §11.4 proof #3): the
@@ -84,7 +97,9 @@ export async function advanceCommentsAccessRevision(
 }
 
 /**
- * The only raw writer for the comments table.
+ * The only writer of conversation comments. They live in review_comments
+ * (commentStore, lib/conversationCommentRows); `comments` is history and
+ * nothing writes it.
  *
  * A semantic operation may insert and then enrich the same projection (the
  * ask-agent placeholder is the important case). The callback groups those row
@@ -103,45 +118,52 @@ export async function runCommentViewTransition<Result>(
   if (!authoritative) {
     throw new Error("Cannot write comments for a missing conversation");
   }
-  // Every row the transition wrote gets its review_comments twin brought in
-  // line once the transition is done (commentTwinWrites, the dual write).
-  const touched = new Map<string, Id<"comments">>();
-  const outcome = await runViewTransition(ctx, {
-    table: "comments",
+  const inConversation = (conversationId: unknown) => String(conversationId) === String(authoritative._id);
+  const rowOf = async (id: CommentId): Promise<Id<"review_comments">> => {
+    const row = await commentRowById(ctx, String(id));
+    if (!row) throw new Error("Cannot write a missing comment");
+    return row._id;
+  };
+  return await runViewTransition(ctx, {
+    table: "review_comments",
     label: "comment",
     guardInsert(value) {
-      if (String(value.conversation_id) !== String(authoritative._id)) {
+      if (!inConversation(value.conversation_id)) {
         throw new Error("Comment insert crossed its bound conversation view");
       }
     },
     guardRow(row) {
-      if (String(row.conversation_id) !== String(authoritative._id)) {
+      if (!isConversationComment(row) || !inConversation(row.conversation_id)) {
         throw new Error("Comment write crossed its bound conversation view");
       }
     },
     coverageTarget: commentsCoverageTarget(authoritative),
   }, revisionMode, (writer) => transition({
     async insert(value) {
-      const id = await writer.insert(value);
-      touched.set(String(id), id);
-      return id;
+      const parentRowId = value.parent_comment_id ? await rowOf(value.parent_comment_id) : undefined;
+      return await writer.insert(rowFromComment(value, parentRowId));
     },
     async patch(id, value) {
-      await writer.patch(id, value);
-      touched.set(String(id), id);
+      await writer.patch(await rowOf(id), rowPatchFromComment(value));
     },
     async delete(id) {
-      await writer.delete(id);
-      touched.set(String(id), id);
+      const rowId = await rowOf(id);
+      // A reply whose parent is gone has no parent, as before.
+      const replies: Doc<"review_comments">[] = await ctx.db
+        .query("review_comments")
+        .withIndex("by_parent", (q: any) => q.eq("parent_id", rowId))
+        .collect();
+      for (const reply of replies) {
+        if (isConversationComment(reply)) await writer.patch(reply._id, { parent_id: undefined });
+      }
+      await writer.delete(rowId);
     },
   }));
-  await mirrorCommentTwins(ctx, touched.values());
-  return outcome;
 }
 
 export function commentPatchChanges(
-  comment: Doc<"comments">,
-  patch: Partial<Doc<"comments">>,
+  comment: ConversationComment,
+  patch: Partial<ConversationCommentValue>,
 ): boolean {
   return Object.entries(patch).some(([field, value]) =>
     (comment as Record<string, unknown>)[field] !== value);
@@ -150,8 +172,8 @@ export function commentPatchChanges(
 /** Advance a comment view for one non-command projection patch. */
 export async function patchCommentWithRevision(
   ctx: MutationCtx,
-  comment: Doc<"comments">,
-  patch: Partial<Doc<"comments">>,
+  comment: ConversationComment,
+  patch: Partial<ConversationCommentValue>,
   knownConversation?: Doc<"conversations">,
 ): Promise<boolean> {
   if (!commentPatchChanges(comment, patch)) return false;
@@ -166,7 +188,7 @@ export async function patchCommentWithRevision(
 /** Advance a comment view for one non-command deletion. */
 export async function deleteCommentWithRevision(
   ctx: MutationCtx,
-  comment: Doc<"comments">,
+  comment: ConversationComment,
   knownConversation?: Doc<"conversations">,
 ): Promise<boolean> {
   const conversation = knownConversation ?? await ctx.db.get(comment.conversation_id);

@@ -23,7 +23,9 @@ describe("dispatch table authority", () => {
         const get = db.get;
         db.get = async (key: string) => { reads.push(key); return get(key); };
         await run(db, { [policy]: { [id]: fields } });
-        expect(normalizations).toEqual([[policy, id]]);
+        // A comment goes by an id of either table it can live in (commentStore).
+        const tables = policy === "comments" ? ["review_comments", "comments"] : [policy];
+        expect(normalizations).toEqual(tables.map((name) => [name, id]));
         expect(reads).toEqual([]);
         expect(db._patched).toEqual([]);
         expect(db._deleted).toEqual([]);
@@ -31,6 +33,13 @@ describe("dispatch table authority", () => {
       });
     }
   }
+
+  test("comments refuses a review_comments ID that is not a conversation comment, writing nothing", async () => {
+    const db = makeFakeDb({ review_comments: [{ _id: "review_comments_1", author_user_id: USER, content: "code note", resolved: false, created_at: 1 }] });
+    await run(db, { comments: { review_comments_1: { content: "forged" } } });
+    expect(db._tables.review_comments[0].content).toBe("code note");
+    expect(db._patched).toEqual([]);
+  });
 
   test("ordinary conversation updates still pass", async () => {
     const db = makeFakeDb({ conversations: [{ _id: "conversations_1", user_id: USER }] });

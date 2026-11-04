@@ -1,6 +1,8 @@
 import { internalMutation } from "./functions";
 import { v } from "convex/values";
 import { patchCommentWithRevision } from "./commentViewWrites";
+import { getComment } from "./commentStore";
+import { commentIdOf, isConversationComment } from "./lib/conversationCommentRows";
 import { moveBookmarkPrincipalWithRevision } from "./bookmarkViewWrites";
 
 // (table, field, indexName | null) — when indexName is present, use the
@@ -244,12 +246,11 @@ export const mergeDuplicateUser = internalMutation({
         for (const row of rows) {
           if (table === "bookmarks" && field === "user_id") {
             await moveBookmarkPrincipalWithRevision(ctx, row, args.to_user_id);
-          } else if (table === "comments") {
-            await patchCommentWithRevision(
-              ctx,
-              row,
-              { [field]: args.to_user_id } as any,
-            );
+          } else if (table === "review_comments" && isConversationComment(row)) {
+            // A conversation comment: its author moves through the comment
+            // writer, so the conversation's comment view advances.
+            const comment = await getComment(ctx, commentIdOf(row));
+            if (comment) await patchCommentWithRevision(ctx, comment, { user_id: args.to_user_id });
           } else if (table === "local_view_heads") {
             await mergeLocalViewHead(ctx, row as any, args.to_user_id);
           } else {

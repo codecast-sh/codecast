@@ -32,7 +32,7 @@ import type { MutationCtx } from "./_generated/server";
 import { codeThreadRootKey } from "@codecast/shared/comments";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 import { isQuoteRow } from "./lib/quoteRows";
-import { isCommentTwin, withoutBorrowedRows } from "./lib/commentTwins";
+import { isConversationComment, withoutBorrowedRows } from "./lib/conversationCommentRows";
 
 const GITHUB_API_BASE = "https://api.github.com";
 // The feed row clips a long summary and expands it on click, so keep the whole
@@ -54,10 +54,9 @@ export async function canAccessComment(
   userId: Id<"users">,
   comment: Doc<"review_comments">,
 ): Promise<boolean> {
-  // A conversation comment's twin is read and written through `comments`
-  // until reads switch (lib/commentTwins), never through this table's paths,
-  // its author included.
-  if (isCommentTwin(comment)) return false;
+  // A conversation comment is read and written through comments.ts
+  // (commentStore), never through this table's paths, its author included.
+  if (isConversationComment(comment)) return false;
   if (comment.author_user_id && String(comment.author_user_id) === String(userId)) return true;
   // A note in an unsubmitted review is the author's alone, as it is on GitHub.
   if (comment.pending_review) return false;

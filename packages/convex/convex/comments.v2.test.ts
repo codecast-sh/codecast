@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
+import { commentRow, storedComments } from "./testComments";
 import {
   addCommentV2,
   askAgentDelivery,
@@ -69,10 +70,13 @@ function context(
     runAfter?: (delay: number, reference: unknown, args: unknown) => Promise<unknown>;
   } = {},
 ) {
+  // Conversation comments are seeded in the `comments` shape and stored as
+  // the review_comments rows they live in (testComments).
+  const { comments: seededComments = [], ...rest } = seed;
   const db = makeFakeDb({
     users: [user(OWNER, "Owner"), user(MEMBER, "Member"), user(OTHER, "Other")],
     conversations: [],
-    comments: [],
+    review_comments: seededComments.map(commentRow),
     messages: [],
     pull_requests: [],
     team_memberships: [],
@@ -81,7 +85,7 @@ function context(
     pending_messages: [],
     conversation_execution_heads: [],
     execution_bindings: [],
-    ...seed,
+    ...rest,
   });
   const mutationCalls: Array<{ reference: unknown; args: unknown }> = [];
   const scheduledCalls: Array<{ delay: number; reference: unknown; args: unknown }> = [];
@@ -108,7 +112,7 @@ function context(
 }
 
 function commentsFor(ctx: any, conversationId = CONVERSATION) {
-  return ctx.db._tables.comments.filter(
+  return storedComments(ctx.db).filter(
     (comment: any) => String(comment.conversation_id) === String(conversationId),
   );
 }
@@ -542,7 +546,7 @@ describe("comments v2 dependent edit and delete", () => {
         { kind: "command-id", contractId: CONTRACT_V3, viewKey: VIEW_KEY, commandId: expect.any(String) },
       ],
     });
-    expect(ctx.db._tables.comments.find((row: any) => row._id === "comment-edit").content)
+    expect(storedComments(ctx.db).find((row: any) => row._id === "comment-edit").content)
       .toBe("after");
     const updatedReplay = await (updateCommentV2 as any)._handler(ctx, {
       command_id: "edit-by-client",
@@ -566,7 +570,7 @@ describe("comments v2 dependent edit and delete", () => {
         { kind: "command-id", contractId: CONTRACT_V3, viewKey: VIEW_KEY, commandId: expect.any(String) },
       ],
     });
-    expect(ctx.db._tables.comments.some((row: any) => row._id === "comment-delete"))
+    expect(storedComments(ctx.db).some((row: any) => row._id === "comment-delete"))
       .toBe(false);
 
     const replay = await (deleteCommentV2 as any)._handler(ctx, {
@@ -646,7 +650,7 @@ describe("comments v2 dependent edit and delete", () => {
       rejection: { code: "INVALID_RELATION" },
       coverage: [],
     });
-    expect(ctx.db._tables.comments.map((row: any) => row.content)).toEqual([
+    expect(storedComments(ctx.db).map((row: any) => row.content)).toEqual([
       "protected",
       "elsewhere",
     ]);
@@ -672,7 +676,7 @@ describe("comments write-choke coverage", () => {
       "advance",
       async (writer) => writer.patch("comment-other-view" as any, { content: "poisoned" }),
     )).rejects.toThrow("crossed its bound conversation view");
-    expect(ctx.db._tables.comments[0].content).toBe("protected");
+    expect(storedComments(ctx.db)[0].content).toBe("protected");
     expect(heads(ctx)).toHaveLength(0);
   });
 
@@ -700,7 +704,7 @@ describe("comments write-choke coverage", () => {
     expect(await (deleteComment as any)._handler(ctx, {
       comment_id: "comment-legacy-delete",
     })).toBe(true);
-    expect(ctx.db._tables.comments).toEqual([
+    expect(storedComments(ctx.db)).toEqual([
       expect.objectContaining({ _id: "comment-legacy-edit", content: "after" }),
     ]);
     expect(heads(ctx)[0]).toMatchObject({ principal_id: OWNER, revision: 2 });
@@ -1010,7 +1014,7 @@ describe("comments write-choke coverage", () => {
     })).toBe(true);
     await (mirrorAgentReply as any)._handler(ctx, { fork_conversation_id: forkId });
 
-    expect(ctx.db._tables.comments[0]).toMatchObject({
+    expect(storedComments(ctx.db)[0]).toMatchObject({
       github_comment_id: 123,
       content: "The answer from the agent",
       agent_status: "done",
@@ -1049,7 +1053,7 @@ describe("comments write-choke coverage", () => {
       }],
     });
     await (mirrorAgentReply as any)._handler(ctx, { fork_conversation_id: forkId });
-    expect(ctx.db._tables.comments[0]).toMatchObject({
+    expect(storedComments(ctx.db)[0]).toMatchObject({
       content: "protected",
       agent_status: "thinking",
     });
@@ -1084,7 +1088,7 @@ describe("comments write-choke coverage", () => {
         },
       },
     });
-    expect(ctx.db._tables.comments[0]).toMatchObject({
+    expect(storedComments(ctx.db)[0]).toMatchObject({
       content: "after",
       user_id: OWNER,
       conversation_id: CONVERSATION,
@@ -1119,7 +1123,7 @@ describe("comments write-choke coverage", () => {
       dry_run: false,
       delete_source: false,
     });
-    expect(ctx.db._tables.comments[0].user_id).toBe(surviving);
+    expect(storedComments(ctx.db)[0].user_id).toBe(surviving);
     expect(heads(ctx)[0]).toMatchObject({ principal_id: OWNER, revision: 1 });
   });
 
@@ -1214,7 +1218,7 @@ describe("comments write-choke coverage", () => {
     const purges = ctx._scheduledCalls.map((call: any) => call.args).filter((args: any) => args?.conversation_id);
     expect(purges).toEqual([{ conversation_id: CONVERSATION }]);
     for (const args of purges) await (purgeConversationRows as any)._handler(ctx, args);
-    expect(ctx.db._tables.comments).toHaveLength(0);
+    expect(storedComments(ctx.db)).toHaveLength(0);
   });
 
   test("a comment finds its session's pull request by index, never by reading every pull request", async () => {

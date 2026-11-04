@@ -10,6 +10,7 @@
 
 import { internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
+import { isConversationComment } from "./lib/conversationCommentRows";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -357,12 +358,14 @@ export const backfillThreadReads = internalMutation({
       ({ isDone, continueCursor } = page);
       scanned = page.page.length;
     } else if (args.kind === "comment") {
+      // Conversation comments live in review_comments (commentStore).
       const page = await ctx.db
-        .query("comments")
-        .withIndex("by_created_at")
+        .query("review_comments")
+        .withIndex("by_creation_time")
         .paginate({ numItems: MIGRATION_PAGE, cursor: args.cursor ?? null });
       const conversationCache = new Map<string, Doc<"conversations"> | null>();
       for (const row of page.page) {
+        if (!isConversationComment(row) || !row.conversation_id) continue;
         // An unfinished agent placeholder is not a reply yet.
         if (row.agent_status === "thinking" || row.agent_status === "streaming") continue;
         const convKey = String(row.conversation_id);
@@ -371,7 +374,7 @@ export const backfillThreadReads = internalMutation({
         }
         const conversation = conversationCache.get(convKey);
         if (!conversation) continue;
-        await seed([row.user_id, conversation.user_id], {
+        await seed([row.author_user_id, conversation.user_id], {
           kind: "comment",
           rootKey: commentThreadRootKey(convKey, row),
           teamId: conversation.team_id,

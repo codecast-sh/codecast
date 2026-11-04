@@ -143,19 +143,25 @@ describe("authorization boundary coverage", () => {
 
 describe("comments complete-view write choke", () => {
   test("comment inserts exist only inside the revision-aware writer", () => {
-    // The generic bound-writer factory owns the single raw insert; no module
-    // may write the comments table by literal name at all.
-    const insertWriters: string[] = [];
-    for (const f of readdirSync(DIR)) {
-      if (!f.endsWith(".ts") || f.endsWith(".test.ts")) continue;
-      const src = readFileSync(join(DIR, f), "utf8");
-      if (src.includes('.insert("comments"')) insertWriters.push(f);
+    // The generic bound-writer factory owns the single raw insert. Nothing
+    // writes the `comments` table (history), and only the comment row mapping
+    // marks a review_comments row as a conversation comment.
+    const writers: string[] = [];
+    const markers: string[] = [];
+    for (const dir of [DIR, join(DIR, "lib")]) {
+      for (const f of readdirSync(dir)) {
+        if (!f.endsWith(".ts") || f.endsWith(".test.ts")) continue;
+        const src = readFileSync(join(dir, f), "utf8");
+        if (/\.(insert|replace)\("comments"/.test(src)) writers.push(f);
+        if (/origin: "comment"/.test(src)) markers.push(f);
+      }
     }
-    expect(insertWriters).toEqual([]);
+    expect(writers).toEqual([]);
+    expect(markers).toEqual(["conversationCommentRows.ts"]);
 
     const writer = readFileSync(join(DIR, "commentViewWrites.ts"), "utf8");
     expect(writer).toContain("runCommentViewTransition");
-    expect(writer).toContain('table: "comments"');
+    expect(writer).toContain('table: "review_comments"');
     expect(writer).toContain("revisionPrincipalId: conversation.user_id");
 
     const factory = readFileSync(join(DIR, "lib", "viewWriters.ts"), "utf8");
@@ -187,7 +193,7 @@ describe("comments complete-view write choke", () => {
     expect(accountDelete).not.toContain('query("comments")');
 
     const merge = readFileSync(join(DIR, "admin_mergeUser.ts"), "utf8");
-    expect(merge).toContain('if (table === "comments")');
+    expect(merge).toContain("isConversationComment(row)");
     expect(merge).toContain("patchCommentWithRevision");
   });
 
