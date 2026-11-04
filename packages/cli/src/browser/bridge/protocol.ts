@@ -91,9 +91,23 @@ export function bridgePairingPage(pairingUrl: string): string {
   // `<` cannot appear in a URL built by URLSearchParams, but a script body
   // must never be able to close itself, so the escape is unconditional.
   const js = JSON.stringify(pairingUrl).replace(/</g, "\\u003c");
-  return `<!doctype html><meta charset="utf-8"><title>Pairing with cast</title>` +
-    `<script>location.replace(${js})</script>` +
-    `<p>Opening the Codecast extension. If this page stays, <a href="${BRIDGE_STORE_URL}" target="_blank" rel="noopener noreferrer">install Codecast from the Chrome Web Store</a>, then run <code>cast browser extension setup</code> again.</p>\n`;
+  return PAIRING_PAGE_HEAD + `<script>location.replace(${js})</script>` +
+    `<p>Opening the Codecast extension. ${PAIRING_FALLBACK}</p>\n`;
+}
+
+const PAIRING_PAGE_HEAD = `<!doctype html><meta charset="utf-8"><title>Pairing with cast</title>`;
+const PAIRING_FALLBACK = `If this page stays, <a href="${BRIDGE_STORE_URL}" target="_blank" rel="noopener noreferrer">install Codecast from the Chrome Web Store</a>, then run <code>cast browser extension setup</code> again.`;
+
+/**
+ * What the forwarding page becomes once the wait settles, with the token
+ * gone. The file stays: the extension can connect on its own (a Chrome
+ * started cold reconnects with its saved token) before Chrome has read the
+ * tab, and a deleted file then loads as "file not found".
+ */
+export function bridgeSettledPage(connected: boolean): string {
+  return PAIRING_PAGE_HEAD + (connected
+    ? `<p>Codecast is connected to cast. You can close this tab.</p>\n`
+    : `<p>The Codecast extension did not connect. ${PAIRING_FALLBACK}</p>\n`);
 }
 
 /** WS close code the host uses for a bad or missing token. */
@@ -107,6 +121,15 @@ export const CLOSE_BAD_TOKEN = 4401;
  * and the extension keys its badge and its retries on the code.
  */
 export const CLOSE_HANDSHAKE_TIMEOUT = 4408;
+
+/**
+ * WS close code for a second extension, a proven one, while the current one
+ * still answers: the extension paired in two Chrome profiles. The newcomer
+ * waits as a standby instead of replacing the live one; replacing made the
+ * two profiles take the bridge from each other every few seconds, failing
+ * every command in flight each time.
+ */
+export const CLOSE_EXTENSION_STANDBY = 4409;
 
 /** WebSocket close code for a CDP client whose sessions the host dropped while their tabs live on (host.ts disconnect). */
 export const CLOSE_SESSIONS_DROPPED = 4410;

@@ -5,9 +5,9 @@
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as path from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "../../test-helpers/codecastDir.js";
-import { chromeLaunchCommand, takeStamp, takeWake, WAKE_MIN_GAP_MS, WAKE_ONCE_MS } from "./realChrome.js";
+import { chromeLaunchCommand, pairingPagePath, settlePairingPage, takeStamp, takeWake, WAKE_MIN_GAP_MS, WAKE_ONCE_MS } from "./realChrome.js";
 
 let isolation: IsolatedCodecastDir;
 
@@ -92,3 +92,20 @@ test("six processes claiming the same outage at once: exactly one wins", async (
   expect(answers.filter((a) => a === "true")).toHaveLength(1);
   expect(answers.filter((a) => a === "false")).toHaveLength(5);
 }, 90_000);
+
+// A Chrome started cold can connect the extension with its saved token before
+// it has read the pairing tab; the file must still be there when it does.
+test("a settled pairing page stays on disk without the token", () => {
+  const page = pairingPagePath();
+  mkdirSync(path.dirname(page), { recursive: true });
+  writeFileSync(page, "<script>location.replace(\"chrome-extension://x/options.html#t=secret\")</script>");
+  settlePairingPage(true);
+  const settled = readFileSync(page, "utf-8");
+  expect(settled).not.toContain("secret");
+  expect(settled).toContain("connected");
+});
+
+test("settling writes no page when none was opened", () => {
+  settlePairingPage(false);
+  expect(existsSync(pairingPagePath())).toBe(false);
+});

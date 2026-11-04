@@ -26,7 +26,24 @@ import { findChromeBinary, keychainArgs } from "../../workspace/chrome.js";
 import { realChromePid } from "../localChrome.js";
 import { browserHome } from "../profile.js";
 import { isWSL } from "../../windowsSupport.js";
-import { bridgePairingPage, bridgeWakeUrl } from "./protocol.js";
+import { bridgePairingPage, bridgeSettledPage, bridgeWakeUrl } from "./protocol.js";
+import { extensionProfiles, pickBridgeProfile } from "./chromeProfiles.js";
+import { readBridgeState } from "./host.js";
+
+/**
+ * The `--profile-directory` switch for the profile that holds the extension
+ * (chromeProfiles.ts pickBridgeProfile). Without it Chrome uses its
+ * last-used profile, where the extension may not be: an extension page
+ * there is `chrome-extension://invalid`, and a Chrome started on it never
+ * loads the extension at all. `null` when the profiles were read and none
+ * has the extension; empty when they could not be read (Chrome decides).
+ */
+export function bridgeProfileArgs(): string[] | null {
+  const found = extensionProfiles();
+  if (!found.known) return [];
+  const chosen = pickBridgeProfile(found, readBridgeState()?.profile);
+  return chosen ? [`--profile-directory=${chosen.dir}`] : null;
+}
 
 export function realChromeRunning(): boolean {
   return realChromePid() !== null;
@@ -162,20 +179,21 @@ export const REAL_CHROME_LAUNCH_ARGS = ["--disable-renderer-backgrounding", "--s
 
 export async function launchRealChrome(): Promise<boolean> {
   if (!(await takeStamp("launchedAt", LAUNCH_ONCE_MS))) return true;
-  return spawnChrome(REAL_CHROME_LAUNCH_ARGS);
+  return spawnChrome([...REAL_CHROME_LAUNCH_ARGS, ...(bridgeProfileArgs() ?? [])]);
 }
 
-/** The forwarding page `setup` leaves for Chrome to open; removed once pairing settles. */
+/** The forwarding page `setup` leaves for Chrome to open; stripped of its token once pairing settles. */
 export function pairingPagePath(): string {
   return path.join(browserHome(), "pair.html");
 }
 
 /**
- * Hand a URL to the human's own Chrome without waiting for it. Nothing here
+ * Hand a URL to the human's own Chrome without waiting for it, in the
+ * profile `profileArgs` names (bridgeProfileArgs). Nothing here
  * can see whether Chrome showed the page or an error, which is why callers
  * ask the host afterwards and print the fallback themselves.
  */
-export function openInRealChrome(url: string): boolean {
+export function openInRealChrome(url: string, profileArgs: string[] = []): boolean {
   const page = pairingPagePath();
   try {
     fs.mkdirSync(path.dirname(page), { recursive: true, mode: 0o700 });
@@ -184,7 +202,7 @@ export function openInRealChrome(url: string): boolean {
   } catch {
     return false;
   }
-  return spawnChrome([isWSL() ? windowsPathOf(page) : pathToFileURL(page).href]);
+  return spawnChrome([...profileArgs, isWSL() ? windowsPathOf(page) : pathToFileURL(page).href]);
 }
 
 /** The path Windows programs use for a file inside WSL (\\wsl.localhost\<distro>\...). */
@@ -193,12 +211,16 @@ function windowsPathOf(linuxPath: string): string {
   return out || linuxPath;
 }
 
-/** Drop the forwarding page; Chrome has read it by the time the wait settled either way. */
-export function discardPairingPage(): void {
+/**
+ * Replace the forwarding page with one that holds no token
+ * (protocol.ts bridgeSettledPage). Only rewrites a page that exists.
+ */
+export function settlePairingPage(connected: boolean): void {
+  const page = pairingPagePath();
   try {
-    fs.rmSync(pairingPagePath(), { force: true });
+    if (fs.existsSync(page)) fs.writeFileSync(page, bridgeSettledPage(connected), { mode: 0o600 });
   } catch {
-    /* already gone */
+    fs.rmSync(page, { force: true });
   }
 }
 
@@ -216,8 +238,12 @@ export function discardPairingPage(): void {
  * that wake rather than adding a tab.
  */
 export async function wakeExtension(outage: string): Promise<boolean> {
+  // No profile has the extension any more (uninstalled, turned off): a wake
+  // could only show `chrome-extension://invalid`, so none is sent.
+  const profile = bridgeProfileArgs();
+  if (!profile) return false;
   if (!(await takeWake(outage))) return false;
-  return openInRealChrome(bridgeWakeUrl());
+  return openInRealChrome(bridgeWakeUrl(), profile);
 }
 
 // ---------------------------------------------------------------------------
