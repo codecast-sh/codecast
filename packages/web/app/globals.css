@@ -381,8 +381,7 @@ html, body {
   /* What the sol accent utility classes paint (tailwind.config.ts). They are
      their own variables, separate from --sol-yellow and friends above, which
      Minimal and dark retune for the CSS that reads them: the classes have
-     always painted these Solarized values in every theme, and only hosted
-     mode remaps them (the hosted-mode block near the end of this file). */
+     always painted these Solarized values in every theme. */
   --sol-class-yellow: #b58900;
   --sol-class-orange: #cb4b16;
   --sol-class-amber: #b66f20;
@@ -674,8 +673,6 @@ html, body {
   background-color: var(--sol-bg-alt);
 }
 
-
-
 @layer base {
   :root, .hero-sandbox {
     /* Solarized Light - base3 #fdf6e3 = 44 87% 94% */
@@ -733,8 +730,6 @@ html, body {
     --chart-5: 175 59% 40%;
   }
 }
-
-
 
 @layer base {
   * {
@@ -2165,7 +2160,8 @@ diffs-container {
 }
 /* Chat mentions stay red: that number is "someone named you", and washing it
    to the same pale cyan as every other count hid the one that matters. */
-.simple-view [data-sv-nav] [data-sv-count="mention"] {
+.simple-view [data-sv-nav] [data-sv-count="mention"],
+.simple-view [data-sv-nav] [data-sv-count="alert"] {
   background: var(--sol-red);
   color: #fff;
 }
@@ -2915,159 +2911,220 @@ diffs-container {
 
 /* ── Comment card ─────────────────────────────────────────────────────────── */
 .cc-cmt {
+  position: relative;
   display: flex;
-  gap: 0.5rem;
-  padding: 0.3rem 0.4rem;
-  border-radius: 9px;
+  gap: 0.55rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 8px;
   transition: background 120ms ease;
 }
-.cc-cmt:hover {
-  background: color-mix(in srgb, var(--sol-text) 3.5%, transparent);
+.cc-cmt:hover,
+.cc-cmt:focus-within { background: color-mix(in srgb, var(--sol-text) 3.5%, transparent); }
+.cc-cmt-editing,
+.cc-cmt-editing:hover { background: transparent; }
+.cc-cmt-avatar { margin-top: 0.05rem; }
+/* A comment that continues its author's block: tight to the one above, its
+   time in the avatar's column on hover. */
+.cc-cmt-continued { padding-top: 0.05rem; margin-top: -0.25rem; }
+.cc-cmt-gutter {
+  flex-shrink: 0; width: 22px; padding-top: 0.2rem;
+  font-size: 0.56rem; font-variant-numeric: tabular-nums; text-align: right; color: var(--sol-text-dim);
+  opacity: 0; transition: opacity 100ms ease;
 }
-.cc-cmt-avatar { margin-top: 0.1rem; }
+.cc-cmt-continued:hover .cc-cmt-gutter { opacity: 1; }
 .cc-cmt-main { flex: 1; min-width: 0; }
 .cc-cmt-head {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  line-height: 1.2;
-  margin-bottom: 0.05rem;
+  gap: 0.45rem;
+  min-width: 0;
+  line-height: 1.25;
 }
 .cc-cmt-name {
-  font-size: 0.745rem;
+  flex-shrink: 1;
+  min-width: 2.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
   font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--sol-text-secondary);
+  color: var(--sol-text);
 }
+.cc-cmt-name-link { min-width: 0; text-align: left; }
+.cc-cmt-name-link:hover { text-decoration: underline; text-underline-offset: 2px; }
 .cc-cmt-time {
-  font-size: 0.62rem;
+  flex-shrink: 0;
+  font-size: 0.66rem;
   font-variant-numeric: tabular-nums;
   color: var(--sol-text-dim);
 }
-.cc-cmt-thinking {
-  font-size: 0.66rem;
-  color: var(--sol-text-dim);
+.cc-cmt-thinking,
+.cc-cmt-failed {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-}
-/* Action row below the body — mirrors the left quote chip's buttons. Hidden
-   until hover so a quiet thread stays clean. */
-.cc-cmt-actions {
-  display: flex;
-  gap: 0.15rem;
-  margin: 0.1rem 0 0 -0.4rem;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.cc-cmt:hover .cc-cmt-actions,
-.cc-cmt:focus-within .cc-cmt-actions { opacity: 1; }
-.cc-cmt-act {
+  align-self: center;
+  font-size: 0.66rem;
   color: var(--sol-text-dim);
-  padding: 0.18rem;
-  border-radius: 5px;
-  transition: color 110ms ease, background 110ms ease;
 }
-.cc-cmt-act:hover {
-  color: var(--sol-text);
-  background: color-mix(in srgb, var(--sol-text) 9%, transparent);
+.cc-cmt-failed { color: var(--sol-red); }
+/* Whom a reply answers, beside the time. */
+.cc-cmt-replying {
+  /* Gives way long before the author's name does. */
+  flex: 0 1000 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.66rem;
+  color: var(--sol-text-dim);
 }
-.cc-cmt-act-danger:hover {
-  color: var(--sol-red);
-  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
-}
+.cc-cmt-replying svg { flex-shrink: 0; color: var(--cc-accent); }
+.cc-cmt-replying > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cc-cmt-replying b { font-weight: 600; color: var(--sol-text-muted); }
 .cc-cmt-body {
-  font-size: 0.795rem;
+  margin-top: 0.1rem;
+  font-size: 0.8rem;
   line-height: 1.5;
   color: var(--sol-text);
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
-.cc-cmt-shimmer {
-  color: var(--sol-text-dim);
-  font-style: italic;
-  background: linear-gradient(90deg, var(--sol-text-dim) 30%, color-mix(in srgb, var(--cc-agent) 80%, var(--sol-text-dim)) 50%, var(--sol-text-dim) 70%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: ccShimmer 2s linear infinite;
+
+/* The card's tools (the thread's ping and resolve, then reply / edit /
+   delete): at the end of the head row, shown on hover or focus. Negative block
+   margins keep them from growing the row, and the reply marker truncates
+   before them, so they never cover the name or what it answers; hidden, they
+   take no width. A continued comment has no head row; its tools float at its
+   top-right corner. */
+.cc-cmt-tools {
+  flex-shrink: 0;
+  margin: -0.35rem -0.2rem -0.35rem auto;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 1px;
+  border-radius: 7px;
+  background: var(--sol-bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-border) 70%, transparent), 0 2px 8px -4px rgba(0, 0, 0, 0.25);
+  display: none;
 }
-@keyframes ccShimmer { to { background-position: -200% 0; } }
+.cc-cmt-tools-float { position: absolute; top: 0.1rem; right: 0.25rem; margin: 0; z-index: 2; }
+.cc-cmt:hover .cc-cmt-tools,
+.cc-cmt:focus-within .cc-cmt-tools { display: flex; }
+.cc-cmt-tool {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.45rem;
+  height: 1.45rem;
+  padding: 0 0.3rem;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--sol-text-muted);
+  transition: color 100ms ease, background 100ms ease;
+}
+.cc-cmt-tool:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 9%, transparent); }
+.cc-cmt-tool-danger:hover { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
+.cc-cmt-tool-confirm,
+.cc-cmt-tool-confirm:hover { color: var(--sol-bg); background: var(--sol-red); }
+.cc-cmt-tool-resolved { color: var(--sol-green); }
+.cc-cmt-tools-sep { width: 1px; align-self: stretch; margin: 0.25rem 0.15rem; background: color-mix(in srgb, var(--sol-border) 70%, transparent); }
+.cc-cmt-tools-sep:first-child { display: none; }
+.cc-cmt-tools .cc-ping-tool { display: inline-flex; gap: 0.25rem; padding: 0 0.35rem; font-size: 0.66rem; }
+/* Inside the PR timeline's outlined box, the box is the card: no second tint. */
+.pr-cmt-box .cc-cmt:hover, .pr-cmt-box .cc-cmt:focus-within { background: transparent; }
+
+/* A failed agent reply: "no reply · Retry" in the head, the reason quiet below. */
+.cc-cmt-retry {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.2rem; align-self: center;
+  font-size: 0.66rem; font-weight: 600; color: var(--sol-text-muted);
+  padding: 0 0.3rem; border-radius: 5px; transition: color 100ms ease, background 100ms ease;
+}
+.cc-cmt-retry:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+.cc-cmt-body-failed, .cc-cmt-body-failed .cc-cmt-md.prose { font-size: 0.72rem; color: var(--sol-text-dim); }
 
 /* Tighten the shared markdown pipeline for the comment scale. */
-.cc-cmt-md.prose { font-size: 0.795rem; line-height: 1.5; }
+.cc-cmt-md.prose { font-size: 0.8rem; line-height: 1.5; }
 .cc-cmt-md.prose > :first-child { margin-top: 0; }
 .cc-cmt-md.prose > :last-child { margin-bottom: 0; }
 .cc-cmt-md.prose p { margin: 0.2rem 0; }
 .cc-cmt-md.prose pre { margin: 0.4rem 0; }
 .cc-cmt-md.prose ul, .cc-cmt-md.prose ol { margin: 0.25rem 0; }
+.cc-cmt-md.prose img { margin: 0; }
 
 /* Inline edit. */
 .cc-cmt-edit { margin-top: 0.2rem; }
 .cc-cmt-textarea {
+  display: block;
   width: 100%;
   resize: none;
   background: var(--sol-bg);
-  border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
-  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--cc-accent) 55%, transparent);
+  border-radius: 8px;
   padding: 0.35rem 0.5rem;
-  font-size: 0.795rem;
+  font-size: 0.8rem;
   line-height: 1.45;
   color: var(--sol-text);
   font-family: inherit;
 }
-.cc-cmt-textarea:focus {
-  outline: none;
-  border-color: color-mix(in srgb, var(--cc-accent) 55%, transparent);
-}
-.cc-cmt-edit-foot { display: flex; justify-content: flex-end; gap: 0.3rem; margin-top: 0.3rem; }
-.cc-cmt-mini {
-  display: inline-flex; align-items: center; gap: 0.2rem;
-  font-size: 0.66rem; padding: 0.15rem 0.45rem; border-radius: 6px;
-  color: var(--sol-text-dim); border: 1px solid transparent; transition: all 120ms ease;
-}
-.cc-cmt-mini:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
-.cc-cmt-mini-primary { color: var(--cc-accent); border-color: color-mix(in srgb, var(--cc-accent) 35%, transparent); }
-.cc-cmt-mini-primary:hover { background: color-mix(in srgb, var(--cc-accent) 14%, transparent); }
+.cc-cmt-textarea:focus { outline: none; }
+.cc-cmt-edit-foot { display: flex; justify-content: flex-end; gap: 0.25rem; margin-top: 0.3rem; }
 
-/* thinking dots */
-.cc-dots { display: inline-flex; gap: 2px; margin-left: 3px; }
-.cc-dots i { width: 3px; height: 3px; border-radius: 999px; background: currentColor; animation: ccBlink 1.2s infinite ease-in-out; }
-.cc-dots i:nth-child(2) { animation-delay: 0.18s; }
-.cc-dots i:nth-child(3) { animation-delay: 0.36s; }
 @keyframes ccBlink { 0%, 60%, 100% { opacity: 0.25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
 
-/* ── Thread (cards + composer) ────────────────────────────────────────────── */
+/* ── Thread (cards, action row, composer) ─────────────────────────────────── */
 .cc-thread { display: flex; flex-direction: column; min-height: 0; }
 .cc-thread-global { flex: 1; }
-.cc-thread-list { display: flex; flex-direction: column; gap: 0.1rem; overflow-y: auto; padding: 0.2rem 0.25rem; }
-.cc-thread-global .cc-thread-list { flex: 1; padding: 0.35rem 0.5rem 0.5rem; }
-.cc-thread-empty {
-  font-size: 0.74rem; line-height: 1.55; color: var(--sol-text-dim);
-  padding: 0.6rem 0.5rem;
+.cc-thread-list { display: flex; flex-direction: column; gap: 1px; }
+.cc-thread-global .cc-thread-list { flex: 1; overflow-y: auto; padding: 0.75rem 0.4rem 0.2rem; }
+.cc-thread-is-resolved .cc-thread-list { opacity: 0.6; }
+.cc-thread-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  min-height: 1.25rem;
+  padding: 0 0 0 0.05rem;
 }
-.cc-thread-acc-head { display: flex; align-items: center; gap: 0.15rem; cursor: pointer; }
-.cc-thread-acc-toggle { flex-shrink: 0; color: var(--sol-text-dim); padding: 0.15rem; border-radius: 5px; transition: color 120ms ease, background 120ms ease; }
-.cc-thread-acc-toggle:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
-.cc-thread-chev { transition: transform 160ms ease; }
-.cc-thread-chev-collapsed { transform: rotate(-90deg); }
-.cc-thread-acc-header { flex: 1; min-width: 0; }
-.cc-thread-acc-count {
-  flex-shrink: 0; font-size: 0.58rem; font-weight: 700; color: var(--cc-accent);
-  background: color-mix(in srgb, var(--cc-accent) 14%, transparent); border-radius: 999px;
-  min-width: 1rem; height: 1rem; display: grid; place-items: center; padding: 0 0.25rem; margin-right: 0.2rem;
+.cc-thread-global .cc-thread-foot { padding: 0 0.45rem 0.2rem; }
+/* A thread's actions show while the pointer or the caret is in it; a quiet
+   thread is only its words. Touch screens keep them. */
+@media (hover: hover) {
+  .cc-thread-foot-hover { opacity: 0; transition: opacity 120ms ease; }
+  .cc-thread:hover > .cc-thread-foot-hover,
+  .cc-thread:focus-within > .cc-thread-foot-hover { opacity: 1; }
 }
-
-/* Agent action — separate from Send, styled like the shared comment buttons. */
-.cc-thread-askagent-row { display: flex; padding: 0.1rem 0.4rem 0.3rem; }
+/* A resolved thread, folded to one line. */
+.cc-thread-fold {
+  display: flex; align-items: center; gap: 0.4rem; width: 100%; min-width: 0;
+  padding: 0.25rem 0.4rem; border-radius: 7px; text-align: left;
+  font-size: 0.72rem; color: var(--sol-text-dim);
+  transition: background 110ms ease, color 110ms ease;
+}
+.cc-thread-fold:hover { color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.cc-thread-fold-icon { width: 0.8rem; height: 0.8rem; flex-shrink: 0; color: var(--sol-green); }
+.cc-thread-fold-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-thread-fold-count { flex-shrink: 0; font-size: 0.66rem; font-variant-numeric: tabular-nums; }
+.cc-thread-resolve-btn { margin-left: auto; }
+.cc-thread-resolve-btn.is-resolved { color: var(--sol-green); }
+.cc-thread-reopen-mark { opacity: 0; margin-left: -0.1rem; transition: opacity 100ms ease; }
+.cc-thread-resolve-btn.is-resolved:hover .cc-thread-reopen-mark { opacity: 1; }
 
 /* ── Composer (reuses MessageInput in bareComposer mode) ──────────────────── */
-.cc-cmt-composer { flex-shrink: 0; padding: 0.35rem 0.5rem 0.45rem; }
-.cc-thread-anchored .cc-cmt-composer { padding: 0.2rem 0.25rem 0.1rem; }
+.cc-cmt-composer { flex-shrink: 0; padding: 0.15rem 0 0.1rem; }
+.cc-thread-global .cc-cmt-composer { padding: 0.35rem 0.5rem 0.5rem; }
 .cc-cmt-mi { width: 100%; }
 .cc-cmt-mi form { padding: 0 !important; }
-/* Drop MessageInput's footer spacing in bare mode (its own gates hide content). */
 .cc-cmt-mi .conv-col { max-width: none; }
+/* MessageInput floats over a transcript: a sticky box with a 64px scrim pulled
+   up over the content behind it. A comment composer sits in its thread, so the
+   scrim would grey out the thread's last row. It is a plain block here. */
+.cc-cmt-mi [data-sv-composer] { position: static; pointer-events: auto; }
+.cc-cmt-mi [data-sv-composer] > .bg-gradient-to-t { display: none; }
+.cc-cmt-mi [data-sv-composer] > .pointer-events-auto { background: transparent; padding-bottom: 0; }
 .cc-cmt-signedout { font-size: 0.74rem; color: var(--sol-text-dim); padding: 0.5rem; }
 
 .cc-cmt-typing {
@@ -3083,28 +3140,17 @@ diffs-container {
 
 .cc-cmt-replyto {
   display: flex; align-items: center; gap: 0.35rem;
-  font-size: 0.68rem; color: var(--sol-text-secondary);
-  padding: 0.2rem 0.45rem; margin-bottom: 0.3rem;
-  border-left: 2px solid var(--cc-accent);
-  background: color-mix(in srgb, var(--cc-accent) 12%, transparent);
-  border-radius: 0 6px 6px 0;
+  font-size: 0.68rem; color: var(--sol-text-muted);
+  padding: 0 0.15rem 0.3rem;
 }
 .cc-cmt-replyto b { color: var(--sol-text); font-weight: 600; }
-.cc-cmt-replyto > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.cc-cmt-replyto-x { color: var(--sol-text-dim); display: inline-flex; }
-.cc-cmt-replyto-x:hover { color: var(--sol-text); }
-
-/* "replying to <name>" marker on a threaded reply card. */
-.cc-cmt-replying {
-  display: inline-flex; align-items: center; gap: 0.2rem;
-  font-size: 0.62rem; font-weight: 500; color: var(--sol-text-dim);
-  margin-bottom: 0.08rem;
-}
-.cc-cmt-replying svg { color: var(--cc-accent); opacity: 0.75; }
+.cc-cmt-replyto > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-cmt-replyto-x { color: var(--sol-text-dim); display: inline-flex; padding: 0.1rem; border-radius: 4px; }
+.cc-cmt-replyto-x:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
 
 /* Where the reader's news starts, and the news itself. */
 .cc-thread-new {
-  display: flex; align-items: center; gap: 0.4rem; margin: 0.2rem 0.25rem;
+  display: flex; align-items: center; gap: 0.4rem; margin: 0.15rem 0.45rem;
   font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-cyan);
 }
 .cc-thread-new::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--sol-cyan) 45%, transparent); }
@@ -3115,61 +3161,23 @@ diffs-container {
 /* A thread event (a hand-off): the author and what they did, on one line. */
 .cc-cmt-event .cc-cmt-main { padding-left: 0.1rem; }
 .cc-cmt-event-words { font-size: 0.72rem; color: var(--sol-text-muted); }
-/* Resolve / Reopen under the thread. */
-.cc-thread-resolve { display: flex; align-items: center; gap: 0.5rem; padding: 0.1rem 0.5rem 0.2rem; }
-.cc-thread-resolved { font-size: 0.66rem; color: var(--sol-green); }
 
-/* Composer Cancel footer (matches the left editor footer). */
-.cc-cmt-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.25rem; }
-/* Ping <agent> button — agent logo + name, clean (no violet, no sparkle). */
+/* Composer Cancel footer. */
+.cc-cmt-composer-foot { display: flex; justify-content: flex-end; margin-top: 0.25rem; }
 .cc-ping-btn { gap: 0.35rem; }
-.cc-ping-btn:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
-/* Agent variant of the shared comment button — violet, like Ask-agent. */
-.cc-comment-btn-agent { color: color-mix(in srgb, var(--cc-agent) 80%, var(--sol-text-dim)); }
-.cc-comment-btn-agent:hover { color: var(--cc-agent); background: color-mix(in srgb, var(--cc-agent) 12%, transparent); }
-.cc-comment-btn-agent svg { color: var(--cc-agent); }
 
-/* ── Inline anchored thread (pinned at its message in the flow) ───────────── */
+/* ── A code line's thread, under its diff line ────────────────────────────── */
+.cc-fline {
+  margin: 0.3rem 0 0.4rem 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid color-mix(in srgb, var(--cc-accent) 45%, transparent);
+  white-space: normal;
+  color: var(--sol-text);
+  display: flex; flex-direction: column; gap: 0.2rem;
+}
+.cc-fline[data-placement="outdated"] { border-left-color: color-mix(in srgb, var(--sol-yellow) 45%, transparent); }
+
 .cc-inline { margin: 0.4rem 0 0.55rem; }
-.cc-inline-preview {
-  display: flex; align-items: center; gap: 0.5rem; width: 100%; text-align: left;
-  padding: 0.35rem 0.55rem; border-radius: 0 8px 8px 0;
-  border-left: 2px solid color-mix(in srgb, var(--cc-accent) 50%, transparent);
-  background: transparent;
-  transition: background 130ms ease, border-color 130ms ease;
-}
-.cc-inline-preview:hover {
-  background: color-mix(in srgb, var(--cc-accent) 6%, transparent);
-  border-left-color: var(--cc-accent);
-}
-.cc-inline-faces { display: inline-flex; flex-shrink: 0; }
-.cc-inline-faces > * + * { margin-left: -6px; }
-.cc-inline-last {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 0.775rem; color: var(--sol-text-secondary);
-}
-.cc-inline-last-text { color: var(--sol-text-muted); }
-.cc-inline-meta {
-  flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.3rem;
-  font-size: 0.66rem; font-weight: 600; color: var(--cc-accent);
-}
-.cc-inline-time { color: var(--sol-text-dim); font-weight: 400; }
-
-/* Clean left-accent treatment — one teal bar, no boxed borders. */
-.cc-inline-thread {
-  border-left: 2px solid color-mix(in srgb, var(--cc-accent) 55%, transparent);
-  border-radius: 0 8px 8px 0;
-  background: color-mix(in srgb, var(--cc-accent) 3%, transparent);
-  overflow: hidden;
-}
-.cc-inline-head {
-  display: flex; align-items: center; gap: 0.4rem;
-  padding: 0.35rem 0.4rem 0.25rem 0.6rem;
-}
-.cc-inline-title { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.01em; color: var(--sol-text-muted); }
-.cc-inline-collapse { margin-left: auto; color: var(--sol-text-dim); padding: 0.15rem; border-radius: 5px; transition: color 120ms ease, background 120ms ease; }
-.cc-inline-collapse:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
-.cc-inline-thread .cc-thread-list { max-height: 340px; }
 
 /* ── Right-docked rail (the conversation-wide thread) ─────────────────────── */
 .cc-railx {
@@ -3204,53 +3212,53 @@ diffs-container {
 .cc-railx-head {
   display: flex; align-items: center; gap: 6px; flex-shrink: 0;
   height: var(--cc-panel-head-h); min-height: var(--cc-panel-head-h);
-  padding: 0 6px 0 10px;
+  padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--cc-panel-rule);
   background: var(--cc-panel-head-bg);
 }
+.cc-railx-head .cc-panel__actions { margin-left: auto; }
 .cc-railx-title { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--sol-text-muted); }
-.cc-railx-count {
-  font-size: 0.62rem; font-weight: 600; color: var(--cc-accent);
-  background: color-mix(in srgb, var(--cc-accent) 14%, transparent);
-  border-radius: 999px; padding: 0.05rem 0.4rem;
-}
-.cc-railx-close { margin-left: auto; color: var(--sol-text-dim); padding: 0.2rem; border-radius: 6px; transition: color 120ms ease, background 120ms ease; }
-.cc-railx-close:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+.cc-railx-count { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--sol-text-dim); }
 
-.cc-railx-anchored {
-  flex-shrink: 0; max-height: 34%; overflow-y: auto;
-  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent);
-  padding: 0.35rem 0.4rem;
+/* Anchored threads, one row each: where, opening words, size, resolve. */
+.cc-railx-threads {
+  flex-shrink: 0; max-height: 38%; overflow-y: auto;
+  margin: 0.4rem 0.4rem 0;
+  padding: 0.2rem;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--sol-bg) 60%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-border) 40%, transparent);
 }
-.cc-railx-anchored-label {
-  font-size: 0.58rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--sol-text-dim); padding: 0.1rem 0.25rem 0.3rem;
+.cc-railx-row { display: flex; align-items: center; border-radius: 7px; transition: background 110ms ease; }
+.cc-railx-row:hover { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.cc-railx-row.is-resolved { opacity: 0.5; }
+.cc-railx-row-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.45rem;
+  padding: 0.3rem 0.35rem; text-align: left;
+  font-size: 0.74rem; color: var(--sol-text-secondary);
 }
-.cc-railx-anchored-row {
-  display: flex; align-items: center; gap: 0.35rem; width: 100%; text-align: left;
-  font-size: 0.7rem; color: var(--sol-text-dim); padding: 0.28rem 0.3rem; border-radius: 7px;
-  transition: color 120ms ease, background 120ms ease;
+.cc-railx-row-icon { width: 0.8rem; height: 0.8rem; flex-shrink: 0; color: var(--sol-text-dim); }
+.cc-railx-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-railx-row-where { color: var(--sol-text-muted); margin-right: 0.4rem; }
+.cc-railx-row-count { flex-shrink: 0; font-size: 0.66rem; font-variant-numeric: tabular-nums; color: var(--sol-text-dim); }
+.cc-railx-row-resolve {
+  flex-shrink: 0; display: grid; place-items: center; width: 1.5rem; height: 1.5rem; margin-right: 0.15rem;
+  border-radius: 6px; color: var(--sol-text-dim); opacity: 0; transition: opacity 100ms ease, color 100ms ease, background 100ms ease;
 }
-.cc-railx-anchored-row:hover { color: var(--sol-text-secondary); background: color-mix(in srgb, var(--cc-accent) 6%, transparent); }
-.cc-railx-anchored-snip { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
-.cc-railx-anchored-count {
-  flex-shrink: 0; font-size: 0.56rem; font-weight: 700; color: var(--cc-accent);
-  background: color-mix(in srgb, var(--cc-accent) 14%, transparent); border-radius: 999px;
-  min-width: 0.95rem; height: 0.95rem; display: grid; place-items: center; padding: 0 0.2rem;
-}
+.cc-railx-row:hover .cc-railx-row-resolve,
+.cc-railx-row-resolve:focus-visible { opacity: 1; }
+.cc-railx-row-resolve:hover { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 12%, transparent); }
 .cc-railx-global { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.cc-railx-global .cc-thread-global { flex: 1; min-height: 0; }
+.cc-railx-global .cc-thread-global { flex: 1; min-height: 0; justify-content: flex-end; }
 
 /* ── Right comment rail (mirror of the left quote rail) ───────────────────────
    MARGIN mode: float in the empty right margin (text keeps full width).
    INLINE mode: the host becomes a flex row and the rail is a real right column
    that shrinks the text — so comments still sit beside the message, not below. */
 .cc-rright {
-  display: flex; flex-direction: column; gap: 0.1rem;
-  border-left: 2px solid color-mix(in srgb, var(--cc-accent) 50%, transparent);
-  padding: 0.05rem 0 0.2rem 0.6rem;
+  border-left: 2px solid color-mix(in srgb, var(--cc-accent) 45%, transparent);
+  padding: 0 0 0 0.35rem;
 }
-.cc-rright-cards { display: flex; flex-direction: column; gap: 0.1rem; }
 .cc-rright-margin {
   position: absolute;
   top: 0;
@@ -3273,11 +3281,6 @@ diffs-container {
 .cc-rright-below {
   margin: 0.45rem 0 0.2rem;
   max-width: 34rem;
-}
-.cc-rright-composer { padding: 0.15rem 0 0.1rem; }
-.cc-rright-foot {
-  display: flex; align-items: center; gap: 0.25rem;
-  padding: 0.2rem 0 0.1rem;
 }
 
 /* The live browser stream: the agent's cursor ring on a press, and the dock's
@@ -4062,18 +4065,6 @@ diffs-container {
   box-shadow: none !important;
 }
 
-/* Hosted mode's New conversation on a phone: the same ghost button as the
-   bell and the gear, in ink with a 36px reach. The accent is kept for what
-   waits on the person (an approval's dot, Yes). */
-@media (max-width: 767px) {
-  html.hosted-mode [data-cc-topbar-group] > button[data-cc-compose],
-  html.hosted-mode [data-cc-topbar-group] > div > button[data-cc-compose] {
-    min-width: 36px;
-    min-height: 36px;
-    color: var(--pd-ink, var(--sol-text)) !important;
-  }
-}
-
 .minimal-style [data-cc-topbar-group] > div > button:hover,
 .minimal-style [data-cc-topbar-group] > button:hover {
   background: var(--sol-bg-highlight) !important;
@@ -4266,7 +4257,9 @@ diffs-container {
   font-variant-numeric: tabular-nums;
 }
 .minimal-style [data-sv-nav] [data-sv-count="mention"],
-.minimal-style [data-sv-nav] [data-sv-count="mention"] > * {
+.minimal-style [data-sv-nav] [data-sv-count="mention"] > *,
+.minimal-style [data-sv-nav] [data-sv-count="alert"],
+.minimal-style [data-sv-nav] [data-sv-count="alert"] > * {
   color: var(--sol-red) !important;
   font-weight: 500;
 }
@@ -4999,11 +4992,6 @@ diffs-container {
 .minimal-style [data-sv-nav] [data-rail-heading="Agents"],
 .minimal-style [data-sv-nav] [data-rail-group] {
   display: none;
-}
-/* Assistant mode (lib/surfaces.ts) keeps that group, renamed Assistant: its
-   routines are the standing work the assistant does for the person. */
-.minimal-style .hosted-mode [data-sv-nav] [data-rail-group="agents"] {
-  display: block;
 }
 
 /* Session list head */
@@ -6976,819 +6964,6 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 .cc-quote-compact .cc-quote-body,
 .cc-quote-compact .cc-quote-body * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* ── Hosted mode: the family's paper, ink and type ─────────────────────────
-   Hosted mode (client_state.ui.lane "simple", docs/architecture/
-   hosted-assistant.md "The mode") keeps codecast's layout and structure and
-   takes the family's look from @platform/design, the tokens Whisk and
-   /welcome are built on: warm paper, warm ink, Instrument Sans for the
-   interface, Newsreader for what the assistant writes, Fragment Mono for code
-   and receipts. ThemeProvider sets html.hosted-mode beside .minimal-style, so
-   portaled surfaces take it too. A person who picks Classic in hosted mode
-   keeps Classic: every rule here needs .minimal-style. */
-html.hosted-mode.minimal-style {
-  --font-ui: var(--pd-font-ui);
-  --font-mono: var(--pd-font-mono);
-  --sol-bg: var(--pd-bg);
-  --sol-bg-alt: color-mix(in srgb, var(--pd-bg-sunken) 55%, var(--pd-bg));
-  --sol-bg-highlight: var(--pd-bg-hover);
-  --sol-bg-inset: var(--pd-bg-sunken);
-  --sol-card: var(--pd-bg-raised);
-  --sol-card-hover: var(--pd-bg-hover);
-  --sol-border: var(--pd-rule);
-  --cc-panel-rule: var(--pd-rule);
-  --sol-text: var(--pd-ink);
-  --sol-text-secondary: color-mix(in srgb, var(--pd-ink) 78%, var(--pd-ink-muted));
-  --sol-text-muted: var(--pd-ink-muted);
-  --sol-text-dim: var(--pd-ink-faint);
-  --sol-text-muted0: color-mix(in srgb, var(--pd-ink-faint) 70%, var(--pd-bg));
-  --sol-link: var(--pd-accent);
-  --sol-orange: var(--pd-accent);
-  /* The accent classes collapse to Whisk's palette: one rust accent for
-     what wants attention, ok and danger for outcomes, stars in their gold,
-     and the cool hues (violet, blue) to muted ink, since they only ever
-     told one kind of thing from another. Light and dark both resolve
-     through the family tokens, which carry their own dark values. */
-  --sol-class-yellow: var(--pd-star);
-  --sol-class-orange: var(--pd-accent);
-  --sol-class-amber: var(--pd-accent);
-  --sol-class-red: var(--pd-danger);
-  --sol-class-magenta: var(--pd-danger);
-  --sol-class-violet: var(--pd-ink-muted);
-  --sol-class-blue: var(--pd-ink-muted);
-  --sol-class-cyan: var(--pd-ok);
-  --sol-class-green: var(--pd-ok);
-  --logo-c: var(--pd-ink);
-  --radius: var(--pd-radius-lg);
-  /* shadcn's surfaces, as HSL triplets of the same palette. */
-  --background: 43 37% 94%;
-  --foreground: 33 16% 11%;
-  --card: 43 64% 98%;
-  --card-foreground: 33 16% 11%;
-  --popover: 43 64% 98%;
-  --popover-foreground: 33 16% 11%;
-  --primary: 33 16% 11%;
-  --primary-foreground: 43 64% 98%;
-  --secondary: 43 27% 91%;
-  --secondary-foreground: 33 16% 20%;
-  --muted: 43 27% 91%;
-  --muted-foreground: 38 11% 38%;
-  --accent: 45 33% 91%;
-  --accent-foreground: 33 16% 11%;
-  --border: 41 28% 85%;
-  --input: 41 28% 85%;
-  --ring: 33 16% 30%;
-  /* Your own words read as a quiet note, the way Whisk sets quoted text,
-     not as a coloured block. */
-  --cc-user-bubble: color-mix(in srgb, var(--pd-ink) 7%, var(--pd-bg));
-}
-
-html.hosted-mode.dark.minimal-style {
-  --sol-bg: var(--pd-bg);
-  --sol-bg-alt: var(--pd-bg-sunken);
-  --sol-bg-highlight: var(--pd-bg-hover);
-  --sol-bg-inset: var(--pd-bg-sunken);
-  --sol-card: var(--pd-bg-raised);
-  --sol-card-hover: var(--pd-bg-hover);
-  --sol-border: var(--pd-rule-strong);
-  --cc-panel-rule: var(--pd-rule);
-  --sol-text: var(--pd-ink);
-  --sol-text-secondary: color-mix(in srgb, var(--pd-ink) 82%, var(--pd-ink-muted));
-  --sol-text-muted: var(--pd-ink-muted);
-  --sol-text-dim: var(--pd-ink-faint);
-  --sol-text-muted0: color-mix(in srgb, var(--pd-ink-faint) 70%, var(--pd-bg));
-  --background: 30 16% 7%;
-  --foreground: 39 32% 89%;
-  --card: 33 18% 10%;
-  --card-foreground: 39 32% 89%;
-  --popover: 33 18% 10%;
-  --popover-foreground: 39 32% 89%;
-  --primary: 39 32% 89%;
-  --primary-foreground: 30 16% 7%;
-  --secondary: 33 18% 12%;
-  --secondary-foreground: 39 20% 82%;
-  --muted: 33 18% 12%;
-  --muted-foreground: 37 12% 59%;
-  --accent: 33 18% 14%;
-  --accent-foreground: 39 32% 89%;
-  --border: 38 15% 21%;
-  --input: 38 15% 21%;
-  --ring: 37 12% 59%;
-  --cc-user-bubble: color-mix(in srgb, var(--pd-ink) 9%, var(--pd-bg));
-}
-
-html.hosted-mode.minimal-style ::selection { background: var(--pd-selection); }
-
-/* What the assistant writes reads like a letter: Newsreader at a reading
-   size, on the conversation's measure. The person's words, receipts and step
-   lines stay in the interface face, so the two voices separate. Code keeps
-   the mono face (the .prose pre and code rule above). */
-html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="assistant"] .prose {
-  font-family: var(--pd-font-read);
-  font-size: 17px;
-  line-height: 1.55;
-  letter-spacing: 0;
-}
-html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"] {
-  font-size: 14px;
-}
-/* What the assistant says before it acts ("I'll make a packing list...")
-   is narration, not the answer: when the step it leads into follows it in
-   the same message, it sits in the interface face at the receipt's size and
-   ink, so the final reply alone reads in the letter face. */
-html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="assistant"] .prose:has(~ [data-cc-made-note], ~ [data-cc-made-line], ~ .not-prose [data-cc-tool-receipt], ~ .not-prose [data-cc-made-line]) {
-  font-family: var(--pd-font-ui);
-  font-size: 13.5px;
-  line-height: 1.5;
-  color: var(--pd-ink-muted);
-}
-/* A reply's headings are its own emphasis, not a document's: body size in
-   the reading face's semibold, so three "## Option" lines read as the start
-   of each part of an answer rather than as poster type in a chat column. */
-html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="assistant"] .prose :is(h1, h2, h3, h4) {
-  font-family: var(--pd-font-read);
-  font-size: 1em;
-  line-height: 1.45;
-  font-weight: 600;
-  letter-spacing: 0;
-  margin: 1.1em 0 0.35em;
-}
-html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="assistant"] .prose :is(h1, h2, h3, h4):first-child {
-  margin-top: 0;
-}
-/* A proposal card reads in that same face wherever it is mounted (the thread,
-   the open proposals strip, a doc), so one proposal never changes voice
-   between two places on one screen. */
-html.hosted-mode.minimal-style .entity-card[data-entity-card="proposal"] {
-  font-family: var(--pd-font-read);
-}
-
-/* A note reads like the assistant's answers: the reading face at a reading
-   size, a title set like a page's rather than a poster's, and lists held
-   tight, as a checklist is written. The editor and the read view share the
-   rules, so switching modes reflows nothing. */
-html.hosted-mode.minimal-style .doc-editor,
-html.hosted-mode.minimal-style .doc-read-body {
-  font-family: var(--pd-font-read);
-  font-size: 17px;
-  line-height: 1.55;
-}
-html.hosted-mode.minimal-style :is(.doc-title, .doc-editor--title-first .tiptap > h1:first-child) {
-  font-family: var(--pd-font-read);
-  font-size: 28px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-}
-html.hosted-mode.minimal-style .doc-editor .tiptap :is(ul, ol) { margin: 0.4em 0; }
-html.hosted-mode.minimal-style .doc-editor .tiptap li { margin: 0.1em 0; }
-html.hosted-mode.minimal-style .doc-editor .tiptap li > p { margin-bottom: 0; }
-html.hosted-mode.minimal-style .doc-read-body :is(ul, ol) { margin-top: 0.4em; margin-bottom: 0.4em; }
-html.hosted-mode.minimal-style .doc-read-body li { margin-top: 0.1em; margin-bottom: 0.1em; }
-
-/* The conversation's title in the header, in the reading face. */
-html.hosted-mode.minimal-style [data-sv-convhead] [data-cc-conv-title] {
-  font-family: var(--pd-font-read);
-  font-size: 18px;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-
-/* The composer, as /welcome draws it: a raised sheet on a hairline with the
-   family's soft shadow, and a round send in ink that takes the accent once
-   there is something to send. The round form is the icon send only: with a
-   label ("Send and apply 3") the button is the pill its own classes draw,
-   wide enough for its words. */
-/* One composer surface for the home and a conversation: raised paper on a
-   hairline, 20px in from the left, and the same small shadow in both, so the
-   caret never sits on the border and nothing pools under the box in dark. */
-html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div,
-html.hosted-mode.minimal-style [data-simple-lane] .sl-composer {
-  border-color: var(--pd-rule);
-  background: var(--pd-bg-raised);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--pd-ink) 8%, transparent);
-  padding-left: 20px;
-}
-html.hosted-mode.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div:focus-within,
-html.hosted-mode.minimal-style [data-simple-lane] .sl-composer:focus-within {
-  border-color: var(--pd-rule-strong);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--pd-ink) 8%, transparent);
-}
-html.hosted-mode.minimal-style [data-cc-send]:not([data-cc-send-label]) {
-  width: 40px;
-  height: 40px;
-  border: 0;
-  background: var(--pd-ink);
-  color: var(--pd-bg-raised);
-  transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
-}
-/* One send in hosted mode and on /welcome: an ink disc with a paper arrow
-   once there is something to send, the accent only under the pointer or the
-   press. Empty, it is a hairline ring with the arrow in muted ink at full
-   strength, so the target is findable before typing, in light and dark. */
-html.hosted-mode.minimal-style [data-cc-send]:not([data-cc-send-label]):not(:disabled):is(:hover, :active) {
-  background: var(--pd-accent);
-  color: var(--pd-accent-ink);
-}
-html.hosted-mode.minimal-style [data-cc-send]:not([data-cc-send-label]):disabled {
-  opacity: 1;
-  background: transparent;
-  color: var(--pd-ink-muted);
-  box-shadow: inset 0 0 0 1px var(--pd-rule-strong);
-}
-
-/* The conversations panel's section captions read as quiet headings, not a
-   band of colours: sentence case, the muted ink, a hairline above. The one
-   colour left is a small accent dot on the sections that wait on the person. */
-html.hosted-mode.minimal-style [data-sv-sec],
-html.hosted-mode.minimal-style [data-sv-rail] [data-sv-sec] {
-  color: var(--pd-ink-muted);
-  border-bottom: 0 !important;
-  border-top: 1px solid var(--pd-rule);
-  /* The panel's own paper: a heading, not a filled band. Minimal's tinted
-     band sets its fill with !important, so this answers in kind. */
-  background: var(--sol-bg-alt) !important;
-}
-html.hosted-mode.minimal-style [data-sv-sec] > span,
-html.hosted-mode.minimal-style [data-sv-sec] > svg {
-  color: var(--pd-ink-muted);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-}
-html.hosted-mode.minimal-style :is([data-inbox-section="questions"], [data-inbox-section="needs_input"]) > span::before {
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 7px;
-  border-radius: 999px;
-  background: var(--pd-accent);
-  vertical-align: 1px;
-}
-
-/* The plan, in the family's ink: the meter fills with ink on a sunken track
-   and takes the accent only once most of the month is used; the plan's name
-   and the month's headline read in the reading face. */
-html.hosted-mode.minimal-style [data-cc-meter] { background: var(--pd-bg-sunken); }
-html.hosted-mode.minimal-style [data-cc-meter-used] { background: var(--pd-ink); }
-html.hosted-mode.minimal-style [data-cc-meter-held] { background: color-mix(in srgb, var(--pd-ink) 28%, transparent); }
-html.hosted-mode.minimal-style [data-cc-meter][data-cc-meter-high] [data-cc-meter-used] { background: var(--pd-accent); }
-html.hosted-mode.minimal-style [data-cc-plan-card][data-current] { box-shadow: inset 0 0 0 1px var(--pd-accent); background: var(--pd-bg-raised); }
-html.hosted-mode.minimal-style [data-cc-plan-yours] { background: var(--pd-accent-soft); color: var(--pd-accent); }
-html.hosted-mode.minimal-style :is([data-cc-plan-name], [data-cc-plan-headline]) {
-  font-family: var(--pd-font-read);
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-/* The sidebar's meter speaks in the interface face like the rail around it,
-   on a hairline track. */
-html.hosted-mode.minimal-style [data-cc-usage-meter] > span {
-  font-family: var(--pd-font-ui);
-  font-size: 12px;
-  color: var(--pd-ink-muted);
-}
-/* The sidebar's meter fills as Plan's does: ink, rust past 80%, danger only
-   for a month used up, so 2% never reads as a warning. */
-html.hosted-mode.minimal-style [data-cc-usage-meter] [data-cc-meter] { background: var(--pd-rule); }
-
-/* The palette's group headings, as the family labels a list: small sentence
-   case in muted ink, not a letterspaced capital kicker. */
-html.hosted-mode.minimal-style [cmdk-group-heading] {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--pd-ink-muted);
-}
-
-/* A page's own title (PageHeading) in the reading face, as Whisk titles its
-   pages, with the count beside it in the interface face. */
-html.hosted-mode.minimal-style [data-cc-page-title] {
-  font-family: var(--pd-font-read);
-  font-size: 22px;
-  font-weight: 500;
-  letter-spacing: 0;
-  color: var(--pd-ink);
-}
-html.hosted-mode.minimal-style [data-cc-page-count] {
-  font-family: var(--pd-font-mono);
-  font-size: 13px;
-  color: var(--pd-ink-faint);
-}
-/* The full search page's field and its selected hit take the family accent,
-   not the developer's amber. */
-html.hosted-mode.minimal-style [data-cc-search-field]:focus {
-  border-color: color-mix(in srgb, var(--pd-accent) 45%, transparent);
-  --tw-ring-color: color-mix(in srgb, var(--pd-accent) 30%, transparent);
-}
-html.hosted-mode.minimal-style .group:focus-within [data-cc-search-icon],
-html.hosted-mode.minimal-style [data-cc-search-icon].animate-spin {
-  color: var(--pd-accent);
-}
-html.hosted-mode.minimal-style [data-cc-search-result="selected"] {
-  border-color: color-mix(in srgb, var(--pd-accent) 55%, transparent);
-  --tw-ring-color: color-mix(in srgb, var(--pd-accent) 25%, transparent);
-}
-
-/* Hosted list pages (To-dos, Notes) on the Routines measure: the header and
-   the rows share one centred column instead of running the screen's width
-   with the time at the far edge. The header's rule still spans the pane. */
-html.hosted-mode.minimal-style [data-list-view] .cq-header,
-html.hosted-mode.minimal-style [data-list-view] [data-list-scroll] > * {
-  max-width: 950px;
-  margin-inline: auto;
-}
-/* On a phone the title gets the family's 20px edge, not the toolbar's 8px. */
-@container (max-width: 440px) {
-  html.hosted-mode.minimal-style [data-list-view] .cq-header-pad {
-    padding-left: 20px !important;
-    padding-right: 20px !important;
-  }
-}
-
-/* An empty queue's words sit under the page title, so they read quieter
-   than it: the same reading face, no larger, in muted ink. */
-html.hosted-mode.minimal-style [data-queue-empty-title] {
-  font-family: var(--pd-font-read);
-  font-size: 22px;
-  line-height: 1.25;
-  color: var(--pd-ink-muted);
-}
-html.hosted-mode.minimal-style [data-queue-empty-title] + div {
-  font-size: 14px;
-}
-
-/* A list's group headings (the tasks list's people and statuses) in sentence
-   case, with a bare mono count instead of a bracketed one. */
-html.hosted-mode.minimal-style [data-cc-group-label] {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--pd-ink-muted);
-}
-html.hosted-mode.minimal-style [data-cc-group-count] {
-  font-family: var(--pd-font-mono);
-  font-size: 11px;
-  color: var(--pd-ink-faint);
-}
-html.hosted-mode.minimal-style [data-cc-bracket] { display: none; }
-/* An approval's options are buttons; their numbers only ever served the keys. */
-html.hosted-mode.minimal-style [data-cc-option-number] { display: none; }
-/* A live call's cluster (the face row's seats, its card and the phone's
-   strip) in the family's palette: the call reads in the live green rather
-   than the developer theme's violet, which the family does not have, and
-   names and counts are set in the interface face, not mono. */
-html.hosted-mode.minimal-style :is(.face-row, .walkie-strip, .people-bar, .phone-call-strip) {
-  --sol-violet: var(--pd-ok);
-  --font-mono: var(--pd-font-ui);
-}
-
-/* The rail, as Whisk draws its own: words without glyphs (Inbox and
-   Approvals keep theirs, quieter), counts as small mono numerals in the
-   accent where they wait on the person and in faint ink elsewhere, and the
-   open page in Whisk's warm hover tint, ink at weight 500, rather than a grey
-   band with an edge or a raised chip that reads as a button. The narrow rail
-   (centred rows) keeps its icons, which are all it has. */
-html.hosted-mode.minimal-style [data-sv-nav] :is([data-nav-row], [data-nav-subrow], a.w-full, button.w-full):not(.justify-center) > :first-child:not(:last-child):not([data-sv-count]) {
-  display: none;
-}
-html.hosted-mode.minimal-style [data-sv-nav] :is([href="/inbox"], [data-nav-page="/inbox"], [href="/questions"]):not(.justify-center) > :first-child:not(:last-child) {
-  display: inline-block;
-  opacity: 0.6;
-}
-html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count],
-html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count] > * {
-  /* The interface face with tabular figures: a mono count was the last
-     terminal detail on the hosted chrome. */
-  font-family: var(--pd-font-ui);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
-  font-size: 11.5px;
-  color: var(--pd-ink-faint) !important;
-}
-html.hosted-mode.minimal-style [data-sv-nav] :is([href="/inbox"], [data-nav-page="/inbox"], [href="/questions"]) [data-sv-count],
-html.hosted-mode.minimal-style [data-sv-nav] [data-sv-new-results] {
-  color: var(--pd-accent) !important;
-}
-html.hosted-mode.minimal-style [data-sv-nav] [data-sv-count="mention"] {
-  color: var(--pd-danger) !important;
-}
-/* Every row is one box, open or not: inset from the rail's edges, rounded,
-   with its words at the same place and the same width whether or not it has a
-   chevron, so hovering a row and opening it only change its fill and never its
-   geometry. The open row is a filled pill, as Whisk's nav draws it; the accent
-   bar is kept for the selected row of a list (the inbox rail, To-dos, Notes). */
-/* An explicit width, not auto: a link stretches at auto but a button (the
-   Inbox row) shrinks to its words, so the open Inbox was a short pill. The
-   count sits at the row's right edge, as Whisk's "Inbox 9" does. */
-html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center) {
-  width: calc(100% - 16px);
-  margin-inline: 8px;
-  border-radius: 8px;
-  border-left-color: transparent;
-}
-html.hosted-mode.minimal-style [data-sv-nav] :is(a, button).border-l-2:not(.justify-center),
-html.hosted-mode.minimal-style [data-sv-nav] div.border-l-2 > [data-nav-row]:not(.justify-center) {
-  padding-left: 8px;
-}
-/* Rows at rest read in muted ink, so the open page is the one row in full
-   ink; hover lifts a row to ink on the hover paper. */
-html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center):not(.bg-sol-bg-highlight) {
-  color: var(--pd-ink-muted);
-}
-html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center) [data-sv-count] {
-  margin-left: auto;
-}
-/* Hover is half the selected fill, so a row under the pointer never reads as
-   a second open page (in dark the two used to all but match). */
-html.hosted-mode.minimal-style [data-sv-nav] .border-l-2:not(.justify-center):not(.bg-sol-bg-highlight):hover {
-  color: var(--pd-ink);
-  background: var(--hosted-hover);
-}
-/* The app's one selected look (the rail's open conversation and a list's
-   open row use it too): a neutral warm fill, as Whisk selects. The accent is
-   kept for what is new or waits on the person, never for what is open. */
-html.hosted-mode { --hosted-selected: #ebe4d8; --hosted-hover: color-mix(in srgb, #ebe4d8 50%, transparent); }
-html.hosted-mode.dark {
-  --hosted-selected: color-mix(in srgb, var(--pd-ink) 9%, var(--pd-bg-raised));
-  --hosted-hover: color-mix(in srgb, var(--pd-ink) 4%, var(--pd-bg-raised));
-}
-html.hosted-mode.minimal-style [data-sv-nav] .border-l-2.bg-sol-bg-highlight {
-  background: var(--hosted-selected);
-  box-shadow: none;
-  color: var(--pd-ink);
-  font-weight: 550;
-  /* The bar is the only mark, in both themes: the accent border class the
-     developer rail paints with must not outline the box in dark. */
-  border-color: transparent !important;
-  outline: none;
-}
-
-/* A group's label reads as a label, not a row: the interface face in
-   sentence case and faint ink, air above and a little below. Tracked mono
-   capitals made the nav look like a terminal. */
-html.hosted-mode.minimal-style [data-sv-nav] [data-rail-heading] {
-  font-family: var(--pd-font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--pd-ink-faint);
-  margin-top: 20px;
-  margin-bottom: 6px;
-}
-html.hosted-mode.minimal-style [data-sv-nav] [data-rail-heading]:first-child { margin-top: 4px; }
-
-/* Hosted mode's wordmark at the head of the rail, as Whisk opens its own. */
-html.hosted-mode.minimal-style [data-cc-rail-wordmark] {
-  font-family: var(--pd-font-read);
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--pd-ink);
-}
-
-/* Settings' section titles in the reading face, like the pages' own titles,
-   rather than a letterspaced capital kicker. */
-html.hosted-mode.minimal-style [data-cc-settings-title] {
-  font-family: var(--pd-font-read);
-  font-size: 19px;
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--pd-ink);
-}
-
-/* The conversations panel's title, in the reading face as Whisk titles its
-   inbox. */
-html.hosted-mode.minimal-style [data-cc-panel-title] {
-  font-family: var(--pd-font-read);
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-html.hosted-mode.minimal-style [data-cc-sec-count] {
-  margin-left: 2px;
-  font-family: var(--pd-font-ui);
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--pd-ink-faint);
-  /* The caption is tracked wide; a count inherits none of it, or "13" reads
-     as "1 3". */
-  letter-spacing: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-/* With no top bar, the account and notification menus hang from the rail's
-   foot (Sidebar [data-cc-rail-foot]): they open upward and to the right of
-   their button, over the page, rather than down off the screen. */
-@media (min-width: 768px) {
-  [data-cc-rail-foot] .cc-topbar-menu {
-    position: absolute;
-    top: auto;
-    bottom: calc(100% + 8px);
-    left: 0;
-    right: auto;
-    margin-top: 0;
-    max-height: calc(100vh - 6rem);
-  }
-}
-
-/* A message's hover toolbar (quote, copy, more) on a touch screen: a tap
-   leaves :hover stuck, and the bar then sits over the reply's first line.
-   Hosted mode keeps it to pointers that hover; the conversation's menu keeps
-   copy and the rest. */
-@media not ((hover: hover) and (pointer: fine)) {
-  html.hosted-mode :is([data-cc-user-message-toolbar], [data-cc-assistant-message-toolbar]) {
-    display: none !important;
-  }
-}
-
-/* The shortcuts sheet's section headings in sentence case, as the palette's. */
-html.hosted-mode.minimal-style [data-cc-help-heading] {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--pd-ink-muted);
-}
-
-/* A list's section headings (the routines page's Active, Paused, History) as
-   the family labels them: sentence case in the interface face, no capitals
-   spaced into a kicker. */
-html.hosted-mode.minimal-style [data-cc-list-section] {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--pd-ink-muted);
-}
-html.hosted-mode.minimal-style [data-cc-list-section] > span {
-  font-family: var(--pd-font-ui);
-}
-
-/* Inbox rows, as Whisk draws its list: the open row is a raised sheet with a
-   rust rule on its left edge, and a settled row carries no idle dot, since
-   "nothing is happening" needs no mark. */
-html.hosted-mode.minimal-style [data-sv-rail] [data-session-id][data-active="true"] {
-  background: var(--hosted-selected) !important;
-  box-shadow: none !important;
-  border-left-color: transparent;
-}
-html.hosted-mode.minimal-style [data-sv-idle-dot] { display: none; }
-/* Every row keeps one gutter for the unread dot, drawn or not, so titles share
-   one left edge. Unread is said as Whisk's list says it: the title in full ink
-   at 600 and a dot in the accent, while a read row's title sits in the muted
-   ink. Quick saves are filed as read, so the accent marks only what is new. */
-html.hosted-mode.minimal-style [data-sv-rail] [data-sv-titlerow] {
-  position: relative;
-  padding-left: 12px;
-}
-html.hosted-mode.minimal-style [data-sv-rail] [data-sv-titlerow] > [aria-label="Unread"] {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  background: var(--pd-accent);
-}
-html.hosted-mode.minimal-style div:has(> :is([data-inbox-section="needs_input"], [data-inbox-section="questions"])) [data-sv-titlerow] > [aria-label="Unread"],
-html.hosted-mode.minimal-style [data-sv-titlerow]:has([data-sv-asks-ok]) > [aria-label="Unread"] {
-  background: var(--pd-accent);
-}
-html.hosted-mode.minimal-style [data-sv-rail] [data-session-id]:not([data-active="true"]) [data-sv-titlerow]:not(:has(> [aria-label="Unread"])) {
-  color: var(--pd-ink-muted);
-}
-/* The title span carries its own colour and weight from the minimal rail
-   rule (400, secondary ink), which beat the card's font-semibold and the
-   muted line above, so read and unread rows painted the same. Said here at
-   the span, the unread and read titles finally differ. */
-html.hosted-mode.minimal-style [data-sv-rail] [data-sv-titlerow]:has(> [aria-label="Unread"]) [data-sv-title] > span.truncate {
-  font-weight: 600;
-  color: var(--pd-ink);
-}
-html.hosted-mode.minimal-style [data-sv-rail] [data-session-id]:not([data-active="true"]) [data-sv-titlerow]:not(:has(> [aria-label="Unread"])) [data-sv-title] > span.truncate {
-  color: var(--pd-ink-muted);
-}
-/* The rail's extras ("Show N more", "N more in Everything") start on the
-   titles' edge (the row's 22px padding plus the 12px dot gutter), so the rail
-   reads on one left edge rather than three. */
-html.hosted-mode.minimal-style [data-sv-rail] [data-sv-show-more] { padding-left: 34px; }
-html.hosted-mode.minimal-style [data-sv-rail] [data-cc-more-everything] { padding-left: 22px; }
-/* A row the assistant is working on shows one dot, the working one. */
-html.hosted-mode.minimal-style [data-sv-rail] [data-session-id]:has([data-sv-working-dot]) [data-sv-titlerow] > [aria-label="Unread"] {
-  visibility: hidden;
-}
-/* Drafts say so by their section: no unread dot, no Draft chip per row. */
-html.hosted-mode.minimal-style div:has(> [data-inbox-section="drafts"]) :is([data-sv-titlerow] > [aria-label="Unread"], [data-sv-draft] > span:first-child) {
-  display: none;
-}
-/* The assistant at work shows in quiet ink, not green. */
-html.hosted-mode.minimal-style [data-sv-working-dot] > span { background: var(--pd-ink-muted); }
-
-/* One language with the rail and the nav, as Whisk keeps it: hover is a
-   plain paper shift, and the open row and the keyboard cursor both take the
-   rail's selected fill with no bar, never the developer's cyan. Inline links
-   read in ink and underline on hover. The cursor is drawn only once
-   the keyboard has moved it (lib/keyboardCursor sets data-kbd-cursor), so a
-   touch screen never shows a cursor nobody placed. */
-html.hosted-mode.minimal-style [data-list-row-state] {
-  border-left-color: transparent !important;
-}
-html.hosted-mode.minimal-style [data-list-row-state="active"] {
-  background: var(--hosted-selected) !important;
-}
-html.hosted-mode.minimal-style[data-kbd-cursor] [data-list-row-state="focused"] {
-  /* The rail's selected fill, so the list and the rail share one selection
-     look; a hairline ring was too faint to find on dark paper. */
-  background: var(--hosted-selected) !important;
-  box-shadow: none;
-}
-html.hosted-mode.minimal-style:not([data-kbd-cursor]) [data-list-row-state="focused"] {
-  background: transparent !important;
-}
-html.hosted-mode.minimal-style:not([data-kbd-cursor]) [data-list-row-state="focused"]:hover {
-  background: var(--pd-bg-hover) !important;
-}
-html.hosted-mode.minimal-style [data-list-row-state="selected"] {
-  background: color-mix(in srgb, var(--hosted-selected) 60%, transparent) !important;
-}
-html.hosted-mode.minimal-style [data-cc-inline-link] {
-  color: var(--pd-ink);
-  text-decoration-color: var(--pd-rule-strong);
-  text-underline-offset: 2px;
-}
-html.hosted-mode.minimal-style [data-cc-inline-link]:hover { text-decoration-line: underline; }
-
-/* A message on its way reads as the ordinary bubble, a little faded, with a
-   quiet "Sending" under it, rather than the developer hatch that looked
-   disabled or failed. */
-html.hosted-mode.minimal-style [data-cc-message="user"].pending-stripes {
-  background-image: none !important;
-  opacity: 0.6;
-}
-html.hosted-mode.minimal-style [data-cc-message="user"].pending-stripes::after {
-  content: "Sending";
-  display: block;
-  margin-top: 6px;
-  text-align: right;
-  font-family: var(--pd-font-ui);
-  font-size: 11px;
-  color: var(--pd-ink-faint);
-}
-
-/* The assistant's intro (AssistantIntro) titles itself as /welcome does. */
-html.hosted-mode.minimal-style [data-cc-intro-title] {
-  font-family: var(--pd-font-read);
-  font-size: 24px;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-
-/* A connection's facts line (LedgerLine) in the interface face: hosted mode
-   keeps mono for code. */
-html.hosted-mode.minimal-style [data-cc-ledger] {
-  font-family: var(--pd-font-ui);
-  font-size: 11.5px;
-}
-
-/* Hosted mode's reading face sizes above the interface scale: a card's
-   question (an approval, as Whisk's subject line) and a sheet's title. */
-html.hosted-mode {
-  --t-read-title: 17px;
-  --t-read-head: 20px;
-}
-
-/* Approvals: the question carries the card, in the reading face, as Whisk's
-   subject line carries a message. */
-html.hosted-mode.minimal-style .decision-card .decision-question {
-  font-family: var(--pd-font-read);
-  font-size: var(--t-read-title);
-  font-weight: 500;
-  letter-spacing: 0;
-  color: var(--pd-ink);
-}
-
-/* Couldn't finish (hosted conversations that ended on a stop): one heading
-   with its Try again beside the caption, and the danger colour said once,
-   as the heading's dot, rather than on every row under it. */
-html.hosted-mode.minimal-style [data-sv-sec-row] {
-  background: var(--sol-bg-alt);
-  border-top: 1px solid var(--pd-rule);
-}
-html.hosted-mode.minimal-style [data-sv-sec-row] > [data-sv-sec] { border-top: 0; }
-html.hosted-mode.minimal-style [data-sv-sec-row] > [data-sv-sec-action] { border-bottom: 0; }
-html.hosted-mode.minimal-style [data-inbox-section="hosted_stopped"] > span::before {
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 7px;
-  border-radius: 999px;
-  background: var(--pd-danger);
-  vertical-align: 1px;
-}
-
-/* A row's time, as Whisk's time column: the interface face with tabular
-   numerals in faint ink, and the accent only on a row that is new, so the
-   accent means one thing. A row waiting on the person says so by its
-   section and its dot, never by an alarm-coloured time. */
-html.hosted-mode.minimal-style [data-sv-time] {
-  font-family: var(--pd-font-ui);
-  font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
-  color: var(--pd-ink-faint);
-  transition: opacity 120ms ease;
-}
-html.hosted-mode.minimal-style [data-sv-rail] [data-session-id]:has([data-sv-titlerow] > [aria-label="Unread"]) [data-sv-time] {
-  color: var(--pd-accent);
-}
-/* Hosted rows carry no rule of their own, as Whisk's list: the section
-   headings' hairlines are the only lines, so nine unread rows read as a list
-   and not a table. */
-html.hosted-mode.minimal-style [data-sv-rail] div:has(> [data-session-id])::after {
-  content: none;
-}
-/* Hover hands the time column to the row's actions: one slot, two states,
-   so the time is never partly covered. Hosted rows keep one action, Pin;
-   the star shows only on a row already starred. */
-html.hosted-mode.minimal-style [data-sv-rail] [data-session-id]:is(:hover, :focus-within) [data-sv-time] {
-  opacity: 0;
-}
-html.hosted-mode.minimal-style [data-sv-rail] [data-sv-fav="off"] {
-  display: none;
-}
-html.hosted-mode.minimal-style [data-sv-rail] [data-session-id] [data-sv-fade] {
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  padding-left: 24px;
-  transition: opacity 120ms ease;
-}
-
-/* The set-aside lists (Closed, Stashed, Snoozed) head like Done: the same
-   sentence-case caption, bare mono count, no extra indent. */
-html.hosted-mode.minimal-style [data-sv-rail] [data-sv-hidden-head] {
-  padding-inline: 0;
-  border-top: 1px solid var(--pd-rule);
-  border-bottom: 0;
-  background: var(--sol-bg-alt);
-}
-/* Archived lines up with Done above it: the same caption inset and the same
-   chevron slot (the section headers' 22px and 16px). */
-html.hosted-mode.minimal-style [data-sv-rail] [data-sv-hidden-head] > button:first-child { padding-left: 22px; }
-html.hosted-mode.minimal-style [data-sv-rail] [data-sv-hidden-head] > button:last-child { padding-right: 16px; }
-html.hosted-mode.minimal-style [data-sv-rail] [data-sv-hidden-head] > button:last-child svg { width: 12px; height: 12px; opacity: 0.6; color: var(--pd-ink-muted); }
-html.hosted-mode.minimal-style [data-sv-hidden-head] [data-sv-hidden-label] {
-  color: var(--pd-ink-muted);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-/* Approval options: every option on the same raised paper, nothing filled
-   as if already chosen. The asker's suggestion is a rust hairline and a
-   small "Suggested" at the row's end. On a wide screen the options sit in
-   one row, so more asks fit above the fold. */
-html.hosted-mode.minimal-style :is(.decision-card, .decision-doc) .decision-option {
-  background: var(--pd-bg-raised);
-}
-html.hosted-mode.minimal-style :is(.decision-card, .decision-doc) .decision-option[data-suggested] {
-  border-color: var(--pd-accent);
-}
-html.hosted-mode.minimal-style [data-cc-suggested] {
-  color: var(--pd-accent);
-}
-@media (min-width: 900px) {
-  html.hosted-mode.minimal-style .decision-card [data-option-list] {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  html.hosted-mode.minimal-style .decision-card [data-option-list] > .decision-option {
-    width: auto;
-    flex: 1 1 180px;
-    margin: 0;
-  }
-}
-
-/* A month used up is the one time the meter takes the danger colour. */
-html.hosted-mode.minimal-style [data-cc-meter][data-cc-meter-full] [data-cc-meter-used] { background: var(--pd-danger); }
-
-/* Settings: the sheet's title in the reading face, over sections that drop
-   their leading icons, so the hierarchy reads title, then section. */
-html.hosted-mode.minimal-style [data-cc-sheet-title] {
-  font-family: var(--pd-font-read);
-  font-size: var(--t-read-head);
-  font-weight: 500;
-  letter-spacing: 0;
-}
-html.hosted-mode.minimal-style [data-cc-settings-icon] { display: none; }
-
-
 /* The note a hosted turn wrote (HostedNoteCard): a quiet card in the reply's
    column, hairline on raised paper, its title in the reading face and its
    opening in muted ink fading out, so the thing asked for is the most
@@ -7844,62 +7019,6 @@ html.hosted-mode.minimal-style [data-cc-settings-icon] { display: none; }
   color: var(--pd-ink);
 }
 [data-cc-made-note-open]::after { content: " \2192"; }
-
-/* The assistant's compose sheet is one surface: raised paper from the mark to
-   the composer, with no second band of page paper under the starters. */
-html.hosted-mode [data-cc-compose-sheet] {
-  background: var(--pd-bg-raised);
-  border-color: var(--pd-rule);
-}
-html.hosted-mode [data-cc-compose-sheet] :is([data-sv-composer], [data-sv-composer] > *, form) {
-  background: transparent;
-}
-
-/* A hosted transcript scrolled under its header fades into it over 24px,
-   as a note card fades at its foot, instead of cutting a line in half at the
-   rule. At the top of the conversation there is nothing above, so the fade
-   grows with the first 24px of scroll (a scroll-driven length) and the first
-   line is never dimmed. */
-@property --cc-feed-fade {
-  syntax: "<length>";
-  inherits: false;
-  initial-value: 0px;
-}
-@keyframes cc-feed-fade {
-  from { --cc-feed-fade: 0px; }
-  to { --cc-feed-fade: 24px; }
-}
-@supports (animation-timeline: scroll()) {
-  html.hosted-mode [data-cc-conversation] [data-sv-feed] {
-    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--cc-feed-fade));
-    mask-image: linear-gradient(to bottom, transparent, #000 var(--cc-feed-fade));
-    animation: cc-feed-fade linear both;
-    animation-timeline: scroll(self);
-    animation-range: 0px 24px;
-  }
-}
-
-/* A hosted list page's title sits on the frame's inner edge (HOSTED_PAGE_PAD:
-   16px, 24px from sm up), where Routines and Approvals put theirs. */
-html.hosted-mode [data-list-view] .cc-panel__head {
-  padding-left: 16px;
-}
-@media (min-width: 640px) {
-  html.hosted-mode [data-list-view] .cc-panel__head { padding-left: 24px; }
-}
-
-/* The rail's search, as Whisk draws its own: a quiet 32px field on a
-   hairline with an 8px radius, on the sidebar's own surface. */
-html.hosted-mode.minimal-style [data-cc-rail-search] input {
-  height: 32px;
-  border-radius: 8px;
-  border-color: var(--pd-rule);
-  background: transparent;
-}
-html.hosted-mode.minimal-style [data-cc-rail-search] input:is(:hover, :focus) {
-  border-color: var(--pd-rule-strong);
-  background: transparent;
-}
 
 /* A role's icon tile (components/identity/RoleIconTile.tsx). `--rt-accent`
    is the icon's accent token, set inline. */

@@ -1,10 +1,15 @@
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
+import { MarkdownImageSize } from "../../lib/markdownImageSize";
 
 // Rich comment body — the SAME markdown codepath the conversation transcript uses
 // (entity pills, mentions, fenced code with syntax highlighting, GFM tables,
-// collapsible images). The `cc-cmt-md` class just tightens the prose spacing for
-// the narrow rail; everything else is identical to a message body, so a comment
-// and the message it's about render with one visual language.
+// images). The `cc-cmt-md` class just tightens the prose spacing for the narrow
+// rail. An image someone attached is the point of their comment, so it shows
+// whole rather than cut to the transcript's preview height.
 export function CommentMarkdown({ content }: { content: string }) {
-  return <MarkdownRenderer content={content} className="cc-cmt-md" />;
+  return (
+    <MarkdownImageSize.Provider value="whole">
+      <MarkdownRenderer content={content} className="cc-cmt-md" />
+    </MarkdownImageSize.Provider>
+  );
 }

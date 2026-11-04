@@ -1,12 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { CheckCircle2, CornerDownRight, ExternalLink, Link2, Pencil, RotateCcw, Trash2 } from "lucide-react";
-import { CommentAvatar } from "../comments/CommentAvatar";
+import { CornerDownRight, ExternalLink, Link2 } from "lucide-react";
 import { CommentComposer } from "../comments/CommentComposer";
-import { CommentMarkdown } from "../comments/CommentMarkdown";
+import { CommentCard, ResolveTool } from "../comments/CommentCard";
+import type { Comment } from "../../lib/commentThread";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useRepositoryTeamId } from "../../hooks/useRepoBrowse";
-import { relTimeShort } from "../../lib/utils";
 import { copyText } from "../../lib/copyText";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { isOptimisticComment, threadResolved, type CodeCommentRow } from "../../lib/prView";
@@ -79,103 +78,71 @@ export function PRComposer({
   );
 }
 
-export function PRCommentCard({ comment, linkUrl }: {
+export function PRCommentCard({ comment, linkUrl, threadTools, onReply }: {
   comment: CodeCommentRow;
   /** This comment's own address, offered as a copy on hover. */
   linkUrl?: string;
+  /** The thread's own actions (resolve), in the card's hover tools. */
+  threadTools?: ReactNode;
+  /** Open the thread's reply box. */
+  onReply?: () => void;
 }) {
   const author = useAuthor(comment);
   const { user } = useCurrentUser();
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(comment.content);
-  const mine = !!user && comment.author_user_id === user._id && !isOptimisticComment(comment._id);
   const pending = !!comment.pending_review;
+  // A review_comments row in the shape the shared card draws.
+  const card: Comment = useMemo(() => ({
+    _id: comment._id,
+    conversation_id: "",
+    content: comment.content,
+    created_at: comment.created_at,
+    user_id: comment.author_user_id ?? "",
+    user: { name: author.name, image: author.image },
+    author_kind: author.isAgent ? "agent" : "user",
+    author_name: author.isAgent ? author.name : undefined,
+  }), [comment._id, comment.content, comment.created_at, comment.author_user_id, author.name, author.image, author.isAgent]);
 
   return (
-    <div className={`group/card flex gap-2 ${pending ? "pr-pending -ml-2.5 pl-2 border-l-2 rounded-r" : ""}`}>
-      <CommentAvatar name={author.name} image={author.image} isAgent={author.isAgent} size={20} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-[11px]">
-          <span className="font-medium text-sol-text">{author.name}</span>
-          {pending ? (
-            <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-[10px] text-sol-yellow" title="Held in your review. Only you can see it until you finish the review.">
-              not sent
-            </span>
-          ) : (
-            <span className="text-sol-text-dim">{relTimeShort(comment.created_at)}</span>
-          )}
-          {comment.answered_message_id && comment.sent_to_conversation_id && (
-            <Link
-              href={`/conversation/${comment.sent_to_conversation_id}#msg-${comment.answered_message_id}`}
-              className="inline-flex items-center gap-1 rounded-full border border-sol-green/40 px-1.5 text-[10px] text-sol-green hover:bg-sol-green/10 transition-colors"
-              title="The agent answered this note: jump to its reply"
-            >
-              <CornerDownRight className="w-2.5 h-2.5" />
-              answered
-            </Link>
-          )}
-          {linkUrl && (
-            <button
-              type="button"
-              className="text-sol-text-dim opacity-0 group-hover/card:opacity-100 hover:text-sol-cyan transition-opacity"
-              title="Copy a link to this comment"
-              aria-label="Copy a link to this comment"
-              onClick={() => void copyText(linkUrl, "Link to the comment copied")}
-            >
-              <Link2 className="w-3 h-3" />
-            </button>
-          )}
-          {comment.html_url && (
-            <a
-              href={comment.html_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sol-text-dim hover:text-sol-cyan transition-colors"
-              title="Open this comment on GitHub"
-            >
-              <ExternalLink className="w-3 h-3" />
-            </a>
-          )}
-          {mine && !editing && (
-            <span className="ml-auto flex items-center gap-1 opacity-0 group-hover/thread:opacity-100 transition-opacity">
-              <button type="button" className="text-sol-text-dim hover:text-sol-text" title="Edit" onClick={() => { setText(comment.content); setEditing(true); }}>
-                <Pencil className="w-3 h-3" />
-              </button>
-              <button type="button" className="text-sol-text-dim hover:text-sol-red" title="Delete" onClick={() => useInboxStore.getState().deleteCodeComment(comment._id)}>
-                <Trash2 className="w-3 h-3" />
-              </button>
-            </span>
-          )}
-        </div>
-        {editing ? (
-          <form
-            className="mt-1 space-y-1.5"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const content = text.trim();
-              if (content && content !== comment.content) useInboxStore.getState().editCodeComment(comment._id, content);
-              setEditing(false);
-            }}
+    <div className={pending ? "pr-pending -ml-2.5 pl-1 border-l-2 rounded-r" : ""}>
+      <CommentCard
+        comment={card}
+        conversationId=""
+        // An optimistic stub has no server id to edit or delete yet.
+        currentUserId={isOptimisticComment(comment._id) ? undefined : (user?._id as string | undefined)}
+        onEdit={(id, content) => useInboxStore.getState().editCodeComment(id, content)}
+        onDelete={(id) => useInboxStore.getState().deleteCodeComment(id)}
+        onReply={onReply ? () => onReply() : undefined}
+        threadTools={threadTools}
+        status={pending ? (
+          <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-[10px] text-sol-yellow" title="Held in your review. Only you can see it until you finish the review.">
+            not sent
+          </span>
+        ) : undefined}
+        headExtra={comment.answered_message_id && comment.sent_to_conversation_id ? (
+          <Link
+            href={`/conversation/${comment.sent_to_conversation_id}#msg-${comment.answered_message_id}`}
+            className="inline-flex items-center gap-1 rounded-full border border-sol-green/40 px-1.5 text-[10px] text-sol-green hover:bg-sol-green/10 transition-colors"
+            title="The agent answered this note: jump to its reply"
           >
-            <textarea
-              autoFocus
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              rows={3}
-              className="w-full resize-none rounded-md border border-sol-border/60 bg-sol-bg-alt/40 px-2 py-1.5 text-[13px] text-sol-text focus:border-sol-cyan focus:outline-none"
-              onKeyDown={(e) => { if (e.key === "Escape") setEditing(false); }}
-            />
-            <div className="flex gap-2">
-              <button type="submit" className="cc-comment-btn">Save</button>
-              <button type="button" className="cc-comment-btn" onClick={() => setEditing(false)}>Cancel</button>
-            </div>
-          </form>
-        ) : (
-          <div className="text-[13px] text-sol-text-muted">
-            <CommentMarkdown content={comment.content} />
-          </div>
-        )}
-      </div>
+            <CornerDownRight className="w-2.5 h-2.5" />
+            answered
+          </Link>
+        ) : undefined}
+        extraTools={(linkUrl || comment.html_url) ? (
+          <>
+            {linkUrl && (
+              <button type="button" className="cc-cmt-tool" title="Copy a link to this comment" aria-label="Copy a link to this comment" onClick={() => void copyText(linkUrl, "Link to the comment copied")}>
+                <Link2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {comment.html_url && (
+              <a href={comment.html_url} target="_blank" rel="noopener noreferrer" className="cc-cmt-tool" title="Open this comment on GitHub" aria-label="Open this comment on GitHub">
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+          </>
+        ) : undefined}
+      />
     </div>
   );
 }
@@ -294,8 +261,13 @@ export function PRLineThread({
         )}
       </div>
       <AnchorPlacementQuote placement={placement} anchorLines={comments.find((c) => c.anchor_lines)?.anchor_lines} />
-      {comments.map((comment) => (
-        <PRCommentCard key={comment._id} comment={comment} />
+      {comments.map((comment, i) => (
+        <PRCommentCard
+          key={comment._id}
+          comment={comment}
+          onReply={authed ? () => setReplying(true) : undefined}
+          threadTools={i === 0 && authed && !pending ? <><ResolveTool resolved={resolved} onToggle={() => onResolve(!resolved)} /><span className="cc-cmt-tools-sep" aria-hidden /></> : undefined}
+        />
       ))}
 
       {replying && authed ? (
@@ -318,39 +290,11 @@ export function PRLineThread({
             if (comments.length === 0) onClose();
           }}
         />
-      ) : (
-        <div className="flex items-center gap-2 flex-wrap">
-          {authed && (
-            <button type="button" className="cc-comment-btn" onClick={() => setReplying(true)}>
-              Reply
-            </button>
-          )}
-          {pending && (
-            <span className="ml-auto text-[11px] text-sol-text-dim">
-              Only you can see this. It goes out when you{" "}
-              {onFinishReview ? (
-                <button type="button" className="text-sol-yellow hover:underline underline-offset-2" onClick={onFinishReview}>
-                  finish your review
-                </button>
-              ) : "finish your review"}
-              .
-            </span>
-          )}
-          {authed && comments.length > 0 && !pending && (
-            <button type="button" className="cc-comment-btn" onClick={() => onResolve(!resolved)}>
-              {resolved ? (
-                <>
-                  <RotateCcw className="w-3 h-3" /> Unresolve
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="w-3 h-3" /> Resolve
-                </>
-              )}
-            </button>
-          )}
-        </div>
-      )}
+      ) : pending && onFinishReview ? (
+        <button type="button" className="cc-comment-btn text-sol-yellow" onClick={onFinishReview}>
+          Finish review
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -9,7 +9,8 @@ import { useInboxStore, type TaskCommentExternal } from "../../store/inboxStore"
 import { compressImage } from "../../lib/compressImage";
 import { formatDateFull, formatRelative } from "../../lib/utils";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
-import { MarkdownRenderer } from "../tools/MarkdownRenderer";
+import { CommentAvatar } from "../comments/CommentAvatar";
+import { CommentMarkdown } from "../comments/CommentMarkdown";
 import { SessionTag } from "../identity/SessionTag";
 import { useWorkingOwner } from "../../lib/workUnit";
 import { ChatNewDivider } from "../chat/ChatMessage";
@@ -38,31 +39,10 @@ export function TimeAgo({ ts, className }: { ts: number; className?: string }) {
   );
 }
 
-export function ClaudeIcon({ size = "sm" }: { size?: "sm" | "md" }) {
-  const px = size === "md" ? "w-7 h-7" : "w-5 h-5";
-  const svg = size === "md" ? "w-4 h-4" : "w-3 h-3";
-  return (
-    <span className={`${px} rounded bg-sol-orange flex items-center justify-center shrink-0`}>
-      <svg className={`${svg} text-sol-bg`} viewBox="0 0 24 24" fill="currentColor">
-        <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
-      </svg>
-    </span>
-  );
-}
-
+/** The app's one round face (components/comments/CommentAvatar), at the two
+ *  sizes the task surfaces use. "Claude" is the agent's own mark. */
 export function Avatar({ name, image, size = "sm" }: { name: string; image?: string; size?: "sm" | "md" }) {
-  if (name.toLowerCase() === "claude") return <ClaudeIcon size={size} />;
-  const px = size === "md" ? "w-7 h-7" : "w-5 h-5";
-  const textSize = size === "md" ? "text-[10px]" : "text-[8px]";
-  if (image) {
-    return <img src={image} alt={name} className={`${px} rounded-full flex-shrink-0`} />;
-  }
-  const initials = name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
-  return (
-    <div className={`${px} rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center ${textSize} font-medium text-sol-text-muted`}>
-      {initials}
-    </div>
-  );
+  return <CommentAvatar name={name} image={image} isAgent={name.toLowerCase() === "claude"} size={size === "md" ? 28 : 20} letters={2} />;
 }
 
 export function UserBadge({ name, image, username }: { name: string; image?: string; username?: string }) {
@@ -150,49 +130,51 @@ export function TaskCommentItem({
   comment,
   openLinkedSession,
   clamp,
+  noTime,
 }: {
   comment: TaskCommentRow;
   openLinkedSession: (info: any) => void;
   /** Fold a long body (the Threads reader). */
   clamp?: boolean;
+  /** The surface prints the time itself (the task timeline's clock column). */
+  noTime?: boolean;
 }) {
   // The line's own notes (a run that stopped, a problem grounded) read in plain words, however old (shared lineWords).
-  const body = <MarkdownRenderer content={lineCommentWords(comment.text)} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />;
+  const body = <CommentMarkdown content={lineCommentWords(comment.text)} />;
+  const session = comment.session_info;
+  const name = session ? session.title || comment.author : comment.author;
+  // Drawn as a comment card (components/comments), so a task note reads like a
+  // comment anywhere else: the face, the name and time, then the words.
   return (
-    <div className="py-2.5 relative">
-      <div className="flex items-center gap-2 mb-1.5">
-        {comment.session_info ? (
-          <SessionTag
-            session={comment.session_info}
-            title={comment.session_info.title || comment.author}
-            size="md"
-            onClick={() => openLinkedSession(comment.session_info)}
-            className="flex-shrink min-w-0 max-w-[360px] font-medium"
-          />
-        ) : (
-          <UserBadge name={comment.author} image={comment.author_image} />
-        )}
-        {comment.comment_type && comment.comment_type !== "note" && (
-          <Badge variant="outline" className="text-[10px] px-1">{comment.comment_type}</Badge>
-        )}
-        {comment.external && <CommentProvenance external={comment.external} />}
-        <TimeAgo ts={comment.created_at} className="text-[11px] text-gray-400" />
-      </div>
-      <div className="ml-[26px] border-l-2 border-sol-border/30 pl-3">
-        {clamp ? <Clamp>{body}</Clamp> : body}
-      </div>
-      {comment.delivered_to_info && (
-        <div className="ml-[26px] mt-1 pl-3 flex items-center gap-1.5 text-[10px] text-sol-text-dim" title="The session working on this task received this comment">
-          <span>Sent to</span>
-          <SessionTag
-            session={comment.delivered_to_info}
-            title={comment.delivered_to_info.title}
-            size="xs"
-            onClick={() => openLinkedSession(comment.delivered_to_info)}
-            className="min-w-0 max-w-[260px]"
-          />
+    <div className="cc-cmt cc-task-cmt">
+      <CommentAvatar name={name} image={session ? undefined : comment.author_image} isAgent={!!session} agentType={session?.agent_type} />
+      <div className="cc-cmt-main">
+        <div className="cc-cmt-head">
+          {session ? (
+            <button type="button" className="cc-cmt-name cc-cmt-name-link truncate" onClick={() => openLinkedSession(session)} title="Open this session">{name}</button>
+          ) : (
+            <span className="cc-cmt-name">{name}</span>
+          )}
+          {comment.comment_type && comment.comment_type !== "note" && (
+            <Badge variant="outline" className="text-[10px] px-1 py-0 leading-4">{comment.comment_type}</Badge>
+          )}
+          {comment.external && <CommentProvenance external={comment.external} />}
+          {!noTime && <TimeAgo ts={comment.created_at} className="cc-cmt-time" />}
         </div>
-      )}
+        <div className="cc-cmt-body">{clamp ? <Clamp>{body}</Clamp> : body}</div>
+        {comment.delivered_to_info && (
+          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-sol-text-dim" title="The session working on this task received this comment">
+            <span>Sent to</span>
+            <SessionTag
+              session={comment.delivered_to_info}
+              title={comment.delivered_to_info.title}
+              size="xs"
+              onClick={() => openLinkedSession(comment.delivered_to_info)}
+              className="min-w-0 max-w-[260px]"
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

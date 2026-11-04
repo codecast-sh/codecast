@@ -250,8 +250,8 @@ export function TaskTimeline({
             if (item.kind === "comment") {
               return (
                 <RailRow key={item.key} icon={MessageSquare} color="text-sol-blue" ts={item.ts} card clock>
-                  <CollapsibleBody collapsedHeight={200} className="flex-1 min-w-0 -mt-1.5" expandLabel="Read the whole comment" collapseLabel="Collapse">
-                    <TaskCommentItem comment={item.row} openLinkedSession={openLinkedSession} />
+                  <CollapsibleBody collapsedHeight={132} className="flex-1 min-w-0 -mt-1.5" expandLabel="Read the whole comment" collapseLabel="Collapse">
+                    <TaskCommentItem comment={item.row} openLinkedSession={openLinkedSession} noTime />
                   </CollapsibleBody>
                 </RailRow>
               );

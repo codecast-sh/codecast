@@ -35,8 +35,9 @@ const LazyThread = lazy(() => threadModule.then((m) => ({ default: m.CommentThre
  *  surface calls it by what it is (a line run's session is titled after its
  *  pipeline step). `compact` (a card) leaves the thread unread until the
  *  person opens it; elsewhere showing it reads it. `askFirst` opens the box
- *  on asking the session (a surface whose point is talking to it). */
-export function DecisionDiscussion({ decisionId, compact = false, className, open: openProp, onOpenChange, bare = false, askerName, askFirst = false }: { decisionId: string; compact?: boolean; className?: string; open?: boolean; onOpenChange?: (open: boolean) => void; bare?: boolean; askerName?: string; askFirst?: boolean }) {
+ *  on asking the session (a surface whose point is talking to it). `noAsk`
+ *  drops the ask button, for a page that opens the session itself. */
+export function DecisionDiscussion({ decisionId, compact = false, className, open: openProp, onOpenChange, bare = false, askerName, askFirst = false, noAsk = false }: { decisionId: string; compact?: boolean; className?: string; open?: boolean; onOpenChange?: (open: boolean) => void; bare?: boolean; askerName?: string; askFirst?: boolean; noAsk?: boolean }) {
   const [openOwn, setOpenOwn] = useState(false);
   const open = openProp ?? openOwn;
   const setOpen = (o: boolean) => { setOpenOwn(o); onOpenChange?.(o); };
@@ -93,12 +94,11 @@ export function DecisionDiscussion({ decisionId, compact = false, className, ope
           thread={thread}
           conversationId={sessionId}
           variant="global"
-          header={
+          header={noAsk ? undefined : (
             <div className="mb-1 flex flex-wrap items-center gap-2">
               <AskButton name={name} title={owner ? ownerReason(owner.via) : undefined} onClick={discuss} />
-              {compact && unread > 0 && <span className="rounded-full bg-sol-cyan/15 px-1.5 text-[11px] text-sol-cyan" data-decision-thread-unread>{unread} new</span>}
             </div>
-          }
+          )}
           authed={!!me}
           canWrite={open || !compact}
           currentUserId={me}
@@ -115,6 +115,7 @@ export function DecisionDiscussion({ decisionId, compact = false, className, ope
           onEdit={(commentId, content) => { void useInboxStore.getState().editDecisionComment(commentId, content).then((r: any) => refusedToast(r?.error ?? null)); }}
           onDelete={(commentId) => { void useInboxStore.getState().deleteDecisionComment(commentId).then((r: any) => refusedToast(r?.error ?? null)); }}
           onAskAgent={ask}
+          pingAgent={false}
           onResolve={(resolved) => useInboxStore.getState().resolveDecisionThread(decisionId, resolved)}
         />
       </Suspense>

@@ -185,3 +185,42 @@ export async function withImages(
   const marks = ids.map((id) => urls[id]).filter((u): u is string => !!u).map((u) => `![image](${u})`);
   return [text.trim(), ...marks].filter(Boolean).join("\n\n");
 }
+
+/** An agent reply still "thinking" this long after it was asked never came:
+ *  the hand-off died without saying so. It reads as failed, with a retry. */
+export const AGENT_REPLY_STALE_MS = 10 * 60_000;
+
+/** Where an agent row stands for the reader: answering, failed, or done. */
+export function agentReplyState(c: Comment, now = Date.now()): "thinking" | "failed" | "done" {
+  if (!isAgentComment(c)) return "done";
+  if (c.agent_status === "error") return "failed";
+  if (c.agent_status === "thinking" || c.agent_status === "streaming") {
+    return now - c.created_at > AGENT_REPLY_STALE_MS ? "failed" : "thinking";
+  }
+  return "done";
+}
+
+/** The agent is answering in this thread now, so asking again is moot. */
+export function isAgentAnswering(comments: Comment[], now = Date.now()): boolean {
+  return comments.some((c) => agentReplyState(c, now) === "thinking");
+}
+
+/** One line of a message's text for a label: code blocks folded, whitespace collapsed. */
+export function messageExcerpt(content: string | undefined, max: number, clean: (s: string) => string = (s) => s): string | undefined {
+  if (!content) return undefined;
+  return clean(content).replace(/```[\s\S]*?```/g, " code ").replace(/\s+/g, " ").trim().slice(0, max) || undefined;
+}
+
+/** How close two comments by one author must be to read as one block. */
+export const COMMENT_GROUP_MS = 5 * 60_000;
+
+/** `c` follows `prev` from the same author closely enough to drop its own
+ *  avatar and name: same person (or the same agent), within a few minutes,
+ *  and neither one a reply or an event. */
+export function continuesPrevious(prev: Comment | undefined, c: Comment): boolean {
+  // A reply names whom it answers, and the comment after a reply starts afresh.
+  if (!prev || prev.event || c.event || c.parent_comment_id || prev.parent_comment_id) return false;
+  if (isAgentComment(prev) !== isAgentComment(c)) return false;
+  if (isAgentComment(c) ? (prev.author_name ?? "") !== (c.author_name ?? "") : prev.user_id !== c.user_id) return false;
+  return c.created_at - prev.created_at < COMMENT_GROUP_MS;
+}

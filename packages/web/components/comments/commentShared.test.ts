@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { firstUnreadIndex, withImages, type Comment } from "../../lib/commentThread";
+import { continuesPrevious, firstUnreadIndex, withImages, type Comment } from "../../lib/commentThread";
 
 // What the shared comment components add for every comment surface: pasted
 // images post as markdown images, and a thread knows where the reader's news starts.
@@ -26,5 +26,19 @@ describe("firstUnreadIndex", () => {
   test("an agent's answer is news, its empty placeholder is not", () => {
     const rows = [c("t", 5, "me", { author_kind: "agent", agent_status: "thinking", content: "" }), c("a", 6, "me", { author_kind: "agent", agent_status: "done" })];
     expect(firstUnreadIndex(rows, 1, "me")).toBe(1);
+  });
+});
+
+describe("continuesPrevious", () => {
+  const base = { conversation_id: "c", content: "x" } as any;
+  const at = (id: string, user: string, t: number, over: any = {}) => ({ ...base, _id: id, user_id: user, created_at: t, ...over });
+  test("one author's comments within minutes form one block", () => {
+    expect(continuesPrevious(at("a", "u1", 0), at("b", "u1", 60_000))).toBe(true);
+  });
+  test("another author, a long gap, a reply, or the comment after a reply each start a new block", () => {
+    expect(continuesPrevious(at("a", "u1", 0), at("b", "u2", 1000))).toBe(false);
+    expect(continuesPrevious(at("a", "u1", 0), at("b", "u1", 10 * 60_000))).toBe(false);
+    expect(continuesPrevious(at("a", "u1", 0), at("b", "u1", 1000, { parent_comment_id: "a" }))).toBe(false);
+    expect(continuesPrevious(at("a", "u1", 0, { parent_comment_id: "z" }), at("b", "u1", 1000))).toBe(false);
   });
 });

@@ -4,8 +4,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
 import { useDocPresence } from "../../hooks/useDocPresence";
 import { MessageInput } from "../MessageInput";
+import "../chat/chat.css";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { PingAgentButton } from "./PingAgentButton";
 import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
 import { presenceDocId, commentAuthorName, withImages, type Comment } from "../../lib/commentThread";
 
@@ -17,7 +17,7 @@ import { presenceDocId, commentAuthorName, withImages, type Comment } from "../.
 // conversation's (a decision's) passes `scopeKey`, which keys both instead.
 // Pasted images upload as MessageInput uploads them and post as markdown
 // images, so every comment surface renders them. The agent affordance lives
-// in the thread, not here.
+// in the thread's action row, not here.
 
 const api = _api as any;
 
@@ -30,7 +30,6 @@ export function CommentComposer({
   currentUserId,
   onCancelReply,
   onClose,
-  onPingAgent,
   agentType,
   onSubmit,
   placeholder = "Comment…",
@@ -48,7 +47,6 @@ export function CommentComposer({
   currentUserId?: string;
   onCancelReply?: () => void;
   onClose?: () => void;
-  onPingAgent?: () => void;
   agentType?: string;
   onSubmit: (content: string) => void | Promise<void>;
   placeholder?: string;
@@ -90,7 +88,7 @@ export function CommentComposer({
   };
 
   return (
-    <div className={"cc-cmt-composer" + (className ? " " + className : "")} onKeyDownCapture={onKeyDownCapture}>
+    <div className="cc-cmt-composer" onKeyDownCapture={onKeyDownCapture}>
       {typing.length > 0 && (
         <div className="cc-cmt-typing">
           <span className="cc-cmt-typing-dots"><i /><i /><i /></span>
@@ -116,7 +114,9 @@ export function CommentComposer({
         </div>
       )}
 
-      <div className="cc-cmt-mi">
+      {/* The app's one composer frame (chat.css): border, card surface, focus
+          ring. A surface may pass its own frame placement. */}
+      <div className={"cc-cmt-mi " + (className ?? "ch-composer ch-composer-flush")}>
         <MessageInput
           conversationId={draftKey}
           bareComposer
@@ -133,14 +133,11 @@ export function CommentComposer({
         />
       </div>
 
-      {(onPingAgent || onClose) && (
+      {onClose && (
         <div className="cc-cmt-composer-foot">
-          {onPingAgent ? <PingAgentButton conversationId={conversationId} agentType={agentType} onClick={onPingAgent} /> : <span />}
-          {onClose && (
-            <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={onClose}>
-              Cancel <KeyCap size="xs">Esc</KeyCap>
-            </button>
-          )}
+          <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={onClose}>
+            Cancel <KeyCap size="xs">Esc</KeyCap>
+          </button>
         </div>
       )}
     </div>

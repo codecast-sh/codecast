@@ -4,8 +4,7 @@ import { RunLogEndedBar, isEndedRunLog } from "./conversation/RunLogEndedBar";
 import { CloudAgentLink, CloudAgentMenuItems } from "./cloudAgents";
 import { useCloudAgentActions } from "./cloudAgents/sessionAgent";
 import { familyHeading, firstUserPromptOf } from "../hooks/useForkTree";
-import { conversationTitle } from "./simple/lane";
-import { hostedTitle } from "../lib/conversationTitle";
+import { conversationTitle, hostedTitle } from "../lib/conversationTitle";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { knownPullRequestIds, madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
@@ -108,7 +107,6 @@ import { instancesFromMatches, planActivation, skipDeadHit, stepIndex, walkSearc
 import { FilePathContext } from "../lib/filePathLinks";
 import { WorktreesProvider } from "./worktree/WorktreesContext";
 import { SessionWorktreePills } from "./worktree/WorktreePill";
-import { Surface, useModeWords, useSurface } from "../lib/surfaces";
 import { isStickyEligible, pickStickyFallback, stickyPromptContent, mergeNavigatorSources, buildNavigatorRows, resolveStickyPrompt, resolveNavigatorCurrentId, topVisibleIndexFromRects } from "../lib/messageNavigator";
 import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt } from "./sessionMessage";
 import { CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
@@ -475,10 +473,7 @@ const ConversationViewInner = (
   // next-prompt test must keep using its height then, or hide/show alternate.
   const stickyHeightRef = useRef(0);
   const stickyPrefDisabled = useInboxStore(s => s.clientState.ui?.sticky_headers_disabled ?? false);
-  // Hosted conversations are short chats whose header already names them, so
-  // a pinned first ask over the reply only reads as a rendering glitch.
-  const stickyShown = useSurface("conversation.stickyPrompt");
-  const stickyDisabled = stickyPrefDisabled || !stickyPrompt || !stickyShown;
+  const stickyDisabled = stickyPrefDisabled || !stickyPrompt;
   const updateUI = useInboxStore(s => s.updateClientUI);
   const headerRef = useRef<HTMLElement>(null);
   // Zen mode on desktop: the head ROW is the window titlebar (drag +
@@ -1177,7 +1172,7 @@ const ConversationViewInner = (
     }
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
   const { userMsgKindMap, turnAggregates, openAsk, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
-  const { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery } = useSessionMentions({ currentUser, conversation, managedSession });
+  const { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery } = useSessionMentions({ conversation, managedSession });
   const { serverUserMessages, stickyEligibleServerIds, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds } = useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap });
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
@@ -3229,28 +3224,24 @@ const ConversationViewInner = (
   // A session with an agent process of its own (not a cloud agent's): the one a restart or a resume command reaches.
   // A share guest has no machine for a resume command to run on, and the hosted assistant has no process at all.
   const hasLocalAgent = !guest && !!conversation?.session_id && !cloudAgentActions.cloud && !isHostedAgentType(conversation?.agent_type);
-  // The menu's working parts (short id, resume commands, the model and agent panel, token counts) and the mode's words.
-  const internalsShown = useSurface("conversation.internals");
-  const transcriptNav = useSurface("transcriptNav");
-  const words = useModeWords();
   usePaletteSessionCommands(conversation?._id, [
     ...cloudAgentActions.palette,
     { key: "view_restart", label: "Restart session", icon: PaletteRestart, available: !!isOwner && hasLocalAgent, run: handleRestartSession },
-    { key: "view_profile_pin", label: conversation?.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile", icon: PalettePin, available: !!isOwner && internalsShown, run: togglePublicProfilePin },
+    { key: "view_profile_pin", label: conversation?.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile", icon: PalettePin, available: !!isOwner, run: togglePublicProfilePin },
     { key: "view_copy_all", label: "Copy all messages", icon: PaletteCopy, run: handleCopyAll },
-    { key: "view_resume_claude", label: "Copy Claude resume command", icon: PaletteCopy, available: hasLocalAgent && internalsShown, run: () => { void handleCopyResumeCommand("claude"); } },
-    { key: "view_resume_codex", label: "Copy Codex resume command", icon: PaletteCopy, available: hasLocalAgent && internalsShown, run: () => { void handleCopyResumeCommand("codex"); } },
+    { key: "view_resume_claude", label: "Copy Claude resume command", icon: PaletteCopy, available: hasLocalAgent, run: () => { void handleCopyResumeCommand("claude"); } },
+    { key: "view_resume_codex", label: "Copy Codex resume command", icon: PaletteCopy, available: hasLocalAgent, run: () => { void handleCopyResumeCommand("codex"); } },
     { key: "view_tmux", label: "Copy tmux attach command", icon: PaletteCopy, available: !!managedSession?.tmux_session, run: copyTmuxAttach },
-    { key: "view_ask", label: `Ask ${words.thisConversation}…`, icon: PaletteAsk, shortcutAction: "conv.ask", available: !guest, run: openAskPanel },
+    { key: "view_ask", label: "Ask this session…", icon: PaletteAsk, shortcutAction: "conv.ask", available: !guest, run: openAskPanel },
     { key: "view_search", label: "Search in conversation", icon: PaletteSearch, run: () => { setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); } },
     { key: "view_thinking", label: showThinking ? "Hide thinking" : "Show thinking", icon: PaletteEye, shortcutAction: "conv.toggleThinking", available: hasAnyThinking, run: () => setShowThinking(s => !s) },
     { key: "view_context", label: showSessionContext ? "Hide schedule and plan" : "Show schedule and plan", icon: PaletteEye, available: minimalStyle, run: () => updateUI({ show_session_context: !showSessionContext }) },
-    { key: "view_sticky", label: stickyDisabled ? "Enable sticky headers" : "Disable sticky headers", icon: PalettePin, available: internalsShown, run: () => { updateUI({ sticky_headers_disabled: !stickyDisabled }); setStickyMsgVisible(false); setActiveStickyMsg(null); } },
+    { key: "view_sticky", label: stickyDisabled ? "Enable sticky headers" : "Disable sticky headers", icon: PalettePin, run: () => { updateUI({ sticky_headers_disabled: !stickyDisabled }); setStickyMsgVisible(false); setActiveStickyMsg(null); } },
     { key: "view_source", label: "Browse repository source", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoTreeHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_history", label: "Browse commit history", icon: PaletteBranch, available: !!codeRepository, run: () => { if (codeRepository) codeRouter.push(repoCommitsHref(codeRepository, conversation?.git_branch || "HEAD")); } },
     { key: "view_diff", label: diffExpanded ? "Hide git diff" : "Show git diff", icon: PaletteBranch, available: !!conversation?.git_branch, run: () => setDiffExpanded(s => !s) },
-    { key: "view_branches", label: "Branch map", icon: PaletteBranch, shortcutAction: "conv.toggleTree", available: !!isOwner && internalsShown, run: toggleMap },
-    { key: "view_density", label: "Cycle message density", icon: PaletteRows, shortcutAction: "conv.cycleDensity", available: internalsShown, run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
+    { key: "view_branches", label: "Branch map", icon: PaletteBranch, shortcutAction: "conv.toggleTree", available: !!isOwner, run: toggleMap },
+    { key: "view_density", label: "Cycle message density", icon: PaletteRows, shortcutAction: "conv.cycleDensity", run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
   ]);
   const knownPrIdsRaw = useMemo(
     () => knownPullRequestIds(codeRepository, messages as any, [...pullRequests, ...linkedPullRequests], transcriptOutcomes.prRefs),
@@ -3935,7 +3926,7 @@ const ConversationViewInner = (
     <HostedCardShownContext.Provider value={hostedOwnCard}>
     <ImageGalleryProvider conversationId={conversation?._id} onJumpToMessage={scrollToMessageById} quotable={showMessageInput && effectiveIsOwner}>
     <ReviewComposerContext.Provider value={reviewComposer}>
-    <main data-cc-conversation data-cc-context={showSessionContext ? "" : undefined} data-reveal-chrome={inRevealBand ? "band" : hostingReveal ? "host" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main data-cc-conversation data-cc-context={showSessionContext ? "" : undefined} data-reveal-chrome={inRevealBand ? "band" : hostingReveal ? "host" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" style={commentRailW ? { paddingRight: commentRailW } : undefined} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && !isHostedAgentType(conversation?.agent_type) && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -3950,10 +3941,17 @@ const ConversationViewInner = (
         squeezeRowRef={squeezeRowRef}
         className={`${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}
         lead={<>
+            {/* The inbox's way back from a conversation to its home (the
+                board or the feed of your sessions). */}
+            {onBack && (
+              <button type="button" onClick={onBack} aria-label="Back to all sessions" title="All sessions" data-cc-conv-back className="-ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text">
+                <ChevronLeft className="h-4 w-4" aria-hidden />
+              </button>
+            )}
             {headerLeft}
             {/* On a phone a hosted conversation has a plain way back to the
                 inbox, rather than only the menu. */}
-            {!embedded && isHostedAgentType(conversation?.agent_type) && (
+            {!onBack && !embedded && isHostedAgentType(conversation?.agent_type) && (
               <Link href="/inbox" aria-label="Back to Inbox" data-cc-conv-back className="sm:hidden -ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text">
                 <ChevronLeft className="h-4 w-4" aria-hidden />
               </Link>
@@ -4030,10 +4028,8 @@ const ConversationViewInner = (
                     A share guest gets what ran and when; the rest links into a workspace they cannot open. */}
                 {!guest && <>
                 <CloudAgentLink actions={cloudAgentActions} />
-                <Surface name="gitChips">
-                  <BranchCodeLink session={conversation} />
-                  <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
-                </Surface>
+                <BranchCodeLink session={conversation} />
+                <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
             {(conversation as any)?.active_plan && (
               <span data-simple-hide className="contents">
                 <PlanBadge plan={(conversation as any).active_plan} />
@@ -4126,19 +4122,19 @@ const ConversationViewInner = (
                     "where is this running" reads as one thing. */}
                 <span data-cc-runner data-cc-keep="live" className="inline-flex items-center flex-shrink-0">
                 <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
-                {conversation?._id && !guest && <Surface name="machineChips">
+                {conversation?._id && !guest && <>
                   <SessionDaemonChip conversationId={String(conversation._id)} />
                   <SessionHooksOffChip conversationId={String(conversation._id)} />
-                </Surface>}
+                </>}
                 {/* Kept in simple view (dimmed, copy sub-button hidden inside
                     the pill): the live tmux badge is how you reach the
                     terminal split, which simple view users still want. */}
-                {!guest && <Surface name="terminal"><span data-simple-dim className="inline-flex items-stretch">
+                {!guest && <span data-simple-dim className="inline-flex items-stretch">
                   <TmuxAttachPill tmuxSession={managedSession?.tmux_session} agentType={conversation?.agent_type} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
-                </span></Surface>}
+                </span>}
                 </span>
                 {/* Where a cloud session's edits land on a laptop, when mirrored (LocalMirror.tsx). */}
-                {conversation?._id && !guest && <Surface name="machineChips"><LocalMirrorChip conversationId={String(conversation._id)} compact={simpleViewPref} /></Surface>}
+                {conversation?._id && !guest && <LocalMirrorChip conversationId={String(conversation._id)} compact={simpleViewPref} />}
 
                 {/* Who has this session open right now: teammates' faces off
                     the roster's viewing field. A solo session shows nothing. */}
@@ -4216,7 +4212,7 @@ const ConversationViewInner = (
                       <button
                         onClick={() => { askSession(localSearchQuery); onClearHighlight(); openAskPanel(); }}
                         className="ml-1 px-1 rounded text-[10px] font-medium whitespace-nowrap hover:bg-amber-300/50 dark:hover:bg-amber-700/40 transition-colors"
-                        title={`Ask ${words.thisConversation} instead of searching it`}
+                        title="Ask this session instead of searching it"
                       >
                         Ask
                       </button>
@@ -4247,7 +4243,7 @@ const ConversationViewInner = (
                     {/* data-cc-keep: the Minimal style rests the header on the
                         title, the live status and this menu; the rest of the
                         cluster fades in on hover or keyboard focus. */}
-                    <button data-cc-keep aria-label={`${words.conversation} menu`} className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
+                    <button data-cc-keep aria-label="Session menu" className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
                       </svg>
@@ -4265,7 +4261,7 @@ const ConversationViewInner = (
                       Copy link
                       <MenuKeyCaps action="conv.copyLink" />
                     </DropdownMenuItem>
-                    {!guest && internalsShown && conversation?.short_id && (
+                    {!guest && conversation?.short_id && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
@@ -4295,7 +4291,7 @@ const ConversationViewInner = (
                       </svg>
                       Copy all messages
                     </DropdownMenuItem>
-                    {hasLocalAgent && internalsShown && (
+                    {hasLocalAgent && (
                       <>
                         <DropdownMenuItem onSelect={() => setTimeout(() => handleCopyResumeCommand("claude"))}>
                           <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4330,7 +4326,7 @@ const ConversationViewInner = (
                     {!guest && (
                       <DropdownMenuItem onSelect={() => setTimeout(openAskPanel)}>
                         <PaletteAsk className="w-3 h-3 mr-1.5" />
-                        Ask {words.thisConversation}…
+                        Ask this session…
                         <MenuKeyCaps action="conv.ask" />
                       </DropdownMenuItem>
                     )}
@@ -4377,7 +4373,7 @@ const ConversationViewInner = (
                     {(isOwner || (effectiveIsOwner && conversation?.session_id)) && (
                       <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">{words.conversation}</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Session</DropdownMenuLabel>
                       </>
                     )}
                     {/* The header shows a huddle only while one is live; starting one lives here. */}
@@ -4424,7 +4420,7 @@ const ConversationViewInner = (
                         {isHeaderRestarting ? "Restarting…" : "Restart session"}
                       </DropdownMenuItem>
                     )}
-                    {isOwner && internalsShown && (
+                    {isOwner && (
                       <>
                         {/* One row for the whole session control panel (model,
                             effort, switch agent, fork as, hand off) — the
@@ -4513,7 +4509,7 @@ const ConversationViewInner = (
                       </>
                     )}
                     {!guest && conversation?._id && <ConversationTaskStatsMenuItem conversationId={conversation._id} />}
-                    {!guest && internalsShown && latestUsage && (
+                    {!guest && latestUsage && (
                       <>
                         <DropdownMenuSeparator />
                         <div className="px-2 py-1.5">
@@ -4536,7 +4532,7 @@ const ConversationViewInner = (
           {conversation?._id && !guest && <DeviceMoveStatusStrip conversationId={conversation._id} />}
         </>}
       >
-        {conversation && transcriptNav && (
+        {conversation && (
           <div className="absolute top-full right-3 mt-24 z-30">
             <MessageNavButton
               conversationId={conversation._id}
@@ -4558,11 +4554,9 @@ const ConversationViewInner = (
             drag. */}
         {conversation && !guest && (
           <ErrorBoundary name="ConversationTerminal" level="inline" fallback={null}>
-            <Surface name="terminal">
-              <Suspense fallback={null}>
-                <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
-              </Suspense>
-            </Surface>
+            <Suspense fallback={null}>
+              <ConversationTerminalSplit convKey={conversation._id.toString()} tmuxSession={managedSession?.tmux_session} />
+            </Suspense>
             <BrowserWatchSplit convKey={conversation._id.toString()} sessionUuid={managedSession?.session_id} tmuxSession={managedSession?.tmux_session} lastPage={lastBrowserPage} />
           </ErrorBoundary>
         )}
@@ -5072,7 +5066,7 @@ const ConversationViewInner = (
       {timeline.length > 0 && (
         <div data-cc-scroll-tools className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115), transform: commentRailW ? `translateX(-${commentRailW}px)` : undefined, transition: "transform 160ms ease" }}>
           <div className="flex flex-col gap-2">
-              {transcriptNav && <button
+              <button
                 onClick={() => {
                   if (jumpPending === 'start') {
                     handleCancelJump();
@@ -5107,7 +5101,7 @@ const ConversationViewInner = (
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
                   </svg>
                 )}
-              </button>}
+              </button>
               <button
                 onClick={() => {
                   if (jumpPending === 'end') {
@@ -5124,7 +5118,7 @@ const ConversationViewInner = (
                     scrollToEdgeRef.current('bottom');
                   }
                 }}
-                className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg transition-all ${transcriptNav ? "hover:bg-sol-cyan hover:text-white" : "text-sol-text-muted hover:bg-sol-bg-highlight hover:text-sol-text"} ${(((userScrolled || guestStayAtTop) && !isNearBottom && isScrollable) || hasMoreBelow || jumpPending === 'end') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg transition-all hover:bg-sol-cyan hover:text-white ${(((userScrolled || guestStayAtTop) && !isNearBottom && isScrollable) || hasMoreBelow || jumpPending === 'end') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label={jumpPending === 'end' ? "Cancel jump to bottom" : "Scroll to bottom"}
                 title={jumpPending === 'end' ? "Cancel" : undefined}
               >
@@ -5153,7 +5147,7 @@ const ConversationViewInner = (
                 )}
               </button>
           </div>
-          {transcriptNav && (isScrollable || hasMoreAbove || hasMoreBelow) && (
+          {(isScrollable || hasMoreAbove || hasMoreBelow) && (
             <div className="hidden sm:block w-2 self-stretch bg-sol-base02 rounded-full overflow-hidden">
               <div
                 data-cc-scroll-progress
@@ -5235,7 +5229,7 @@ const ConversationViewInner = (
       <SelectionQuoteToolbar conversationId={conversation?._id ?? ""} />
       {conversation && (
         <Suspense fallback={null}>
-          <CommentDock conversationId={conversation._id.toString()} />
+          <CommentDock conversationId={conversation._id.toString()} onJumpToMessage={scrollToMessageById} />
         </Suspense>
       )}
     </main>

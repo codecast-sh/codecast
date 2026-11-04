@@ -3,7 +3,7 @@ import { CheckCircle2, FileCode2, MessageSquare, Quote } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useCommentActions, useConversationCommentsSync } from "../../../hooks/useConversationComments";
-import { isAgentComment, isThreadResolved, type CommentThread as CommentThreadModel } from "../../../lib/commentThread";
+import { isThreadResolved, messageExcerpt, type CommentThread as CommentThreadModel } from "../../../lib/commentThread";
 import { sessionLabel } from "../../../lib/notificationTypes";
 import { cleanContent } from "../../../lib/conversationProcessor";
 import type { ThreadCardModel } from "../../../lib/threadCards";
@@ -50,9 +50,7 @@ export function CommentLabel({ card }: { card: ThreadCardModel }) {
 function AnchorLine({ conversationId, messageId, filePath, lineNumber }: { conversationId: string; messageId?: string; filePath?: string; lineNumber?: number }) {
   const excerpt = useInboxStore((s) => {
     if (!messageId) return undefined;
-    const content = s.messages[conversationId]?.find((m) => m._id === messageId)?.content;
-    if (!content) return undefined;
-    return cleanContent(content).replace(/```[\s\S]*?```/g, " code ").replace(/\s+/g, " ").trim().slice(0, 120) || undefined;
+    return messageExcerpt(s.messages[conversationId]?.find((m) => m._id === messageId)?.content, 120, cleanContent);
   });
   if (messageId) {
     return (
@@ -136,7 +134,6 @@ export function CommentExpanded({ card, seen, frozenReadAt, focusComposer }: { c
     }),
     [webKey, messageId, filePath, lineNumber, comments, shown],
   );
-  const agentBusy = comments.some((c) => isAgentComment(c) && (c.agent_status === "thinking" || c.agent_status === "streaming"));
 
   const earlier = <EarlierButton count={fold.hidden} noun="reply" onClick={fold.showAll} />;
 
@@ -164,7 +161,6 @@ export function CommentExpanded({ card, seen, frozenReadAt, focusComposer }: { c
         onEdit={actions.editComment}
         onDelete={actions.deleteComment}
         onAskAgent={actions.askAgent}
-        agentBusy={agentBusy}
         agentType={agentType}
       />
     </div>

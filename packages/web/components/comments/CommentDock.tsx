@@ -1,15 +1,15 @@
-import { memo, useState } from "react";
-import { MessageSquare, CornerUpRight, Quote, FileCode2, CheckCircle2, RotateCcw } from "lucide-react";
+import { memo, useMemo, useState } from "react";
+import { Quote, FileCode2, CheckCircle2, RotateCcw } from "lucide-react";
 import { SlotActions } from "../workspace/Slot";
 import { useInboxStore, selectCommentRailOpen } from "../../store/inboxStore";
 import { useDiffViewerStore } from "../../store/diffViewerStore";
 import { getRelativePath } from "@codecast/shared/render";
-import type { CommentThread as CommentThreadModel } from "../../lib/commentThread";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { isConvexId } from "../../lib/entityLinks";
 import { cleanContent } from "../../lib/conversationProcessor";
 import { useConversationComments } from "../../hooks/useConversationComments";
-import { isAgentComment } from "../../lib/commentThread";
+import { messageExcerpt, type CommentThread as CommentThreadModel } from "../../lib/commentThread";
+import { useConversationAgentType } from "../../hooks/useConversationAgentType";
 import { CommentThread } from "./CommentThread";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -20,7 +20,7 @@ import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
 // the left sidebar exactly. Open it fills the height and is width-resizable by
 // dragging its left edge. Anchored threads live inline at their messages; the
 // rail also lists them as jump targets. Publishes its width via commentRailWidth
-// so the floating scroll arrows slide clear of it.
+// so the conversation makes room for it.
 
 const MIN_W = 300;
 const MAX_W = 760;
@@ -36,11 +36,6 @@ function slotPixelWidth(v: number | undefined): number | undefined {
   return v !== undefined && v >= MIN_W && v <= MAX_W ? v : undefined;
 }
 
-function snippetFor(content: string | undefined): string {
-  if (!content) return "a message";
-  return cleanContent(content).replace(/```[\s\S]*?```/g, " code ").replace(/\s+/g, " ").trim().slice(0, 64) || "a message";
-}
-
 // Jump to a code thread: open the diff panel focused on the thread's file.
 // The anchor stores the workspace-relative path; the panel's change list holds
 // raw tool paths, so match through the same normalization the anchor used.
@@ -51,22 +46,37 @@ function jumpToFileThread(t: CommentThreadModel) {
   if (change) st.selectFile(change.filePath);
 }
 
-function jumpToMessage(conversationId: string, messageId: string) {
-  const st = useInboxStore.getState();
-  // Navigate + load the message even if it isn't in the current window (the
-  // conversation view honors scrollToMessageId and pages it in); then anchor the
-  // per-message rail there. If it's already on screen, flash it right away.
-  st.requestNavigate(conversationId, { scrollToMessageId: messageId, source: "gesture" });
-  st.openCommentThread(messageId);
-  const el = document.getElementById("msg-" + messageId);
-  if (el) {
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
-    el.classList.add("cc-msg-flash");
-    setTimeout(() => el.classList.remove("cc-msg-flash"), 1300);
-  }
+/** One row per anchored thread: where it hangs, its opening words, its size.
+ *  Opening it scrolls the transcript to the message (or opens the diff at the
+ *  line); the check resolves or reopens it in place. */
+function ThreadRow({ t, conversationId, label, onJump }: { t: CommentThreadModel; conversationId: string; label: string; onJump: () => void }) {
+  // What the thread says; what it hangs on is the row's tooltip.
+  const text = messageExcerpt(t.comments[0]?.content, 90, cleanContent) ?? label;
+  const Icon = t.filePath ? FileCode2 : Quote;
+  return (
+    <div className={"cc-railx-row" + (t.resolved ? " is-resolved" : "")} data-comment-rail-row>
+      <button type="button" className="cc-railx-row-main" onClick={onJump} title={label}>
+        <Icon className="cc-railx-row-icon" />
+        <span className="cc-railx-row-text">
+          {t.filePath && <span className="cc-railx-row-where">{t.filePath.split("/").pop()}{t.lineNumber ? `:${t.lineNumber}` : ""}</span>}
+          {text}
+        </span>
+        <span className="cc-railx-row-count">{t.comments.length}</span>
+      </button>
+      <button
+        type="button"
+        className="cc-railx-row-resolve"
+        title={t.resolved ? "Reopen" : "Resolve"}
+        aria-label={t.resolved ? "Reopen" : "Resolve"}
+        onClick={() => useInboxStore.getState().resolveCommentThread(conversationId, { messageId: t.messageId, filePath: t.filePath, lineNumber: t.lineNumber }, !t.resolved)}
+      >
+        {t.resolved ? <RotateCcw className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+      </button>
+    </div>
+  );
 }
 
-function CommentRailImpl({ conversationId }: { conversationId: string }) {
+function CommentRailImpl({ conversationId, onJumpToMessage }: { conversationId: string; onJumpToMessage?: (messageId: string) => void }) {
   const { user, isAuthenticated } = useCurrentUser();
   const currentUserId = user?._id as string | undefined;
   const comments = useConversationComments(conversationId);
@@ -78,7 +88,7 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
   // The rail is opt-in, but a conversation that already has comments keeps it
   // available so you can read + reply to what teammates left.
   const railEnabled = commentsEnabled || comments.totalCount > 0;
-  const agentType = useInboxStore((s) => ((s.conversations[conversationId] ?? s.sessions[conversationId]) as { agent_type?: string } | undefined)?.agent_type ?? "claude_code");
+  const agentType = useConversationAgentType(conversationId);
   const messages = useInboxStore((s) => s.messages[conversationId]) as Array<{ _id: string; content?: string }> | undefined;
 
   // The context slot owns the rail's width (a workbench restores it with the
@@ -108,27 +118,32 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
     return () => clearTimeout(t);
   }, [open]);
 
-  const globalBusy = comments.global.comments.some((c) => isAgentComment(c) && (c.agent_status === "thinking" || c.agent_status === "streaming"));
-
-  // Publish the rail width while open — the transcript does NOT pad for it (the
-  // rail hangs over the right edge as an overlay), but the floating scroll arrows
-  // read it to slide clear of the rail instead of hiding under it.
+  // Publish the rail width while open: the conversation pads its right edge by
+  // it so the rail never covers the header or the transcript, and the floating
+  // scroll arrows slide clear of it.
   useWatchEffect(() => {
     setWidth(conversationId, open && railEnabled ? width : 0);
     return () => setWidth(conversationId, 0);
   }, [conversationId, open, width, railEnabled, setWidth]);
 
+  // Open threads first, newest activity first; resolved ones sink below.
+  const threads = useMemo(
+    () => [...comments.files, ...comments.anchored].sort((a, b) => Number(a.resolved) - Number(b.resolved) || b.lastActivity - a.lastActivity),
+    [comments.files, comments.anchored],
+  );
+
   // Comment tools off and nothing to read → the rail doesn't exist at all (this
   // also catches the keyboard shortcut, not just the now-hidden header toggle).
   if (!railEnabled) return null;
 
+  const messageText = (id?: string) => messageExcerpt((messages ?? []).find((m) => m._id === id)?.content, 140, cleanContent);
+
   return (
-    <aside className={`cc-railx${open ? "" : " cc-railx--closed"}`} style={{ width }} aria-hidden={!open}>
+    <aside className={`cc-railx${open ? "" : " cc-railx--closed"}`} style={{ width }} aria-hidden={!open} data-comment-rail>
       {mounted && (
       <>
       <EdgeResizeHandle onResizeDown={onResizeDown} />
       <header className="cc-railx-head">
-        <MessageSquare className="w-3.5 h-3.5 text-sol-cyan" />
         <span className="cc-railx-title">Comments</span>
         {comments.totalCount > 0 && <span className="cc-railx-count">{comments.totalCount}</span>}
         {/* Shared controls: this rail dismisses exactly like the session list
@@ -136,58 +151,16 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
         <SlotActions slot="context" onClose={() => setOpen(false)} />
       </header>
 
-      {comments.files.length > 0 && (
-        <div className="cc-railx-anchored">
-          <div className="cc-railx-anchored-label">On code</div>
-          {[...comments.files].sort((a, b) => Number(a.resolved) - Number(b.resolved)).map((t) => (
-            <div key={t.key} className={`group/fthread flex items-center${t.resolved ? " opacity-50" : ""}`}>
-              <button
-                type="button"
-                className="cc-railx-anchored-row flex-1 min-w-0"
-                title="Open the diff panel at this file"
-                onClick={() => t.filePath && jumpToFileThread(t)}
-              >
-                <FileCode2 className="w-3 h-3 shrink-0 text-sol-cyan/70" />
-                <span className="cc-railx-anchored-snip font-mono">
-                  {t.filePath}{t.lineNumber ? `:${t.lineNumber}` : ""}
-                </span>
-                <span className="cc-railx-anchored-count">{t.comments.length}</span>
-                <CornerUpRight className="w-3 h-3 shrink-0 opacity-50" />
-              </button>
-              <button
-                type="button"
-                className="cc-comment-btn shrink-0 opacity-0 group-hover/fthread:opacity-100 transition-opacity"
-                title={t.resolved ? "Reopen this thread" : "Resolve this thread"}
-                onClick={() =>
-                  useInboxStore.getState().resolveCommentThread(
-                    conversationId,
-                    { filePath: t.filePath, lineNumber: t.lineNumber },
-                    !t.resolved,
-                  )}
-              >
-                {t.resolved ? <RotateCcw className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {comments.anchored.length > 0 && (
-        <div className="cc-railx-anchored">
-          <div className="cc-railx-anchored-label">On specific messages</div>
-          {comments.anchored.map((t) => (
-            <button
+      {threads.length > 0 && (
+        <div className="cc-railx-threads" data-comment-rail-threads>
+          {threads.map((t) => (
+            <ThreadRow
               key={t.key}
-              type="button"
-              className="cc-railx-anchored-row"
-              title="Jump to this message"
-              onClick={() => t.messageId && jumpToMessage(conversationId, t.messageId)}
-            >
-              <Quote className="w-3 h-3 shrink-0 text-sol-cyan/70" />
-              <span className="cc-railx-anchored-snip">{t.messageId ? snippetFor((messages ?? []).find((m) => m._id === t.messageId)?.content) : "a message"}</span>
-              <span className="cc-railx-anchored-count">{t.comments.length}</span>
-              <CornerUpRight className="w-3 h-3 shrink-0 opacity-50" />
-            </button>
+              t={t}
+              conversationId={conversationId}
+              label={t.filePath ? `${t.filePath}${t.lineNumber ? `:${t.lineNumber}` : ""}` : messageText(t.messageId) ?? "Comment on a message"}
+              onJump={() => (t.filePath ? jumpToFileThread(t) : t.messageId && onJumpToMessage?.(t.messageId))}
+            />
           ))}
         </div>
       )}
@@ -201,16 +174,11 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
           canWrite={isAuthenticated}
           currentUserId={currentUserId}
           composerAutoFocus
-          emptyHint={
-            comments.totalCount === 0
-              ? "Start a thread for your team. Comments are visible to everyone who can see this conversation."
-              : undefined
-          }
+          placeholder="Comment on this conversation…"
           onAdd={comments.addComment}
           onEdit={comments.editComment}
           onDelete={comments.deleteComment}
           onAskAgent={comments.askAgent}
-          agentBusy={globalBusy}
           agentType={agentType}
         />
       </div>
@@ -222,9 +190,12 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
 
 export const CommentDock = memo(function CommentDock({
   conversationId,
+  onJumpToMessage,
 }: {
   conversationId: string;
+  /** The transcript's own jump: pages the message in, opens a folded turn, flashes it. */
+  onJumpToMessage?: (messageId: string) => void;
 }) {
   if (!isConvexId(conversationId)) return null;
-  return <CommentRailImpl conversationId={conversationId} />;
+  return <CommentRailImpl conversationId={conversationId} onJumpToMessage={onJumpToMessage} />;
 });

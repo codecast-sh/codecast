@@ -18,7 +18,7 @@ const { CommentCard } = await import("./CommentCard");
 
 const ASKER = "user_1";
 const placeholder = (over: Record<string, unknown> = {}) => ({
-  _id: "c1", conversation_id: "conv_1", user_id: ASKER, content: "", created_at: 1, author_kind: "agent", agent_status: "thinking", ...over,
+  _id: "c1", conversation_id: "conv_1", user_id: ASKER, content: "", created_at: Date.now(), author_kind: "agent", agent_status: "thinking", ...over,
 }) as any;
 
 let root: Root;
@@ -53,9 +53,16 @@ describe("an agent reply placeholder", () => {
     expect(document.querySelector("[data-comment-agent-retry]")).toBeNull();
   });
 
+  test("still thinking long after the ask reads as a failed reply, with a retry", async () => {
+    await render(placeholder({ created_at: Date.now() - 60 * 60_000 }));
+    expect(document.body.textContent).toContain("reply failed");
+    expect(document.body.textContent).not.toContain("thinking");
+    expect(document.querySelector("[data-comment-agent-retry]")).not.toBeNull();
+  });
+
   test("error says why and offers a retry that replaces the failed row", async () => {
     await render(placeholder({ agent_status: "error", content: "Could not reach the agent: fork refused" }));
-    expect(document.body.textContent).toContain("no reply");
+    expect(document.body.textContent).toContain("reply failed");
     expect(document.body.textContent).toContain("fork refused");
     await act(async () => (document.querySelector("[data-comment-agent-retry]") as HTMLButtonElement).click());
     expect(deleted).toEqual(["c1"]);
@@ -67,5 +74,21 @@ describe("an agent reply placeholder", () => {
     await act(async () => (document.querySelector("[data-comment-agent-retry]") as HTMLButtonElement).click());
     expect(deleted).toEqual([]);
     expect(retries).toBe(1);
+  });
+});
+
+describe("your own comment", () => {
+  test("delete takes a second press on the same spot", async () => {
+    await render({ _id: "c2", conversation_id: "conv_1", user_id: ASKER, content: "mine", created_at: Date.now() } as any);
+    await act(async () => (document.querySelector("[data-comment-delete]") as HTMLButtonElement).click());
+    expect(deleted).toEqual([]);
+    await act(async () => (document.querySelector("[data-comment-delete-confirm]") as HTMLButtonElement).click());
+    expect(deleted).toEqual(["c2"]);
+  });
+
+  test("a teammate's comment offers no edit or delete", async () => {
+    await render({ _id: "c3", conversation_id: "conv_1", user_id: "user_2", content: "theirs", created_at: Date.now() } as any);
+    expect(document.querySelector("[data-comment-delete]")).toBeNull();
+    expect(document.querySelector("[aria-label=Edit]")).toBeNull();
   });
 });
