@@ -21,8 +21,8 @@ export const passkeyTables = {
     name: v.string(),
     created_at: v.number(),
     last_used_at: v.optional(v.number()),
-    // Set up with no grant (an account's first): it confirms nothing until
-    // then, and can be removed with one press (passkeys.ts removableUnasked).
+    // Stamped on first passkeys enrolled from 2026-10-24 to 2026-11-04;
+    // nothing reads it. Kept so those rows still validate.
     probation_until: v.optional(v.number()),
   })
     .index("by_user", ["user_id"])
@@ -36,7 +36,7 @@ export const passkeyTables = {
   // grant_hash is the SHA-256 of the secret presenceBegin handed its caller,
   // which the gate needs to spend the grant (lib/presence.ts). A register row
   // a second passkey began names the add_passkey grant it spent in
-  // authorized_by; a first one has none and lands in probation.
+  // authorized_by; a first one has none.
   passkey_challenges: defineTable({
     user_id: v.id("users"),
     purpose: v.union(v.literal("register"), v.literal("presence")),

@@ -351,3 +351,9 @@ test('job settlement waits for actual held close and then observes the same dead
     }
   });
 });
+
+test('generateTitleFromMessage unwraps a message that is all pasted content', async () => {
+  const { generateTitleFromMessage } = await import('./ingestMetadata.js');
+  const title = generateTitleFromMessage('\n\n<pasted_content id="375a">\nRequested by Ashot (#team, Nov 3 2026). Action needed.\n</pasted_content id="375a">\n');
+  expect(title).toBe('Requested by Ashot (#team, Nov 3 2026). Action nee...');
+});

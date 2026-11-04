@@ -19,11 +19,9 @@
 // spend it.
 //
 // Enrollment runs the same way. The first passkey needs no grant, since there
-// is nothing to assert with yet, so it may have been set up by an agent
-// holding the person's sign-in: it confirms nothing for a day
-// (PASSKEY_PROBATION_MS), and until it has confirmed something, or while it
-// is the only one, it is removed with one press. Every later one spends an add_passkey grant when its
-// enrollment begins. Every add and remove is mailed and pushed to the phone.
+// is nothing to assert with yet; every later one spends an add_passkey grant
+// when its enrollment begins. Every add and remove is mailed and pushed to the
+// phone.
 //
 // Verification runs in actions (WebAuthn crypto is async web crypto); the
 // mutation after it re-reads the challenge, so a challenge is used once
@@ -48,12 +46,9 @@ import { sha256Hex } from "./lib/hash";
 import { passkeyOrigins, siteUrl } from "./lib/siteUrl";
 import { emitNotification } from "./notificationRouter";
 import {
-  PASSKEY_PROBATION_MS,
   PRESENCE_ACTIONS,
   PRESENCE_TTL_MS,
-  inProbation,
   presenceRequiredMessage,
-  removableUnasked,
   type PasskeyMeta,
   type PresenceAction,
   type PresenceChallengeState,
@@ -84,11 +79,10 @@ function ceremonyRp(origin?: string): { rp_id: string } | { error: string } {
 /** Every origin passkeys run on that answers to this relying party; none for a relying party they no longer run for. */
 const originsFor = (rpId: string) => [...passkeyOrigins()].filter((o) => rpIdFor(o) === rpId);
 
-/** Whether a passkey may confirm a challenge for this relying party now: made for it, a relying party passkeys still run for, and past its probation. */
-const confirmsFor = (p: Doc<"passkeys">, rpId: string, now: number) => p.rp_id === rpId && originsFor(rpId).length > 0 && !inProbation(p, now);
+/** Whether a passkey may confirm a challenge for this relying party: made for it, and a relying party passkeys still run for. */
+const confirmsFor = (p: Doc<"passkeys">, rpId: string) => p.rp_id === rpId && originsFor(rpId).length > 0;
 
-const probationRefusal = (p: Doc<"passkeys">, now: number) =>
-  `${p.name} is new and confirms nothing for ${Math.ceil(((p.probation_until ?? now) - now) / 3_600_000)} more hours. If you did not add it, remove it in Settings`;
+const OTHER_SITE = "This passkey was made for another site: set up a new one";
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
@@ -105,14 +99,14 @@ export const list = query({
     const rows = await passkeysOf(ctx, userId);
     return rows
       .sort((a, b) => b.created_at - a.created_at)
-      .map((r) => ({ _id: String(r._id), name: r.name, created_at: r.created_at, last_used_at: r.last_used_at, probation_until: r.probation_until }));
+      .map((r) => ({ _id: String(r._id), name: r.name, created_at: r.created_at, last_used_at: r.last_used_at }));
   },
 });
 
 /** The WebAuthn options a pending challenge's ceremony runs with, rebuilt from the row so the /confirm page can fetch them by id. */
 async function optionsFor(ctx: any, row: Doc<"passkey_challenges">) {
   const now = Date.now();
-  const passkeys = (await passkeysOf(ctx, row.user_id)).filter((p) => (row.purpose === "presence" ? confirmsFor(p, row.rp_id, now) : p.rp_id === row.rp_id));
+  const passkeys = (await passkeysOf(ctx, row.user_id)).filter((p) => (row.purpose === "presence" ? confirmsFor(p, row.rp_id) : p.rp_id === row.rp_id));
   const credentials = passkeys.map((p) => ({ id: p.credential_id, transports: p.transports }));
   const challenge = isoBase64URL.toBuffer(row.challenge);
   const timeout = PRESENCE_TTL_MS;
@@ -223,7 +217,7 @@ export const openChallenge = internalMutation({
     } else {
       const here = passkeys.filter((p) => p.rp_id === args.rp_id);
       if (!here.length) return { error: "Set up Touch ID first: you have no passkey here yet", needs_passkey: true };
-      if (!here.some((p) => confirmsFor(p, args.rp_id, now))) return { error: probationRefusal(here[0], now) };
+      if (!here.some((p) => confirmsFor(p, args.rp_id))) return { error: OTHER_SITE };
       const subject = await presenceSubject(ctx, args.user_id, args.action!, args.target!);
       if ("error" in subject) return subject;
       label = subject.label;
@@ -343,8 +337,6 @@ export const storePasskey = internalMutation({
     // A passkey added since this enrollment began makes it a second one, which only a grant spent at the begin lets in.
     const existing = await passkeysOf(ctx, userId);
     if (existing.length && !row!.authorized_by) return { error: presenceRequiredMessage("add_passkey") };
-    // One with no grant behind it may be an agent's, set up with the person's sign-in: it waits out its probation.
-    const probation_until = row!.authorized_by ? undefined : now + PASSKEY_PROBATION_MS;
     const id = await ctx.db.insert("passkeys", {
       user_id: userId,
       credential_id: args.credential_id,
@@ -354,7 +346,6 @@ export const storePasskey = internalMutation({
       rp_id: row!.rp_id,
       name: args.name,
       created_at: now,
-      probation_until,
     });
     const user = await ctx.db.get(userId);
     if (user?.email) {
@@ -365,8 +356,8 @@ export const storePasskey = internalMutation({
         settings_url: `${siteUrl()}/settings/accounts`,
       });
     }
-    await tellOwner(ctx, userId, `Touch ID added: ${args.name}`, probation_until ? "It confirms nothing for a day. Not you? Remove it in Settings" : undefined);
-    return { id: String(id), name: args.name, first: !existing.length, probation_until };
+    await tellOwner(ctx, userId, `Touch ID added: ${args.name}`);
+    return { id: String(id), name: args.name, first: !existing.length };
   },
 });
 
@@ -378,7 +369,7 @@ export const storePasskey = internalMutation({
  */
 export const registrationFinish = action({
   args: { challenge_id: v.string(), response: v.any(), name: v.optional(v.string()) },
-  handler: async (ctx, args): Promise<{ id: string; name: string; first: boolean; probation_until?: number } | { error: string }> => {
+  handler: async (ctx, args): Promise<{ id: string; name: string; first: boolean } | { error: string }> => {
     const got = await ctx.runQuery(internal.passkeys.ceremony, { challenge_id: args.challenge_id });
     const closed = closedReason(got?.row, "register", Date.now());
     if (closed) return { error: closed };
@@ -422,8 +413,7 @@ export const grantPresence = internalMutation({
     if (closed) return { error: closed };
     const passkey = await ctx.db.get(args.passkey_id);
     if (!passkey || String(passkey.user_id) !== String(row!.user_id)) return { error: "This passkey is not set up for the account that asked" };
-    if (inProbation(passkey, now)) return { error: probationRefusal(passkey, now) };
-    if (!confirmsFor(passkey, row!.rp_id, now)) return { error: "This passkey was made for another site: set up a new one" };
+    if (!confirmsFor(passkey, row!.rp_id)) return { error: OTHER_SITE };
     // A signature count that fails to rise means the key was copied: an authenticator that counts never repeats one.
     if ((args.counter > 0 || passkey.counter > 0) && args.counter <= passkey.counter) {
       return { error: "This passkey's signature count went backwards, so it may have been copied: remove it in Settings and set up a new one" };
@@ -511,21 +501,15 @@ export const rename = mutation({
 
 /**
  * Remove one of the person's passkeys. It spends a remove_passkey grant for
- * it, asserted with any of their passkeys (itself included), unless it went
- * in with no grant and is still in probation, has never confirmed anything,
- * or is their only one (removableUnasked): a key an agent set up first must
- * not be the only thing that can assert its own removal.
+ * it, asserted with any of their passkeys (itself included).
  */
 export const remove = mutation({
   args: { id: v.string(), grant: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const got = await ownPasskey(ctx, args.id);
     if ("error" in got) return got;
-    const count = (await passkeysOf(ctx, got.userId)).length;
-    if (!removableUnasked(got.row, count)) {
-      const refusal = await consumePresence(ctx, got.userId, "remove_passkey", String(got.row._id), args.grant);
-      if (refusal) return { error: refusal };
-    }
+    const refusal = await consumePresence(ctx, got.userId, "remove_passkey", String(got.row._id), args.grant);
+    if (refusal) return { error: refusal };
     await ctx.db.delete(got.row._id);
     await tellOwner(ctx, got.userId, `Touch ID removed: ${got.row.name}`);
     return { removed: true, id: args.id };

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { stripPastedContent } from "@codecast/shared/contracts";
 import { INGEST_MAX_BYTES } from "./ingestTypes.js";
 import { parseSessionFile, type ParsedMessage } from "../parser.js";
 import { classifyMirrorTranscriptTail } from "../cloudAgents/transcript.js";
@@ -266,7 +267,10 @@ export function classifyMuseTranscriptTail(tailContent: string): TranscriptTurnS
 }
 
 export function generateTitleFromMessage(content: string): string {
-  const trimmed = content.trim();
+  // A pasted brief is the person's own words in a wrapper: unwrap it before
+  // tag pairs are dropped below, or a message that is all paste loses its
+  // text and the title falls back to the raw wrapper.
+  const trimmed = stripPastedContent(content).trim();
   if (!trimmed) {
     return "";
   }

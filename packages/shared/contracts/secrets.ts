@@ -768,14 +768,6 @@ export type PresenceAction = (typeof PRESENCE_ACTIONS)[number];
 export const PRESENCE_TTL_MS = 2 * 60 * 1000;
 
 /**
- * How long a passkey set up with nothing to vouch for it (an account's first)
- * waits before it confirms anything. The session that set it up may be an
- * agent holding the person's sign-in, so the person gets that long, told on
- * the phone and on every screen, to remove it with one press.
- */
-export const PASSKEY_PROBATION_MS = 24 * 60 * 60 * 1000;
-
-/**
  * A grant is spent by the one who began it. presenceBegin answers a `grant`
  * string beside the challenge id, and the gated call takes it (`grant` on
  * reveal, setAskFirst, resolve, passkeys.remove and registrationBegin;
@@ -816,21 +808,7 @@ export type PasskeyMeta = {
   name: string;
   created_at: number;
   last_used_at?: number;
-  /** Set up with no grant, it confirms nothing until then (PASSKEY_PROBATION_MS). */
-  probation_until?: number;
 };
-
-/** Whether a passkey is still waiting out its probation. */
-export const inProbation = (p: { probation_until?: number }, now = Date.now()): boolean => (p.probation_until ?? 0) > now;
-
-/**
- * Whether removing a passkey needs no Touch ID: one set up with no grant
- * while it waits out its probation, has never confirmed anything, or is the
- * only one. Otherwise a key an agent set up first would be the only thing
- * that could assert its own removal. `count` is how many passkeys the person has.
- */
-export const removableUnasked = (p: { probation_until?: number; last_used_at?: number }, count: number, now = Date.now()): boolean =>
-  p.probation_until !== undefined && (inProbation(p, now) || !p.last_used_at || count === 1);
 
 /** What the waiting client and the /confirm page read about one presence challenge. */
 export type PresenceChallengeState = {

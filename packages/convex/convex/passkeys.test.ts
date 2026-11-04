@@ -1,7 +1,7 @@
 // Passkeys and presence grants (vault.md "Touch ID"), driven by a software
 // authenticator that produces real registration and assertion responses: the
-// first passkey enrolls freely, waits out its probation and is removed with
-// one press meanwhile, a second spends a grant; an assertion grants one action
+// first passkey enrolls freely and confirms at once, a second spends a grant,
+// and removing any takes one; an assertion grants one action
 // on one target once, spent only with the grant string its beginner holds;
 // replays, other targets, expiry, a counter that goes backwards, another
 // person's passkey and origins outside the web's are refused; and each Vault
@@ -58,18 +58,6 @@ async function enroll(as: any, auth: SoftAuthenticator, name = "MacBook Touch ID
   return await as.action(api.passkeys.registrationFinish, { challenge_id: begun.challenge_id, response: await auth.register(begun.options, ORIGIN), name });
 }
 
-/** A day passes: every passkey is past its probation. */
-const dayLater = (t: any) => t.run(async (ctx: any) => {
-  for (const p of await ctx.db.query("passkeys").collect()) if (p.probation_until) await ctx.db.patch(p._id, { probation_until: Date.now() - 1 });
-});
-
-/** Enroll a first passkey and let its probation pass. */
-async function enrollTrusted(t: any, as: any, auth: SoftAuthenticator, name?: string) {
-  const made = await enroll(as, auth, name);
-  await dayLater(t);
-  return made;
-}
-
 /** Begin a presence challenge as the signed-in person and answer it with `auth`; returns the finish result, the begin's answer (its `grant` string included) and the response used. */
 async function confirm(t: any, as: any, auth: SoftAuthenticator, action: PresenceAction, target?: string) {
   const begun = await as.action(api.passkeys.presenceBegin, { action, target, origin: ORIGIN });
@@ -90,25 +78,20 @@ const scheduledMails = async (t: any) =>
   (await t.run((ctx: any) => ctx.db.system.query("_scheduled_functions").collect())).filter((s: any) => s.name.includes("sendPasskeyAdded"));
 const notices = (t: any) => t.run(async (ctx: any) => (await ctx.db.query("notifications").collect()).filter((n: any) => n.type === "passkey_changed"));
 
-test("the first passkey enrolls with no grant into probation; a second spends an add_passkey grant; each is mailed and noticed", async () => {
+test("the first passkey enrolls with no grant and confirms at once; a second spends an add_passkey grant; each is mailed and noticed", async () => {
   const { t, as, ana } = await seed();
   expect(await as(ana).query(api.passkeys.list, {})).toEqual([]);
   const first = await softAuthenticator();
   const made = await enroll(as(ana), first);
   expect(made).toMatchObject({ name: "MacBook Touch ID", first: true });
-  expect(made.probation_until).toBeGreaterThan(Date.now() + 23 * 3_600_000);
   const listed = await as(ana).query(api.passkeys.list, {});
   expect(listed.map((p: any) => p.name)).toEqual(["MacBook Touch ID"]);
-  expect(listed[0].probation_until).toBe(made.probation_until);
   expect(JSON.stringify(listed)).not.toContain("public_key");
   const mails = await scheduledMails(t);
   expect(mails).toHaveLength(1);
   expect(mails[0].args[0]).toMatchObject({ email: "ana@example.com", passkey_name: "MacBook Touch ID" });
   expect((await notices(t)).map((n: any) => [String(n.recipient_user_id), n.message])).toEqual([[ana, "Touch ID added: MacBook Touch ID"]]);
 
-  // In probation it confirms nothing, so it cannot vouch for a second one yet.
-  expect((await as(ana).action(api.passkeys.presenceBegin, { action: "add_passkey", origin: ORIGIN })).error).toMatch(/new and confirms nothing/);
-  await dayLater(t);
 
   // A second passkey is one more way to confirm as Ana, so it takes the first.
   const second = await softAuthenticator();
@@ -117,8 +100,6 @@ test("the first passkey enrolls with no grant into probation; a second spends an
   expect(finished).toMatchObject({ granted: true, action: "add_passkey" });
   const added = await enroll(as(ana), second, "YubiKey", grant);
   expect(added).toMatchObject({ name: "YubiKey", first: false });
-  // Vouched for, it has no probation.
-  expect(added.probation_until).toBeUndefined();
   expect((await as(ana).query(api.passkeys.list, {})).map((p: any) => p.name).sort()).toEqual(["MacBook Touch ID", "YubiKey"]);
   // Every enrollment is mailed and noticed.
   expect(await scheduledMails(t)).toHaveLength(2);
@@ -130,7 +111,7 @@ test("the first passkey enrolls with no grant into probation; a second spends an
 test("a grant is spent only with the string its beginner holds: another caller on the same sign-in gets nothing", async () => {
   const { t, as, ana, acme } = await seed();
   const auth = await softAuthenticator();
-  await enrollTrusted(t, as(ana), auth);
+  await enroll(as(ana), auth);
   const live = await askFirstSecret(t, as, ana, acme);
   // An agent holding Ana's session polls reveal while she confirms.
   const agent = as(ana);
@@ -150,7 +131,7 @@ test("a grant is spent only with the string its beginner holds: another caller o
 test("an add_passkey grant is spent when enrollment begins, so a second register cannot ride the person's confirmation", async () => {
   const { t, as, ana } = await seed();
   const first = await softAuthenticator();
-  await enrollTrusted(t, as(ana), first);
+  await enroll(as(ana), first);
   const { grant } = await confirm(t, as(ana), first, "add_passkey");
   // The agent's register begin, without the string, is refused even though Ana just confirmed.
   expect(isPresenceRequired(await as(ana).action(api.passkeys.registrationBegin, { origin: ORIGIN }))).toBe(true);
@@ -174,32 +155,17 @@ test("a first enrollment that a passkey overtook cannot store a second without a
   expect((await as(ana).query(api.passkeys.list, {})).map((p: any) => p.name)).toEqual(["Ana's Mac"]);
 });
 
-test("a passkey in probation confirms nothing and is removed with one press; the only grant-less one stays removable after", async () => {
+test("a first passkey confirms at once, and removing it takes Touch ID like any other", async () => {
   const { t, as, ana, acme } = await seed();
-  const rogue = await softAuthenticator();
-  await enroll(as(ana), rogue, "Rogue");
-  const live = await askFirstSecret(t, as, ana, acme);
-  expect((await as(ana).action(api.passkeys.presenceBegin, { action: "reveal", target: live, origin: ORIGIN })).error).toMatch(/new and confirms nothing/);
-  // A challenge opened before is still refused at the grant.
-  const stamped = await t.run(async (ctx: any) => {
-    const p = (await ctx.db.query("passkeys").collect())[0];
-    await ctx.db.patch(p._id, { probation_until: undefined });
-    return p;
-  });
-  const begun = await as(ana).action(api.passkeys.presenceBegin, { action: "reveal", target: live, origin: ORIGIN });
-  await t.run((ctx: any) => ctx.db.patch(stamped._id, { probation_until: Date.now() + 3_600_000 }));
-  expect((await t.action(api.passkeys.presenceFinish, { challenge_id: begun.challenge_id, response: await rogue.assert(begun.options, ORIGIN) })).error).toMatch(/new and confirms nothing/);
-  // Ana removes it with one press.
-  const id = String(stamped._id);
-  expect(await as(ana).mutation(api.passkeys.remove, { id })).toMatchObject({ removed: true });
-  expect((await notices(t)).map((n: any) => n.message)).toContain("Touch ID removed: Rogue");
-
-  // Past probation and used, the account's only grant-less passkey still goes with one press.
   const mine = await softAuthenticator();
-  await enrollTrusted(t, as(ana), mine, "Mine");
+  await enroll(as(ana), mine, "Mine");
+  const live = await askFirstSecret(t, as, ana, acme);
   expect((await confirm(t, as(ana), mine, "reveal", live)).finished.granted).toBe(true);
-  const mineId = (await as(ana).query(api.passkeys.list, {}))[0]._id;
-  expect(await as(ana).mutation(api.passkeys.remove, { id: mineId })).toMatchObject({ removed: true });
+  const id = (await as(ana).query(api.passkeys.list, {}))[0]._id;
+  expect(isPresenceRequired(await as(ana).mutation(api.passkeys.remove, { id }))).toBe(true);
+  const { grant } = await confirm(t, as(ana), mine, "remove_passkey", id);
+  expect(await as(ana).mutation(api.passkeys.remove, { id, grant })).toMatchObject({ removed: true });
+  expect((await notices(t)).map((n: any) => n.message)).toContain("Touch ID removed: Mine");
 });
 
 test("enrollment from a page that is not the web's origin is refused", async () => {
@@ -214,7 +180,7 @@ test("enrollment from a page that is not the web's origin is refused", async () 
 test("the local dev origins take no ceremony on a deployment that has not opted in", async () => {
   const { t, as, ana, acme } = await seed();
   const auth = await softAuthenticator();
-  await enrollTrusted(t, as(ana), auth);
+  await enroll(as(ana), auth);
   const live = await askFirstSecret(t, as, ana, acme);
   for (const origin of ["https://local.codecast.sh", "http://localhost:3200"]) {
     expect((await as(ana).action(api.passkeys.presenceBegin, { action: "reveal", target: live, origin })).error).toMatch(/runs on https:\/\/codecast.sh only/);
@@ -242,7 +208,6 @@ test("a dev deployment that opts in takes the local origins", async () => {
     const begun = await as(ana).action(api.passkeys.registrationBegin, { origin });
     expect(begun.options.rp.id).toBe("localhost");
     await as(ana).action(api.passkeys.registrationFinish, { challenge_id: begun.challenge_id, response: await auth.register(begun.options, origin), name: "Dev" });
-    await dayLater(t);
     const live = await askFirstSecret(t, as, ana, acme);
     const asked = await as(ana).action(api.passkeys.presenceBegin, { action: "reveal", target: live, origin });
     expect((await t.action(api.passkeys.presenceFinish, { challenge_id: asked.challenge_id, response: await auth.assert(asked.options, origin) })).granted).toBe(true);
@@ -255,7 +220,7 @@ test("a dev deployment that opts in takes the local origins", async () => {
 test("an assertion grants exactly one action on one target, once", async () => {
   const { t, as, ana, acme } = await seed();
   const auth = await softAuthenticator();
-  await enrollTrusted(t, as(ana), auth);
+  await enroll(as(ana), auth);
   const live = await askFirstSecret(t, as, ana, acme);
   const other = await askFirstSecret(t, as, ana, acme, "stripe-other");
 
@@ -289,7 +254,7 @@ test("an enrollment's options name the account by id, never its email", async ()
 test("a replayed assertion is refused, on its own challenge and on a new one", async () => {
   const { t, as, ana, acme } = await seed();
   const auth = await softAuthenticator();
-  await enrollTrusted(t, as(ana), auth);
+  await enroll(as(ana), auth);
   const live = await askFirstSecret(t, as, ana, acme);
   const { begun, response } = await confirm(t, as(ana), auth, "reveal", live);
   expect((await t.action(api.passkeys.presenceFinish, { challenge_id: begun.challenge_id, response })).error).toMatch(/already used/);
@@ -301,7 +266,7 @@ test("a replayed assertion is refused, on its own challenge and on a new one", a
 test("an expired challenge and an expired grant are refused", async () => {
   const { t, as, ana, acme } = await seed();
   const auth = await softAuthenticator();
-  await enrollTrusted(t, as(ana), auth);
+  await enroll(as(ana), auth);
   const live = await askFirstSecret(t, as, ana, acme);
   const past = (id: string) => t.run((ctx: any) => ctx.db.patch(id, { expires_at: Date.now() - 1 }));
 
@@ -324,7 +289,7 @@ test("an expired challenge and an expired grant are refused", async () => {
 test("a signature count that goes backwards is refused", async () => {
   const { t, as, ana, acme } = await seed();
   const auth = await softAuthenticator();
-  await enrollTrusted(t, as(ana), auth);
+  await enroll(as(ana), auth);
   const live = await askFirstSecret(t, as, ana, acme);
   expect((await confirm(t, as(ana), auth, "reveal", live)).finished.granted).toBe(true);
   // A copy of the key still at its first count signs the same count again.
@@ -340,7 +305,6 @@ test("another person's passkey does not answer the asker's challenge", async () 
   const bens = await softAuthenticator();
   await enroll(as(ana), anas);
   await enroll(as(ben), bens);
-  await dayLater(t);
   const live = await askFirstSecret(t, as, ana, acme);
   const begun = await as(ana).action(api.passkeys.presenceBegin, { action: "reveal", target: live, origin: ORIGIN });
   const response = await bens.assert(begun.options, ORIGIN);
@@ -362,7 +326,7 @@ test("with no passkey, a presence challenge asks for enrollment", async () => {
 test("reveal of an Ask first secret takes a grant; an ordinary secret's does not", async () => {
   const { t, as, ana, acme } = await seed();
   const auth = await softAuthenticator();
-  await enrollTrusted(t, as(ana), auth);
+  await enroll(as(ana), auth);
   await as(ana).action(api.secrets.create, { name: "plain", kind: "key", payload: { value: "plain-value-123456" }, team_id: acme });
   expect(await as(ana).action(api.secrets.reveal, { ref: "plain" })).toEqual({ payload: { value: "plain-value-123456" } });
   const live = await askFirstSecret(t, as, ana, acme);
@@ -376,7 +340,7 @@ test("reveal of an Ask first secret takes a grant; an ordinary secret's does not
 test("Ask first off takes a grant on the web and through the dispatch rail; on takes none", async () => {
   const { t, as, ana, acme } = await seed();
   const auth = await softAuthenticator();
-  await enrollTrusted(t, as(ana), auth);
+  await enroll(as(ana), auth);
   const live = await askFirstSecret(t, as, ana, acme);
   expect(isPresenceRequired(await as(ana).mutation(api.secrets.setAskFirst, { ref: live, ask_first: false }))).toBe(true);
   await expect(as(ana).mutation(api.dispatch.dispatch, { action: "setSecretAskFirst", args: [live, false] })).rejects.toThrow(/presence_required/);
@@ -392,7 +356,7 @@ test("Ask first off takes a grant on the web and through the dispatch rail; on t
 test("approving an Ask first read takes a grant for that decision; Deny takes none", async () => {
   const { t, as, ana, acme } = await seed();
   const auth = await softAuthenticator();
-  await enrollTrusted(t, as(ana), auth);
+  await enroll(as(ana), auth);
   await askFirstSecret(t, as, ana, acme);
   const read = () => t.action(api.secrets.cliRead, { api_token: ANA_TOKEN, refs: ["stripe-live"], conversation: "jx7ana1", purpose: "get" });
   const decisionId = async () => String((await t.run((ctx: any) => ctx.db.query("session_decisions").order("desc").first()))._id);
@@ -429,7 +393,7 @@ test("approving an Ask first read takes a grant for that decision; Deny takes no
 test("an Ask first decision cannot be edited by its asker, and only such a decision opens an approve challenge", async () => {
   const { t, as, ana, acme } = await seed();
   const auth = await softAuthenticator();
-  await enrollTrusted(t, as(ana), auth);
+  await enroll(as(ana), auth);
   await askFirstSecret(t, as, ana, acme);
   await t.action(api.secrets.cliRead, { api_token: ANA_TOKEN, refs: ["stripe-live"], conversation: "jx7ana1", purpose: "get" });
   const row = await t.run((ctx: any) => ctx.db.query("session_decisions").order("desc").first());
@@ -441,17 +405,16 @@ test("an Ask first decision cannot be edited by its asker, and only such a decis
   expect((await as(ana).action(api.passkeys.presenceBegin, { action: "approve", target: String(plain.id), origin: ORIGIN })).error).toMatch(/Only approving an Ask first read/);
 });
 
-test("removing a passkey takes a grant for it unless it went in with none; renaming does not", async () => {
+test("removing a passkey takes a grant for it; renaming does not", async () => {
   const { t, as, ana, ben } = await seed();
   const first = await softAuthenticator();
-  await enrollTrusted(t, as(ana), first);
+  await enroll(as(ana), first);
   const { grant: add } = await confirm(t, as(ana), first, "add_passkey");
   const second = await softAuthenticator();
   await enroll(as(ana), second, "YubiKey", add);
   const id = (await as(ana).query(api.passkeys.list, {})).find((p: any) => p.name === "YubiKey")._id;
   expect(await as(ana).mutation(api.passkeys.rename, { id, name: "Work key" })).toMatchObject({ name: "Work key" });
   expect((await as(ben).mutation(api.passkeys.rename, { id, name: "mine" })).error).toMatch(/No such passkey/);
-  // A vouched-for passkey needs Touch ID to go.
   expect(isPresenceRequired(await as(ana).mutation(api.passkeys.remove, { id }))).toBe(true);
   const { begun, grant } = await confirm(t, as(ana), first, "remove_passkey", id);
   expect(begun.options.allowCredentials.map((c: any) => c.id).sort()).toEqual([first.credentialId, second.credentialId].sort());

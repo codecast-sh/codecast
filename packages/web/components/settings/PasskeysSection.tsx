@@ -1,26 +1,24 @@
 // Settings > Accounts > Touch ID: the person's passkeys (convex/passkeys.ts),
-// each with when it was added and last used, or how long a new one waits out
-// its probation. A name renames in place; Remove and a second Add take Touch
-// ID (lib/passkeyPresence), except Remove of one that went in with no grant
-// (removableUnasked), which is one press. One they did not add is the alarm
-// the enrollment email, the phone notice and the banner point here for.
+// each with when it was added and last used. A name renames in place; Remove
+// and a second Add take Touch ID (lib/passkeyPresence). One they did not add
+// is the alarm the enrollment email and the phone notice point here for.
 import { useState } from "react";
 import { useConvex, useMutation } from "convex/react";
 import { Fingerprint, Loader2, Lock, Plus, Trash2 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { inProbation, type PasskeyMeta } from "@codecast/shared/contracts/secrets";
+import type { PasskeyMeta } from "@codecast/shared/contracts/secrets";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { PERSON_ONLY, useAgentDrivenTab } from "../../lib/agentTabGuard";
 import { addPasskey } from "../../lib/passkeyPresence";
 import { VAULT_PRIMARY } from "../../lib/secretLook";
-import { probationHours, useRemovePasskey } from "../../hooks/useRemovePasskey";
+import { useRemovePasskey } from "../../hooks/useRemovePasskey";
 import { Button } from "../ui/button";
 import { SettingsSection } from "./ui";
 
-function PasskeyRow({ passkey, count }: { passkey: PasskeyMeta; count: number }) {
+function PasskeyRow({ passkey }: { passkey: PasskeyMeta }) {
   const rename = useMutation(api.passkeys.rename);
-  const { drop, removing, error: removeError, unasked } = useRemovePasskey(passkey, count);
+  const { drop, removing, error: removeError } = useRemovePasskey(passkey);
   const [name, setName] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
   const error = removeError ?? renameError;
@@ -57,13 +55,7 @@ function PasskeyRow({ passkey, count }: { passkey: PasskeyMeta; count: number })
           )}
           <div className="mt-0.5 flex gap-3 text-xs text-sol-text-muted">
             <span title={formatFullTimestamp(passkey.created_at)}>added {formatRelativeTime(passkey.created_at)}</span>
-            {inProbation(passkey) ? (
-              <span className="text-sol-orange" title={formatFullTimestamp(passkey.probation_until!)} data-passkey-probation>
-                confirms in {probationHours(passkey)}h
-              </span>
-            ) : (
-              <span title={passkey.last_used_at ? formatFullTimestamp(passkey.last_used_at) : undefined}>{passkey.last_used_at ? `used ${formatRelativeTime(passkey.last_used_at)}` : "never used"}</span>
-            )}
+            <span title={passkey.last_used_at ? formatFullTimestamp(passkey.last_used_at) : undefined}>{passkey.last_used_at ? `used ${formatRelativeTime(passkey.last_used_at)}` : "never used"}</span>
           </div>
           {error && <div className="mt-0.5 text-xs text-sol-red">{error}</div>}
         </div>
@@ -72,8 +64,8 @@ function PasskeyRow({ passkey, count }: { passkey: PasskeyMeta; count: number })
         type="button"
         onClick={() => void drop()}
         disabled={removing}
-        title={unasked ? "Remove" : "Remove with Touch ID"}
-        aria-label={unasked ? "Remove" : "Remove with Touch ID"}
+        title="Remove with Touch ID"
+        aria-label="Remove with Touch ID"
         className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sol-text-dim transition-colors hover:bg-sol-red/10 hover:text-sol-red disabled:opacity-50"
         data-passkey-remove
       >
@@ -130,7 +122,7 @@ export function PasskeysSection() {
           </button>
         </div>
       ) : (
-        passkeys.map((p) => <PasskeyRow key={p._id} passkey={p} count={passkeys.length} />)
+        passkeys.map((p) => <PasskeyRow key={p._id} passkey={p} />)
       )}
     </SettingsSection>
   );

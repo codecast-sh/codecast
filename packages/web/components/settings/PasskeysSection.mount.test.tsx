@@ -46,7 +46,6 @@ const realSonner = await import("sonner");
 mock.module("sonner", () => ({ ...realSonner, toast: Object.assign(() => "", { error: () => {}, success: () => {}, dismiss: () => {} }) }));
 
 const { PasskeysSection } = await import("./PasskeysSection");
-const { PasskeyProbationBanner } = await import("../PasskeyProbationBanner");
 const { createRoot } = await import("react-dom/client");
 
 afterAll(() => {
@@ -95,33 +94,6 @@ describe("PasskeysSection", () => {
     expect(calls[2].args).toEqual({ id: "pk-1", grant: "ch-1.g" });
     expect(ceremonies).toEqual(["get"]);
     await m.unmount();
-  });
-
-  test("a passkey in probation says when it confirms, and Remove is one press with no Touch ID", async () => {
-    passkeys = [{ _id: "pk-2", name: "Rogue", created_at: Date.now() - 60_000, probation_until: Date.now() + 23.5 * 3_600_000 }];
-    const m = await mount();
-    const row = m.container.querySelector("[data-passkey='pk-2']")!;
-    expect(row.querySelector("[data-passkey-probation]")!.textContent).toBe("confirms in 24h");
-    expect((row.querySelector("[data-passkey-remove]") as HTMLElement).title).toBe("Remove");
-    await click(row.querySelector("[data-passkey-remove]"));
-    expect(calls.map((c) => c.name)).toEqual(["passkeys:remove"]);
-    expect(ceremonies).toEqual([]);
-    await m.unmount();
-  });
-
-  test("a passkey in probation is on a banner with Remove, which has no dismiss; none in probation, no banner", async () => {
-    passkeys = [{ _id: "pk-3", name: "Chrome on Mac", created_at: Date.now() - 60_000, probation_until: Date.now() + 3_600_000 }];
-    const m = await mount(<PasskeyProbationBanner />);
-    const banner = m.container.querySelector("[data-passkey-probation-banner]")!;
-    expect(banner.textContent).toContain("New Touch ID Chrome on Mac");
-    expect(banner.querySelector("[aria-label='Dismiss']")).toBeNull();
-    await click(banner.querySelector("[data-passkey-probation-remove]"));
-    expect(calls).toEqual([{ name: "passkeys:remove", args: { id: "pk-3", grant: undefined } }]);
-    await m.unmount();
-    passkeys = [{ _id: "pk-1", name: "Chrome on Mac", created_at: Date.now() - 3 * 86_400_000 }];
-    const none = await mount(<PasskeyProbationBanner />);
-    expect(none.container.innerHTML).toBe("");
-    await none.unmount();
   });
 
   test("with none, Add sets up the first passkey with no Touch ID to assert", async () => {
