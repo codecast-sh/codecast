@@ -29,6 +29,7 @@ import { WATCH_KINDS_BY_PROVIDER } from "@codecast/shared/contracts/ingest";
 import type { OpsSource } from "./opsTypes";
 import "./ops.css";
 import "./opsHome.css";
+import "./opsLayout.css";
 
 type CountKey = OpsTab | "home";
 type TabCount = { n: number; more?: boolean; alert?: boolean; words?: string; /** Not counted by the server yet: a floor, drawn dimmed. */ provisional?: boolean };

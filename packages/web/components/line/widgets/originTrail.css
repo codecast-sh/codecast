@@ -1,12 +1,12 @@
-/* Where a thing on the line came from (OriginTrail): the steps from the raw
-   thing to now, each a link, then the raw thing opened beneath. */
+/* Where a thing on the line came from (OriginTrail): the stages from the raw
+   thing to now, each a tab, and the chosen stage opened beneath. */
 .ot { display: flex; flex-direction: column; gap: var(--lw-s2); }
 .ot-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; list-style: none; margin: 0; padding: 0; }
 .ot-step { display: inline-flex; align-items: center; gap: 2px; }
 .ot-arrow { color: var(--lw-ink-3); font-size: var(--lw-fs-xs); padding: 0 3px; }
 .ot-btn {
-  display: inline-flex; align-items: baseline; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--lw-rule); border-radius: 999px;
-  background: var(--lw-card); color: var(--lw-ink-2); font-size: var(--lw-fs-xs); font-weight: 600; text-decoration: none; line-height: 24px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--lw-rule); border-radius: 999px;
+  background: var(--lw-card); color: var(--lw-ink-2); font-size: var(--lw-fs-xs); font-weight: 600; text-decoration: none; line-height: 1; cursor: pointer;
   transition: border-color var(--lw-fast), color var(--lw-fast);
 }
 .ot-btn:hover:not([data-static]) { border-color: var(--lw-ink-3); color: var(--lw-ink); }
@@ -15,9 +15,6 @@
 .ot-label { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ot-step[data-tone="raw"] .ot-btn { background: var(--lw-paper-2); color: var(--lw-ink); }
 .ot-step[data-tone="ask"] .ot-btn { background: var(--lw-person-soft); color: var(--lw-person-deep); border-color: color-mix(in srgb, var(--lw-person) 35%, transparent); }
-.ot-fold { margin-left: 8px; border: 0; background: none; padding: 0; font: inherit; font-size: var(--lw-fs-xs); color: var(--lw-person); cursor: pointer; }
-.ot-fold:hover { text-decoration: underline; }
-.ot-raw { min-width: 0; }
 /* Which finding the strip shows, of how many, with a step either way. */
 .ot-of { gap: 2px; margin-left: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
 .ot-count { font-variant-numeric: tabular-nums; padding: 0 2px; }
@@ -27,3 +24,21 @@
 .ot-nav svg { width: 14px; height: 14px; }
 .ot-all { margin-left: 6px; color: var(--lw-person); text-decoration: none; }
 .ot-all:hover { text-decoration: underline; }
+.ot-step button.ot-btn { font: inherit; font-size: var(--lw-fs-xs); font-weight: 600; }
+.ot-btn[aria-selected="true"] { border-color: var(--lw-person); color: var(--lw-ink); box-shadow: 0 0 0 1px var(--lw-person); }
+.ot-btn:focus-visible { outline: 2px solid var(--lw-person); outline-offset: 2px; }
+/* The opened stage: a bounded pane, so flipping stages never moves the page under the strip. */
+.ot-panel { border: 1px solid var(--lw-rule); border-radius: 10px; background: var(--lw-card); min-width: 0; overflow: hidden; }
+.ot-panel-head { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.ot-panel-title { display: inline-flex; align-items: baseline; gap: 6px; margin-left: 6px; color: var(--lw-ink); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ot-panel-body { padding: 12px 14px; max-height: min(60vh, 560px); overflow-y: auto; overscroll-behavior: contain; }
+.ot-panel-body > li { list-style: none; }
+.ot-all { display: inline-flex; align-items: center; gap: 2px; }
+.ot-all svg { width: 12px; height: 12px; }
+.ot-quiet { color: var(--lw-ink-3); font-size: var(--lw-fs-xs); }
+.ot-problem-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; }
+.ot-problem-title { color: var(--lw-ink); font-weight: 600; font-size: var(--lw-fs-md); }
+.ot-chip { padding: 1px 7px; border: 1px solid var(--lw-rule); border-radius: 999px; font-size: var(--lw-fs-2xs); color: var(--lw-ink-2); }
+.ot-problem-body { margin-top: 8px; }
+.ot-run { display: flex; flex-direction: column; gap: 12px; }
+.ot-run-outcome { font-size: var(--lw-fs-md); }

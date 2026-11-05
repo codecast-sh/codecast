@@ -82,6 +82,21 @@ describe("workflow/runner (a station with a cap on runs at once)", () => {
     expect(evalStarted).toBeGreaterThan(firstAsk);
   });
 
+  // At 07:08 UTC Nov 5 Eval held 6 runs and Prove 8 under caps of 4: every run over the cap had been resumed straight
+  // into its station (cast workflow resume, a queued resume) and held no place.
+  test("a run resumed at a capped station asks for its place before the station starts", async () => {
+    fs.mkdirSync(path.join(tmpDir, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, ".codecast/line.toml"), "[line.caps.stations]\neval = 2\n");
+    answers = [{ admitted: false, inside: 2, cap: 2 }, { admitted: true, inside: 2, cap: 2 }];
+    const resume = { current_node_id: "eval", status: "running", node_statuses: [{ node_id: "prepare", status: "completed", completed_at: 1 }] } as any;
+    await runWorkflow(graph, { ...options(), runId: `run-resumed-${Date.now()}`, resume });
+    const asks = calls.filter((c) => c.route === "/cli/workflow-runs/admit");
+    expect(asks.map((c) => c.body.node_id)).toEqual(["eval", "eval"]);
+    const firstAsk = calls.findIndex((c) => c.route === "/cli/workflow-runs/admit");
+    const evalStarted = calls.findIndex((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "eval" && c.body.node_status === "running");
+    expect(evalStarted).toBeGreaterThan(firstAsk);
+  });
+
   test("a profile with no station caps asks for no place", async () => {
     await runWorkflow(graph, options());
     expect(calls.some((c) => c.route === "/cli/workflow-runs/admit")).toBe(false);
