@@ -298,3 +298,20 @@
 .lwg-elabel[data-owed] text { fill: var(--lw-bad); }
 /* A dot's one count holds the rest (runs, loops) on hover. */
 .lwg-ran[data-lwg-count] { pointer-events: auto; cursor: default; }
+
+/* Drawn live (the Flows stage): the runs standing at each step badge it; its history (the counts under it, its ways
+   out, the edges' funnel) shows on hover and on the open step, so the graph reads as where work is now. */
+.lwg-live rect { fill: color-mix(in srgb, var(--lw-live) 16%, var(--lw-card)); stroke: color-mix(in srgb, var(--lw-live) 55%, transparent); stroke-width: 1; }
+.lwg-live circle { fill: var(--lw-live); }
+.lwg-live text { fill: var(--lw-ink); font: 700 11px var(--lw-ui); font-variant-numeric: tabular-nums; }
+.lwg-live[data-stalled] rect { fill: color-mix(in srgb, var(--lw-bad) 18%, var(--lw-card)); stroke: color-mix(in srgb, var(--lw-bad) 60%, transparent); }
+.lwg-live[data-stalled] circle { fill: var(--lw-bad); }
+.lwg-canvas[data-live] .lwg-exits,
+.lwg-canvas[data-live] .lwg-ecount { opacity: 0; transition: opacity var(--lw-fast); }
+.lwg-canvas[data-live] .lwg-node:hover .lwg-exits,
+.lwg-canvas[data-live] .lwg-node[data-selected] .lwg-exits,
+.lwg-canvas[data-live] .lwg-node:focus-visible .lwg-exits { opacity: 1; }
+.lwg-canvas[data-live] .lwg-node:not([data-live]):not([data-waiting]) .lwg-s,
+.lwg-canvas[data-live] .lwg-node:not([data-live]):not([data-waiting]) .lwg-ran { opacity: .6; }
+.lwg-canvas[data-live] .lwg-node[data-live="stalled"] .lwg-shape { stroke: color-mix(in srgb, var(--lw-bad) 65%, transparent); }
+.lwg-canvas[data-live] .lwg-lane-sub { display: none; }

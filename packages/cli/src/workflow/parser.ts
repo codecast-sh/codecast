@@ -225,6 +225,7 @@ class Parser {
           condition: attrs.condition as string | undefined,
           weight: attrs.weight as number | undefined,
           fidelity: attrs.fidelity as string | undefined,
+          ...(attrs.free_visit ? { free_visit: String(attrs.free_visit) } : {}),
         });
       }
     }
@@ -297,6 +298,7 @@ class Parser {
     if (attrs.temperature !== undefined) node.temperature = attrs.temperature as number;
     if (attrs.timeout !== undefined) node.timeout = Number(attrs.timeout);
     if (attrs.max_visits !== undefined) node.max_visits = attrs.max_visits as number;
+    if (attrs.max_free_visits !== undefined) node.max_free_visits = Number(attrs.max_free_visits);
     if (attrs.max_retries !== undefined) node.max_retries = attrs.max_retries as number;
     if (attrs.retry_target) node.retry_target = attrs.retry_target as string;
     if (attrs.goal_gate) node.goal_gate = attrs.goal_gate as boolean;
