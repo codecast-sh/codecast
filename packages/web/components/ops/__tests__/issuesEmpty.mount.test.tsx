@@ -26,7 +26,7 @@ const restoreGlobals = replaceGlobals({
 
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
-const { IssuesEmpty } = await import("../IssuesTab");
+const { IssuesEmpty } = await import("../issueEmpty");
 type Props = Parameters<typeof IssuesEmpty>[0];
 
 afterAll(() => {

@@ -267,7 +267,7 @@ describe("the map over the Union fixture", () => {
     expect(owns(off, "person:fixture-user-me")).toBe(1);
     expect(owns(on, "person:fixture-user-me")).toBe(6);
     // The reporting chart's ghosts ride the column: a proposed role is a stub card, a move marks its card and names where it was.
-    const { ghostsFor } = require("./orgLayout") as typeof import("./orgLayout");
+    const { ghostsFor } = require("./orgGhostsFor") as typeof import("./orgGhostsFor");
     const changes: OrgProposalChange[] = [
       { _id: "r-new", proposal_id: "x", seq: 1, status: "proposed", rationale: "", evidence: [], change: { kind: "role", name: "Head of Brokers", handle: "brokers", scope: { projects: [], plans: [] }, reports_to: "@head-of-people" } as any },
       { _id: "r-move", proposal_id: "x", seq: 2, status: "proposed", rationale: "", evidence: [], change: { kind: "move", handle: "agent-quality", reports_to: "@head-of-people" } as any },

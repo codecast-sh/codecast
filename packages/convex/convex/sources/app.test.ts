@@ -5,6 +5,7 @@ import { makeFakeDb, schemaIndexes } from "../testDb";
 import * as ingest from "../ingest";
 import * as tokenConnectors from "../tokenConnectors";
 import * as app from "./app";
+import { appHttp } from "../lib/appHttp";
 import { encryptConnectionSecret } from "../tokenConnectors";
 import { hashToken } from "../apiTokens";
 import { publishedKeys } from "../lib/codecastSigning";
@@ -279,7 +280,7 @@ describe("read", () => {
     expect(out).toMatchObject({ ok: false, error: "the response is over 256 KB" });
     expect(w.db._tables.app_calls[0]).toMatchObject({ status: "error", bytes: 256 * 1024 });
 
-    const timeout = await app.appHttp(
+    const timeout = await appHttp(
       async (_u, init) => {
         expect(init.signal).toBeTruthy();
         throw Object.assign(new Error("timed out"), { name: "TimeoutError" });

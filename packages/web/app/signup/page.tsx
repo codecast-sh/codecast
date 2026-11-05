@@ -9,6 +9,7 @@ import { EmailVerificationForm } from "../../components/EmailVerificationForm";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
 import { useEmailAuth } from "../../hooks/useEmailAuth";
+import { Button } from "../../components/ui/button";
 
 function SignUpForm() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -129,13 +130,15 @@ function SignUpForm() {
             <p className="mt-4 text-sm text-red-400 text-center">{error}</p>
           )}
 
-            <button
+            <Button
+              variant="amber"
+              size="lg"
               type="submit"
               disabled={loading}
-              className="w-full mt-6 py-3 px-4 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg"
+              className="mt-6 w-full"
             >
               {loading ? "Signing up..." : "Sign Up"}
-            </button>
+            </Button>
           </form>
 
           <p className="mt-6 text-center text-sm text-sol-text-muted">
