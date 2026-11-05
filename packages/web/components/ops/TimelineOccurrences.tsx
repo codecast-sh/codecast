@@ -25,11 +25,11 @@ import { EntityIdPill } from "../EntityIdPill";
 import { useInboxStore } from "../../store/inboxStore";
 import type { OpsGroup, OpsSample, OpsSource } from "./opsTypes";
 
-/** A row's time: the full stamp in the column, a short age ("6m") on a phone row where the message takes the width. */
-export function RowTime({ at, span, now }: { at: number; span: number; now: number }) {
+/** A row's time: the full stamp in the column (with its date on a dated window), a short age ("6m") on a phone row where the message takes the width. */
+export function RowTime({ at, span, now, dated, title }: { at: number; span: number; now: number; dated?: boolean; title?: string }) {
   return (
-    <span className="ops-num ops-dim otl-time" title={fmtStamp(at)}>
-      <span className="otl-time-full">{fmtTime(at, span)}</span>
+    <span className="ops-num ops-dim otl-time" title={title ?? fmtStamp(at)}>
+      <span className="otl-time-full">{fmtTime(at, span, dated)}</span>
       <span className="otl-time-age">{relTimeShort(at, now)}</span>
     </span>
   );
@@ -43,6 +43,8 @@ export function OccurrenceRows(p: {
   expanded?: ReadonlySet<string>;
   toggleRun?: (key: string) => void;
   span: number;
+  /** The window needs dates on its times (windowDated). */
+  dated?: boolean;
   groupById: Map<string, OpsGroup>;
   sourceById: Map<string, OpsSource>;
   open: string | null;
@@ -97,7 +99,7 @@ export function OccurrenceRows(p: {
         onClick={(ev) => { if (!(ev.target as Element).closest("a")) p.setOpen(on ? null : x._id); }}
         onKeyDown={(ev) => { if (ev.target === ev.currentTarget && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); p.setOpen(on ? null : x._id); } }}
       >
-        <RowTime at={x.at} span={p.span} now={now} />
+        <RowTime at={x.at} span={p.span} now={now} dated={p.dated} />
         <span className="otl-src">{s && <ProviderIcon provider={s.provider} />}<span className="truncate">{s?.name ?? "-"}</span></span>
         <span className="otl-what" title={type ? `${level ?? "no level"} · ${type.replace(/_/g, " ")}` : undefined}>{level && <span className="otl-level" data-level={level}>{level}</span>}{x.replay_id && <Film className="w-3 h-3 ops-dim" aria-label="Has a replay" />}</span>
         <span className="otl-title truncate" title={x.message ?? g?.title}><SampleMessage sample={x} group={g} /></span>
@@ -108,7 +110,7 @@ export function OccurrenceRows(p: {
   };
   const items = p.items ?? p.samples.map((x) => ({ kind: "one" as const, sample: x }));
   return (
-    <section className="otl-rows" aria-label="Occurrences" data-span={p.span > 2 * 86_400_000 ? "long" : undefined} data-view="occurrences" data-scoped={p.source ? "true" : undefined}>
+    <section className="otl-rows" aria-label="Occurrences" data-span={p.span > 2 * 86_400_000 || p.dated ? "long" : undefined} data-view="occurrences" data-scoped={p.source ? "true" : undefined}>
       <div className="otl-row otl-orow otl-row-head" aria-hidden>
         <span>Time</span><span>Source</span><span>Level</span><span>Message</span><span>Issue</span><span>Where</span>
       </div>
@@ -117,7 +119,7 @@ export function OccurrenceRows(p: {
         const open = !!p.expanded?.has(it.key);
         return (
           <Fragment key={it.key}>
-            <RunRow run={it} span={p.span} open={open} cursor={p.cursor === it.samples[0]._id} group={p.groupById.get(it.samples[0].group_id)} source={p.sourceById.get(it.samples[0].source_id)} onToggle={() => p.toggleRun?.(it.key)} />
+            <RunRow run={it} span={p.span} dated={p.dated} now={now} open={open} cursor={p.cursor === it.samples[0]._id} group={p.groupById.get(it.samples[0].group_id)} source={p.sourceById.get(it.samples[0].source_id)} onToggle={() => p.toggleRun?.(it.key)} />
             {open && it.samples.map((x) => sampleRow(x, true))}
           </Fragment>
         );
@@ -133,10 +135,13 @@ export function OccurrenceRows(p: {
 }
 
 /** A run of one issue's occurrences folded into one line: its newest message, how many, and the span they cover; pressing it lists them. */
-function RunRow({ run, span, open, cursor, group: g, source: s, onToggle }: { run: Extract<OccurrenceItem<OpsSample>, { kind: "run" }>; span: number; open: boolean; cursor: boolean; group?: OpsGroup; source?: OpsSource; onToggle: () => void }) {
+function RunRow({ run, span, dated, now, open, cursor, group: g, source: s, onToggle }: { run: Extract<OccurrenceItem<OpsSample>, { kind: "run" }>; span: number; dated?: boolean; now: number; open: boolean; cursor: boolean; group?: OpsGroup; source?: OpsSource; onToggle: () => void }) {
   const x = run.samples[0];
   const { level, type } = sampleLevel(x, g);
   const n = run.samples.length;
+  // The run's span on hover, one moment when its ends are the same second; its Where is its newest occurrence's, as a single row's.
+  const spanTitle = Math.floor(run.from / 1000) === Math.floor(run.to / 1000) ? fmtStamp(run.to) : `${fmtStamp(run.from)} to ${fmtStamp(run.to)}`;
+  const where = [shortUrl(x.url), sampleWho(x), x.release ? x.release.slice(0, 12) : null].filter(Boolean).join(" · ");
   return (
     <div
       className="otl-row otl-orow otl-run"
@@ -150,7 +155,7 @@ function RunRow({ run, span, open, cursor, group: g, source: s, onToggle }: { ru
       onClick={(ev) => { if (!(ev.target as Element).closest("a")) onToggle(); }}
       onKeyDown={(ev) => { if (ev.target === ev.currentTarget && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); onToggle(); } }}
     >
-      <span className="ops-num ops-dim otl-time" title={`${fmtStamp(run.from)} to ${fmtStamp(run.to)}`}>{fmtTime(run.to, span)}</span>
+      <RowTime at={run.to} span={span} now={now} dated={dated} title={spanTitle} />
       <span className="otl-src">{s && <ProviderIcon provider={s.provider} />}<span className="truncate">{s?.name ?? "-"}</span></span>
       <span className="otl-what" title={type ? `${level ?? "no level"} · ${type.replace(/_/g, " ")}` : undefined}>{level && <span className="otl-level" data-level={level}>{level}</span>}</span>
       <span className="otl-title otl-run-title" title={x.message ?? g?.title}>
@@ -159,7 +164,7 @@ function RunRow({ run, span, open, cursor, group: g, source: s, onToggle }: { ru
         <span className="truncate"><SampleMessage sample={x} group={g} /></span>
       </span>
       <span className="otl-id ops-mono">{g ? <Link href={opsHref.issue(g.short_id)}>{g.short_id}</Link> : <span className="ops-dim">-</span>}</span>
-      <span className="otl-where ops-dim ops-num truncate" title={`${fmtStamp(run.from)} to ${fmtStamp(run.to)}`}>{fmtTime(run.from, run.to - run.from)} to {fmtTime(run.to, run.to - run.from)}</span>
+      <span className="otl-where ops-dim truncate" title={where}>{where}</span>
     </div>
   );
 }

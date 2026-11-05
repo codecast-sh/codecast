@@ -10,7 +10,7 @@ import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { fixPrompt, type FixFacts } from "./opsModel";
 import { issueFixLedger, folderName, seededWith } from "./issueFix";
-import { FIX_STAGE_LABEL, FIX_STAGE_SHORT, FLAP_DAYS, FLAP_MIN, escalation, escalationFactor, escalationWords, issueState, rateWords, knownRelease, regressedAt, resolverOf, taskMatchesIssue, taskStateWord, type FixStage, type FixTask, type IssueLane, type IssueState } from "./issuesModel";
+import { FIX_STAGE_LABEL, FIX_STAGE_SHORT, FLAP_DAYS, FLAP_MIN, escalation, escalationFactor, escalationWords, issueState, rateUnit, rateWords, knownRelease, regressedAt, resolverOf, taskMatchesIssue, taskStateWord, type FixStage, type FixTask, type IssueLane, type IssueState } from "./issuesModel";
 import { fixFolderChoices, startOpsFixSession } from "./startFix";
 import type { OpsGroup, OpsSource } from "./opsTypes";
 
@@ -42,11 +42,12 @@ export function IssueStatePill({ group, release, now, flaps, row, stage, resolve
   resolvedBy?: string;
 }) {
   const state = issueState(group);
-  // A monitor that recovered on its own between flips is still a flapper: resolved is where it rests, not that it settled.
-  if (flaps && flaps >= FLAP_MIN && state !== "ignored") {
+  // A flapper failing now reads flapping; one resting resolved or passing between flips reads its own state, its flips a second mark, so a Resolved list says resolved.
+  const flapper = !!flaps && flaps >= FLAP_MIN && state !== "ignored";
+  if (flapper && (state === "open" || state === "regressed")) {
     const ink = "var(--sol-yellow)";
     return (
-      <span className="ops-pill iss-state-pill" data-issue-state="flapping" data-rel="true" style={{ color: ink, background: `color-mix(in srgb, ${ink} 14%, transparent)` }} title={`failed ${flaps} times in ${FLAP_DAYS} days; ${state === "ok" || state === "resolved" ? "passing now" : "failing now"}`}>
+      <span className="ops-pill iss-state-pill" data-issue-state="flapping" data-rel="true" style={{ color: ink, background: `color-mix(in srgb, ${ink} 14%, transparent)` }} title={`failed ${flaps} times in ${FLAP_DAYS} days; failing now`}>
         <span className="iss-state-word">flapping </span><span className="ops-num iss-state-rel">{flaps}×</span>
       </span>
     );
@@ -59,7 +60,7 @@ export function IssueStatePill({ group, release, now, flaps, row, stage, resolve
   const age = back ?? (settled ? group.resolved_at ?? null : null);
   const rel = shownRelease ? <span className="ops-mono iss-state-rel">{shownRelease}</span> : age && now ? <span className="ops-num iss-state-rel">{relTimeShort(age, now)}</span> : null;
   // A plain open row says nothing: the list is open issues, and regressed, flapping and settled rows stand out against the blank.
-  if (row && state === "open" && !rel) return null;
+  if (row && state === "open" && !rel && !flapper) return null;
   const title = back
     ? `regressed ${new Date(back).toLocaleString()}${release ? ` in ${release}` : ""}`
     : settled && group.resolved_at
@@ -75,6 +76,7 @@ export function IssueStatePill({ group, release, now, flaps, row, stage, resolve
     >
       <span className="iss-state-word">{settled ?? look.label}</span>
       {rel}
+      {flapper && <span className="ops-num iss-state-flaps" title={`flipped to failing ${flaps} times in ${FLAP_DAYS} days`}> · {flaps}×</span>}
     </span>
   );
 }
@@ -109,10 +111,11 @@ export function EscalationStrip({ group, now }: { group: OpsGroup; now: number }
   const e = escalation(group, now);
   if (!e.spiked) return null;
   if (e.settled) {
+    // Passed only once the rate is back near its usual; under the spike line but still well over usual, it is still elevated.
     return (
-      <span className="iss-escalation ops-num" data-settled="true" title={`peaked at ${e.peak.toLocaleString()} in the hour from ${new Date(e.peakAt).toLocaleString()}`}>
-        <span className="iss-lane" data-lane="settled">Spike passed</span>
-        <span className="ops-dim">peak {e.peak.toLocaleString()}/h {relTimeShort(e.peakAt, now)} ago · now {rateWords(e.perHourNow * 24)}, usually {rateWords(e.baseline)}</span>
+      <span className="iss-escalation ops-num" data-settled={e.back ? "true" : undefined} title={`peaked at ${e.peak.toLocaleString()} in the hour from ${new Date(e.peakAt).toLocaleString()}`}>
+        {e.back ? <span className="iss-lane" data-lane="settled">Spike passed</span> : <span className="iss-lane" data-lane="escalating"><Flame className="w-3 h-3" />Still elevated</span>}
+        <span className="ops-dim">peak {e.peak.toLocaleString()}/h {relTimeShort(e.peakAt, now)} ago · now {rateWords(e.perHourNow * 24, rateUnit(e.perHourNow * 24, e.baseline))}, usually {rateWords(e.baseline, rateUnit(e.perHourNow * 24, e.baseline))}</span>
       </span>
     );
   }
@@ -146,7 +149,7 @@ export function FixStageGlyph({ stage, word }: { stage: FixStage; word?: boolean
   const Icon = look.icon;
   if (word && stage === "none") return <span className="iss-fix" data-stage={stage} title={FIX_STAGE_LABEL[stage]}><span className="ops-dim">–</span></span>;
   return (
-    <span className="iss-fix" data-stage={stage} data-word={word ? "true" : undefined} style={{ color: look.ink }} title={FIX_STAGE_LABEL[stage]}>
+    <span className="iss-fix" data-stage={stage} data-word={word ? "true" : undefined} style={{ color: look.ink }} title={stage === "other" ? "Its task was filed for another issue" : FIX_STAGE_LABEL[stage]}>
       <Icon className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} role="img" aria-label={FIX_STAGE_LABEL[stage]} />
       {word && <span className="iss-fix-label" aria-hidden="true">{FIX_STAGE_SHORT[stage]}</span>}
     </span>

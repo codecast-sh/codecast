@@ -8,10 +8,13 @@ const POLLED = new Set(["posthog", "sentry", "app", "github"]);
 /** A vendor poll older than this means the numbers may be behind: the same line a source's own health reads as Poll late. */
 export const POLL_STALE_MS = POLL_LATE_MS;
 
+/** "Polled 2m ago", or "Polled just now" under a minute: the word the overview's last poll tile uses. */
+const polledAgo = (at: number, now: number) => (now - at < 60_000 ? "Polled just now" : `Polled ${relTimeShort(at, now)} ago`);
+
 /**
  * How fresh the area is, as one reading for the shell's header: offline (the
  * socket is down, so nothing new arrives), a feed failed, a polled source
- * behind (named, so the header can link to it), or live. Null with no source:
+ * behind (named, so the header can link to it), or up to date (with its last poll). Null with no source:
  * nothing is connected, so nothing is live. Pure, so it is tested alone.
  */
 export function freshness(opts: { connected: boolean; offlineSince: number | null; feedError: boolean; sources: readonly (Pick<OpsSource, "provider" | "status" | "last_poll_at" | "name"> & Partial<Pick<OpsSource, "_id">>)[]; now: number; /** Watches, for each source's own poll cadence (pollLateAfter): the same line its health reads as Poll late. */ watches?: readonly Pick<OpsWatch, "source_id" | "status" | "interval_ms">[]; /** The source the view is scoped to: the chip speaks for it alone, never for another source. */ scope?: string | null }): { stale: boolean; label: string; title: string; source: string | null } | null {
@@ -25,8 +28,9 @@ export function freshness(opts: { connected: boolean; offlineSince: number | nul
   const lateAfter = (s: (typeof polled)[number]) => (s._id ? pollLateAfter({ _id: s._id }, opts.watches) : POLL_STALE_MS);
   const behind = polled.filter((s) => now - s.last_poll_at! > lateAfter(s)).sort((a, b) => a.last_poll_at! - b.last_poll_at!)[0];
   // Inside the late source's own view its health line already names it: the chip says how late, without repeating the name.
-  if (behind && scoped) return { stale: true, label: `Polled ${relTimeShort(behind.last_poll_at!, now)} ago`, title: `${behind.name} last polled ${new Date(behind.last_poll_at!).toLocaleString()}`, source: null };
+  if (behind && scoped) return { stale: true, label: polledAgo(behind.last_poll_at!, now), title: `${behind.name} last polled ${new Date(behind.last_poll_at!).toLocaleString()}`, source: null };
   if (behind) return { stale: true, label: `Stale: ${behind.name} ${relTimeShort(behind.last_poll_at!, now)}`, title: `${behind.name} last polled ${new Date(behind.last_poll_at!).toLocaleString()}`, source: behind.name };
   const newest = polled.length ? Math.max(...polled.map((s) => s.last_poll_at!)) : null;
-  return { stale: false, label: "Live", title: newest !== null ? `Vendors last polled ${new Date(newest).toLocaleString()}` : "Pushed events arrive as they happen", source: null };
+  // The chip says how fresh, never "Live": that word is the Timeline's toggle that pins its window to now.
+  return { stale: false, label: newest !== null ? polledAgo(newest, now) : "Up to date", title: newest !== null ? `Vendors last polled ${new Date(newest).toLocaleString()}` : "Pushed events arrive as they happen", source: null };
 }

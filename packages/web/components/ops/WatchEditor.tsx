@@ -11,28 +11,25 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useAction } from "convex/react";
 import { Loader2, Pause, Pencil, Play, PlayCircle, Trash2, X } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { watchProblem, type WatchKind } from "@codecast/shared/contracts/ingest";
 import { monitorProblem, type AlertNotifyInput, type AlertRoute } from "@codecast/shared/contracts/metricMonitor";
-import { parseAppManifest, type AppReader } from "@codecast/shared/contracts/appConnector";
-import { useOpsApp, useOpsGroups, useOpsWatches, useSyncOpsApp } from "../../hooks/useSyncOps";
+import { useOpsWatches } from "../../hooks/useSyncOps";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useInboxStore } from "../../store/inboxStore";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { MetricChart } from "./MetricChart";
 import { AlertRouting, NotifyRows, OnAlertRow } from "./WatchRouting";
 import { lastUsedRoutes } from "./alertRouting";
-import {
-  EVAL_READS, EVENTS_HOGQL, HOGQL_AGGS, HOGQL_WINDOWS, INTERVALS, KIND_LABEL, NO_DATA_AFTER, argFields, argOptions, argSourceReader, duplicateWatch, eventRows, formatValue, hogqlOfPick, intervalLabel, nameOfPick, parseThreshold,
-  lineSuggestions, readerAnswersNumber, readerQueryText, readerQueryValues, spanLabel, suggestDirection, volumeOptions, wouldCross,
-  type ArgField, type ArgOption, type HogqlPick, type Pt,
-} from "./metricModel";
+import { KIND_LABEL, crosses, formatValue, spanLabel, type Pt } from "./metricModel";
+import { lineSuggestions, suggestDirection, wouldCross } from "./metricEvents";
+import { EVAL_READS, INTERVALS, NO_DATA_AFTER, duplicateWatch, intervalLabel, parseThreshold } from "./metricEditing";
 import { opsHref } from "./opsPaths";
 import { ProviderIcon } from "./parts";
-import { scopeOfSource, useQueryRun, watchKindsOf } from "./watchQuery";
+import { useQueryRun, watchKindsOf } from "./watchQuery";
 import type { OpsSource, OpsWatch } from "./opsTypes";
+import { HogqlBuilder, InsightPicker, ReaderPicker, VolumePicker } from "./WatchPickers";
 
 const api = _api as any;
 
@@ -105,75 +102,39 @@ export function WatchSettings({ watch, source, removeLedger, history, within, on
           <label htmlFor="mx-name">Name</label>
           <input id="mx-name" className="mx-input" value={name ?? watch.name} onChange={(e) => setName(e.target.value)} onBlur={commitName} onKeyDown={enter(commitName, () => setName(null))} />
 
-          <div className="mx-form-sub" data-watch-section="when">Alert when</div>
-          <label htmlFor="mx-line">Alert</label>
-          <div className="mx-form-row">
-            <span className="mx-seg" role="group" aria-label="Alerting side">
-              {(["above", "below"] as const).map((d) => (
-                <button key={d} type="button" aria-pressed={hasLine && watch.direction === d} disabled={!hasLine} onClick={() => watch.direction !== d && update(watch._id, { direction: d })} data-watch-direction={d}>
-                  {d}
-                </button>
-              ))}
-            </span>
-            <input
-              id="mx-line"
-              className="mx-input ops-num"
-              inputMode="decimal"
-              placeholder="no line"
-              aria-invalid={parsed === null}
-              value={lineText}
-              onChange={(e) => setLine(e.target.value)}
-              onKeyDown={enter(commitLine, () => setLine(null))}
-              data-watch-threshold
-            />
-          </div>
-          {parsed === null && <div className="mx-problem">Not a number</div>}
-          {lineDirty && (
-            <DraftRow
-              label={parsed === undefined ? "No line: the watch becomes a series" : <CrossCount history={history} within={within} now={watch.threshold} next={parsed!} direction={watch.direction} />}
-              onSave={commitLine}
-              onDiscard={() => setLine(null)}
-            />
-          )}
-
-          {hasLine && (
-            <>
-              <label htmlFor="mx-warn">Warn</label>
-              <input
-                id="mx-warn"
-                className="mx-input ops-num"
-                inputMode="decimal"
-                placeholder="none"
-                aria-invalid={!!warnProblem}
-                value={warnShown}
-                onChange={(e) => setWarnText(e.target.value)}
-                onKeyDown={enter(commitWarn, () => setWarnText(null))}
-                data-watch-warn
+          <AlertWhenRows
+            ids="mx"
+            direction={watch.direction}
+            onDirection={(d) => watch.direction !== d && update(watch._id, { direction: d })}
+            hasLine={hasLine}
+            lineText={lineText}
+            onLineText={setLine}
+            lineInvalid={parsed === null}
+            lineKeys={enter(commitLine, () => setLine(null))}
+            afterLine={lineDirty && (
+              <DraftRow
+                label={parsed === undefined ? "No line: the watch becomes a series" : <CrossCount history={history} within={within} now={watch.threshold} next={parsed!} direction={watch.direction} />}
+                onSave={commitLine}
+                onDiscard={() => setLine(null)}
               />
-              {warnProblem && <div className="mx-problem">{warnProblem}</div>}
-              {warnDirty && (
-                <DraftRow
-                  label={warnParsed === undefined ? "No warning level" : <CrossCount history={history} within={within} now={watch.warn} next={warnParsed!} direction={watch.direction} />}
-                  onSave={commitWarn}
-                  onDiscard={() => setWarnText(null)}
-                />
-              )}
-
-              <label htmlFor="mx-after">After</label>
-              <div className="mx-form-row">
-                <select id="mx-after" className="mx-select" value={watch.eval_reads ?? 1} onChange={(e) => update(watch._id, { eval_reads: Number(e.target.value) })} data-watch-eval>
-                  {EVAL_READS.map((n) => <option key={n} value={n}>{n === 1 ? "1 read" : `${n} reads in a row`}</option>)}
-                </select>
-                <span className="ops-dim ops-num">{spanLabel((watch.eval_reads ?? 1) * watch.interval_ms)}</span>
-              </div>
-
-              <label htmlFor="mx-nodata">No data</label>
-              <select id="mx-nodata" className="mx-select" value={watch.no_data_after ?? 0} onChange={(e) => update(watch._id, { no_data_after: Number(e.target.value) || null })} data-watch-nodata>
-                <option value={0}>Ignore</option>
-                {NO_DATA_AFTER.map((n) => <option key={n} value={n}>Alert after {n} missed</option>)}
-              </select>
-            </>
-          )}
+            )}
+            warnText={warnShown}
+            onWarnText={setWarnText}
+            warnProblem={warnProblem}
+            warnKeys={enter(commitWarn, () => setWarnText(null))}
+            afterWarn={warnDirty && (
+              <DraftRow
+                label={warnParsed === undefined ? "No warning level" : <CrossCount history={history} within={within} now={watch.warn} next={warnParsed!} direction={watch.direction} />}
+                onSave={commitWarn}
+                onDiscard={() => setWarnText(null)}
+              />
+            )}
+            evalReads={watch.eval_reads ?? 1}
+            onEvalReads={(n) => update(watch._id, { eval_reads: n })}
+            interval_ms={watch.interval_ms}
+            noData={watch.no_data_after ?? 0}
+            onNoData={(n) => update(watch._id, { no_data_after: n || null })}
+          />
 
           <label htmlFor="mx-unit">Unit</label>
           <input id="mx-unit" className="mx-input" maxLength={12} placeholder="none" value={unit ?? watch.unit ?? ""} onChange={(e) => setUnit(e.target.value)} onBlur={commitUnit} onKeyDown={enter(commitUnit, () => setUnit(null))} />
@@ -211,6 +172,82 @@ export function WatchSettings({ watch, source, removeLedger, history, within, on
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The "Alert when" rows, one form for the settings card and the New watch
+ * sheet (as Datadog's monitor form keeps its thresholds and no-data policy in
+ * one place): the side and the line, then once there is a line the warning
+ * level, how many reads in a row, and what missing data does. The inputs are
+ * the caller's (the card commits on Enter, the sheet on Add); `afterLine` and
+ * `afterWarn` sit under their input.
+ */
+function AlertWhenRows({ ids, direction, onDirection, hasLine, lineText, onLineText, lineInvalid, lineKeys, afterLine, warnText, onWarnText, warnProblem, warnKeys, afterWarn, evalReads, onEvalReads, interval_ms, noData, onNoData }: {
+  ids: string; direction: "above" | "below"; onDirection: (d: "above" | "below") => void; hasLine: boolean;
+  lineText: string; onLineText: (t: string) => void; lineInvalid: boolean; lineKeys?: (e: React.KeyboardEvent) => void; afterLine?: React.ReactNode;
+  warnText: string; onWarnText: (t: string) => void; warnProblem: string | null; warnKeys?: (e: React.KeyboardEvent) => void; afterWarn?: React.ReactNode;
+  evalReads: number; onEvalReads: (n: number) => void; interval_ms: number; noData: number; onNoData: (n: number) => void;
+}) {
+  return (
+    <>
+      <div className="mx-form-sub" data-watch-section="when">Alert when</div>
+      <label htmlFor={`${ids}-line`}>Alert</label>
+      <div className="mx-form-row">
+        <span className="mx-seg" role="group" aria-label="Alerting side">
+          {(["above", "below"] as const).map((d) => (
+            <button key={d} type="button" aria-pressed={hasLine && direction === d} disabled={!hasLine} onClick={() => onDirection(d)} data-watch-direction={d}>
+              {d}
+            </button>
+          ))}
+        </span>
+        <input
+          id={`${ids}-line`}
+          className="mx-input ops-num"
+          inputMode="decimal"
+          placeholder="no line"
+          aria-invalid={lineInvalid}
+          value={lineText}
+          onChange={(e) => onLineText(e.target.value)}
+          onKeyDown={lineKeys}
+          data-watch-threshold
+        />
+      </div>
+      {lineInvalid && <div className="mx-problem">Not a number</div>}
+      {afterLine}
+      {hasLine && (
+        <>
+          <label htmlFor={`${ids}-warn`}>Warn</label>
+          <input
+            id={`${ids}-warn`}
+            className="mx-input ops-num"
+            inputMode="decimal"
+            placeholder="none"
+            aria-invalid={!!warnProblem}
+            value={warnText}
+            onChange={(e) => onWarnText(e.target.value)}
+            onKeyDown={warnKeys}
+            data-watch-warn
+          />
+          {warnProblem && <div className="mx-problem">{warnProblem}</div>}
+          {afterWarn}
+
+          <label htmlFor={`${ids}-after`}>After</label>
+          <div className="mx-form-row">
+            <select id={`${ids}-after`} className="mx-select" value={evalReads} onChange={(e) => onEvalReads(Number(e.target.value))} data-watch-eval>
+              {EVAL_READS.map((n) => <option key={n} value={n}>{n === 1 ? "1 read" : `${n} reads in a row`}</option>)}
+            </select>
+            <span className="ops-dim ops-num">{spanLabel(evalReads * interval_ms)}</span>
+          </div>
+
+          <label htmlFor={`${ids}-nodata`}>No data</label>
+          <select id={`${ids}-nodata`} className="mx-select" value={noData} onChange={(e) => onNoData(Number(e.target.value))} data-watch-nodata>
+            <option value={0}>Ignore</option>
+            {NO_DATA_AFTER.map((n) => <option key={n} value={n}>Alert after {n} missed</option>)}
+          </select>
+        </>
+      )}
+    </>
   );
 }
 
@@ -333,6 +370,8 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
   const [unit, setUnit] = useState("");
   const [interval, setInterval_] = useState<number>(INTERVALS[1].ms);
   const [evalReads, setEvalReads] = useState(1);
+  const [warnText, setWarnText] = useState("");
+  const [noData, setNoData] = useState(0);
   // Who hears about it once it has a line, in the same form as the threshold (as Datadog's monitor form does): the routes this workspace last set, else the creator.
   const me = useInboxStore((s) => (s as any).currentUser?._id as string | undefined);
   const [tell, setTell] = useState<AlertNotifyInput | null>(null);
@@ -355,9 +394,12 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
   const dup = source && k ? duplicateWatch(watches, source._id, k, query) : null;
 
   const threshold = parseThreshold(line);
+  const hasLine = typeof threshold === "number";
+  const warn = parseThreshold(warnText);
+  const warnProblem = !hasLine || !warnText.trim() ? null : warn === null ? "Not a number" : monitorProblem({ threshold, direction, warn: warn ?? undefined });
   // The reader's own syntax is the picker's job: an unfinished pick reads as what is left to pick.
   const queryProblem = !source || !k ? null : !query.trim() ? (k === "reader" || k === "volume" ? "Pick a number" : k === "insight" ? "Pick an insight" : "Write the query") : watchProblem(source.provider, k, query, threshold ?? undefined);
-  const problem = !source ? "Pick a source" : !k ? "This source cannot host watches" : queryProblem ?? (!name.trim() ? "Name it" : threshold === null ? "The line is not a number" : null);
+  const problem = !source ? "Pick a source" : !k ? "This source cannot host watches" : queryProblem ?? (!name.trim() ? "Name it" : threshold === null ? "The line is not a number" : warnProblem ? `Warn: ${warnProblem}` : null);
   // A pick not made yet is what the unselected list and the disabled button already say: the footer names only what is wrong.
   const footProblem = !source || !k || !query.trim() ? null : problem;
   const canPreview = !!source && (k === "hogql" || k === "reader" || k === "volume") && !!query.trim() && !(k && watchProblem(source.provider, k, query, undefined));
@@ -374,15 +416,18 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
     return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- follows the query
   }, [k, query, sourceId, canPreview]);
-  const series = preview.state === "value" ? preview.points : [];
+  const series = useMemo(() => (preview.state === "value" ? preview.points : []), [preview]);
   // The number in the Now row, on the chart at the time it was read: the newest point, the axis ending at it.
-  const livePt = preview.state === "value" && series.length > 1 && preview.at && preview.at > series[series.length - 1].at ? { at: preview.at, value: preview.value } : null;
+  const livePt = useMemo(() => (preview.state === "value" && series.length > 1 && preview.at && preview.at > series[series.length - 1].at ? { at: preview.at, value: preview.value } : null), [preview, series]);
   const seriesSpan = series.length > 1 ? (livePt?.at ?? series[series.length - 1].at) - series[0].at : 0;
-  // Counted over what the chart draws, the value read now included: a Now past the line is never "never past it".
-  const crossesN = series.length > 1 && typeof threshold === "number" ? wouldCross(livePt ? [...series, livePt] : series, threshold, direction) : null;
+  // Every count in the sheet is over what the chart draws, the value read now included: the Now row and each suggested line say the same number.
+  const drawnPts = useMemo(() => (livePt ? [...series, livePt] : series), [series, livePt]);
+  const crossesN = series.length > 1 && hasLine ? wouldCross(drawnPts, threshold, direction) : null;
   // The lines the preview's own history suggests (the page's Add alert line, read the same way): on the side typed, or the side the values stray to.
   const suggestSide = threshold === undefined ? suggestDirection(series) : direction;
-  const suggestions = useMemo(() => (series.length >= 3 ? lineSuggestions(series, suggestSide) : []), [series, suggestSide]);
+  const suggestions = useMemo(() => (series.length >= 3 ? lineSuggestions(series, suggestSide, drawnPts) : []), [series, suggestSide, drawnPts]);
+  // A value read now past the line opens an alert on the watch's first poll (one read is enough), and tells whoever the Notify rows name.
+  const firesOnAdd = hasLine && preview.state === "value" && evalReads === 1 && crosses(preview.value, threshold, direction);
   const save = async () => {
     if (dup) {
       onClose();
@@ -394,16 +439,18 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
     try {
       const res = await useInboxStore.getState().createOpsWatch({
         source: source._id, name: name.trim(), query_kind: k, query: query.trim(),
-        ...(threshold !== undefined && threshold !== null ? { threshold, direction } : {}),
+        ...(hasLine ? { threshold, direction } : {}),
         ...(unit.trim() ? { unit: unit.trim() } : {}),
-        ...(evalReads > 1 && threshold !== undefined && threshold !== null ? { eval_reads: evalReads } : {}),
+        ...(evalReads > 1 && hasLine ? { eval_reads: evalReads } : {}),
+        ...(hasLine && typeof warn === "number" ? { warn } : {}),
+        ...(hasLine && noData ? { no_data_after: noData } : {}),
         interval_ms: interval,
       });
       if (res?.short_id) {
         // Routing rides one patch right after the create, the same write the settings card makes.
         const routed = !!(tellShown.users?.length || tellShown.roles?.length || tellShown.channel || tellShown.fix);
         const routing = { ...(routed ? { notify: tellShown } : {}), ...(onAlert ? { on_alert: onAlert } : {}) };
-        if (typeof threshold === "number" && Object.keys(routing).length) useInboxStore.getState().updateOpsWatch(res.watch_id, routing);
+        if (hasLine && Object.keys(routing).length) useInboxStore.getState().updateOpsWatch(res.watch_id, routing);
         onClose();
         router.push(opsHref.metric(res.short_id));
       } else setSaving("The server did not make it");
@@ -482,6 +529,7 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
                   {k === "reader" && preview.state === "reading" && <Loader2 className="w-3.5 h-3.5 animate-spin self-center" aria-label="Reading" />}
                   {(k === "reader" || k === "volume") && preview.state === "idle" && <span className="ops-dim">–</span>}
                   {preview.state === "value" && <b data-watch-preview-value>{formatValue(preview.value, unit.trim() || preview.unit)}</b>}
+                  {firesOnAdd && <FiresOnAdd />}
                   {crossesN !== null && (
                     <span className="ops-num" data-would-cross={crossesN} style={{ color: crossesN ? "var(--sol-red)" : "var(--sol-text-dim)" }}>
                       {crossesN ? `crossed ${crossesN}× in ${spanLabel(seriesSpan)}` : `never past it in ${spanLabel(seriesSpan)}`}
@@ -498,7 +546,7 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
                   win={{ from: series[0].at, to: Math.max(series[series.length - 1].at, livePt?.at ?? 0) }}
                   live={livePt}
                   interval_ms={Math.max(interval, seriesSpan / Math.max(1, series.length - 1))}
-                  threshold={typeof threshold === "number" ? threshold : undefined}
+                  threshold={hasLine ? threshold : undefined}
                   direction={direction}
                   unit={unit.trim() || (preview.state === "value" ? preview.unit : null) || undefined}
                   height={120}
@@ -507,42 +555,47 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
                 />
               </div>
             )}
-            <label htmlFor="mx-new-line">Alert</label>
-            <div className="mx-form-row">
-              <span className="mx-seg" role="group" aria-label="Alerting side">
-                {(["above", "below"] as const).map((d) => <button key={d} type="button" aria-pressed={direction === d} disabled={threshold === undefined} onClick={() => setDirection(d)}>{d}</button>)}
-              </span>
-              <input id="mx-new-line" className="mx-input ops-num" inputMode="decimal" placeholder="none" aria-invalid={threshold === null} value={line} onChange={(e) => setLine(e.target.value)} />
-              <select className="mx-select" value={evalReads} onChange={(e) => setEvalReads(Number(e.target.value))} aria-label="Reads in a row before it alerts" disabled={threshold === undefined || threshold === null}>
-                {EVAL_READS.map((n) => <option key={n} value={n}>{n === 1 ? "1 read" : `${n} in a row`}</option>)}
-              </select>
-            </div>
-            {suggestions.length > 0 && (
-              <div className="mx-form-row mx-suggest-chips" style={{ gridColumn: "2 / -1" }} data-new-watch-suggest>
-                {suggestions.map((sg) => (
-                  <button
-                    key={sg.key}
-                    type="button"
-                    className="mx-state"
-                    aria-pressed={threshold === sg.value && direction === suggestSide}
-                    style={{ ["--ink" as string]: sg.crossings ? "var(--sol-red)" : "var(--sol-text-muted)" }}
-                    onClick={() => { setDirection(suggestSide); setLine(String(sg.value)); }}
-                    data-new-watch-suggest-line={sg.key}
-                  >
-                    {sg.label} {suggestSide === "above" ? ">" : "<"} {formatValue(sg.value, unit.trim() || (preview.state === "value" ? preview.unit : null))}<b>{sg.crossings}×</b>
-                  </button>
-                ))}
-              </div>
-            )}
+            <AlertWhenRows
+              ids="mx-new"
+              direction={direction}
+              onDirection={setDirection}
+              hasLine={hasLine}
+              lineText={line}
+              onLineText={setLine}
+              lineInvalid={threshold === null}
+              afterLine={suggestions.length > 0 && (
+                <div className="mx-form-row mx-suggest-chips" style={{ gridColumn: "2 / -1" }} data-new-watch-suggest>
+                  {suggestions.map((sg) => (
+                    <button
+                      key={sg.key}
+                      type="button"
+                      className="mx-state"
+                      aria-pressed={threshold === sg.value && direction === suggestSide}
+                      style={{ ["--ink" as string]: sg.crossings ? "var(--sol-red)" : "var(--sol-text-muted)" }}
+                      onClick={() => { setDirection(suggestSide); setLine(String(sg.value)); }}
+                      data-new-watch-suggest-line={sg.key}
+                    >
+                      {sg.label} {suggestSide === "above" ? ">" : "<"} {formatValue(sg.value, unit.trim() || (preview.state === "value" ? preview.unit : null))}<b>{sg.crossings}×</b>
+                    </button>
+                  ))}
+                </div>
+              )}
+              warnText={warnText}
+              onWarnText={setWarnText}
+              warnProblem={warnProblem}
+              evalReads={evalReads}
+              onEvalReads={setEvalReads}
+              interval_ms={interval}
+              noData={noData}
+              onNoData={setNoData}
+            />
             <label htmlFor="mx-new-unit">Unit</label>
-            <div className="mx-form-row">
-              <input id="mx-new-unit" className="mx-input" style={{ maxWidth: 110 }} maxLength={12} value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="%, ms, $" />
-              <span className="ops-dim" style={{ marginLeft: 8 }}>every</span>
-              <select className="mx-select" value={interval} onChange={(e) => setInterval_(Number(e.target.value))} aria-label="Poll interval">
-                {INTERVALS.map((i) => <option key={i.ms} value={i.ms}>{i.label}</option>)}
-              </select>
-            </div>
-            {typeof threshold === "number" && source && (
+            <input id="mx-new-unit" className="mx-input" style={{ maxWidth: 110 }} maxLength={12} value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="%, ms, $" />
+            <label htmlFor="mx-new-every">Every</label>
+            <select id="mx-new-every" className="mx-select" style={{ justifySelf: "start" }} value={interval} onChange={(e) => setInterval_(Number(e.target.value))}>
+              {INTERVALS.map((i) => <option key={i.ms} value={i.ms}>{i.label}</option>)}
+            </select>
+            {hasLine && source && (
               <>
                 <div className="mx-form-sub" data-watch-section="notify">Notify</div>
                 <OnAlertRow value={onAlert ?? undefined} source={source} onChange={setOnAlert} />
@@ -555,6 +608,7 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
           <span className="flex-1 text-[11.5px]" style={{ color: saving && saving !== "saving" ? "var(--sol-red)" : "var(--sol-text-dim)" }} data-watch-problem>
             {saving && saving !== "saving" ? saving : dup ? "" : footProblem ?? ""}
           </span>
+          {firesOnAdd && !dup && <FiresOnAdd />}
           <button type="button" className="ops-btn" onClick={onClose}>Cancel</button>
           <button type="button" className="ops-btn" data-tone="primary" disabled={!dup && (!!problem || saving === "saving")} onClick={save} data-watch-create={dup ? "open" : "add"}>
             {dup ? `Open ${dup.short_id}` : saving === "saving" ? "Adding…" : "Add watch"}
@@ -565,246 +619,7 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
   );
 }
 
-// ── Pickers ──
-
-/** The series codecast counts for a source, each with its value now and a spark of the past its counters hold. */
-function VolumePicker({ source, query, onQuery }: { source: OpsSource; query: string; onQuery: (query: string, title: string) => void }) {
-  const groups = useOpsGroups();
-  const options = useMemo(() => volumeOptions(source, groups.filter((g) => g.source_id === source._id), Date.now()), [source, groups]);
-  return (
-    <div className="mx-insights mx-volume-pick" role="listbox" aria-label="Series" data-volume-picker>
-      {options.map((o) => (
-        <button key={o.query} type="button" role="option" aria-selected={query === o.query} onClick={() => onQuery(o.query, `${o.label}, ${source.name}`)} data-volume-option={o.query}>
-          <span className="mx-name">{o.label}</span>
-          <span className="mx-volume-spark">{o.points.length > 1 && <MetricChart points={o.points} win={{ from: o.points[0].at, to: o.points[o.points.length - 1].at }} interval_ms={o.points[1].at - o.points[0].at} direction="above" height={20} />}</span>
-          <b className="ops-num">{formatValue(o.value, o.unit)}</b>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/**
- * HogQL from a pick, PostHog's insight builder in one row: an event from the
- * project's last week (busiest first, with its count), counted or as
- * distinct people, per hour or per day. The query it writes stays editable
- * in the box under it.
- */
-function HogqlBuilder({ source, onQuery }: { source: OpsSource; onQuery: (query: string, title: string) => void }) {
-  const run = useAction(api.sources.posthog.query);
-  const [events, setEvents] = useState<{ s: "loading" } | { s: "ok"; rows: { event: string; count: number }[] } | { s: "error"; error: string }>({ s: "loading" });
-  const [pickState, setPick] = useState<HogqlPick>({ event: "", agg: "count", window: "1h" });
-  useWatchEffect(() => {
-    let live = true;
-    setEvents({ s: "loading" });
-    run({ ...scopeOfSource(source), source: source._id, query: EVENTS_HOGQL })
-      .then((body: { results?: unknown[] }) => live && setEvents({ s: "ok", rows: eventRows(body) }))
-      .catch((e: unknown) => live && setEvents({ s: "error", error: e instanceof Error ? (e.message.split("Uncaught Error:").pop() ?? e.message).trim().split("\n")[0] : "PostHog did not answer" }));
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per source
-  }, [source._id]);
-  const set = (patch: Partial<HogqlPick>) => {
-    const next = { ...pickState, ...patch };
-    setPick(next);
-    if (next.event) onQuery(hogqlOfPick(next), nameOfPick(next));
-  };
-  return (
-    <div className="mx-form-row flex-wrap" data-hogql-builder>
-      {events.s === "ok" && events.rows.length ? (
-        <select className="mx-select" value={pickState.event} onChange={(e) => set({ event: e.target.value })} aria-label="Event" data-hogql-event>
-          <option value="" disabled>Pick an event</option>
-          {events.rows.map((r) => <option key={r.event} value={r.event}>{r.event} · {formatValue(r.count)}</option>)}
-        </select>
-      ) : (
-        <input className="mx-input ops-mono" value={pickState.event} onChange={(e) => set({ event: e.target.value.trim() })} placeholder={events.s === "loading" ? "Loading events…" : "event name"} title={events.s === "error" ? events.error : undefined} aria-label="Event" />
-      )}
-      <span className="mx-seg" role="group" aria-label="Aggregate">
-        {HOGQL_AGGS.map((a) => <button key={a.key} type="button" aria-pressed={pickState.agg === a.key} onClick={() => set({ agg: a.key })}>{a.label}</button>)}
-      </span>
-      <span className="mx-seg" role="group" aria-label="Window">
-        {HOGQL_WINDOWS.map((w) => <button key={w.key} type="button" aria-pressed={pickState.window === w.key} onClick={() => set({ window: w.key })}>{w.label}</button>)}
-      </span>
-    </div>
-  );
-}
-
-/**
- * A reader picked from the app's manifest, only those that answer a number
- * or a dated series (by their output hint); its arguments as typed fields,
- * and an argument that names another reader as its list ("the key from
- * metrics.list") as a picker filled from that reader's answer, each choice
- * with its name and its value now. The query is built from them (`name
- * {json}`); the title handed up is the picked choice's name, else the
- * reader's. With no manifest yet, the plain text box.
- */
-export function ReaderPicker({ source, query, onQuery, fallback }: { source: OpsSource; query: string; onQuery: (query: string, title: string) => void; fallback: React.ReactNode }) {
-  useSyncOpsApp(source._id);
-  const app = useOpsApp(source._id);
-  const all = useMemo<AppReader[]>(() => {
-    if (!app?.manifest_json) return [];
-    try {
-      const parsed = parseAppManifest(JSON.parse(app.manifest_json));
-      return parsed.ok ? parsed.manifest.readers : [];
-    } catch {
-      return [];
-    }
-  }, [app?.manifest_json]);
-  const saved = readerQueryValues(query);
-  // Readers that answer a number; when none declares its answer, every reader that does not say otherwise.
-  const readers = useMemo(() => {
-    const numeric = all.filter((r) => readerAnswersNumber(r) === true);
-    const list = numeric.length ? numeric : all.filter((r) => readerAnswersNumber(r) !== false);
-    const kept = saved?.reader && !list.some((r) => r.name === saved.reader) ? all.filter((r) => r.name === saved.reader) : [];
-    return [...list, ...kept];
-  }, [all, saved?.reader]);
-  const [name, setName] = useState(saved?.reader ?? "");
-  const [values, setValues] = useState<Record<string, string>>(saved?.values ?? {});
-  const [labels, setLabels] = useState<Record<string, string>>({});
-  const reader = readers.find((r) => r.name === name);
-  const fields = useMemo(() => argFields(reader?.input), [reader]);
-  // A lone reader is picked for the person.
-  useWatchEffect(() => {
-    if (!name && readers.length === 1) choose(readers[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once the list is known
-  }, [readers.length]);
-  if (!all.length) return <>{fallback}</>;
-  const emit = (r: AppReader | undefined, v: Record<string, string>, l: Record<string, string>) => {
-    if (!r) return onQuery("", "");
-    const out = readerQueryText(r.name, argFields(r.input), v);
-    const picked = argFields(r.input).map((f) => l[f.key]).find(Boolean);
-    onQuery("query" in out ? out.query : "", picked ?? r.title);
-  };
-  function choose(r: AppReader | undefined) {
-    const v = Object.fromEntries(argFields(r?.input).filter((f) => f.dflt !== undefined).map((f) => [f.key, f.dflt!]));
-    setName(r?.name ?? "");
-    setValues(v);
-    setLabels({});
-    emit(r, v, {});
-  }
-  const set = (key: string, value: string, label?: string) => {
-    const v = { ...values, [key]: value };
-    const l = { ...labels, [key]: label ?? "" };
-    setValues(v);
-    setLabels(l);
-    emit(reader, v, l);
-  };
-  const built = reader ? readerQueryText(reader.name, fields, values) : null;
-  const missing = built && "error" in built ? fields.find((f) => f.required && !(values[f.key] ?? "").trim()) : null;
-  return (
-    <div className="mx-picker" data-reader-picker>
-      <select className="mx-select" value={name} onChange={(e) => choose(readers.find((x) => x.name === e.target.value))} aria-label="Reader" data-reader-select>
-        <option value="" disabled>Pick a number</option>
-        {readers.map((r) => <option key={r.name} value={r.name}>{r.title}</option>)}
-      </select>
-      {fields.map((f) => {
-        const from = argSourceReader(f.description, all, reader?.name ?? "");
-        const fromReader = from ? all.find((r) => r.name === from) : undefined;
-        return (
-          <label key={f.key} className="mx-arg" title={f.description}>
-            <span>{fieldLabel(f)}</span>
-            {fromReader && !argFields(fromReader.input).some((x) => x.required) ? (
-              <ArgChoice source={source} reader={fromReader.name} field={f} value={values[f.key] ?? ""} onPick={(o) => set(f.key, o?.value ?? "", o?.label)} />
-            ) : f.type === "enum" || f.type === "boolean" ? (
-              <select className="mx-select" value={values[f.key] ?? ""} onChange={(e) => set(f.key, e.target.value)}>
-                <option value="">{f.required ? "pick" : "default"}</option>
-                {(f.type === "boolean" ? ["true", "false"] : f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
-            ) : (
-              <input
-                className="mx-input ops-num"
-                inputMode={f.type === "number" ? "decimal" : undefined}
-                value={values[f.key] ?? ""}
-                placeholder={f.dflt ?? (f.required ? "required" : "default")}
-                onChange={(e) => set(f.key, e.target.value)}
-              />
-            )}
-          </label>
-        );
-      })}
-      {built && "error" in built && !missing && <div className="mx-problem">{built.error}</div>}
-    </div>
-  );
-}
-
-/** An argument's name as a label: `invariantId` reads "invariant id". */
-function fieldLabel(f: ArgField): string {
-  return f.key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").toLowerCase();
-}
-
-/** The choices for one argument, read once from the reader that lists them, each with its name and value now. */
-function ArgChoice({ source, reader, field, value, onPick }: { source: OpsSource; reader: string; field: ArgField; value: string; onPick: (o: ArgOption | null) => void }) {
-  const runReader = useAction(api.sources.app.read);
-  const [state, setState] = useState<{ s: "loading" } | { s: "ok"; options: ArgOption[] } | { s: "error"; error: string }>({ s: "loading" });
-  useWatchEffect(() => {
-    let live = true;
-    setState({ s: "loading" });
-    runReader({ ...scopeOfSource(source), source: source._id, reader, args_json: "{}" })
-      .then((res: { ok?: boolean; text?: string; error?: string } | null) => {
-        if (!live) return;
-        if (!res?.ok) return setState({ s: "error", error: res?.error ?? `${reader} did not answer` });
-        let body: unknown = null;
-        try { body = JSON.parse(res.text ?? "null"); } catch { body = null; }
-        setState({ s: "ok", options: argOptions(body, field.key) });
-      })
-      .catch((e: unknown) => live && setState({ s: "error", error: e instanceof Error ? e.message.split("\n")[0] : `${reader} did not answer` }));
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per source and reader
-  }, [source._id, reader, field.key]);
-  if (state.s === "error" || (state.s === "ok" && state.options.length === 0)) {
-    return <input className="mx-input" value={value} placeholder={state.s === "error" ? "type it" : "required"} onChange={(e) => onPick(e.target.value ? { value: e.target.value, label: "", current: null, unit: null } : null)} title={state.s === "error" ? state.error : undefined} />;
-  }
-  const options = state.s === "ok" ? state.options : [];
-  return (
-    <select className="mx-select" value={value} disabled={state.s === "loading"} onChange={(e) => onPick(options.find((o) => o.value === e.target.value) ?? null)} data-arg-choice={field.key}>
-      <option value="" disabled>{state.s === "loading" ? "Loading…" : field.required ? "Pick one" : "default"}</option>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>{o.label}{o.current !== null ? ` · ${formatValue(o.current, o.unit)}` : ""}</option>
-      ))}
-    </select>
-  );
-}
-
-type InsightRow = { id: number; short_id: string; name: string; kind: string | null };
-
-/** An insight picked from the project's saved insights (sources.posthog.listInsights), or typed by id. */
-function InsightPicker({ source, query, onQuery, placeholder }: { source: OpsSource; query: string; onQuery: (query: string, title: string) => void; placeholder: string }) {
-  const list = useAction(api.sources.posthog.listInsights);
-  const [state, setState] = useState<{ s: "idle" } | { s: "loading" } | { s: "ok"; rows: InsightRow[] } | { s: "error"; error: string }>({ s: "idle" });
-  const [filter, setFilter] = useState("");
-  const load = async () => {
-    setState({ s: "loading" });
-    try {
-      const res = await list({ ...scopeOfSource(source), source: source._id });
-      setState({ s: "ok", rows: res?.insights ?? [] });
-    } catch (e) {
-      setState({ s: "error", error: e instanceof Error ? (e.message.split("Uncaught Error:").pop() ?? e.message).trim().split("\n")[0] : "PostHog did not answer" });
-    }
-  };
-  const rows = state.s === "ok" ? state.rows.filter((r) => !filter.trim() || r.name.toLowerCase().includes(filter.trim().toLowerCase()) || r.short_id.includes(filter.trim())) : [];
-  return (
-    <div className="mx-picker" data-insight-picker>
-      <div className="mx-form-row">
-        <input className="mx-input ops-mono" value={query} onChange={(e) => onQuery(e.target.value, "")} placeholder={placeholder} aria-label="Insight id" />
-        {state.s !== "ok" && (
-          <button type="button" className="ops-btn" onClick={load} disabled={state.s === "loading"} data-insight-load>{state.s === "loading" ? "Loading…" : "Browse"}</button>
-        )}
-      </div>
-      {state.s === "error" && <div className="mx-problem">{state.error}</div>}
-      {state.s === "ok" && (
-        <>
-          <input className="mx-input" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={`Filter ${state.rows.length} insights`} aria-label="Filter insights" />
-          <div className="mx-insights" role="listbox" aria-label="Insights">
-            {rows.slice(0, 60).map((r) => (
-              <button key={r.id} type="button" role="option" aria-selected={query === r.short_id} onClick={() => onQuery(r.short_id, r.name)}>
-                <span className="mx-name">{r.name}</span>
-                {r.kind && <span className="ops-dim">{r.kind}</span>}
-                <span className="ops-mono ops-dim">{r.short_id}</span>
-              </button>
-            ))}
-            {rows.length === 0 && <span className="ops-dim text-[12px] px-2 py-1.5">None match</span>}
-          </div>
-        </>
-      )}
-    </div>
-  );
+/** The value read now is past the line: adding the watch opens an alert on its first poll (Datadog's "would trigger now"). */
+function FiresOnAdd() {
+  return <span className="mx-health" style={{ ["--ink" as string]: "var(--sol-red)" }} data-health="alert" data-fires-on-add>Alerts on add</span>;
 }

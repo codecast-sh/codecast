@@ -285,12 +285,39 @@ export function rangeTicks(r: Pick<TimeRange, "from" | "to">, max = 8): { x: num
   return out;
 }
 
-/** A row's time: with the date once a range spans more than two days, with seconds inside an hour. */
-export function fmtTime(at: number, span: number): string {
+/** A row's time: with the date once a range spans more than two days or is `dated` (windowDated), with seconds inside an hour. */
+export function fmtTime(at: number, span: number, dated = false): string {
   const d = new Date(at);
   if (span > 2 * 86_400_000) return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: span <= HOUR ? "2-digit" : undefined });
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: span <= HOUR ? "2-digit" : undefined });
+  return dated ? `${shortDay(at)} ${time}` : time;
 }
+
+const shortDay = (at: number) => new Date(at).toLocaleDateString([], { month: "short", day: "numeric" });
+const dayKey = (at: number) => new Date(at).toDateString();
+
+/**
+ * Whether a window's times need their date to be read: it crosses midnight or
+ * is not today. A clock time alone ("5:47 PM") is only a moment inside today.
+ */
+export function windowDated(r: Pick<TimeRange, "from" | "to">, now: number): boolean {
+  return dayKey(r.from) !== dayKey(r.to) || dayKey(r.to) !== dayKey(now);
+}
+
+/** A held window as its chip reads it: "Oct 20 5:47 PM to Oct 21 4:35 PM", the second date dropped when both ends share a day, both dropped inside today. */
+export function fmtWindow(r: Pick<TimeRange, "from" | "to">, now: number): string {
+  const span = r.to - r.from;
+  if (span > 2 * DAY) return `${fmtTime(r.from, span)} to ${fmtTime(r.to, span)}`;
+  const dated = windowDated(r, now);
+  const sameDay = dayKey(r.from) === dayKey(r.to);
+  return `${fmtTime(r.from, span, dated)} to ${fmtTime(r.to, span, dated && !sameDay)}`;
+}
+
+/** A local midnight: where a dated axis names the new day. */
+export const isMidnight = (at: number) => {
+  const d = new Date(at);
+  return d.getHours() === 0 && d.getMinutes() === 0;
+};
 
 // ── Histogram ──
 
@@ -511,6 +538,39 @@ export function clusterByPixels<T extends { x: number }>(marks: readonly T[], wi
   return out;
 }
 
+/** A lane bubble's width in pixels: a diamond for one mark, a pill sized to its count's digits for more (ops.css .ops-tl-cluster). */
+export const lanePillPx = (n: number) => (n > 1 ? Math.max(20, 10 + 6.5 * String(n).length) : 13);
+
+/**
+ * A lane's marks as bubbles that never overlap and never cross the track's
+ * edges: neighbours merge (their counts summed) while their pills, at their
+ * real widths, would touch, and each bubble's centre is held half its width
+ * inside the track. `px` is the centre in pixels; `x` the same as a fraction.
+ */
+export function laneClusters<T extends { x: number }>(marks: readonly T[], widthPx: number, gapPx = 3): { x: number; px: number; marks: T[] }[] {
+  if (widthPx <= 0) return clusterByPixels(marks, 0, 0).map((c) => ({ ...c, px: 0 }));
+  type C = { lo: number; hi: number; marks: T[] };
+  const centre = (c: C) => {
+    const half = lanePillPx(c.marks.length) / 2;
+    return Math.min(widthPx - half, Math.max(half, ((c.lo + c.hi) / 2) * widthPx));
+  };
+  let cs: C[] = clusterByPixels(marks, widthPx, 1).map((c) => ({ lo: c.marks[0].x, hi: c.marks[c.marks.length - 1].x, marks: c.marks }));
+  for (let merged = true; merged; ) {
+    merged = false;
+    const out: C[] = [];
+    for (const c of cs) {
+      const last = out[out.length - 1];
+      if (last && centre(c) - centre(last) < (lanePillPx(last.marks.length) + lanePillPx(c.marks.length)) / 2 + gapPx) {
+        last.hi = c.hi;
+        last.marks.push(...c.marks);
+        merged = true;
+      } else out.push({ ...c, marks: [...c.marks] });
+    }
+    cs = out;
+  }
+  return cs.map((c) => ({ x: centre(c) / widthPx, px: centre(c), marks: c.marks }));
+}
+
 /** A cluster's span in time, for a click that narrows the stream to its marks. */
 export function clusterSpan(marks: readonly { event: Pick<OpsEvent, "created_at"> }[]): { from: number; to: number } {
   const ts = marks.map((m) => m.event.created_at);
@@ -525,6 +585,21 @@ export function admitsGroup(g: Pick<OpsGroup, "kind" | "level">, f: TimelineFilt
   const { level, type } = splitLevel(g.level);
   const { kind, level: levels, type: types } = f.facets;
   return (!kind.size || kind.has(g.kind)) && (!levels.size || (!!level && levels.has(level))) && (!types.size || (!!type && types.has(type)));
+}
+
+/**
+ * The groups whose hourly buckets the stream counts: in the sources asked for,
+ * through the kind, type and level facets, and without the kinds an
+ * occurrence list leaves out until picked. The chart's hourly bars and the
+ * list's "kept of N" both read this, so they are one number.
+ */
+export function streamGroups<G extends Pick<OpsGroup, "kind" | "level" | "source_id">>(groups: readonly G[], sourceIds: ReadonlySet<string> | null, f: TimelineFilter): G[] {
+  return groups.filter((g) => (!sourceIds || sourceIds.has(g.source_id)) && admitsGroup(g, f) && (f.facets.kind.size > 0 || !OFF_BY_DEFAULT_KINDS.has(g.kind)));
+}
+
+/** Occurrences per hour across a window from the stream's groups (streamGroups), on the histogram's one edge rule. */
+export function hourlyVolumeBins(groups: readonly OpsGroup[], sourceIds: ReadonlySet<string> | null, f: TimelineFilter, r: Pick<TimeRange, "from" | "to">, width?: number): HistBin[] {
+  return histogram(occurrencePoints(streamGroups(groups, sourceIds, f)), (p) => p.at, (p) => p.key, (p) => p.n, r, width);
 }
 
 /** Whether a filter asks for more than a server series can split by: words, a status, or (for the day counters) any facet past source. */
@@ -619,7 +694,7 @@ export function nearestReplay<R extends { group_ids: readonly string[]; started_
  */
 export function streamDayBins(sources: readonly Pick<OpsSource, "_id" | "days" | "last_event_at">[], groups: readonly OpsGroup[], sourceIds: ReadonlySet<string> | null, filter: TimelineFilter, range: Pick<TimeRange, "from" | "to">, rows: readonly { at: number }[]): HistBin[] {
   const inScope = sources.filter((s) => !sourceIds || sourceIds.has(s._id));
-  const gs = groups.filter((g) => (!sourceIds || sourceIds.has(g.source_id)) && admitsGroup(g, filter));
+  const gs = streamGroups(groups, sourceIds, filter);
   const filled = fillEstimates(counterBins(inScope, range), [rows.map((p) => ({ at: p.at, n: 1 })), occurrencePoints(gs)]);
   // Past the newest sign of life from every source in scope nothing arrived: those days are silence, not missing data.
   const lastAt = Math.max(0, ...inScope.map((s) => s.last_event_at ?? 0), ...groups.filter((g) => !sourceIds || sourceIds.has(g.source_id)).map((g) => g.last_seen));

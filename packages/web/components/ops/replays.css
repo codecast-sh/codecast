@@ -25,6 +25,11 @@
 .rp-failed-group > .rp-failed-why { padding: 6px 10px 0; color: var(--sol-red); white-space: normal; }
 .rp-failed-group .rp-failed-list { max-height: 220px; }
 .rp-failed-group .rp-failed-list li { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.rp-failed-rec { display: flex; flex-direction: column; min-width: 0; }
+.rp-failed-rec > b { font-weight: 500; color: var(--sol-text); min-width: 0; }
+.rp-failed-raw { padding: 0 10px 8px; font-size: 11px; color: var(--sol-text-dim); }
+.rp-failed-raw > summary { cursor: pointer; width: max-content; }
+.rp-failed-raw > pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; font-size: 10.5px; color: var(--sol-text-muted); }
 .rp-failed-open { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-blue); white-space: nowrap; }
 .rp-failed-more { padding: 6px 10px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent); font-size: 11px; }
 .rp-import-acts { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; flex-wrap: wrap; max-width: 100%; }
@@ -76,11 +81,22 @@
   .rp-chips::-webkit-scrollbar { display: none; }
   .rp-chips .rp-chip { flex-shrink: 0; }
   .rp-imports { padding: 6px 10px; }
-  .rp-imports .rp-import { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; }
-  .rp-imports .rp-import-name { flex-shrink: 1; max-width: 45%; }
-  .rp-imports .rp-import-nums { flex-wrap: nowrap; overflow: hidden; min-width: 0; flex: 0 0 auto; }
-  .rp-imports .rp-import-bar { display: none; }
-  .rp-imports .rp-import-nums > span:not(:first-child) { display: none; }
+}
+/* The Replays tab's import strip keeps one line at any width: the backlog, its trend and the recording being read stay; when it finished, this run's new count and the button's words step aside (both stay in titles). */
+.rp-imports { container-type: inline-size; container-name: rpimp; }
+.rp-again-icon { display: none; }
+@container rpimp (max-width: 760px) {
+  .rp-imports .rp-import { flex-wrap: nowrap; gap: 8px; overflow: hidden; }
+  .rp-imports .rp-import-nums, .rp-imports .rp-rest-tally { flex-wrap: nowrap; overflow: hidden; min-width: 0; }
+  .rp-imports .rp-import-nums:has(.rp-cell), .rp-imports .rp-rest-tally:has(.rp-cell) { gap: 4px 12px; }
+  .rp-imports .rp-import-when, .rp-imports .rp-import-new, .rp-imports .rp-again-label, .rp-imports .rp-import-bar { display: none; }
+  .rp-imports .rp-again-icon { display: inline; }
+  .rp-imports .rp-again-btn { padding: 0 7px; }
+  .rp-imports[data-count="1"] .rp-import-name { display: none; }
+  .rp-imports .rp-import-name { max-width: 30%; flex-shrink: 1; }
+}
+@container rpimp (max-width: 440px) {
+  .rp-imports .rp-import-done-state { display: none; }
 }
 .rp-tokens { display: flex; align-items: center; gap: 8px; margin: -2px 0 10px; flex-wrap: wrap; }
 .rp-token { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 4px 0 6px; border-radius: 12px; font-size: 11.5px; background: color-mix(in srgb, var(--sol-blue) 12%, transparent); color: var(--sol-text); }
@@ -216,7 +232,8 @@
 .rp-title-line { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 2px 0 6px; }
 .rp-h1 { display: flex; align-items: baseline; gap: 8px; min-width: 120px; flex: 0 1 auto; font-size: 17px; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; margin: 0; }
 .rp-title-line > .rp-head-issue { flex: 0 4 auto; min-width: min(34ch, 100%); max-width: 460px; font-size: 12px; height: 24px; }
-.rp-h1-person { flex-shrink: 1; min-width: 0; max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* No percentage cap: inside the shrink-to-fit title it resolved against the title itself and cut every name. The path and the issue give up width first (.rp-h1-path flex-shrink 6, the issue 4). */
+.rp-h1-person { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rp-h1-person:hover { text-decoration: underline; text-underline-offset: 3px; }
 .rp-h1-person[data-anon="true"] { color: var(--sol-text-muted); }
 .rp-h1-on { font-weight: 400; font-size: 14px; flex-shrink: 0; }
@@ -577,7 +594,11 @@ a.rp-fix-stage .iss-fix svg { width: 12px; height: 12px; }
 }
 
 /* The environment sits on the second line after the id and the page, so it never cuts the person's name. */
-.rp-who-sub .rp-env { margin-left: 4px; padding-left: 6px; flex-shrink: 0; max-width: 55%; overflow: hidden; }
+/* The page tells rows apart and the environment does not: the environment gives way first, and the path keeps its last segment whole. */
+.rp-who-sub .rp-env { margin-left: 4px; padding-left: 6px; flex: 0 40 auto; min-width: 0; max-width: 55%; overflow: hidden; }
+.rp-who-sub .rp-env .rp-env-part[data-env] { flex-shrink: 1; min-width: 0; }
+.rp-who-sub .rp-net-path { flex: 0 1 auto; }
+.rp-who-sub .rp-net-tail { max-width: none; }
 /* A part that does not fit leaves whole, never as a bare separator. */
 .rp-env-part[data-env="country"] { flex-shrink: 0; }
 .rp-who-top .rp-person { max-width: 100%; }
@@ -635,6 +656,30 @@ a.rp-fix-stage { gap: 4px; }
 @container rp (max-width: 520px) {
   .rp-c-issue .rp-issue[data-unfiled] { display: none; }
 }
+/* A phone row that caught an issue gives the issue a line of its own under the stats, at full width, so its id and title are never cut to a letter. */
+@container rp (max-width: 520px) {
+  .rp-row:not([data-issues="none"]):has(.rp-c-issue .rp-issue:not([data-unfiled])), .rp-table[data-scoped="true"] .rp-row:not([data-issues="none"]):has(.rp-c-issue .rp-issue:not([data-unfiled])) {
+    grid-template-columns: 28px auto auto minmax(0, 1fr) auto;
+    grid-template-areas: "mark who who who who" "mark len figs . age" "mark issue issue issue issue";
+  }
+  .rp-c-issue { min-width: 0; }
+  .rp-c-issue .rp-issue { max-width: 100%; min-width: 0; }
+}
 /* The notice's dismiss sits in its corner, so the wrapped lines are only the state and the press. */
 .rp-past-cut { padding-right: 34px; }
 .rp-past-cut > .rp-icon-btn { position: absolute; top: 4px; right: 4px; }
+/* An import's numbers as labelled cells (value over its word), read at a glance rather than as a sentence. */
+.rp-cell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; line-height: 1.15; white-space: nowrap; min-width: 0; }
+.rp-cell > b { font-weight: 600; color: var(--sol-text); display: inline-flex; align-items: baseline; gap: 5px; }
+.rp-cell > small { font-size: 10px; color: var(--sol-text-dim); }
+button.rp-cell { border-bottom: 0; text-align: left; }
+button.rp-cell > b, a.rp-rest-tally-n.rp-cell > b { color: inherit; }
+.rp-import-nums:has(.rp-cell) { align-items: center; gap: 4px 16px; }
+.rp-rest-tally:has(.rp-cell) { gap: 4px 16px; align-items: center; }
+.rp-cell .rp-rest-trend { font-size: 10.5px; font-weight: 500; }
+.rp-cell .rp-rest-trend::before { content: none; }
+a.rp-rest-tally-n.rp-cell { text-decoration: none; }
+a.rp-rest-tally-n.rp-cell:hover small { text-decoration: underline; }
+/* Import line: a 429 reads as a chip, and the backlog's rate sits in its own cell at the cell's own size. */
+.rp-import-chip { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font-size: 11px; font-weight: 500; white-space: nowrap; color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 13%, transparent); }
+.rp-cell[data-ops-rest-trend] .rp-rest-trend { font-size: inherit; font-weight: 600; }
