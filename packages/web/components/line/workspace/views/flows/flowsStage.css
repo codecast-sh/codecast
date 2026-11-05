@@ -116,3 +116,9 @@ a.fs-hot-s:hover { border-color: var(--lw-rule); color: var(--lw-ink); }
   .fs-app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(440px, 1fr); height: auto; }
   .fs-list { border-right: 0; border-bottom: 1px solid var(--lw-rule-2); max-height: 280px; }
 }
+/* Full view names the drawn flow and its counts beside Exit. */
+.fs-full-name { display: inline-flex; align-items: baseline; gap: 12px; margin: 0 4px 0 8px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; }
+.fs-full-name > b { font-size: var(--lw-fs-sm); color: var(--lw-ink); font-weight: 650; }
+.fs-full-name span b, .fs-full-name a b { color: var(--lw-ink); }
+.fs-full-name [data-tone="you"], .fs-full-name [data-tone="you"] b { color: var(--lw-person); text-decoration: none; }
+.fs-full-name [data-tone="bad"], .fs-full-name [data-tone="bad"] b { color: var(--lw-bad); }
