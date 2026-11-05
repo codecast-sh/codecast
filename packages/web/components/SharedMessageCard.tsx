@@ -8,7 +8,8 @@ import { parseMessageRefPayload, truncateEntityLabel, type MessageRef } from "..
 import { cleanTitle } from "../lib/conversationProcessor";
 import { stripMarkdown } from "../lib/notificationText";
 import { MessageBlock, type SharedMessageData } from "../app/share/message/[token]/SharedMessageView";
-import { CardMarkdown, ObjectCardFrame } from "./EntityObjectCard";
+import { ObjectCardFrame } from "./EntityObjectCard";
+import { CardMarkdown } from "./EntityCardRows";
 import { ACCENT } from "../lib/entityCardAccent";
 import { AuthorAvatar } from "./entityDisplay";
 import { relativeTime } from "../lib/entityDisplay";

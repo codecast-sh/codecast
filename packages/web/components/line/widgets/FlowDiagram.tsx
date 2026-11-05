@@ -4,25 +4,15 @@
 // routes off the path under the step they leave, and a run's state on every
 // step. The model is lib/line/flowDiagram.ts; this only draws it.
 import { memo, useMemo } from "react";
-import { Bot, Sparkles, SquareTerminal, User, type LucideIcon } from "lucide-react";
 import { flowDiagram, routeTail, runReached, SESSION_WORDS, stepStates, type DiagramStep, type SideRoute, type StepState } from "../../../lib/line/flowDiagram";
 import type { ShippedFlow } from "../../../lib/line/flowPool";
+import { WHO } from "../../../lib/line/flowWho";
 
 type RunLike = Parameters<typeof stepStates>[1];
 /** Picking a step: the card opens what that station does under the drawing. */
 export type StepPick = { id: string; kind: DiagramStep["kind"] };
 type Pick = { picked: string | null; onPick?: (pick: StepPick) => void };
 
-/** Who does a step, said on the step itself. */
-export const WHO: Record<DiagramStep["kind"], { icon: LucideIcon; word: string }> = {
-  agent: { icon: Bot, word: "An agent session does this" },
-  script: { icon: SquareTerminal, word: "A command runs this" },
-  person: { icon: User, word: "A person decides this" },
-  call: { icon: Sparkles, word: "One model call answers this" },
-  segment: { icon: Bot, word: "A segment" },
-  parallel: { icon: Bot, word: "These run side by side" },
-  join: { icon: Bot, word: "Waits for every branch" },
-};
 const STATE_MARK: Record<StepState, string> = { idle: "", done: "✓", current: "", stopped: "✕" };
 const TONE_MARK: Record<SideRoute["tone"], string> = { stop: "⊣", back: "↺", out: "↳" };
 

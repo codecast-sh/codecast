@@ -13,7 +13,8 @@ import { flowRefOf } from "../../../lib/entityLinks";
 import { MarkdownBlocks } from "../../tools/MarkdownRenderer";
 import { CodeBlock } from "../../CodeBlock";
 import { EntityIdPill } from "../../EntityIdPill";
-import { FlowDiagram, WHO, type StepPick } from "./FlowDiagram";
+import { FlowDiagram, type StepPick } from "./FlowDiagram";
+import { WHO } from "../../../lib/line/flowWho";
 
 type RunLike = { node_statuses?: ReadonlyArray<{ node_id: string; status: string; outcome?: string; session_id?: string }> | null } & Record<string, any>;
 
