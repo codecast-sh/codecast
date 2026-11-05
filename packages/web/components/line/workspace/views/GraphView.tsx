@@ -18,7 +18,7 @@ import { hasOpenModal, isMac } from "../../../../shortcuts";
 import { keyBelongsElsewhere } from "../../../../shortcuts/keyOwnership";
 import { KeyCap } from "../../../KeyCap";
 import { RunTrail, dayWords, durationWords, useLineNav } from "../../widgets";
-import { GraphCanvas, GraphDefs } from "./graph/GraphCanvas";
+import { GraphCanvas, GraphDefs, type LiveAtStep } from "./graph/GraphCanvas";
 import { litRun } from "./graph/litRun";
 import { DOT_LINE, EXIT_LEAD, essenceExits, exitWords, graphLayout, textW, withFailures, type GEdge, type GraphMode } from "./graph/graphLayout";
 import { stepFailures, stepPassed, stepWaits } from "../../../../lib/line/stepTable";
@@ -138,7 +138,7 @@ const ARROW_BELOW_ROW = 78;
 /** How far in from each side of the stage its edge fade hides words, in px (graph.css .lwg::before: 112px, nearly opaque for the first third). */
 const EDGE_FADE = 40;
 
-export function GraphView({ model, workspace, selection, select, href, lead, trail }: LineViewProps & { lead?: ReactNode; trail?: ReactNode }) {
+export function GraphView({ model, workspace, selection, select, href, lead, trail, live }: LineViewProps & { lead?: ReactNode; trail?: ReactNode; live?: ReadonlyMap<string, LiveAtStep> }) {
   const nav = useLineNav();
   const [mode, setModeState] = useState<GraphMode>(readMode);
   const [peek, setPeek] = useState<string | null>(null);
@@ -222,10 +222,21 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
     onView,
   });
 
-  /** Where the view should rest now: on the open step, else the whole graph. */
-  const settle = useCallback((anim: boolean) => {
+  /** Where the view should rest now: on the open step; else, drawn live, on the steps holding runs when the whole graph
+   *  does not fit at a size its words read; else the whole graph. `whole` (the fit control, F) always fits it all. */
+  const settle = useCallback((anim: boolean, whole = false) => {
     const n = drawerStep ? layout.nodes.get(drawerStep) : null;
-    if (!n) { pz.fit(anim); return; }
+    if (!n) {
+      const held = !whole && live?.size ? layout.list.filter((m) => live.has(m.id)) : [];
+      const sz = pz.size();
+      const fits = layout.bounds.w * FIT_MIN_K <= sz.w - insets.left - insets.right && layout.bounds.h * FIT_MIN_K <= sz.h - insets.top - insets.bottom;
+      if (!held.length || fits) { pz.fit(anim); return; }
+      // Room for each step's badge above it and its name beside a dot.
+      const l = Math.min(...held.map((m) => m.x - Math.max(m.w / 2, 70))) - 40, r = Math.max(...held.map((m) => m.x + Math.max(m.w / 2, 70))) + 40;
+      const t = Math.min(...held.map((m) => m.y - m.h / 2)) - 50, b = Math.max(...held.map((m) => m.y + m.h / 2)) + 60;
+      pz.fit(anim, { x: l, y: t, w: r - l, h: b - t });
+      return;
+    }
     // Its "can end" words run past the step's right edge: keep them in view with it.
     const ends = layout.exits.has(n.id) ? withFailures(essenceExits(model.graph, (id) => layout.nodes.has(id)), failed).get(n.id) : undefined;
     const words = ends && !n.dot ? -n.w / 2 + 4 + textW(`${EXIT_LEAD}${exitWords(ends)}`, 14) : 0;
@@ -255,7 +266,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
     }
     const fits = (reach.left + reach.right) * k <= aw;
     pz.centerOn(n.x, n.y, anim, fits ? reach : own);
-  }, [drawerStep, layout, model.graph, pz, failed]);
+  }, [drawerStep, layout, model.graph, pz, failed, live]);
   const settleRef = useRef(settle);
   settleRef.current = settle;
 
@@ -277,12 +288,13 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
   // A new layout (the other mode, another graph's shape) or a step opened or closed: ease to it.
   const settledFor = useRef<string | null>(null);
   useWatchEffect(() => {
-    const key = `${mode}:${drawerStep ?? ""}`;
+    // The live counts arriving after the first paint move the rest onto them once.
+    const key = `${mode}:${drawerStep ?? ""}:${live?.size ? "live" : ""}`;
     if (settledFor.current === null) { settledFor.current = key; return; }
     if (settledFor.current === key) return;
     settledFor.current = key;
     settle(true);
-  }, [mode, drawerStep, layout]);
+  }, [mode, drawerStep, layout, live]);
 
   const setMode = useCallback((m: GraphMode) => {
     setModeState(m);
@@ -371,7 +383,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
       }
       const lower = k.toLowerCase();
       if (lower === "m") { take(); setMode(mode === "essence" ? "all" : "essence"); return; }
-      if (lower === "f") { take(); settle(true); return; }
+      if (lower === "f") { take(); settle(true, true); return; }
       if (lower === "r") { take(); setRunsOpen((o) => !o); return; }
       if (k === "[") { take(); stepRun(1); return; }
       if (k === "]") { take(); stepRun(-1); return; }
@@ -409,6 +421,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
             passed={passed}
             waits={waits}
             onWaiting={openWaiting}
+            live={live}
           />
         </g>
       </svg>
@@ -423,7 +436,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
           <button type="button" className="lwg-btn" data-ghost="" aria-pressed={!!run} aria-expanded={runsOpen} onClick={() => setRunsOpen((o) => !o)} disabled={!model.runs.length} title="Light a run's path (R)" data-lwg-runs-btn>
             <span className="lwg-runs-dot" />Runs <em>{model.runs.length}</em>
           </button>
-          <button type="button" className="lwg-btn" data-ghost="" data-icon="" onClick={() => settle(true)} title="Fit (F)" aria-label="Fit the graph"><Maximize2 className="w-3.5 h-3.5" /></button>
+          <button type="button" className="lwg-btn" data-ghost="" data-icon="" onClick={() => settle(true, true)} title="Fit (F)" aria-label="Fit the graph"><Maximize2 className="w-3.5 h-3.5" /></button>
           <button type="button" className="lwg-btn" data-ghost="" data-icon="" onClick={() => setHelp(true)} title="Keys (?)" aria-label="Keys">?</button>
           {trail}
         </div>
