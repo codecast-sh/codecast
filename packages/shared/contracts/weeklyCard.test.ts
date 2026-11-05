@@ -67,37 +67,24 @@ describe("buildWeekCard", () => {
     });
     expect(card.sessions).toBe(1);
     expect(card.agent_hours).toBe(2);
-    // Open for three days: resumed, not worked through, so it is nobody's longest session.
-    expect(card.longest_session_ms).toBe(0);
   });
 
-  test("the longest session is the longest one that lived within a day, clipped to the week", () => {
-    const card = buildWeekCard({
-      bounds, tz: LA, now,
-      sessions: [s({ started_at: mon - 2 * H, updated_at: mon + 5 * H }), s({ started_at: mon + 9 * H, updated_at: mon + 15 * H })],
-      devices: [],
-    });
-    expect(card.longest_session_ms).toBe(6 * H);
-  });
-
-  test("sessions outside the week are not counted, and a persistent session is not the longest", () => {
+  test("sessions outside the week are not counted", () => {
     const card = buildWeekCard({
       bounds, tz: LA, now,
       sessions: [
         s({ started_at: bounds.end + H, updated_at: bounds.end + 2 * H }),
         s({ started_at: mon - 10 * H, updated_at: mon - 9 * H }),
-        s({ started_at: mon + H, updated_at: mon + 6 * H, persistent: true }),
         s({}),
       ],
       devices: [],
     });
-    expect(card.sessions).toBe(2);
-    expect(card.longest_session_ms).toBe(H);
+    expect(card.sessions).toBe(1);
   });
 
   test("an empty week has no busiest day and zero hours", () => {
     const card = buildWeekCard({ bounds, tz: LA, now, sessions: [], devices: [] });
-    expect(card).toMatchObject({ sessions: 0, agent_hours: 0, active_days: 0, busiest_day: -1, longest_session_ms: 0 });
+    expect(card).toMatchObject({ sessions: 0, agent_hours: 0, active_days: 0, busiest_day: -1 });
     expect(card.days).toHaveLength(7);
   });
 

@@ -23,11 +23,9 @@
 import { Fragment, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, BellOff, Check, History, Loader2, Plus, RefreshCw, RotateCcw, Wand2 } from "lucide-react";
+import { AlertTriangle, BellOff, Check, History, Loader2, Plus, RefreshCw } from "lucide-react";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { hasOpenModal, isEditableTarget } from "../../shortcuts";
-import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useOpsGroup, useOpsSources, useOpsWatches, useSyncOpsGroup, useSyncOpsGroupTransitions } from "../../hooks/useSyncOps";
 import { useActiveWorkspaceKey, useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { useHeldSeries, useWatchSeries, useWatchSeriesLive } from "../../hooks/useSyncOpsMetrics";
@@ -38,20 +36,16 @@ import { relTimeShort } from "../../lib/utils";
 import { MONITOR_LIMITS } from "@codecast/shared/contracts/metricMonitor";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { HealthPill, MetricChart } from "./MetricChart";
-import {
-  CARD_BUCKETS, DETAIL_BUCKETS, KIND_LABEL, allWindow, METRIC_RANGES, changeRange, changeSpan, changeState, changeTone, chartPoints, crossings, currentEpisodeSince, durationShort, episodeSummary, formatMeasure, formatPct, formatValue, fullestHeld, inWindow, intervalLabel, measuresCount, periodChange, rangeChange, runningCrossing,
-  isMetricRange, isMutedAt, rangeWindow, relatedShips, shiftPoints, shipMarks, SHIPS_SHOWN_MAX, spanLabel, stampLabel, stats, transitionRows, transitionsIn, watchErrorText, watchHealth, watchMarks, windowAround, windowName,
-  type ChartMark, type Episode, type MetricRange, type Pt, type SeriesSpec, type ShipTask, type TransitionRow, type Win,
-} from "./metricModel";
+import { HEALTH_LOOK, KIND_LABEL, METRIC_RANGES, crossings, durationShort, formatMeasure, formatPct, formatValue, inWindow, measuresCount, isMetricRange, isMutedAt, rangeWindow, spanLabel, stampLabel, stats, watchHealth, windowName, type MetricRange, type Pt, type Win } from "./metricModel";
+import { CARD_BUCKETS, DETAIL_BUCKETS, changeRange, changeSpan, changeState, changeTone, chartPoints, fullestHeld, periodChange, rangeChange, shiftPoints, stripMean, withAnnouncedReads, type SeriesSpec } from "./metricSeries";
+import { currentEpisodeSince, episodeSummary, runningCrossing, relatedShips, shipMarks, SHIPS_SHOWN_MAX, transitionRows, transitionsIn, watchErrorText, watchMarks, windowAround, type ChartMark, type ShipTask, type TransitionRow } from "./metricEvents";
+import { allWindow, intervalLabel } from "./metricEditing";
 import { opsHref } from "./opsPaths";
 import { OpsNotFound } from "./OpsShellParts";
-import { OpsFeedEmpty, ProviderIcon, SOURCE_PROVIDER_LABEL, StatusPill, useOpsFeed } from "./parts";
+import { OpsFeedEmpty, ProviderIcon, SOURCE_PROVIDER_LABEL, useOpsFeed } from "./parts";
 import { QueryEditor, WatchSettings } from "./WatchEditor";
 import { removeWatchLedger } from "./watchQuery";
-import { FixReview } from "./issueParts";
-import { useIssueFix } from "./useIssueFix";
-import { fixActionLabel, fixClose, fixStage, regressedAt, taskMatchesIssue } from "./issuesModel";
-import { triage } from "./issueUndo";
+import { fixStage } from "./issuesModel";
 import { useWatchEpisodes } from "./useWatchEpisodes";
 import { DistributionCard } from "./MetricDistribution";
 import { useReadNow } from "./useReadNow";
@@ -59,6 +53,7 @@ import { deliveriesByRow, routedSilently, rowKey } from "./alertRouting";
 import type { AlertDelivery } from "@codecast/shared/contracts/metricMonitor";
 import type { OpsEvent, OpsGroup, OpsSource, OpsWatch } from "./opsTypes";
 import "./metrics.css";
+import { FixAction, FixPanel } from "./MetricFixPanel";
 
 /** Watch and range pairs whose older values this tab already asked for (WatchView). */
 const autoBackfilled = new Set<string>();
@@ -177,9 +172,9 @@ function ElsewherePreview({ watch, issue }: { watch: OpsWatch; issue: ElsewhereI
           sub={change ? <><span className="mx-stat-wide">mean </span>{fmt(change.now)} vs {fmt(change.base)}</> : !changeCur || !changePrev ? "reading…" : "no values 7d earlier"}
           data="change"
         />
-        <Stat label="Line" value={watch.threshold === undefined ? "none" : `${watch.direction === "above" ? ">" : "<"} ${formatValue(watch.threshold, watch.unit)}`} sub={watch.warn !== undefined ? `warn ${formatValue(watch.warn, watch.unit)}` : undefined} />
+        <Stat label="Line" value={watch.threshold === undefined ? "none" : `${watch.direction === "above" ? ">" : "<"} ${formatValue(watch.threshold, watch.unit)}`} sub={watch.warn !== undefined ? `warn ${formatValue(watch.warn, watch.unit)}` : undefined} data="line" />
         <Stat label="Range 7d" value={st ? (st.min === st.max ? fmt(st.min) : `${fmt(st.min)} – ${fmt(st.max)}`) : "–"} data="range" minor />
-        <Stat label="Mean 7d" value={st ? fmt(st.avg) : "–"} data="mean" minor />
+        <Stat label="Mean 7d" value={((m) => (m !== null ? fmt(m) : "–"))(stripMean(st ? st.avg : null, change, "7d", false))} data="mean" minor />
       </div>
       <div className="mx-chart-card">
         <MetricChart
@@ -273,14 +268,17 @@ function WatchView({ watch }: { watch: OpsWatch }) {
   const { announced, episodes, since } = useWatchEpisodes(watch, group);
   // All runs from the earliest thing known about the watch (its first value, its first announced alert, its issue's first sighting), so the episodes it counts are the issue's.
   const firstAnnounced = announced[0]?.at ?? null;
-  const base = useMemo(
-    () => (range === "all" && !loading ? allWindow({ heldFrom, firstAnnounced, firstSeen: group?.first_seen ?? null, points, now }).win : rangeWindow(range, points, now)),
-    [range, loading, heldFrom, firstAnnounced, group?.first_seen, points, now],
+  const all = useMemo(
+    () => (range === "all" && !loading ? allWindow({ heldFrom, firstAnnounced, firstSeen: group?.first_seen ?? null, points, now, step }) : null),
+    [range, loading, heldFrom, firstAnnounced, group?.first_seen, points, now, step],
   );
+  const base = all?.win ?? rangeWindow(range, points, now);
+  // A value or two held weeks before the rest: named on the bar, one press shows the window from it.
+  const stray = zoom ? null : all?.stray ?? null;
   const win = zoom ?? base;
   const span = win.to - win.from;
   // The stretch of the window before the first value held, named on the chart.
-  const held = heldFrom ?? points[0]?.at ?? null;
+  const held = all?.stray ? base.from : heldFrom ?? points[0]?.at ?? null;
   const gap = !loading && !pending && (held === null || held - win.from > span / 50) ? { from: win.from, to: Math.min(win.to, held ?? win.to) } : null;
   const episodeBands = useMemo(() => episodes.map((e) => ({ from: e.from, to: e.to ?? now })), [episodes, now]);
   // The period before, from the server, laid over this one.
@@ -304,6 +302,7 @@ function WatchView({ watch }: { watch: OpsWatch }) {
     ? (zoomSeries ? periodChange(points, prevSeries?.points ?? null, cspan, win.to) : null)
     : rangeChange(changeCur.series, changePrev.series, watch.points, range, now);
   const changeIs = changeState(change, zoom ? zoomLive && prevLive : changeCur.live && changePrev.live);
+  const mean = stripMean(st ? st.avg : null, change, range, !!zoom);
   const named = windowName(win, range === "all" && !zoom);
   const integral = useMemo(() => measuresCount(watch.points, visible), [watch.points, visible]);
   const fmt = (v: number) => formatMeasure(v, watch.unit, integral);
@@ -322,6 +321,8 @@ function WatchView({ watch }: { watch: OpsWatch }) {
     useInboxStore.getState().loadOpsWatchHistory(watch._id);
   }, [!!gap, backfillable, reading, pending, range, watch._id]);
 
+  // The chart draws the announced transitions' own reads where the series holds no value near them, so a recovery sits on its line.
+  const drawnPoints = useMemo(() => (watch.threshold === undefined ? points : withAnnouncedReads(points, announced, step)), [points, announced, step, watch.threshold]);
   const tolerance = Math.max(watch.interval_ms * ((watch.eval_reads ?? 1) + 1), step * 2);
   const transitions = useMemo(() => transitionRows(announced, crossings(points, watch.threshold, watch.direction, true), tolerance), [announced, points, watch.threshold, watch.direction, tolerance]);
   const inWin = episodeSummary(episodes, win, now);
@@ -342,7 +343,9 @@ function WatchView({ watch }: { watch: OpsWatch }) {
         <div className="mx-head-main">
           <h1>{watch.name}</h1>
           <div className="mx-facts">
-            <HealthPill watch={watch} now={now} since={since} />
+            {health === "series" && !muted ? (
+              <button type="button" className="mx-health mx-noline" style={{ ["--ink" as string]: HEALTH_LOOK.series.ink }} onClick={focusLine} data-health="series" data-add-line><span>No line</span><span>Add line</span></button>
+            ) : <HealthPill watch={watch} now={now} since={since} />}
             {source && (
               <Link href={opsHref.tab("metrics", { source: source.name })} className="inline-flex items-center gap-1 hover:text-sol-text">
                 <ProviderIcon provider={source.provider} />{source.name}
@@ -372,9 +375,9 @@ function WatchView({ watch }: { watch: OpsWatch }) {
           title={`The mean of the ${zoom ? "zoomed span" : `last ${spanLabel(cspan)}`} against the mean of the ${spanLabel(cspan)} before it`}
           data="change"
         />
-        <Stat label="Line" value={watch.threshold === undefined ? "none" : `${watch.direction === "above" ? ">" : "<"} ${formatValue(watch.threshold, watch.unit)}`} sub={watch.warn !== undefined ? `warn ${formatValue(watch.warn, watch.unit)}` : undefined} />
+        <Stat label="Line" value={watch.threshold === undefined ? "none" : `${watch.direction === "above" ? ">" : "<"} ${formatValue(watch.threshold, watch.unit)}`} sub={watch.warn !== undefined ? `warn ${formatValue(watch.warn, watch.unit)}` : undefined} data="line" />
         <Stat label={`Range ${named.short}`} value={st ? (st.min === st.max ? fmt(st.min) : `${fmt(st.min)} – ${fmt(st.max)}`) : "–"} data="range" minor />
-        <Stat label="Mean" value={st ? fmt(st.avg) : "–"} sub={st?.uneven ? "time-weighted" : undefined} title={st?.uneven ? "Each value counts for as long as it stood, so a day of polls does not outweigh weeks of weekly values" : undefined} data="mean" minor />
+        <Stat label="Mean" value={mean !== null ? fmt(mean) : "–"} sub={st?.uneven ? "time-weighted" : undefined} title={st?.uneven ? "Each value counts for as long as it stood, so a day of polls does not outweigh weeks of weekly values" : undefined} data="mean" minor />
         {watch.threshold !== undefined && (
           <Stat
             label={`Episodes ${named.short}`}
@@ -398,6 +401,11 @@ function WatchView({ watch }: { watch: OpsWatch }) {
           {zoom && (
             <button type="button" className="ops-btn" onClick={() => zoomTo(null)} data-metric-unzoom>
               {stampLabel(zoom.from)} – {stampLabel(zoom.to)} ✕
+            </button>
+          )}
+          {stray && (
+            <button type="button" className="mx-state" style={{ ["--ink" as string]: "var(--sol-text-muted)" }} onClick={() => zoomTo({ from: stray.at - (now - stray.at) * 0.02, to: now })} title="Show the window from the earliest value" data-metric-stray={stray.count}>
+              {stray.count === 1 ? "1 value" : `${stray.count} values`} {shortDate(stray.at)}
             </button>
           )}
           {prevSpec && (
@@ -429,7 +437,7 @@ function WatchView({ watch }: { watch: OpsWatch }) {
           </button>
         </div>
         <MetricChart
-          points={points}
+          points={drawnPoints}
           win={win}
           interval_ms={step}
           threshold={watch.threshold}
@@ -541,123 +549,6 @@ function MuteControl({ watch, muted, onMute }: { watch: OpsWatch; muted: boolean
   );
 }
 
-/**
- * The header's one fix action, the issue page's plan (fixPlan) read the same
- * way: open the running fix, start one, start a follow-up when a closed fix
- * did not hold, refile a dropped problem, or resolve an issue whose fix held.
- * `f` presses it (`e` for resolve).
- */
-function FixAction({ group, source, stage, now }: { group: OpsGroup; source?: OpsSource; stage: ReturnType<typeof fixStage>; now: number }) {
-  const router = useRouter();
-  const { task, plan } = useIssueFix(group, stage, now);
-  const [fixing, setFixing] = useState(false);
-  const primary = group.status === "ignored" ? null : plan.primary;
-  const reopenTask = () => task?.short_id && void useInboxStore.getState().updateTask(task.short_id, { status: "open" });
-  const press = (): boolean => {
-    if ((primary === "open" || primary === "continue") && plan.live) router.push(`/conversation/${plan.live}`);
-    else if (primary === "start" || primary === "followup") setFixing(true);
-    else if (primary === "refile") reopenTask();
-    else if (primary === "resolve") triage([group], "resolved");
-    else return false;
-    return true;
-  };
-  useWatchEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target) || hasOpenModal() || fixing) return;
-      if (e.key === "f" && primary !== "resolve" && press()) e.preventDefault();
-      else if (e.key === "e" && primary === "resolve" && press()) e.preventDefault();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [primary, plan.live, fixing, group, task?.short_id]);
-  if (!primary) return null;
-  const mismatch = !!task?.title && !taskMatchesIssue(task.title, group.title);
-  const label = fixActionLabel(primary, task?.short_id, mismatch) ?? "Start fix";
-  const Icon = primary === "resolve" ? Check : primary === "refile" ? RotateCcw : Wand2;
-  return (
-    <>
-      <button type="button" className="ops-btn" data-tone="primary" onClick={press} data-watch-fix={primary}>
-        <Icon className="w-3.5 h-3.5" />{label}<KeyCap size="xs" tone="onAccent">{primary === "resolve" ? "e" : "f"}</KeyCap>
-      </button>
-      {primary === "refile" && <button type="button" className="ops-btn" onClick={() => setFixing(true)} data-watch-fix-start><Wand2 className="w-3.5 h-3.5" />Start fix</button>}
-      {fixing && <FixReview groups={[group]} source={source} onClose={() => setFixing(false)} onStarted={() => setFixing(false)} />}
-    </>
-  );
-}
-
-type StepState = "done" | "now" | "todo" | "bad";
-
-/**
- * The alert's issue and its fix in one card: the issue, its state and its
- * episodes over the watch's whole life, then the fix as a stepper (filed,
- * session, closed or shipped, then resolved, or recurred when the fix did
- * not hold). Each step that happened links to its object.
- */
-function FixPanel({ group, source, stage, episodes, now }: { group: OpsGroup; source?: OpsSource; stage: ReturnType<typeof fixStage>; episodes: Episode[]; now: number }) {
-  const { task, sessions, plan } = useIssueFix(group, stage, now);
-  const [fixing, setFixing] = useState(false);
-  // The step the alert waits on carries its action: no session yet, so the Session row starts one.
-  const canStart = group.status !== "ignored" && (plan.primary === "start" || plan.primary === "followup");
-  const session = plan.live ?? group.fix_conversation_id ?? sessions[0]?.id ?? null;
-  const resolved = group.status === "resolved";
-  const close = fixClose(group, task ?? undefined);
-  const recurred = stage === "recurring" ? regressedAt(group) ?? group.last_transition_at ?? group.last_seen : null;
-  const all = episodeSummary(episodes, { from: 0, to: now }, now);
-  const first = episodes[0]?.from;
-  const closeStep = task?.landed
-    ? { label: "Shipped", ref: task.landed.sha.slice(0, 7), href: task.landed.url, external: true, sub: relTimeShort(task.landed.at, now) }
-    : close && close.how !== "dissolved" && close.how !== "dropped"
-      ? { label: close.how === "resolved" ? "Resolved" : "Closed", ref: close.how === "resolved" ? "by hand" : task?.short_id ?? "task", href: close.how === "resolved" ? opsHref.issue(group.short_id) : `/tasks/${task?.short_id ?? group.signal_task_id}`, sub: close.at ? relTimeShort(close.at, now) : undefined }
-      : null;
-  const steps: { key: string; label: string; state: StepState; ref?: string; href?: string; external?: boolean; sub?: string }[] = [
-    {
-      key: "filed", label: "Filed", state: group.signal_task_id ? "done" : "todo",
-      ...(group.signal_task_id ? { ref: task?.short_id ?? "task", href: `/tasks/${task?.short_id ?? group.signal_task_id}`, sub: task?.status?.replace("_", " ") } : {}),
-    },
-    {
-      key: "session", label: "Session", state: session ? (plan.live && !closeStep ? "now" : "done") : "todo",
-      ...(session ? { ref: plan.live ? "running" : "opened", href: `/conversation/${session}`, sub: group.fix_started_at ? relTimeShort(group.fix_started_at, now) : undefined } : {}),
-    },
-    { key: "shipped", state: closeStep ? "done" : "todo", ...(closeStep ?? { label: "Shipped" }) },
-    recurred !== null
-      ? { key: "recurred", label: "Recurred", state: "bad", ref: `${relTimeShort(recurred, now)} ago`, href: opsHref.issue(group.short_id), sub: stampLabel(recurred) }
-      : {
-        key: "resolved", label: "Resolved", state: resolved ? "done" : "todo",
-        ...(resolved ? { ref: group.short_id, href: opsHref.issue(group.short_id), sub: group.resolved_in ? `in ${group.resolved_in}` : group.resolved_at ? relTimeShort(group.resolved_at, now) : undefined } : {}),
-      },
-  ];
-  return (
-    <div className="ops-card mt-3.5 mx-fix" data-watch-fixcard data-stage={stage}>
-      <div className="ops-card-head">
-        <span className="inline-flex items-center gap-2 min-w-0">
-          Issue
-          <Link href={opsHref.issue(group.short_id)} className="ops-mono font-normal hover:underline">{group.short_id}</Link>
-          <StatusPill status={group.status} failing={group.meta?.ok === undefined ? undefined : !group.meta.ok} />
-        </span>
-        <span className="ops-num ops-dim font-normal text-[11.5px]" data-watch-episodes={all.count} title={first ? `since ${stampLabel(first)}` : undefined}>
-          {all.count ? `${all.count} ${all.count === 1 ? "episode" : "episodes"} · ${durationShort(all.total)} alerting` : "no episodes"}
-        </span>
-      </div>
-      {task?.title && <Link href={`/tasks/${task.short_id ?? group.signal_task_id}`} className="mx-fix-title" title={task.title}>{task.title}</Link>}
-      <ol className="mx-steps">
-        {steps.map((st) => (
-          <li key={st.key} data-state={st.state} data-step={st.key}>
-            <i aria-hidden>{st.state === "done" ? <Check className="w-2.5 h-2.5" /> : st.state === "bad" ? <AlertTriangle className="w-2.5 h-2.5" /> : null}</i>
-            <span className="mx-step-label">{st.label}</span>
-            {st.key === "session" && !session && canStart ? (
-              <button type="button" className="mx-step-action" onClick={() => setFixing(true)} data-watch-step-start><Wand2 className="w-3 h-3" />{plan.primary === "followup" ? "Start follow-up" : "Start fix"}</button>
-            ) : st.ref && st.href ? (
-              st.external ? <a href={st.href} target="_blank" rel="noreferrer" className="ops-mono hover:underline">{st.ref}</a> : <Link href={st.href} className="ops-mono hover:underline">{st.ref}</Link>
-            ) : <span className="ops-dim">–</span>}
-            {st.sub && <span className="ops-dim mx-step-sub">{st.sub}</span>}
-          </li>
-        ))}
-      </ol>
-      {fixing && <FixReview groups={[group]} source={source} onClose={() => setFixing(false)} onStarted={() => setFixing(false)} />}
-    </div>
-  );
-}
-
 /** A read that failed: what failed (the reader and its error), how often, and the two things to do about it. */
 function ReadError({ watch, source, error, now }: { watch: OpsWatch; source: OpsSource | undefined; error: string; now: number }) {
   const { asking, readNow } = useReadNow([watch]);
@@ -701,10 +592,18 @@ function SourceCard({ watch, source, heldFrom, now }: { watch: OpsWatch; source:
   );
 }
 
+/** The settings' line field, scrolled to and focused: where a watch with no line gets one. */
+function focusLine() {
+  const el = document.getElementById("mx-line");
+  el?.scrollIntoView({ block: "center", behavior: "smooth" });
+  (el as HTMLInputElement | null)?.focus({ preventScroll: true });
+}
+
 /** The stats strip's columns: all in one row when wide, an even split into two rows when the page narrows (metrics.css). */
 function statCols(n: number): CSSProperties {
   const half = Math.ceil(n / 2);
-  return { ["--n" as string]: n, ["--half" as string]: half, ["--last-span" as string]: 2 * half - n + 1 };
+  // On a phone two to a row, the Mean cell last (metrics.css): it takes the whole row when the count is odd.
+  return { ["--n" as string]: n, ["--half" as string]: half, ["--last-span" as string]: 2 * half - n + 1, ["--phone-span" as string]: n % 2 ? 2 : 1 };
 }
 
 function Stat({ label, value, tone, sub, data, minor, title }: { label: ReactNode; value: string; tone?: "bad" | "good"; sub?: ReactNode; data?: string; /** Left off a phone's first screen. */ minor?: boolean; title?: string }) {
@@ -827,4 +726,9 @@ function highlightSql(sql: string) {
     }
     return p;
   });
+}
+
+/** A day as the bar names it: "Sep 6". */
+function shortDate(at: number): string {
+  return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }

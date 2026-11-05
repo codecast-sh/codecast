@@ -18,7 +18,7 @@ import { moveTaskStatus } from "./tasks";
 import { noticeCardWaiting, noticeChangeShipped } from "./lineNotices";
 import { createDataContext } from "./data";
 import { askTrialGate, trialProjectOf } from "./lineTrial";
-import { alignGateChoices, gateResponseOf, standingCard } from "./lib/gateChoices";
+import { gateMirror, gateResponseOf, standingCard } from "./lib/gateChoices";
 import { runSuperseded } from "./lib/superseded";
 import { resolveOwnerDevice } from "./devices";
 import { openRunPrice } from "./lib/trialRunPrices";
@@ -240,7 +240,7 @@ export async function pauseAtGateCore(
       updated_at: now,
     });
     // The session's options in its own order, each keyed to the edge it names (an answer routes by option index).
-    const choices = alignGateChoices(own.options, args.choices).map((c, i) => (c ? { key: c.key, label: c.label, target: c.target } : { key: "", label: own.options[i].label, target: "" }));
+    const choices = gateMirror(own.options, args.choices);
     const answered = own.status === "answered" ? { gate_response: gateResponseOf(choices[own.answer_index ?? -1]?.key, own.answer_text, own.options[own.answer_index ?? -1]?.label), status: "running" as const } : {};
     await ctx.db.patch(args.run_id, { gate_decision_id: own._id, gate_choices: choices, ...answered });
     decision = { id: own._id, short_id: own.short_id };

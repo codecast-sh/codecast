@@ -10,12 +10,27 @@ import { scopeArgs, scopeOf } from "../lib/ingestScope";
 import { connectionIdForSource, tokenFor } from "../tokenConnectors";
 import { sentryCall, SENTRY_DEFAULT_HOST } from "./sentry";
 import { tokenHttp } from "../lib/tokenHttp";
+import { hogqlBody, hogqlScalar, posthogRequest } from "./posthog";
 
-export type VendorProject = { id: string; slug?: string; name: string; platform?: string; taken_by?: string };
+export type VendorProject = { id: string; slug?: string; name: string; platform?: string; taken_by?: string; /** PostHog: events the project took in the last 7 days, when the key may query it. */ events_7d?: number };
 export type VendorProjects = { ok: true; projects: VendorProject[]; account?: string } | { ok: false; error: string };
 
 const vendorValidator = v.union(v.literal("sentry"), v.literal("posthog"));
 const LIST_MAX_BYTES = 512 * 1024;
+/** Projects whose last week is counted for the picker; past this the rows show no count rather than one call each. */
+const COUNT_MAX_PROJECTS = 12;
+const WEEK_COUNT = "SELECT count() FROM events WHERE timestamp > now() - INTERVAL 7 DAY";
+
+/** A PostHog project's events over the last week, or undefined when the key may not query it or it does not answer. */
+async function weekEvents(token: string, host: string, projectId: string): Promise<number | undefined> {
+  const answer = await posthogRequest({ token, host, project_id: projectId }, "/query/", { method: "POST", body: hogqlBody(WEEK_COUNT), maxBytes: 16 * 1024 });
+  if (!answer.ok) return undefined;
+  try {
+    return hogqlScalar(JSON.parse(answer.text)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The workspace's connection for the vendor and what its sources already read. */
 export const projectsTarget = internalQuery({
@@ -65,7 +80,11 @@ export const listVendorProjects = action({
       return { ok: false, error: "PostHog's project list was not JSON" };
     }
     const rows: any[] = Array.isArray(body?.results) ? body.results : Array.isArray(body) ? body : [];
-    const projects = rows.map((p): VendorProject => ({ id: String(p?.id), name: String(p?.name ?? p?.id) }));
+    const host = config.host.replace(/\/+$/, "");
+    const listed = rows.map((p): VendorProject => ({ id: String(p?.id), name: String(p?.name ?? p?.id) }));
+    // Each project's last week beside its name, so a person picks the one that holds the traffic; read in parallel, a failure leaves the count off.
+    const counts = await Promise.all(listed.slice(0, COUNT_MAX_PROJECTS).map((p) => weekEvents(cred.token, host, p.id)));
+    const projects = listed.map((p, i) => (counts[i] !== undefined ? { ...p, events_7d: counts[i] } : p));
     return { ok: true, projects: projects.map((p) => ({ ...p, ...(takenBy("posthog", p, target.reads, config.project_id) ? { taken_by: takenBy("posthog", p, target.reads, config.project_id) } : {}) })) };
   },
 });

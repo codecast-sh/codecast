@@ -6,8 +6,9 @@
 // (before a counter's first day) is shaded and named, never drawn as zero.
 import { useState, type PointerEvent, type ReactNode } from "react";
 import Link from "next/link";
-import { clusterByPixels, niceMax, rangeTicks, seriesLabel, stackKeys, STACK_INK, tickBudget, unknownUntil, type HistBin } from "./timelineModel";
+import { clusterByPixels, isMidnight, niceMax, rangeTicks, seriesLabel, stackKeys, STACK_INK, tickBudget, unknownUntil, type HistBin } from "./timelineModel";
 import { MARK_PX, endAnchored, mergeFacing, useWidth } from "./volumeChartLayout";
+import { tickLabel } from "./timelineTabModel";
 import "./sourceView.css";
 
 export type ChartMark = { at: number; label: string; href?: string; title?: string };
@@ -21,8 +22,6 @@ const binWhen = (b: HistBin) => {
   const t = (at: number) => new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return `${new Date(b.from).toLocaleDateString([], { month: "short", day: "numeric" })}, ${t(b.from)} to ${t(b.to)}`;
 };
-const tick = (at: number, span: number) =>
-  span > 3 * 86_400_000 ? new Date(at).toLocaleDateString([], { month: "short", day: "numeric" }) : new Date(at).toLocaleTimeString([], { hour: "numeric", minute: span <= 6 * 3600_000 ? "2-digit" : undefined });
 const compact = (n: number) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n));
 /** The grid reaches this far above the plot, so the top tick's label is not cut in half. */
 const GRID_PAD = 8;
@@ -38,6 +37,7 @@ export function VolumeChart({
   empty,
   label,
   silence,
+  dated,
 }: {
   bins: HistBin[];
   range: { from: number; to: number };
@@ -52,6 +52,8 @@ export function VolumeChart({
   label?: string;
   /** A source known to have sent nothing since `from`: drawn as a flat, named stretch to the right edge rather than as missing data. */
   silence?: { from: number; label: string } | null;
+  /** The window needs its date (windowDated): the first tick and each midnight name the day. */
+  dated?: boolean;
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
@@ -166,7 +168,7 @@ export function VolumeChart({
         )}
       </div>
       <div className="ovc-x" aria-hidden>
-        {ticks.map((t) => <span key={t.at} className="ovc-tick ops-num" style={{ left: `${t.x * 100}%` }}>{tick(t.at, span)}</span>)}
+        {ticks.map((t, i) => <span key={t.at} className="ovc-tick ops-num" style={{ left: `${t.x * 100}%` }}>{tickLabel(t.at, span, !!dated && (i === 0 || isMidnight(t.at)))}</span>)}
       </div>
       {(keys.length > 1 || keys.includes("estimated")) && (
         <div className="ovc-legend">

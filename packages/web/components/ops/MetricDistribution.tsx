@@ -5,11 +5,15 @@
 // with one press.
 import { useMemo, useState } from "react";
 import { useInboxStore } from "../../store/inboxStore";
-import { crosses, distribution, formatMeasure, sharePast, measuresCount, lineSuggestions, suggestDirection, type Direction, type Pt } from "./metricModel";
+import { crosses, formatMeasure, measuresCount, type Direction, type Pt } from "./metricModel";
+import { distribution, sharePast, lineSuggestions, suggestDirection } from "./metricEvents";
+import { readCount } from "./metricSeries";
 import type { OpsWatch } from "./opsTypes";
 
 export function DistributionCard({ watch, history, named, loading = false, provisional = false, onDraft }: { watch: OpsWatch; history: readonly Pt[]; /** The chart's window as the page names it (metricModel windowName). */ named: { short: string; within: string }; /** No values for the window have come yet: a skeleton, never "too few". */ loading?: boolean; /** Read off a stored answer while the window's own is on its way. */ provisional?: boolean; onDraft?: (line: number | undefined) => void }) {
   const d = useMemo(() => distribution(history), [history]);
+  // The reads behind the window, whatever the chart folded them to: a longer window never names fewer than a shorter one.
+  const reads = useMemo(() => readCount(history), [history]);
   // A count keeps a count's precision at every range: judged on the values the watch read, not on a range's folded means.
   const integral = useMemo(() => measuresCount(watch.points, history), [watch.points, history]);
   // A watch with no line has no side yet: start on the side its values stray to.
@@ -32,7 +36,7 @@ export function DistributionCard({ watch, history, named, loading = false, provi
     <div className="ops-card" data-watch-distribution data-provisional={provisional ? "" : undefined} aria-busy={provisional || undefined}>
       <div className="ops-card-head">
         <span>Distribution</span>
-        <span className="ops-dim ops-num font-normal text-[11.5px]" title={d?.uneven ? "Each value counts for as long as it stood" : undefined}>{d ? `${d.n} values · ${named.short}${d.uneven ? " · time-weighted" : ""}` : ""}</span>
+        <span className="ops-dim ops-num font-normal text-[11.5px]" title={d ? `${d.n} points drawn${reads > d.n ? `, ${reads} reads folded into them` : ""}${d.uneven ? "; each counts for as long as it stood" : ""}` : undefined}>{d ? `${reads.toLocaleString()} ${reads === 1 ? "read" : "reads"} · ${named.short}${d.uneven ? " · time-weighted" : ""}` : ""}</span>
       </div>
       {loading ? (
         <div className="ops-card-body" aria-busy="true" data-dist-loading>

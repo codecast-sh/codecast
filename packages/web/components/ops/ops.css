@@ -403,7 +403,8 @@ button.ops-stat:hover .ops-stat-label { color: var(--sol-text); text-decoration:
 /* ── Settings, Product sources: one row per source in columns (name, state, 24h, last, open), its actions in a trailing slot that never clips. ── */
 /* One grid for the whole table: every row and the head take its tracks (subgrid), so a column's values sit on one vertical line whatever each row's state or actions. */
 .ops-srows { container: srows / inline-size; font-size: 12.5px; }
-.ops-srows-grid { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, max-content) max-content max-content max-content max-content; column-gap: 14px; }
+/* The name takes its own width (source names are short) and the state gives way: its badge truncates first. */
+.ops-srows-grid { display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr) max-content max-content max-content max-content; column-gap: 14px; }
 /* A long state ("Invariants check failing · 5 of 11 watches retrying") gives way before the numbers and actions do: it truncates, whole in its title. */
 .ops-srow .ops-health { max-width: 100%; min-width: 0; }
 .ops-srows-grid > .ops-srow-head, .ops-srows-grid > .ops-srow-wrap { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }

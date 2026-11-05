@@ -59,7 +59,6 @@ packages/cli/src/syncService.ts 2700
 packages/cli/src/test-helpers/messagingHarness.ts 950
 packages/cli/src/workflow/runner.test.ts 1450
 packages/cli/src/workflow/runner.ts 2250
-packages/cli/src/workflow/templates.test.ts 1050
 packages/cli/src/workspace/lifecycle.test.ts 1000
 packages/cli/src/workspace/lifecycle.ts 950
 packages/convex/convex/accountSwitch.test.ts 1650
@@ -78,7 +77,7 @@ packages/convex/convex/callGuests.test.ts 1700
 packages/convex/convex/callGuests.ts 1550
 packages/convex/convex/callRecordings.test.ts 2150
 packages/convex/convex/callRecordings.ts 2050
-packages/convex/convex/calls.test.ts 1400
+packages/convex/convex/calls.test.ts 1000
 packages/convex/convex/calls.ts 1400
 packages/convex/convex/capabilities.test.ts 1800
 packages/convex/convex/capabilityState.ts 1950
@@ -123,7 +122,6 @@ packages/convex/convex/oauthConnectors.test.ts 850
 packages/convex/convex/org.ts 1650
 packages/convex/convex/orgHealth.ts 950
 packages/convex/convex/orgInit.ts 2000
-packages/convex/convex/orgLine.test.ts 850
 packages/convex/convex/orgProposals.test.ts 1850
 packages/convex/convex/orgProposals.ts 1550
 packages/convex/convex/orgRoles.ts 2350
@@ -149,7 +147,6 @@ packages/convex/convex/signals.ts 2350
 packages/convex/convex/slackSync.test.ts 900
 packages/convex/convex/slackSync.ts 3300
 packages/convex/convex/smallViews.v2.test.ts 850
-packages/convex/convex/sources/app.ts 850
 packages/convex/convex/sources/sentry.test.ts 950
 packages/convex/convex/sources/sentry.ts 1100
 packages/convex/convex/syncLog.test.ts 950
@@ -157,8 +154,6 @@ packages/convex/convex/taskWaits.test.ts 950
 packages/convex/convex/taskWaits.ts 950
 packages/convex/convex/tasks.ts 4900
 packages/convex/convex/teams.ts 1700
-packages/convex/convex/threads.test.ts 850
-packages/convex/convex/threads.ts 850
 packages/convex/convex/transcripts.test.ts 2050
 packages/convex/convex/transcripts.ts 3000
 packages/convex/convex/users.ts 4300
@@ -185,7 +180,7 @@ packages/shared/contracts/snippets.ts 1850
 packages/shared/entities/index.ts 1250
 packages/shared/render/toolCall.ts 900
 packages/shared/tasks/graph.ts 950
-packages/web/app/(marketing)/compare/comparisons.ts 1300
+packages/web/app/(marketing)/compare/comparisons.ts 1100
 packages/web/app/(marketing)/documentation/page.tsx 1500
 packages/web/app/(marketing)/features/browser/Sections.tsx 850
 packages/web/app/(marketing)/heroFly/timeline.ts 1050
@@ -198,7 +193,7 @@ packages/web/app/sessions/page.tsx 950
 packages/web/app/settings/sync/page.tsx 1050
 packages/web/app/tasks/[id]/page.tsx 1000
 packages/web/app/tasks/page.tsx 1550
-packages/web/app/triggers/page.tsx 1450
+packages/web/app/triggers/page.tsx 1250
 packages/web/components/ActivityFeed.tsx 1050
 packages/web/components/CommandPalette.tsx 3850
 packages/web/components/ComposeView.tsx 900
@@ -216,7 +211,7 @@ packages/web/components/MessageInput.tsx 3050
 packages/web/components/MessageReview.tsx 1050
 packages/web/components/PlanDetailPanel.tsx 1250
 packages/web/components/PublishedPageEmbed.tsx 950
-packages/web/components/Sidebar.tsx 1150
+packages/web/components/Sidebar.tsx 1000
 packages/web/components/TriggerContextPanel.tsx 900
 packages/web/components/calls/CallStage.tsx 1150
 packages/web/components/calls/RoomThread.tsx 1050
@@ -234,9 +229,9 @@ packages/web/components/decisions/ChangeCardView.tsx 1250
 packages/web/components/faces/FaceRow.tsx 1050
 packages/web/components/faces/__tests__/faceRow.mount.test.tsx 1050
 packages/web/components/inbox/SessionCardView.tsx 900
-packages/web/components/org/OrgGraph.tsx 950
+packages/web/components/org/OrgGraph.tsx 850
 packages/web/components/org/OrgNodeCards.tsx 850
-packages/web/components/org/orgLayout.ts 1050
+packages/web/components/org/orgLayout.ts 850
 packages/web/hooks/useConversationMessages.ts 1150
 packages/web/hooks/useWalkie.ts 1000
 packages/web/lib/__tests__/walkieOrder.test.ts 1600
@@ -244,7 +239,6 @@ packages/web/lib/calls/callManager.ts 1700
 packages/web/lib/calls/walkie.ts 1850
 packages/web/lib/desktop.test.ts 1150
 packages/web/lib/desktop.ts 1750
-packages/web/lib/faces/faceRow.test.ts 850
 packages/web/lib/faces/faceRow.ts 1050
 packages/web/lib/line/lineModel.ts 1350
 packages/web/lib/line/problemPage.ts 1150

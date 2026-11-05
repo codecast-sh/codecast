@@ -40,6 +40,10 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
       };
     }), candidates: [], notOffered: [], staying: [],
   };
+  // A sample whose process list timed out (the daemon's loop froze under load)
+  // still carries every session: offer them with usage unknown rather than
+  // stranding the move exactly when the machine is overloaded.
+  const listed = source.snapshot!.sample.processCount !== undefined;
   for (const session of sessions.filter(s => s.deviceId === source.deviceId)) {
     const migration = candidates.find(c => c._id === session.conversationId);
     const processes = source.snapshot!.processes.filter(p => p.sessionId === session.sessionId);
@@ -51,7 +55,7 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
       : !migration ? "Not movable"
       : !["claude", "claude_code", "claude-code", ""].includes((migration.agent_type ?? "").toLowerCase()) ? "Not Claude Code"
       : shared ? "Shares a process"
-      : processes.length === 0 ? "No process found"
+      : listed && processes.length === 0 ? "No process found"
       : null);
     if (reason || !migration) { plan.notOffered.push({ sessionId: session.sessionId, reason: reason ?? "Not movable" }); continue; }
     const rss = processes.reduce((n, p) => n + p.rss, 0);
@@ -64,6 +68,7 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
       const checks = evaluateOffloadRequirements({ processes, targetPlatform: device?.platform, targetOnline: host.online,
         targetWakeable: !!host.asleep, readiness: device?.host_readiness,
         targetSample: freshResourceMachine(host, now) ? host.snapshot?.sample : undefined, now });
+      if (!listed) checks.pending.unshift("Check for a local browser, app or simulator: the process list was not sampled");
       if (!eligibility.ok) checks.blockers.unshift(eligibility.reason);
       perDestination[host.deviceId] = { readiness: checks.blockers.length ? "blocked" : "preflight_required", ...checks };
     }
@@ -74,9 +79,10 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
         || Number(b.role === "cloud_linux") - Number(a.role === "cloud_linux");
     });
     plan.candidates.push({
-      sessionId: session.sessionId, reason: `${processes.length} exclusively attributed processes; ${cpu.toFixed(0)}% CPU across cores${macRequired ? "; Apple tooling observed" : "; project portability still needs verification"}`,
+      sessionId: session.sessionId, reason: !listed ? "Usage unknown: the latest sample has no process list"
+        : `${processes.length} exclusively attributed processes; ${cpu.toFixed(0)}% CPU across cores${macRequired ? "; Apple tooling observed" : "; project portability still needs verification"}`,
       ...(macRequired ? { requiresMac: "Apple build or simulator tooling observed in the process tree" } : {}),
-      confidence: "low", relief: { cpu, rssLow: 0, rssHigh: rss },
+      confidence: "low", relief: listed ? { cpu, rssLow: 0, rssHigh: rss } : { rssLow: 0 },
       stops: [...processes].sort((a, b) => b.cpu - a.cpu || b.rss - a.rss).map(p => ({ label: p.name, pid: p.pid, cpu: p.cpu, rss: p.rss, ...(p.detached ? { detached: p.detached } : {}) })),
       staysLocal: source.snapshot!.processes.filter(p => !p.sessionId && ["browser", "simulator", "tool"].includes(p.kind)).slice(0, 4).map(p => ({ label: p.name, pid: p.pid, cpu: p.cpu, rss: p.rss, why: "Not owned exclusively by this session; moving it will not stop this process" })),
       disruption: session.state === "working" ? "mid_turn" : "idle", perDestination,

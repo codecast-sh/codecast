@@ -62,13 +62,14 @@ export function deadRunPanes(panes: ReadonlyArray<{ session: string; command: st
   return [...new Set(panes.filter((p) => p.session.startsWith("wf-") && SHELLS.has(p.command.replace(/^-/, "")) && nowS - p.activityS >= DEAD_RUN_PANE_IDLE_S).map((p) => p.session))];
 }
 
-/** Close them, through the daemon's tmux (`tmux` runs one command and returns its output, throwing on failure). */
-export function closeDeadRunPanes(tmux: (args: string[]) => string, log: (line: string) => void, nowS = Date.now() / 1000): void {
+/** Close them, through the daemon's tmux (`tmux` runs one command and resolves to its output, rejecting on failure).
+ *  Async because the listing walks every tmux server: done synchronously it froze the daemon's loop for 30 to 80s under load. */
+export async function closeDeadRunPanes(tmux: (args: string[]) => Promise<string>, log: (line: string) => void, nowS = Date.now() / 1000): Promise<void> {
   let listed = "";
-  try { listed = tmux(["list-panes", "-a", "-F", "#{session_name}|#{pane_current_command}|#{session_activity}"]); } catch { return; }
+  try { listed = await tmux(["list-panes", "-a", "-F", "#{session_name}|#{pane_current_command}|#{session_activity}"]); } catch { return; }
   const panes = listed.trim().split("\n").filter(Boolean).map((l) => { const [session, command, activity] = l.split("|"); return { session: session ?? "", command: command ?? "", activityS: Number(activity) || 0 }; });
   for (const session of deadRunPanes(panes, nowS)) {
-    try { tmux(["kill-session", "-t", `=${session}`]); log(`[WORKFLOW] closed ${session}: its runner was gone and its shell idle`); } catch { /* gone */ }
+    try { await tmux(["kill-session", "-t", `=${session}`]); log(`[WORKFLOW] closed ${session}: its runner was gone and its shell idle`); } catch { /* gone */ }
   }
 }
 

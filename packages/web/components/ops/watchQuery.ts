@@ -7,7 +7,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { readMetricAnswer, parseReaderQuery, WATCH_KINDS_BY_PROVIDER, type WatchKind } from "@codecast/shared/contracts/ingest";
 import { useOpsGroups } from "../../hooks/useSyncOps";
 import type { SwitchLedger } from "../consequential/ConsequentialSwitch";
-import { hogqlFirstCell, spanLabel, volumePreview, type Pt } from "./metricModel";
+import { spanLabel, type Pt } from "./metricModel";
+import { hogqlFirstCell, volumePreview } from "./metricEditing";
 import type { OpsSource, OpsWatch } from "./opsTypes";
 
 const api = _api as any;

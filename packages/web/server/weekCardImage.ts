@@ -10,7 +10,8 @@ import { createRequire } from "module";
 import { join } from "path";
 import type { Hono } from "hono";
 import type { WeekCardStats } from "@codecast/shared/contracts/weeklyCard";
-import { WEEK_CARD_H, WEEK_CARD_W, WeekCardView } from "../components/weeklyCard/WeekCardView";
+import { WeekCardView } from "../components/weeklyCard/WeekCardView";
+import { WEEK_CARD_H, WEEK_CARD_W } from "@codecast/shared/contracts/weeklyCard";
 import { fetchShared } from "./shareData";
 
 const require = createRequire(import.meta.url);

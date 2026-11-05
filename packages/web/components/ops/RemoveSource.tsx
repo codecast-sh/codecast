@@ -11,6 +11,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useOpsGroups, useOpsScope, useOpsWatches } from "../../hooks/useSyncOps";
+import { REPLAY_PROVIDERS } from "@codecast/shared/contracts/replay";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { removeSourceLedger, REMOVE_SOURCE_CHOICES, type RemoveSourceChoice } from "../consequential/ledgers";
 import { openIssueCount } from "./issuesModel";
@@ -51,7 +52,9 @@ function RemoveReview({ source, onClose, onRemoved }: { source: Pick<OpsSource, 
   const { source: _ref, ...counted } = data ?? { source: null, ...local, calls: undefined };
   // Replays are the Replays tab badge's own count (useReplayTotal), so the review and the tab say the same number.
   const replayCount = replays ? { n: replayCountShown(replays), capped: replays.capped } : data?.replays ?? { n: 0, capped: true };
-  const ledger = removeSourceLedger({ ...counted, replays: replayCount, source: source.name, provider: SOURCE_PROVIDER_LABEL[source.provider], choice, canPause, keyed: source.keyed });
+  // A provider that never records (an app, CI, a webhook) has no replays to count: the tile is left off, as on the overview.
+  const holdsReplays = (REPLAY_PROVIDERS as readonly string[]).includes(source.provider) || replayCount.n > 0;
+  const ledger = removeSourceLedger({ ...counted, replays: replayCount, holdsReplays, source: source.name, provider: SOURCE_PROVIDER_LABEL[source.provider], choice, canPause, keyed: source.keyed });
   const confirm = () => {
     onClose();
     const store = useInboxStore.getState();

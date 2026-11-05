@@ -1,6 +1,6 @@
 // Undo policy for work objects: tasks, plans, projects, initiatives, docs,
-// comments, stacks, bookmarks, saved views, triggers, chat, privacy and the
-// org record.
+// comments, stacks, bookmarks, saved views, chat, privacy and the org record.
+// Triggers have their own file (./triggers.ts).
 //
 // Two routes reach the server. Edits to a local-first collection off the
 // patch rail (tasks, plans, projects, initiatives, docs, bucket assignments)
@@ -32,14 +32,14 @@ type Spec = { spec: UndoSpec };
 /** The fields updateSecretMeta writes, each with how secrets.updateMeta unsets it (a name is never unset). */
 const SECRET_CLEARS = new Map<string, unknown>([["name", undefined], ["note", ""], ["env", []], ["sites", []]]);
 
-const call = (action: string, ...args: unknown[]): Invocation => ({ action, args, runDraft: false });
+export const call = (action: string, ...args: unknown[]): Invocation => ({ action, args, runDraft: false });
 
-const cellsOf = (ctx: UndoCtx, stores: string | readonly string[], field?: string): CellChange[] => {
+export const cellsOf = (ctx: UndoCtx, stores: string | readonly string[], field?: string): CellChange[] => {
   const keys = typeof stores === "string" ? [stores] : stores;
   return ctx.changes.filter((c) => keys.includes(c.store) && (field === undefined || c.field === field));
 };
 
-const rowIds = (cells: readonly CellChange[]): string[] => [...new Set(cells.map((c) => c.id))];
+export const rowIds = (cells: readonly CellChange[]): string[] => [...new Set(cells.map((c) => c.id))];
 
 /** The writer route's label: null when the undo would need a clear the server cannot make. */
 const viaWriter = (label: (ctx: UndoCtx) => string | null, extra?: Partial<UndoSpec>): Spec => ({
@@ -319,55 +319,9 @@ function undoWidens(ctx: UndoCtx): boolean {
 
 const visibilityName = (v: unknown) => (v === "full" ? "full" : v === "summary" ? "summary" : "default");
 
-// ── Comments, stacks, triggers ───────────────────────────────────────────────
+// ── Comments, stacks ─────────────────────────────────────────────────────────
 
 const stackTitle = (state: any, id: string) => quoted(state?.decisionStacks?.[id]?.title, "stack");
-
-type TriggerVerb = "pause" | "resume" | "runNow" | "cancel" | "reactivate";
-const TRIGGER_STORES = ["agentTasks", "foreignTriggers"] as const;
-const triggerRow = (state: any, id: string) => state?.agentTasks?.[id] ?? state?.foreignTriggers?.[id];
-const triggerTitle = (state: any, id: string) => {
-  const t = triggerRow(state, id);
-  return quoted(t?.display_title || t?.title || t?.prompt, "trigger");
-};
-
-/**
- * The verbs that take a trigger verb back, given the status before it.
- * Pause works on a scheduled trigger and resume returns it to scheduled.
- * Nothing else is taken back: run now has run, reactivate has re-armed, and
- * cancel ends the trigger (reactivating re-arms a recurring one an interval
- * from now, not at its slot).
- */
-function triggerInverse(verb: TriggerVerb, prior: unknown): string[] | null {
-  if (verb === "pause") return prior === "scheduled" ? ["resume"] : null;
-  if (verb === "resume") return prior === "paused" ? ["pause"] : null;
-  return null;
-}
-
-const priorStatus = (ctx: UndoCtx, id: string) =>
-  ctx.changes.find((c) => c.id === id && c.field === "status" && (TRIGGER_STORES as readonly string[]).includes(c.store))?.before;
-
-const TRIGGER_TEXT_FIELDS = ["prompt", "title", "mode", "agent_type"] as const;
-
-/** A trigger's prior values for the fields an edit named (TriggerEdit). */
-function priorTriggerFields(prior: any, edited: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const k of TRIGGER_TEXT_FIELDS) if (k in edited && prior[k] != null) out[k] = prior[k];
-  if ("project_path" in edited) out.project_path = prior.project_path ?? "";
-  if ("schedule_type" in edited || "interval_ms" in edited || "run_at" in edited) {
-    out.schedule_type = prior.schedule_type;
-    if (prior.schedule_type === "recurring") out.interval_ms = prior.interval_ms;
-    if (prior.schedule_type === "event") out.event_filter = prior.event_filter;
-    if (prior.schedule_type !== "event" && typeof prior.run_at === "number" && prior.run_at > Date.now()) out.run_at = prior.run_at;
-  }
-  return out;
-}
-
-function formatInterval(ms: number): string {
-  const units: Array<[number, string]> = [[86_400_000, "d"], [3_600_000, "h"], [60_000, "m"]];
-  for (const [size, unit] of units) if (ms >= size && ms % size === 0) return `${ms / size}${unit}`;
-  return `${Math.round(ms / 60_000)}m`;
-}
 
 // ── Chat ─────────────────────────────────────────────────────────────────────
 
@@ -744,56 +698,6 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
     },
   },
 
-  // ── Triggers ───────────────────────────────────────────────────────────────
-  // Pause and resume go back through the opposite verb (see triggerInverse).
-  // Run now, reactivate and cancel are not recorded. The verbs run without their
-  // drafts: the overlay puts the status back, and run_at is the server's to
-  // recompute.
-  triggerAction: {
-    spec: {
-      label: (ctx) => {
-        const [id, verb] = ctx.args as [string, TriggerVerb];
-        if (!triggerInverse(verb, priorStatus(ctx, id))) return null;
-        const done = { pause: "Paused", resume: "Resumed" }[verb as "pause" | "resume"];
-        return `${done} ${triggerTitle(ctx.before, id)}`;
-      },
-      inverse: (ctx) => {
-        const verb = ctx.args[1] as TriggerVerb;
-        return rowIds(cellsOf(ctx, TRIGGER_STORES, "status")).flatMap((id) =>
-          (triggerInverse(verb, priorStatus(ctx, id)) ?? []).map((v) => call("triggerAction", id, v)),
-        );
-      },
-      toast: true,
-    },
-  },
-  // The draft runs so run_at lands where the server's applyTaskUpdate puts it
-  // for the prior interval; the captured run_at is left out for that reason.
-  setTriggerInterval: {
-    spec: {
-      label: (ctx) => `Set ${triggerTitle(ctx.before, ctx.args[0] as string)} to every ${formatInterval(ctx.args[1] as number)}`,
-      inverse: (ctx) =>
-        cellsOf(ctx, TRIGGER_STORES, "interval_ms").map((c) => ({ action: "setTriggerInterval", args: [c.id, c.before] })),
-      ignoreFields: ["run_at"],
-    },
-  },
-  // The inverse sends the prior value of every field the edit named. A
-  // schedule goes back whole: its type with the cadence or event it ran on.
-  // A past run_at is left to the server (an interval from now), like the
-  // interval verb above.
-  editTrigger: {
-    spec: {
-      label: (ctx) => `Edited ${triggerTitle(ctx.before, ctx.args[0] as string)}`,
-      inverse: (ctx) => {
-        const [id, fields] = ctx.args as [string, Record<string, unknown>];
-        if (!ctx.changes.some((c) => c.id === id && (TRIGGER_STORES as readonly string[]).includes(c.store))) return [];
-        const prior = triggerRow(ctx.before, id);
-        if (!prior) return [];
-        return [{ action: "editTrigger", args: [id, priorTriggerFields(prior, fields)] }];
-      },
-      ignoreFields: ["run_at"],
-    },
-  },
-
   // ── Chat (no local-first rows; the inverses carry the server half) ─────────
   updateChatChannel: {
     spec: {
@@ -938,6 +842,15 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
       inverse: (ctx) => {
         const before = teamRow(ctx.before, ctx.args[0] as string);
         return before ? [call("setTeamDefaultFlow", ctx.args[0], before.default_flow ?? null)] : null;
+      },
+    },
+  },
+  setTeamWorkspaceAgent: {
+    spec: {
+      label: () => "Changed the workspace's agent",
+      inverse: (ctx) => {
+        const root = Object.values((ctx.before as any)?.anchors ?? {}).find((a: any) => a?.scope_type === "team" && String(a.team_id) === ctx.args[0] && a.is_root && a.role) as any;
+        return root ? [call("setTeamWorkspaceAgent", ctx.args[0], String(root.role._id))] : null;
       },
     },
   },

@@ -640,6 +640,10 @@ export async function startBridgeHost(opts: {
 
   let ext: BridgeSocket | null = null;
   let extHeardAt = 0;
+  // Frames heard from the current extension, counted: the incumbent probe asks
+  // "anything since the ping?", which a millisecond clock cannot answer when
+  // the incumbent's last frame landed in the same millisecond as the ping.
+  let extFramesHeard = 0;
   let extMeta: { version?: string; protocol?: number; userAgent?: string; boot?: string; bootAt?: number } = {};
   let nextExtId = 1;
   const extPending = new Map<number, PendingExt>();
@@ -874,6 +878,7 @@ export async function startBridgeHost(opts: {
 
   const onExtMessage = (raw: Buffer): void => {
     extHeardAt = Date.now();
+    extFramesHeard++;
     // The two messages that carry nearly every byte go through as bytes (frames.ts).
     const event = readEventFrame(raw);
     if (event) {
@@ -1240,15 +1245,15 @@ export async function startBridgeHost(opts: {
 
   /** Does the current extension say anything (a pong, or any traffic) within the probe window? */
   const incumbentAnswers = async (incumbent: BridgeSocket): Promise<boolean> => {
-    const asked = Date.now();
+    const heard = extFramesHeard;
     sendJson(incumbent, { op: "ping" });
-    const deadline = asked + (opts.incumbentProbeMs ?? 2_000);
+    const deadline = Date.now() + (opts.incumbentProbeMs ?? 2_000);
     while (Date.now() < deadline) {
-      if (extHeardAt >= asked) return true;
+      if (extFramesHeard !== heard) return true;
       if (ext !== incumbent || incumbent.readyState !== WebSocket.OPEN) return false;
       await sleep(50);
     }
-    return extHeardAt >= asked;
+    return extFramesHeard !== heard;
   };
 
   /**
