@@ -677,3 +677,12 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .lw-title-up { color: var(--lw-ink-3); text-decoration: none; font-weight: 600; }
 .lw-title-up:hover { color: var(--lw-ink); }
 .lw-title-sep { margin: 0 7px; color: var(--lw-ink-3); font-weight: 400; }
+/* A folded segment: one box, its step count beside its name; pressed, its frame opens, and the frame folds back. */
+.fd-fold-n { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); font-weight: 500; }
+.fd-step[data-folded] { border-style: dashed; cursor: pointer; font: inherit; color: inherit; text-align: left; }
+.fd-step[data-folded]:hover { border-color: color-mix(in srgb, var(--lw-ink-3) 60%, transparent); }
+.fd-seg-fold {
+  position: absolute; top: 4px; right: 6px; width: 18px; height: 18px; display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--lw-rule-2); border-radius: 5px; background: var(--lw-card); color: var(--lw-ink-3); font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
+}
+.fd-seg-fold:hover { color: var(--lw-ink); border-color: var(--lw-rule); }
