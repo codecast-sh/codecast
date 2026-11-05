@@ -15,6 +15,7 @@ import { CALL_INVITE_TTL_MS, CALL_KNOCK_TTL_MS, CALL_RING_PERIOD_MS } from "@cod
 
 import { useMountEffect } from "./useMountEffect";
 import { useWatchEffect } from "./useWatchEffect";
+import { Button } from "../components/ui/button";
 // THE RING HAS A WINDOW OF ITS OWN (route /call-ring, main.js
 // createCallRingWindow), and it is the ring on every build that has one.
 // A ring arrives unannounced, usually while the person is in another app
@@ -144,33 +145,13 @@ export function useCallRing(): void {
               </div>
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={answer}
-                // Filled, like every answer-the-call button ever made. The
-                // tinted `bg-sol-green/20` it replaces put Solarized green
-                // text on a green wash over a dark card and measured 3.13:1 —
-                // under AA, on the one control the ring exists for. `sol-base03`
-                // is a fixed literal on purpose here: the fill it sits on is a
-                // fixed accent, so the pair must not drift with the theme.
-                className="flex-1 rounded border border-sol-green bg-sol-green px-3 py-2 text-xs font-semibold text-sol-base03 transition-colors hover:bg-sol-green/90"
-              >
+              {/* Join is the one filled thing on the card, so the eye goes there; decline is the outline beside it, the same size. */}
+              <Button variant="green" size="sm" onClick={answer} className="flex-1">
                 Join
-              </button>
-              <button
-                onClick={decline}
-                // The quiet half of the pair: no fill at rest, so "Join" is
-                // the one filled thing on the card and the eye goes there. The
-                // border keeps it a legible target at 320px, and Join carries
-                // a matching one so the two boxes stay the same size.
-                //
-                // Full text colour, not muted. Hierarchy is carried by the
-                // fill and the weight; dimming the LABEL of a button put it at
-                // 4.39:1 on the light card, under AA for 12px, and "hard to
-                // read" is not a way to say "secondary".
-                className="flex-1 rounded border border-sol-border/60 px-3 py-2 text-xs text-sol-text transition-colors hover:bg-sol-bg-highlight"
-              >
+              </Button>
+              <Button variant="outline" size="sm" onClick={decline} className="flex-1">
                 Decline
-              </button>
+              </Button>
             </div>
           </div>
         ),

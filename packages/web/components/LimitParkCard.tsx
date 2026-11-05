@@ -24,6 +24,7 @@ import { DISPATCH_REFUSED, latestSessionCommand, switchPending } from "../lib/se
 import { formatResetPhrase, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
 import type { LimitRecoveryAction } from "../lib/limitRecovery";
 import { continueOnAccount, limitContinueTarget } from "../lib/limitContinue";
+import { Button } from "./ui/button";
 
 type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
 
@@ -163,13 +164,9 @@ export function LimitParkCard({
         {live && (
           <span className="ml-auto flex items-center gap-2 shrink-0">
             {resetPassed && conversationId && (
-              <button
-                type="button"
-                onClick={continueNow}
-                className="rounded bg-amber-500 px-2 py-0.5 text-[11px] font-semibold text-sol-bg hover:bg-amber-400"
-              >
+              <Button type="button" variant="amber" size="xs" onClick={continueNow}>
                 Continue
-              </button>
+              </Button>
             )}
             {!resetPassed && canSwitch && (
               <button

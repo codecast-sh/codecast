@@ -917,8 +917,8 @@ export default function SyncPage() {
               {isUnsyncing ? "Removing..." : "Keep conversations"}
             </Button>
             <Button
+              variant="red"
               onClick={() => executeUnsync(true)}
-              className="bg-sol-red text-sol-base03"
               disabled={isUnsyncing}
             >
               {isUnsyncing ? "Deleting..." : "Delete conversations"}
