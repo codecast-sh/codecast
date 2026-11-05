@@ -42,7 +42,7 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
    *  talking to the person; the cut is the first message after it. */
   foldBootstrap?: boolean;
   /** The conversation as the agent talking to the person (ConversationView
-   *  foldWorkingTurns): working turns and machine prompts fold away. */
+   *  foldWorkingTurns): machine prompts fold away. */
   foldWorkingTurns?: boolean;
   openAtTop?: ConversationDiffLayoutProps["openAtTop"];
   composerPlaceholder?: ConversationDiffLayoutProps["composerPlaceholder"];

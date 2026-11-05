@@ -283,11 +283,9 @@ export type ConversationViewProps = {
    *  the conversation (a proposal's thread reads as a conversation, S19). */
   initialDensity?: ConversationDensity;
   /** Fold mode (scopes-and-feed.md F4.1): the conversation as the agent
-   *  talking to the person. Each turn shows its last reply in full; the steps
-   *  before it (the prose between, the tools) sit behind one line, and the
-   *  prompts a machine sent (wake frames, interrupts, polls, notices) render
-   *  nothing. The live turn keeps its ask cards: a question the agent waits
-   *  on is it talking. A person opens a folded turn to read it whole. */
+   *  talking to the person: the prompts a machine sent (wake frames,
+   *  interrupts, polls, notices) render nothing. Every reply the agent wrote
+   *  stays; pair it with the condensed density so tools fold into receipts. */
   foldWorkingTurns?: boolean;
   /** Open at the top of what is loaded and do not follow the live tail: the
    *  host's lead is what the reader came for (a proposal's letter, S19). The
