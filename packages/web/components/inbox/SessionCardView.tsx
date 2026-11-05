@@ -33,6 +33,7 @@ import { AuthErrorBadge } from "../AuthErrorBadge";
 import { BranchCodeLink } from "../repo/RepositoryLinks";
 import { PrStatusChip } from "../PrStatusChip";
 import { SessionShipChip } from "../ship/SessionShipChip";
+import type { SessionShip } from "../../lib/ship/sessionShip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
@@ -145,6 +146,8 @@ export type SessionCardViewProps = {
   placeDevice?: Device | null;
   /** The resolved image thumbnail, when the row shows one. */
   thumbSrc?: string | null;
+  /** Where the session's work is on its way to production (lib/ship/sessionShip). */
+  ship?: SessionShip | null;
   /** A plain click opens; the panel reads the event for ⌘/shift selection gestures. */
   onSelect: (session: InboxSession, e?: React.MouseEvent) => void;
   onDismiss?: (id: string) => void;
@@ -203,6 +206,7 @@ export function SessionCardView({
   runHost,
   placeDevice,
   thumbSrc,
+  ship = null,
   onSelect,
   onDismiss,
   onStash,
@@ -786,7 +790,7 @@ export function SessionCardView({
           )}
           <div data-sv-status className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
             {showBranchPill && <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />}
-            <SessionShipChip conversationId={String(session._id)} />
+            <SessionShipChip ship={ship} />
             <PrStatusChip status={session.pr_status} />
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (

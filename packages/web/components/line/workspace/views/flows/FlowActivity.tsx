@@ -24,7 +24,7 @@ const FILTERS: Array<{ key: RunState | "all"; label: string }> = [
 ];
 
 /** Where a run stands now: a paused run waits on a person, a running one unchanged for STALLED_MS is stalled. */
-export function runState(r: FlowRun, now: number): RunState {
+function runState(r: FlowRun, now: number): RunState {
   if (r.status === "paused") return "you";
   if (r.status === "failed") return "failed";
   if (r.status === "completed") return "done";

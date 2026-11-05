@@ -2032,6 +2032,10 @@ async function runNodeLoop(
     }
     // A person's answer is the next attempt: a Revise sent back to a build that spent its visits is carried out (Oct 26).
     if (current.type === "human" && outcome !== "failure" && !options.dryRun && !state.context["human.gate.no_card"]) clearVisits(state.visitCounts, state.context);
+    // "No decision of yours stands" is news for the one visit the gate sent back. Left set, every later visit (a card
+    // the card station refused) read it too, and Present withdrew its open card and posted it again unchanged,
+    // dropping the ladder's recommendations each time (sd-2513, sd-2527, sd-2528 on ct-62633, Nov 5).
+    if (current.type !== "human" && presentsDecision(current, graph)) delete state.context["human.gate.no_card"];
 
     if (options.runId) {
       await reportProgress(options, {

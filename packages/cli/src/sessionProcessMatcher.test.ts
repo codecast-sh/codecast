@@ -5,7 +5,6 @@ import {
   hasCodexSessionFileOpen,
   isRecognizedAgentComm,
   registrySupersedesCachedPid,
-  registeredTerminalFor,
   isResumeInvocation,
   matchSingleFreshStartedConversation,
   matchStartedConversation,
@@ -628,28 +627,6 @@ describe("registrySupersedesCachedPid", () => {
     expect(registrySupersedesCachedPid(undefined, 16959, fillMs)).toBe(false);
     expect(registrySupersedesCachedPid({ pid: "96988", ts: later, term: "tmux" }, 16959, fillMs)).toBe(false);
     expect(registrySupersedesCachedPid({ pid: 96988, ts: "later", term: "tmux" }, 16959, fillMs)).toBe(false);
-  });
-});
-
-// The terminal a cache fill should carry when only a pid is known (the
-// liveness pass, a resume process match). Without it delivery falls back to
-// the AppleScript route, which is iTerm2 (2026-11-03: every message to a
-// session running in a herdr pane was held for hours).
-describe("registeredTerminalFor", () => {
-  test("the session's own claim names the terminal of the same pid", () => {
-    expect(registeredTerminalFor({ pid: 51234, tty: "ttys004", ts: 1790000000, term: "herdr", launch_token: "" }, 51234)).toBe("herdr");
-  });
-
-  test("a claim for a different pid says nothing about this one", () => {
-    expect(registeredTerminalFor({ pid: 51299, ts: 1790000000, term: "herdr" }, 51234)).toBeUndefined();
-  });
-
-  test("an unknown terminal, a daemon write and a malformed claim name none", () => {
-    expect(registeredTerminalFor({ pid: 51234, ts: 1790000000, term: "unknown" }, 51234)).toBeUndefined();
-    expect(registeredTerminalFor({ pid: 51234, ts: 1790000000, term: "herdr", src: "daemon" }, 51234)).toBeUndefined();
-    expect(registeredTerminalFor({ pid: 51234, ts: 1790000000, term: "" }, 51234)).toBeUndefined();
-    expect(registeredTerminalFor({ pid: "51234", term: "herdr" }, 51234)).toBeUndefined();
-    expect(registeredTerminalFor(null, 51234)).toBeUndefined();
   });
 });
 

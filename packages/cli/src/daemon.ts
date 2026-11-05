@@ -256,7 +256,6 @@ import {
   processStartSecFromEtime,
   judgeProcessIdentity,
   processDeclaredSessionId,
-  registeredTerminalFor,
   registrySupersedesCachedPid,
   registrationPredatesProcess,
   type ProcessOwnership,
@@ -14431,11 +14430,9 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
             codexResumeCandidates.push({ pid, tty: normalizedTty });
             continue;
           }
-          // argv carries no TERM_PROGRAM; the session's claim for this pid may.
-          const termProgram = registeredTerminalFor(registryRegistrationFor(sessionId), pid);
-          const result = { pid, tty: normalizedTty, sessionId, ...(termProgram ? { termProgram } : {}) };
+          const result = { pid, tty: normalizedTty, sessionId };
           cacheSessionProcess(sessionId, result);
-          log(`Found session ${shortId(sessionId)} via resume process match: pid=${pid}${termProgram ? `, term=${termProgram}` : ""}`);
+          log(`Found session ${shortId(sessionId)} via resume process match: pid=${pid}`);
           return result;
         }
         if (agentType === "gemini") {
@@ -23778,16 +23775,11 @@ function dropSupersededProcessCacheEntry(sessionId: string): boolean {
 const registeredTmuxBySession = new Map<string, string>();
 
 export function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTarget?: string): void {
-  // A re-fill for the same process that knows no terminal (the liveness pass, a
-  // resume process match) keeps the one an earlier fill learned: the process's
-  // terminal cannot have changed, and losing it sends delivery to iTerm2.
-  const prior = sessionProcessCache.get(sessionId);
-  const termProgram = info.termProgram ?? (prior?.pid === info.pid ? prior.termProgram : undefined);
   sessionProcessCache.set(sessionId, {
     pid: info.pid,
     tty: info.tty,
     tmuxTarget,
-    termProgram,
+    termProgram: info.termProgram,
     lastVerified: Date.now(),
     filledAt: Date.now(),
   });
@@ -24143,16 +24135,10 @@ export async function reconcileSessionLiveness(): Promise<void> {
         }
       }
       if (agentPid !== null) {
-        // The terminal comes from the session's own SessionStart claim for this
-        // pid: a session resumed by hand in herdr or Ghostty is still a managed
-        // row here, and a fill without its terminal sends delivery to iTerm2.
-        // The row's tmux name is passed on only when a pane still runs there;
-        // otherwise registering it again keeps the server pointing at a dead one.
-        const termProgram = registeredTerminalFor(registryRegistrationFor(row.session_id), agentPid);
         cacheSessionProcess(
           row.session_id,
-          { pid: agentPid, tty, sessionId: row.session_id, ...(termProgram ? { termProgram } : {}) },
-          pane !== undefined ? row.tmux_session : undefined,
+          { pid: agentPid, tty, sessionId: row.session_id },
+          row.tmux_session,
         );
         seeded++;
       }

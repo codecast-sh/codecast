@@ -233,6 +233,25 @@ async function followStationCard(ctx: Ctx, conversation: Doc<"conversations">, i
   await ctx.db.patch(run._id, { gate_decision_id: id, gate_response: undefined, gate_choices: undefined, updated_at: now });
 }
 
+// A card a session withdrew and then asked again as a new decision on the
+// same problem keeps what the ladder said about it: each role's
+// recommendation moves to the option that says the same words, with its note,
+// and is left out when no option does. Without it every repost started the
+// ladder over (sd-2514 to sd-2517, sd-2376 to sd-2516, sd-2513 to sd-2528).
+async function carriedHops(ctx: Ctx, conversationId: Id<"conversations">, taskId: Id<"tasks"> | undefined, options: DecisionRow["options"], hops: Hop[]): Promise<Hop[]> {
+  if (!taskId || !hops.length) return hops;
+  const withdrawn = await ctx.db.query("session_decisions").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", "withdrawn")).collect();
+  const last = withdrawn.filter((d: any) => String(d.task_id ?? "") === String(taskId)).sort((a: any, b: any) => (b.resolved_at ?? b.created_at) - (a.resolved_at ?? a.created_at))[0];
+  const said = (last?.hops ?? []).filter((h: Hop) => h.recommendation !== undefined);
+  if (!said.length) return hops;
+  const moves = optionMoves(last!.options, options);
+  return hops.map((h) => {
+    const before = said.find((o: Hop) => String(o.role_id) === String(h.role_id));
+    const at = before ? moves[before.recommendation!] : undefined;
+    return before && at !== undefined ? { ...h, recommendation: at, note: before.note, at: before.at } : h;
+  });
+}
+
 // The ladder (D2): the roles from the asker up to the first person. A paused
 // or retired role is recorded as a skipped hop so the card can show the gap;
 // only active roles may recommend, and only the first is told (routeFor).
@@ -1265,6 +1284,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   if (stack?.policy?.delegate_role_id) roleIds.push(stack.policy.delegate_role_id);
   const { holder, holder_key, grant } = await resolveHolder(ctx, { people, roleIds, category, scopeKeys, now });
 
+  const hops = await carriedHops(ctx, conversation._id, task?._id, args.options, ladder.hops);
   const short_id = await nextShortId(ctx.db as any, "sd");
   const id: Id<"session_decisions"> = await ctx.db.insert("session_decisions", {
     conversation_id: conversation._id,
@@ -1295,7 +1315,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     holder,
     holder_key,
     asked_user_ids: people,
-    hops: ladder.hops,
+    hops,
     scope_keys: scopeKeys,
     team_id,
     ...(addressed ? { addressed: true } : {}),
