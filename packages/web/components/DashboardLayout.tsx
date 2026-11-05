@@ -1,4 +1,5 @@
 import { SeatKillDialog } from "./org/SeatKillDialog";
+import { LiveRunsCheck } from "../hooks/useLiveRunsCheck";
 import { useSyncMetricSeries } from "../hooks/useMetricSeries";
 import { useSyncOpsSources } from "../hooks/useSyncOps";
 import { useSyncSessionIndex } from "../hooks/useSyncSessionIndex";
@@ -371,7 +372,9 @@ function HostFeeders() {
   useSyncSettings();
   // Machine resource reports: the pressure notice and /resources read them.
   useSyncMachineResources();
-  return null;
+  // Every run the store holds as live, checked against the server's live runs, so no surface shows an ended run as
+  // live; a leaf of its own, so its wakes re-render nothing here.
+  return <LiveRunsCheck />;
 }
 
 /** The store's feeders and write wiring for one window. An embedded pane

@@ -10,7 +10,7 @@ import { sessionIdFromEnv } from "./sessionIdentity.js";
 
 /** The variables that name the session a process works for (sessionIdFromEnv reads them). */
 export const SESSION_ENV_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION"];
-const KEYS = [...SESSION_ENV_KEYS, "TMUX"];
+const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM"];
 
 /** An environment that names no session: for what the daemon starts on its own behalf. */
 export function withoutSessionIds<T extends Record<string, string | undefined>>(env: T): T {
@@ -90,6 +90,16 @@ function readEnv(pid: number): Env | null {
     if (process.platform === "darwin") return darwinEnv(pid);
   } catch {}
   return null;
+}
+
+/**
+ * The terminal app a process runs in, from the TERM_PROGRAM it was exec'd
+ * with ("ghostty", "iTerm.app", "tmux", …). Delivery picks its injector from
+ * this, and only Claude Code's SessionStart hook records it, so an agent with
+ * no hook (Codex, cursor-agent, …) is read here instead.
+ */
+export function terminalProgramOf(pid: number, read: (pid: number) => Env | null = readEnv): string | undefined {
+  return read(pid)?.TERM_PROGRAM || undefined;
 }
 
 const cache = new Map<number, { startedAt?: number; env: Env | null }>();
