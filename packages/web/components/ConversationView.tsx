@@ -1602,6 +1602,7 @@ const ConversationViewInner = (
     const key = instance.options.getItemKey(index);
     const stampedKey = (element as HTMLElement).dataset?.vkey;
     if (stampedKey !== undefined && stampedKey !== String(key)) {
+      ((window as any).__VSTAT ??= {}).guard = ((window as any).__VSTAT.guard ?? 0) + 1; // TEMP-VSTAT
       return instance.itemSizeCache.get(key) ?? instance.options.estimateSize(index);
     }
     const box = entry?.borderBoxSize?.[0];
@@ -1815,6 +1816,7 @@ const ConversationViewInner = (
         // the same layout-px border box the virtualizer's own measurements use.
         const real = el.offsetHeight;
         if (Math.abs(real - v.size) > 1) {
+          (((window as any).__VSTAT ??= {}).heal ??= []).push({ k: String(v.key), from: v.size, to: real, t: Date.now() }); // TEMP-VSTAT
           if ((window as any).__RECON_DEBUG) (((window as any).__RECON_LOG) ??= []).push({ i: v.index, from: v.size, to: real });
           corrections.push({ index: v.index, size: real });
         }
