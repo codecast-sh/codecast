@@ -8,7 +8,6 @@
 // Pan, zoom and fit by pointer or key; ? lists every key. Clicking a step
 // opens the shared step drawer through the selection, so the URL holds it.
 import { useCallback, useId, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import { Maximize2 } from "lucide-react";
 import { stepCameBack, type LineRunModel } from "../../../../lib/line/lineModel";
 import { RUN_END_GROUPS, runEndTone, runEndWords } from "../../../../lib/line/replay";
 import { useTabActive } from "../../../../hooks/usePagePresence";
@@ -19,6 +18,7 @@ import { keyBelongsElsewhere } from "../../../../shortcuts/keyOwnership";
 import { KeyCap } from "../../../KeyCap";
 import { RunTrail, dayWords, durationWords, useLineNav } from "../../widgets";
 import { GraphCanvas, GraphDefs, type LiveAtStep } from "./graph/GraphCanvas";
+import { GraphOverview } from "./graph/GraphOverview";
 import { litRun } from "./graph/litRun";
 import { DOT_LINE, EXIT_LEAD, essenceExits, exitWords, graphLayout, textW, withFailures, type GEdge, type GraphMode } from "./graph/graphLayout";
 import { stepFailures, stepPassed, stepWaits } from "../../../../lib/line/stepTable";
@@ -131,6 +131,8 @@ function KeySheet({ onClose }: { onClose: () => void }) {
 }
 
 
+/** The smallest zoom the live steps rest at together (the Flows stage): their names and live counts still read. */
+const LIVE_FIT_K = 0.7;
 /** Where a lane's pinned name sits when steps lie past the left edge: clear of the edge fade (graph.css .lwg::before, 112px) and its arrow. */
 const LANE_HEAD_CLEAR = 132;
 /** How far under an open step's box the past-edge arrows sit, in canvas units: below its "can end" line (a dot's name lines take two more). */
@@ -169,7 +171,15 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
   const insets: Insets = { top: 62, bottom: run ? 96 : 24, left: 18, right: 18 };
   // What lies past the stage's edges: the steps a reader would pan to, named on the arrows.
   const [past, setPast] = useState<{ left: string[]; right: string[] }>(NO_PAST);
+  const overviewRef = useRef<SVGRectElement>(null);
   const onView = useCallback((v: View, width: number) => {
+    // The overview's outline: the part of the graph the stage shows.
+    const ov = overviewRef.current;
+    if (ov) {
+      const h = rootRef.current?.clientHeight ?? 0;
+      ov.setAttribute("x", String(-v.x / v.k)); ov.setAttribute("y", String(-v.y / v.k));
+      ov.setAttribute("width", String(width / v.k)); ov.setAttribute("height", String(h / v.k));
+    }
     const left: string[] = [];
     const right: string[] = [];
     const nodes = rootRef.current?.querySelectorAll<SVGGElement>("[data-lwg-node]");
@@ -227,14 +237,21 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
   const settle = useCallback((anim: boolean, whole = false) => {
     const n = drawerStep ? layout.nodes.get(drawerStep) : null;
     if (!n) {
-      const held = !whole && live ? layout.list.filter((m) => live.has(m.id) || (waits.get(m.id)?.onYou ?? 0) + (waits.get(m.id)?.others ?? 0) > 0) : [];
+      const held = !whole && live?.size ? layout.list.filter((m) => live.has(m.id)) : [];
       const sz = pz.size();
       const fits = layout.bounds.w * FIT_MIN_K <= sz.w - insets.left - insets.right && layout.bounds.h * FIT_MIN_K <= sz.h - insets.top - insets.bottom;
       if (!held.length || fits) { pz.fit(anim); return; }
       // Room for each step's badge above it and its name beside a dot.
       const l = Math.min(...held.map((m) => m.x - Math.max(m.w / 2, 70))) - 40, r = Math.max(...held.map((m) => m.x + Math.max(m.w / 2, 70))) + 40;
       const t = Math.min(...held.map((m) => m.y - m.h / 2)) - 50, b = Math.max(...held.map((m) => m.y + m.h / 2)) + 60;
-      pz.fit(anim, { x: l, y: t, w: r - l, h: b - t });
+      const aw = sz.w - insets.left - insets.right, ah = sz.h - insets.top - insets.bottom;
+      // Drawn live, a card says one line of what stands at it, so the live steps can share the stage a little smaller.
+      if ((r - l) * LIVE_FIT_K <= aw && (b - t) * LIVE_FIT_K <= ah) { pz.fit(anim, { x: l, y: t, w: r - l, h: b - t }, LIVE_FIT_K); return; }
+      // Too spread to hold at once: rest on the step that most needs a look (on the viewer, then stalled, then busiest).
+      const weight = (id: string) => (live?.get(id)?.waiting ?? 0) * 1e6 + (live?.get(id)?.stalled ?? 0) * 1e3 + (live?.get(id)?.running ?? 0);
+      const top = [...held].sort((a, c) => weight(c.id) - weight(a.id))[0];
+      // A little above the middle, clear of the edge arrows that sit at the stage's middle.
+      pz.centerOn(top.x, top.y + 70, anim, top.w / 2 + 80, { k: FIT_MIN_K, middle: true, exact: true });
       return;
     }
     // Its "can end" words run past the step's right edge: keep them in view with it.
@@ -266,7 +283,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
     }
     const fits = (reach.left + reach.right) * k <= aw;
     pz.centerOn(n.x, n.y, anim, fits ? reach : own);
-  }, [drawerStep, layout, model.graph, pz, failed, live, waits]);
+  }, [drawerStep, layout, model.graph, pz, failed, live]);
   const settleRef = useRef(settle);
   settleRef.current = settle;
 
@@ -400,7 +417,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
   return (
     <div className="lw-graph-col">
     <div className="lwg-wrap">
-    <div className="lwg" ref={rootRef} data-line-view="graph" data-mode={mode} data-hovering={peek ? "" : undefined} data-run-bar={run ? "" : undefined} data-more-left={past.left.length ? "" : undefined} data-more-right={past.right.length ? "" : undefined}>
+    <div className="lwg" ref={rootRef} data-line-view="graph" data-mode={mode} data-hovering={peek ? "" : undefined} data-run-bar={run ? "" : undefined} data-more-left={past.left.length ? "" : undefined} data-more-right={past.right.length ? "" : undefined} data-live={live ? "" : undefined}>
       <svg ref={svgRef} className="lwg-svg" role="group" aria-label={`${model.title}: ${model.graph.nodes.length} steps`}>
         <GraphDefs uid={uid} />
         <rect width="100%" height="100%" fill={`url(#${uid}-dots)`} />
@@ -436,7 +453,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
           <button type="button" className="lwg-btn" data-ghost="" aria-pressed={!!run} aria-expanded={runsOpen} onClick={() => setRunsOpen((o) => !o)} disabled={!model.runs.length} title="Light a run's path (R)" data-lwg-runs-btn>
             <span className="lwg-runs-dot" />Runs <em>{model.runs.length}</em>
           </button>
-          <button type="button" className="lwg-btn" data-ghost="" data-icon="" onClick={() => settle(true, true)} title="Fit (F)" aria-label="Fit the graph"><Maximize2 className="w-3.5 h-3.5" /></button>
+          <button type="button" className="lwg-btn" data-ghost="" onClick={() => settle(true, true)} title="Fit the whole graph (F)" aria-label="Fit the whole graph">Fit</button>
           <button type="button" className="lwg-btn" data-ghost="" data-icon="" onClick={() => setHelp(true)} title="Keys (?)" aria-label="Keys">?</button>
           {trail}
         </div>
@@ -447,6 +464,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
         <RunBar run={run} index={runIndex} total={model.runs.length} onPrev={() => stepRun(1)} onNext={() => stepRun(-1)} onClear={() => pickRun(null)} />
       ) : null}
       <EdgeArrows edges={{ left: past.left.length > 0, right: past.right.length > 0 }} names={past} label="the graph" step={0.6} onMove={(dir, step) => pz.panBy(dir * step)} />
+      {live ? <GraphOverview layout={layout} live={live} viewRef={overviewRef} onJump={(x, y) => pz.centerOn(x, y, true, 0, { middle: true, exact: true })} /> : null}
       <div className="lwg-zoom" aria-label="Zoom">
         <button type="button" onClick={() => pz.zoomBy(1.25)} aria-label="Zoom in" title="Zoom in (+)">+</button>
         <button type="button" onClick={() => pz.zoomBy(0.8)} aria-label="Zoom out" title="Zoom out (−)">−</button>

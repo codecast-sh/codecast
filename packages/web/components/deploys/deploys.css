@@ -161,3 +161,6 @@ a.dpp-headci:hover span { text-decoration: underline; }
 .dpp-live { flex-wrap: wrap; row-gap: 2px; }
 .dpp-head-sub { margin-right: 6px; }
 @container (max-width: 760px) { .dpp-head { grid-template-areas: "name" "live" "actions"; grid-template-columns: minmax(0, 1fr); } .dpp-actions { justify-self: start; flex-wrap: wrap; } }
+@container (min-width: 1000px) { .dpp-body[data-record-only] { grid-template-columns: minmax(0, 1fr); } }
+.dpp-detail-sessions a.dpp-detail-task { background: color-mix(in srgb, var(--sol-blue) 10%, transparent); }
+.dpp-detail-task span { margin-left: 6px; color: var(--sol-text-muted); }
