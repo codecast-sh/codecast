@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DELIVERIES_KEPT } from "@codecast/shared/contracts/metricMonitor";
-import { deliveriesByRow, lastUsedRoutes, notifySummary, notifyTargets, routedSilently, rowKey } from "./alertRouting";
+import { deliveriesByRow, lastUsedRoutes, notifySummary, notifyTargets, routedSilently, rowKey } from "./alertRoutingModel";
 
 describe("alert routing on the web", () => {
   test("each delivery sits under its transition; a repeat under the crossing before it; inferred rows get none", () => {

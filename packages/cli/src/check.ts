@@ -414,8 +414,13 @@ export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" 
   const last = Math.max(state.askedAt ?? 0, state.firstFinishedAt ?? 0, state.startedAt);
   return now - last > IDLE_EXIT_MS;
 }
-/** A big program needs more heap than node's default; the largest figure the projects' own CI uses (union landing's typecheck.sh). */
-export const TSC_NODE_OPTIONS = "--max-old-space-size=6144";
+/**
+ * A big program needs more heap than node's default. A watch pass holds the
+ * old program beside the new one, so it needs well over a full pass: web's
+ * full pass reached ~4.1 GB and its incremental passes aborted at 6 GB
+ * (2026-11-05). The cap only bites when tsc would otherwise crash.
+ */
+export const TSC_NODE_OPTIONS = "--max-old-space-size=8192";
 /**
  * How long a pass that did not check the tree on disk may wait for tsc to
  * start one that does, before the watcher counts as having lost track of it.

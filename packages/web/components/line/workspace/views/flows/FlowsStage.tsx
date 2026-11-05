@@ -8,17 +8,21 @@
 // the runs just did. Full view gives the map the whole stage. The queue sits
 // below. A team with no live flow lands on the library; an address that names
 // the steps (their view, a flow, a step or a run) draws them.
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { BookOpen, Maximize, Minimize } from "lucide-react";
 import { useFlowMapRow } from "../../../../../hooks/useFlowMap";
 import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
+import { useMountEffect } from "../../../../../hooks/useMountEffect";
 import type { LineSelectionPatch } from "../../../../../lib/line/lineWorkspaceUrl";
 import { processKeyOf } from "../../../../../lib/line/lineGraphs";
-import type { LiveAtStep } from "../graph/GraphCanvas";
+import { LIVE_ENTRY, type LiveAtStep } from "../graph/GraphCanvas";
 import { hasOpenModal } from "../../../../../shortcuts";
 import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
 import { KeyCap } from "../../../../KeyCap";
 import { ProcessView } from "../ProcessView";
+import { StepPage } from "../../step/StepPage";
+import { StationDrawer } from "../../stages/LineDrawer";
 import { FlowsView, LiveFlowHead, LiveFlowWork } from "./FlowsView";
 import { FlowList } from "./FlowList";
 import { FlowActivity, type ActivityFilter } from "./FlowActivity";
@@ -47,7 +51,8 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
     const out = new Map<string, LiveAtStep>();
     for (const s of drawnLane.steps) {
       if (!s.running && !s.waiting) continue;
-      const id = model.steps[s.id] ? s.id : byLabel.get(s.label);
+      // Runs that have not reached a step yet stand at the entry, which the map draws apart from the steps.
+      const id = s.id === LIVE_ENTRY ? LIVE_ENTRY : model.steps[s.id] ? s.id : byLabel.get(s.label);
       if (id) out.set(id, { running: s.running, stalled: s.stalled, waiting: s.waiting });
     }
     return out;
@@ -90,21 +95,43 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
     </>
   );
   return (
-    <div className="fs" data-flows-stage={live.flow.slug} data-full={full ? "" : undefined}>
-      {full ? null : (
-        <section className="fll-live fs-live" data-live-flow={live._id} data-on={live.on ? "" : undefined}>
-          <LiveFlowHead live={live} workspace={workspace} stalled={stalled} onStalled={() => setActivity("stalled")} flows={map?.lanes.length} onOpenFlow={(slug) => select({ view: "flows", item: slug, run: null })}>
-            <a className="lw-chip fs-lib" href={href(library)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select(library); }} data-flows-library-link><BookOpen className="w-3.5 h-3.5" aria-hidden />Library</a>
-          </LiveFlowHead>
-        </section>
-      )}
+    <div className="fs" data-flows-stage={live.flow.slug}>
+      <section className="fll-live fs-live" data-live-flow={live._id} data-on={live.on ? "" : undefined}>
+        <LiveFlowHead live={live} workspace={workspace} stalled={stalled} onStalled={() => setActivity("stalled")} flows={map?.lanes.length} onOpenFlow={(slug) => select({ view: "flows", item: slug, run: null })}>
+          <a className="lw-chip fs-lib" href={href(library)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select(library); }} data-flows-library-link><BookOpen className="w-3.5 h-3.5" aria-hidden />Library</a>
+        </LiveFlowHead>
+      </section>
       <div className="fs-app">
-        {map && !full ? <FlowList map={map} drawn={model.graphKey} select={select} href={href} /> : null}
-        <div className="fs-map" data-mode={selection.mode}><ProcessView {...props} expand={expand} live={liveAt} /></div>
-        {full ? null : <FlowActivity runs={runs} flowLabel={flowLabel} now={workspace.now} href={href} filter={activity} onFilter={setActivity} />}
+        {map ? <FlowList map={map} drawn={model.graphKey} select={select} href={href} /> : null}
+        {/* In full view the map moves to the window's own layer (FullView); its place here stays, so leaving puts it back. */}
+        <div className="fs-map" data-mode={selection.mode}>{full ? null : <ProcessView {...props} expand={expand} live={liveAt} />}</div>
+        <FlowActivity runs={runs} flowLabel={flowLabel} now={workspace.now} href={href} filter={activity} onFilter={setActivity} />
       </div>
-      {full ? null : <section className="fll-live fs-work" id="fs-queue"><LiveFlowWork live={live} workspace={workspace} href={href} /></section>}
+      <section className="fll-live fs-work" id="fs-queue"><LiveFlowWork live={live} workspace={workspace} href={href} /></section>
+      {full ? (
+        <FullView step={selection.step && model.steps[selection.step] ? selection.step : null} model={model} select={select}
+          drawer={<StepPage model={model} workspace={workspace} selection={selection} select={select} href={href} pinned={!!props.pinned} />}>
+          <div className="fs-map" data-mode={selection.mode}><ProcessView {...props} expand={expand} live={liveAt} /></div>
+        </FullView>
+      ) : null}
     </div>
   );
 });
 
+/** Full view: the map over the whole window, on a layer of its own (a portal, since the stage's containment would hold a
+ *  fixed box inside it), with the station a person opens beside it. Esc, or Exit, puts it back. */
+function FullView({ step, model, select, drawer, children }: { step: string | null; model: LineViewProps["model"]; select: LineViewProps["select"]; drawer: ReactNode; children: ReactNode }) {
+  // The page's own station drawer sits under this layer while it is up: marked, so it draws nothing there.
+  useMountEffect(() => {
+    document.documentElement.toggleAttribute("data-flows-full", true);
+    return () => document.documentElement.toggleAttribute("data-flows-full", false);
+  });
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div className="lw-widget fs-full" data-drawer={step ? "" : undefined} data-flows-full-layer="">
+      {children}
+      {step ? <StationDrawer key={`step:${step}`} model={model} at={step} select={select}>{drawer}</StationDrawer> : null}
+    </div>,
+    document.body,
+  );
+}

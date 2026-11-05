@@ -70,7 +70,7 @@ export function moveFlowLedger(from: string, to: string, steps: number, queued: 
     rows: [
       { k: "New runs", v: to },
       { k: "Runs going now", v: `Finish on ${from}` },
-      { k: "Keeps", v: "Its switch, sources, bar and caps" },
+      { k: "Keeps", v: "Its switch, sources, bar and limits" },
       { k: "Queue", v: "Starts on the new flow" },
     ],
     stop: `Move it back to ${from}, one press`,

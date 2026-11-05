@@ -9,9 +9,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
-import type { DeployTarget } from "@codecast/shared/contracts/deployTargets";
-import { DEPLOY_TARGETS_REL_PATH, readDeployTargets } from "./workspace/deployTargetsFile.js";
-import { MANIFEST_REL_PATH, parseManifest } from "./workspace/manifest.js";
 import { LINE_DEPLOY_KEYS, LINE_DEPLOY_STEPS, LINE_DEPLOY_TRIGGERS, normalizeDeployTarget, normalizeRoleHandle, type LineDeployTrigger } from "@codecast/shared/contracts/lineDeploy";
 import {
   CAPS_KEYS,
@@ -321,32 +318,9 @@ export function loadLineProfile(cwd: string = process.env.CODECAST_CWD || proces
   const { file, root } = findLineProfile(cwd);
   if (!file) return resolveLineProfile({}, { root });
   const { values, warnings } = parseLineProfileText(fs.readFileSync(file, "utf8"), file);
-  return withDeclaredTarget(resolveLineProfile(values, { root, file, warnings }));
+  return resolveLineProfile(values, { root, file, warnings });
 }
 
-/**
- * The line's deploy sends a target .codecast/deploy.toml declares (deploys.md DP10) when `[line.deploy] target`
- * names one: that file holds the command, so the line runs the target's. A `[line.deploy] command` beside it is a
- * copy for CLIs that read only line.toml, and a copy that drifted from the target is a warning.
- */
-export function withDeclaredTarget(r: ResolvedLineProfile): ResolvedLineProfile {
-  const deploy = r.profile.deploy;
-  if (!deploy?.target || !r.root) return r;
-  let target: DeployTarget | undefined;
-  try {
-    const manifest = path.join(r.root, MANIFEST_REL_PATH);
-    const steps = fs.existsSync(manifest) ? parseManifest(manifest)?.ship?.deploy ?? [] : [];
-    target = readDeployTargets(r.root, steps).find((t) => t.name === deploy.target);
-  } catch {
-    // An unreadable deploy.toml leaves line.toml's own command; `cast line deploy targets` says what is wrong.
-    return r;
-  }
-  if (!target?.command) return r;
-  const warnings = deploy.command && deploy.command !== target.command
-    ? [...r.warnings, `[line.deploy] command differs from target "${target.name}" in ${DEPLOY_TARGETS_REL_PATH}, which the line sends: ${target.command}`]
-    : r.warnings;
-  return { ...r, warnings, profile: { ...r.profile, deploy: { ...deploy, command: target.command } }, sources: { ...r.sources, "deploy.command": "file" } };
-}
 
 /**
  * The run values a profile command may name (LP2 "$vars expand"). The runner
