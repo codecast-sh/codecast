@@ -16,6 +16,13 @@ echarts.use([
 ]);
 
 export { echarts };
-export type { EChartsOption } from "echarts";
+/**
+ * An option as Ops builds it. ECharts' own option type is a union of every
+ * series and component shape; checking literals against it took the web
+ * typecheck past its memory cap, so options are plain objects here and
+ * ECharts reads them at run time.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type EChartsOption = Record<string, any>;
 /** The instance type core's init returns; the full package declares its own copy of the class. */
 export type ECharts = ReturnType<typeof echarts.init>;
