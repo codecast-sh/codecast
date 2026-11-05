@@ -1,6 +1,5 @@
-// Run as its own process (daemon.liveness-terminal.e2e.test.ts): the daemon
-// reads CODECAST_DIR once, at module load, so the scratch config dir has to be
-// in place before daemon.js is evaluated.
+// Run as its own process (daemon.liveness-terminal.e2e.test.ts), which hands it
+// a scratch CODECAST_DIR: the daemon reads it once, at module load.
 //
 // The shape this pins: a session codecast once resumed into its own tmux is
 // still a managed row on the server after the person resumed it by hand in
@@ -12,13 +11,15 @@
 import "./isolatedTmuxServer.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "../proc.js";
+import { defaultConfigDir } from "../config/configDir.js";
 
-const dir = mkdtempSync(join(tmpdir(), "liveness-terminal-"));
-process.env.CODECAST_DIR = dir;
+const dir = defaultConfigDir();
+// Never write a registry claim into the human's own config dir.
+assert.ok(dir.startsWith(tmpdir()), `scratch CODECAST_DIR expected, got ${dir}`);
 const { cacheSessionProcess, getCachedSessionProcess, reconcileSessionLiveness, setSyncServiceForTests } = await import("../daemon.js");
 
 const sessionId = randomUUID();
@@ -56,6 +57,5 @@ try {
 } finally {
   setSyncServiceForTests(null);
   agent.kill();
-  rmSync(dir, { recursive: true, force: true });
 }
 process.exit(0);
