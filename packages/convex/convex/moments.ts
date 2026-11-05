@@ -35,7 +35,7 @@ import { MOMENTS_30D_ROOT, MOMENTS_KEPT_ROOT, replaysBucketFromEnv } from "./lib
 import { sha256Hex } from "./lib/hash";
 import { agentJudgeFields, judgeInputs } from "./momentsSchema";
 import { judgeRunRow, liveBodyKey, momentRefs, momentView, readKeptBody } from "./lib/momentBody";
-import { putChunk } from "./replays";
+import { putChunk } from "./lib/replayChunks";
 import type { ModelCallResult } from "@codecast/shared/contracts/modelCall";
 import { linesSince, renderExpectations, type ExpectationsVersion } from "@codecast/shared/contracts/expectations";
 import {

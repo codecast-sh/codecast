@@ -7,6 +7,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { FunctionReturnType } from "convex/server";
 import { AuthGuard } from "../../../components/AuthGuard";
 import Link from "next/link";
+import { Button } from "../../../components/ui/button";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 type Command = "status" | "restart" | "force_update" | "version";
@@ -780,12 +781,9 @@ function AdminDaemonLogs() {
 
           <div className="relative flex-1 min-h-0 bg-zinc-900/40 rounded-lg border border-zinc-800/60 overflow-hidden">
             {newCount > 0 && (
-              <button
-                onClick={toTop}
-                className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-3 py-1 rounded-full bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-mono shadow-lg shadow-black/40 transition-colors"
-              >
+              <Button variant="blue" size="xs" onClick={toTop} className="absolute top-2 left-1/2 z-10 -translate-x-1/2 rounded-full font-mono">
                 {newCount} new · jump to latest
-              </button>
+              </Button>
             )}
             <div
               ref={scrollRef}

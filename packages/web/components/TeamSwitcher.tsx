@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuLabel,
 } from "./ui/dropdown-menu";
-import { Check, ChevronDown, LogIn, Plus, User, UserPlus } from "lucide-react";
+import { Check, CheckCheck, ChevronDown, LogIn, Plus, User, UserPlus } from "lucide-react";
 import { useState, lazy, Suspense, forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { TeamCrest } from "./team/TeamCrest";
@@ -99,6 +99,7 @@ export function TeamSwitcher({
   const [inviteOpen, setInviteOpen] = useState(false);
   const unreadElsewhere = useInboxStore((s) => s.threadUnreadByWorkspace);
   const unreadFor = (teamId: string | null) => unreadElsewhere?.find((w) => w.team_id === teamId)?.count ?? 0;
+  const markAllThreadsRead = useInboxStore((s) => s.markAllThreadsRead);
 
   if (!user) {
     return null;
@@ -116,8 +117,10 @@ export function TeamSwitcher({
   // lands; inviting against it would 404 (or fall back to the previous team).
   const canInvite = !!activeTeam && activeTeam.role === "admin" && isConvexId(String(activeTeam._id));
 
-  const handleTeamChange = async (teamId: Id<"teams"> | null) => {
+  // The unread count opens what it counts: that workspace's Threads.
+  const handleTeamChange = async (teamId: Id<"teams"> | null, openThreads = false) => {
     await switchWorkspace(teamId);
+    if (openThreads) router.push("/threads");
   };
 
   if (!teams || teams.length === 0) {
@@ -152,7 +155,8 @@ export function TeamSwitcher({
             name="Personal"
             detail="Just you"
             unread={shownTeamId ? unreadFor(null) : 0}
-            onSelect={() => handleTeamChange(null)}
+            onClear={() => markAllThreadsRead(null, "all")}
+            onSelect={(openThreads) => handleTeamChange(null, openThreads)}
           />
         )}
         {teams.map((team) => {
@@ -166,7 +170,8 @@ export function TeamSwitcher({
               name={team.name}
               detail={members ? `${members} ${members === 1 ? "member" : "members"}` : ""}
               unread={shownTeamId === team._id ? 0 : unreadFor(String(team._id))}
-              onSelect={() => handleTeamChange(team._id)}
+              onClear={() => markAllThreadsRead(String(team._id), "all")}
+              onSelect={(openThreads) => handleTeamChange(team._id, openThreads)}
             />
           );
         })}
@@ -208,19 +213,21 @@ export function TeamSwitcher({
 
 /** One workspace in the picker: its mark, name, who is in it, and how many of
  *  your threads in it have unseen replies. */
-function WorkspaceRow({ selected, icon, name, detail, unread, onSelect }: {
+function WorkspaceRow({ selected, icon, name, detail, unread, onClear, onSelect }: {
   selected: boolean;
   icon: ReactNode;
   name: string;
   detail: string;
   unread: number;
-  onSelect: () => void;
+  /** Marks that workspace's threads read without switching to it. */
+  onClear: () => void;
+  onSelect: (openThreads: boolean) => void;
 }) {
   return (
     <DropdownMenuItem
-      onClick={onSelect}
+      onClick={(e) => onSelect(!!(e.target as Element).closest("[data-cc-workspace-unread]"))}
       data-selected={selected || undefined}
-      className="flex items-center gap-2.5 px-2 py-1.5 cursor-pointer text-sol-text hover:bg-sol-base02/50 data-[selected]:bg-sol-bg-alt"
+      className="group/row flex items-center gap-2.5 px-2 py-1.5 cursor-pointer text-sol-text hover:bg-sol-base02/50 data-[selected]:bg-sol-bg-alt"
     >
       {icon}
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
@@ -228,9 +235,22 @@ function WorkspaceRow({ selected, icon, name, detail, unread, onSelect }: {
         {detail && <span className="truncate text-[11px] text-sol-text-dim">{detail}</span>}
       </span>
       {unread > 0 && (
+        <button
+          type="button"
+          data-cc-workspace-clear
+          title="Mark all read"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClear(); }}
+          className="flex h-5 w-5 items-center justify-center rounded text-sol-base1 opacity-0 transition-opacity hover:bg-sol-base02 hover:text-sol-green focus-visible:opacity-100 group-hover/row:opacity-100 group-data-[highlighted]/row:opacity-100"
+        >
+          <CheckCheck className="h-3.5 w-3.5" />
+        </button>
+      )}
+      {unread > 0 && (
         <span
-          title={`${unread} unread ${unread === 1 ? "thread" : "threads"}`}
-          className="min-w-[18px] rounded-full bg-sol-orange px-1.5 text-center text-[10px] font-semibold leading-[18px] text-sol-bg"
+          data-cc-workspace-unread
+          title={`Open ${unread} unread ${unread === 1 ? "thread" : "threads"}`}
+          className="min-w-[18px] rounded-full bg-sol-orange px-1.5 text-center text-[10px] font-semibold leading-[18px] text-sol-bg transition-shadow hover:ring-2 hover:ring-sol-orange/40"
         >
           {unread > 99 ? "99+" : unread}
         </span>

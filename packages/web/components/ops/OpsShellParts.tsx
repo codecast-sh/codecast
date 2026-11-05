@@ -104,18 +104,6 @@ function WorkspaceSwitch({ ws, primary }: { ws: WorkspaceName; primary?: boolean
   );
 }
 
-export function OpsWorkspaceBar({ itemRef, workspace }: { itemRef: string; workspace: string }) {
-  const ws = useWorkspaceName(workspace);
-  if (!ws) return null;
-  return (
-    <div className="ops-wsbar" role="status" data-ops-foreign={workspace}>
-      {ws.icon || ws.color ? <TeamIcon icon={ws.icon} color={ws.color} className="w-3.5 h-3.5" /> : null}
-      <span><span className="ops-mono">{itemRef}</span> is in <b>{ws.name}</b></span>
-      <WorkspaceSwitch ws={ws} />
-    </div>
-  );
-}
-
 // ── Walking issues ──
 
 /** Previous and next issue in the list it was opened from (k and j on the page), and where in it this one sits. */
@@ -198,20 +186,21 @@ export function OpsNotFound({ id, kind, workspace, checking, lookingElsewhere }:
   // A workspace picked from Look in waits on the same switch review the Switch press opens.
   const [lookIn, setLookIn] = useState<WorkspaceName | null>(null);
   const list = NOT_FOUND_LIST[kind];
+  const asking = !ws && !!lookingElsewhere;
   const listHref = list.tab ? opsHref.tab(list.tab) : opsHref.home();
   return (
     <div className="ops-notfound" data-ops-notfound={id} data-checking={checking ? "true" : undefined}>
       <div className="ops-notfound-title">
         {kind !== "page" && <span>{KIND_WORD[kind]}</span>}
         <span className="ops-mono">{id}</span>
-        {ws ? <span>is in <b>{ws.name}</b></span> : <span className="ops-dim">{checking ? "not in this workspace's lists" : <>not in <b>{here?.name ?? "this workspace"}</b></>}</span>}
-        {checking && <i className="ops-notfound-spin" aria-label="Still checking" />}
-        {!checking && !ws && lookingElsewhere && <span className="ops-dim ops-notfound-elsewhere" data-ops-looking-elsewhere><i className="ops-notfound-spin" aria-hidden />other workspaces</span>}
+        {/* No verdict until the other workspaces answer: "not in Union" first and "is in Codecast" a while later would be wrong first. */}
+        {ws ? <span>is in <b>{ws.name}</b></span> : asking ? <span className="ops-dim ops-notfound-elsewhere" data-ops-looking-elsewhere>looking in your other workspaces<i className="ops-notfound-spin" aria-label="Still checking" /></span> : <span className="ops-dim">{checking ? "not in this workspace's lists" : <>not in <b>{here?.name ?? "this workspace"}</b></>}</span>}
+        {checking && !asking && <i className="ops-notfound-spin" aria-label="Still checking" />}
       </div>
       <div className="ops-notfound-actions">
         {ws && <WorkspaceSwitch ws={ws} primary />}
         {/* Nothing names where it lives: the other workspaces the reader belongs to, one press each, as the place to look next. */}
-        {!ws && !checking && others.length > 0 && (
+        {!ws && !checking && !asking && others.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button type="button" className="ops-btn" data-ops-look-in>Look in<ChevronDown className="w-3.5 h-3.5" /></button>

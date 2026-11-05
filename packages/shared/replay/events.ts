@@ -196,3 +196,29 @@ export function urlPath(url: string): string {
     return url.startsWith("/") ? url : `/${url}`;
   }
 }
+
+/** A scrubber position (ms) as the address writes it: seconds, a tenth kept when it has one ("83", "83.2"). */
+export function replayTParam(ms: number): string {
+  const tenths = Math.round(Math.max(0, ms) / 100);
+  return tenths % 10 ? (tenths / 10).toFixed(1) : String(tenths / 10);
+}
+
+/**
+ * A `t` from an address, in ms: seconds ("7200", "83.2"), a clock ("1:30",
+ * "2:00:00") or units ("2h0m0s", "1m30s", "45s"), as people and the vendors
+ * write it. A bare integer may also be an older link's ms: `alt` carries that
+ * reading for the page to take when the seconds run past the recording.
+ */
+export function parseReplayT(raw: string | null | undefined): { t: number; alt?: number } | null {
+  const v = raw?.trim().toLowerCase();
+  if (!v) return null;
+  if (/^\d+(\.\d+)?$/.test(v)) {
+    const n = Number(v);
+    return /^\d+$/.test(v) ? { t: Math.round(n * 1000), alt: n } : { t: Math.round(n * 1000) };
+  }
+  const clock = /^(?:(\d+):)?(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/.exec(v);
+  if (clock) return { t: Math.round(((Number(clock[1] ?? 0) * 60 + Number(clock[2])) * 60 + Number(clock[3])) * 1000) };
+  const units = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/.exec(v);
+  if (units && (units[1] || units[2] || units[3])) return { t: Math.round(((Number(units[1] ?? 0) * 60 + Number(units[2] ?? 0)) * 60 + Number(units[3] ?? 0)) * 1000) };
+  return null;
+}

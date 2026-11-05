@@ -5,16 +5,14 @@
 // inline styles, flex boxes, literal colors, no hooks, no classes.
 import {
   DEVICE_KIND_LABEL,
+  WEEK_CARD_H,
   WEEK_CARD_INSTALL,
+  WEEK_CARD_W,
   WEEK_DAY_NAMES,
   formatCount,
-  formatSpan,
   weekRangeLabel,
   type WeekCardStats,
 } from "@codecast/shared/contracts/weeklyCard";
-
-export const WEEK_CARD_W = 1200;
-export const WEEK_CARD_H = 630;
 
 // Solarized dark, the product's own palette.
 const C = {
@@ -65,8 +63,8 @@ export function WeekCardView({ stats, name }: { stats: WeekCardStats; name: stri
     return p > 0 && p < 1 ? "<1%" : `${Math.round(p)}%`;
   };
   const extras: Array<[string, string]> = [];
-  if (stats.longest_session_ms > 0) extras.push(["longest session", formatSpan(stats.longest_session_ms)]);
   if (busiest) extras.push(["busiest day", `${WEEK_DAY_NAMES[stats.busiest_day]} · ${busiest.hours}h`]);
+  if (stats.active_days > 0) extras.push(["per active day", `${Math.round((stats.agent_hours / stats.active_days) * 10) / 10}h`]);
   if (stats.tokens !== null) extras.push(["tokens", formatCount(stats.tokens)]);
 
   return (
@@ -139,11 +137,11 @@ export function WeekCardView({ stats, name }: { stats: WeekCardStats; name: stri
               );
             })}
           </div>
-          <div style={row({ gap: 28 })}>
+          <div style={row({ gap: 24, paddingTop: 14, borderTop: `1px solid ${C.line}` })}>
             {extras.map(([k, v]) => (
-              <div key={k} style={col({ gap: 2 })}>
-                <div style={{ display: "flex", fontSize: 22, fontWeight: 700, color: C.text }}>{v}</div>
-                <div style={{ display: "flex", fontSize: 16, color: C.dim }}>{k}</div>
+              <div key={k} style={col({ flexGrow: 1, flexBasis: 0, gap: 4 })}>
+                <div style={{ display: "flex", fontSize: 26, fontWeight: 700, color: k === "busiest day" ? C.yellow : C.text }}>{v}</div>
+                <div style={{ display: "flex", fontSize: 17, color: C.dim }}>{k}</div>
               </div>
             ))}
           </div>

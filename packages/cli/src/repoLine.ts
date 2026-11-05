@@ -54,7 +54,8 @@ const REPO_LINE_HEADER = [
 /** The shipped line as repo files: line.cast with its `@line/<file>` refs made local, and every file they name. */
 export function shippedRepoLineFiles(): Record<string, string> {
   const out: Record<string, string> = { "line.cast": REPO_LINE_HEADER + localizeRefs(lineCast) };
-  for (const [ref, text] of Object.entries(LINE_TEMPLATE_FILES)) out[ref.slice(SHIPPED_PREFIX.length)] = text;
+  // LINE_TEMPLATE_FILES also holds other shipped flows' files (change/*); only the line's own belong here.
+  for (const [ref, text] of Object.entries(LINE_TEMPLATE_FILES)) if (ref.startsWith(SHIPPED_PREFIX)) out[ref.slice(SHIPPED_PREFIX.length)] = text;
   return out;
 }
 

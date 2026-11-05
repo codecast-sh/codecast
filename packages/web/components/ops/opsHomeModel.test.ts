@@ -58,7 +58,7 @@ describe("attentionItems", () => {
     expect(items[1].state).toBe("regressed");
   });
 
-  test("old, resolved, fine-now and watch-backed groups are not listed; replays an issue covers fold into it", () => {
+  test("old, resolved and fine-now groups are not listed; a metric issue whose watch reads fine is listed as itself, as Issues lists it; replays an issue covers fold into it", () => {
     const items = attentionItems({
       sources: [],
       groups: [
@@ -71,8 +71,8 @@ describe("attentionItems", () => {
       watches: [watch({ group_id: "g4" })],
       replays: [replay({ group_ids: ["g5"] }), replay({ _id: "r4", started_at: NOW - 30 * 60_000, group_ids: ["g5"] }), replay({ _id: "r2", counts: { clicks: 0, errors: 0, failed_requests: 0 } }), replay({ _id: "r3", started_at: NOW - 2 * 24 * H })],
     }, NOW);
-    expect(items.map((i) => i.key)).toEqual(["issue:g5"]);
-    const it = items[0];
+    expect(items.map((i) => i.key).sort()).toEqual(["issue:g4", "issue:g5"]);
+    const it = items.find((i) => i.key === "issue:g5")!;
     expect(it.kind === "issue" && [it.replay?._id, it.replays]).toEqual(["r4", 2]);
   });
 
@@ -190,39 +190,31 @@ test("the source filter groups by provider in a fixed order and finds by name, p
 });
 
 describe("replay errors, one row per root cause", () => {
-  test("replays naming the same issue fold into one row that counts its replays and people, and opens on the issue", async () => {
+  test("a replay naming an issue the store holds is that issue's evidence, never a row of its own: the home and the Issues lane hold one set", async () => {
     const { replayUsers } = await import("./opsHomeModel");
-    // An old issue (not listed itself) that five replays from three people keep hitting.
+    // An old issue (ongoing, in no Needs attention lane) that replays keep hitting: it is on its own page, not on the home.
     const old = group({ _id: "g9", short_id: "eg-9", title: "GET /api/users/:id answers 403", first_seen: NOW - 9 * 24 * H });
     const rs = [
       replay({ _id: "a", group_ids: ["g9"], user: { id: "ada" }, started_at: NOW - 5 * H }),
       replay({ _id: "b", group_ids: ["g9"], user: { id: "ada" }, started_at: NOW - 4 * H }),
-      replay({ _id: "c", group_ids: ["g9"], user: { email: "bo@x.co" }, started_at: NOW - 3 * H }),
-      replay({ _id: "d", group_ids: ["g9"], user: null, started_at: NOW - 2 * H }),
-      replay({ _id: "e", group_ids: ["g9"], user: null, started_at: NOW - H }),
-      // One that names no issue stays its own row.
-      replay({ _id: "solo", group_ids: [], user: { id: "cy" }, started_at: NOW - H }),
+      // One that names no issue the store holds is its own row.
+      replay({ _id: "solo", group_ids: ["unheld"], user: { id: "cy" }, started_at: NOW - H }),
     ];
     const items = attentionItems({ sources: [source()], groups: [old], watches: [], replays: rs }, NOW);
-    expect(items.map((i) => i.key)).toEqual(["replays:g9", "replay:solo"]);
-    const sig = items[0];
-    if (sig.kind !== "replay") throw new Error("expected a replay row");
-    expect([sig.replays.length, sig.users, sig.replay._id, sig.group?.short_id]).toEqual([5, 4, "e", "eg-9"]);
+    expect(items.map((i) => i.key)).toEqual(["replay:solo"]);
+    expect(homeIssueRefs(items, NOW)).toEqual([]);
     expect(replayUsers(rs.slice(0, 2))).toBe(1);
   });
 
   test("more people outrank more errors", () => {
-    const g1 = group({ _id: "g1", first_seen: NOW - 9 * 24 * H });
-    const g2 = group({ _id: "g2", short_id: "eg-2", first_seen: NOW - 9 * 24 * H });
     const items = attentionItems({
-      sources: [source()], groups: [g1, g2], watches: [],
+      sources: [source()], groups: [], watches: [],
       replays: [
-        replay({ _id: "loud", group_ids: ["g1"], counts: { clicks: 0, errors: 400, failed_requests: 0 }, user: { id: "a" } }),
-        replay({ _id: "p1", group_ids: ["g2"], user: { id: "a" } }),
-        replay({ _id: "p2", group_ids: ["g2"], user: { id: "b" } }),
+        replay({ _id: "loud", group_ids: [], counts: { clicks: 0, errors: 400, failed_requests: 0 }, user: { id: "a" } }),
+        replay({ _id: "p1", group_ids: [], user: { id: "a" }, started_at: NOW - 2 * H }),
       ],
     }, NOW);
-    expect(items.map((i) => i.key)).toEqual(["replays:g2", "replays:g1"]);
+    expect(items.map((i) => i.key)).toEqual(["replay:loud", "replay:p1"]);
   });
 });
 
@@ -265,7 +257,7 @@ test("the band's tiles are the watches that are not fine; the healthy ones fold 
     watch({ _id: "nodata", threshold: 10, last_value: null }),
   ]);
   expect(band.attention.map((w) => w._id)).toEqual(["alert", "warn", "nodata"]);
-  expect(band.healthy.map((w) => w._id).sort()).toEqual(["ok", "series"]);
+  expect(band.watches.filter((w) => !band.attention.includes(w)).map(band.stateOf).sort()).toEqual(["ok", "series"]);
 });
 
 describe("a source that is degraded, not down", () => {
@@ -405,8 +397,7 @@ describe("round 4: words and counts that agree across surfaces", () => {
     expect([once, twice, fine].map(watchRetrying)).toEqual([true, false, false]);
     expect(watchRetrying({ ...once, status: "paused" })).toBe(false);
     const band = watchBand([once, twice, fine]);
-    expect(band.retrying.map((w) => w._id)).toEqual(["once"]);
-    expect(band.healthy.map((w) => w._id)).toEqual(["fine"]);
+    expect([band.counts.retrying, band.counts.series, band.counts.error]).toEqual([1, 1, 1]);
     expect(band.attention.map((w) => w._id)).toEqual(["twice"]);
   });
 
@@ -432,9 +423,10 @@ describe("one row per root cause", () => {
     const it = items[0] as Extract<(typeof items)[number], { kind: "issue" }>;
     expect(it.group._id).toBe("618");
     expect(it.variants?.map((g) => g._id)).toEqual(["618", "616", "149", "148"]);
-    expect(attentionCounts(items).regressed).toBe(1);
-    expect(opsBadge(items).n).toBe(1);
-    expect(homeIssueRefs(items)).toEqual(["eg-618"]);
+    // The tile counts issues, as the Issues lane lists them; the row is one, and the stepper walks all four.
+    expect(attentionCounts(items).regressed).toBe(4);
+    expect(opsBadge(items).n).toBe(4);
+    expect(homeIssueRefs(items, NOW)).toEqual(["eg-618", "eg-616", "eg-149", "eg-148"]);
     expect(foldedTitle(it.variants!.map((g) => g.title))).toBe("budget context missing: … — wrap the origin in withBudget(...)");
   });
 

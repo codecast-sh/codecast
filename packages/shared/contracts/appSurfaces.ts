@@ -33,6 +33,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("feed", "team activity feed"),
   dash("mods", "codecast mods: the panes, commands and blocks you and your agents added, each with its switch and logs"),
   dash("changes", "the daily edition of what the team shipped and why (?d=YYYY-MM-DD picks the day)"),
+  dash("deploys", "every place the team's code goes live: what runs there, what waits on main, the press that sends it and every past deploy"),
   dash("prompts", "a day of what each person typed into sessions, a column per person (?d=YYYY-MM-DD picks the day)"),
   dash("crosstalk", "agents talking to each other across sessions"),
   dash("goals", "every goal, with its owner, health and the projects serving it (/goals/<in-N> opens one)"),

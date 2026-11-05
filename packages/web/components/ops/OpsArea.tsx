@@ -8,7 +8,7 @@ import { OpsShell } from "./OpsShell";
 import { resolveSource } from "./opsHomeModel";
 import { OpsHome } from "./OpsHome";
 import { OpsNotFound } from "./OpsShellParts";
-import { useForeignSourceLookup } from "./opsShellHooks";
+import { useForeignItemWorkspace, useForeignSourceLookup } from "./opsShellHooks";
 import { useOpsFeed } from "./parts";
 import type { OpsTab, OpsView } from "./opsPaths";
 
@@ -40,15 +40,28 @@ function SourceGate({ source, children }: { source: string; children: ReactNode 
   return <OpsNotFound id={source} kind="source" workspace={foreign.workspace} checking={!feed?.ready && !sources.length} lookingElsewhere={foreign.pending} />;
 }
 
+/**
+ * An issue, replay or watch the device holds from another workspace (a link
+ * shared from there) is that workspace's: its page never mounts here, where
+ * its joins (the watch it files, the errors behind it, its task) would be
+ * read from this workspace and its presses would act on it unseen. It says
+ * whose it is, with the switch through its review, as a source link does.
+ */
+function ItemGate({ view, children }: { view: OpsView; children: ReactNode }) {
+  const foreign = useForeignItemWorkspace(view);
+  if (!foreign || (view.view !== "issue" && view.view !== "replay" && view.view !== "metric")) return <>{children}</>;
+  return <OpsNotFound id={view.id} kind={view.view} workspace={foreign} />;
+}
+
 function OpsPage({ view }: { view: OpsView }) {
   if ((view.view === "home" || view.view === "tab") && view.source) return <SourceGate source={view.source}><OpsViewPage view={view} /></SourceGate>;
-  return <OpsViewPage view={view} />;
+  return <ItemGate view={view}><OpsViewPage view={view} /></ItemGate>;
 }
 
 function OpsViewPage({ view }: { view: OpsView }) {
   if (view.view === "home") return <OpsHome source={view.source} show={view.show} />;
   if (view.view === "issue") return <IssuePage id={view.id} />;
-  if (view.view === "replay") return <ReplayPage id={view.id} t={view.t} />;
+  if (view.view === "replay") return <ReplayPage id={view.id} t={view.t} tAlt={view.t_alt} />;
   if (view.view === "metric") return <MetricPage id={view.id} />;
   if (view.view === "tab") {
     const Tab = TABS[view.tab];

@@ -104,7 +104,9 @@ describe("the filter", () => {
     expect(personKey({ id: "01a1a2b3c4d5e6f7" })).toBe("01a1a2b3c4d5e6f7");
     expect(personKey(null)).toBeNull();
     const handle = personLabel({ id: "01a1a2b3c4d5e6f7" });
-    expect(handle).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+    expect(handle).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+ ·[0-9a-z]{3}$/);
+    // Two words alone collide across a workspace's anonymous visitors; with the suffix a thousand ids read as a thousand names.
+    expect(new Set(Array.from({ length: 1000 }, (_, i) => anonHandle(`0192f${i.toString(16).padStart(6, "0")}-anon`))).size).toBe(1000);
     expect(personLabel({ id: "01a1a2b3c4d5e6f7" })).toBe(handle);
     expect(anonHandle("01a1a2b3c4d5e6f8")).not.toBe(handle);
     // The handle finds them in search, as the id does.

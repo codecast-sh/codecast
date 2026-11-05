@@ -25,7 +25,8 @@ import { byListOrder } from "../../lib/initiatives";
 import { countStates, EMPTY_COUNTS, type OrgSession, type OrgTree, type StateCounts } from "./orgTypes";
 import type { ZoomLevel } from "./orgZoom";
 import type { OrgProposalChange } from "./orgStaffingTypes";
-import { ghostScopeNames, ORG_SIZES, personNodeId, quietChipLines, roleNodeId, wrappedLines, type OrgGhostChip, type OrgGhostMeta, type OrgGhostMove, type OrgGhostPlan, type OrgGhostStub } from "./orgLayout";
+import { ORG_SIZES, personNodeId, quietChipLines, roleNodeId, wrappedLines, type OrgGhostChip, type OrgGhostMeta, type OrgGhostMove, type OrgGhostPlan, type OrgGhostStub } from "./orgLayout";
+import { ghostScopeNames } from "./orgGhostsFor";
 import { proposalChangeRows, type ProposalTreeFace, type ProposalTreeRow } from "./proposalTree";
 
 /** What the lens reads off a project row. */
