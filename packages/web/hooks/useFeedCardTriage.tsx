@@ -10,57 +10,29 @@
  * every click, as before.
  */
 
+import { createContext, useContext } from "react";
 import type React from "react";
-import { useInboxStore } from "../../store/inboxStore";
-import { animatedHideSessions } from "../../store/undoActions";
-import { selectionGesture, selectionIdsFor, useInboxSelection } from "../../lib/inboxSelection";
-import { isSessionSetAside } from "../../lib/sessionRetirement";
-import { useTriggerKillNotice } from "../../hooks/useTriggerKillNotice";
-import { ContextMenu, useContextMenu } from "../ui/context-menu";
-import { SessionMenuItems } from "../menus/ObjectContextMenus";
-import { BulkSessionMenuItems } from "../BulkMoveSessions";
-import { CardHoverToolbar } from "../inbox/SessionCardParts";
+import { useInboxStore } from "../store/inboxStore";
+import { animatedHideSessions } from "../store/undoActions";
+import { selectionIdsFor, useInboxSelection } from "../lib/inboxSelection";
+import { isSessionSetAside } from "../lib/sessionRetirement";
+import { useTriggerKillNotice } from "./useTriggerKillNotice";
+import { ContextMenu, useContextMenu } from "../components/ui/context-menu";
+import { SessionMenuItems } from "../components/menus/ObjectContextMenus";
+import { BulkSessionMenuItems } from "../components/BulkMoveSessions";
+import { CardHoverToolbar } from "../components/inbox/SessionCardParts";
 
-/** The attribute every feed card carries: a shift-click ranges over them in DOM order. */
-export const FEED_CARD_ATTR = "data-feed-card";
-
-function liveSession(id: string) {
-  const row = useInboxStore.getState().sessions[id];
-  return row && !isSessionSetAside(row) ? row : null;
-}
-
-function feedOrder(): string[] {
-  if (typeof document === "undefined") return [];
-  return Array.from(document.querySelectorAll<HTMLElement>(`[${FEED_CARD_ATTR}]`))
-    .map((el) => el.getAttribute(FEED_CARD_ATTR)!)
-    .filter((id) => !!liveSession(id));
-}
-
-/** Handles a selection gesture on a card; true when the click was one, so the card must not open. */
-export function feedCardSelect(id: string, e: React.MouseEvent): boolean {
-  const gesture = selectionGesture(e);
-  if (!gesture || !liveSession(id)) return false;
-  e.preventDefault();
-  const sel = useInboxSelection.getState();
-  if (gesture === "toggle") sel.toggle(id);
-  else sel.range(id, feedOrder());
-  return true;
-}
-
-/** A plain click opens the card: it leaves selection mode and becomes the shift-range anchor. */
-export function feedCardOpened(id: string): void {
-  const sel = useInboxSelection.getState();
-  if (sel.ids.length > 0) sel.set([], id);
-  else useInboxSelection.setState({ anchorId: id });
-}
+/** True where a card's conversation is never the viewer's own session (the homepage hero's fixtures): no triage, no tick. */
+export const FeedTriageOff = createContext(false);
 
 export function useFeedCardTriage(id: string, own: boolean, open: () => void) {
+  const off = useContext(FeedTriageOff);
   // Primitives only: a heartbeat on the row must not re-render the card.
   const triageable = useInboxStore((s) => {
     const row = s.sessions[id];
-    return own && !!row && !isSessionSetAside(row);
+    return !off && own && !!row && !isSessionSetAside(row);
   });
-  const ticked = useInboxSelection((sel) => sel.ids.includes(id));
+  const ticked = useInboxSelection((sel) => !off && sel.ids.includes(id));
   const menu = useContextMenu<null>();
   if (!triageable) return { ticked: false, onContextMenu: undefined, overlay: null };
   const session = useInboxStore.getState().sessions[id]!;

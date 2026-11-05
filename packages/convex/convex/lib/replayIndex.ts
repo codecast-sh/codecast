@@ -11,6 +11,7 @@
 // the tend cron's recounts (sources/replayRest.ts tally).
 import { personKey } from "@codecast/shared/replay";
 import { replayCutAt } from "@codecast/shared/contracts/replay";
+import { moveTally, type TallyInput } from "./replayTallies";
 
 type IndexInput = {
   user?: { id?: string; email?: string; name?: string } | null;
@@ -44,6 +45,9 @@ export async function patchReplay(ctx: { db: any }, row: IndexInput & { _id: any
   const out: Record<string, unknown> = { ...patch };
   if (want.person_key !== row.person_key) out.person_key = want.person_key;
   if (want.rest_cut !== (row.rest_cut || undefined)) out.rest_cut = want.rest_cut;
+  // The person's tally (lib/replayTallies.ts): length, failures and the active-time floor can all move on one patch. Read from the row before it is patched.
+  const full = row as Partial<TallyInput> & { workspace?: string };
+  if (full.workspace && full.external_id !== undefined && full.counts) await moveTally(ctx, { workspace: full.workspace, source_id: row.source_id }, { ...full } as TallyInput, { ...full, ...patch } as TallyInput);
   await ctx.db.patch(row._id, out);
   const now = want.rest_cut === true;
   if (was === now) return;

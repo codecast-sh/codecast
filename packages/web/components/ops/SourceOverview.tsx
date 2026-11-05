@@ -184,8 +184,7 @@ export function SourceOverview({ source, needs }: { source: OpsSource; /** What 
   // The source's one watch sentence (sourceHealth watches): the header, this tile and the Apps head say the same count in the same noun.
   const tally = health.watches;
   const watchTotal = tally.total;
-  // Reading fine with no line to judge them by: unjudged, so the tile's "ok" leaves them out and names them, as the home's band does.
-  const noLine = myWatches.filter((w) => w.threshold === undefined && watchVerdict(w) === "ok").length;
+  const firstNoLine = myWatches.find((w) => w.threshold === undefined)?.short_id ?? null;
   // What is wrong with them, by cause: "1 over 256 KB · 1 timed out".
   // Metric watches only: the app's own checks are their own noun (health.checks), named in the header.
   const watchWords = watchWordBreakdown(panelWatches.flatMap((w) => (w.kind === "metric" ? [{ verdict: w.verdict, error: w.watch.last_error }] : [])));
@@ -281,7 +280,13 @@ export function SourceOverview({ source, needs }: { source: OpsSource; /** What 
         )}
         <Fact label="open issues" title={regressed ? "Regressed: came back after a resolve in the last 7d, the Issues list's Regressed lane" : undefined} value={openCount.toLocaleString()} sub={[regressed ? `${regressed} regressed` : null, passing ? `${passing} ${passing === 1 ? "check" : "checks"} passing` : null].filter(Boolean).join(" · ") || undefined} tone={regressed ? "bad" : openCount ? "warn" : "ok"} href={opsHref.tab("issues", { source: source.name })} data-ops-stat="open" />
         {watchTotal > 0 ? (
-          <Fact label={`watches ${tally.word}`} value={tally.bad ? `${tally.bad.toLocaleString()}/${watchTotal.toLocaleString()}` : `${(watchTotal - noLine).toLocaleString()}/${watchTotal.toLocaleString()}`} sub={tally.bad ? watchWords || undefined : noLine ? `${noLine.toLocaleString()} no line` : undefined} title={tally.text} tone={tally.tone} href={allWatchesHref} data-ops-stat="alerting" />
+          tally.unjudged ? (
+            // Nothing judged yet: the count in neutral ink, a press into the first watch's line.
+            <Fact label={tally.label} value={watchTotal.toLocaleString()} title={tally.text} tone="off" href={firstNoLine ? `${opsHref.metric(firstNoLine)}#mx-line` : allWatchesHref} data-ops-stat="alerting" />
+          ) : (
+            // Always the watches ok of all of them; what is wrong with the rest is named under it.
+            <Fact label={tally.label} value={`${tally.value.toLocaleString()}/${watchTotal.toLocaleString()}`} sub={(tally.bad ? [watchWords, tally.noLine ? `${tally.noLine.toLocaleString()} no line` : ""].filter(Boolean).join(" · ") || tally.sub : tally.sub) || undefined} title={tally.text} tone={tally.tone} href={allWatchesHref} data-ops-stat="alerting" />
+          )
         ) : canWatch ? (
           <Fact label="watches" value="None" sub="+ Watch a number" onClick={() => setAddingWatch(true)} data-ops-stat="alerting" />
         ) : null}
@@ -307,7 +312,8 @@ export function SourceOverview({ source, needs }: { source: OpsSource; /** What 
         <section className="ops-card sov-panel" aria-label="Open issues">
           <div className="ops-card-head"><span>Open issues <span className="ops-dim ops-num font-normal">{openCount.toLocaleString()}</span></span><Link href={opsHref.tab("issues", { source: source.name })}>All</Link></div>
           {causes.length ? causes.map(([g, ...twins]) => <IssueRow key={g._id} group={g} variants={twins.length ? [g, ...twins] : undefined} task={g.signal_task_id ? taskOf(g.signal_task_id) : undefined} now={now} lane={laneOf(g)} />) : <div className="sov-none">{open.length ? "All in Needs attention" : "No open issues"}</div>}
-          {openCount - (open.length - rest.length) > causes.flat().length && causes.length > 0 && <Link href={opsHref.tab("issues", { source: source.name })} className="sov-more" data-ops-issues-more>+{(openCount - (open.length - rest.length) - causes.flat().length).toLocaleString()} more</Link>}
+          {/* The head's count less the rows drawn here: the issues Needs attention lists are among the "more", so the two always add up to the head. */}
+          {openCount > causes.flat().length && causes.length > 0 && <Link href={opsHref.tab("issues", { source: source.name })} className="sov-more" data-ops-issues-more>+{(openCount - causes.flat().length).toLocaleString()} more</Link>}
         </section>
         {canReplay && <section className="ops-card sov-panel" aria-label="Newest replays">
           {/* The Replays tab badge's own count (useReplayTotal), so both say the same number. */}
@@ -365,7 +371,7 @@ const VOLUME_WHAT: Partial<Record<OpsSource["provider"], string>> = {
   app: "items its watches turned into checks and jobs",
 };
 
-function Fact({ label, value, tone, href, onClick, sub, title, ...rest }: { label: string; value: string; tone?: "bad" | "warn" | "ok"; href?: string; onClick?: () => void; sub?: string; title?: string; "data-ops-stat"?: string }) {
+function Fact({ label, value, tone, href, onClick, sub, title, ...rest }: { label: string; value: string; tone?: "bad" | "warn" | "ok" | "off"; href?: string; onClick?: () => void; sub?: string; title?: string; "data-ops-stat"?: string }) {
   const body = (
     <>
       <span className="sov-fact-v ops-num">{value}{sub && <small>{sub}</small>}</span>

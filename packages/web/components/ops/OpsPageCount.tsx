@@ -44,7 +44,7 @@ function ReplaysCount() {
 function MetricsCount() {
   const watches = useOpsWatches();
   const n = useMemo(() => watches.filter(watchNeedsLook).length, [watches]);
-  return <Chip n={n} alert title="Alerting or cannot read" />;
+  return <Chip n={n} alert title="Alerting, blind or erroring" />;
 }
 
 /** The Apps tab's count: the apps connected, as the tab reads it. */

@@ -56,6 +56,7 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { HOLD_MS, nextEntryId, type DockDot, type DockEntry } from "./dockModel";
 import "./agentDock.css";
+import { Button } from "../ui/button";
 
 export function AgentDock() {
   const placed = useMinePlacement();
@@ -521,15 +522,9 @@ function DockInput({ placeholder, onSend, attach }: { placeholder: string; onSen
           placeholder={placeholder}
           className={`min-h-7 flex-1 resize-none bg-transparent py-1 text-[13px] leading-5 text-sol-text outline-none placeholder:text-white/35 ${attach ? "" : "pl-2"}`}
         />
-        <button
-          title="Send"
-          aria-label="Send"
-          disabled={!ready}
-          onClick={send}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sol-blue text-white transition-[opacity,transform] hover:brightness-110 active:scale-95 disabled:bg-white/10 disabled:text-white/30"
-        >
+        <Button title="Send" aria-label="Send" variant="blue" size="icon-sm" disabled={!ready} onClick={send} className="rounded-full">
           <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
-        </button>
+        </Button>
       </div>
     </div>
   );

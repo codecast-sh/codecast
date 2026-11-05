@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dia
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 import { useEventListener } from "../../hooks/useEventListener";
+import { Button } from "../ui/button";
 
 /** A number the review leads with: how many start, how fast, how much. The label is a few words. */
 export type SwitchFigure = { value: string; label: string; tone?: "warn" };
@@ -185,10 +186,10 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger
           <button ref={cancel} type="button" onClick={onClose} className="inline-flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text-muted hover:text-sol-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50" data-switch-cancel>
             {l.keep ?? "Keep off"} <KeyCap size="xs">esc</KeyCap>
           </button>
-          <button type="button" disabled={blocked} onClick={onConfirm} title={l.blocked ?? l.confirm} className="ml-auto inline-flex h-8 min-w-0 max-w-full items-center gap-2 rounded-md bg-sol-orange px-3.5 text-[12.5px] font-semibold text-sol-bg hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-orange/50 disabled:cursor-not-allowed disabled:bg-sol-border disabled:text-sol-text-dim" data-switch-confirm>
+          <Button type="button" variant="orange" size="sm" disabled={blocked} onClick={onConfirm} title={l.blocked ?? l.confirm} className="ml-auto min-w-0 max-w-full" data-switch-confirm>
             <span className="min-w-0 truncate">{l.blocked ?? l.confirm}</span>
             {!blocked && <span className="inline-flex shrink-0 items-center gap-0.5"><KeyCap size="xs" tone="onAccent">{isMac ? "⌘" : "ctrl"}</KeyCap><KeyCap size="xs" tone="onAccent">↵</KeyCap></span>}
-          </button>
+          </Button>
         </footer>
       </DialogContent>
     </Dialog>

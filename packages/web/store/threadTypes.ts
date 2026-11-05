@@ -1,7 +1,7 @@
 // The Threads inbox's row types. One row per (viewer, thread) across every
 // threaded system — chat threads, session comment threads, task comment
 // streams — as threads.listMine returns them. The shape mirrors the server's
-// ThreadInboxEntry (convex/threads.ts); keep the two in step.
+// ThreadInboxEntry (convex/threadsTypes.ts); keep the two in step.
 
 export type ThreadKind = "chat" | "comment" | "task" | "page" | "code" | "decision";
 

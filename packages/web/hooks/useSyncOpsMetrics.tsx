@@ -7,7 +7,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { useOpsScope } from "./useSyncOps";
-import { CARD_BUCKETS, changeRange, rangeMs, seriesArgs, seriesKey, type MetricRange, type OpsWatchSeries, type SeriesSpec } from "../components/ops/metricModel";
+import { type MetricRange } from "../components/ops/metricModel";
+import { CARD_BUCKETS, changeRange, rangeMs, seriesArgs, seriesKey, type OpsWatchSeries, type SeriesSpec } from "../components/ops/metricSeries";
 
 const api = _api as any;
 

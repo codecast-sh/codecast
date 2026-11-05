@@ -83,10 +83,9 @@ test("what is wrong leads, worst first, and each count is a filter", async () =>
   const count = (k: string) => container.querySelector(`[data-ops-count="${k}"]`)!;
   expect(count("alerting").textContent).toBe("1Alerting");
   expect(count("alerting").getAttribute("href")).toBe("/ops?show=alerting");
-  // A paging tile that holds nothing is not drawn; a calmer one that holds nothing is a count, never a link to an empty list.
+  // A tile that holds nothing is not drawn, paging or not, at every width: the strip is only what holds something.
   expect(container.querySelector('[data-ops-count="regressed"]')).toBeNull();
-  expect(count("firing").getAttribute("data-tone")).toBe("zero");
-  expect(count("firing").getAttribute("href")).toBeNull();
+  expect(container.querySelector('[data-ops-count="firing"]')).toBeNull();
   done();
 });
 
@@ -146,7 +145,7 @@ test("a snoozed item leaves the list and its counts, and the Snoozed filter list
   const snoozes = { "issue:g1": { until: NOW + H, state: "new", volume: 3, at: NOW } };
   const live = await mount(data, null, snoozes);
   expect(live.container.querySelector('[data-ops-item="eg-1"]')).toBeNull();
-  expect(live.container.querySelector('[data-ops-count="new"] b')!.textContent).toBe("0");
+  expect(live.container.querySelector('[data-ops-count="new"]')).toBeNull();
   expect(live.container.querySelector('[data-ops-count="snoozed"] b')!.textContent).toBe("1");
   live.done();
   const list = await mount(data, "snoozed", snoozes);
@@ -320,8 +319,8 @@ test("one failing reader is one row naming its blind watches, its fix once, and 
   expect([...row.querySelectorAll("[data-ops-blind-watch]")].map((a) => a.getAttribute("href"))).toEqual(["/ops/metrics/mw-1", "/ops/metrics/mw-2", "/ops/metrics/mw-3", "/ops/metrics/mw-4"]);
   // The band draws none of them again: they are on the list. Its summary counts them as Blind, opening the reader's row, never as Erroring.
   expect(container.querySelector("[data-ops-band-watch]")).toBeNull();
-  expect(container.querySelector('[data-ops-band-count="reader"]')!.textContent).toBe("4Blind");
-  expect(container.querySelector('[data-ops-band-count="reader"]')!.getAttribute("href")).toBe("/ops?show=reader");
+  expect(container.querySelector('[data-ops-band-count="blind"]')!.textContent).toBe("4Blind");
+  expect(container.querySelector('[data-ops-band-count="blind"]')!.getAttribute("href")).toBe("/ops?show=reader");
   expect(container.querySelector('[data-ops-band-count="error"]')).toBeNull();
   await act(async () => root.unmount());
   container.remove();

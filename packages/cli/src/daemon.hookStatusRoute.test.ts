@@ -91,6 +91,11 @@ describe("hook status wire coercion", () => {
     expect(normalizeHookStatus(once)).toEqual(once);
   });
 
+  test("the fallback file's dialog string becomes a flag", () => {
+    expect(normalizeHookStatus({ ...base, status: "permission_blocked", dialog: "1" }).dialog).toBe(true);
+    expect(normalizeHookStatus({ ...base, dialog: "0" }).dialog).toBeUndefined();
+  });
+
   test("junk claims nothing rather than a boundary at time zero", () => {
     const out = normalizeHookStatus({ ...base, session_boundary: "0", turn_completed_at: "not-a-number" });
     expect(out.session_boundary).toBeUndefined();

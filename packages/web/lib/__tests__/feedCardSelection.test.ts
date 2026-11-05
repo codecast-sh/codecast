@@ -9,8 +9,8 @@ import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
 const restoreGlobals = replaceGlobals({ window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, Element: dom.window.Element, Node: dom.window.Node, navigator: dom.window.navigator });
 const { useInboxStore } = await import("../../store/inboxStore");
-const { useInboxSelection } = await import("../../lib/inboxSelection");
-const { FEED_CARD_ATTR, feedCardOpened, feedCardSelect } = await import("./FeedCardTriage");
+const { useInboxSelection } = await import("../inboxSelection");
+const { FEED_CARD_ATTR, feedCardOpened, feedCardSelect } = await import("../feedCardSelection");
 
 afterAll(() => {
   closeDomWindow(dom);

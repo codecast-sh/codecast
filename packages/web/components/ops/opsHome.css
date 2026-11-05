@@ -55,12 +55,6 @@
 .ops-fresh[data-state="stale"] { color: var(--sol-orange); }
 .ops-fresh[data-state="stale"] i { background: var(--sol-orange); }
 .ops-ws[data-foreign="true"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
-.ops-wsbar {
-  display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 7px 10px; border-radius: 6px; font-size: 12.5px;
-  border: 1px solid color-mix(in srgb, var(--sol-orange) 45%, var(--sol-border)); background: color-mix(in srgb, var(--sol-orange) 8%, transparent);
-}
-.ops-wsbar b { font-weight: 600; }
-.ops-wsbar .ops-btn { margin-left: auto; }
 .ops-step { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; }
 .ops-step button, .ops-step a {
   display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0 5px; border-radius: 5px;
@@ -102,18 +96,18 @@
 /* The filter that is on is filled, so it reads as pressed from across the page. */
 .ops-home-count[data-on="true"] { border-style: solid; border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 16%, var(--sol-bg-alt)); }
 .ops-home-count[data-on="true"] span { color: var(--sol-text); }
-/* Under 1200px the tiles turn into chips, number beside label, that wrap to a second row: a label is never cut. */
-@container ops-home (max-width: 1200px) {
-  .ops-home-strip { flex-wrap: wrap; gap: 6px 10px; }
-  .ops-home-strip .ops-home-tilegroup { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 1 auto !important; }
-  .ops-home-tilegroup[data-paging="true"] { margin: 0; padding: 3px; }
-  .ops-home-count { flex: 0 0 auto; flex-direction: row; align-items: baseline; gap: 6px; padding: 6px 11px; }
-  .ops-home-count b { font-size: 15px; }
-  .ops-home-count span { overflow: visible; }
-}
+/* At every width the tiles are one-line chips, number beside label, that wrap to a second row: one look to learn, a label
+   never cut, and the first screen keeps its height for the rows. */
+.ops-home-strip { flex-wrap: wrap; gap: 6px 10px; }
+.ops-home-strip .ops-home-tilegroup { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 1 auto !important; }
+.ops-home-tilegroup[data-paging="true"] { margin: 0; padding: 3px; }
+.ops-home-count { flex: 0 0 auto; flex-direction: row; align-items: baseline; gap: 6px; padding: 6px 11px; }
+.ops-home-count b { font-size: 15px; }
+.ops-home-count span { overflow: visible; }
 
 /* The filter that is on, beside the list's count: pressing it shows everything. */
-.ops-home-headtitle { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.ops-home-headtitle { display: inline-flex; align-items: center; gap: 6px 12px; min-width: 0; white-space: nowrap; }
+.ops-home-lane { display: inline-flex; align-items: center; gap: 3px; }
 .ops-home-token {
   display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 4px 0 8px; margin-left: 4px; border-radius: 5px;
   font-size: 11px; font-weight: 500; color: var(--sol-text); background: color-mix(in srgb, var(--sol-blue) 16%, transparent);
@@ -136,7 +130,16 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 
 /* One grid for the head and every row (the list and each row are subgrids of it), so Events, Users, Since and
    the three action columns line up down the list, and each action column is as wide as its widest row: no label is ever cut. */
-.ops-home-table { --ops-home-cols: 26px minmax(0, 1fr) 76px 56px 48px 40px auto auto; display: grid; grid-template-columns: var(--ops-home-cols); column-gap: 12px; }
+.ops-home-table { --ops-home-cols: 26px auto minmax(0, 1fr) 76px 56px 48px 40px auto auto; display: grid; grid-template-columns: var(--ops-home-cols); column-gap: 12px; }
+/* No row has people to count: the Users column goes and the title takes its room. */
+@container ops-home (min-width: 1061px) {
+  .ops-home-table[data-users="none"] { --ops-home-cols: 26px auto minmax(0, 1fr) 76px 56px 40px auto auto; }
+  .ops-home-table[data-users="none"] [data-col="users"], .ops-home-table[data-users="none"] .ops-home-head [data-h="users"] { display: none; }
+}
+/* The state column: as wide as the widest pill on the list, so every pill sits at one x. The head's title spans it. */
+.ops-home-statecol { display: flex; align-items: center; min-width: 0; }
+.ops-home-head .ops-home-headtitle { grid-column: span 2; }
+.ops-home-state[data-copy="true"] { display: none; }
 /* The column head and the selection bar take the same 32px, so selecting a row moves nothing. */
 .ops-home-head, .ops-home-bulk.ops-home-bulk { height: 32px; box-sizing: border-box; margin-bottom: 4px; }
 .ops-home-head {
@@ -180,8 +183,11 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 /* One line a row: the id and title, then the state and the facts that say how bad in what room the title leaves (at least
    two fifths), so a screen holds a stream of rows the way an issue list does. A phone stacks them (the 600px rule). */
 .ops-home-main { display: flex; flex-direction: row; align-items: center; gap: 10px; min-width: 0; }
-.ops-home-line1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 0 1 auto; }
-.ops-home-main > .ops-home-line2 { flex: 1 1 0; min-width: min(38%, 320px); }
+/* The facts take what they need (up to half the row) and the title every pixel they leave, so a short reason never
+   leaves a gap while the title beside it is cut. */
+/* The title keeps at least three fifths of the row; the facts get what is left, the reading and its source first. */
+.ops-home-line1 { display: flex; align-items: baseline; gap: 8px; min-width: 60%; flex: 1 1 0; }
+.ops-home-main > .ops-home-line2 { flex: 0 1 auto; min-width: 0; max-width: calc(40% - 10px); }
 .ops-home-ref { font-size: 11px; flex-shrink: 0; }
 .ops-home-title { font-size: 13px; color: var(--sol-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 /* Line two is one line tall and wraps: a fact that does not fit moves to the hidden second line whole,
@@ -203,7 +209,12 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 /* It takes a sliver to stay on the line beside the pill, then whatever room is left up to its full width. */
 .ops-home-line2 > .ops-home-fact[data-lead="true"] { flex: 1 1 0%; min-width: 48px; max-width: max-content; overflow: hidden; text-overflow: ellipsis; }
 .ops-home-line2 > .ops-home-blind ~ .ops-home-fact[data-lead="true"] { max-width: calc(100% - 210px); }
-.ops-home-src { display: inline-flex; align-items: center; gap: 4px; }
+/* The reading leads (it shortens rather than drop), the source right after it, then the rest by rank; a second state
+   rides last. A fact that does not fit drops whole to the hidden second line, so none is ever cut mid-word. */
+.ops-home-src { display: inline-flex; align-items: center; gap: 4px; order: -1; }
+.ops-home-line2 > .ops-home-fact[data-lead="true"] { order: -2; }
+.ops-home-line2 > .ops-home-state[data-copy="true"] { order: -3; }
+.ops-home-line2 > .ops-home-also { order: 1; }
 .ops-home-snz { display: inline-flex; align-items: center; gap: 4px; color: var(--sol-text-muted) !important; }
 .ops-home-spark { display: flex; justify-content: flex-end; }
 .ops-home-numcol { font-size: 12px; text-align: right; color: var(--sol-text); }
@@ -215,13 +226,14 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-slot[data-slot="task"] { justify-content: flex-end; }
 /* The primary press lives in the task's column and shows over the numbers to its left while the row is pointed at,
    holds the cursor or has focus: the list stays rows, and every row still offers its act in one move. */
-.ops-home-slot[data-slot="task"] { position: relative; }
-.ops-home-slot[data-slot="primary"] {
-  position: absolute; right: 100%; top: 50%; transform: translateY(-50%); z-index: 1; gap: 6px;
-  padding: 0 8px 0 22px; background: linear-gradient(90deg, transparent, var(--ops-row-bg) 20px);
-  opacity: 0; pointer-events: none; transition: opacity 90ms ease;
-}
-.ops-home-row:hover .ops-home-slot[data-slot="primary"], .ops-home-row[data-cursor="true"] .ops-home-slot[data-slot="primary"], .ops-home-row:focus-within .ops-home-slot[data-slot="primary"] { opacity: 1; pointer-events: auto; }
+/* The press shares the task's column: pointing at a row (or holding the cursor or focus on it) swaps the task chip for
+   the press in the same cell, so the Started time and the reason beside it stay readable. The column is as wide as
+   the wider of the two on any row. */
+.ops-home-slot[data-slot="task"] { position: relative; display: grid; justify-items: end; }
+.ops-home-slot[data-slot="task"] > * { grid-area: 1 / 1; }
+.ops-home-slot[data-slot="primary"] { gap: 6px; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 90ms ease; }
+.ops-home-row:hover .ops-home-slot[data-slot="primary"], .ops-home-row[data-cursor="true"] .ops-home-slot[data-slot="primary"], .ops-home-row:focus-within .ops-home-slot[data-slot="primary"] { opacity: 1; visibility: visible; pointer-events: auto; }
+.ops-home-row:is(:hover, [data-cursor="true"], :focus-within) .ops-home-slot[data-primary="true"] > :not([data-slot="primary"]) { visibility: hidden; }
 .ops-home-acts .ops-btn { height: 24px; padding: 0 8px; font-size: 11.5px; gap: 4px; white-space: nowrap; }
 .ops-home-acts .ops-home-menu-btn { width: 24px; padding: 0; justify-content: center; border-color: transparent; background: transparent; color: var(--sol-text-dim); }
 .ops-home-row:hover .ops-home-menu-btn, .ops-home-menu-btn[data-state="open"], .ops-home-menu-btn:focus-visible { border-color: var(--sol-border); color: var(--sol-text); }
@@ -364,13 +376,13 @@ a.ops-fresh:hover span { text-decoration: underline; }
 }
 @container ops-home (max-width: 1060px) {
   /* Events and Users go first (line two repeats them), then the sparkline; the reason on line two is the last to go. */
-  .ops-home-table { --ops-home-cols: 26px minmax(0, 1fr) 76px 40px auto auto auto; }
+  .ops-home-table { --ops-home-cols: 26px auto minmax(0, 1fr) 76px 40px auto auto; }
   .ops-home-numcol, .ops-home-head [data-h] { display: none; }
   .ops-home-fact[data-narrow="true"] { display: inline; }
 }
 @container ops-home (max-width: 900px) {
   /* The sparkline goes too (the facts carry the counts); a row stays one line: id, title, state and facts, start, task, menu. */
-  .ops-home-table { --ops-home-cols: 26px minmax(0, 1fr) 40px auto auto; }
+  .ops-home-table { --ops-home-cols: 26px auto minmax(0, 1fr) 40px auto auto; }
   .ops-home-spark, .ops-home-head [data-col="spark"] { display: none; }
   .ops-home-head { height: auto; }
   .ops-home-headtitle { flex-wrap: wrap; row-gap: 4px; white-space: normal; }
@@ -391,30 +403,42 @@ a.ops-fresh:hover span { text-decoration: underline; }
   .ops-home-count[data-tone="zero"] { display: none; }
   .ops-home-count[data-on="true"] { display: flex; }
   .ops-home-main { flex-direction: column; align-items: stretch; gap: 3px; }
-  .ops-home-main > .ops-home-line2 { flex: none; min-width: 0; }
+  .ops-home-main > .ops-home-line1 { flex: none; min-width: 0; }
+  .ops-home-main > .ops-home-line2 { flex: none; min-width: 0; max-width: none; }
   /* The source stays on line two before the event counts that line one's columns repeat: it is how two like errors tell apart. */
   .ops-home-line2 > .ops-home-fact[data-narrow="true"]:not([data-lead="true"]) { order: 2; }
-  /* The press shown on hover sits on the facts' line, so the title it would cover stays readable. */
-  .ops-home-slot[data-slot="primary"] { top: auto; bottom: -11px; transform: none; }
-  /* A touch screen (or a phone-sized window) has no hover to reveal a press: the acts take a line of their own, the title
-     two lines and the lead fact a line above the pill, so the words a person triages by are whole. */
+  /* The title gets the whole first line: the task chip shows on the cursor row only, and the press shown on hover sits
+     at the end of the facts' line, over the facts that drop first. */
+  .ops-home-row:not([data-cursor="true"]) .ops-home-task { display: none; }
+  .ops-home-slot[data-slot="task"] { display: flex; }
+  .ops-home-slot[data-slot="primary"] {
+    position: absolute; right: 0; bottom: -11px; z-index: 1;
+    padding: 0 0 0 22px; background: linear-gradient(90deg, transparent, var(--ops-row-bg) 20px);
+  }
+  /* A touch screen (or a phone-sized window): two lines a row, the title (two lines at most) with its menu at the right
+     edge, then the state, the reading and the source. A tap opens the item, whose page leads with its fix; the cursor row
+     also shows its task and press on a line of their own. */
   @media (hover: none), (max-width: 600px) {
     .ops-home-table, .ops-home-list { display: flex; flex-direction: column; }
-    /* The head keeps the list's count and the filter that is on (with its x), so a filtered list always says so; the column heads go. */
+    /* The head keeps the filter that is on (with its x), so a filtered list always says so; the column heads go. */
     .ops-home-head { display: flex; align-items: center; padding: 0 2px 6px; }
     .ops-home-head > :not(.ops-home-headtitle) { display: none; }
-    .ops-home-row { grid-template-columns: 26px minmax(0, 1fr) 40px; column-gap: 10px; row-gap: 6px; padding: 9px 10px 9px 12px; }
-    .ops-home-acts { grid-column: 2 / -1; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+    .ops-home-row { grid-template-columns: 26px minmax(0, 1fr) auto auto; column-gap: 8px; row-gap: 6px; padding: 8px 6px 8px 12px; align-items: start; }
+    .ops-home-statecol, .ops-home-spark { display: none; }
+    .ops-home-state[data-copy="true"] { display: inline; }
+    .ops-home-age { line-height: 18px; }
+    .ops-home-acts { display: flex; gap: 6px; align-items: center; min-width: 0; margin-top: -3px; }
     .ops-home-slot:empty { display: none; }
+    .ops-home-row:not([data-cursor="true"]) .ops-home-slot[data-slot="task"] { display: none; }
+    .ops-home-row[data-cursor="true"] .ops-home-acts { grid-column: 2 / -1; grid-row: 2; flex-wrap: wrap; margin-top: 0; }
+    .ops-home-row .ops-home-task { display: inline-flex; }
     .ops-home-slot { min-width: 0; max-width: 100%; }
-    .ops-home-slot[data-slot="task"] { gap: 6px; }
-    .ops-home-slot[data-slot="primary"] { position: static; transform: none; opacity: 1; pointer-events: auto; background: none; padding: 0; }
-    .ops-home-slot[data-slot="more"] { margin-left: auto; }
+    .ops-home-slot[data-slot="task"] { gap: 6px; display: flex; }
+    .ops-home-slot[data-slot="primary"] { position: static; transform: none; opacity: 1; visibility: visible; pointer-events: auto; background: none; padding: 0; }
+    .ops-home-row[data-cursor="true"] .ops-home-slot[data-slot="more"] { margin-left: auto; }
     .ops-home-acts .ops-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
     .ops-home-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
     .ops-home-line1 { align-items: flex-start; }
-    .ops-home-line2 { height: 42px; }
-    .ops-home-line2 > .ops-home-fact[data-lead="true"] { order: -1; flex-basis: 100%; max-width: 100% !important; }
   }
   .ops-home-fact[data-rank="3"] { display: none !important; }
   .ops-home-srctable thead th:nth-child(4), .ops-home-srctable td:nth-child(4) { display: none; }
@@ -441,11 +465,11 @@ a.ops-fresh:hover span { text-decoration: underline; }
 @media (max-width: 600px) {
   .ops-home-strip {
     flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; min-width: 0; max-width: 100%;
-    gap: 8px; padding: 1px 0; mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    gap: 8px; padding: 1px 0; mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent); -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent);
   }
   .ops-home-strip::-webkit-scrollbar { display: none; }
   .ops-home-strip .ops-home-tilegroup { flex-wrap: nowrap; flex: 0 0 auto !important; max-width: none; gap: 4px; }
-  .ops-home-strip .ops-home-tilegroup:last-child { padding-right: 28px; }
+  .ops-home-strip .ops-home-tilegroup:last-child { padding-right: 56px; }
 }
 
 /* An id this workspace does not hold: what it is, then the ways on. */
