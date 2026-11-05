@@ -66,6 +66,8 @@ export interface WorkflowNode {
   timeout?: number;
   // Control flow
   max_visits?: number;
+  /** How many entries along `free_visit` edges this node takes without counting them toward max_visits. */
+  max_free_visits?: number;
   max_retries?: number;
   retry_target?: string;
   goal_gate?: boolean;
@@ -109,6 +111,8 @@ export interface WorkflowEdge {
   condition?: string;
   weight?: number;
   fidelity?: string;
+  /** A node this edge sends the run back to without spending one of its visits (bounded by its max_free_visits). */
+  free_visit?: string;
 }
 
 export interface WorkflowGraph {
