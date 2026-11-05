@@ -94,7 +94,7 @@ describe("watch (LE12)", () => {
   test("a signal during watch reopens the cause, so the sweep has nothing to close", async () => {
     const { t, taskId, task, now } = await setup();
     await t.run(async (ctx) => {
-      await ctx.db.patch(taskId, { status: "done", closed_at: now, watch_until: now + DAY } as any);
+      await ctx.db.patch(taskId, { status: "done", closed_at: now - 1000, watch_until: now + DAY } as any);
       const user = (await ctx.db.query("users").first())!;
       await ctx.db.insert("signals", {
         user_id: user._id, workspace: `user:${user._id}`, short_id: "sg-1", source: "sentry", kind: "bug",
