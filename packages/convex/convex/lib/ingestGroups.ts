@@ -19,6 +19,7 @@ import {
 } from "@codecast/shared/contracts/ingest";
 import {
   checkFingerprint,
+  errorCulprit,
   groupFingerprint,
   failureMessageKey,
   jobFingerprint,
@@ -648,7 +649,7 @@ export function planItem(item: IngestItem, envelope: { release?: string; environ
     case "error":
       return group("error", sdkErrorFingerprint(item), {
         title: titleOf(item.message),
-        culprit: topInAppFrame(item.stack),
+        culprit: errorCulprit(item),
         level: item.level ?? "error",
         occurrence: occurrence("error"),
         sample: {

@@ -308,7 +308,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           {/* The role's face (S13); the root workspace has none. */}
           {role && <RoleFace role={role} size={phone ? 24 : 26} className="shrink-0" />}
           <h1 className={cn("shrink-0 max-w-[40%] font-semibold tracking-tight leading-none truncate", phone ? "text-[15px]" : "text-[17px]")} style={{ fontFamily: "var(--font-serif)" }} title={`@${handle}`}>{name}</h1>
-          {words && words.subtitle !== words.name && <span className="shrink-0 whitespace-nowrap text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-scope-title>{words.subtitle}</span>}
+          {words && words.subtitle !== words.name && <span className="scope-head-wide min-w-0 shrink-[2] truncate whitespace-nowrap text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-scope-title>{words.subtitle}</span>}
           {!role && <span className="shrink-0 inline-flex items-center gap-1 text-[11px]" style={{ color: "var(--sol-text-dim)" }}><Network className="w-3 h-3" /> whole workspace</span>}
           {paused && <span className="shrink-0 whitespace-nowrap text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
           {/* The state line: the role's pinned line, else the first line of its
@@ -424,13 +424,16 @@ function RoleHeadFacts({ role, tree, onOpen }: { role: OrgRole; tree: OrgTree; o
   const members = useTeamRosterIdentity() as Parameters<typeof reportsToNamed>[1];
   const reportsTo = reportsToNamed(tree, members, role);
   const keep = (e: React.MouseEvent) => e.stopPropagation();
+  // The state first: it is the one fact that must survive a narrow pane.
+  // Whom it reports to and what it carries truncate; since when goes first,
+  // then whom it reports to (globals.css, .scope-head-cq).
   const cells = [
-    reportsTo ? <span key="to" className="inline-flex min-w-0 items-center gap-1" onClick={keep} data-scope-reports-to><span aria-hidden style={{ color: "var(--sol-text-dim)" }}>↳</span><ObjectLink n={reportsTo} /></span> : null,
-    head.facts.state,
+    { key: "state", fit: "shrink-0", node: head.facts.state },
+    { key: "to", fit: "min-w-0 scope-head-wide", node: reportsTo ? <span className="inline-flex min-w-0 items-center gap-1" onClick={keep} data-scope-reports-to><span aria-hidden style={{ color: "var(--sol-text-dim)" }}>↳</span><ObjectLink n={reportsTo} /></span> : null },
     // With nothing led or owned, what it carries is its charter: the brief says that whole.
-    head.lineFacts.measure && head.leads.length + head.goals.length > 0 ? <span key="measure" className="inline-flex min-w-0 max-w-[260px]">{head.lineFacts.measure}</span> : null,
-    head.facts.date,
-  ].filter((c) => c != null && c !== false);
+    { key: "measure", fit: "min-w-0 max-w-[260px]", node: head.leads.length + head.goals.length > 0 ? head.lineFacts.measure : null },
+    { key: "date", fit: "shrink-0 scope-head-mid", node: head.facts.date },
+  ].filter((c) => c.node != null && c.node !== false);
   return (
     <div
       className={cn("min-w-0 shrink flex items-center gap-x-2 whitespace-nowrap overflow-hidden text-[11.5px] rounded-md px-1.5 h-6", onOpen && "cursor-pointer transition-colors hover:bg-sol-bg-highlight/40")}
@@ -440,9 +443,9 @@ function RoleHeadFacts({ role, tree, onOpen }: { role: OrgRole; tree: OrgTree; o
       data-scope-head-facts
     >
       {cells.map((c, i) => (
-        <span key={i} className={cn("inline-flex items-center gap-2", (c as React.ReactElement).key === "measure" ? "min-w-0" : "shrink-0")}>
+        <span key={c.key} className={cn("inline-flex items-center gap-2", c.fit)}>
           {i > 0 && <span aria-hidden className="h-[3px] w-[3px] rounded-full shrink-0" style={{ background: "var(--sol-text-dim)" }} />}
-          <span className="inline-flex min-w-0 items-center">{c}</span>
+          <span className="inline-flex min-w-0 items-center truncate">{c.node}</span>
         </span>
       ))}
       {head.serves.length > 0 && (
