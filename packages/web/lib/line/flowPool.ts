@@ -7,6 +7,7 @@
 import { flowBase, flowFills, flowGraphAttr as graphAttr, flowNodeAttrOf, flowPathWords, flowSlotsOf, foldFlow, publishableFlowSource, segmentTopOf, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import { SHIPPED_FLOWS } from "./shippedFlows.generated";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
+import { stationsOfNodes, type FlowStations, type StationDetail } from "./flowStations";
 
 export type ShippedFlow = PoolFlowSummary & { name: string; nodes: FlowNodeIn[]; edges: FlowEdgeIn[]; /** The flow it extends, as the generator reads it (cli workflow/flowPool.ts PoolFlow). */ extends?: string | null };
 
@@ -17,6 +18,8 @@ export type AppFlow = ShippedFlow & {
   workflowId: string | null;
   /** The library flow it extends, by slug. */
   base?: string | null;
+  /** Each station's words and settings, from the row it was pushed as. A shipped flow's load on demand (flowStations). */
+  stations?: FlowStations | null;
 };
 
 /** A pushed workflows row, as much of it as the pool reads. */
@@ -32,7 +35,7 @@ export type PushedFlowRow = {
   /** The nodes the graph fills with steps it wrote in place, for a row that carries no source. */
   fills?: ReadonlyArray<string> | null;
   variant_of?: string | null;
-  nodes: ReadonlyArray<{ id: string; label: string; type: string; shape?: string }>;
+  nodes: ReadonlyArray<{ id: string; label: string; type: string; shape?: string } & StationDetail>;
   edges: ReadonlyArray<{ from: string; to: string; label?: string; condition?: string }>;
 };
 
@@ -79,6 +82,7 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
     where: row.workspace?.startsWith("team:") ? "team" : "pushed",
     workflowId: row._id,
     base: flowBase(row),
+    stations: stationsOfNodes(row.nodes),
   };
 }
 

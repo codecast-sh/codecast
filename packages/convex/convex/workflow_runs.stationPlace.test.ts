@@ -51,6 +51,16 @@ describe("workflow_runs.admitToStation", () => {
     expect(await admit(c)).toMatchObject({ admitted: true, inside: 2 });
   });
 
+  // A resumed runner reports its machine and graph before it asks for a place; marking Eval running then read the
+  // waiting runs as inside it (Eval 6 and Prove 8 under caps of 4, 07:08 UTC Nov 5).
+  test("a report naming no station leaves the run's stations as they were", async () => {
+    const { t, run } = await setup();
+    const a = await run(undefined, "eval");
+    await t.mutation(api.workflow_runs.updateProgress, { api_token: TOKEN, run_id: a, current_node_id: "eval", runner_device: "dev-1", graph_hash: "h1" });
+    const row = await t.run((ctx) => ctx.db.get(a as any)) as any;
+    expect(row).toMatchObject({ current_node_id: "eval", runner_device: "dev-1", graph_hash: "h1", node_statuses: [] });
+  });
+
   test("a run that holds its place keeps it when its runner asks again", async () => {
     const { run, admit } = await setup();
     const [a, b] = [await run(), await run()];

@@ -103,17 +103,17 @@ export function normalizeThreadState(input: string): string {
 
 /**
  * The one line that stands in for the whole state on an inbox card. Takes the
- * first non-empty line, drops a leading bullet, and drops a leading label
+ * first non-empty line that is not a markdown heading, drops a leading bullet, and drops a leading label
  * ("Status:", "Goal:") — on a card the label is noise, since the line IS the
  * status. The convention puts what the session is working on here unlabeled.
  */
 export function threadStateHeadline(text: string): string {
-  const line = text
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.length > 0);
+  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  // A markdown heading ("## Where it stands") titles the note rather than saying where it stands.
+  const line = lines.find((l) => !/^#{1,6}\s/.test(l)) ?? lines[0];
   if (!line) return "";
   return line
+    .replace(/^#{1,6}\s+/, "")
     .replace(/^[-*•]\s*/, "")
     .replace(/^(Status|State|Goal):\s*/i, "")
     .trim();
