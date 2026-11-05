@@ -38,7 +38,7 @@ export function stagedWords(answer: SubjectAnswer): [string, string] {
 /** The surface's confirm before approving new roles: show the review, and run `go` on its confirm. */
 export type HireReview = (roles: ReturnType<typeof newRolesOf>, go: () => void) => void;
 
-export type Proposal = Pick<OrgProposalListRow, "_id" | "short_id" | "title" | "status" | "team_id" | "scope_user_id" | "reply"> & Partial<Pick<OrgProposalListRow, "author">>;
+export type Proposal = Pick<OrgProposalListRow, "_id" | "short_id" | "title" | "status" | "team_id" | "scope_user_id" | "reply"> & Partial<Pick<OrgProposalListRow, "author" | "applied_by_author">>;
 /** What a ref of the batch names a proposal by. */
 export type ProposalRef = Pick<Proposal, "_id" | "short_id" | "title">;
 

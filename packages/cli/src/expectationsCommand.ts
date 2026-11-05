@@ -71,7 +71,7 @@ export function formatProposeResult(r: { short_id: string; status: string; versi
   if (r.status === "empty") return `${r.short_id} recorded the window read; nothing to change (version ${r.version}).`;
   if (r.status === "applied") return `${r.short_id} applied as version ${r.version}: it only adds lines a person said, in their quoted words.`;
   if (r.ask) return `${r.short_id} is open against version ${r.version} and waits on the project's person. Nobody is asked yet: ask them yourself with cast decide --proposal ${r.short_id}, an answer opening with Apply to land it and one opening with Keep to leave the lines as they are.`;
-  return `${r.short_id} is open against version ${r.version}. A person applies it with: cast expectations apply ${r.short_id}`;
+  return `${r.short_id} is open against version ${r.version}. Apply it with: cast expectations apply ${r.short_id}`;
 }
 
 export function registerExpectationsCommand(program: Command, deps: PublishDeps): void {
@@ -153,7 +153,7 @@ since/until record the window of team context read; the newest until is the next
 
   for (const action of ["apply", "drop"] as const) {
     cmd.command(action)
-      .description(action === "apply" ? "Apply a proposal as the next version (a person's act)" : "Close a proposal without applying it (a person's act)")
+      .description(action === "apply" ? "Apply a proposal as the next version" : "Close a proposal without applying it")
       .argument("<proposal>", "The proposal: xp-N")
       .action(async (ref: string) => {
         const r = await apiPost(deps, "/cli/expectations/resolve", { proposal: ref, action, ...(deps.detectCurrentSessionId() ? { conversation_id: deps.detectCurrentSessionId() } : {}) });

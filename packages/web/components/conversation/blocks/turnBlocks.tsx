@@ -77,8 +77,6 @@ import { PENDING_BOOT_GRACE_MS, PENDING_HOSTED_STALL_MS, PENDING_IDLE_GRACE_MS, 
 import { ApiErrorCard } from "../sessionChrome";
 import { MessageDecisionReview } from "../../decisions/MessageDecisionReview";
 import { followRestoredConversation } from "../../../lib/followRestoredConversation";
-import { unreachableTerminalOf } from "@codecast/shared/contracts/deliveryHold";
-import { TerminalHoldRestart } from "./TerminalHoldRestart";
 import type { CondensedReceipt, ImageData, MessageFeedDensity, ParsedContextBlock, ReceiptEntry, StoryBeat, TaskRecordMaps, ToolCall, ToolCallChangeSelection, ToolResult } from "../types";
 import { COMPACT_TAIL_HEIGHT } from "../../../lib/conversationTurnDefaults";
 
@@ -317,7 +315,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const messageReachedSession = pendingMessageReachedSession(messageId, conversationPending);
   const holdReason = pendingMessageHoldReason(messageId, conversationPending);
   const holdScreen = pendingMessageHoldScreen(messageId, conversationPending);
-  const heldTerminal = unreachableTerminalOf(holdReason);
   const [holdScreenOpen, setHoldScreenOpen] = useState(false);
   const [sendingAnyway, setSendingAnyway] = useState(false);
   const handleSendAnyway = async () => {
@@ -704,7 +701,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           ) : (
             <span>Held: {holdReason}</span>
           )}
-          {heldTerminal && conversationId && <TerminalHoldRestart conversationId={conversationId} terminal={heldTerminal} working={isActiveAgentStatus(agentStatus)} />}
           <CancelPendingButton onClick={handleCancelPending} disabled={cancelState !== "idle"} />
         </div>
       )}

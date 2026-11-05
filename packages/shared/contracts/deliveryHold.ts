@@ -1,7 +1,7 @@
 // A message the daemon is holding because the session runs in a terminal it
-// cannot type into (a plain Alacritty window rather than tmux).
-// The daemon writes the reason as the pending row's hold reason; the web and
-// mobile bubbles recognize it here to offer the one fix, a restart in tmux.
+// cannot type into (a plain Alacritty window, or a Ghostty whose AppleScript
+// is out of reach). The daemon writes the reason as the pending row's hold
+// reason, and the web and mobile bubbles show it under the held message.
 // Before this the daemon retried such a message as a failure every five
 // minutes and said nothing, and the person saw "Connecting..." for nine hours
 // (jx72xn9, 2026-11-04).

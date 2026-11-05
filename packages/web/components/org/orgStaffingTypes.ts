@@ -146,6 +146,9 @@ export type OrgProposalRow = {
   superseded_by?: OrgProposalPointer;
   created_at: number;
   resolved_at?: number;
+  /** When the author applied its own changes as it posted them (a role a
+   *  person let start work on its own filing sessions, or hiring freely). */
+  applied_by_author?: number;
   /** The author's thread bound to this proposal (S18): the pane embeds it.
    *  null = a person posted it and there is no agent to talk to. Absent on a
    *  row from before the field: the web derives it from the author. */

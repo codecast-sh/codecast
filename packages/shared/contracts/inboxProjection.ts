@@ -116,7 +116,9 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // v22: a workflow run's own log (isRunLog) is never an inbox member.
 // v23: a standing session whose live work is a nested subagent (child_live)
 // files by its own state, as one with a hand beside it already did.
-export const INBOX_PROJECTION_VERSION = 23 as const;
+// v24: a session imported from history (history_import) holds a recent seat
+// only while its last activity is within HISTORY_IMPORT_INBOX_MS.
+export const INBOX_PROJECTION_VERSION = 24 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -1016,6 +1018,17 @@ export function isWorkingSetWindow(t: InboxTruncation): t is WorkingSetWindow {
 
 // How far back a row's stamp may be and still hold its window seat.
 export const WORKING_SET_RECENCY_MS = 30 * 24 * 60 * 60 * 1000;
+// A session that arrived from history (a newly linked machine's old
+// transcripts, decision sd-2537): the server stamps history_import when its
+// start predates its upload by more than this, and the inbox shows it only
+// while its last activity is this recent. Search and history always have it;
+// resuming it makes its activity current and it lands like any session.
+export const HISTORY_IMPORT_INBOX_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** True for a history import too old to take a recent seat. */
+export function isStaleHistoryImport(row: { history_import?: boolean | null; updated_at: number }, epoch: number): boolean {
+  return !!row.history_import && row.updated_at < epoch - HISTORY_IMPORT_INBOX_MS;
+}
 // The fold: a clean gap this wide in the recent members' activity hides
 // everything older behind the show-old toggle.
 export const INBOX_FOLD_GAP_MS = 12 * 60 * 60 * 1000;
@@ -1031,6 +1044,8 @@ export interface WorkingSetRow extends InboxVisibilityRow, RollupRow {
   has_pending_messages?: boolean | null;
   /** Membership in the viewer's session_owners set, stamped by the caller. */
   owned_by_me?: boolean | null;
+  /** Arrived from history (HISTORY_IMPORT_INBOX_MS). */
+  history_import?: boolean | null;
 }
 
 // A row someone filed on purpose: a pin, a dismiss, a stash or a snooze STAMP
@@ -1053,7 +1068,7 @@ export function inWorkingSet(row: WorkingSetRow, epoch: number): WorkingSetWindo
   // agent may still be running (a stash keeps it alive), and fresh activity
   // stamps on filed rows would crowd the plain rows out of the recent cap.
   const recentEligible =
-    !isFiled(row) && (row.status === "active" || row.status === "completed") && row.updated_at >= horizon;
+    !isFiled(row) && (row.status === "active" || row.status === "completed") && row.updated_at >= horizon && !isStaleHistoryImport(row, epoch);
   if (recentEligible) windows.push("recent");
   if (row.inbox_pinned_at) windows.push("pinned");
   if (!row.inbox_killed_at) {

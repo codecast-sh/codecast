@@ -724,3 +724,14 @@ test("no entry draws a dashed line, a hatch, an upper case label, a long dash, o
   expect(document.body.textContent).not.toMatch(/skip|on your next message|no change|Accept with edits/i);
   React.act(() => root.unmount());
 });
+
+test("an entry its author applied on its own carries no You line: no person answered it", () => {
+  const card = cardOf([{ ...RAISE, status: "applied", reply: { verdict: "approve", text: "Filed by @hop, which starts work on its own", at: 3 } }], "Private Network");
+  const person = mount({ card, ordinal: 1, onAnswer });
+  expect(q("[data-subject-you]")).not.toBeNull();
+  person.done();
+  const self = mount({ card, ordinal: 1, onAnswer, authorApplied: true });
+  expect(q("[data-subject-you]")).toBeNull();
+  expect(q("[data-subject-state]").textContent).toBe("Applied");
+  self.done();
+});
