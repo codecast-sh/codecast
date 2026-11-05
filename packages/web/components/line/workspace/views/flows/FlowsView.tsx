@@ -18,7 +18,7 @@ import { useSessionFlows, type LiveFlow, type SessionFlow } from "../../../../..
 import { useInboxStore } from "../../../../../store/inboxStore";
 import { appPool, CHANGE_FLOW_SLUG, defaultFlowOf, flowBySlug, flowRowPath, pushedFlow, takesSessionChange, type AppFlow } from "../../../../../lib/line/flowPool";
 import { changesAnything, libraryEntry, libraryFlows, type FlowLibrary, type LibraryEntry, type VariantChange } from "../../../../../lib/line/flowLibrary";
-import { liveFlowLedger, liveQueue, startFlowLedger, type LiveQueueRow } from "../../../../../lib/line/liveFlow";
+import { liveFlowLedger, liveQueue, moveFlowLedger, startFlowLedger, type LiveQueueRow } from "../../../../../lib/line/liveFlow";
 import { scoreBand } from "../../../../../lib/line/problemScore";
 import { flowRunState } from "../../../../../lib/line/flowFence";
 import { flowNeeds, flowOf, type OwnedFlow } from "../../../../../lib/line/ownedFlows";
@@ -54,6 +54,7 @@ function FlowsHome(props: LineViewProps) {
     <div className="flh" data-flows-home>
       {/* The live flow is the Flows stage's own page; here the library, and with no live flow, the way to start one. */}
       {!live && lib.lines.length ? <NoLiveFlow lines={lib.lines} space={space ?? null} /> : null}
+      {live && lib.lines.length > 1 ? <MoveLiveFlow live={live} lines={lib.lines} /> : null}
       <section data-flows-library>
         <h2 className="flv-h">Library<span className="lw-num">{libraryFlows({ lines: lib.lines, segments: [] }).length}</span></h2>
         <ul className="fll-tree">
@@ -117,6 +118,41 @@ function NoLiveFlow({ lines, space }: { lines: LibraryEntry[]; space: string | n
           ))}
         </ul>
       ) : null}
+    </section>
+  );
+}
+
+/** A team with a live flow: the library's other flows, each with the way to move the live flow onto it (a team admin's).
+ *  New runs take the flow it moves to; runs going now finish on theirs. */
+function MoveLiveFlow({ live, lines }: { live: LiveFlow; lines: LibraryEntry[] }) {
+  const admin = useInboxStore((s) => ((s.teams || []) as Array<{ _id: string; role?: string }>).some((t) => String(t._id) === live.team_id && (t.role === "admin" || t.role === "owner")));
+  const queued = useLiveQueue(live).length;
+  const others = lines.filter((e) => e.flow.workflowId && e.flow.workflowId !== live.flow.id);
+  if (!admin || !others.length) return null;
+  return (
+    <section className="fll-live" data-live-flow-move="">
+      <header className="fll-live-head">
+        <span className="fll-live-k">Live</span>
+        <span className="fll-live-name">{live.flow.label}</span>
+        <span className="fll-live-figs">new runs take another flow when it is made live</span>
+      </header>
+      <ul className="fll-start">
+        {others.map((e) => (
+          <li key={e.flow.slug} data-live-flow-move-to={e.flow.slug}>
+            <b>{e.flow.label}</b>
+            <span className="flh-dim">{e.flow.stations.length} steps</span>
+            <ConsequentialSwitch
+              on={false}
+              ledger={moveFlowLedger(live.flow.label, e.flow.label, e.flow.stations.length, queued)}
+              onTurnOn={() => useInboxStore.getState().moveLiveFlow(live._id, { id: e.flow.workflowId!, slug: e.flow.slug, label: e.flow.label })}
+              onTurnOff={() => {}}
+              label="Make live"
+              className="flv-steps"
+              triggerProps={{ "data-live-flow-make": e.flow.slug }}
+            />
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

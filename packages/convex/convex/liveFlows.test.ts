@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { LINE_RUNS_PER_RUNNER, requeueCore, sweepCore } from "./orgLine";
-import { barFromCli, clearHoldCore, createLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, setBarCore, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
+import { barFromCli, clearHoldCore, createLiveFlowCore, moveLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, setBarCore, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
 import { hashToken } from "./apiTokens";
 
 // A team's live flow (liveFlows.ts): one queue in start order across every
@@ -350,3 +350,27 @@ describe("liveFlows: each problem runs a graph of the flow's family", () => {
     expect(graphOf(tables, "person")).toBe("workflows_mateperson");
   });
 });
+
+describe("liveFlows: moving the live flow onto another library flow", () => {
+  const onefix = { _id: "workflows_onefix", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, slug: "onefix", name: "onefix", label: "Acme fix flow, one session", nodes: [], edges: [], created_at: 2, updated_at: 2 };
+  const elsewhere = { ...onefix, _id: "workflows_other", team_id: "teams_other", workspace: "team:teams_other", slug: "other" };
+
+  test("a team admin moves it: the queue starts on the new flow, the switch, bar and sources carry over", async () => {
+    const { ctx, tables } = fixtures({ tasks: [problem("g70", "growth", 70)], flow: { sources: ["union.eval"], bar: { score: 60 } }, extra: { workflows: [tables0(), onefix] } });
+    await moveLiveFlowCore(ctx, HOST, tables.live_flows[0], "workflows_onefix", NOW);
+    expect(tables.live_flows[0]).toMatchObject({ workflow_id: "workflows_onefix", on: true, sources: ["union.eval"], bar: { score: 60 }, changed_by: HOST, changed_at: NOW });
+    const view = await liveFlowView(ctx, tables.live_flows[0], NOW);
+    expect(view.flow).toEqual({ id: "workflows_onefix", slug: "onefix", label: "Acme fix flow, one session" });
+  });
+
+  test("a member who is not an admin, or a flow outside the team's library, is refused and nothing moves", async () => {
+    const { ctx, tables } = fixtures({ tasks: [], extra: { workflows: [tables0(), onefix, elsewhere] } });
+    await expect(moveLiveFlowCore(ctx, MATE, tables.live_flows[0], "workflows_onefix", NOW)).rejects.toThrow();
+    await expect(moveLiveFlowCore(ctx, HOST, tables.live_flows[0], "workflows_other", NOW)).rejects.toThrow("that flow is not in the team's library");
+    expect(tables.live_flows[0].workflow_id).toBe("workflows_spine");
+  });
+});
+
+function tables0() {
+  return { _id: "workflows_spine", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, slug: "agentwatch", name: "agentwatch", label: "Acme fix flow", nodes: [], edges: [], created_at: 1, updated_at: 1 };
+}

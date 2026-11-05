@@ -50,6 +50,9 @@ export type LineSliceActions = {
   /** Make one of the team's library flows its live flow (convex liveFlows.startLiveFlowCore, team admins): a row keyed
    *  by `clientKey` paints at once, off until the server says what it carried, and the real row supersedes it. */
   startLiveFlow: (teamId: string, flow: { id: string; slug: string; label: string }, clientKey: string) => void;
+  /** Move the team's live flow onto another of its library flows (convex liveFlows.moveLiveFlowCore, team admins): the
+   *  row names the new flow at once; its switch, queue and settings stay. */
+  moveLiveFlow: (id: string, flow: { id: string; slug: string; label: string }) => void;
   /** Save a flow a session ran into the team's library (convex flowLibrary.save): the row reads saved at once, under the
    *  slug it asks for, as a new version when that slug is saved already. */
   saveSessionFlow: (id: string, opts?: { slug?: string; label?: string; variant_of?: string }) => void;
@@ -213,6 +216,14 @@ export function createLineSlice(): LineSliceActions {
         changed_by: this.currentUser?._id ?? null, changed_at: now, running: [], queue: [],
       };
     }) as unknown as LineSliceActions["startLiveFlow"],
+
+    moveLiveFlow: action(function (this: { liveFlows: Record<string, any>; currentUser?: { _id: string } | null }, id: string, flow: { id: string; slug: string; label: string }) {
+      const row = this.liveFlows[id];
+      if (!row) return;
+      row.flow = flow;
+      row.changed_by = this.currentUser?._id ?? null;
+      row.changed_at = Date.now();
+    }) as unknown as LineSliceActions["moveLiveFlow"],
 
     clearLiveFlowHold: action(function (this: { liveFlows: Record<string, any> }, id: string) {
       const row = this.liveFlows[id];

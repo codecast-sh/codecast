@@ -464,6 +464,25 @@ export async function startLiveFlowCore(ctx: Ctx, userId: Id<"users">, args: { t
   return createLiveFlowCore(ctx, { team_id: team, workflow_id: wf._id, by: userId, ...(args.client_key ? { client_key: args.client_key } : {}) });
 }
 
+/**
+ * Moves a team's live flow onto another of its library flows: a team admin's
+ * act, as the switch is, since it decides which graph every new run takes.
+ * The row keeps its switch, sources, bar, caps and hold, so the queue carries
+ * over and nothing pauses; runs already going keep the version they started
+ * on. Refused for a flow outside the team's library.
+ */
+export async function moveLiveFlowCore(ctx: Ctx, userId: Id<"users">, flow: any, workflowId: string, now = Date.now()): Promise<void> {
+  if (!flow || !(await isMember(ctx, userId, flow.team_id))) throw new ConvexError("no such live flow");
+  await requireTeamAdmin(ctx as any, userId, flow.team_id);
+  const id = ctx.db.normalizeId("workflows", workflowId);
+  const wf: any = id ? await ctx.db.get(id) : null;
+  if (!wf || (wf.workspace ?? (wf.team_id ? `team:${wf.team_id}` : null)) !== flow.workspace) throw new ConvexError("that flow is not in the team's library");
+  if (String(flow.workflow_id) === String(wf._id)) return;
+  const from = String(flow.workflow_id);
+  await ctx.db.patch(flow._id, { workflow_id: wf._id, changed_by: userId, changed_at: now });
+  console.log(`live flow ${flow._id} for team ${flow.team_id}: moved from ${from} to ${wf._id} (${wf.slug})`);
+}
+
 export const create = internalMutation({
   args: { team_id: v.id("teams"), workflow_id: v.id("workflows"), by: v.id("users"), sources: v.optional(v.array(v.string())), watcher_role_id: v.optional(v.id("org_roles")) },
   handler: async (ctx, args) => createLiveFlowCore(ctx, args),

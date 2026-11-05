@@ -15,7 +15,7 @@ import type { AreaAssignment } from "@codecast/shared/contracts/decisionAreas";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { askCore as askDecisionCore, commentCore, deleteCore as deleteDecisionCommentCore, editCore as editDecisionCommentCore, resolveCore as resolveDecisionThreadCore } from "./decisionThread";
 import { sendLineChatCore } from "./lineChat";
-import { clearHoldCore, setOnCore, startLiveFlowCore } from "./liveFlows";
+import { clearHoldCore, moveLiveFlowCore, setOnCore, startLiveFlowCore } from "./liveFlows";
 import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
@@ -3152,6 +3152,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   startLiveFlow: async (ctx, userId, [team_id, workflow_id, client_key]: [string, string, string]) => {
     await startLiveFlowCore(ctx, userId, { team_id, workflow_id, client_key });
   },
+  moveLiveFlow: async (ctx, userId, [id, to]: [string, string]) => { const f = ctx.db.normalizeId("live_flows", id); await moveLiveFlowCore(ctx, userId, f ? await ctx.db.get(f) : null, to); },
   clearLiveFlowHold: async (ctx, userId, [id]: [string]) => {
     const flowId = ctx.db.normalizeId("live_flows", id);
     await clearHoldCore(ctx, userId, flowId ? await ctx.db.get(flowId) : null);

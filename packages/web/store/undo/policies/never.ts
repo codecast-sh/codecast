@@ -306,6 +306,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   editLineGraph: never("machine control: the daemon rewrites the graph on its host, and the step is set back in the same editor"),
   setLiveFlowOn: never("machine control: the switch starts or stops the team's flow runs; the same switch is the way back"),
   startLiveFlow: CREATE,
+  moveLiveFlow: never("machine control: it decides which graph every new run of the team's flow takes; moving it back is the way back"),
   clearLiveFlowHold: never("machine control: lifting the hold lets queued runs start at once; a new hold is the way back"),
   saveSessionFlow: never("create: saving writes a new library version, and the library keeps the earlier one to switch back to"),
   labelDecision: never("settings: the viewer's own label on a decision, taken back in the same control (a null verdict)"),

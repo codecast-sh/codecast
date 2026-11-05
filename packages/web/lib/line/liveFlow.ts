@@ -60,6 +60,25 @@ export function liveFlowLedger(flow: LiveFlow, queued: number): SwitchLedger {
   };
 }
 
+/** The ledger for moving a team's live flow onto another library flow: the same queue, switch and settings, a new graph for every new run. */
+export function moveFlowLedger(from: string, to: string, steps: number, queued: number): SwitchLedger {
+  return {
+    name: "Live flow",
+    subject: to,
+    shift: [from, to],
+    figures: [{ value: String(steps), label: steps === 1 ? "step" : "steps" }, { value: String(queued), label: "in the queue" }],
+    rows: [
+      { k: "New runs", v: to },
+      { k: "Runs going now", v: `Finish on ${from}` },
+      { k: "Keeps", v: "Its switch, sources, bar and caps" },
+      { k: "Queue", v: "Starts on the new flow" },
+    ],
+    stop: `Move it back to ${from}, one press`,
+    confirm: "Make live",
+    keep: "Not now",
+  };
+}
+
 /** The review before a library flow becomes the team's live flow: what it runs and takes, and the state it starts in,
  *  which is the leads' lines' (convex createLiveFlowCore): on when any lead's line is on. */
 export function startFlowLedger(label: string, steps: number): SwitchLedger {
