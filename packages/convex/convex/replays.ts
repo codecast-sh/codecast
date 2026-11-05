@@ -40,6 +40,7 @@ import {
 } from "@codecast/shared/contracts/replayPlayer";
 import { mintReplayCap, replayCapKey } from "./lib/replayCap";
 import { patchReplay, replayIndexFields, replayIndexStale } from "./lib/replayIndex";
+import { recordMomentEvents } from "./moments";
 import { moveTally } from "./lib/replayTallies";
 import { domChunkMeta, lastCaptureTimestamp, readDomChunkSpan, readReplayChunks } from "./lib/replayChunks";
 import { applyIssues, domArgs, importExternalArgs, importExternalCore, importShrinks, summarize } from "./lib/replayImport";
@@ -258,6 +259,11 @@ export const assemblyInputs = internalQuery({
   },
 });
 
+/** A recording worth a replay judge's session: long enough and clicked enough to show someone working. */
+export const REPLAY_MOMENT_MIN = { duration_ms: 30_000, clicks: 3 };
+export const isUsedRecording = (counts: { clicks: number }, durationMs: number): boolean =>
+  durationMs >= REPLAY_MOMENT_MIN.duration_ms && counts.clicks >= REPLAY_MOMENT_MIN.clicks;
+
 export const saveSummary = internalMutation({
   args: {
     replay_id: v.id("replays"),
@@ -303,6 +309,19 @@ export const saveSummary = internalMutation({
       ...(row.provider === "sdk" && args.first_t !== undefined ? { dom_t0: row.started_at + args.first_t } : {}),
       updated_at: now,
     });
+    // Our recorder sends no "recording ended" signal, so every complete
+    // assembly is a moment event and the replay extractor's quiet window
+    // decides when the recording is over (learning-loop.md LL7). Only a
+    // source with a published replay extractor opens moments, and only for a
+    // recording someone used: a reload or a glance has nothing to judge, and
+    // each judged replay costs an agent session.
+    if (!pending && row.provider === "sdk" && isUsedRecording(args.counts, args.duration_ms)) {
+      const extractor = await ctx.db.query("moment_extractors").withIndex("by_source_kind", (q: any) => q.eq("source_id", row.source_id).eq("kind", "replay")).first();
+      const source = extractor ? await ctx.db.get(row.source_id) : null;
+      if (source) {
+        await recordMomentEvents(ctx, source, [{ type: "moment", kind: "replay", subject: row.short_id, at: row.started_at + args.duration_ms, refs: { replay: row.short_id } }], now);
+      }
+    }
   },
 });
 
