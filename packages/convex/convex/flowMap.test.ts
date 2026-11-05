@@ -202,8 +202,9 @@ describe("rollup then forTeam", () => {
     return fixtures({ tasks, signals, workflow_runs: runs, external_events, event_groups, session_decisions });
   }
 
-  async function rolledMap(viewer = VIEWER) {
+  async function rolledMap(viewer = VIEWER, prep?: (db: any) => Promise<void>) {
     const { db } = union();
+    if (prep) await prep(db);
     const realNow = Date.now;
     Date.now = () => NOW;
     try {
@@ -231,6 +232,19 @@ describe("rollup then forTeam", () => {
       { id: "decide", label: "Decide", running: 0, stalled: 0, waiting: 1 },
     ]);
     expect(map.off).toEqual({ running: 1, stalled: 1, steps: [{ id: "rebase", label: "Rebase", running: 1, stalled: 1, waiting: 1 }] });
+  });
+
+  test("a run of an older version of a live flow stands in that flow's lane, and every live run is named", async () => {
+    const map = (await rolledMap(VIEWER, async (db) => {
+      // The spine's previous version: same slug, its own row. Its run waits at Decide: still the spine's work.
+      const v1 = await db.insert("workflows", { user_id: VIEWER, workspace: WS, slug: "agentwatch", name: "agentwatch", label: "Union fix flow", nodes: spineNodes, edges: [], created_at: 0, updated_at: 0 });
+      await db.insert("workflow_runs", { workspace: WS, user_id: VIEWER, workflow_id: v1, task_id: "tasks_p1", status: "paused", current_node_id: "decide", created_at: NOW - DAY_MS, updated_at: NOW - DAY_MS });
+    }))!;
+    expect(map.lanes[0].steps.find((s) => s.id === "decide")).toMatchObject({ waiting: 2 });
+    expect(map.off.steps.find((s) => s.id === "decide")).toBeUndefined();
+    // The ids a client checks its live rows against: every pending, running or paused run in the workspace.
+    expect(map.liveRunIds).toHaveLength(8);
+    expect(map.liveRunIds).toContain("workflow_runs_3");
   });
 
   test("each source: its counts, its lane, its escapes and where its problems stand", async () => {
