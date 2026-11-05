@@ -60,6 +60,7 @@ const ALLOWED: ReadonlyArray<[string, string]> = [
   ["packages/web/lib/lineSettings.ts", "Size budget"],
   ["packages/web/lib/navPages.ts", "ship size bud"],
   ["packages/web/lib/line/shippedLine.generated.ts", "size budget"],
+  ["packages/web/lib/line/shippedFlowStations.generated.ts", "size budget"],
   // A sample request a person might give the assistant: a trip's money.
   ["packages/web/components/simple/assistantPromise.ts", "rough budget"],
   // The team's monthly model spend for the learning loop (LL10): billing, not a role's limit.

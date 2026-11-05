@@ -259,7 +259,9 @@ describe("agent_tasks has ONE writer module (repo-wide)", () => {
   test("no convex file other than agentTasks.ts inserts into or patches agent_tasks rows", () => {
     const offenders: string[] = [];
     for (const name of readdirSync(import.meta.dir)) {
-      if (!name.endsWith(".ts") || name.endsWith(".test.ts") || name === "agentTasks.ts") continue;
+      // Deployed modules only: a name with more than one dot (a test, a
+      // testkit fixture seeding a fake db) never reaches the Convex bundle.
+      if (!name.endsWith(".ts") || name.split(".").length > 2 || name === "agentTasks.ts") continue;
       const src = readFileSync(join(import.meta.dir, name), "utf8");
       if (/\.insert\(\s*"agent_tasks"/.test(src)) offenders.push(`${name}: insert`);
       // A patch of a row obtained from the agent_tasks table. A file that only

@@ -22,6 +22,8 @@ export type DeployTargetRow = {
   can_rollback: boolean;
   device_id: string | null;
   publisher_user_id: string;
+  /** No checkout declared it: the page knows it only from its deploy records (no queue, no press). */
+  record_only?: boolean;
   last_read?: { sha?: string; version?: string; at: number; error?: string } | null;
   queue: {
     known: boolean;
@@ -79,7 +81,7 @@ export const isOpen = (d: Pick<TeamDeployRow, "status">) => d.status === "reques
 
 /** A target's deploys, newest first. */
 export function deploysOf(t: Pick<DeployTargetRow, "name" | "repository">, deploys: ReadonlyArray<TeamDeployRow>): TeamDeployRow[] {
-  return deploys.filter((d) => d.target === t.name && (!d.repository || d.repository === t.repository)).sort((a, b) => b.created_at - a.created_at);
+  return deploys.filter((d) => d.target === t.name && (!d.repository || !t.repository || d.repository === t.repository)).sort((a, b) => b.created_at - a.created_at);
 }
 
 /** What a target runs now, what is going out to it, and its history. */
@@ -142,4 +144,17 @@ export function deploysHref(run: any, words?: string | null): string {
   const target = words?.match(/\b([a-z][a-z0-9-]{0,31}) dp-\d+/)?.[1] ?? null;
   const q = [team ? `team=${team}` : null, target ? `target=${encodeURIComponent(target)}` : null].filter(Boolean).join("&");
   return `/deploys${q ? `?${q}` : ""}`;
+}
+
+/** The targets a team's deploy records name that no checkout declared, as targets the page can show from their records. */
+export function recordTargets(declared: ReadonlyArray<DeployTargetRow>, deploys: ReadonlyArray<TeamDeployRow>, teamId: string): DeployTargetRow[] {
+  const known = new Set(declared.map((t) => t.name));
+  const seen = new Map<string, TeamDeployRow>();
+  for (const d of deploys) if (!known.has(d.target) && !seen.has(d.target)) seen.set(d.target, d);
+  return [...seen.values()].map((d) => ({
+    _id: `records#${d.target}`, workspace: d.workspace, team_id: teamId, name: d.target, repository: d.repository || "", runs: "push", policy: "press",
+    command: null, rollback: null, paths: [], can_deploy: false, can_redeploy_sha: false, can_rollback: false, device_id: null, publisher_user_id: "",
+    record_only: true,
+    queue: { known: false, truncated: false, commits: 0, untouched: 0, head_sha: null, head_ci: "none", head_ci_url: null, shown: 0, groups: [] },
+  }));
 }

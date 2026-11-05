@@ -152,7 +152,7 @@ export function LiveFlowHead({ live, workspace, onOpenFlow, stalled = 0, flows, 
           <span><b className="lw-num">{live.load.working}</b>/{live.load.cap} running</span>
           {stalled > 0 ? <span data-tone="bad" data-live-flow-stalled={stalled}><b className="lw-num">{stalled}</b> stalled</span> : null}
           <span><b className="lw-num">{queue.length.toLocaleString()}</b> queued</span>
-          <span><b className="lw-num">{live.hands_today}</b>{live.caps.hands_per_day != null ? `/${live.caps.hands_per_day}` : ""} started today</span>
+          {live.hands_today || live.caps.hands_per_day != null ? <span><b className="lw-num">{live.hands_today}</b>{live.caps.hands_per_day != null ? `/${live.caps.hands_per_day}` : ""} started today</span> : null}
           {live.watcher ? <span>watched by <b>@{live.watcher.handle}</b></span> : null}
           {changedBy && live.changed_at ? <span title={new Date(live.changed_at).toLocaleString()}>{live.on ? "on" : "off"} by {changedBy}, {ageShort(workspace.now - live.changed_at)} ago</span> : null}
         </span>
@@ -179,49 +179,28 @@ function HoldBy({ by, names }: { by: string | null; names: ReadonlyMap<string, s
   return person ? <span className="flv-chip">{person}</span> : null;
 }
 
-/** The live flow's work: its queue best score first, and what is running now. */
-export function LiveFlowWork({ live, runs, workspace, href }: Pick<LineViewProps, "workspace" | "href"> & { live: LiveFlow; runs: Run[] }) {
+/** The live flow's queue, best score first; the runs the engine counts as running that the store does not hold yet are
+ *  fed by id, so the activity rail beside the map lists every one. */
+export function LiveFlowWork({ live, workspace, href }: Pick<LineViewProps, "workspace" | "href"> & { live: LiveFlow }) {
   const queue = useLiveQueue(live);
-  // What the engine counts as running (its load), so the list and the figure agree.
-  const running = useMemo(() => {
-    const ids = new Set(live.running);
-    return runs.filter((r) => ids.has(r._id)).sort((a, b) => b.created_at - a.created_at);
-  }, [runs, live.running]);
+  const held = useInboxStore((s) => { const runs = (s as unknown as { workflowRuns?: Record<string, unknown> }).workflowRuns ?? {}; return live.running.filter((id) => !(id in runs)).join(","); });
   const [all, setAll] = useState(false);
   const projectTitle = useMemo(() => new Map(workspace.projects.map((p) => [p._id, p.title ?? ""])), [workspace.projects]);
   const shown = all ? queue : queue.slice(0, QUEUE_SHOWN);
   return (
-    <div className="fll-live-cols">
-      <div>
-        <h3 className="flv-h">Queue<span className="lw-num">{queue.length}</span><span className="fll-h-note">best score first</span></h3>
-        {queue.length === 0 ? <p className="flv-none">Nothing waiting</p> : (
-          <table className="flh-table fll-queue" data-live-queue>
-            <thead><tr><th data-num="">#</th><th>Problem</th><th data-num="">Score</th><th>Family</th><th data-num="">Findings</th><th>Area</th><th>Waits on</th></tr></thead>
-            <tbody>
-              {/* A row's wait is named only where it differs from the flow's own, which the head says once above. */}
-              {shown.map((r, i) => <QueueRow key={r.taskId} row={r.waiting === live.waiting ? { ...r, waiting: null } : r} n={i + 1} area={r.projectId ? projectTitle.get(r.projectId) ?? "" : ""} href={href({ view: "problems", case: r.ref ?? r.taskId, run: null })} />)}
-            </tbody>
-          </table>
-        )}
-        {queue.length > QUEUE_SHOWN ? <button type="button" className="fll-more" onClick={() => setAll(!all)} data-live-queue-all>{all ? "Show the first 12" : `Show all ${queue.length}`}</button> : null}
-      </div>
-      <div>
-        <h3 className="flv-h">Running<span className="lw-num">{live.running.length}</span></h3>
-        {live.running.filter((id) => !running.some((r) => r._id === id)).map((id) => <RunFeed key={id} id={id} />)}
-        {running.length === 0 ? <p className="flv-none">{live.running.length ? "Loading" : "Nothing running"}</p> : (
-          <ul className="fll-running" data-live-running>
-            {running.slice(0, QUEUE_SHOWN).map((r) => (
-              <li key={r._id}>
-                <Link href={href({ view: "problems", run: r._id, case: r.task_short_id ?? r.task_id ?? null })} className="fll-run" data-live-run={r._id}>
-                  <span className="fll-run-ref">{r.task_short_id ?? "run"}</span>
-                  <span className="fll-run-step">{r.current_node_label ?? r.current_node_id ?? r.status}</span>
-                  <span className="fll-run-age">{ageShort(workspace.now - r.created_at)}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+    <div>
+      {held ? held.split(",").map((id) => <RunFeed key={id} id={id} />) : null}
+      <h3 className="flv-h">Queue<span className="lw-num">{queue.length}</span>{queue.length > 1 ? <span className="fll-h-note">best score first</span> : null}</h3>
+      {queue.length === 0 ? <p className="flv-none">Nothing waiting</p> : (
+        <table className="flh-table fll-queue" data-live-queue>
+          <thead><tr><th data-num="">#</th><th>Problem</th><th data-num="">Score</th><th>Family</th><th data-num="">Findings</th><th>Area</th><th>Waits on</th></tr></thead>
+          <tbody>
+            {/* A row's wait is named only where it differs from the flow's own, which the head says once above. */}
+            {shown.map((r, i) => <QueueRow key={r.taskId} row={r.waiting === live.waiting ? { ...r, waiting: null } : r} n={i + 1} area={r.projectId ? projectTitle.get(r.projectId) ?? "" : ""} href={href({ view: "problems", case: r.ref ?? r.taskId, run: null })} />)}
+          </tbody>
+        </table>
+      )}
+      {queue.length > QUEUE_SHOWN ? <button type="button" className="fll-more" onClick={() => setAll(!all)} data-live-queue-all>{all ? "Show the first 12" : `Show all ${queue.length}`}</button> : null}
     </div>
   );
 }

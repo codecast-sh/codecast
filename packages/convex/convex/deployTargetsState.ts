@@ -24,6 +24,26 @@ export async function commitBySha(ctx: any, repository: string, sha: string): Pr
     const rows: Doc<"commits">[] = await ctx.db.query("commits").withIndex("by_sha", (q: any) => q.eq("sha", s)).take(10);
     return rows.find((c) => c.repository === repository) ?? null;
   }
+  // A short sha (a source's marker names a release by its first 9 characters): the commit it is a prefix of.
+  if (!/^[0-9a-f]{7,39}$/.test(s)) return null;
+  const rows: Doc<"commits">[] = await ctx.db.query("commits").withIndex("by_sha", (q: any) => q.gte("sha", s).lt("sha", `${s}~`)).take(20);
+  const mine = rows.filter((c) => c.repository === repository && c.sha.startsWith(s));
+  return mine.find((c) => c.main_at != null) ?? mine[0] ?? null;
+}
+
+/**
+ * The session behind a commit: its Codecast-Session trailer, else the newest session that worked the task it names.
+ * A line run's commits and a plain `(ct-N)` subject carry no trailer, but name their task.
+ */
+export async function commitSession(ctx: any, c: Doc<"commits">, taskCache: Map<string, any>): Promise<{ conversation_id: Id<"conversations">; via: "trailer" | "task" } | null> {
+  if (c.conversation_id) return { conversation_id: c.conversation_id, via: "trailer" };
+  for (const id of c.task_ids ?? []) {
+    const key = String(id);
+    if (!taskCache.has(key)) taskCache.set(key, await ctx.db.get(id));
+    const t = taskCache.get(key);
+    const conv = t?.conversation_ids?.[t.conversation_ids.length - 1] ?? t?.created_from_conversation;
+    if (conv) return { conversation_id: conv, via: "task" };
+  }
   return null;
 }
 
@@ -47,11 +67,12 @@ export async function mainCommitsAfter(ctx: any, repository: string, fromSha: st
 
 export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<string, any>, taskCache: Map<string, any>): Promise<QueueCommit> {
   let session: QueueCommit["session"] = null;
-  if (c.conversation_id) {
-    const key = String(c.conversation_id);
-    if (!convCache.has(key)) convCache.set(key, await ctx.db.get(c.conversation_id));
+  const owner = await commitSession(ctx, c, taskCache);
+  if (owner) {
+    const key = String(owner.conversation_id);
+    if (!convCache.has(key)) convCache.set(key, await ctx.db.get(owner.conversation_id));
     const conv = convCache.get(key);
-    session = { conversation_id: key, short_id: key.slice(0, 7), title: conv?.title ?? null };
+    session = { conversation_id: key, short_id: key.slice(0, 7), title: conv?.title ?? null, ...(owner.via === "task" ? { via: "task" as const } : {}) };
   }
   const tasks = [];
   for (const id of c.task_ids ?? []) {
@@ -73,15 +94,21 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
   };
 }
 
-/** A commit on main as a deploy's record keeps it, with the session that wrote it and the tasks it links. */
-export function deployCommitOf(c: Doc<"commits">) {
-  return {
-    sha: c.sha,
-    subject: c.message.split("\n")[0].slice(0, 200),
-    ...(c.author_login || c.author_name ? { author: c.author_login ?? c.author_name } : {}),
-    ...(c.conversation_id ? { conversation_id: c.conversation_id } : {}),
-    ...(c.task_ids?.length ? { task_ids: c.task_ids } : {}),
-  };
+/** Commits on main as a deploy's record keeps them, each with the session behind it (commitSession) and the tasks it links. */
+export async function deployCommitsOf(ctx: any, rows: Doc<"commits">[]) {
+  const taskCache = new Map<string, any>();
+  const out = [];
+  for (const c of rows) {
+    const owner = await commitSession(ctx, c, taskCache);
+    out.push({
+      sha: c.sha,
+      subject: c.message.split("\n")[0].slice(0, 200),
+      ...(c.author_login || c.author_name ? { author: c.author_login ?? c.author_name } : {}),
+      ...(owner ? { conversation_id: owner.conversation_id } : {}),
+      ...(c.task_ids?.length ? { task_ids: c.task_ids } : {}),
+    });
+  }
+  return out;
 }
 
 type DeployAfterCounts = { new_errors: number; regressions: number; reopened: number; quiet: boolean; open: boolean };
