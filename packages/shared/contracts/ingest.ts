@@ -7,7 +7,7 @@
 //
 // Pure: no node or convex imports. The CLI, the browser SDK and the Convex
 // runtime all load it, which is why the key helpers use globalThis.crypto.
-import type { SignalKind } from "./signalFingerprint";
+import { dropRequestIds, type SignalKind } from "./signalFingerprint";
 import { JUDGE_BACKENDS, MOMENT_RETENTIONS, MOMENT_STORAGES, validateMomentEvent, type MomentEventItem } from "./moments";
 import { isCiRunSeries, parseVolumeQuery } from "./volumeWatch";
 
@@ -777,7 +777,7 @@ export function validateIngestBatch(body: unknown, now: number = Date.now()): In
 export function errorTitle(raw: string): { title: string; words: string | null; error: string | null } {
   const norm = (s: string) => s.trim().replace(/[.\s]+$/, "").toLowerCase();
   const parts: string[] = [];
-  for (const p of raw.trim().split(/(?<=\S):\s+/)) if (!parts.length || norm(parts[parts.length - 1]) !== norm(p)) parts.push(p.trim());
+  for (const p of dropRequestIds(raw).split(/(?<=\S):\s+/)) if (!parts.length || norm(parts[parts.length - 1]) !== norm(p)) parts.push(p.trim());
   // A part repeated anywhere later (": A: B: A: B") collapses too.
   for (let size = Math.floor(parts.length / 2); size >= 1; size--) {
     const tail = parts.slice(-size).map(norm).join("|");

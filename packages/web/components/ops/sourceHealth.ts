@@ -254,8 +254,9 @@ export function failingHeadline(tally: WatchTally, calls: number, checks?: Watch
 
 /** A source's metric watches under the one verdict (appsModel watchVerdict): the set Metrics and the home's band count. */
 export function sourceWatchTally(source: Pick<OpsSource, "_id">, watches: readonly OpsWatch[]): WatchTally {
-  const verdicts = watches.filter((w) => w.source_id === source._id).map(watchVerdict);
-  const t = watchTally(verdicts);
+  const own = watches.filter((w) => w.source_id === source._id);
+  const verdicts = own.map(watchVerdict);
+  const t = watchTally(verdicts, { noLine: own.filter((w, i) => verdicts[i] === "ok" && w.threshold === undefined).length });
   // Watches whose last read failed but still hold a value are Retrying, the band's and Metrics' word, never "failing".
   const c = verdictCounts(verdicts);
   if (!c.alerting && !c.failing && c.retrying) return { ...t, word: "retrying", text: `${c.retrying.toLocaleString()} of ${c.total.toLocaleString()} ${c.total === 1 ? "watch" : "watches"} retrying` };

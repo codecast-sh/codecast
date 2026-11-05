@@ -121,7 +121,7 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
 
   return (
     <div className={`tf-accent-scope ${page ? "space-y-6" : "space-y-4 py-4"}`}>
-      {seats && <SeatPlanRow teamId={teamId} teamName={team?.name ?? ""} state={seats} />}
+      {seats && <SeatPlanRow teamId={teamId} state={seats} />}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="team-invite-link" className="text-sol-text">Invite link</Label>

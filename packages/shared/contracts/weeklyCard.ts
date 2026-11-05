@@ -11,8 +11,6 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 /** A session credits at most this much wall time: a terminal left open is not work (lib/activityDaily CAP). */
 export const SESSION_CREDIT_CAP_MS = 8 * HOUR;
-/** A session open longer than this was resumed across days, not worked through; it stays out of "longest session". */
-export const LONGEST_SESSION_MAX_MS = 24 * HOUR;
 /** Token counters exist from this UTC day on (user_usage_daily started 2026-09-13); a week before it is partial. */
 export const TOKEN_HISTORY_START = Date.UTC(2026, 8, 13);
 
@@ -57,8 +55,6 @@ export type WeekCardSession = {
   project?: string | null;
   /** Private sessions count toward the numbers but never lend their project name. */
   private?: boolean;
-  /** A standing role session that lives for days; it stays out of "longest session" (as does any session open past a day). */
-  persistent?: boolean;
 };
 
 export type DeviceKind = "mac" | "linux" | "windows" | "cloud";
@@ -96,7 +92,6 @@ export type WeekCardStats = {
   agents: Array<{ name: string; sessions: number }>;
   machines: { count: number; kinds: Array<{ kind: DeviceKind; count: number }> };
   days: WeekCardDay[];
-  longest_session_ms: number;
   /** Index into `days`, or -1 for an empty week. */
   busiest_day: number;
   /** Top projects by sessions, from sessions that are not private. Shown only when the owner turns them on. */
@@ -166,10 +161,6 @@ export function buildWeekCard(input: {
     if (d.hours > 0 && (busiest < 0 || d.hours > dayRows[busiest].hours)) busiest = i;
   });
 
-  const longest = credited
-    .filter(({ s }) => !s.persistent && s.updated_at - s.started_at <= LONGEST_SESSION_MAX_MS)
-    .reduce((m, { s }) => Math.max(m, Math.min(s.updated_at, end) - Math.max(s.started_at, start)), 0);
-
   const deviceKind = new Map(input.devices.map((d) => [d.device_id, d.kind]));
   const usedDevices = [...new Set(credited.map(({ s }) => s.device_id).filter((d): d is string => !!d))];
   const kinds = topCounts(usedDevices.map((d) => deviceKind.get(d) ?? "linux")).map((k) => ({ kind: k.name as DeviceKind, count: k.sessions }));
@@ -189,7 +180,6 @@ export function buildWeekCard(input: {
     agents: topCounts(credited.map(({ s }) => weekCardAgentName(s.agent_type))),
     machines: { count: usedDevices.length, kinds },
     days: dayRows,
-    longest_session_ms: Math.max(0, longest),
     busiest_day: busiest,
     projects: topCounts(credited.filter(({ s }) => !s.private).map(({ s }) => s.project), 5),
     tokens,
@@ -212,15 +202,6 @@ export function weekRangeLabel(stats: Pick<WeekCardStats, "week_start" | "week_e
   return `${left} – ${right}`;
 }
 
-/** "3h 20m" / "45m". */
-export function formatSpan(ms: number): string {
-  const mins = Math.round(ms / 60_000);
-  if (mins < 60) return `${mins}m`;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return m ? `${h}h ${m}m` : `${h}h`;
-}
-
 /** "1.2M", "48k", "950". */
 export function formatCount(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1)}B`;
@@ -234,3 +215,7 @@ export const WEEK_DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 /** The footer link every published card carries. */
 export const WEEK_CARD_SITE_URL = "https://codecast.sh/?utm_source=scorecard&utm_medium=share&utm_campaign=weekly-card";
 export const WEEK_CARD_INSTALL = "curl -fsSL codecast.sh/i/scorecard | sh";
+
+/** The card's drawn size: the social image size a link unfurls to. */
+export const WEEK_CARD_W = 1200;
+export const WEEK_CARD_H = 630;

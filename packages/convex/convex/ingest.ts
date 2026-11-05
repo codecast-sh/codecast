@@ -17,7 +17,6 @@ import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { createWorkContext } from "./data";
 import { requireUserOrToken, notFound, invalidScope } from "./lib/auth";
 import { workspaceGrantsAccess } from "./lib/access";
 import { workspaceKey as makeWorkspaceKey, parseWorkspaceKey } from "./lib/accessKeys";
@@ -35,6 +34,8 @@ import { linkReplayToGroup, upsertReplayManifest } from "./replays";
 import { recordMomentEvents } from "./moments";
 import { takeFromWindow, windowSpent } from "./ipRateLimit";
 import { readableRowByRef, rowByRef } from "./lib/rowByRef";
+import { OVERFLOW_FP, SOURCE_CAPS, announceTransition, appendSamples, findGroup, GROUP_USERS_MAX, GROUP_USERS_PER_BATCH, mirrorGroups, tallyFields, tallyJson, tallyOf, upsertGroup, withTally, type EventLink, type GroupPlan, type MirroredGroup } from "./lib/groupWrite";
+import { countLanded, groupView, patchSourceStats, rollStats, sourceStats, sourceView, sourceViewOf } from "./lib/sourceStats";
 import { scopeArgs } from "./lib/ingestScopeArgs";
 import { scopeOf, sourceByRef } from "./lib/ingestScope";
 import { deployMarkerOf, promotionSignal } from "./lib/ingestPayloads";
@@ -53,32 +54,19 @@ import {
   ingestKeyPrefix,
   normalizeSourceName,
   sourceConfigProblem,
-  transitionSignalKind,
-  transitionTriggerEvent,
-  type GroupKind,
   type IngestItem,
-  type Transition,
 } from "@codecast/shared/contracts/ingest";
 import { ciCheckFingerprint, groupFingerprint, isRecordNotIssue } from "@codecast/shared/contracts/signalFingerprint";
 import { clusterPeople, mergeStoredPeople, userKeys } from "./lib/groupPeople";
 import type { ReplayIssue } from "@codecast/shared/replay";
 import {
-  SAMPLES_PER_BATCH,
-  SAMPLE_TRIM_LOOKAHEAD,
-  samplePins,
-  samplesToTrim,
-  applyMirror,
+  HOUR_MS,
   countEventNames,
-  foldOccurrences,
   openGroupsDelta,
   planItem,
   planReplayIssue,
   pruneBuckets,
-  tallyMessages,
-  utcDay,
-  type GroupState,
   type ItemPlan,
-  type MirrorSnapshot,
 } from "./lib/ingestGroups";
 
 // ── Scope and access ──
@@ -108,142 +96,6 @@ export async function triggerSourceName(ctx: any, userId: Id<"users">, workspace
 
 export async function groupByRef(ctx: any, userId: Id<"users">, ref: string): Promise<Doc<"event_groups">> {
   return await rowByRef(ctx, "event_groups", userId, ref, "Group");
-}
-
-// ── A source's counters (event_source_stats) ──
-
-/** The fields that move on every batch and poll, kept off the source row. */
-const STAT_KEYS = ["counters_day", "events_today", "dropped_today", "event_names", "groups_open", "last_event_at", "last_poll_at", "days", "hours", "group_counts", "groups_counted_at", "ci_runs", "old_key_last_at", "old_key_events"] as const;
-export type SourceStats = Partial<Pick<Doc<"event_source_stats">, (typeof STAT_KEYS)[number]>>;
-
-function pickStats(row: Partial<Record<(typeof STAT_KEYS)[number], unknown>>): SourceStats {
-  const out: Record<string, unknown> = {};
-  for (const k of STAT_KEYS) if (row[k] !== undefined) out[k] = row[k];
-  return out as SourceStats;
-}
-
-async function statsRow(ctx: any, sourceId: Id<"event_sources">): Promise<Doc<"event_source_stats"> | null> {
-  return await ctx.db.query("event_source_stats").withIndex("by_source", (q: any) => q.eq("source_id", sourceId)).first();
-}
-
-/** A source's counters: their own row, else the fields a source made before that table still carries. */
-export async function sourceStats(ctx: any, source: Doc<"event_sources">): Promise<SourceStats> {
-  return pickStats((await statsRow(ctx, source._id)) ?? source);
-}
-
-/**
- * The one write of a source's counters. `patch` sees the current counters
- * (already rolled to today when the day changed), so a caller adds to what is
- * there. Never touches the source row.
- */
-export async function patchSourceStats(ctx: any, source: Doc<"event_sources">, patch: (prev: SourceStats) => SourceStats, now = Date.now()): Promise<SourceStats> {
-  const row = await statsRow(ctx, source._id);
-  const stored = pickStats(row ?? source);
-  const prev = rollStats(stored, now);
-  // A roll is written with the patch: left unwritten, every later write rolls again and today's count restarts at its last batch.
-  const rolled: SourceStats = prev.counters_day !== stored.counters_day ? { counters_day: prev.counters_day, events_today: prev.events_today, dropped_today: prev.dropped_today } : {};
-  const next: SourceStats = { ...rolled, ...patch(prev) };
-  // A move of today's counters is written into the day series too, so volume over time reads from one row.
-  if ("events_today" in next || "dropped_today" in next) next.days = withDayCounters({ ...prev, ...next }, now);
-  // And into the hour series, for a 24 hour chart of the same count; countLanded writes its own hours for dated points.
-  const added = (next.events_today ?? prev.events_today ?? 0) - (prev.events_today ?? 0);
-  if (added > 0 && !("hours" in next)) next.hours = withHourCount(prev.hours, now, added, now);
-  if (row) await ctx.db.patch(row._id, next);
-  else await ctx.db.insert("event_source_stats", { source_id: source._id, workspace: source.workspace, ...prev, ...next });
-  return { ...prev, ...next };
-}
-
-/** How many UTC days of counters a source keeps (event_source_stats.days). */
-export const SOURCE_STAT_DAYS = 30;
-
-/** Today's counters folded into the day series, oldest first, cut to SOURCE_STAT_DAYS. */
-export function withDayCounters(stats: SourceStats, now: number): NonNullable<SourceStats["days"]> {
-  const day = utcDay(now);
-  const kept = (stats.days ?? []).filter((d) => d.day !== day && d.day < day);
-  return [...kept, { day, events: stats.events_today ?? 0, dropped: stats.dropped_today ?? 0 }].slice(-SOURCE_STAT_DAYS);
-}
-
-/** How many hours of counts a source keeps (event_source_stats.hours): a 24 hour chart and the day before it. */
-export const SOURCE_STAT_HOURS = 48;
-
-/** `n` added to the hour holding `at`, oldest first, cut to the last SOURCE_STAT_HOURS before `now`. */
-export function withHourCount(hours: SourceStats["hours"], at: number, n: number, now: number): NonNullable<SourceStats["hours"]> {
-  const hour = Math.floor(Math.min(at, now) / HOUR_MS) * HOUR_MS;
-  const floor = Math.floor(now / HOUR_MS) * HOUR_MS - (SOURCE_STAT_HOURS - 1) * HOUR_MS;
-  const out = (hours ?? []).filter((h) => h.hour >= floor).map((h) => ({ ...h }));
-  if (hour < floor || n <= 0) return out;
-  const hit = out.find((h) => h.hour === hour);
-  if (hit) hit.events += n;
-  else out.push({ hour, events: n });
-  return out.sort((a, b) => a.hour - b.hour);
-}
-
-/**
- * What a source sent that did not come through the ingest door, counted where
- * the door counts its items: a recording imported, the issues a recording
- * showed, a watch's reading. Each point lands on the day (and, inside
- * SOURCE_STAT_HOURS, the hour) it happened, so a backfilled recording from
- * last week adds to last week rather than to today. A patch for
- * patchSourceStats; points older than SOURCE_STAT_DAYS are not counted.
- */
-export function countLanded(prev: SourceStats, points: readonly { at: number; n: number }[], now: number): SourceStats {
-  const today = utcDay(now);
-  const floorDay = utcDay(now - (SOURCE_STAT_DAYS - 1) * 86_400_000);
-  let eventsToday = prev.events_today ?? 0;
-  let hours = prev.hours;
-  const days = new Map((prev.days ?? []).map((d) => [d.day, { ...d }]));
-  let last = prev.last_event_at ?? 0;
-  for (const p of points) {
-    if (!(p.n > 0)) continue;
-    const at = Math.min(p.at, now);
-    const day = utcDay(at);
-    if (day < floorDay) continue;
-    hours = withHourCount(hours, at, p.n, now);
-    last = Math.max(last, at);
-    if (day === today) eventsToday += p.n;
-    else {
-      const d = days.get(day) ?? { day, events: 0, dropped: 0 };
-      d.events += p.n;
-      days.set(day, d);
-    }
-  }
-  return {
-    events_today: eventsToday,
-    days: [...days.values()].sort((a, b) => (a.day < b.day ? -1 : 1)),
-    hours: hours ?? [],
-    ...(last ? { last_event_at: last } : {}),
-  };
-}
-
-/**
- * The *_today counters on a new UTC day start from what today's hour and day
- * series already hold: nothing on a real new day, and on a row whose roll was
- * never written (counters_day stuck on an old day) the count the hours kept,
- * so today's day entry equals the sum of today's hours.
- */
-export function rollStats(stats: SourceStats, now: number): SourceStats {
-  const day = utcDay(now);
-  if (stats.counters_day === day) return stats;
-  const start = Date.parse(`${day}T00:00:00Z`);
-  const hoursToday = (stats.hours ?? []).reduce((n, h) => (h.hour >= start ? n + h.events : n), 0);
-  const entry = (stats.days ?? []).find((d) => d.day === day);
-  return { ...stats, counters_day: day, events_today: Math.max(hoursToday, entry?.events ?? 0), dropped_today: entry?.dropped ?? 0 };
-}
-
-/** A source as any reader sees it, counters included: never the key hash or the manifest. */
-export function sourceView(row: Doc<"event_sources">, stats: SourceStats = pickStats(row), now = Date.now()) {
-  const { ingest_key_hash: _hash, manifest_json: _manifest, old_key_hash: _old, old_key_prefix, old_key_until, ...rest } = row;
-  const oldKey = old_key_until && old_key_until > now ? { old_key_prefix, old_key_until } : {};
-  return { ...rest, ...oldKey, events_today: 0, dropped_today: 0, groups_open: 0, ...rollStats(stats, now), keyed: !!row.ingest_key_hash };
-}
-
-export async function sourceViewOf(ctx: any, row: Doc<"event_sources">) {
-  return sourceView(row, await sourceStats(ctx, row));
-}
-
-/** A group as lists show it: buckets cut to the window as of now. */
-export function groupView(row: Doc<"event_groups">, now: number) {
-  return { ...row, buckets: pruneBuckets(row.buckets, now) };
 }
 
 // ── Sources ──
@@ -504,6 +356,7 @@ export const purgeSourceRows = internalMutation({
       for (const r of replays) await del(await ctx.db.query("replay_timelines").withIndex("by_replay", (q) => q.eq("replay_id", r._id)).collect());
       await del(replays);
     }
+    if (budget > 0) await del(await ctx.db.query("replay_tallies").withIndex("by_source_person", (q) => q.eq("source_id", args.source_id)).take(budget));
     if (budget > 0) await del(await ctx.db.query("app_calls").withIndex("by_source_created", (q) => q.eq("source_id", args.source_id)).take(budget));
     if (budget > 0) await del([...(await bySource("event_source_stats", 1)), ...(await bySource("app_manifests", 1))]);
     if (budget <= 0) await ctx.scheduler.runAfter(0, internal.ingest.purgeSourceRows, args);
@@ -860,28 +713,10 @@ export const sourceForKey = internalQuery({
   },
 });
 
-export type GroupPlan = Extract<ItemPlan, { type: "group" }>;
 
-const HOUR_MS = 3600_000;
 // Held-back promotions filed per cron pass (promoteDue).
 const PROMOTE_DUE_BATCH = 100;
 
-/**
- * What one source may cost per hour, whoever holds its key (X2). The browser
- * SDK ships its key in a page, so these bound what a scraped key can do: past
- * the group caps a batch's new fingerprints fold into the source's overflow
- * group of their kind, and past the others the extra promotions and deploy
- * markers are skipped. Each is a fixed window (ipRateLimit.takeFromWindow).
- */
-export const SOURCE_CAPS = {
-  new_groups_per_hour: 200,
-  open_groups_max: 1000,
-  promotions_per_hour: 30,
-  deploys_per_hour: 30,
-} as const;
-
-/** The fingerprint new groups past the caps fold into, one per kind. */
-export const OVERFLOW_FP = "(overflow)";
 
 /** How many of `wanted` new groups the source may open now (SOURCE_CAPS); the rest fold into overflow. */
 async function grantNewGroups(ctx: any, source: Doc<"event_sources">, wanted: number): Promise<number> {
@@ -900,63 +735,6 @@ function overflowPlan(plan: GroupPlan): GroupPlan {
   };
 }
 
-/**
- * How long a group row goes unwritten while occurrences keep coming without a
- * transition. Inside it they land on the group's tally (event_group_tallies),
- * so the issues list, which subscribes to the group rows, re-runs at most
- * this often per busy group rather than on every batch.
- */
-export const GROUP_WRITE_EVERY_MS = 60_000;
-
-/** The group fields a tally may hold ahead of the row: counts and names, never a status a person sets. */
-const TALLY_FIELDS = ["count", "last_seen", "buckets", "days", "last_release", "title", "culprit", "level", "meta", "sample_count", "last_sha", "users", "users_since", "messages"] as const;
-
-function stateOf(row: Doc<"event_groups">): GroupState {
-  return {
-    kind: row.kind,
-    status: row.status,
-    count: row.count,
-    first_seen: row.first_seen,
-    last_seen: row.last_seen,
-    buckets: row.buckets,
-    days: row.days,
-    first_release: row.first_release,
-    last_release: row.last_release,
-    resolved_at: row.resolved_at,
-    resolved_in: row.resolved_in,
-    resolved_via: row.resolved_via,
-    resolved_by: row.resolved_by,
-    regressed_at: row.regressed_at,
-    regressed_in: row.regressed_in,
-    failed_at: row.failed_at,
-    last_transition: row.last_transition,
-    last_transition_at: row.last_transition_at,
-    meta: row.meta ? { ok: row.meta.ok } : undefined,
-  };
-}
-
-async function findGroup(ctx: any, sourceId: Id<"event_sources">, fingerprint: string): Promise<Doc<"event_groups"> | null> {
-  return await ctx.db.query("event_groups").withIndex("by_source_fingerprint", (q: any) => q.eq("source_id", sourceId).eq("fingerprint", fingerprint)).first();
-}
-
-async function tallyOf(ctx: any, groupId: Id<"event_groups">): Promise<Doc<"event_group_tallies"> | null> {
-  return await ctx.db.query("event_group_tallies").withIndex("by_group", (q: any) => q.eq("group_id", groupId)).first();
-}
-
-/** A tally's held fields as JSON. A cleared field rides as null, since JSON drops undefined. */
-function tallyJson(fields: Record<string, unknown>): string {
-  return JSON.stringify(Object.fromEntries(TALLY_FIELDS.map((k) => [k, fields[k] ?? null])));
-}
-
-function tallyFields(json: string): Partial<Doc<"event_groups">> {
-  return Object.fromEntries(Object.entries(JSON.parse(json)).map(([k, value]) => [k, value ?? undefined]));
-}
-
-/** A group with what its tally holds ahead of the row: the live numbers, for a reader that shows one group. */
-export async function withTally(ctx: any, row: Doc<"event_groups">): Promise<Doc<"event_groups">> {
-  const tally = await tallyOf(ctx, row._id);
-  return tally ? { ...row, ...tallyFields(tally.fields_json) } : row;
-}
 
 /** A tally's fields onto its group row, and the tally gone. */
 export const flushGroupTally = internalMutation({
@@ -969,135 +747,6 @@ export const flushGroupTally = internalMutation({
   },
 });
 
-/**
- * One group's occurrences from one source folded into its row, with the
- * samples and every transition announced. The one upsert every feed goes
- * through: the door's batches and the polled adapters (metric watches) alike,
- * so a group behaves the same whichever way its facts arrive. `plans` share a
- * fingerprint. The caller moves the source's groups_open by `open_delta`.
- * `found` is the stored row when the caller already looked it up. A deploy's
- * `sha` for the envelope's release is stamped as the group's last_sha (X3),
- * the join from an error to the commit that shipped it.
- */
-export async function upsertGroup(
-  ctx: any,
-  source: Doc<"event_sources">,
-  plans: GroupPlan[],
-  envelope: { release?: string; environment?: string; sha?: string },
-  now: number,
-  found?: Doc<"event_groups"> | null,
-  link?: EventLink,
-): Promise<{ group_id: Id<"event_groups">; short_id: string; open_delta: number; transitions: number }> {
-  const plan = plans[0];
-  const stored = found !== undefined ? found : await findGroup(ctx, source._id, plan.fingerprint);
-  const tally = stored ? await tallyOf(ctx, stored._id) : null;
-  const existing: Doc<"event_groups"> | null = stored && tally ? { ...stored, ...tallyFields(tally.fields_json) } : stored;
-  const folded = foldOccurrences(existing ? stateOf(existing) : null, plans.map((p) => p.occurrence), now);
-  const next = folded.next!;
-  // The newest occurrence names the group: a title that drifts with the
-  // message (a clipped stack, a new culprit) follows what is happening now.
-  const newest = plans.reduce((a, b) => (b.occurrence.at >= a.occurrence.at ? b : a));
-  const meta = next.meta || newest.meta ? { ...existing?.meta, ...newest.meta, ...next.meta } : existing?.meta;
-  const keep = samplesToKeep(plans);
-  const people = await newGroupUsers(ctx, stored?._id ?? null, plans);
-  // Samples a group held before sample_count existed are counted once, here.
-  const priorSamples = existing ? existing.sample_count ?? (await countSamples(ctx, existing._id)) : 0;
-  const fields: Record<string, unknown> = {
-    ...next,
-    title: newest.title,
-    culprit: newest.culprit ?? existing?.culprit,
-    level: newest.level ?? existing?.level,
-    meta: meta as Doc<"event_groups">["meta"],
-    sample_count: Math.min(priorSamples + keep.length, GROUP_RULES.samples_per_group),
-    // A release with no known deploy sha clears the last one: it named another build.
-    last_sha: envelope.release ? envelope.sha : existing?.last_sha,
-    ...usersFields(existing, people.added, now),
-    // One job name holds many causes: each failure counts under what it said, so the page splits them by count, not by the kept samples.
-    ...(next.kind === "job" ? { messages: tallyMessages(existing?.messages, plans.map((p) => ({ message: p.sample.message, at: p.occurrence.at }))) } : {}),
-  };
-
-  let groupId: Id<"event_groups">;
-  let shortId: string;
-  const quiet = stored && !folded.transitions.length && next.status === stored.status && now - stored.updated_at < GROUP_WRITE_EVERY_MS;
-  if (quiet) {
-    groupId = stored._id;
-    shortId = stored.short_id;
-    const held = tallyJson(fields);
-    if (tally) await ctx.db.patch(tally._id, { fields_json: held, updated_at: now });
-    else {
-      await ctx.db.insert("event_group_tallies", { group_id: groupId, fields_json: held, updated_at: now });
-      await ctx.scheduler.runAfter(GROUP_WRITE_EVERY_MS, internal.ingest.flushGroupTally, { group_id: groupId });
-    }
-  } else {
-    ({ group_id: groupId, short_id: shortId } = await writeGroup(ctx, source, stored, plan.fingerprint, { ...fields, updated_at: now }));
-    if (tally) await ctx.db.delete(tally._id);
-  }
-  await appendSamples(ctx, source, groupId, plans, keep, priorSamples, existing ? { samples: priorSamples, last_release: existing.last_release, last_seen: existing.last_seen } : null);
-  for (const key of people.keys) await ctx.db.insert("event_group_users", { group_id: groupId, user_key: key, at: now });
-
-  for (const t of folded.transitions) {
-    await announceTransition(ctx, source, {
-      group_id: groupId,
-      group_short_id: shortId,
-      kind: plan.kind,
-      title: newest.title,
-      level: fields.level as string | undefined,
-      count: next.count,
-      transition: t.transition,
-      at: t.at,
-      reopens: t.reopens,
-      release: envelope.release,
-      environment: envelope.environment,
-      value: newest.meta?.value,
-      threshold: newest.meta?.threshold,
-      signal_fingerprint: groupFingerprint(source.fingerprint_prefix, plan.kind, plan.fp),
-      cause_task_id: stored?.signal_task_id,
-      link,
-    });
-  }
-  return { group_id: groupId, short_id: shortId, open_delta: openGroupsDelta(existing?.status, next.status), transitions: folded.transitions.length };
-}
-
-/** How many distinct people one group counts at most; past it the count stops growing rather than the table. */
-const GROUP_USERS_MAX = 10_000;
-/** New people one batch may add to a group: a bounded number of index reads per batch. */
-const GROUP_USERS_PER_BATCH = 50;
-
-/**
- * The people in a batch the group has not counted yet, and the alias keys to
- * store. A person is every identifier their occurrences carry together
- * (lib/groupPeople): one already held under any of their keys is not new,
- * and their other keys are stored beside it so the next occurrence matches
- * whichever key it arrives with.
- */
-async function newGroupUsers(ctx: any, groupId: Id<"event_groups"> | null, plans: GroupPlan[]): Promise<{ added: number; keys: string[] }> {
-  const clusters = clusterPeople(plans.filter((p) => p.occurrence.ok !== true).map((p) => p.sample.user)).slice(0, GROUP_USERS_PER_BATCH);
-  let added = 0;
-  const keys: string[] = [];
-  for (const c of clusters) {
-    const held = new Set<string>();
-    if (groupId) {
-      for (const key of c) {
-        if (await ctx.db.query("event_group_users").withIndex("by_group_user", (q: any) => q.eq("group_id", groupId).eq("user_key", key)).first()) held.add(key);
-      }
-    }
-    if (!held.size) added++;
-    keys.push(...c.filter((k) => !held.has(k)));
-  }
-  return { added, keys };
-}
-
-/**
- * The group's people count after a batch. A group that existed before people
- * were counted starts its count now and says since when (users_since), so a
- * reader never shows a partial count as the whole.
- */
-function usersFields(existing: Doc<"event_groups"> | null, added: number, now: number): { users?: number; users_since?: number } {
-  const counting = existing ? existing.users !== undefined || existing.users_since !== undefined : true;
-  const users = Math.min(GROUP_USERS_MAX, (existing?.users ?? 0) + added);
-  const since = existing?.users_since ?? (counting ? undefined : now);
-  return { users: counting || added ? users : existing?.users, users_since: since };
-}
 
 /** Alias rows one recount reads for a group; a group holding more is left as counted. */
 const GROUP_USERS_READ = 1000;
@@ -1180,113 +829,6 @@ export const backfillGroupUsers = internalMutation({
   },
 });
 
-/** The row write every upsert shares: patch the group, or insert it with its short id. */
-async function writeGroup(
-  ctx: any,
-  source: Doc<"event_sources">,
-  existing: Doc<"event_groups"> | null,
-  fingerprint: string,
-  fields: Record<string, unknown>,
-): Promise<{ group_id: Id<"event_groups">; short_id: string }> {
-  if (existing) {
-    await ctx.db.patch(existing._id, fields);
-    return { group_id: existing._id, short_id: existing.short_id };
-  }
-  const shortId = await nextShortId(ctx.db, INGEST_SHORT_ID_PREFIX.group);
-  const groupId = await ctx.db.insert("event_groups", {
-    ...fields,
-    workspace: source.workspace,
-    team_id: source.team_id,
-    source_id: source._id,
-    short_id: shortId,
-    fingerprint,
-  });
-  return { group_id: groupId, short_id: shortId };
-}
-
-/** A vendor group as an adapter read it (X7): its state, its names, and where it lives there. */
-export interface MirroredGroup extends MirrorSnapshot {
-  /** The kind's own fingerprint (sentryIssueFingerprint), before segment or prefix. */
-  fp: string;
-  title: string;
-  culprit?: string;
-  level?: string;
-  users?: number;
-  external: { provider: string; id: string; url?: string };
-}
-
-/**
- * A vendor group mirrored into its row under applyMirror, the counterpart of
- * upsertGroup for a feed that reports whole groups rather than occurrences.
- * A read that changes nothing writes nothing, so a poll every two minutes
- * over a quiet project costs reads only. `added` is how many occurrences the
- * vendor counted since the last read.
- */
-export async function mirrorGroup(
-  ctx: any,
-  source: Doc<"event_sources">,
-  m: MirroredGroup,
-  now: number,
-): Promise<{ group_id?: Id<"event_groups">; short_id?: string; open_delta: number; transitions: number; added: number }> {
-  const fingerprint = groupFingerprint(undefined, m.kind, m.fp);
-  const existing = await findGroup(ctx, source._id, fingerprint);
-  const { next, transitions } = applyMirror(existing ? stateOf(existing) : null, m, now, source.created_at);
-  const fields: Record<string, unknown> = {
-    ...next,
-    title: m.title,
-    culprit: m.culprit ?? existing?.culprit,
-    level: m.level ?? existing?.level,
-    users: m.users ?? existing?.users,
-    external: m.external,
-  };
-  const added = Math.max(0, next.count - (existing?.count ?? 0));
-  if (existing && !transitions.length && Object.keys(fields).every((k) => JSON.stringify((existing as any)[k]) === JSON.stringify(fields[k]))) {
-    return { group_id: existing._id, short_id: existing.short_id, open_delta: 0, transitions: 0, added: 0 };
-  }
-  const { group_id, short_id } = await writeGroup(ctx, source, existing, fingerprint, { ...fields, updated_at: now });
-  for (const t of transitions) {
-    await announceTransition(ctx, source, {
-      group_id,
-      group_short_id: short_id,
-      kind: m.kind,
-      title: m.title,
-      level: m.level,
-      count: next.count,
-      transition: t.transition,
-      at: t.at,
-      reopens: t.reopens,
-      release: m.release,
-      signal_fingerprint: groupFingerprint(source.fingerprint_prefix, m.kind, m.fp),
-      cause_task_id: existing?.signal_task_id,
-    });
-  }
-  return { group_id, short_id, open_delta: openGroupsDelta(existing?.status, next.status), transitions: transitions.length, added };
-}
-
-/**
- * Vendor groups for one source mirrored in one transaction, with the source's
- * counters moved once: what the Sentry poll and webhook both write through.
- */
-export async function mirrorGroups(ctx: any, source: Doc<"event_sources">, groups: MirroredGroup[], now: number): Promise<{ mirrored: number; transitions: number }> {
-  if (source.status === "paused") return { mirrored: 0, transitions: 0 };
-  let openDelta = 0;
-  let transitions = 0;
-  let added = 0;
-  for (const m of groups) {
-    const out = await mirrorGroup(ctx, source, m, now);
-    openDelta += out.open_delta;
-    transitions += out.transitions;
-    added += out.added;
-  }
-  if (openDelta || added) {
-    await patchSourceStats(ctx, source, (s) => ({
-      events_today: (s.events_today ?? 0) + added,
-      groups_open: Math.max(0, (s.groups_open ?? 0) + openDelta),
-      ...(added ? { last_event_at: now } : {}),
-    }), now);
-  }
-  return { mirrored: groups.length, transitions };
-}
 
 /**
  * A page of vendor groups from an adapter's action. Groups cross as JSON for
@@ -1560,140 +1102,6 @@ export const countDropped = internalMutation({
   },
 });
 
-/** The newest few occurrences of a batch worth keeping. A green check report is not one. */
-function samplesToKeep(plans: GroupPlan[]): GroupPlan[] {
-  return plans
-    .filter((p) => p.occurrence.ok !== true)
-    .sort((a, b) => b.occurrence.at - a.occurrence.at)
-    .slice(0, SAMPLES_PER_BATCH);
-}
-
-/** A group's samples counted, for a row written before sample_count. At most samples_per_group plus one batch. */
-async function countSamples(ctx: any, groupId: Id<"event_groups">): Promise<number> {
-  const rows = await ctx.db.query("event_samples").withIndex("by_group_at", (q: any) => q.eq("group_id", groupId)).take(GROUP_RULES.samples_per_group + SAMPLES_PER_BATCH);
-  return rows.length;
-}
-
-/**
- * A batch's kept occurrences as samples, then the oldest past the cap
- * removed. `prior` is how many the group held, so the trim reads only the
- * rows it deletes, never the group's whole set of bodies.
- */
-async function appendSamples(ctx: any, source: Doc<"event_sources">, groupId: Id<"event_groups">, plans: GroupPlan[], keep: GroupPlan[], prior: number, held: { samples: number; last_release?: string; last_seen?: number } | null): Promise<void> {
-  // Every occurrence inside a recording links the recording to its group
-  // (X5), sampled or not; a kept sample also names the recording's row.
-  const replays = new Map<string, Id<"replays"> | null>();
-  for (const p of plans) {
-    const ext = p.sample.replay_external_id;
-    if (ext && !replays.has(ext)) replays.set(ext, await linkReplayToGroup(ctx, source, ext, groupId, p.occurrence.at));
-  }
-  if (!keep.length) return;
-  const pins = samplePins(keep.map((p) => p.sample), held);
-  for (const [i, p] of keep.entries()) {
-    const replayId = p.sample.replay_external_id ? replays.get(p.sample.replay_external_id) : undefined;
-    await ctx.db.insert("event_samples", { ...p.sample, workspace: source.workspace, group_id: groupId, source_id: source._id, ...(replayId ? { replay_id: replayId } : {}), ...(pins[i] ? { pin: pins[i] } : {}) });
-  }
-  const over = prior + keep.length - GROUP_RULES.samples_per_group;
-  if (over <= 0) return;
-  // The trim reads a few past the overflow so it can pass over pinned samples and keep the group's samples spread over its life.
-  const oldest: Doc<"event_samples">[] = await ctx.db.query("event_samples").withIndex("by_group_at", (q: any) => q.eq("group_id", groupId)).order("asc").take(over + SAMPLE_TRIM_LOOKAHEAD);
-  for (const extra of samplesToTrim(oldest, over)) await ctx.db.delete(extra._id);
-}
-
-interface Announcement {
-  group_id: Id<"event_groups">;
-  group_short_id: string;
-  kind: GroupKind;
-  title: string;
-  level?: string;
-  count: number;
-  transition: Transition;
-  at: number;
-  /** The resolve the transition breaks (TransitionAt.reopens). */
-  reopens?: number;
-  release?: string;
-  environment?: string;
-  /** A metric's polled value and its line. */
-  value?: number;
-  threshold?: number;
-  signal_fingerprint: string;
-  /** The cause the group already promoted to, so its later transitions land on that task's timeline. */
-  cause_task_id?: Id<"tasks">;
-  link?: EventLink;
-}
-
-/**
- * Where a transition happened in git, for a feed that knows (CI on a
- * repository): stored on the timeline row, and the repository lets a
- * trigger's --repo filter match the firing.
- */
-export interface EventLink {
-  repository?: string;
-  url?: string;
-  sha?: string;
-  branch?: string;
-}
-
-/**
- * A transition's three effects (X3, X4, X6): the timeline row, the triggers
- * armed on its name, and a promotion when the source promotes it. A
- * transition already on the timeline (a retried batch) has had its effects
- * and fires nothing again; promotions past SOURCE_CAPS.promotions_per_hour
- * stay on the timeline and the triggers without filing a signal.
- */
-async function announceTransition(ctx: any, source: Doc<"event_sources">, a: Announcement): Promise<void> {
-  const eventType = transitionTriggerEvent(a.kind, a.transition);
-  const { id: eventId, created } = await recordExternalEventOnce(ctx, {
-    team_id: source.team_id,
-    workspace: source.workspace,
-    source: source.provider,
-    kind: eventType ?? a.transition,
-    title: a.title,
-    ...a.link,
-    source_id: source._id,
-    group_id: a.group_id,
-    data: {
-      transition: a.transition,
-      group_kind: a.kind,
-      group_short_id: a.group_short_id,
-      source_name: source.name,
-      provider: source.provider,
-      count: a.count,
-      level: a.level,
-      release: a.release,
-      environment: a.environment,
-      value: a.value,
-      threshold: a.threshold,
-    },
-    dedupe_key: `ingest:${a.group_id}:${a.transition}:${a.at}${a.reopens !== undefined ? `:after:${a.reopens}` : ""}`,
-    created_at: a.at,
-    task_ids: a.cause_task_id ? [a.cause_task_id] : undefined,
-  });
-  if (!created) return;
-  if (eventType) {
-    await scheduleTriggerMatch(ctx, {
-      event_type: eventType,
-      team_id: source.team_id,
-      workspace: source.workspace,
-      source: source.name,
-      repository: a.link?.repository,
-      event_ref: { external_event_id: eventId, group_short_id: a.group_short_id, title: a.title },
-    });
-  }
-  const kind = transitionSignalKind(a.transition);
-  if (kind && source.promote.includes(a.transition)) {
-    const { granted } = await takeFromWindow(ctx.db, `ingest-promote:${source._id}`, SOURCE_CAPS.promotions_per_hour, HOUR_MS, 1);
-    // Over the cap the promotion waits on the group rather than being dropped:
-    // a group that promoted nothing on its "new" transition would otherwise
-    // never reach the line unless it regressed (promoteDue files it later).
-    const due = { transition: a.transition, fingerprint: a.signal_fingerprint, external_event_id: eventId };
-    if (!granted) {
-      await ctx.db.patch(a.group_id, { promotion_due: { ...due, at: Date.now() } });
-      return;
-    }
-    await schedulePromotion(ctx, a.group_id, due);
-  }
-}
 
 /**
  * Promotions the hourly cap held back, and runs that never settled

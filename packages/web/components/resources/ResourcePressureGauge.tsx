@@ -22,6 +22,7 @@ import { HoverCard } from "../ui/HoverCard";
 import { MiniTrace } from "./HealthStrip";
 import { attribute, fmtAgo, fmtBytes, fmtCpu, freshness, loadPercent, memoryUsedPct } from "./resourceModel";
 import type { ResourceMachine } from "./types";
+import { Button } from "../ui/button";
 
 // How far back the card's traces reach.
 const TRACE_MS = 30 * 60_000;
@@ -217,20 +218,12 @@ function ResourcesLink({ deviceId, hot }: { deviceId: string; hot: boolean }) {
   const go = (path: string) => { close?.(); router.push(path); };
   return (
     <div className="mt-2.5 flex gap-1.5 border-t border-sol-border/30 pt-2.5">
-      <button
-        type="button"
-        onClick={() => go(`/resources?offload=${encodeURIComponent(deviceId)}`)}
-        className={cn("inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[11.5px]", hot ? "bg-sol-cyan font-semibold text-sol-bg hover:opacity-90" : "border border-sol-border/50 text-sol-text hover:bg-sol-bg-alt")}
-      >
+      <Button type="button" variant={hot ? "cyan" : "outline"} size="xs" onClick={() => go(`/resources?offload=${encodeURIComponent(deviceId)}`)}>
         <CloudUpload className="h-3.5 w-3.5" />Move load to cloud
-      </button>
-      <button
-        type="button"
-        onClick={() => go("/resources")}
-        className="h-7 rounded-md border border-sol-border/50 px-2.5 text-[11.5px] text-sol-text hover:bg-sol-bg-alt"
-      >
+      </Button>
+      <Button type="button" variant="outline" size="xs" onClick={() => go("/resources")}>
         Open Resources
-      </button>
+      </Button>
     </div>
   );
 }

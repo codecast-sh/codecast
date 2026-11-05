@@ -61,7 +61,7 @@ describe("bucketize", () => {
 
   test("fewer values than buckets come back as read", () => {
     const out = bucketize([e(10, 1), e(20, 3)], 0, 100, 10);
-    expect(out).toEqual({ points: [{ at: 10, value: 1, min: 1, max: 1 }, { at: 20, value: 3, min: 3, max: 3 }], step_ms: 0 });
+    expect(out).toEqual({ points: [{ at: 10, value: 1, min: 1, max: 1, n: 1 }, { at: 20, value: 3, min: 3, max: 3, n: 1 }], step_ms: 0 });
   });
 
   test("more fold into equal buckets: weighted average, min and max, at the mean time", () => {
@@ -69,9 +69,18 @@ describe("bucketize", () => {
     const out = bucketize(entries, 0, 100, 10);
     expect(out.step_ms).toBe(10);
     expect(out.points).toHaveLength(10);
-    expect(out.points[0]).toEqual({ at: 5, value: 4.5, min: 0, max: 9 });
+    expect(out.points[0]).toEqual({ at: 5, value: 4.5, min: 0, max: 9, n: 10 });
     // An hourly rollup weighs by its count.
     expect(bucketize([{ at: 0, n: 3, sum: 30, min: 5, max: 15 }, { at: 1, n: 1, sum: 2, min: 2, max: 2 }, e(50, 0), e(60, 0)], 0, 100, 2).points[0]).toMatchObject({ value: 8, min: 2, max: 15 });
+  });
+
+  test("the buckets sit on a grid fixed to the epoch, so a window read a little later folds the same values together", () => {
+    const entries = Array.from({ length: 400 }, (_, i) => e(i * 10, i % 7));
+    const a = bucketize(entries, 0, 4000, 40).points;
+    const b = bucketize(entries, 30, 4030, 40).points;
+    // Every whole bucket both windows hold is the same point.
+    const inner = (pts: typeof a) => pts.filter((p) => p.at > 200 && p.at < 3800);
+    expect(inner(b)).toEqual(inner(a));
   });
 
   test("values outside the window are left out", () => {

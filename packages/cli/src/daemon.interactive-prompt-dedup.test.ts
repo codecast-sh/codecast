@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { interactivePromptMessageUuid } from "./daemon.js";
+import { interactivePromptMessageUuid, jsonlPromptAnchor } from "./daemon.js";
 
 // Regression coverage for poll spam: the daemon emits a synthetic AskUserQuestion
 // message for a live interactive prompt from several call sites (post-inject,
@@ -65,5 +65,38 @@ describe("interactivePromptMessageUuid", () => {
     expect(interactivePromptMessageUuid(sid, prompt)).not.toBe(
       interactivePromptMessageUuid("e5e5410e-f381-4c95-acde-2f08ddbb1b26", prompt),
     );
+  });
+});
+
+// jx7e7zm, 2026-11-04: Claude Code asks "Do you want to proceed?" Yes/No for every
+// permission dialog. The second one, after the first was answered from the app, got the
+// first card's id; the daemon had restarted and lost its close count, so the new card
+// upserted onto the answered row and rendered pre-answered. The session sat 9 hours.
+describe("prompt anchor", () => {
+  const sid = "22d4c672-cc74-4751-a86a-51c30d8f587a";
+  const proceed = { question: "Do you want to proceed?", options: [{ label: "Yes" }, { label: "No" }] };
+  const line = (o: Record<string, unknown>) => JSON.stringify(o);
+
+  test("the same words under a later transcript message get a new id", () => {
+    expect(interactivePromptMessageUuid(sid, proceed, "msg-a")).not.toBe(interactivePromptMessageUuid(sid, proceed, "msg-b"));
+    expect(interactivePromptMessageUuid(sid, proceed, "msg-a")).toBe(interactivePromptMessageUuid(sid, proceed, "msg-a"));
+  });
+
+  test("anchors on the newest user or assistant entry, past bookkeeping lines", () => {
+    const tail = [
+      line({ type: "assistant", uuid: "first-call" }),
+      line({ type: "user", uuid: "first-result" }),
+      line({ type: "assistant", uuid: "second-call" }),
+      line({ type: "queue-operation", operation: "enqueue" }),
+      line({ type: "attachment", uuid: "att-1" }),
+      line({ type: "system", uuid: "sys-1" }),
+      "{\"truncated",
+    ].join("\n");
+    expect(jsonlPromptAnchor(tail)).toBe("second-call");
+  });
+
+  test("no transcript entries, no anchor", () => {
+    expect(jsonlPromptAnchor("")).toBeNull();
+    expect(jsonlPromptAnchor(line({ type: "queue-operation" }))).toBeNull();
   });
 });

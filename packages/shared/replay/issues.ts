@@ -30,7 +30,7 @@
 // Pure, so the assembler, the vendor import and a regroup pass all read a
 // stream the same way.
 import type { ReplayEvent } from "../contracts/replay";
-import { normalizeErrorMessage, replayIssueFingerprint } from "../contracts/signalFingerprint";
+import { dropRequestIds, normalizeErrorMessage, replayIssueFingerprint } from "../contracts/signalFingerprint";
 import { isFailedRequest } from "./events";
 
 export const REPLAY_ISSUE_KINDS = ["error", "request", "rage_click"] as const;
@@ -225,7 +225,7 @@ export function replayIssues(events: readonly ReplayEvent[], startUrl?: string, 
         if (!line || !failure) break;
         // The title is the line its failure is keyed by, so every recording names one failure alike.
         const title = failure === normalizeErrorMessage(line).slice(0, 300) ? line : failure;
-        add("error", failure, clip(title, 120), e.t, e.type === "error" && e.stack ? `${e.message}\n${e.stack}` : e.message);
+        add("error", failure, clip(dropRequestIds(title), 120), e.t, e.type === "error" && e.stack ? `${e.message}\n${e.stack}` : e.message);
         break;
       }
       case "network": {

@@ -8,7 +8,7 @@ import { beforeAll, expect, mock, test } from "bun:test";
 
 let React: typeof import("react");
 let createRoot: typeof import("react-dom/client").createRoot;
-let Player: typeof import("../ReplayPage").Player;
+let Player: typeof import("../ReplayPlayer").Player;
 let ReplayMomentEmbed: typeof import("../ReplayMomentEmbed").ReplayMomentEmbed;
 const PLAYER = "https://replay.codecast.sh";
 const minted: any[] = [];
@@ -61,14 +61,13 @@ beforeAll(async () => {
       minted.push(args);
       return answer;
     },
-    useMutation: () => async (args: any) => {
-      lengthChecks.push(args);
-      return { queued: true };
-    },
   }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => h("a", { href, ...rest }, children) }));
   ({ createRoot } = await import("react-dom/client"));
-  ({ Player } = await import("../ReplayPage"));
+  ({ Player } = await import("../ReplayPlayer"));
+  // The length check is a store action riding dispatch; record what it was asked.
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  useInboxStore.setState({ checkReplayCaptureLength: (replay: string) => { lengthChecks.push({ replay }); } } as any);
   ({ ReplayMomentEmbed } = await import("../ReplayMomentEmbed"));
 }, 120_000);
 

@@ -106,7 +106,7 @@ export const replayBackfillValidator = v.object({
   failures_in_row: v.optional(v.number()),
   rate_limited_since: v.optional(v.number()),
   last_error: v.optional(v.string()),
-  failures: v.optional(v.array(v.object({ id: v.string(), error: v.string() }))),
+  failures: v.optional(v.array(v.object({ id: v.string(), error: v.string(), at: v.optional(v.number()), length_ms: v.optional(v.number()), person: v.optional(v.string()), url: v.optional(v.string()) }))),
   started_at: v.number(),
   updated_at: v.number(),
   finished_at: v.optional(v.number()),
@@ -237,6 +237,8 @@ export const ingestTables = {
      * `counted` is what the recount at `at` found and `prev` the recount before it, so the import line can say whether the backlog drains; `queue` the next recordings the sweep reads, in its order.
      */
     replay_rest: v.optional(v.object({ cut: v.number(), unknown: v.number(), reading: v.optional(v.string()), waiting_until: v.optional(v.number()), at: v.number(), counted: v.optional(v.number()), prev: v.optional(v.object({ cut: v.number(), at: v.number() })), queue: v.optional(v.array(v.string())) })),
+    /** When the source's replay_tallies were last counted whole (lib/replayTallies.ts rebuild): the list reads its totals and people from them only once set. */
+    replay_tally_at: v.optional(v.number()),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -537,6 +539,35 @@ export const ingestTables = {
     timeline_md: v.string(),
     updated_at: v.number(),
   }).index("by_replay", ["replay_id"]),
+
+  // A source's recordings counted per person (lib/replayTallies.ts): every
+  // recording, and the part the default active-time floor hides, so the list's
+  // total, the tab badge and each People row print the exact count however
+  // many recordings there are. Kept by every replay write (patchReplay,
+  // ensureReplay); recounted whole by the tend cron. Recordings with no person
+  // land in one of a few shards (shard set, person_key absent) so imports do
+  // not all write one row.
+  replay_tallies: defineTable({
+    workspace: v.string(),
+    source_id: v.id("event_sources"),
+    person_key: v.optional(v.string()),
+    shard: v.optional(v.number()),
+    label: v.optional(v.string()),
+    anonymous: v.optional(v.boolean()),
+    n: v.number(),
+    ms: v.number(),
+    errors: v.number(),
+    failed: v.number(),
+    short_n: v.number(),
+    short_ms: v.number(),
+    short_errors: v.number(),
+    short_failed: v.number(),
+    first_at: v.number(),
+    last_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_source_person", ["source_id", "person_key", "shard"])
+    .index("by_workspace", ["workspace"]),
 
   // X7. A metric polled from a source and compared to a line.
   metric_watches: defineTable({

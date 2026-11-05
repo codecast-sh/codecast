@@ -22,7 +22,7 @@ import { relTimeShort } from "../../lib/utils";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Spark } from "../Spark";
 import { opsHref, type OpsHomeShow } from "./opsPaths";
-import { ATTENTION_FILTERS, BADGE_STATES, TILE_LANE, admitsShow, filterWords, attentionCounts, attentionItems, healthBad, isNewSince, homeIssueRefs, itemsForSource, resolveSource, sourceLastDay, type AttentionInput, type AttentionItem } from "./opsHomeModel";
+import { ATTENTION_FILTERS, BADGE_STATES, TILE_LANE, admitsShow, filterWords, attentionCounts, attentionItems, healthBad, isNewSince, listedIssues, itemsForSource, resolveSource, sourceLastDay, type AttentionInput, type AttentionItem } from "./opsHomeModel";
 import type { SyncCollectionResult } from "../../hooks/useSyncCollection";
 import { OpsFeedError, ProviderIcon, SOURCE_PROVIDER_LABEL, SourceHealthContext, useOpsFeed } from "./parts";
 import { HealthFixButton } from "./SourceHealthParts";
@@ -36,7 +36,8 @@ import { rememberIssueList } from "./issueNav";
 import { undoTriage } from "./issueUndo";
 import { snoozeChoices, snoozedUntil, splitSnoozed, type OpsSnoozes } from "./opsSnooze";
 import { AttentionRow } from "./OpsHomeRow";
-import { assignItems, itemHref, itemRef, resolvableGroups, resolveItems, snoozeItems } from "./opsHomeItems";
+import { assignItems, itemHref, itemRef, resolvableGroups, resolveItems, rowUsers, snoozeItems } from "./opsHomeItems";
+import { blindWatchIds } from "./metricModel";
 import { WatchBand } from "./WatchBand";
 import { ConnectSheet } from "./ConnectSheet";
 import type { Kind } from "./SourcesSection";
@@ -114,13 +115,16 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
   const clearHref = opsHref.home({ source: source?.name ?? sourceRef });
   // The watches the list already shows (alerting, erroring, blind behind a reader): the band leaves them out.
   const listedWatches = useMemo(() => new Set(live.flatMap((it) => (it.kind === "watch" ? [it.watch._id] : it.kind === "reader" ? it.watches.slice(0, it.blind).map((w) => w._id) : []))), [live]);
-  // Watches blind behind a failing reader: the band counts them under Reader failing, the reader's own name, never as watch errors.
-  const readerBlind = useMemo(() => new Set(live.flatMap((it) => (it.kind === "reader" ? it.watches.slice(0, it.blind).map((w) => w._id) : []))), [live]);
+  // Watches blind behind a failing reader, by the rule the Metrics chips count them with, so the band's Blind is theirs.
+  const readerBlind = useMemo(() => blindWatchIds(data.watches, (id) => health.get(id)), [data.watches, health]);
   // An issue opened from here walks this list with j and k, and Escape comes back to it (issueNav).
-  const issueRefs = useMemo(() => homeIssueRefs(items), [items]);
-  // The issues the list draws, the ones j and k walk and an issue page's "of N issues" counts: one number on both.
-  // The issues in Needs attention as the Issues list counts them: the number the link beside the title opens to.
+  // The issues the rows hold (a folded row's every variant, an alerting watch's metric issue), narrowed as the filter on
+  // narrows the Issues list: the count the header's link wears, the list it opens, the tiles and an issue page's "of N".
+  const listed = useMemo(() => listedIssues(items, now, data, show), [items, now, data, show]);
+  const issueRefs = useMemo(() => listed.map((g) => g.short_id || g._id), [listed]);
+  // The Issues list's own Needs attention count, which a snooze here does not narrow: said on the link when they differ.
   const laneN = useMemo(() => attentionIssueCount(data.groups, now, data.failures, source?._id ?? null), [data.groups, data.failures, now, source?._id]);
+  const issueLink = !show || !!TILE_LANE[show] || show === "unassigned";
   // Kept current while the list is on screen, so the walk is the order drawn now, even after a re-sort.
   useWatchEffect(() => rememberIssueList(issueRefs, here), [issueRefs, here]);
 
@@ -210,10 +214,11 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
   // When anything was last heard: from this source alone inside its view, else from any.
   const checked = Math.max(0, ...(source ? [source] : sources).map((s) => health.get(s._id)?.lastAt ?? s.last_event_at ?? 0));
   const allTiles = [...ATTENTION_FILTERS, ...(snoozed.length || show === "snoozed" ? [{ key: "snoozed" as const, label: "Snoozed", tone: "calm" as const }] : [])];
-  // Inside one source the strip keeps only the filters that hold something here (or are on); its red group sums to the Overview tab's badge.
-  // Watch errors and degraded sources show only when there are some, so a workspace with none keeps the strip it knows.
-  // A paging tile that holds nothing goes, as the watch band drops an empty state: the red group is only what pages now.
-  const tiles = source ? allTiles.filter((f) => counts[f.key] > 0 || show === f.key) : allTiles.filter((f) => (!OCCASIONAL.has(f.key) && f.tone !== "bad") || counts[f.key] > 0 || show === f.key);
+  // The strip keeps only the filters that hold something (or are on), at every width, as the watch band drops an empty
+  // state: its red group is only what pages now and sums to the Overview tab's badge.
+  const tiles = allTiles.filter((f) => counts[f.key] > 0 || show === f.key);
+  // The Users column goes when no row has people to count (watches, sources, readers): the title takes its room.
+  const usersCol = shown.some((it) => rowUsers(it) != null);
   const watches = source ? data.watches.filter((w) => w.source_id === source._id) : data.watches;
   const newCount = seenAt ? items.filter((it) => isNewSince(it, seenAt)).length : 0;
   const resolvable = resolvableGroups(picked).length;
@@ -223,7 +228,6 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
     return f ? filterWords(f, counts[key]) : key;
   };
   const withTask = picked.filter((it) => it.task?.short_id).length;
-  const paging = tiles.filter((f) => f.tone === "bad").reduce((n, f) => n + counts[f.key], 0);
   return (
     <div className="ops-pad ops-home" data-ops-home={show ?? "all"}>
       {sheet}
@@ -234,15 +238,6 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
             {group.map((f) => {
               const n = counts[f.key];
               const on = show === f.key;
-              // A count of nothing says so in place: pressing it would only open an empty list.
-              if (!n && !on) {
-                return (
-                  <span key={f.key} className="ops-home-count" data-tone="zero" aria-disabled="true" data-overlap={f.key === "unassigned" || f.key === "snoozed" ? "true" : undefined} data-ops-count={f.key} title={TILE_WINDOW[f.key]}>
-                    <b className="ops-num">0</b>
-                    <span>{filterWords(f, 0)}</span>
-                  </span>
-                );
-              }
               return (
                 <Link key={f.key} href={opsHref.home({ source: source?.name ?? sourceRef, show: on ? null : f.key })} className="ops-home-count" data-tone={n ? f.tone : "zero"} data-on={on ? "true" : undefined} data-overlap={f.key === "unassigned" || f.key === "snoozed" ? "true" : undefined} aria-pressed={on} data-ops-count={f.key} title={TILE_WINDOW[f.key]}>
                   <b className="ops-num">{n}</b>
@@ -258,7 +253,7 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
       {!show && !source && <WatchBand watches={watches} source={null} listed={listedWatches} readerBlind={readerBlind} />}
 
       {items.length ? (
-        <div className="ops-home-table">
+        <div className="ops-home-table" data-users={usersCol ? undefined : "none"}>
           {picked.length > 0 ? (
             <div className="iss-bulk ops-home-bulk" role="toolbar" aria-label="Selected" data-ops-bulk={picked.length}>
               <span className="ops-num"><b>{picked.length}</b> selected</span>
@@ -272,14 +267,20 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
             <div className="ops-home-head">
               <span />
               <span className="ops-home-headtitle">
-                {show === "snoozed" ? "Snoozed" : "Needs attention"} <span className="ops-num">{items.length}</span>
-                {/* The Overview tab's and the sidebar's number is the paging part of this list: said beside it, not only on hover. */}
-                {/* The rows in it that open an issue (one per folded cause), the count an issue opened from here steps through; watches, sources and the rest make up the remainder. */}
-                {/* The Issues list's own Needs attention count (one per issue, variants and replay rows aside), the number that tab shows when this opens it. */}
-                {!show && laneN > 0 && <Link href={opsHref.issues({ source: source?.name ?? sourceRef, lane: "attention" })} className="ops-link ops-home-lane" data-ops-attention-issues={laneN}>· <span className="ops-num">{laneN}</span> {laneN === 1 ? "issue" : "issues"}</Link>}
-                {!show && paging > 0 && paging !== items.length && <span className="ops-home-paging" data-ops-paging={paging} title="Alerting, checks failing, regressed, escalating and sources down: the Overview tab's and the sidebar's count">· <b className="ops-num">{paging}</b> paging</span>}
+                {/* One number here: the issues the rows hold, which opens Issues and is an issue page's "of N". The paging sum is the strip's red group; the row count is "Show all". */}
+                {show === "snoozed" ? "Snoozed" : "Needs attention"}
                 {show && <FilterToken label={tileWords(show)} href={clearHref} />}
-                {show && TILE_LANE[show] && <Link href={opsHref.issues({ source: source?.name ?? sourceRef, lane: TILE_LANE[show] })} className="ops-link ops-home-lane" data-ops-lane-link={TILE_LANE[show]}>In Issues<ArrowUpRight className="w-3 h-3" aria-hidden /></Link>}
+                {issueLink && listed.length > 0 && (
+                  <Link
+                    href={opsHref.issues({ source: source?.name ?? sourceRef, lane: (show && TILE_LANE[show]) || "attention", nobody: show === "unassigned" })}
+                    className="ops-link ops-home-lane"
+                    data-ops-attention-issues={listed.length}
+                    data-ops-lane-link={(show && TILE_LANE[show]) || "attention"}
+                    title={!show && laneN > listed.length ? `${laneN} in Issues: ${laneN - listed.length} snoozed here` : "Open them in Issues"}
+                  >
+                    <span className="ops-num">{listed.length}</span> {listed.length === 1 ? "issue" : "issues"}<ArrowUpRight className="w-3 h-3" aria-hidden />
+                  </Link>
+                )}
                 {newCount > 0 && <span className="ops-home-newcount" data-ops-new-count={newCount}><i className="ops-home-newdot" />{newCount} new</span>}
               </span>
               <span data-col="spark">Last 24h</span>
@@ -337,9 +338,6 @@ function FilterToken({ label, href }: { label: string; href: string }) {
     </Link>
   );
 }
-
-/** Tiles drawn only while they hold something (or are the filter on). */
-const OCCASIONAL: ReadonlySet<OpsHomeShow> = new Set(["check", "reader", "erroring", "degraded"]);
 
 /** What each tile counts, and over what window, on hover. */
 const TILE_WINDOW: Record<OpsHomeShow, string> = {

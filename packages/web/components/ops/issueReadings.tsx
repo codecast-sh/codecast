@@ -20,7 +20,7 @@ import { SourceChip } from "./parts";
 import { FixReview, FixStageGlyph } from "./issueParts";
 import { useProblemTask } from "./useIssueFix";
 import { leaveOutOfWatch } from "./issueUndo";
-import { hogqlExclude, lastDayStart, noiseOf, type FailurePart, type FailureSplit, taskFixStage, foldReadings, metricContributors, parseTags, projectZero, readingRows, readingTemplate, type BreakdownRow, type Contributor, type ReadingColumn, type ReadingRow, type ReadingTemplate } from "./issuesModel";
+import { hogqlExclude, lastDayStart, noiseOf, stageFixLabel, type FailurePart, type FailureSplit, taskFixStage, foldReadings, metricContributors, parseTags, readingRows, trendZero, readingTemplate, type BreakdownRow, type Contributor, type ReadingColumn, type ReadingRow, type ReadingTemplate } from "./issuesModel";
 import type { MetricBreakdown } from "./useMetricBreakdown";
 import type { OpsGroup, OpsSample, OpsSource, OpsWatch } from "./opsTypes";
 
@@ -136,11 +136,9 @@ function ReadingTrend({ template, rows, now }: { template: ReadingTemplate; rows
   // Kept readings are failures only: a gap well past their usual spacing is a stretch it passed, so the line breaks there.
   const gaps = held.slice(1).map((p, i) => p.at - held[i].at).sort((a, b) => a - b);
   const breakAt = Math.max(3600_000, 4 * (gaps[Math.floor(gaps.length / 2)] ?? 0));
-  // The chart is the current episode: readings from before its last break are an earlier one and would squeeze this one into a corner.
-  let from = 0;
-  for (let i = 1; i < held.length; i++) if (held[i].at - held[i - 1].at > breakAt) from = i;
-  const points = held.length - from >= 2 ? held.slice(from) : held;
-  const zero = projectZero(points);
+  // Every kept reading is drawn; the line only breaks across a gap, so a new reading never hides the ones before it.
+  const points = held;
+  const zero = trendZero(template, rows, at);
   if (points.length < 2) return null;
   const t0 = points[0].at;
   const t1 = Math.max(now, zero && zero - now < 30 * 24 * 3600_000 ? zero : now);
@@ -368,7 +366,7 @@ function ContributorRow({ c, now, source, onFix }: { c: Contributor; now: number
         {stage === "dropped" ? (
           <Link href={`${opsHref.issue(ref)}#iss-fix`} className="iss-fix-open" title="Open the dropped task, or refile it" data-ops-fix-dropped><FixStageGlyph stage={stage} word /></Link>
         ) : <FixStageGlyph stage={stage} word />}
-        {stage !== "fixing" && <button type="button" className="ops-btn iss-contrib-fix" onClick={onFix} title={`Start a fix on ${ref}`}><Wand2 className="w-3 h-3" /> Start fix</button>}
+        {stage !== "fixing" && <button type="button" className="ops-btn iss-contrib-fix" onClick={onFix} title={`Start a fix on ${ref}`}><Wand2 className="w-3 h-3" /> {stageFixLabel(c.group, stage, task)}</button>}
       </span>
     </li>
   );

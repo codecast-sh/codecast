@@ -32,6 +32,7 @@ import { NEW_SESSION_EVENT } from "../lib/utils";
 import { PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TeamDomainBanner } from "./TeamDomainBanner";
+import { SeatBanner } from "./team/SeatBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
 import { TourLayer, ToursPanel } from "../tours";
@@ -617,6 +618,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnModObjectPage = pathname?.startsWith("/o/") ?? false;
   // The daily edition sets its own 1180px column (changes-page.md 4).
   const isOnChangesPage = pathname === "/changes";
+  const isOnDeploysPage = pathname === "/deploys";
   // Prompts: a column per person, each its own scroll region.
   const isOnPromptsPage = pathname === "/prompts";
   // Settings is a modal-like surface, not a working surface — selecting a session
@@ -626,7 +628,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnGoalsPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnSessionMapPage || isOnRepoPage || isOnOrgPage || isOnChangesPage || isOnPromptsPage || isOnModPage || isOnModObjectsPage || isOnModObjectPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnGoalsPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnSessionMapPage || isOnRepoPage || isOnOrgPage || isOnChangesPage || isOnDeploysPage || isOnPromptsPage || isOnModPage || isOnModObjectsPage || isOnModObjectPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
@@ -1418,6 +1420,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <ThemeIntroAnywhere />
         <CliOfflineBanner />
         <TmuxMissingBanner />
+        <SeatBanner />
         {/* The nudges share one slot, in priority order: only the first that
             renders shows (globals.css [data-nudge-slot]), and dismissing it
             brings up the next. Stacked, a new account met four at once. */}

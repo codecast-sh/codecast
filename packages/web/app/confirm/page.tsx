@@ -15,7 +15,7 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useEventListener } from "../../hooks/useEventListener";
 import { PERSON_ONLY, useAgentDrivenTab } from "../../lib/agentTabGuard";
 import { finishPresence, finishRegistration } from "../../lib/passkeyPresence";
-import { VAULT_PRIMARY } from "../../lib/secretLook";
+import { Button } from "../../components/ui/button";
 
 function Frame({ icon, title, sub, children }: { icon: React.ReactNode; title: string; sub?: string; children?: React.ReactNode }) {
   return (
@@ -64,18 +64,20 @@ export default function ConfirmPage() {
   const title = register ? "Set up Touch ID" : `Confirm to ${PRESENCE_PHRASE[pending.action!]}`;
   return (
     <Frame icon={<Fingerprint className="h-5 w-5 text-sol-cyan" />} title={title} sub={pending.label}>
-      <button
+      <Button
         type="button"
+        variant="yellow"
+        size="lg"
         onClick={() => void run()}
         disabled={busy || !!held}
         title={held}
-        className={`mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm ${VAULT_PRIMARY}`}
+        className="mt-6 w-full px-4"
         data-confirm-run
       >
         {held ? <Lock className="h-4 w-4" /> : busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Fingerprint className="h-4 w-4" />}
         {held ?? (register ? "Set up Touch ID" : "Confirm with Touch ID")}
         {!held && !busy && <KeyCap size="xs" tone="onAccent">return</KeyCap>}
-      </button>
+      </Button>
     </Frame>
   );
 }

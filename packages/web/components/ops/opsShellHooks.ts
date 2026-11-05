@@ -66,7 +66,7 @@ const MORE_WIDTH = 76;
  * past its width fold into a More menu (fitTabs), measured from the tabs as
  * drawn and again whenever the bar resizes.
  */
-export function useTabFit(nav: RefObject<HTMLElement | null>, keys: readonly string[], active: string | null, /** What the tabs print (their counts): a change re-measures them. */ content = ""): ReadonlySet<string> | null {
+export function useTabFit(nav: RefObject<HTMLElement | null>, keys: readonly string[], active: string | null, /** What the tabs print (their counts): a change re-measures them. */ content = "", /** The tabs kept first when the bar is narrow, most opened first. */ rank: readonly string[] = []): ReadonlySet<string> | null {
   const widths = useRef(new Map<string, number>());
   const [shown, setShown] = useState<string | null>(null);
   const sig = keys.join(",");
@@ -79,7 +79,7 @@ export function useTabFit(nav: RefObject<HTMLElement | null>, keys: readonly str
         if (w) widths.current.set(t.dataset.opsTab!, w);
       }
       const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
-      const keep = fitTabs(keys.map((k) => widths.current.get(k) ?? 0), el.clientWidth, MORE_WIDTH, gap, active ? keys.indexOf(active) : -1);
+      const keep = fitTabs(keys.map((k) => widths.current.get(k) ?? 0), el.clientWidth, MORE_WIDTH, gap, active ? keys.indexOf(active) : -1, rank.map((k) => keys.indexOf(k)));
       const next = keep.length === keys.length ? null : keep.map((i) => keys[i]).join(",");
       setShown((prev) => (prev === next ? prev : next));
     };

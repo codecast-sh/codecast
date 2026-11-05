@@ -48,16 +48,23 @@ export function AnchorAvatar({ anchor, size = 28, className = "", bare }: { anch
 /** "Personal" or the team's name — the pill that answers "which workspace's
  *  agent am I talking to". Team scope carries a small people mark so the two
  *  kinds read differently even before the words do. */
-export function AnchorScopePill({ anchor, className = "" }: { anchor: Identity | null | undefined; className?: string }) {
+export function AnchorScopePill({ anchor, quiet = false, className = "" }: {
+  anchor: Identity | null | undefined;
+  /** Plain dim text with the glyph, for a row's meta line where a pill would be one box too many. */
+  quiet?: boolean;
+  className?: string;
+}) {
   if (!anchor) return null;
   const team = anchor.scope_type === "team";
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-[1px] text-[10px] font-medium leading-none tracking-wide uppercase ${
-        team
+      className={`inline-flex items-center gap-1 text-[10px] leading-none ${
+        quiet
+          ? "text-sol-text-dim"
+          : team
           ? "bg-sol-blue/12 text-sol-blue border border-sol-blue/25"
           : "bg-sol-violet/12 text-sol-violet border border-sol-violet/25"
-      } ${className}`}
+      } ${quiet ? "" : "rounded-full px-1.5 py-[1px] font-medium tracking-wide uppercase"} ${className}`}
       title={team ? `The agent of ${anchor.team_name ?? "this team"}'s workspace` : "The agent of your personal workspace, private to you"}
     >
       {team ? (

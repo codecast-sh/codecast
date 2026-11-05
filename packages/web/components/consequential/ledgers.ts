@@ -608,10 +608,13 @@ export type RemoveSourceChoice = (typeof REMOVE_SOURCE_CHOICES)[number];
 export function removeSourceLedger(r: {
   source: string; provider: string; issues: CappedCount; open: CappedCount; tasked: CappedCount;
   watches: CappedCount; replays: CappedCount; calls?: CappedCount; choice: RemoveSourceChoice; canPause: boolean; keyed: boolean;
+  /** The provider can hold recordings (or this source holds some): false drops the replays tile and row, as the overview does. */
+  holdsReplays?: boolean;
 }): SwitchLedger {
   const remove = r.choice === "Remove" || !r.canPause;
   const n = capped;
   const warn = remove ? { tone: "warn" as const } : {};
+  const replays = r.holdsReplays !== false;
   return {
     name: remove ? "Remove source" : "Pause source",
     subject: `${r.source} · ${r.provider}`,
@@ -619,7 +622,7 @@ export function removeSourceLedger(r: {
     ...(remove ? { alert: "Deleted for good, no undo" } : {}),
     figures: [
       { value: n(r.issues), label: `issues · ${n(r.open)} open`, ...warn },
-      { value: n(r.replays), label: "replays", ...warn },
+      ...(replays ? [{ value: n(r.replays), label: "replays", ...warn }] : []),
       { value: n(r.watches), label: "metric watches", ...warn },
     ],
     rows: remove
@@ -630,7 +633,10 @@ export function removeSourceLedger(r: {
           ...(r.keyed ? [{ k: "Its key", v: "Refused at once", tone: "warn" as const }] : []),
         ]
       : [
-          { k: "Issues, replays", v: "All kept", tone: "ok" as const },
+          // One row per kind kept, each with its count, so no label is two nouns cut to fit.
+          { k: "Issues", v: `${n(r.issues)} kept`, tone: "ok" as const },
+          ...(replays ? [{ k: "Replays", v: `${n(r.replays)} kept`, tone: "ok" as const }] : []),
+          { k: "Watches", v: `${n(r.watches)} kept`, tone: "ok" as const },
           { k: "New events", v: "Refused while paused" },
           { k: "To undo", v: "Resume" },
         ],

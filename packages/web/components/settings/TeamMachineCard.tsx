@@ -18,8 +18,7 @@ import { Avatar } from "../tasks/TaskCommentStream";
 import { DeviceDot } from "../DeviceBadge";
 import { LoginCodePaste } from "../LoginCodePaste";
 import { membershipPhase, myMembership, type TeamMachine, type TeamMachineMember } from "../../lib/teamMachines";
-
-const BTN = "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50";
+import { Button } from "../ui/button";
 
 export function TeamMachineCard({ m, showTeam }: { m: TeamMachine; showTeam?: boolean }) {
   const me = useInboxStore((s) => s.currentUser);
@@ -112,9 +111,9 @@ function MyControl({ m, mine, me }: { m: TeamMachine; mine: TeamMachineMember | 
         onTurnOn={() => join(m._id)}
         onTurnOff={() => {}}
         trigger={({ press }) => (
-          <button type="button" onClick={press} className={`${BTN} bg-sol-blue text-sol-bg hover:brightness-110`} data-team-machine-join>
+          <Button type="button" variant="blue" size="xs" onClick={press} data-team-machine-join>
             Join
-          </button>
+          </Button>
         )}
       />
     );
@@ -127,7 +126,7 @@ function MyControl({ m, mine, me }: { m: TeamMachine; mine: TeamMachineMember | 
           : <Loader2 className="h-3.5 w-3.5 animate-spin text-sol-blue" />}
         <span className="text-sol-text">{phase.label}</span>
         <span className="tabular-nums text-sol-text-dim">{phase.step}/{phase.total}</span>
-        {phase.stalled && <button type="button" onClick={() => join(m._id)} className={`${BTN} border border-sol-border text-sol-text-muted hover:text-sol-text`}>Retry</button>}
+        {phase.stalled && <Button type="button" variant="outline" size="xs" onClick={() => join(m._id)}>Retry</Button>}
       </span>
     );
   }
@@ -135,7 +134,7 @@ function MyControl({ m, mine, me }: { m: TeamMachine; mine: TeamMachineMember | 
     return (
       <span className="flex min-w-0 items-center gap-2 text-[12px]">
         <span className="max-w-[16rem] truncate text-sol-red" data-tip={phase.error}>Join failed: {phase.error}</span>
-        <button type="button" onClick={() => join(m._id)} className={`${BTN} border border-sol-border text-sol-text-muted hover:text-sol-text`}>Retry</button>
+        <Button type="button" variant="outline" size="xs" onClick={() => join(m._id)}>Retry</Button>
       </span>
     );
   }
@@ -181,10 +180,10 @@ function ClaudeSignIn({ deviceId, member }: { deviceId: string; member: TeamMach
   return (
     <span className="flex items-center gap-2 text-[12px]">
       {flow?.status === "rejected" && <span className="max-w-[12rem] truncate text-sol-red" data-tip={flow.reason}>{flow.reason ?? "Sign-in failed"}</span>}
-      <button type="button" disabled={waiting} onClick={start} className={`${BTN} bg-amber-500 text-sol-bg hover:bg-amber-400 disabled:opacity-60`} data-team-machine-signin="start">
+      <Button type="button" variant="amber" size="xs" disabled={waiting} onClick={start} data-team-machine-signin="start">
         {waiting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
         Sign in to Claude
-      </button>
+      </Button>
     </span>
   );
 }
