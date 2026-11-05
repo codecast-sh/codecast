@@ -79,8 +79,12 @@ test('scan protocol refuses callback code, unknown policies, oversized paths and
 test('missing, unreadable and deleted entries preserve local parity and policy-only crash fallback',async()=>{
  const root=temp();write(root,'ok/a.jsonl');write(root,'deny/a.jsonl');fs.chmodSync(path.join(root,'deny'),0);
  try{const off:WalkFile[]=[];await walkFiles(root,{policy:{files:'jsonl'}},f=>off.push(f));await start();const on:WalkFile[]=[];await walkFiles(root,{policy:{files:'jsonl'}},f=>on.push(f));expect(on.map(f=>f.rel)).toEqual(off.map(f=>f.rel));expect(on.map(f=>f.rel)).toEqual(['ok/a.jsonl']);}finally{fs.chmodSync(path.join(root,'deny'),0o755);}
- closeDaemonWorkers();const large=temp();for(let i=0;i<500;i++)write(large,`${String(i).padStart(4,'0')}.jsonl`);write(large,'exclude.txt');await start();let killed=false;const seen:string[]=[];
- await walkFiles(large,{policy:{files:'jsonl'}},f=>{seen.push(f.rel);if(!killed){killed=true;fs.unlinkSync(path.join(large,'0499.jsonl'));process.kill(scanWorkerHost()!.state.pid!,'SIGKILL');}});expect(seen).toHaveLength(499);expect(new Set(seen).size).toBe(499);expect(seen).not.toContain('exclude.txt');
+ closeDaemonWorkers();const large=temp();for(let i=0;i<500;i++)write(large,`${String(i).padStart(4,'0')}.jsonl`);write(large,'exclude.txt');await start();await collectScan({name:'walk',root:temp(),policy:{},stats:false});let killed=false;const seen:string[]=[];
+ // readdir order is the filesystem's (hash order on Linux), so the deleted entry is picked once the first page is
+ // fully delivered (a microtask after its synchronous visit) from the names not yet seen, before the next page is asked for.
+ let deleted='',killedPid=0;
+ await walkFiles(large,{policy:{files:'jsonl'}},f=>{seen.push(f.rel);if(!killed){killed=true;queueMicrotask(()=>{deleted=[...Array(500).keys()].map(i=>`${String(i).padStart(4,'0')}.jsonl`).find(n=>!seen.includes(n))!;fs.unlinkSync(path.join(large,deleted));});killedPid=scanWorkerHost()?.state.pid??0;if(killedPid)process.kill(killedPid,'SIGKILL');}});
+ expect(killedPid,'the worker served the first page').toBeGreaterThan(1);expect(seen).toHaveLength(499);expect(new Set(seen).size).toBe(499);expect(seen).not.toContain(deleted);expect(seen).not.toContain('exclude.txt');
 });
 
 test('old scan replies after runtime replacement are discarded and open cursors are bounded',async()=>{
