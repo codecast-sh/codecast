@@ -22,8 +22,8 @@ export type FlowLibraryState =
 
 type RunRow = { _id: string; workflow_id?: string | null; graph_hash?: string | null; workspace?: string | null; workflow_slug?: string | null; workflow_name?: string | null; workflow_label?: string | null };
 
-function usePool(): AppFlow[] {
-  const rows = usePoolFlowRows();
+function usePool(enabled = true): AppFlow[] {
+  const rows = usePoolFlowRows(undefined, enabled);
   return useMemo(() => appPool(rows), [rows]);
 }
 
@@ -58,11 +58,12 @@ export function useRunFlow(run: RunRow | null | undefined): { flow: AppFlow | nu
   return { flow, library: libraryState(flow ?? null, session) };
 }
 
-/** A flow by name: the library's, else the viewer's own graph of that name (one this session defined, pushed as its draft). */
-export function useNamedFlow(slug: string): { flow: AppFlow | null | undefined; library: FlowLibraryState } {
-  const pool = usePool();
+/** A flow by name: the library's, else the viewer's own graph of that name (one this session defined, pushed as its draft).
+ *  A null slug reads and feeds nothing (a reference that is not a flow). */
+export function useNamedFlow(slug: string | null): { flow: AppFlow | null | undefined; library: FlowLibraryState } {
+  const pool = usePool(!!slug);
   const inPool = flowBySlug(pool, slug);
-  const own = useWorkflowBySlug(inPool ? null : slug);
+  const own = useWorkflowBySlug(inPool || !slug ? null : slug);
   const flow = useMemo(() => inPool ?? (own ? pushedFlow(own) : own === null ? null : undefined), [inPool, own]);
   return { flow, library: libraryState(flow ?? null, null) };
 }

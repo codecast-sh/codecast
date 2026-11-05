@@ -42,7 +42,7 @@ import {
   type DeployLiveReader,
 } from "@codecast/shared/contracts/deployTargets";
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
-import { deployCommitOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
+import { commitBySha, deployCommitOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
 
 /** Commits kept on one deploy's record. */
 const COMMITS_MAX = 200;
@@ -707,5 +707,35 @@ export const correctDeploySha = internalMutation({
     await ctx.db.patch(d._id, { sha: args.sha.toLowerCase(), commits: undefined, previous_sha: undefined, updated_at: Date.now() });
     await fillDeployRange(ctx, d._id);
     return { short_id: d.short_id, sha: args.sha.toLowerCase() };
+  },
+});
+
+/**
+ * Fill what a target's past deploys carried, for deploys recorded before their range and task links were kept:
+ * a live deploy with no commits gets its range on main, and carried commits get the tasks they link.
+ */
+export const backfillDeployRanges = internalMutation({
+  args: { team_id: v.id("teams"), target: v.string() },
+  handler: async (ctx, args) => {
+    let ranged = 0, linked = 0;
+    for (const d of await targetDeploys(ctx, teamKey(args.team_id), args.target, 60)) {
+      if (d.status !== "live") continue;
+      if (!d.commits?.length) {
+        await fillDeployRange(ctx, d._id);
+        if ((await ctx.db.get(d._id))?.commits?.length) ranged++;
+        continue;
+      }
+      if (!d.repository || d.commits.every((c) => c.task_ids)) continue;
+      const commits = [];
+      for (const c of d.commits) {
+        const row = c.task_ids ? null : await commitBySha(ctx, d.repository, c.sha);
+        commits.push(row?.task_ids?.length ? { ...c, task_ids: row.task_ids } : c);
+      }
+      if (commits.some((c, i) => c !== d.commits![i])) {
+        await ctx.db.patch(d._id, { commits, updated_at: Date.now() });
+        linked++;
+      }
+    }
+    return { ranged, linked };
   },
 });

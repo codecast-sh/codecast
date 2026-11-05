@@ -52,7 +52,7 @@ export type DeployCarry = {
   how: DeployCarriedHow;
 };
 
-export type DeployCommit = { sha: string; subject: string; author?: string; conversation_id?: string };
+export type DeployCommit = { sha: string; subject: string; author?: string; conversation_id?: string; task_ids?: string[] };
 
 export type DeployStartedBy = { kind: "person" | "role" | "line" | "source" | "cli"; name: string; user_id?: string; role_id?: string };
 

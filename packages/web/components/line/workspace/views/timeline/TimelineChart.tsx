@@ -18,7 +18,7 @@ import {
 } from "../../../../../lib/line/timeline";
 import { useDerivedSize } from "../../../../../hooks/useDerivedSize";
 import { navigateHere } from "../../../../../lib/openIntent";
-import { lineSelectionSearch, lineWorkspaceHref } from "../../../../../lib/line/lineWorkspaceUrl";
+import { entityRoute } from "@codecast/shared/entities";
 
 /** What a click on the chart picks: a bucket of occurrences, what came back after a close (a fix or a close without one), an attempt. */
 export type TimelinePick =
@@ -136,11 +136,9 @@ export type TimelineChartProps = {
   offTopic?: ReadonlySet<number>;
 };
 
-/** A deploy flag opens its deploy on the line's Deploys view (deploys.md DP7), keeping the line's filter when inside it.
- *  The address is read at the click, so drawing the chart needs no router. */
+/** A deploy flag opens its deploy on the Deploys page (deploys.md DP12). */
 function openDeploy(ref: string): void {
-  const { pathname, search } = window.location;
-  navigateHere(pathname.startsWith("/flows") ? `${pathname}${lineSelectionSearch(new URLSearchParams(search), { view: "deploys", deploy: ref })}` : lineWorkspaceHref(null, { view: "deploys", deploy: ref }));
+  navigateHere(entityRoute("deploy", ref)!);
 }
 
 /** The project's live deploys that carried none of this problem's fixes (coverage.live less h.deploys). */

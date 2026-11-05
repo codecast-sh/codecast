@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import type { SeatConversation } from "../../../app/inbox/QueuePageClient";
 import { askSessionView } from "../../../lib/sessionViewVisit";
 
-export function useSeat({ conversationId, speaker, ask, lead, offer, canTalk, hideDiff, onSessionView }: {
+export function useSeat({ conversationId, speaker, ask, lead, offer, canTalk, hideDiff, onSessionView, head }: {
   conversationId: string | null | undefined;
   /** Who the composer addresses: "Ask <speaker> for anything". */
   speaker: string;
@@ -23,6 +23,8 @@ export function useSeat({ conversationId, speaker, ask, lead, offer, canTalk, hi
   hideDiff: boolean;
   /** The pane that renders this page in place of a session supplies its own. */
   onSessionView?: () => void;
+  /** The session header's fold, owned by the page that draws its expander. */
+  head: SeatConversation["head"];
 }): SeatConversation {
   const router = useRouter();
   return useMemo(() => ({
@@ -40,5 +42,6 @@ export function useSeat({ conversationId, speaker, ask, lead, offer, canTalk, hi
     // From a page's own route the plain view is the session's address; the
     // pane that opens it reads the ask (lib/sessionViewVisit).
     onSessionView: onSessionView ?? (() => { if (!conversationId) return; askSessionView(conversationId); router.push(`/conversation/${conversationId}`); }),
-  }), [lead, offer, speaker, ask, hideDiff, canTalk, onSessionView, conversationId, router]);
+    head,
+  }), [lead, offer, speaker, ask, hideDiff, canTalk, onSessionView, conversationId, router, head]);
 }
