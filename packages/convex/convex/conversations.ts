@@ -40,6 +40,7 @@ import {
   rideLeadPlacements,
   selectWorkingSet,
   WORKING_SET_RECENCY_MS,
+  HISTORY_IMPORT_INBOX_MS,
   BLOCKED_BANNER_KINDS,
   placeProjectableRow,
   deriveLiveAt,
@@ -1398,6 +1399,7 @@ export const createConversation = mutation({
       owner_device_id: args.owner_device_id,
       started_at: startedAt,
       updated_at: startedAt,
+      ...(startedAt < now - HISTORY_IMPORT_INBOX_MS ? { history_import: true } : {}),
       message_count: 0,
       is_private: isPrivate,
       auto_shared: autoShared || undefined,
@@ -8778,6 +8780,7 @@ async function enrichInboxSessionRow(
     subtitle: conv.subtitle,
     updated_at: conv.updated_at,
     started_at: conv.started_at,
+    ...(conv.history_import ? { history_import: true } : {}),
     project_path: conv.project_path,
     git_root: conv.git_root,
     git_branch: conv.git_branch,
@@ -9232,9 +9235,16 @@ export async function scanInboxConversations(
     .query("conversations")
     .withIndex("by_user_plain_updated", (q: any) => plainRange(q, isSubagent))
     .order("desc")
-    .filter((q: any) => q.or(
-      q.eq(q.field("status"), "active"),
-      q.eq(q.field("status"), "completed")
+    .filter((q: any) => q.and(
+      q.or(
+        q.eq(q.field("status"), "active"),
+        q.eq(q.field("status"), "completed")
+      ),
+      // isStaleHistoryImport, as the replica's inWorkingSet reads it.
+      q.or(
+        q.neq(q.field("history_import"), true),
+        q.gte(q.field("updated_at"), now - HISTORY_IMPORT_INBOX_MS)
+      )
     ))
     .take(INBOX_WINDOW_CAP + 1), "updated_at", "recent");
 
