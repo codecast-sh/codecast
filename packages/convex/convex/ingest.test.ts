@@ -120,6 +120,27 @@ describe("applyBatch", () => {
     expect((await h(getSource)(w.as("u1"), { ...TEAM, source: "union" })).events_today).toBe(2);
   });
 
+  test("one Convex function's error is one group across requests, argument values and browsers", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    const refused = (requestId: string, value: string) =>
+      `[CONVEX Q(sessionFlowRuns:forConversation)] [Request ID: ${requestId}] Server Error\nArgumentValidationError: Value does not match validator.\nPath: .conversation_id\nValue: "${value}"\nValidator: v.id("conversations")\n\n\n  Called by client`;
+    const chrome = (message: string) => `Error: ${message}\n    at An.queryResult (https://codecast.sh/assets/convex-Btvm0TSz.js:2:11855)`;
+    const a = refused("840724336f5b92b8", "lmj2gfa4b78upxm786ffa");
+    const b = refused("39d07d0b34fc4046", "i5yz2zt0t976fvtn52xtp");
+    const c = refused("dbe41b2eebe7520f", "o73g9z4it236dmwj90l83");
+    await batch(w, source._id, [
+      err(a, { stack: chrome(a) }),
+      err(b, { stack: chrome(b), at: NOW + 1 }),
+      err(c, { stack: "queryResult@https://codecast.sh/assets/convex-CuwZpkwa.js:2:11855", at: NOW + 2 }),
+      err(refused("43124caab399da9c", "x").replace("sessionFlowRuns:forConversation", "sessionFlowRuns:forTask"), { at: NOW + 3 }),
+    ]);
+    const groups = w.db._tables.event_groups;
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g: any) => g.culprit).sort()).toEqual(["sessionFlowRuns:forConversation", "sessionFlowRuns:forTask"]);
+    expect(live(w).count).toBe(3);
+  });
+
   test("a repeat only counts: no row, no firing", async () => {
     const w = world();
     const { source } = await teamSource(w);
