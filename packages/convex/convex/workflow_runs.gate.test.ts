@@ -560,6 +560,26 @@ describe("a gate asks from the station that wrote its card", () => {
     });
   }
 
+  // ct-62158: sd-1676 was answered Ship, Eval failed and Present posted sd-2500; the card station then failed, no gate
+  // took sd-2500 up, and the run's row went on naming sd-1676 and its Ship as the run's card.
+  test("a new card from the presenting station is the run's card at once, and the old answer no longer stands", async () => {
+    const { ctx, tables } = await seed();
+    tables.conversations.push({ ...station, workflow_run_id: RUN });
+    const first = await askCore(ctx, { userId: HOST }, { session_id: "sess-card", question: "Ship the mic message?", options: [{ label: "Ship it" }, { label: "Drop" }], blocking: true });
+    await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card" });
+    await answerCore(ctx, { userId: HOST }, { decision_id: String(first.id), answer_index: 0 });
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "running", gate_response: "S", gate_decision_id: first.id });
+
+    // Another station's question leaves the run's card alone.
+    tables.conversations.push({ _id: "conversations_build", session_id: "sess-build", user_id: HOST, team_id: TEAM, message_count: 3, workflow_run_id: RUN });
+    await askCore(ctx, { userId: HOST }, { session_id: "sess-build", question: "Which fixture?", options: [{ label: "A" }, { label: "B" }], blocking: true });
+    expect(tables.workflow_runs[0]).toMatchObject({ gate_response: "S", gate_decision_id: first.id });
+
+    const second = await askCore(ctx, { userId: HOST }, { session_id: "sess-card", question: "Keep the mic message, now that it is live?", options: [{ label: "Ship it" }, { label: "Drop" }], blocking: true });
+    expect(tables.workflow_runs[0].gate_decision_id).toBe(second.id);
+    expect(tables.workflow_runs[0].gate_response).toBeUndefined();
+  });
+
   test("the runner names the station by its short id, and the gate still adopts its decision", async () => {
     const { ctx, tables } = await seed();
     tables.conversations.push({ ...station, short_id: "jx7card" });
