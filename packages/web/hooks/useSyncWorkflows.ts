@@ -29,8 +29,8 @@ const workflowSig = (w: any) => `${w.name}|${w.slug}|${w.goal ?? ""}|${w.updated
 const useViewerId = () => useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
 
 /** Reader: the viewer's workflows, newest first. */
-export function useWorkflows(): { workflows: any[]; ready: boolean } {
-  const { ready } = useSyncWorkflows();
+export function useWorkflows(enabled = true): { workflows: any[]; ready: boolean } {
+  const { ready } = useSyncWorkflows(enabled);
   const viewerId = useViewerId();
   const where = useMemo(() => (w: any) => isViewersWorkflow(w, viewerId), [viewerId]);
   const workflows = useCollectionRows<any>("workflows", { where, sig: workflowSig, sort: newestFirst });
@@ -39,17 +39,17 @@ export function useWorkflows(): { workflows: any[]; ready: boolean } {
 
 /** Feeder: the flows published to a workspace's pool (flows.md FL2), a
  *  teammate's included. The active workspace unless one is named. */
-export function useSyncPoolFlows(workspace?: string | null) {
+export function useSyncPoolFlows(workspace?: string | null, enabled = true) {
   const { args } = useFeederWorkspace(workspace);
-  return useSyncCollection("workflows", api.workflows.webPool, args);
+  return useSyncCollection("workflows", api.workflows.webPool, enabled ? args : "skip");
 }
 
 /** Reader: the pushed rows a workspace's pool draws from: the viewer's own
  *  workflows, then each flow published to the workspace, newest first. appPool
  *  keeps the first of a slug, so the viewer's own copy wins. */
-export function usePoolFlowRows(workspace?: string | null): any[] {
-  useSyncPoolFlows(workspace);
-  const { workflows: own } = useWorkflows();
+export function usePoolFlowRows(workspace?: string | null, enabled = true): any[] {
+  useSyncPoolFlows(workspace, enabled);
+  const { workflows: own } = useWorkflows(enabled);
   const published = useWorkspaceCollection<any>("workflows", workflowSig, workspace ?? null);
   return useMemo(() => [...own, ...published.slice().sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))], [own, published]);
 }

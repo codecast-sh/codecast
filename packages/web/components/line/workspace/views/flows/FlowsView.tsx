@@ -26,7 +26,7 @@ import { lineWorkspaceHref } from "../../../../../lib/line/lineWorkspaceUrl";
 import { FlowPageContext } from "../../../../../lib/line/flowPageContext";
 import { lineSettingsHref } from "../../../../../lib/lineSettings";
 import { ageShort } from "../../../../../lib/lineFlow";
-import { FlowDiagram } from "../../../widgets/FlowDiagram";
+import { FlowExplorer } from "../../../widgets/FlowStationPanel";
 import { FlowRunCard } from "../../../widgets/FlowFence";
 import { ConsequentialSwitch } from "../../../../consequential/ConsequentialSwitch";
 import { EntityIdPill } from "../../../../EntityIdPill";
@@ -364,7 +364,7 @@ function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
           )}
         </header>
         {picked.description ? <p className="flv-desc">{picked.description}</p> : null}
-        <div className="lw-flow flv-diagram"><FlowDiagram flow={picked} /></div>
+        <div className="lw-flow flv-diagram"><FlowExplorer flow={picked} /></div>
 
         <div className="flv-facts">
           {entry?.base ? <Fact label="Extends"><FlowChip flow={flowBySlug(flows, entry.base)} slug={entry.base} onPick={pick} /></Fact> : null}
@@ -442,7 +442,7 @@ function FlowOverview({ owner, workspace, select, href, space }: LineViewProps &
         <span className="flv-where">{steps?.label ?? flow.steps}</span>
         <button type="button" className="flv-steps" onClick={() => select({ view: "line", graph: flow.steps })} data-flow-steps={flow.steps}>Open steps</button>
       </header>
-      {steps ? <div className="lw-flow flv-diagram"><FlowDiagram flow={steps} /></div> : null}
+      {steps ? <div className="lw-flow flv-diagram"><FlowExplorer flow={steps} /></div> : null}
     </article>
   );
 }

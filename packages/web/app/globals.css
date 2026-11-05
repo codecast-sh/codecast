@@ -6663,6 +6663,12 @@ diffs-container {
 [data-seat-head="rest"][data-seat-stall] [data-sv-convhead] [data-cc-conv-status] {
   display: none;
 }
+/* At rest with nothing to say the row folds away whole: the role's header
+   carries the state, Session view and the expander. A stall, a search or a
+   rename keeps it up. */
+[data-seat-head="rest"]:not([data-seat-stall]) [data-sv-convhead]:not(:has(input)) {
+  display: none;
+}
 [data-seat-head="open"] [data-sv-convhead] .cq-squeeze-row > h1,
 [data-seat-head="open"] [data-sv-convhead] .cq-squeeze-row > :has(+ h1) {
   display: none;

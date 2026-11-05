@@ -17,6 +17,8 @@ import { DecisionDiscussion } from "./DecisionDiscussion";
 import { DecisionBody, DecisionFacts, DecisionLadder, LeadRecommendation, hasDecisionBody } from "./DecisionSections";
 import { GateRunChip } from "./DecisionCompactCard";
 import { DeployedIn } from "../line/widgets/DeployedIn";
+import { OriginTrail } from "../line/widgets/OriginTrail";
+import "../line/workspace/workspace.css";
 import { OptionPages } from "./OptionPages";
 import { HandoffNote } from "./DecisionParties";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
@@ -124,6 +126,13 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           )}
           <HandoffNote decision={decision} className="mt-3" />
         </header>
+
+        {/* A line card's path from the raw thing to this card, each stage opened in place. */}
+        {decision.workflow_run_id && decision.task_id && (
+          <section className="mt-5 lw-widget" data-decision-origin>
+            <OriginTrail decision={decision._id} folded />
+          </section>
+        )}
 
         {/* A lead's call and why, before the evidence it was made on. */}
         <LeadRecommendation decision={decision} detail={detail} />

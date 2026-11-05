@@ -29,6 +29,7 @@ import { WATCH_KINDS_BY_PROVIDER } from "@codecast/shared/contracts/ingest";
 import type { OpsSource } from "./opsTypes";
 import "./ops.css";
 import "./opsHome.css";
+import "./opsLayout.css";
 
 type CountKey = OpsTab | "home";
 type TabCount = { n: number; more?: boolean; alert?: boolean; words?: string; /** Not counted by the server yet: a floor, drawn dimmed. */ provisional?: boolean };
@@ -54,7 +55,7 @@ function useTabCounts(sources: OpsSource[], sourceId: string | null, filtered: b
     const mine = <T extends { source_id: string }>(rows: T[]) => (filtered ? rows.filter((r) => r.source_id === sourceId) : rows);
     const home = itemsForSource(attention, filtered ? sourceId : null);
     return {
-      // What pages a person, the sidebar badge's own count (opsBadge), so the two always read the same number.
+      // What pages a person, opsBadge, the same count the palette shows.
       home: { ...opsBadge(home), alert: true },
       // A floor only while the store holds fewer open groups than the sources' own counters say exist.
       // The list's own totals (issueTotals): exact once the sources are counted, a floor past a full open feeder before then.
