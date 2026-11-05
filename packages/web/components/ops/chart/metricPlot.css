@@ -53,4 +53,4 @@
 @keyframes mp-loading { from { left: -30%; } to { left: 100%; } }
 @media (prefers-reduced-motion: reduce) { .mp-loading::after { animation: none; width: 100%; opacity: .5; } }
 .mp-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--sol-text-dim); pointer-events: none; }
-.mp-start { position: absolute; left: 0; bottom: -2px; font: 10px var(--font-mono); color: var(--sol-text-dim); pointer-events: none; }
+.mp-start { position: absolute; left: 0; bottom: -2px; padding-right: 4px; font: 10px var(--font-mono); line-height: 1; color: var(--sol-text-dim); pointer-events: none; background: var(--mp-bg, var(--sol-bg)); }

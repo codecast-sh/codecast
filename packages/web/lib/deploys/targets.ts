@@ -60,6 +60,10 @@ export type TeamDeployRow = {
   /** The sessions whose commits it carried. */
   sessions: DeploySession[];
   steps?: Array<{ id: string; status: "pending" | "running" | "completed" | "failed" }>;
+  /** The tasks its commits named. */
+  tasks?: Array<{ short_id?: string | null; title?: string | null }>;
+  /** What happened after it went live, over its window (deploys.md DP7): counts only. */
+  after?: { new_errors: number; regressions: number; reopened: number; quiet: boolean; open: boolean } | null;
   created_at: number;
   live_at: number | null;
   finished_at: number | null;
