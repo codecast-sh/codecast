@@ -15,7 +15,7 @@ import type { SeatOffer } from "@codecast/convex/convex/teamBilling";
 import type { EnforcedSeatState } from "../../hooks/useSeatState";
 import { useStripeRedirect } from "../simple/billing";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
-import { seatUpgradeLedger } from "../consequential/seatUpgradeLedger";
+import { BILLED_OPTIONS, seatUpgradeLedger, type SeatBillingChoice } from "../consequential/seatUpgradeLedger";
 import { Button } from "../ui/button";
 
 const DAY_MS = 86_400_000;
@@ -36,24 +36,47 @@ function SeatDots({ members, pending, capacity }: { members: number; pending: nu
   );
 }
 
-export function SeatPlanRow({ teamId, teamName, state }: { teamId: Id<"teams">; teamName: string; state: EnforcedSeatState }) {
+/** Starting (or renewing) Pro from anywhere: `open` shows the consequential
+ *  review with Stripe's prices, `review` is that dialog to render, and its
+ *  confirm leaves for Stripe checkout with the picked billing. */
+export function useSeatUpgrade(teamId: Id<"teams">, state: EnforcedSeatState) {
   const offerAction = useAction(api.teamBilling.seatOffer);
   const checkout = useAction(api.teamBilling.startSeatCheckout);
-  const portal = useAction(api.teamBilling.openSeatPortal);
   const stripe = useStripeRedirect();
   const [reviewing, setReviewing] = useState(false);
   const [offer, setOffer] = useState<SeatOffer | undefined>(undefined);
+  const [billing, setBilling] = useState<SeatBillingChoice>("monthly");
 
-  if (state.grandfathered) return null;
-  const pro = state.plan === "pro";
-  const used = state.members + state.pending;
-  const needsPlan = state.full || state.lapsed;
-
-  const openReview = () => {
+  const open = () => {
     setOffer(undefined);
     setReviewing(true);
     offerAction({ team_id: teamId }).then(setOffer, () => setOffer({ ok: false, error: "Could not read the price." }));
   };
+
+  const review = reviewing ? (
+    <SwitchReview
+      ledger={seatUpgradeLedger({ team: state.team_name, seats: state.members, renew: state.lapsed, offer, billing })}
+      onClose={() => setReviewing(false)}
+      onPick={(option) => setBilling(BILLED_OPTIONS[option as keyof typeof BILLED_OPTIONS] ?? "monthly")}
+      onConfirm={() => {
+        setReviewing(false);
+        void stripe.redirect(() => checkout({ team_id: teamId, billing }));
+      }}
+    />
+  ) : null;
+
+  return { open, review, stripe };
+}
+
+export function SeatPlanRow({ teamId, state }: { teamId: Id<"teams">; state: EnforcedSeatState }) {
+  const portal = useAction(api.teamBilling.openSeatPortal);
+  const { open: openReview, review, stripe } = useSeatUpgrade(teamId, state);
+
+  const freeUntil = state.grandfathered ? state.grandfathered_until : null;
+  if (state.grandfathered && freeUntil === null) return null;
+  const pro = state.plan === "pro";
+  const used = state.members + state.pending;
+  const needsPlan = state.full || state.lapsed;
 
   const trialDays = state.trial_end ? Math.max(0, Math.ceil((state.trial_end - Date.now()) / DAY_MS)) : null;
 
@@ -68,6 +91,10 @@ export function SeatPlanRow({ teamId, teamName, state }: { teamId: Id<"teams">; 
               {trialDays !== null && <span className="text-sol-cyan"> · Trial, {trialDays}d left</span>}
               {state.cancel_at_period_end && state.current_period_end && <span className="text-sol-orange"> · Ends {shortDate(state.current_period_end)}</span>}
               {state.status === "past_due" && <span className="text-sol-orange"> · Payment due</span>}
+            </span>
+          ) : freeUntil !== null ? (
+            <span className="truncate tabular-nums text-sol-text-muted">
+              {state.members} seats <span className="text-sol-orange">· Free until {shortDate(freeUntil)}</span>
             </span>
           ) : (
             <>
@@ -113,16 +140,7 @@ export function SeatPlanRow({ teamId, teamName, state }: { teamId: Id<"teams">; 
         </span>
       </div>
       <p aria-live="polite" className={stripe.error ? "text-sm text-sol-red" : "sr-only"}>{stripe.error}</p>
-      {reviewing && (
-        <SwitchReview
-          ledger={seatUpgradeLedger({ team: teamName, seats: state.members, renew: state.lapsed, offer })}
-          onClose={() => setReviewing(false)}
-          onConfirm={() => {
-            setReviewing(false);
-            void stripe.redirect(() => checkout({ team_id: teamId }));
-          }}
-        />
-      )}
+      {review}
     </div>
   );
 }
