@@ -488,7 +488,6 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
         }
       : null,
     lanes,
-    liveRunIds: live.map((r) => String(r._id)),
     off: { running: offTotal.running, stalled: offTotal.stalled, steps: [...offLive].map(([id, { label, ...c }]) => ({ id, label, ...c })) },
     sources,
     shipped,

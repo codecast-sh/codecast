@@ -28,6 +28,8 @@ import { libraryOfRun, runFlowVersions } from "./flowVersions";
 import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
 import { navPromptField } from "./userMessagesFilter";
+import { retainSessionCreator } from "./sessionLaunch";
+import { isSessionOwner } from "./sessionOwners";
 
 type Ctx = { db: any };
 
@@ -348,8 +350,18 @@ export async function answerGateCore(ctx: Ctx, run: any, response: string, by: A
 
 // Reading a run is workspace wide (L8); cancelling it is the owner's, or a
 // person its open gate was asked of, since cancel withdraws that decision.
-async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
+/**
+ * Whether `userId` answers for a run: the account it runs as, or an owner of its session. A role's run placed on a
+ * machine of the team's pool runs as that machine's account and is owned by the seat's person (orgLine.startRoleRun),
+ * so both may cancel, resume or re-ask it.
+ */
+export async function ownsRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
   if (String(run.user_id) === String(userId)) return true;
+  return !!run.primary_conversation_id && (await isSessionOwner(ctx, run.primary_conversation_id, userId));
+}
+
+async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
+  if (await ownsRun(ctx, userId, run)) return true;
   const decision = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
   return !!decision && decision.status === "pending" && personMayResolve(decision, userId);
 }
@@ -790,8 +802,10 @@ export const createFromCli = mutation({
       return { run_id: null, queued: await requeueForSweep(ctx, lead, taskRow, userId, now, pooled.waiting), primary_conversation_id: null, spawner_conversation_id: null };
     }
     const place = pooled && "place" in pooled ? pooled.place : undefined;
+    // A place on the team's pool runs as that machine's account, and the caller owns the run (orgLine.startRoleRun).
+    const host = (place?.user ?? userId) as Id<"users">;
 
-    const { run_id, primary_conversation_id } = await createRunCore(ctx, userId, {
+    const { run_id, primary_conversation_id } = await createRunCore(ctx, host, {
       workflow_name: workflowName,
       workflow_goal: args.workflow_goal,
       workflow_id: workflowDocId || undefined,
@@ -805,9 +819,10 @@ export const createFromCli = mutation({
       fresh_branch: args.detach && lineRun,
       now,
     });
+    await retainSessionCreator(ctx, primary_conversation_id, userId, host);
     // A placed run names its machine from the start, so the pool counts it there before a runner claims it.
     if (place) await ctx.db.patch(run_id, { runner_device: place.device });
-    if (args.detach) await queueRunOnDaemon(ctx, userId, run_id, { device: place?.device ?? args.run_on_device, ...(version ? { slug: version.slug } : {}), now });
+    if (args.detach) await queueRunOnDaemon(ctx, host, run_id, { device: place?.device ?? args.run_on_device, ...(version ? { slug: version.slug } : {}), now });
     // The session the run speaks as, resolved here when the caller had none,
     // so a runner in the foreground asks its failure decisions through it.
     return { run_id, primary_conversation_id, spawner_conversation_id: spawner?._id ?? null, ...(place ? { runner_device: place.device } : {}) };
@@ -944,6 +959,35 @@ export const byIds = query({
       out.push(await enrichRun(ctx, await withAgentSessions(ctx, run, budget), workflows));
     }
     return out;
+  },
+});
+
+/** The most live run ids one liveIds answer names, across the viewer's workspaces. */
+const LIVE_IDS_MAX = 2000;
+
+// Web: every live run (pending, running, paused) in each workspace the viewer
+// belongs to, by id. The store's runs arrive through windowed feeds, so a run
+// that ended while no tab was open, after it left every window, would read
+// live forever; the sync host checks each run it holds as live against this
+// answer and asks byIds for any the server no longer holds live
+// (useLiveRunsCheck), so the collection itself never shows an ended run as live.
+export const liveIds = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { workspaces: [], ids: [], complete: true };
+    const teams = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", userId)).collect();
+    const workspaces = [`user:${userId}`, ...teams.map((m: any) => `team:${m.team_id}`)];
+    const ids: string[] = [];
+    for (const workspace of workspaces) {
+      for (const status of LIVE_RUN_STATUSES) {
+        if (ids.length >= LIVE_IDS_MAX) break;
+        const rows = await ctx.db.query("workflow_runs").withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", workspace).eq("status", status)).take(LIVE_IDS_MAX - ids.length);
+        for (const r of rows) ids.push(String(r._id));
+      }
+    }
+    // A full answer names every live run; a capped one cannot say which held rows ended, and says so.
+    return { workspaces, ids, complete: ids.length < LIVE_IDS_MAX };
   },
 });
 
@@ -1584,11 +1628,12 @@ export async function resumeRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"wo
  * stays on the row, a problem its failure blocked is unblocked, and `fresh_branch` has the machine read the line's
  * graph as it is now. A decision the run waited on is the caller's to settle after, once the run no longer waits on it.
  */
-export async function resumeRunAt(ctx: Ctx, userId: Id<"users">, run: Doc<"workflow_runs">, node: string, now: number, opts: { newAttempt?: boolean } = {}): Promise<void> {
+export async function resumeRunAt(ctx: Ctx, _by: Id<"users">, run: Doc<"workflow_runs">, node: string, now: number, opts: { newAttempt?: boolean } = {}): Promise<void> {
   await ctx.db.patch(run._id, { status: "running", current_node_id: node, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, resume_queued: undefined, ...(opts.newAttempt ? { visits_reset_at: now } : {}), updated_at: now });
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task?.execution_status === "blocked") await patchTask(ctx, task, { execution_status: undefined, execution_concerns: undefined });
-  await queueRunOnDaemon(ctx, userId, run._id, { device: run.runner_device!, now });
+  // The machine's daemon takes commands for its own account: the run's, whoever asked for the resume.
+  await queueRunOnDaemon(ctx, run.user_id, run._id, { device: run.runner_device!, now });
 }
 
 /**
@@ -1601,7 +1646,7 @@ export async function resumeRunAt(ctx: Ctx, userId: Id<"users">, run: Doc<"workf
 export async function reaskRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow_runs">, opts: { at?: string; asker?: string; check?: boolean } = {}, now = Date.now()) {
   const run = await ctx.db.get(runId);
   if (!run || !(await canReadRun(ctx, userId, run))) throw new ConvexError("Run not found");
-  if (String(run.user_id) !== String(userId)) throw new ConvexError("Only the run's owner asks its decision again");
+  if (!(await ownsRun(ctx, userId, run))) throw new ConvexError("Only the run's owner asks its decision again");
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task && isTerminalTaskStatus(task.status)) throw new ConvexError(`${task.short_id} is ${task.status}: a closed problem is not asked again`);
   if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast flow trial rerun ${task.short_id} --reask asks it again under the trial's budget`);
