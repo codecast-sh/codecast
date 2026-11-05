@@ -315,7 +315,8 @@ import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync, tmuxRunAsync } from "./tmux.js";
 import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
-import { ghosttyInputText, ghosttySendKeys, probeGhostty, readGhosttyScreen } from "./ghostty.js";
+import { ghosttyPane } from "./ghostty.js";
+import type { PaneTransport } from "./paneTransport.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
 import { TerminalHoldError } from "./terminalHold.js";
 import { HERD_TAKE_PATH, SwapHeldError, abortableWait, closeHerdrPane, pollUntilUp, serveHerdTake, swapHeld, takeBusy, type HerdTakeDeps } from "./herdTake.js";
@@ -18695,48 +18696,14 @@ async function injectViaHerdr(
 
 // ── Ghostty injection via its AppleScript dictionary ───────────────────────
 
-async function injectViaGhostty(
-  tty: string,
-  content: string,
-  keystrokes = false,
-  bracketed = true,
-): Promise<void> {
-  const normalizedTty = normalizeTty(tty);
-  const probe = await probeGhostty(normalizedTty);
-  if (probe.state === "unscriptable") {
-    log(`Ghostty scripting unavailable for TTY ${normalizedTty}: ${probe.detail}`);
-    throw new TerminalHoldError(getTerminalLabel("ghostty"));
-  }
-  if (probe.state === "not_found") throw new Error(`Ghostty terminal not found for TTY ${normalizedTty}`);
-  await injectThroughPane({
-    name: `Ghostty for TTY ${normalizedTty}`,
-    // `input text` is a paste: Ghostty brackets it when the program asked for
-    // bracketed paste, and an unverified client gets flattened text.
-    sendText: async (text, beforeInput) => {
-      await beforeInput?.();
-      await ghosttyInputText(normalizedTty, prepareInjectedContent(text, { bracketed }));
-    },
-    sendKey: (key) => ghosttySendKeys(normalizedTty, [key]),
-    sendKeystrokes: (keys) => ghosttySendKeys(normalizedTty, [...keys]),
-    readScreen: () => readGhosttyScreen(normalizedTty),
-  }, content, keystrokes);
+async function injectViaGhostty(tty: string, content: string, keystrokes = false, bracketed = true): Promise<void> {
+  await injectThroughPane(await ghosttyPane(normalizeTty(tty), bracketed, log), content, keystrokes);
 }
 
 // ── Injection through a terminal's pane API ────────────────────────────────
 // Kitty, WezTerm, Ghostty and herdr each expose a pane codecast can type into. Only the
 // transport differs: the keys around a poll and the paste-then-one-submit of a
-// message are the same for all of them.
-type PaneTransport = {
-  /** Which terminal and pane, for the log line. */
-  name: string;
-  /** Message text. Calls `beforeInput` right before writing, when given. */
-  sendText: (text: string, beforeInput?: () => Promise<void>) => Promise<unknown>;
-  /** One named key from a poll step: Escape, Enter, Up, a digit. */
-  sendKey: (key: string) => Promise<unknown>;
-  /** A payload that IS keys (the permission "\r" / "\x1b"), never bracketed. */
-  sendKeystrokes: (keys: string) => Promise<unknown>;
-  readScreen: () => Promise<string>;
-};
+// message are the same for all of them (PaneTransport, paneTransport.ts).
 
 async function injectThroughPane(t: PaneTransport, content: string, keystrokes: boolean): Promise<void> {
   if (keystrokes) {

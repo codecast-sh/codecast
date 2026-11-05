@@ -15,6 +15,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileAsync } from "./proc.js";
+import type { PaneTransport } from "./paneTransport.js";
+import { TerminalHoldError } from "./terminalHold.js";
+import { prepareInjectedContent } from "./tmuxPaste.js";
 
 const OSASCRIPT_TIMEOUT_MS = 15_000;
 
@@ -143,4 +146,39 @@ export async function readGhosttyScreen(tty: string): Promise<string> {
     // Ghostty leaves one temp dir per dump until it quits.
     await fs.promises.rm(path.dirname(file), { recursive: true, force: true }).catch(() => {});
   }
+}
+
+export type GhosttyIo = {
+  probe: typeof probeGhostty;
+  inputText: typeof ghosttyInputText;
+  sendKeys: typeof ghosttySendKeys;
+  readScreen: typeof readGhosttyScreen;
+};
+const GHOSTTY_IO: GhosttyIo = { probe: probeGhostty, inputText: ghosttyInputText, sendKeys: ghosttySendKeys, readScreen: readGhosttyScreen };
+
+/**
+ * The pane transport for the Ghostty terminal on `tty`. A Ghostty the daemon
+ * cannot script holds the message with the terminal named (terminalHold.ts)
+ * rather than failing: retrying never helps, and a failure streak would stop
+ * the person's own agent to resume it elsewhere.
+ */
+export async function ghosttyPane(tty: string, bracketed: boolean, log: (line: string) => void, io: GhosttyIo = GHOSTTY_IO): Promise<PaneTransport> {
+  const probe = await io.probe(tty);
+  if (probe.state === "unscriptable") {
+    log(`Ghostty scripting unavailable for TTY ${tty}: ${probe.detail}`);
+    throw new TerminalHoldError("Ghostty");
+  }
+  if (probe.state === "not_found") throw new Error(`Ghostty terminal not found for TTY ${tty}`);
+  return {
+    name: `Ghostty for TTY ${tty}`,
+    // `input text` is a paste: Ghostty brackets it when the program asked for
+    // bracketed paste, and an unverified client gets flattened text.
+    sendText: async (text, beforeInput) => {
+      await beforeInput?.();
+      await io.inputText(tty, prepareInjectedContent(text, { bracketed }));
+    },
+    sendKey: (key) => io.sendKeys(tty, [key]),
+    sendKeystrokes: (keys) => io.sendKeys(tty, [...keys]),
+    readScreen: () => io.readScreen(tty),
+  };
 }
