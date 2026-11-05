@@ -84,6 +84,8 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "teamKit.webListTeamKitItems": () => [{}],
   // One team's deploy targets; a target is always a team's, so only the team placements exist.
   "deployTargets.view": (ids) => [{ team_id: ids.T }, { team_id: ids.O }],
+  // One team's newest deploys across its targets, asked of both teams.
+  "deployRefs.recentForTeam": (ids) => [{ team_id: ids.T }, { team_id: ids.O }],
   "ingest.searchGroups": (ids) => listArgs(ids).map((a) => ({ ...a, q: "boom" })),
   // One group's transitions, asked of every group in the world.
   "ingest.groupTransitions": (ids) => Object.values(ids.groupRefs).map((group) => ({ group })),
