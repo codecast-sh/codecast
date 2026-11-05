@@ -208,7 +208,13 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
   }
   let previous = d.previous_sha ?? null;
   if (!previous) {
-    const before = (await targetDeploys(ctx, d.workspace, d.target, 30)).find((x) => x._id !== d._id && x.status === "live" && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at));
+    // The live deploys created just before this one, however far back it is.
+    const earlier: Doc<"deploys">[] = await ctx.db
+      .query("deploys")
+      .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", d.workspace).eq("target", d.target).lte("created_at", d.created_at))
+      .order("desc")
+      .take(30);
+    const before = earlier.find((x) => x._id !== d._id && x.status === "live" && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at));
     if (before?.sha && before.sha !== d.sha) previous = patch.previous_sha = before.sha;
   }
   if (!d.commits?.length && previous) {
