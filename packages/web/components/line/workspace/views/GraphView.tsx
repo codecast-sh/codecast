@@ -18,7 +18,7 @@ import { hasOpenModal, isMac } from "../../../../shortcuts";
 import { keyBelongsElsewhere } from "../../../../shortcuts/keyOwnership";
 import { KeyCap } from "../../../KeyCap";
 import { RunTrail, dayWords, durationWords, useLineNav } from "../../widgets";
-import { GraphCanvas, GraphDefs } from "./graph/GraphCanvas";
+import { GraphCanvas, GraphDefs, type LiveAtStep } from "./graph/GraphCanvas";
 import { litRun } from "./graph/litRun";
 import { DOT_LINE, EXIT_LEAD, essenceExits, exitWords, graphLayout, textW, withFailures, type GEdge, type GraphMode } from "./graph/graphLayout";
 import { stepFailures, stepPassed, stepWaits } from "../../../../lib/line/stepTable";
@@ -138,7 +138,7 @@ const ARROW_BELOW_ROW = 78;
 /** How far in from each side of the stage its edge fade hides words, in px (graph.css .lwg::before: 112px, nearly opaque for the first third). */
 const EDGE_FADE = 40;
 
-export function GraphView({ model, workspace, selection, select, href, lead, trail }: LineViewProps & { lead?: ReactNode; trail?: ReactNode }) {
+export function GraphView({ model, workspace, selection, select, href, lead, trail, live }: LineViewProps & { lead?: ReactNode; trail?: ReactNode; live?: ReadonlyMap<string, LiveAtStep> }) {
   const nav = useLineNav();
   const [mode, setModeState] = useState<GraphMode>(readMode);
   const [peek, setPeek] = useState<string | null>(null);
@@ -409,6 +409,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
             passed={passed}
             waits={waits}
             onWaiting={openWaiting}
+            live={live}
           />
         </g>
       </svg>
