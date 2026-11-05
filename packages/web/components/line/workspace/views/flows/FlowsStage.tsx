@@ -16,6 +16,7 @@ import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import { useMountEffect } from "../../../../../hooks/useMountEffect";
 import type { LineSelectionPatch } from "../../../../../lib/line/lineWorkspaceUrl";
 import { processKeyOf } from "../../../../../lib/line/lineGraphs";
+import { segmentTopOf } from "@codecast/shared/contracts/flowPool";
 import { LIVE_ENTRY, type LiveAtStep } from "../graph/GraphCanvas";
 import { hasOpenModal } from "../../../../../shortcuts";
 import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
@@ -52,8 +53,11 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
     for (const s of drawnLane.steps) {
       if (!s.running && !s.waiting) continue;
       // Runs that have not reached a step yet stand at the entry, which the map draws apart from the steps.
-      const id = s.id === LIVE_ENTRY ? LIVE_ENTRY : model.steps[s.id] ? s.id : byLabel.get(s.label);
-      if (id) out.set(id, { running: s.running, stalled: s.stalled, waiting: s.waiting });
+      // A step inside a segment (deploy__wait) stands on the segment the map draws (deploy).
+      const id = s.id === LIVE_ENTRY ? LIVE_ENTRY : model.steps[s.id] ? s.id : model.steps[segmentTopOf(s.id)] ? segmentTopOf(s.id) : byLabel.get(s.label);
+      if (!id) continue;
+      const had = out.get(id);
+      out.set(id, had ? { running: had.running + s.running, stalled: had.stalled + s.stalled, waiting: had.waiting + s.waiting } : { running: s.running, stalled: s.stalled, waiting: s.waiting });
     }
     return out;
   }, [drawnLane, model.graph.nodes, model.steps]);

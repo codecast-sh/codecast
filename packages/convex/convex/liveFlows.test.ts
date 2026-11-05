@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { LINE_RUNS_PER_RUNNER, requeueCore, sweepCore } from "./orgLine";
-import { barFromCli, clearHoldCore, createLiveFlowCore, moveLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, setBarCore, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
+import { barFromCli, clearHoldCore, clearHoldFromCli, createLiveFlowCore, moveLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, setBarCore, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
 import { hashToken } from "./apiTokens";
 
 // A team's live flow (liveFlows.ts): one queue in start order across every
@@ -148,7 +148,7 @@ describe("liveFlows (one live flow per team)", () => {
     expect((await sweepCore(ctx, NOW)).started).toEqual([]);
   });
 
-  test("the switch is a team admin's; the CLI shows the flow by team id and never switches it", async () => {
+  test("the switch is a team admin's, from the web or the CLI", async () => {
     const token = "cx_live_flow_test_token";
     const { ctx, tables } = fixtures({ tasks: [problem("g70", "growth", 70)], flow: { on: false }, extra: { api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(token), name: "cli", created_at: 1 }] } });
     await expect(setOnCore(ctx, MATE as any, tables.live_flows[0], true, NOW)).rejects.toThrow("team admin required");
@@ -160,11 +160,11 @@ describe("liveFlows (one live flow per team)", () => {
     expect(row).toMatchObject({ _id: "live_flows_1", on: true, flow: { slug: "agentwatch" }, sources: null, queue: [{ short_id: "ct-g70", score: 70, area: { handle: "growth" }, waiting: null }] });
     const flip = (args: Record<string, any>) => (setOnFromCli as any)._handler(ctx, { api_token: token, on: false, team_id: TEAM, ...args });
     await expect(flip({ flow: "nope" })).rejects.toThrow('No live flow of the team runs "nope"');
-    await expect(flip({ flow: "agentwatch" })).rejects.toThrow("A person switches a live flow off, from the Flows page in the browser");
-    expect(tables.live_flows[0].on).toBe(true);
+    expect(await flip({ flow: "agentwatch", from_session: "jx7hand" })).toMatchObject({ _id: "live_flows_1", on: false });
+    expect(tables.live_flows[0].on).toBe(false);
   });
 
-  test("a timed hold stops admission and says why until it ends; a hand sets it, a person clears it", async () => {
+  test("a timed hold stops admission and says why until it ends; a hand sets it, a team admin clears it from the web or the CLI", async () => {
     const token = "cx_live_flow_hold_token";
     const { ctx, tables } = fixtures({ tasks: [problem("g70", "growth", 70)], extra: { api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(token), name: "cli", created_at: 1 }] } });
     const hold = (args: Record<string, any>) => (holdFromCli as any)._handler(ctx, { api_token: token, team_id: TEAM, from_session: "jx7hand", ...args });
@@ -182,6 +182,10 @@ describe("liveFlows (one live flow per team)", () => {
     expect(view.queue).toEqual([{ task_id: "tasks_g70", waiting: view.waiting }]);
     // Ended, it no longer holds anything.
     expect((await sweepCore(ctx, until + 1000)).started.map((st) => st.task_id)).toEqual(["tasks_g70"]);
+    // A session clears one early through the CLI.
+    await hold({ why: "again", until });
+    expect(await (clearHoldFromCli as any)._handler(ctx, { api_token: token, team_id: TEAM, from_session: "jx7hand" })).toMatchObject({ _id: "live_flows_1" });
+    expect(tables.live_flows[0].hold).toBeUndefined();
   });
 
   test("a hold set from a session names it by its short id, never by the agent's raw session id", async () => {

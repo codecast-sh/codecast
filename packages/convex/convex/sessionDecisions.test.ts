@@ -385,6 +385,24 @@ describe("the race", () => {
     expect((t2.notifications ?? []).filter((n: any) => n.type === "decision_answered_for_you")).toHaveLength(0);
   });
 
+  test("a line run's change card: the lead on its ladder answers it without a grant, in any category, while its switch is on", async () => {
+    const card = (tables: any) => Object.assign(tables.session_decisions[0], { workflow_run_id: "workflow_runs_1", gate_node_id: "decide", category: "production", holder: { kind: "user", id: HOST } });
+    const { ctx, tables } = seed();
+    await askApproach(ctx);
+    card(tables);
+    expect((tables.session_decisions[0].hops ?? []).map((h: any) => h.role_id)).toContain("org_roles_lead");
+    const r = await answerCore(ctx, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-lead", answer_index: 1 });
+    expect(r.error).toBeUndefined();
+    expect(r.answered_by).toEqual({ kind: "role", id: "org_roles_lead" });
+    // With its switch off, the lead holds nothing it did not hold before.
+    const { ctx: ctx2, tables: t2 } = seed();
+    t2.org_roles[0].trust = "understand";
+    await askApproach(ctx2);
+    card(t2);
+    expect((await answerCore(ctx2, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-lead", answer_index: 1 })).error).toContain("does not hold this decision");
+    expect(t2.session_decisions[0].status).toBe("pending");
+  });
+
   test("a role session whose switch is off cannot answer even under a grant", async () => {
     const { ctx, tables } = seed({
       decision_grants: [

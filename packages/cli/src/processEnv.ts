@@ -7,10 +7,12 @@
 import fs from "node:fs";
 import { AGENT_START_JITTER_MS, type ProcessInfo } from "./resourceMonitor.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
+import { execFileAsync } from "./proc.js";
+import { noTerminal } from "./psTerminal.js";
 
 /** The variables that name the session a process works for (sessionIdFromEnv reads them). */
 export const SESSION_ENV_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION"];
-const KEYS = [...SESSION_ENV_KEYS, "TMUX"];
+const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM"];
 
 /** An environment that names no session: for what the daemon starts on its own behalf. */
 export function withoutSessionIds<T extends Record<string, string | undefined>>(env: T): T {
@@ -90,6 +92,66 @@ function readEnv(pid: number): Env | null {
     if (process.platform === "darwin") return darwinEnv(pid);
   } catch {}
   return null;
+}
+
+/**
+ * The terminal app a process runs in, from the TERM_PROGRAM it was exec'd
+ * with ("ghostty", "iTerm.app", "tmux", …). Delivery picks its injector from
+ * this, and only Claude Code's SessionStart hook records it, so an agent with
+ * no hook (Codex, cursor-agent, …) is read here instead.
+ */
+export function terminalProgramOf(pid: number, read: (pid: number) => Env | null = readEnv): string | undefined {
+  return read(pid)?.TERM_PROGRAM || undefined;
+}
+
+type TtyRow = { ppid: number; tty: string; comm: string };
+async function psTtyRow(pid: number): Promise<TtyRow | null> {
+  try {
+    const m = (await execFileAsync("ps", ["-o", "ppid=,tty=,comm=", "-p", String(pid)], { timeout: 5_000 })).stdout.trim().match(/^(\d+)\s+(\S+)\s+(.+)$/);
+    return m ? { ppid: Number(m[1]), tty: m[2], comm: m[3] } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The TERM_PROGRAM a terminal app sets, from the path of its own process. */
+export function terminalProgramForApp(comm: string): string | undefined {
+  const name = comm.split("/").pop() ?? "";
+  if (/^ghostty$/i.test(name)) return "ghostty";
+  if (/^iTerm(2|Server)/.test(name)) return "iTerm.app";
+  if (name === "Terminal" && comm.includes("Terminal.app")) return "Apple_Terminal";
+  if (/^kitty$/.test(name)) return "kitty";
+  if (/^wezterm(-gui)?$/.test(name)) return "WezTerm";
+  if (/^alacritty$/i.test(name)) return "Alacritty";
+  if (/^tmux/.test(name)) return "tmux";
+  if (/^herdr$/.test(name)) return "herdr";
+  return undefined;
+}
+
+/**
+ * terminalProgramOf, falling back to the terminal app that owns the process's
+ * tty. A Node agent that renames its process (pi) overwrites the memory its
+ * environment is read from, and macOS hides the environment of /bin/bash and
+ * /bin/zsh, so the shell above it often tells nothing either. Walking up the
+ * processes on the same tty always ends at the one that opened it: the
+ * terminal app (or the tmux server), named by its executable.
+ */
+export async function terminalProgramOnTty(pid: number, read: (pid: number) => Env | null = readEnv, row: (pid: number) => Promise<TtyRow | null> = psTtyRow): Promise<string | undefined> {
+  const self = terminalProgramOf(pid, read);
+  if (self) return self;
+  let tty: string | undefined;
+  for (let p = pid, hops = 0; p > 1 && hops < 8; hops++) {
+    const r = await row(p);
+    if (!r) return undefined;
+    if (tty === undefined) {
+      if (noTerminal(r.tty)) return undefined;
+      tty = r.tty;
+    } else if (r.tty !== tty) {
+      return terminalProgramForApp(r.comm);
+    }
+    p = r.ppid;
+  }
+  return undefined;
 }
 
 const cache = new Map<number, { startedAt?: number; env: Env | null }>();

@@ -23,7 +23,7 @@ export type LiveFlow = {
   /** The optional watcher: a role that answers the flow's asks. */
   watcher?: { role_id: string; handle: string } | null;
   running?: string[];
-  /** A hold parks every new run until it ends; only a person clears one, in the browser. */
+  /** A hold parks every new run until it ends or a team admin clears it. */
   hold?: { why: string; until: number; by?: string | null; at?: number } | null;
   /** Only problems that clear the bar start; the rest wait for another finding and close after quiet_days with none. */
   bar?: { score: number; findings: number; quiet_days: number; by?: string | null; at?: number } | null;
