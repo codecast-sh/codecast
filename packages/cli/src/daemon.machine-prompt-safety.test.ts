@@ -24,6 +24,7 @@ import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
 import { planHandoffTarget } from "./planHandoff";
+import { waitForHandHost } from "./handHostGrace";
 
 // The fixture lifts delivery code out of daemon.ts by name; the pane classifiers
 // it calls live in tmuxPaneState.ts, so both files are read as one source.
@@ -234,6 +235,8 @@ function fixture(transport = "tmux", cached = true) {
     planSessionTeardown, acquireSessionProcessOwnership: async () => "owned",
     reapPidTree: async (pid: number) => { reaped.push(pid); return 1; }, sessionProcessCache: new Map(),
     workflowAgentTranscriptPathFor: async () => null, isSessionCircuitOpen: () => false,
+    // No session here last ran by hand in another terminal (handHostGrace.ts).
+    waitForHandHost, deadClaims: new Map(), registryRegistrationFor: () => null, MACHINE_BOOTED_AT: 0,
     resetSessionDeliveryFailures: () => {}, materializedSessions: new Set(), postDeliveryHealthCheck: async () => {},
     autoResumeSession: (...args: unknown[]) => hooks.resume(...args), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
     restoreSuspendedAgent: async () => false,
