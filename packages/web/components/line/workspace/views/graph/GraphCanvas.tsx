@@ -208,8 +208,13 @@ function PersonGlyph({ x }: { x: number }) {
   );
 }
 
+/** The runs standing at a step now: running there, and of those, stalled. */
+export type LiveAtStep = { running: number; stalled: number };
+
 type NodeProps = {
   n: GNode;
+  /** The runs standing here now, when the graph is drawn live (the Flows stage). */
+  live?: LiveAtStep;
   model: LineModel;
   bars: Array<{ tone: BarTone; n: number }> | undefined;
   exits: GraphLayout["exits"];
@@ -263,7 +268,22 @@ function WaitBadge({ wait, x, y, onOpen }: { wait: StepWait; x: number; y: numbe
   );
 }
 
-const Node = memo(function Node({ n, model, bars, exits, failed, passed, wait: tableWait, onWaiting, order, times, dim, soft, selected, focused, intro, back, onOpen, onHover }: NodeProps) {
+/** The live runs standing at a step now (the flow map's count), over its top left corner: how many, and of them how
+ *  many stalled, in red. Waiting runs are the wait badge's, on the other corner. */
+function LiveBadge({ live, x, y }: { live: LiveAtStep; x: number; y: number }) {
+  const words = live.stalled ? `${live.running} · ${live.stalled} stalled` : `${live.running} running`;
+  const w = textW(words, 11) + 26;
+  return (
+    <g className="lwg-live" transform={`translate(${x},${y - 10})`} data-stalled={live.stalled ? "" : undefined} data-lwg-live={live.running}>
+      <title>{[`${live.running} running here now`, live.stalled ? `${live.stalled} with no progress for 8 hours or more` : null].filter(Boolean).join(" · ")}</title>
+      <rect width={w} height={20} rx={10} />
+      <circle cx={11} cy={10} r={3} />
+      <text x={19} y={14}>{words}</text>
+    </g>
+  );
+}
+
+const Node = memo(function Node({ n, live, model, bars, exits, failed, passed, wait: tableWait, onWaiting, order, times, dim, soft, selected, focused, intro, back, onOpen, onHover }: NodeProps) {
   const step = model.steps[n.id];
   const m = model.graph.nodes.find((x) => x.id === n.id);
   const { w, h } = n;
@@ -383,7 +403,8 @@ const Node = memo(function Node({ n, model, bars, exits, failed, passed, wait: t
       </>
     );
   }
-  const ex = exits.get(n.id);
+  // Only the ways out runs took: a zero earns no words. A dot already says its failures under its name.
+  const ex = exits.get(n.id)?.filter((x) => x.count > 0 && !(n.dot && fails && x.label === "failed"));
   const exY = n.dot ? 24 + (n.lines.length + (n.ran ? 1 : 0) + (backTo ? 1 : 0)) * DOT_LINE + 2 : h / 2 + 22;
   return (
     <g
@@ -400,6 +421,7 @@ const Node = memo(function Node({ n, model, bars, exits, failed, passed, wait: t
       data-lwg-node={n.id}
       transform={`translate(${n.x},${n.y})`}
       data-waiting={wait?.onYou ? "" : undefined}
+      data-live={live?.running ? (live.stalled ? "stalled" : "running") : undefined}
       role="button"
       tabIndex={0}
       aria-label={`${n.label}, ${n.kind === "person" ? "a person decides" : n.kind}${wait?.onYou ? `, ${wait.onYou} on you` : ""}${wait?.others ? `, ${wait.others} on someone else` : ""}`}
@@ -410,12 +432,12 @@ const Node = memo(function Node({ n, model, bars, exits, failed, passed, wait: t
     >
       <g className={intro != null ? "lwg-in" : undefined} style={intro != null ? { animationDelay: `${intro * 0.03}s` } : undefined}>
         {body}
-        {ex && (
+        {ex && ex.length > 0 && (
           <text className="lwg-exits" x={n.dot ? 0 : -w / 2 + 4} y={exY} textAnchor={n.dot ? "middle" : undefined}>
             <tspan className="lwg-exits-lead">{EXIT_LEAD}</tspan>
             {ex.map((x, i) => (
               <Fragment key={x.label}>
-                <tspan data-tone={exitTone(x)} data-zero={x.count ? undefined : ""} x={n.dot && i === 0 ? 0 : undefined} dy={n.dot && i === 0 ? DOT_LINE : undefined}>
+                <tspan data-tone={exitTone(x)} x={n.dot && i === 0 ? 0 : undefined} dy={n.dot && i === 0 ? DOT_LINE : undefined}>
                   {`${i ? " · " : ""}${x.label} ${x.count}`}
                 </tspan>
                 {x.back > 0 && <tspan data-tone="bad">{exitBackWords(x)}</tspan>}
@@ -424,6 +446,7 @@ const Node = memo(function Node({ n, model, bars, exits, failed, passed, wait: t
           </text>
         )}
         {/* An agent's exits line under it already says what came back of its closes; a badge over it would cover its border. */}
+        {live && live.running > 0 && <LiveBadge live={live} x={n.dot ? -(textW(live.stalled ? `${live.running} · ${live.stalled} stalled` : `${live.running} running`, 11) + 26) / 2 : -w / 2 - 6} y={n.dot ? -24 : -h / 2 - 2} />}
         {wait && waiting > 0 && <WaitBadge wait={wait} x={w / 2 + 6} y={-h / 2 - 2} onOpen={onWaiting ? () => onWaiting(n.id) : undefined} />}
         {back && n.kind !== "agent" && (n.dot ? <BackBadge words={back} x={textW(back, 11) / 2 + 7} y={-22} /> : <BackBadge words={back} x={w / 2 + 6} y={-h / 2 - 2} />)}
         {order != null && !n.dot && (
@@ -462,9 +485,12 @@ export type GraphCanvasProps = {
   /** Each step's waits as the Steps table splits them (stepWaits), and how to open a step's Waiting list. */
   waits?: ReadonlyMap<string, StepWait>;
   onWaiting?: (id: string) => void;
+  /** The runs standing at each step now (the Flows stage's flow map): drawn as a badge on each step holding any, and the
+   *  graph reads live, its history (counts under a step, its ways out, the edges' funnel) kept for hover and the open step. */
+  live?: ReadonlyMap<string, LiveAtStep>;
 };
 
-export const GraphCanvas = memo(function GraphCanvas({ model, layout, uid, lit, selected, focus = null, peek = null, intro = false, onOpen, onHover, onEdgeHover, failed, passed, waits, onWaiting }: GraphCanvasProps) {
+export const GraphCanvas = memo(function GraphCanvas({ model, layout, uid, lit, selected, focus = null, peek = null, intro = false, onOpen, onHover, onEdgeHover, failed, passed, waits, onWaiting, live }: GraphCanvasProps) {
   const bars = barsOf(model);
   // The ends' counts from this model: the layout is shared by every model of its shape.
   const exits = useMemo(() => withFailures(layout.mode === "essence" ? essenceExits(model.graph, (id) => layout.nodes.has(id)) : layout.exits, failed), [model.graph, layout, failed]);
@@ -479,7 +505,7 @@ export const GraphCanvas = memo(function GraphCanvas({ model, layout, uid, lit, 
     return s;
   }, [layout, sel]);
   return (
-    <g className="lwg-canvas" data-mode={layout.mode} data-run={lit ? "" : undefined}>
+    <g className="lwg-canvas" data-mode={layout.mode} data-run={lit ? "" : undefined} data-live={live ? "" : undefined}>
       <Lanes layout={layout} uid={uid} />
       <Edges layout={layout} lit={lit} selected={sel} uid={uid} intro={intro} onHover={onEdgeHover} />
       {peek && layout.nodes.has(peek) && <Peek layout={layout} id={peek} uid={uid} />}
@@ -488,6 +514,7 @@ export const GraphCanvas = memo(function GraphCanvas({ model, layout, uid, lit, 
           <Node
             key={n.id}
             n={n}
+            live={live?.get(n.id)}
             model={model}
             bars={bars.get(n.id)}
             exits={exits}
