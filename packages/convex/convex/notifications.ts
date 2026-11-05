@@ -635,6 +635,11 @@ export async function deliverSessionNotificationToParties(
   return delivered;
 }
 
+/** The session a push is about, by name: its title, else its project folder. */
+function sessionPushTitle(conv: { title?: string; project_path?: string }): string {
+  return conv.title?.trim() || conv.project_path?.split("/").pop() || "Session";
+}
+
 export const createSessionNotification = mutation({
   args: {
     api_token: v.string(),
@@ -658,8 +663,13 @@ export const createSessionNotification = mutation({
       return { error: "Not found" };
     }
 
+    // A daemon titles every permission push alike; the person needs to know
+    // which session is asking.
+    const title = args.type === "permission_request"
+      ? `${sessionPushTitle(conversation)} · needs permission`
+      : args.title;
     const delivered = await deliverSessionNotificationToParties(
-      ctx, conversation, args.type, args.title, args.message,
+      ctx, conversation, args.type, title, args.message,
     );
 
     // Stamp the needs-input dedupe key so the server-side check
@@ -1025,7 +1035,7 @@ export async function performNeedsInputCheck(
   // Mark BEFORE delivering so a conflicting retry can't double-push.
   await ctx.db.patch(conv._id, { needs_input_notified_key: key });
 
-  const title = conv.title?.trim() || conv.project_path?.split("/").pop() || "Session";
+  const title = sessionPushTitle(conv);
   const message =
     (kind === "awaiting_input" ? auqQuestionPreview(lastMsg) : null) ??
     (lastMsg?.role === "assistant" ? notifPreview(lastMsg.content) : null) ??
