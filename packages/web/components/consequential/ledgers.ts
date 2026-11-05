@@ -382,6 +382,26 @@ export function killSessionsLedger(r: { total: number; working: string[] }): Swi
   };
 }
 
+/** A session in a terminal Codecast can't type into (Ghostty, Alacritty), moved to tmux: its process there ends and
+ *  it resumes in tmux on the same transcript, where the messages held for it go in. */
+export function restartInTmuxLedger(r: { terminal: string; working: boolean }): SwitchLedger {
+  return {
+    name: "Restart in tmux",
+    subject: `Running in ${r.terminal}`,
+    shift: [r.terminal, "tmux"],
+    ...(r.working ? { alert: "It is working now" } : {}),
+    figures: [{ value: "1", label: "agent process ends", tone: "warn" }],
+    rows: [
+      { k: "Ends", v: `The agent in ${r.terminal}`, tone: "warn" },
+      ...(r.working ? [{ k: "Lost", v: "The turn in progress", tone: "warn" as const }] : []),
+      { k: "Keeps", v: "Transcript, context", tone: "ok" },
+      { k: "Then", v: "Held messages send" },
+    ],
+    confirm: "Restart in tmux",
+    keep: `Keep it in ${r.terminal}`,
+  };
+}
+
 /** A session's change sent through a flow of the pool (docs/architecture/flows.md FL4): the session freezes its own
  *  edits, binds them to a task, and its machine runs each step; an agent step starts a session of its own, a check runs
  *  a command that only looks, an automatic step runs one that acts (a rebase, a ship), and a person's step is a

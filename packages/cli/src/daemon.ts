@@ -315,7 +315,9 @@ import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync, tmuxRunAsync } from "./tmux.js";
 import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
+import { ghosttyInputText, ghosttySendKeys, probeGhostty, readGhosttyScreen } from "./ghostty.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
+import { TerminalHoldError } from "./terminalHold.js";
 import { HERD_TAKE_PATH, SwapHeldError, abortableWait, closeHerdrPane, pollUntilUp, serveHerdTake, swapHeld, takeBusy, type HerdTakeDeps } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
@@ -18407,7 +18409,7 @@ function getTerminalLabel(termProgram?: string): string {
 }
 
 // Terminals where we know there's no direct injection API — tmux required
-const TMUX_ONLY_TERMINALS = new Set(["ghostty", "Alacritty"]);
+const TMUX_ONLY_TERMINALS = new Set(["Alacritty"]);
 
 // ── AppleScript injection (iTerm2 + Terminal.app) ──────────────────────────
 // Extracted from original injectViaTerminal — logic is identical
@@ -18685,8 +18687,37 @@ async function injectViaHerdr(
   }, content, keystrokes);
 }
 
+// ── Ghostty injection via its AppleScript dictionary ───────────────────────
+
+async function injectViaGhostty(
+  tty: string,
+  content: string,
+  keystrokes = false,
+  bracketed = true,
+): Promise<void> {
+  const normalizedTty = normalizeTty(tty);
+  const probe = await probeGhostty(normalizedTty);
+  if (probe.state === "unscriptable") {
+    log(`Ghostty scripting unavailable for TTY ${normalizedTty}: ${probe.detail}`);
+    throw new TerminalHoldError(getTerminalLabel("ghostty"));
+  }
+  if (probe.state === "not_found") throw new Error(`Ghostty terminal not found for TTY ${normalizedTty}`);
+  await injectThroughPane({
+    name: `Ghostty for TTY ${normalizedTty}`,
+    // `input text` is a paste: Ghostty brackets it when the program asked for
+    // bracketed paste, and an unverified client gets flattened text.
+    sendText: async (text, beforeInput) => {
+      await beforeInput?.();
+      await ghosttyInputText(normalizedTty, prepareInjectedContent(text, { bracketed }));
+    },
+    sendKey: (key) => ghosttySendKeys(normalizedTty, [key]),
+    sendKeystrokes: (keys) => ghosttySendKeys(normalizedTty, [...keys]),
+    readScreen: () => readGhosttyScreen(normalizedTty),
+  }, content, keystrokes);
+}
+
 // ── Injection through a terminal's pane API ────────────────────────────────
-// Kitty, WezTerm and herdr each expose a pane codecast can type into. Only the
+// Kitty, WezTerm, Ghostty and herdr each expose a pane codecast can type into. Only the
 // transport differs: the keys around a poll and the paste-then-one-submit of a
 // message are the same for all of them.
 type PaneTransport = {
@@ -18773,6 +18804,9 @@ export async function injectViaTerminal(
   }
   if (termProgram === "herdr") {
     return injectViaHerdr(tty, content, keystrokes, bracketed);
+  }
+  if (termProgram === "ghostty") {
+    return injectViaGhostty(tty, content, keystrokes, bracketed);
   }
   if (termProgram && TMUX_ONLY_TERMINALS.has(termProgram)) {
     throw new Error(`${getTerminalLabel(termProgram)} does not support direct injection — use tmux for this terminal`);
@@ -26672,8 +26706,8 @@ async function deliverMessageIntoSession(
   }
 
   // Live agent process not inside tmux (or the tmux inject failed without a confirmed-dead
-  // agent): try direct terminal injection (AppleScript for iTerm2/Terminal.app, CLI for
-  // Kitty/WezTerm). Skipped when the agent was just detected dead — that goes to auto-resume.
+  // agent): try direct terminal injection (AppleScript for iTerm2/Terminal.app/Ghostty,
+  // CLI for Kitty/WezTerm). Skipped when the agent was just detected dead — that goes to auto-resume.
   if (live.proc && !agentDetectedDead) {
     const termLabel = getTerminalLabel(live.proc.termProgram);
     if (!live.proc.tty) {
@@ -26683,6 +26717,10 @@ async function deliverMessageIntoSession(
       // every wake to one session retried into an empty osascript for hours on
       // 2026-09-07. Fall through to the resume paths instead.
       logDelivery(`Live process pid=${live.proc.pid} has no tty — no terminal to inject into`);
+    } else if (live.proc.termProgram && TMUX_ONLY_TERMINALS.has(live.proc.termProgram)) {
+      // Nothing can type into this window, and the agent is the person's own
+      // process: hold with a reason they can see (terminalHold.ts).
+      throw new TerminalHoldError(termLabel);
     } else {
       logDelivery(`Trying ${termLabel} injection for tty=${live.proc.tty}`);
       try {
@@ -26696,7 +26734,7 @@ async function deliverMessageIntoSession(
         logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
         return true;
       } catch (err) {
-        if (err instanceof PendingDeliveryHeldError) throw err;
+        if (err instanceof PendingDeliveryHeldError || err instanceof TerminalHoldError) throw err;
         if (isDeliveryVerdict(err)) throw err;
         logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
         // The agent is alive, so a resume here would run a second copy beside it
@@ -32195,7 +32233,7 @@ async function main(): Promise<void> {
               ? { holdReason: err.holdReason, holdScreen: err.screen }
               : { holdReason: "waiting for a human answer in the terminal" };
             rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
-          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError) {
+          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof TerminalHoldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
             // never spending the retry budget, and tried again at the error's

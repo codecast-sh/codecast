@@ -94,6 +94,27 @@ export function shouldRestoreFocus(i: {
   return true;
 }
 
+/**
+ * Whether this process sits in a window-server (Aqua) session, the only place
+ * CoreGraphics' input state answers. Outside one (a daemon started over SSH,
+ * a user who never logged in at the screen, a background launchd context) the
+ * first CGEventSource call waits forever on SkyLight's lock: the daemon froze
+ * at boot before its first log line, and nothing synced. launchd names the
+ * session kind in one cheap call.
+ */
+export async function inWindowServerSession(managerName: () => Promise<string> = readManagerName): Promise<boolean> {
+  return (await managerName()) === "Aqua";
+}
+
+async function readManagerName(): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("launchctl", ["managername"], { encoding: "utf-8", timeout: 2_000 });
+    return String(stdout ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
 /** Seconds since the last mouse-down, via CoreGraphics — or null when the
  *  symbol can't load (non-darwin, no bun:ffi), which turns the sentinel off. */
 async function loadHumanInput(): Promise<{ clickAge: () => number; appSwitchAge: () => number } | null> {
@@ -144,6 +165,10 @@ export async function startFocusSentinel(log: (line: string) => void): Promise<N
   // with no window-server session: the CoreGraphics input probe below blocks
   // forever there (a Mac host's daemon froze on it right after boot).
   if (isRemoteDevice()) return null;
+  if (process.platform === "darwin" && !(await inWindowServerSession())) {
+    log("[FOCUS] sentinel off: no window-server session (started outside a screen login)");
+    return null;
+  }
   const input = await loadHumanInput();
   if (!input) {
     if (process.platform === "darwin") log("[FOCUS] sentinel off: human-input detector unavailable");

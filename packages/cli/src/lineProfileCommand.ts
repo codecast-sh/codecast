@@ -106,7 +106,9 @@ export function publishFacts(r: ResolvedLineProfile): LineProfileFacts {
  * from this checkout would write. Throws LineProfileError when the profile
  * names no project, since there is nowhere to put it.
  */
-export async function publishLineProfile(deps: PublishDeps, resolved: ResolvedLineProfile): Promise<{ projects: Array<{ project: string; short_id?: string; title: string; finders: number; changed: boolean }>; unprojected: string[] }> {
+export async function publishLineProfile(deps: PublishDeps, read: ResolvedLineProfile): Promise<{ projects: Array<{ project: string; short_id?: string; title: string; finders: number; changed: boolean }>; unprojected: string[] }> {
+  // The deploy as the line runs it: a target deploy.toml declares sends its own command (lineDeploy withDeclaredTarget).
+  const resolved = await (await import("./lineDeploy.js")).withDeclaredTarget(read);
   const { groups, unprojected } = publishGroups(resolved);
   if (!groups.length) throw new LineProfileError(`nothing to publish: the profile names no project (${resolved.file ?? "no .codecast/line.toml"})`);
   const { scopeFor } = await import("./lineScope.js");
@@ -354,7 +356,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
       }
       let resolved: ResolvedLineProfile;
       try {
-        resolved = loadLineProfile();
+        resolved = await (await import("./lineDeploy.js")).withDeclaredTarget(loadLineProfile());
       } catch (err) {
         if (err instanceof LineProfileError) fail(err.message);
         throw err;
