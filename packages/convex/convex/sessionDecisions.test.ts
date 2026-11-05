@@ -172,6 +172,15 @@ describe("ask: people, inbox, ladder, holder", () => {
     expect(tables.session_decisions.map((d: any) => d.team_id)).toEqual(["teams_other"]);
   });
 
+  test("a decision may offer one course: the person takes it or answers in their own words", async () => {
+    const { ctx, tables } = seed();
+    const r = await askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Ship the fix?", options: [{ label: "Ship it", description: "merges to main" }], context_md: "What was wrong and what we built.", category: "approach" });
+    expect(r.error).toBeUndefined();
+    expect(tables.session_decisions[0].options.map((o: any) => o.label)).toEqual(["Ship it"]);
+    const none = await askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Nothing to pick?", options: [], context_md: "x", category: "approach" });
+    expect(none.error).toBe("At least one option required");
+  });
+
   test("materializes one inbox row per person and records the ladder up to the first person", async () => {
     const { ctx, tables } = seed();
     const r = await askApproach(ctx);

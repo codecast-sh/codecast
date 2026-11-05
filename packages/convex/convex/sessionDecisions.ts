@@ -1053,7 +1053,8 @@ function validateShape(kind: DecisionKind, args: { question: string; options: an
     if (!args.form || args.form.fields.length === 0) return "A form decision needs at least one field";
     const keys = args.form.fields.map((f: any) => f.key);
     if (new Set(keys).size !== keys.length) return "Form field keys must be unique";
-  } else if (args.options.length < 2) return "At least two options required";
+  // One option is a single course: the person takes it or answers in their own words.
+  } else if (args.options.length < 1) return "At least one option required";
   if (args.options.length > 9) return "At most nine options (they map to keys 1-9)";
   if (args.default_option !== undefined && (args.default_option < 0 || args.default_option >= args.options.length)) {
     return "default_option out of range";

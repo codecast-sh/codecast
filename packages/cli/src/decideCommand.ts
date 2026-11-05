@@ -646,7 +646,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .argument("[args...]", "subcommand arguments (edit/cancel take an optional decision id)")
     .option(
       "-o, --option <label>",
-      'An option; repeat 2-9 times. "Label :: what happens if chosen" adds a description',
+      'An option; repeat 1-9 times (one option is a single course the person takes or answers in their own words). "Label :: what happens if chosen" adds a description',
       (val: string, acc: string[]) => [...acc, val],
       [] as string[]
     )
@@ -722,8 +722,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       const kind: DecideKind = options.kind ?? spec?.kind ?? (lineForm ? "form" : "single");
       if (!DECIDE_KINDS.includes(kind)) fail(`--kind must be one of ${DECIDE_KINDS.join("|")}.`);
       if (kind === "form" && !optionList) optionList = [];
-      if (optionList && !sub && ((kind !== "form" && optionList.length < 2) || optionList.length > 9)) {
-        fail("Provide 2-9 options (-o), they map to keys 1-9 in the queue.");
+      if (optionList && !sub && ((kind !== "form" && optionList.length < 1) || optionList.length > 9)) {
+        fail("Provide 1-9 options (-o), they map to keys 1-9 in the queue.");
       }
       for (const raw of options.optionBody as string[]) {
         const { index, file } = parseOptionBodyArg(raw);
@@ -902,7 +902,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       // ── ask ──
       question = question ?? spec?.question ?? card?.cause.title;
       if (!question) fail('Usage: cast decide "<question>" -o … -o … --context … — or: ls | show | edit [id] | cancel [id] | recommend | answer');
-      if (!optionList) fail("Provide 2-9 options (-o), they map to keys 1-9 in the queue.");
+      if (!optionList) fail("Provide 1-9 options (-o), they map to keys 1-9 in the queue.");
       const docMd: string | undefined = options.doc ? bodyFromArg(options.doc, "--doc") : spec?.doc_md;
       if (!contextMd && !options.report && !docMd && !card) {
         fail("A bare question is not decidable. Pass --context (or --report, --doc or --card) with the reasoning and the tradeoff.");
