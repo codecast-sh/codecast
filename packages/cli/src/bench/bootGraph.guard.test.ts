@@ -465,7 +465,9 @@ describe("command groups stay off the boot graph", () => {
     // 536 the same day: index.ts's three leaves (above) and
     // backgroundTaskScan.ts, the open background task scanner split out of
     // daemon.ts for its max-lines pin.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(536);
+    // 537 on 2026-11-05: handHostGrace.ts, whether a message to a session the
+    // boot took waits for the terminal that last ran it (a pure leaf).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(537);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
