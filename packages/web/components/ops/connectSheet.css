@@ -1,5 +1,5 @@
 /* ── Connecting a source, in place: on the Ops home and in Settings, so the sheet loads its own styles ── */
-.ops-connect { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); container-type: inline-size; min-width: 0; }
+.ops-connect { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 14px; background: var(--sol-card); box-shadow: var(--osx-shadow); container-type: inline-size; min-width: 0; }
 /* Title and step on the left, close pinned top right; the step drops under the title when the sheet is narrow. */
 .ops-connect-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 2px; font-size: 13.5px; }
 .ops-connect-title { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 10px; row-gap: 2px; min-width: 0; }
@@ -33,7 +33,7 @@
 .ops-connect-reason { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 @media (max-width: 640px) { .ops-connect-row[data-ops-connect-wait] { flex-wrap: wrap; } }
 /* A vendor's projects as rows to pick (VendorProjects.tsx): a box, the name, its slug or id, the source already reading it. */
-.ops-vproj { display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; border: 1px solid var(--sol-border); border-radius: 6px; background: var(--sol-bg); }
+.ops-vproj { display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; border: 1px solid var(--osx-line); border-radius: 6px; background: var(--sol-bg); }
 .ops-vproj-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 10px; font-size: 12.5px; text-align: left; color: var(--sol-text); border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); }
 .ops-vproj-row:last-child { border-bottom: 0; }
 button.ops-vproj-row:hover:not(:disabled) { background: color-mix(in srgb, var(--sol-text-muted) 8%, transparent); }

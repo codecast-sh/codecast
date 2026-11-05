@@ -2,6 +2,7 @@
 // The scope page's store-fed tabs (docs/architecture/scopes-and-feed.md F3):
 // plans, pages, sessions and decisions in the role's area, painted from the
 // local store and the org tree, plus the role's notes and its charter.
+import { threadStateCardLine } from "@codecast/shared/contracts";
 import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { CheckSquare, ExternalLink, Layers, MessageCircleQuestionMark } from "lucide-react";
@@ -155,7 +156,7 @@ export function HandGroups({ rows, hands, now, onOpen }: { rows: OrgSession[]; h
   const tasks = useWorkspaceCollection<TaskItem>("tasks");
   // Subscribe to the two fields a row shows, never the session rows: a
   // heartbeat on any hand would otherwise repaint the whole list.
-  const storeSig = useInboxStore((st) => rows.map((r) => { const row = st.sessions[r._id] as any; return `${row?.thread_state ? String(row.thread_state).split("\n")[0] : ""}|${row?.active_task_id ?? ""}`; }).join("\n"));
+  const storeSig = useInboxStore((st) => rows.map((r) => { const row = st.sessions[r._id] as any; return `${row?.thread_state ? threadStateCardLine(String(row.thread_state)) : ""}|${row?.active_task_id ?? ""}`; }).join("\n"));
   const groups = useMemo(() => groupHands(rows), [rows]);
   const factsById = useMemo(() => new Map((hands ?? []).map((h) => [h._id, h])), [hands]);
   const detail = useMemo(() => {
@@ -164,7 +165,7 @@ export function HandGroups({ rows, hands, now, onOpen }: { rows: OrgSession[]; h
     for (const r of rows) {
       const row = st.sessions[r._id] as any;
       const fact = factsById.get(r._id);
-      const stateLine = (row?.thread_state ? String(row.thread_state).split("\n")[0].trim() : "") || fact?.state_line || null;
+      const stateLine = (row?.thread_state ? threadStateCardLine(String(row.thread_state)) : "") || fact?.state_line || null;
       const bound = boundTaskOf(r._id, row?.active_task_id ? String(row.active_task_id) : null, tasks as any[]);
       const task = bound ? { short_id: bound.short_id, title: bound.title } : fact?.task ? { short_id: fact.task.short_id, title: fact.task.title } : null;
       out.set(r._id, { stateLine, task, progress: bound ? subtaskCounts(bound._id, tasks as any[]) : null });
