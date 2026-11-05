@@ -53,3 +53,9 @@ export function sessionShipFromSig(sig: string): SessionShip | null {
   const [tone, words, deploy, run] = sig.split("\u0000");
   return { tone: tone as SessionShip["tone"], words, deploy: deploy || null, run: run || null };
 }
+
+/** One session's ship state, for a list row that has no card subscription to fold it into (mobile's SessionItem). */
+export function useSessionShip(conversationId: string | null | undefined): SessionShip | null {
+  const sig = useInboxStore((s) => sessionShipSig(s as unknown as ShipState, conversationId));
+  return sessionShipFromSig(sig);
+}
