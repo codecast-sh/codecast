@@ -23,6 +23,8 @@ type Run = {
 
 /** A stage's name on a card, from the station a run stands at. */
 const STAGE: Record<string, string> = { check: "Checking", review: "In review", decide: "Your call", ship: "Landing", deploy: "Waiting to deploy" };
+/** What a stage said when it sent the work back, by the stage. */
+const SENT_BACK: Record<string, string> = { Check: "Check failed", Review: "Changes asked", Decide: "Revise asked", Land: "Conflict" };
 const STOP_AT: Record<string, string> = { check: "Check", review: "Review", decide: "Decide", ship: "Land", deploy: "Deploy" };
 const FIX: Record<string, string> = { fix_check: "Check", fix_review: "Review", revise: "Decide", fix_conflict: "Land" };
 
@@ -32,7 +34,7 @@ export function runShip(run: Run): SessionShip | null {
   const top = segmentTopOf(at);
   const live = run.status === "running" || run.status === "paused" || run.status === "pending";
   if (run.status === "pending") return { words: "Starting", tone: "working", run: run._id };
-  if (live && (run.waiting_on_session || FIX[top])) return { words: `Fixing · ${FIX[segmentTopOf(run.waiting_on_session?.node_id ?? at)] ?? "a finding"}`, tone: "session", run: run._id };
+  if (live && (run.waiting_on_session || FIX[top])) return { words: `${SENT_BACK[FIX[segmentTopOf(run.waiting_on_session?.node_id ?? at)] ?? ""] ?? "Sent back"} · fixing`, tone: "session", run: run._id };
   if (live && (run.status === "paused" || top === "decide")) return { words: "Your call", tone: "you", run: run._id };
   if (live && top === "deploy") return { words: "Waiting to deploy", tone: "wait", run: run._id };
   if (live) return { words: STAGE[top] ?? "Shipping", tone: top === "review" ? "agent" : "working", run: run._id };
@@ -82,7 +84,7 @@ export function sessionShips(runs: ReadonlyArray<Run>, deploys: ReadonlyArray<Te
     const l = live.get(id);
     const f = failed.get(id);
     if (f && (!l || f.created_at > (l.live_at ?? l.created_at))) out.set(id, { words: `Deploy failed · ${f.target}`, tone: "bad", deploy: f.short_id });
-    else if (l) out.set(id, { words: `Live · ${l.short_id}`, tone: "ok", deploy: l.short_id });
+    else if (l) out.set(id, { words: `Live · ${l.target}`, tone: "ok", deploy: l.short_id });
   }
   return out;
 }
