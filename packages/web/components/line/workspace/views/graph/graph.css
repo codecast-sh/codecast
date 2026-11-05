@@ -342,3 +342,6 @@
 .lwg-ov-view { fill: color-mix(in srgb, var(--lw-ink) 6%, transparent); stroke: var(--lw-ink-2); stroke-width: 1.5; rx: 8; }
 /* Drawn live, the view rests on the step holding most work at the stage's middle: the edge arrows sit under the toolbar. */
 .lwg[data-live] > .line-edge-arrow { top: var(--lwg-arrow-y, 96px); }
+/* Drawn live, an agent's warm outline is kept for the steps where runs stand; a quiet agent draws in the rule's grey. */
+.lwg-canvas[data-live] .lwg-node[data-kind="agent"]:not([data-live]):not(:hover):not([data-selected]) .lwg-shape { stroke: var(--lw-rule); }
+.lwg-canvas[data-live] .lwg-node[data-kind="agent"]:not([data-live]):not(:hover):not([data-selected]) .lwg-glyph { opacity: .35; }

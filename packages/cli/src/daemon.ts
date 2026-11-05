@@ -27258,6 +27258,10 @@ async function isAgentProcess(pid: number): Promise<boolean> {
 let skipRespawn = false;
 
 const DAEMON_LAUNCHD_LABEL = "sh.codecast.daemon";
+// History import pacing: no age cap, and 250 ms between files (about 4 a
+// second, 14k an hour), sequential.
+const HISTORY_IMPORT_MAX_AGE_MS = Number.POSITIVE_INFINITY;
+const HISTORY_IMPORT_PACE_MS = 250;
 
 // Parse the running instance pid out of `launchctl print gui/<uid>/<label>` output.
 // Pure so ownership detection is testable without a live launchd.
@@ -31109,7 +31113,7 @@ async function main(): Promise<void> {
   // watcher. Runs at startup (files missed while the daemon was down), on wake (the
   // watcher's FSEvents stream may have gone silent across a sleep), and after
   // reconciliation rewinds positions (so its repair actually ships, not just resets).
-  const runUnsyncedSweepOnce = async (reason: string) => {
+  const runUnsyncedSweepOnce = async (reason: string, opts: { maxAgeMs?: number; concurrency?: number; paceMs?: number } = {}) => {
     // Every Claude config dir's projects tree (claudeConfigDirs.ts).
     const claudeProjectsRoots = claudeProjectsDirs().filter((dir) => fs.existsSync(dir));
     if (claudeProjectsRoots.length === 0) {
@@ -31122,7 +31126,7 @@ async function main(): Promise<void> {
       for (const root of claudeProjectsRoots) {
         unsyncedFiles.push(...await findUnsyncedFilesAsync(
           root,
-          undefined,
+          opts.maxAgeMs,
           (filePath, observation) => isTranscriptFileInSyncScope(filePath, config, observation?.cwd),
           watchDirFilter,
           { dirs: "claudeWatch", files: "jsonl" },
@@ -31136,11 +31140,13 @@ async function main(): Promise<void> {
     if (unsyncedFiles.length > 0) {
       log(`${reason}: Found ${unsyncedFiles.length} files needing sync`);
 
-      await runBounded(unsyncedFiles, bootPacingNow().startupSyncConcurrency, async (filePath) => {
+      await runBounded(unsyncedFiles, opts.concurrency ?? bootPacingNow().startupSyncConcurrency, async (filePath) => {
         // Yield between files: processSessionFile's read+parse is synchronous CPU
         // work, and a backlog sweep runs dozens of files. Without this the sweep
         // monopolizes the loop for minutes and heartbeats/deliveries starve.
-        await new Promise((resolve) => setImmediate(resolve));
+        // A paced sweep (the history import) also waits, so thousands of old
+        // transcripts reach the backend as a trickle, not a burst.
+        await new Promise((resolve) => (opts.paceMs ? setTimeout(resolve, opts.paceMs) : setImmediate(resolve)));
         const parts = filePath.split(path.sep);
         const sessionId = resolveSessionId(filePath);
 
@@ -31201,17 +31207,33 @@ async function main(): Promise<void> {
   // let the running sweep loop once more — so a wake during a slow startup scan isn't lost.
   let unsyncedSweepRunning = false;
   let unsyncedSweepQueued = false;
-  const syncUnsyncedFiles = async (reason: string): Promise<void> => {
+  const syncUnsyncedFiles = async (reason: string, opts?: Parameters<typeof runUnsyncedSweepOnce>[1]): Promise<void> => {
     if (unsyncedSweepRunning) { unsyncedSweepQueued = true; return; }
     unsyncedSweepRunning = true;
     try {
       do {
         unsyncedSweepQueued = false;
-        await runUnsyncedSweepOnce(reason);
+        await runUnsyncedSweepOnce(reason, opts);
       } while (unsyncedSweepQueued);
     } finally {
       unsyncedSweepRunning = false;
     }
+  };
+
+  // The history import (decision sd-2537): a machine just linked to an account
+  // uploads every transcript on disk, not only the last week's the sweep
+  // covers. One file at a time with a pause between, so a machine with
+  // thousands of transcripts trickles them in. The server keeps a session
+  // that was already over a week old when it arrived out of the inbox
+  // (conversations.history_import); search and history have it. The flag
+  // clears only after a full pass, so an interrupted import resumes on the
+  // next start and skips what already synced.
+  const runHistoryImport = async (): Promise<void> => {
+    if (!readConfig()?.history_import_pending) return;
+    log("History import: uploading every transcript on disk");
+    await syncUnsyncedFiles("History import", { maxAgeMs: HISTORY_IMPORT_MAX_AGE_MS, concurrency: 1, paceMs: HISTORY_IMPORT_PACE_MS });
+    patchConfig({ history_import_pending: undefined });
+    log("History import: done");
   };
 
   // Expose the sweep to reconciliation (watcher-independent backstop) and define the
@@ -31248,7 +31270,7 @@ async function main(): Promise<void> {
   };
 
   // Run startup scan in background (don't block daemon startup)
-  syncUnsyncedFiles("Startup scan").then(async () => {
+  syncUnsyncedFiles("Startup scan").then(runHistoryImport).then(async () => {
     // Backfill: detect unlinked plan handoff children.
     //
     // Iterates FILES (one readdir per project dir), not cache entries: the old

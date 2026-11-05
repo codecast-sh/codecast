@@ -188,6 +188,11 @@ describe("one visibility rule, one selection (sync-convergence C4)", () => {
       conv("sub", { is_subagent: true, updated_at: EPOCH - MIN }),
       conv("noise", { title: "[Using: claude]", updated_at: EPOCH - MIN }),
       conv("blank_done", { status: "completed", message_count: 0, updated_at: EPOCH - MIN }),
+      // History imports (decision sd-2537): a recent one lands, one older than
+      // a week stays in search and history, and one resumed today lands again.
+      conv("hist_recent", { history_import: true, updated_at: EPOCH - 3 * 24 * H }),
+      conv("hist_old", { history_import: true, updated_at: EPOCH - 10 * 24 * H }),
+      conv("hist_resumed", { history_import: true, updated_at: EPOCH - H }),
     ];
     const { liveness } = await computeSessionsLiveness({ db: db({ conversations: rows }) }, ME as any);
     const stamped = Object.entries(liveness)
@@ -200,8 +205,8 @@ describe("one visibility rule, one selection (sync-convergence C4)", () => {
     // see exactly the same members.
     expect(stamped).toEqual([...members.keys()].sort());
     expect(stamped).toEqual([
-      "conversations_dismissed1", "conversations_pin_old", "conversations_recent1",
-      "conversations_recent2", "conversations_stashed1",
+      "conversations_dismissed1", "conversations_hist_recent", "conversations_hist_resumed",
+      "conversations_pin_old", "conversations_recent1", "conversations_recent2", "conversations_stashed1",
     ]);
   });
 
