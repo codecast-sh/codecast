@@ -56,7 +56,17 @@ async function flowSetup(ctx: Ctx, workspace: string) {
   const spine = flow ? await ctx.db.get(flow.workflow_id) : null;
   const rows: any[] = await ctx.db.query("workflows").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).collect();
   const family: any[] = spine ? flowFamily<any>(spine, rows) : [];
-  return { flow, spine, rows, family };
+  // A run belongs to the family member it ran, by the flow's slug: a run of an older version of a member is still that
+  // flow's work, standing at its station, never "outside the live flows".
+  const byId = new Map(family.map((w) => [String(w._id), w]));
+  const bySlug = new Map(family.map((w) => [String(w.slug), w]));
+  const slugOf = new Map(rows.map((w) => [String(w._id), String(w.slug)]));
+  const memberOf = (workflowId: unknown): any | null => {
+    if (!workflowId) return null;
+    const id = String(workflowId);
+    return byId.get(id) ?? bySlug.get(slugOf.get(id) ?? "") ?? null;
+  };
+  return { flow, spine, rows, family, memberOf };
 }
 
 /** The lane a source's problems take: a family member's slug, "off" when they run outside the live flow. */
@@ -139,12 +149,11 @@ export const problemsPage = internalQuery({
 export const escapesInputs = internalQuery({
   args: { workspace: v.string(), since: v.number() },
   handler: async (ctx, { workspace, since }) => {
-    const { family } = await flowSetup(ctx, workspace);
-    const members = new Set(family.map((w) => String(w._id)));
+    const { memberOf } = await flowSetup(ctx, workspace);
     const runs: any[] = await ctx.db.query("workflow_runs").withIndex("by_workspace_updated", (q: any) => q.eq("workspace", workspace).gte("updated_at", since)).collect();
     const out: Record<string, number> = {};
     for (const r of runs) {
-      if (!r.task_id || r.created_at < since || (r.workflow_id && members.has(String(r.workflow_id)))) continue;
+      if (!r.task_id || r.created_at < since || memberOf(r.workflow_id)) continue;
       const source = await problemSource(ctx, r.task_id);
       if (source) out[source] = (out[source] ?? 0) + 1;
     }
@@ -329,8 +338,7 @@ function stepsOf(nodes: ReadonlyArray<{ id: string; label?: string; type?: strin
 /** The flow map of one workspace, as the viewer reads it. */
 export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, now = Date.now()): Promise<FlowMap> {
   const setup = await flowSetup(ctx, workspace);
-  const { flow, spine, family } = setup;
-  const members = new Map(family.map((w) => [String(w._id), w]));
+  const { flow, spine, family, memberOf } = setup;
 
   // Live runs, at the station each stands at: a family member's, or off the flow.
   const lanesLive = new Map<string, Map<string, StepCount>>();
@@ -346,7 +354,7 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
   for (const r of live) {
     const node = r.current_node_id ?? "start";
     const waiting = await waitsOnAPerson(r);
-    const member = r.workflow_id ? members.get(String(r.workflow_id)) : null;
+    const member = memberOf(r.workflow_id);
     if (member) {
       const m = lanesLive.get(String(member._id)) ?? lanesLive.set(String(member._id), new Map()).get(String(member._id))!;
       const c = m.get(node) ?? m.set(node, zeroStep()).get(node)!;
@@ -371,7 +379,7 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
   // Finished today: the family's runs that ended since midnight UTC.
   const today = dayStart(now);
   const ended: any[] = await ctx.db.query("workflow_runs").withIndex("by_workspace_updated", (q: any) => q.eq("workspace", workspace).gte("updated_at", today)).collect();
-  const finishedToday = ended.filter((r) => (r.status === "completed" || r.status === "failed") && r.workflow_id && members.has(String(r.workflow_id))).length;
+  const finishedToday = ended.filter((r) => (r.status === "completed" || r.status === "failed") && memberOf(r.workflow_id)).length;
 
   const rolled = await ctx.db.query("flow_map_rollups").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).first();
   const keys = windowDays(now);
@@ -480,6 +488,7 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
         }
       : null,
     lanes,
+    liveRunIds: live.map((r) => String(r._id)),
     off: { running: offTotal.running, stalled: offTotal.stalled, steps: [...offLive].map(([id, { label, ...c }]) => ({ id, label, ...c })) },
     sources,
     shipped,
