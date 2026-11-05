@@ -21,6 +21,7 @@ import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { SwapHeldError } from "./herdTake";
 import { TerminalHoldError } from "./terminalHold";
+import { ghosttyPane } from "./ghostty";
 import { unreachableTerminalOf } from "../../shared/contracts/deliveryHold";
 import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
@@ -235,10 +236,12 @@ function fixture(transport = "tmux", cached = true) {
     findHerdrPaneForTty: async () => null, herdrRequest: fail("herdr request"),
     // Ghostty's AppleScript dictionary: paste, named keys and the screen dump.
     // Unscriptable stands for a Ghostty before 1.3, scripting turned off, or no Automation grant.
-    probeGhostty: async () => state.ghosttyScriptable ? { state: "ok" } : { state: "unscriptable", detail: "Not authorized to send Apple events to Ghostty. (-1743)" },
-    ghosttyInputText: async (_tty: string, text: string) => input("paste", text),
-    ghosttySendKeys: async (_tty: string, keys: string[]) => { for (const key of keys) input(["\r", "Return"].includes(key) ? "Enter" : key); },
-    readGhosttyScreen: async () => capture(),
+    ghosttyPane: (tty: string, bracketed: boolean, log: (line: string) => void) => ghosttyPane(tty, bracketed, log, {
+      probe: async () => state.ghosttyScriptable ? { state: "ok" } : { state: "unscriptable", detail: "Not authorized to send Apple events to Ghostty. (-1743)" },
+      inputText: async (_tty: string, text: string) => { input("paste", text); },
+      sendKeys: async (_tty: string, keys: string[]) => { for (const key of keys) input(["\r", "Return"].includes(key) ? "Enter" : key); },
+      readScreen: async () => capture(),
+    }),
     hasOpenBackgroundWork: () => false, subagentActiveAgoMs: () => Infinity,
     planSessionTeardown, acquireSessionProcessOwnership: async () => "owned",
     reapPidTree: async (pid: number) => { reaped.push(pid); return 1; }, sessionProcessCache: new Map(),

@@ -139,6 +139,8 @@ import {
   setFavoriteWithRevision,
   toggleFavoriteWithRevision,
 } from "./favoriteViewWrites";
+import { formatSlugAsTitle, generateShareToken, isNonEmptyMessage } from "./lib/conversationBasics";
+export { generateShareToken, isNonEmptyMessage };
 
 // Single relevance-ranked search-index lookup shared by every message-search
 // surface (web searchConversations, searchForCLI, feedForCLI). One combined
@@ -1132,30 +1134,6 @@ async function findChildConversations(
   }
 
   return { children, map, agentNameEntries: Object.entries(agentNameMap) };
-}
-
-export function generateShareToken(): string {
-  return crypto.randomUUID();
-}
-
-function formatSlugAsTitle(slug: string): string {
-  return slug
-    .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
-type MessageLike = {
-  content?: string | null;
-  tool_calls?: unknown[] | null;
-  tool_results?: unknown[] | null;
-};
-
-export function isNonEmptyMessage(m: MessageLike): boolean {
-  const hasContent = m.content && m.content.trim();
-  const hasToolCalls = m.tool_calls && m.tool_calls.length > 0;
-  const hasToolResults = m.tool_results && m.tool_results.length > 0;
-  return !!(hasContent || hasToolCalls || hasToolResults);
 }
 
 export const resolveTeamFromDirectory = query({

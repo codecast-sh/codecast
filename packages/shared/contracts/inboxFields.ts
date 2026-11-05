@@ -68,7 +68,7 @@ export type InboxFactField = (typeof INBOX_FACT_FIELDS)[number];
 // again. A convex test pins this set to what those three functions write.
 export const INBOX_ROW_FIELDS = [
   "_id", "session_id", "user_id", "team_id", "status", "is_private", "team_visibility",
-  "title", "subtitle", "started_at", "agent_type", "model", "effort", "cc_account", "transcript_revision",
+  "title", "subtitle", "started_at", "history_import", "agent_type", "model", "effort", "cc_account", "transcript_revision",
   "project_path", "git_root", "git_branch", "git_remote_url", "worktree_name", "worktree_branch",
   "parent_conversation_id", "parent_message_uuid", "spawned_by_conversation_id", "forked_from",
   "is_subagent", "is_workflow_sub", "is_workflow_primary", "agent_team_name", "agent_name",

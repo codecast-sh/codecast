@@ -80,7 +80,11 @@ describe("filing the person's sessions", () => {
     expect(r).toMatchObject({ applied: true, status: "resolved" });
     expect(r.changes.map((c: any) => c.status)).toEqual(r.changes.map(() => "applied"));
     expect(await db.get("conversations_tweet")).toMatchObject({ org_role_id: GROWTH });
-    expect((await db.query("org_proposal_changes").collect())[0]).toMatchObject({ status: "applied", reply: { verdict: "approve", text: "Filed by @head-of-people, which starts work on its own" } });
+    // The author applied it, so no person's reply is invented: the proposal records the act.
+    const [row] = await db.query("org_proposal_changes").collect();
+    expect(row).toMatchObject({ status: "applied" });
+    expect(row.reply?.text).toBeUndefined();
+    expect((await db.query("org_proposals").collect())[0].applied_by_author).toBeGreaterThan(0);
   });
 
   test("filings are their own kind of work: mixed with a structure change the spec is refused", async () => {
