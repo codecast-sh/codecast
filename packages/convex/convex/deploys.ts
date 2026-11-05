@@ -333,8 +333,17 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   return shortId;
 }
 
+/** The targets the workspace's lines deploy to: each project's line profile `[line.deploy] target`. */
+export async function lineDeployTargets(ctx: any, workspace: string): Promise<Set<string>> {
+  const projects = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).take(500);
+  return new Set(projects.flatMap((p: any) => (p.line_profile?.deploy?.command ? [normalizeDeployTarget(p.line_profile.deploy.target) ?? "deploy"] : [])));
+}
+
 /** The fixes a deploy recorded from a marker carried, by the history's rule over the workspace's merges and live deploys. */
 export async function carriesForMarker(ctx: any, row: Doc<"deploys">, now: number): Promise<Doc<"deploys">["carries"]> {
+  // Line fixes go out on the target a line deploys to (its [line.deploy] target). A marker for any other target (a web
+  // build, a release, a second app) carries none of them.
+  if (!(await lineDeployTargets(ctx, row.workspace)).has(row.target)) return [];
   const merges = (await workspaceMerges(ctx, row.workspace, now)).filter((m) => mergeInScope(m, row.project_id ? String(row.project_id) : null));
   // (A marker's deploy names no project: it ships the code, so it carries every fix in the workspace.)
   if (!merges.length) return [];

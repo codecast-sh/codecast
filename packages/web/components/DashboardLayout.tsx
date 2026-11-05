@@ -1,5 +1,4 @@
 import { SeatKillDialog } from "./org/SeatKillDialog";
-import { useSyncTeamShipFeeds } from "../hooks/useSessionShipState";
 import { useSyncMetricSeries } from "../hooks/useMetricSeries";
 import { useSyncOpsSources } from "../hooks/useSyncOps";
 import { useSyncSessionIndex } from "../hooks/useSyncSessionIndex";
@@ -337,8 +336,6 @@ function HostFeeders() {
   // The team's git activity: the team feed reads it, and so does any page that
   // wants recent events without opening a scope of its own.
   useSyncTeamExternalEvents();
-  // Where each session's work is on its way to production: the team's change runs and deploy records the inbox cards read.
-  useSyncTeamShipFeeds();
   // Imported Linear/GitHub containers. Small, workspace-wide and read by the
   // integrations panel and any project surface that shows where its tasks
   // came from — one subscription rather than one per opened card.
