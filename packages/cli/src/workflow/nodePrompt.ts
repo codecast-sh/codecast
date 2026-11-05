@@ -65,7 +65,7 @@ export function buildNodePrompt(
   // A question typed at the gate this station presents comes back here: the
   // decision it posts again is the answer.
   if (context["human.gate.no_card"] && presentsDecision(node, graph)) {
-    parts.push(`\n# No decision of yours stands at ${context["human.gate.no_card"]}\nThe gate decides only on a decision you post in this visit: an answer given to a card from an earlier visit does not carry over. Post the decision for the change as it stands.`);
+    parts.push(`\n# No decision of yours stands at ${context["human.gate.no_card"]}\nThe gate found no open decision of yours: an answer given to a card from an earlier visit does not carry over. Post the decision for the change as it stands. A decision of yours that is still open stands as it is, and changes through \`cast decide edit\` when its facts moved.`);
   }
   if (context["human.gate.question"] && presentsDecision(node, graph)) {
     parts.push(`\n# The person's question about your decision\n${context["human.gate.question"]}\n\nThey asked instead of choosing. Answer it in the decision you post again.`);
