@@ -19,12 +19,12 @@ import {
 } from "@codecast/shared/contracts/ingest";
 import {
   checkFingerprint,
+  errorCulprit,
   groupFingerprint,
   failureMessageKey,
   jobFingerprint,
   metricFingerprint,
   sdkErrorFingerprint,
-  topInAppFrame,
 } from "@codecast/shared/contracts/signalFingerprint";
 import type { ReplayIssue } from "@codecast/shared/replay";
 
@@ -648,7 +648,7 @@ export function planItem(item: IngestItem, envelope: { release?: string; environ
     case "error":
       return group("error", sdkErrorFingerprint(item), {
         title: titleOf(item.message),
-        culprit: topInAppFrame(item.stack),
+        culprit: errorCulprit(item),
         level: item.level ?? "error",
         occurrence: occurrence("error"),
         sample: {
