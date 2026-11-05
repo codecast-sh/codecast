@@ -118,7 +118,7 @@ function targetWords(t: DeployTargetRow, n: ReturnType<typeof targetNow>, tone: 
   if (tone === "failed") return "last deploy failed";
   if (tone === "unknown") return n.live ? "live" : "not tracked yet";
   if (tone === "current") return "up to date";
-  return `${t.queue.commits} waiting`;
+  return `${t.queue.commits} ${t.queue.commits === 1 ? "commit" : "commits"} waiting`;
 }
 
 function ToneMark({ tone }: { tone: TargetTone }) {
@@ -185,7 +185,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
 
       <div className="dpp-body" data-record-only={t.record_only ? "" : undefined}>
       {t.record_only ? null : <section className="dpp-sec" data-deploy-waiting>
-        <h3>Waiting on main{t.queue.known ? <span className="dpp-num">{waiting} {waiting === 1 ? "commit" : "commits"}</span> : null}{sessions ? <span className="dpp-h-sub">· {sessions} {sessions === 1 ? "session" : "sessions"}</span> : null}{t.queue.untouched ? <span className="dpp-h-sub" title={`${t.queue.untouched} commits on main change no file ${t.name} ships`}>· {t.queue.untouched} skip {t.name}</span> : null}</h3>
+        <h3>Waiting on main{t.queue.known ? <span className="dpp-num">{waiting} {waiting === 1 ? "commit" : "commits"}</span> : null}{sessions ? <span className="dpp-h-sub">· {sessions} {sessions === 1 ? "session" : "sessions"}</span> : null}{t.queue.untouched ? <span className="dpp-h-sub" title={`${t.queue.untouched} commits on main change no file ${t.name} ships`}>· {t.queue.untouched} not for {t.name}</span> : null}</h3>
         {!t.queue.known ? <p className="dpp-none" data-deploy-queue-unknown>Live <code>{short(n.live?.sha)}</code> is not on main, so what waits here can't be counted.</p>
         : waiting === 0 ? <p className="dpp-none">Everything on main is live here.</p> : (
           <ul className="dpp-groups">
@@ -208,7 +208,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
               <span className="dpp-age">{ago(now, d.live_at ?? d.created_at)}</span>
               {d._id === n.live?._id ? <span className="dpp-livenow" data-deploy-live-now>Live now</span>
               : d.status === "live" && d._id !== n.live?._id && d.sha && d.sha !== n.live?.sha && (t.can_redeploy_sha || t.can_rollback) && !n.open ? (
-                <button type="button" className="dpp-row-act" onClick={() => onPress({ target: t, action: t.can_redeploy_sha ? "redeploy" : "rollback", of: d })} data-deploy-redeploy={d.short_id}><RotateCcw className="w-3 h-3" aria-hidden />Go back</button>
+                <button type="button" className="dpp-row-act" onClick={() => onPress({ target: t, action: t.can_redeploy_sha ? "redeploy" : "rollback", of: d })} data-deploy-redeploy={d.short_id}><RotateCcw className="w-3 h-3" aria-hidden />Roll back here</button>
               ) : <span />}
               <DeployCarried d={d} />
             </div>
@@ -233,6 +233,7 @@ function DeployDetail({ d, now }: { d: TeamDeployRow; now: number }) {
         {d.note ? <><dt>Note</dt><dd>{d.note}</dd></> : null}
         {d.steps?.length ? <><dt>Steps</dt><dd><ol className="dpp-steps">{d.steps.map((s) => <li key={s.id} data-status={s.status}>{s.id}</li>)}</ol></dd></> : null}
         {d.tasks?.some((x) => x.short_id) ? <><dt>Tasks</dt><dd><ul className="dpp-detail-sessions">{d.tasks.filter((x) => x.short_id).map((x) => <li key={x.short_id!}><Link className="dpp-detail-task" href={`/tasks/${x.short_id}`}>{x.short_id}<span>{x.title}</span></Link></li>)}</ul></dd></> : null}
+        {d.commit_rows?.length ? <><dt>Changes</dt><dd><DeployChanges d={d} /></dd></> : null}
         <dt>Sessions</dt>
         <dd>{ss.length ? <ul className="dpp-detail-sessions">{ss.map((x) => <li key={x.conversation_id}><Link href={`/conversation/${x.conversation_id}`}>{sessionWords(x)}</Link></li>)}</ul> : <span className="dpp-dim">{d.commits ? `${d.commits} commits, none from a session` : "Not recorded"}</span>}</dd>
       </dl>
@@ -270,6 +271,28 @@ function AfterMark({ after }: { after: NonNullable<TeamDeployRow["after"]> }) {
   if (after.quiet) return <span className="dpp-after" data-tone="ok">quiet since</span>;
   const parts = [after.new_errors ? `${after.new_errors} new ${after.new_errors === 1 ? "error" : "errors"}` : null, after.regressions ? `${after.regressions} came back` : null].filter(Boolean);
   return parts.length ? <span className="dpp-after" data-tone="bad" title="Errors that started or came back anywhere in the workspace since this went live">since: {parts.join(" · ")}</span> : null;
+}
+
+/** What a deploy took out, change by change, under the session that wrote each. */
+function DeployChanges({ d }: { d: TeamDeployRow }) {
+  const titles = new Map(sessionsOf(d).map((x) => [x.conversation_id, sessionWords(x)]));
+  const groups = new Map<string, NonNullable<TeamDeployRow["commit_rows"]>>();
+  for (const c of d.commit_rows ?? []) {
+    const k = c.conversation_id ?? "";
+    groups.set(k, [...(groups.get(k) ?? []), c]);
+  }
+  const more = d.commits - (d.commit_rows?.length ?? 0);
+  return (
+    <div className="dpp-changes">
+      {[...groups].sort(([a], [b]) => (a ? 0 : 1) - (b ? 0 : 1)).map(([k, rows]) => (
+        <div key={k || "none"} className="dpp-change-group">
+          {k ? <Link className="dpp-session" href={`/conversation/${k}`}>{titles.get(k) ?? k.slice(0, 7)}</Link> : <span className="dpp-session dpp-dim">Not from a session</span>}
+          <ul>{rows.map((c) => <li key={c.sha}><code>{short(c.sha)}</code><span className="dpp-subject">{c.subject}</span>{c.tasks?.map((t) => <Link key={t} className="dpp-task" href={`/tasks/${t}`}>{t}</Link>)}</li>)}</ul>
+        </div>
+      ))}
+      {more > 0 ? <span className="dpp-dim">{more} more commits</span> : null}
+    </div>
+  );
 }
 
 /** The sessions a deploy carried, each a step from its thread. */

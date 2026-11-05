@@ -206,7 +206,18 @@ a push that deploys itself). When every touched target is live it prints
 `Live: <sha> on <target> dp-N, ...` and the run ends there; the session's end
 message carries that line. A failed deploy ends the run at "Deploy failed" with
 the dp-N and its note. A change no target ships passes at once, and one that
-never lands waits out the station's week.
+never lands waits out the station's week. A flow that composes the segment may
+name targets the change does not wait for, `deploy [flow="deploy",
+except="aivery-operator"]`: one held back on purpose, whose live sha is not where
+the change's watch should start. Union's fix flows end this way: Merge (or Ready
+to land), then Deploy, then Watch, so a cause closes Done and starts its watch
+only once production runs it, and a failed deploy leaves it In Review with a
+blocker.
+
+A segment declares the attributes it reads with `params="except"` in its graph
+line; `$except` in its stations is the composing node's attribute, empty when the
+node sets none. The value lands in a script as written, so the parser holds it to
+words, names and paths.
 
 While the session works, the run carries `waiting_on_session` (`node_id`,
 `conversation_id`, `since`, `note`: what was sent, cut short), cleared when the
