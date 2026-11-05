@@ -225,7 +225,6 @@ export function SidebarNavView({
   docs,
   orgOn,
   orgBadge,
-  opsBadge,
   offers,
   changesOn,
   flowsOn = true,
@@ -248,8 +247,6 @@ export function SidebarNavView({
   orgOn: boolean;
   /** The Org row's count of what waits on you; renders nothing at zero. */
   orgBadge?: ReactNode;
-  /** The Ops row's count of what is wrong now (alerting watches, sources down); renders nothing at zero. */
-  opsBadge?: ReactNode;
   /** Features the workspace's team never decided on (workspaceFeatureState
    *  "offer"): their row stays, marked new, and opens the feature's landing. */
   offers?: { org?: boolean; line?: boolean };
@@ -322,7 +319,6 @@ export function SidebarNavView({
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
           title="Ops: what is wrong in the running product right now"
-          badge={opsBadge}
           icon={<Radar className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />
         {chat}

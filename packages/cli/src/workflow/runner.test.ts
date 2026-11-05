@@ -594,6 +594,26 @@ describe("workflow/runner (LE14: json vars, graph hash, plan ready_tasks)", () =
     expect(cap.logs.some(l => l.includes("routed-few"))).toBe(false);
   });
 
+  // eval_wallet logged "line Evals are paused, so the run stays parked" to stderr while it waited; after the pause
+  // lifted its output still carried that line, and the card written next said the tests were paused (sd-2511).
+  test("a station that succeeds records what it printed to stdout, not what it logged to stderr while it waited", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      hold  [shape=parallelogram, script="echo 'wallet-wait: line Evals are paused, so the run stays parked' >&2; echo '{\\"room_usd\\": 12}'"]
+      quiet [shape=parallelogram, script="echo 'only a log line' >&2"]
+      fail  [shape=parallelogram, script="echo 'why it failed' >&2; exit 1"]
+      exit  [shape=Msquare]
+      start -> hold -> quiet -> fail -> exit
+    }`);
+    const ctx: Record<string, string> = {};
+    const { executeCommand } = await import("./commandStation.js");
+    for (const id of ["hold", "quiet", "fail"]) await executeCommand(g.nodes.get(id)!, ctx, tmpDir);
+    expect(ctx["hold.output"]).toBe('{"room_usd": 12}');
+    expect(ctx["hold.json"]).toBe('{"room_usd":12}');
+    expect(ctx["quiet.output"]).toBe("only a log line");
+    expect(ctx["fail.output"]).toBe("why it failed");
+  });
+
   test("the run reports a graph hash that ignores formatting but not content", async () => {
     const { graphHash } = await import("./parser.js");
     const a = parseWorkflowSource(`digraph g { start [shape=Mdiamond]\n exit [shape=Msquare]\n start -> exit }`);

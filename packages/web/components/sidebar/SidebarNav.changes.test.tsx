@@ -59,10 +59,10 @@ test("no Inbox row and no heading over the conversation rows", () => {
   for (const href of ["/org", "/repo", "/files", "/pages", "/flows", "/ops", "/windows", "/triggers"]) expect(html).toContain(`href="${href}"`);
 });
 
-test("Ops is a top-level row outside the Agents group, lit on /ops, with the count of what is wrong", () => {
-  const view = (active: SidebarNavActive, badge?: React.ReactNode) => renderToStaticMarkup(
+test("Ops is a top-level row outside the Agents group, lit on /ops", () => {
+  const view = (active: SidebarNavActive) => renderToStaticMarkup(
     <MemoryRouter>
-      <SidebarNavView isNarrow={false} active={active} tasks={shut} docs={shut} orgOn opsBadge={badge} />
+      <SidebarNavView isNarrow={false} active={active} tasks={shut} docs={shut} orgOn />
     </MemoryRouter>,
   );
   const html = view(ACTIVE);
@@ -71,7 +71,6 @@ test("Ops is a top-level row outside the Agents group, lit on /ops, with the cou
   expect(html.slice(html.indexOf('data-rail-heading="Agents"'))).not.toContain('href="/ops"');
   const current = (h: string) => [...h.matchAll(/aria-current="page"[^>]*>(?:<[^>]+>)*([^<]+)</g)].map((m) => m[1]);
   expect(current(view({ ...ACTIVE, ops: true }))).toEqual(["Ops"]);
-  expect(view(ACTIVE, <span data-ops-count>3</span>)).toContain("data-ops-count");
 });
 
 test("Org is the first Work row, with its count and its two read views always under it; no project rows, no chevron, and no Org under Agents", () => {

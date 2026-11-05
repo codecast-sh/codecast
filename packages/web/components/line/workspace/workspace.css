@@ -597,6 +597,47 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-seg[data-parallel] { border-style: solid; border-color: color-mix(in srgb, var(--lw-ink-3) 28%, transparent); }
 .fd-seg-par { font-weight: 500; color: var(--lw-ink-3); }
 .fd-seg[data-parallel] .fd-step-wrap { max-width: none; }
+/* A pickable drawing: each step is a button that opens what it does under the drawing (FlowStationPanel). */
+.fd[data-pickable] button.fd-step { font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.fd[data-pickable] button.fd-step:hover { border-color: color-mix(in srgb, var(--lw-ink-3) 60%, transparent); }
+.fd[data-pickable] button.fd-step:focus-visible, .fd[data-pickable] button.fd-seg-name:focus-visible { outline: 2px solid color-mix(in srgb, var(--sol-cyan) 55%, transparent); outline-offset: 2px; }
+.fd-step[data-picked] { border-color: var(--sol-cyan); background: color-mix(in srgb, var(--sol-cyan) 9%, var(--lw-card)); }
+.fd[data-pickable] button.fd-seg-name { all: unset; margin: -2px 0 0 2px; white-space: nowrap; font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .02em; color: var(--lw-ink-2); cursor: pointer; border-radius: 4px; }
+.fd[data-pickable] button.fd-seg-name:hover { color: var(--lw-ink); }
+.fd-seg[data-picked] { border-style: solid; border-color: var(--sol-cyan); }
+
+/* What one station does: who, its settings, its words, its routes. */
+.fsp { border-top: 1px solid var(--lw-rule-2); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.fsp-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fsp-who { flex: none; width: 15px; height: 15px; color: var(--lw-ink-3); }
+.fsp-name { flex: none; font-weight: 650; font-size: var(--lw-fs-base); color: var(--lw-ink); }
+.fsp-in { flex: none; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fsp-facts { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.fsp-fact { font-size: var(--lw-fs-2xs); padding: 1px 6px; border-radius: 4px; color: var(--lw-ink-2); background: color-mix(in srgb, var(--lw-ink-3) 11%, transparent); white-space: nowrap; }
+.fsp-close { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; border: 0; background: transparent; color: var(--lw-ink-3); cursor: pointer; }
+.fsp-close:hover { color: var(--lw-ink); background: color-mix(in srgb, var(--lw-ink-3) 12%, transparent); }
+.fsp-close svg { width: 14px; height: 14px; }
+.fsp-run { display: flex; align-items: center; gap: 8px; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); }
+.fsp-run-state { font-weight: 600; }
+.fsp-run[data-status="completed"] .fsp-run-state { color: var(--lw-ok); }
+.fsp-run[data-status="failed"] .fsp-run-state { color: var(--lw-bad); }
+.fsp-run[data-status="running"] .fsp-run-state { color: var(--lw-person); }
+.fsp-run-outcome { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.fsp-runs-flow { font-size: var(--lw-fs-xs); color: var(--lw-ink-2); display: flex; align-items: center; gap: 6px; }
+.fsp-label { font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--lw-ink-3); }
+.fsp-tabs { display: flex; gap: 2px; }
+.fsp-tab { font: inherit; font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--lw-ink-3); background: transparent; border: 0; border-radius: 5px; padding: 2px 7px; cursor: pointer; }
+.fsp-tab[aria-selected="true"] { color: var(--lw-ink); background: color-mix(in srgb, var(--lw-ink-3) 13%, transparent); }
+.fsp-text { max-height: 420px; overflow: auto; border: 1px solid var(--lw-rule-2); border-radius: 8px; padding: 8px 12px; background: var(--lw-card-2); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.fsp-text[data-kind="script"] { padding: 0; background: transparent; border: 0; }
+.fsp-cold { height: 96px; }
+.fsp-routes { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: max-content 14px 1fr; column-gap: 6px; row-gap: 2px; font-size: var(--lw-fs-xs); }
+.fsp-route { display: contents; }
+.fsp-route-when { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--lw-fs-2xs); color: var(--lw-ink-2); align-self: center; }
+.fsp-route-arrow { color: var(--lw-ink-3); }
+.fsp-route-to { color: var(--lw-ink); font-weight: 600; }
+.fsp-route[data-ends] .fsp-route-to { color: var(--lw-ink-2); font-weight: 500; }
+.fsp-route[data-taken] .fsp-route-to { color: var(--lw-person); }
 /* A flow's page heads the app with the way back to every flow. */
 .lw-title-up { color: var(--lw-ink-3); text-decoration: none; font-weight: 600; }
 .lw-title-up:hover { color: var(--lw-ink); }

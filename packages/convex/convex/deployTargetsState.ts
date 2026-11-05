@@ -4,7 +4,7 @@
 
 import type { Doc, Id } from "./_generated/dataModel";
 import { conversationFromSessionTrailer, normalizeRepository, resolveTaskLinksFromText } from "./lib/gitRefs";
-import { deployStepsOf } from "./deploysView";
+import { afterFor, deployStepsOf } from "./deploysView";
 import { ciOf } from "./deployTargetsCi";
 import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCommit } from "@codecast/shared/contracts/deployTargets";
 
@@ -73,22 +73,34 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
   };
 }
 
-/** A commit on main as a deploy's record keeps it, with the session that wrote it. */
+/** A commit on main as a deploy's record keeps it, with the session that wrote it and the tasks it links. */
 export function deployCommitOf(c: Doc<"commits">) {
   return {
     sha: c.sha,
     subject: c.message.split("\n")[0].slice(0, 200),
     ...(c.author_login || c.author_name ? { author: c.author_login ?? c.author_name } : {}),
     ...(c.conversation_id ? { conversation_id: c.conversation_id } : {}),
+    ...(c.task_ids?.length ? { task_ids: c.task_ids } : {}),
   };
 }
 
-/** A deploy as the targets view lists it, with the sessions whose commits it carried. */
-export async function deployLine(ctx: any, d: Doc<"deploys">, convCache: Map<string, any>) {
+type DeployAfterCounts = { new_errors: number; regressions: number; reopened: number; quiet: boolean; open: boolean };
+
+/**
+ * A deploy as the targets view lists it: the sessions and tasks behind the commits it carried (and the tasks a line
+ * deploy carries), and what happened after it went live, in counts (deploysView.afterFor).
+ */
+export async function deployLine(ctx: any, d: Doc<"deploys">, caches: { conv: Map<string, any>; task: Map<string, any> }, after?: DeployAfterCounts | null) {
   const sessions = [];
   for (const id of new Set((d.commits ?? []).flatMap((c) => (c.conversation_id ? [String(c.conversation_id)] : [])))) {
-    if (!convCache.has(id)) convCache.set(id, await ctx.db.get(id as Id<"conversations">));
-    sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: convCache.get(id)?.title ?? null });
+    if (!caches.conv.has(id)) caches.conv.set(id, await ctx.db.get(id as Id<"conversations">));
+    sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: caches.conv.get(id)?.title ?? null });
+  }
+  const tasks = [];
+  for (const id of new Set([...(d.commits ?? []).flatMap((c) => (c.task_ids ?? []).map(String)), ...d.carries.map((c) => String(c.task_id))])) {
+    if (!caches.task.has(id)) caches.task.set(id, await ctx.db.get(id as Id<"tasks">));
+    const t = caches.task.get(id);
+    if (t) tasks.push({ task_id: id, short_id: t.short_id ?? null, title: t.title ?? null });
   }
   return {
     _id: String(d._id),
@@ -110,6 +122,8 @@ export async function deployLine(ctx: any, d: Doc<"deploys">, convCache: Map<str
     dirty: d.dirty ?? null,
     commits: d.commits?.length ?? 0,
     sessions,
+    tasks,
+    after: after ?? null,
     run_id: d.run_id ? String(d.run_id) : null,
     created_at: d.created_at,
     live_at: d.live_at ?? null,
@@ -133,6 +147,13 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
   const open = deploysHere.find((d) => d.status === "requested" || d.status === "running") ?? null;
   const convCache = new Map<string, any>();
   const taskCache = new Map<string, any>();
+  const caches = { conv: convCache, task: taskCache };
+  const history = deploysHere.slice(0, HISTORY);
+  const aftermath = await afterFor(ctx, t.workspace, live && !history.includes(live) ? [...history, live] : history, Date.now());
+  const countsOf = (d: Doc<"deploys">): DeployAfterCounts | null => {
+    const a = aftermath.get(String(d._id));
+    return a ? { new_errors: a.new_errors, regressions: a.regressions, reopened: a.reopened, quiet: a.quiet, open: a.open } : null;
+  };
   const after = await mainCommitsAfter(ctx, t.repository, live?.sha ?? null);
   const touching = after.commits.filter((c) => commitTouchesTarget(t.paths, (c.files ?? []).map((f) => f.filename)));
   const skipped = after.commits.length - touching.length;
@@ -155,9 +176,9 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
     can_rollback: t.runs === "here" && !!t.rollback,
     device_id: t.device_id ?? null,
     publisher_user_id: String(t.publisher_user_id),
-    live: live ? await deployLine(ctx, live, convCache) : null,
-    open: open ? { ...(await deployLine(ctx, open, convCache)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,
-    history: await Promise.all(deploysHere.slice(0, HISTORY).map((d) => deployLine(ctx, d, convCache))),
+    live: live ? await deployLine(ctx, live, caches, countsOf(live)) : null,
+    open: open ? { ...(await deployLine(ctx, open, caches)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,
+    history: await Promise.all(history.map((d) => deployLine(ctx, d, caches, countsOf(d)))),
     last_read: t.last_read ?? null,
     queue: {
       // False when the live sha is not on main as codecast knows it (no deploy yet, or main's order not backfilled).
