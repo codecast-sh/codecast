@@ -49,6 +49,7 @@ import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { TrialStopActs, approachFailed, useStationReport } from "./TrialStopActs";
 import { TrialHeldLink } from "./TrialHeldLink";
+import { Button } from "../ui/button";
 
 type Filter = "waiting" | "tooling" | "held" | "running" | "empty" | "failed" | "stopped" | "answered" | "closed" | "all" | "superseded";
 
@@ -426,14 +427,9 @@ function FailedRunPane({ run: r, week, runLimit, cards, now, onOpenCard }: { run
             <div className="text-[13px] font-medium text-sol-text">{failWords(r.fail_reason, r.lost_at_gate)}</div>
             {!r.lost_at_gate && r.fail_reason && failWords(r.fail_reason) !== r.fail_reason && <div className="mt-0.5 font-mono text-[11px] text-sol-text-dim">{r.fail_reason}</div>}
           </div>
-          <button
-            type="button"
-            onClick={() => trialRerun(r._id)}
-            className="inline-flex items-center gap-1.5 rounded-md bg-sol-blue px-3 py-1.5 text-[12.5px] font-medium text-sol-bg transition-opacity hover:opacity-90"
-            data-trial-rerun={r.task_short_id}
-          >
+          <Button type="button" variant="blue" size="sm" onClick={() => trialRerun(r._id)} data-trial-rerun={r.task_short_id}>
             <RotateCcw className="h-3.5 w-3.5" /> {r.lost_at_gate ? `Pick up at ${r.lost_at_gate.card}` : "Rerun from main"}
-          </button>
+          </Button>
         </section>
       )}
       {stop && <StoppedBand run={r} week={week} runLimit={runLimit} />}
@@ -591,7 +587,7 @@ function TrialLimitsBar({ spend, project, held, heldHref }: { spend: TrialSpendR
       {spend && <BilledFold spend={spend} cap={limits?.cap ?? null} over={!!hit?.spend} />}
       {spend && <SubscriptionFold spend={spend} />}
       {limits && project && (hit?.runs || hit?.spend) && (
-        <button type="button" onClick={() => setPick(RAISE_PICKS[0])} aria-haspopup="dialog" className="rounded-md bg-sol-blue px-2.5 py-1 text-[12px] font-medium text-sol-bg hover:opacity-90" data-trial-raise>Raise the limits…</button>
+        <Button type="button" variant="blue" size="xs" onClick={() => setPick(RAISE_PICKS[0])} aria-haspopup="dialog" data-trial-raise>Raise the limits…</Button>
       )}
       {pick && limits && project && (
         <SwitchReview

@@ -18,6 +18,7 @@
 //
 // The run is named by `started_at`: a page scheduled by an earlier run finds
 // another value and does nothing, so a restart never leaves two chains.
+import { TALLY_REBUILD_EVERY_MS } from "../replayTallies";
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery, mutation } from "../functions";
 import { internal } from "../_generated/api";
@@ -27,10 +28,10 @@ import { scopeArgs, type ScopeArgs } from "../lib/ingestScopeArgs";
 import { scopeOf, sourceByRef } from "../lib/ingestScope";
 import { markConnectionLost } from "../lib/sourceHealth";
 import { replayBackfillValidator } from "../ingestSchema";
-import { sourceViewOf } from "../ingest";
+import { sourceViewOf } from "../lib/sourceStats";
 import { VendorCallError } from "./vendorReplay";
 import { TALLY_EVERY_MS } from "./replayRest";
-import { connFor, importFor, posthogRequest, recordingsPath } from "./posthog";
+import { connFor, importFor, posthogRequest, recordingRow, recordingsPath } from "./posthog";
 import { connectionIdForSource, tokenFor } from "../tokenConnectors";
 import { importSentryReplay, nextCursor, replayListIds, replaysListUrl, resolveProjectIds, sentryCall, sentryTarget } from "./sentry";
 import {
@@ -42,6 +43,7 @@ import {
   replayBackfillSince,
   replayBackfillStalled,
   type ReplayBackfill,
+  type ReplayImportFailure,
 } from "@codecast/shared/contracts/replay";
 
 /**
@@ -64,7 +66,7 @@ export const REPLAY_BACKFILL_PAGE = {
 } as const;
 
 export type VendorFailure = { error: string; status?: number; retry_after_ms?: number; lost?: boolean };
-export type ListPage = { ids: string[]; next: string | null };
+export type ListPage = { ids: string[]; next: string | null; about?: Record<string, Omit<ReplayImportFailure, "id" | "error">> };
 
 /** What a page needs of a vendor; the Convex wiring below supplies it, a test supplies fakes. */
 export interface BackfillVendor {
@@ -173,7 +175,7 @@ export async function runBackfillPage(
         state.failed++;
         state.failures_in_row = (state.failures_in_row ?? 0) + 1;
         state.last_error = `${id}: ${r.error}`.slice(0, 500);
-        state.failures = [...(state.failures ?? []), { id: id.slice(0, 200), error: r.error.slice(0, 300) }].slice(-REPLAY_BACKFILL_FAILURES_KEPT);
+        state.failures = [...(state.failures ?? []), { ...page.about?.[id], id: id.slice(0, 200), error: r.error.slice(0, 300) }].slice(-REPLAY_BACKFILL_FAILURES_KEPT);
         if (state.failures_in_row >= REPLAY_BACKFILL_LIMITS.failures_in_row) halt ??= { error: r.error };
       }
     }
@@ -240,7 +242,15 @@ export async function listPostHogPage(conn: Parameters<typeof posthogRequest>[0]
   const results: any[] = Array.isArray(body?.results) ? body.results : [];
   const ids = results.map((r) => (typeof r?.id === "string" ? r.id : "")).filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
   const more = typeof body?.has_next === "boolean" ? body.has_next : results.length >= REPLAY_BACKFILL_PAGE.list_size;
-  return { ids, next: more && results.length ? String(offset + results.length) : null };
+  // What the list says of each, kept beside a failure so the popover names the recording as a person knows it.
+  const about: NonNullable<ListPage["about"]> = {};
+  for (const raw of results) {
+    const row = recordingRow(raw);
+    if (!row) continue;
+    const person = row.email ?? row.distinct_id;
+    about[row.id] = { ...(row.started_at ? { at: row.started_at } : {}), ...(row.duration_ms ? { length_ms: row.duration_ms } : {}), ...(person ? { person: person.slice(0, 200) } : {}), ...(row.url ? { url: row.url.slice(0, 300) } : {}) };
+  }
+  return { ids, next: more && results.length ? String(offset + results.length) : null, about };
 }
 
 type SourceInputs = { source: Doc<"event_sources">; connection_id: string | null; connection_config?: any };
@@ -340,6 +350,8 @@ export const runPage = internalAction({
       }
     }
     await ctx.runMutation(internal.sources.replayBackfill.savePage, { source_id: args.source_id, run: args.run, state: outcome.state, next_in_ms: outcome.next_in_ms ?? undefined, lost: outcome.lost });
+    // Recordings this page brought in get PostHog's length, active time, browser, OS and country now (sources/replayFacts.ts), not at the next tend: the list's Active filter and its rows read them.
+    if (input?.source.provider === "posthog" && outcome.state.imported > state.imported) await ctx.scheduler.runAfter(0, internal.sources.replayFacts.run, { source_id: args.source_id });
   },
 });
 
@@ -438,6 +450,8 @@ export const tend = internalMutation({
         if (provider === "posthog") await ctx.scheduler.runAfter(0, internal.sources.replayRest.sweep, { source_id: source._id });
         // How many copies are still cut short, for the Replays tab's import line; recounted hourly.
         if (provider === "posthog" && now - (source.replay_rest?.at ?? 0) >= TALLY_EVERY_MS) await ctx.scheduler.runAfter(0, internal.sources.replayRest.tally, { source_id: source._id });
+        // Each person's recordings, counted whole once a day, for the list's total and People rows (lib/replayTallies.ts); live writes keep them between.
+        if (now - (source.replay_tally_at ?? 0) >= TALLY_REBUILD_EVERY_MS) await ctx.scheduler.runAfter(0, internal.replayTallies.rebuild, { source_id: source._id });
         const next = tendImport(source.replay_backfill, now);
         if (!next) continue;
         await launch(ctx, source, next);

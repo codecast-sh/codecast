@@ -8,11 +8,11 @@ const pool = appPool();
 const change = flowBySlug(pool, "change")!;
 
 describe("a flow as a diagram", () => {
-  test("the change line reads as its four segments, each holding its own steps, ending at Done", () => {
+  test("the change line reads as its five segments, each holding its own steps, ending at Live", () => {
     const d = flowDiagram(change);
-    expect(d.steps.map((s) => s.label)).toEqual(["Check", "Review", "Decide", "Ship"]);
-    expect(d.steps.map((s) => s.inner.map((i) => i.label))).toEqual([["Verify"], ["Review"], ["Decide"], ["Rebase", "Land"]]);
-    expect(d.end).toBe("Done");
+    expect(d.steps.map((s) => s.label)).toEqual(["Check", "Review", "Decide", "Land", "Deploy"]);
+    expect(d.steps.map((s) => s.inner.map((i) => i.label))).toEqual([["Verify"], ["Review"], ["Decide"], ["Rebase", "Land"], ["Wait for live"]]);
+    expect(d.end).toBe("Live");
     expect(d.steps[3].inner[0].id).toBe("ship__rebase");
   });
 
@@ -20,9 +20,17 @@ describe("a flow as a diagram", () => {
     const ship = flowDiagram(change).steps[3];
     const rebase = ship.inner[0].side.map((r) => [r.tone, r.outcome, r.leadsTo]);
     const shipStep = ship.inner[1].side.map((r) => [r.tone, r.outcome, r.leadsTo]);
-    expect(rebase).toEqual([["out", "Already landed", null], ["stop", "Conflict", null]]);
+    expect(rebase).toEqual([["out", "Already landed", null], ["back", "Conflict", "this session"]]);
     expect(shipStep).toContainEqual(["back", "default branch moved", "Rebase"]);
     expect(shipStep).toContainEqual(["stop", "Not shipped", null]);
+  });
+
+  test("a stage's findings go back to the session the change came from, said once; true stops still stop", () => {
+    const routes = (i: number) => { const s = flowDiagram(change).steps[i]; return [...s.side, ...s.inner.flatMap((x) => x.side)].map((r) => [r.tone, r.outcome, r.leadsTo]); };
+    expect(routes(0)).toEqual([["back", "Checks failed", "this session"]]);
+    expect(routes(1)).toEqual([["back", "Changes asked", "this session"], ["stop", "Rejected", null]]);
+    expect(routes(2)).toEqual([["back", "Revise", "this session"], ["stop", "Dropped", null]]);
+    expect(routes(4)).toEqual([["stop", "Deploy failed", null]]);
   });
 
   test("a segment's plain end is not a route off its last step", () => {
@@ -68,13 +76,13 @@ describe("a run in words", () => {
   });
   test("a live run says where it is, a segment's step under the segment's name", () => {
     expect(flowRunState({ status: "running", current_node_id: "review__review" }, change).words).toBe("At Review");
-    expect(flowRunState({ status: "running", current_node_id: "ship__rebase" }, change).words).toBe("At Ship: Rebase");
+    expect(flowRunState({ status: "running", current_node_id: "ship__rebase" }, change).words).toBe("At Land: Rebase");
   });
 });
 
 describe("the pool", () => {
   test("holds the shipped flows, and a pushed one by its slug, reading its kind from its source", () => {
-    expect(pool.filter((f) => f.kind === "segment").map((f) => f.slug).sort()).toEqual(["check", "decide", "eval", "prove-implement", "review", "ship"]);
+    expect(pool.filter((f) => f.kind === "segment").map((f) => f.slug).sort()).toEqual(["check", "decide", "deploy", "eval", "prove-implement", "review", "ship"]);
     const pushed = pushedFlow({
       _id: "w1", slug: "polish", name: "polish",
       source: 'digraph polish { graph [kind="segment", label="Polish", description="Critique then fix"] }',

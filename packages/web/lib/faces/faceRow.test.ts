@@ -1,19 +1,16 @@
 // THE FACE ROW MODEL (pl-756 F1). Every state in the vocabulary, every link
 // kind, the order rules, the seams where a face used to read off then on, the
 // card for each engagement, the selectors, and the shared reader's memo.
-import { beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { dmRoomKey } from "@codecast/shared/contracts";
 import { JOIN_TITLE_MS } from "../calls/joinAnnounce";
 import { useInboxStore } from "../../store/inboxStore";
-import { dmUnreadOf } from "./faceDmUnread";
 import {
   deriveFaceRow,
   engagementOf,
   faceRowInputSig,
   isInCall,
   isTalking,
-  readFaceRow,
-  resetFaceRow,
   roomIsPrivate,
   type FaceMember,
   type FaceRow,
@@ -22,60 +19,7 @@ import {
   roomHeldAsBurst,
   callRoomOf,
 } from "./faceRow";
-
-const NOW = 1_700_000_000_000;
-const ME = "u-me";
-const ANN = "u-ann";
-const BOB = "u-bob";
-const CY = "u-cy";
-const DM_ANN = dmRoomKey(ME, ANN);
-const DM_BOB = dmRoomKey(ME, BOB);
-
-function member(id: string, name: string, over: Partial<FaceMember> = {}): FaceMember {
-  return { _id: id, name, presence_state: "active", ...over };
-}
-
-function input(over: Partial<FaceRowInput> = {}): FaceRowInput {
-  return {
-    viewer: { id: ME, name: "Me" },
-    roster: [member(ME, "Me"), member(ANN, "Ann"), member(BOB, "Bob"), member(CY, "Cy")],
-    occupancy: {},
-    liveRooms: [],
-    walkie: { liveRoom: null, sending: null, incoming: null, canReply: false },
-    call: { phase: "idle", roomKey: null, muted: true, micDenied: false, camera: false, speaking: [], cameras: [] },
-    followLeaderId: null,
-    rings: { incoming: [], outgoing: [] },
-    announcement: null,
-    unread: new Map(),
-    now: NOW,
-    ...over,
-  };
-}
-
-const seat = (id: string, over: Record<string, unknown> = {}) => ({ user_id: id, ...over });
-const walkie = (liveRoom: FaceRowInput["walkie"]["liveRoom"], over: Partial<FaceRowInput["walkie"]> = {}) => ({
-  liveRoom,
-  sending: null,
-  incoming: null,
-  canReply: false,
-  ...over,
-});
-const sendingTo = (roomKey: string, heardLive = true) => ({ roomKey, live: true, heardLive });
-const burstRoom = (key: string, mode: "burst" | "listen" | "call" = "burst") => ({ key, mode, since: NOW - 5_000 });
-const call = (roomKey: string, over: Partial<FaceRowInput["call"]> = {}) => ({
-  phase: "connected",
-  roomKey,
-  muted: false,
-  micDenied: false,
-  camera: false,
-  speaking: [],
-  cameras: [],
-  ...over,
-});
-
-const states = (row: FaceRow) => Object.fromEntries(row.entries.map((e) => [e.id, e.state]));
-const order = (row: FaceRow) => row.entries.map((e) => e.id);
-const entry = (row: FaceRow, id: string) => row.entries.find((e) => e.id === id)!;
+import { NOW, ME, ANN, BOB, CY, DM_ANN, DM_BOB, member, input, seat, walkie, sendingTo, burstRoom, call, states, order, entry } from "./faceRowFixtures";
 
 // ── every state ─────────────────────────────────────────────────────────────
 
@@ -742,70 +686,6 @@ describe("selectors", () => {
     const row = deriveFaceRow(input({}), null);
     expect(engagementOf("u-nobody", row)).toBe("offline");
     expect(engagementOf(ANN, row)).toBe("online");
-  });
-});
-
-describe("the shared reader", () => {
-  beforeEach(() => {
-    resetFaceRow();
-    useInboxStore.setState({
-      currentUser: { _id: ME, name: "Me" },
-      teamMembers: [member(ME, "Me"), member(ANN, "Ann"), member(BOB, "Bob")],
-      callOccupancy: {},
-      liveRooms: [],
-      myCalls: { incoming: [], outgoing: [], membership: null },
-      followLeaderId: null,
-    } as any);
-  });
-
-  test("a roster push that changes nothing a face draws hands back the same row", () => {
-    const first = readFaceRow();
-    expect(order(first)).toEqual([ANN, BOB]);
-    useInboxStore.setState({
-      teamMembers: [member(ME, "Me"), member(ANN, "Ann", { presence_input_at: NOW } as any), member(BOB, "Bob")],
-    } as any);
-    expect(readFaceRow()).toBe(first);
-  });
-
-  test("a change a face draws hands back a new row derived against the last", () => {
-    const first = readFaceRow();
-    useInboxStore.setState({ followLeaderId: BOB } as any);
-    const second = readFaceRow();
-    expect(second).not.toBe(first);
-    expect(entry(second, BOB).followed).toBe(true);
-    expect(isInCall(BOB)).toBe(false);
-  });
-
-  test("the input signature moves on the walkie, and holds through fields no face draws", () => {
-    const st = useInboxStore.getState();
-    const idle = { sending: null, incoming: null, liveRoom: null, unavailable: null, canReply: false, asr: "live", error: null } as const;
-    const a = faceRowInputSig(st, idle, null, [], NOW);
-    expect(faceRowInputSig(st, { ...idle, asr: "unavailable", error: "x" }, null, [], NOW + 1_000)).toBe(a);
-    expect(faceRowInputSig(st, { ...idle, liveRoom: burstRoom(DM_ANN) }, null, [], NOW)).not.toBe(a);
-    expect(faceRowInputSig(st, idle, { roomKey: DM_ANN, text: "Ann joined", at: NOW }, [], NOW)).not.toBe(a);
-    expect(faceRowInputSig(st, idle, null, [{ identity: ANN, isLocal: false, kind: "camera" }], NOW)).not.toBe(a);
-  });
-});
-
-describe("dmUnreadOf", () => {
-  const st = (last: any, unread = 2) => ({
-    currentUser: { _id: "me" },
-    chatChannels: { c1: { kind: "dm" } },
-    chatRail: [{ channel_id: "c1", member_ids: ["me", "cam"], unread, last_message: last }],
-  });
-
-  test("their newest line rides with the count", () => {
-    const d = dmUnreadOf(st({ user_id: "cam", preview: "can you look at this", created_at: 5 }), "cam");
-    expect(d).toEqual({ channelId: "c1", unread: 2, preview: "can you look at this", at: 5 });
-  });
-
-  test("my own last line is not shown as theirs", () => {
-    expect(dmUnreadOf(st({ user_id: "me", preview: "mine", created_at: 5 }), "cam")?.preview).toBe(null);
-  });
-
-  test("nothing unread, nothing to say", () => {
-    expect(dmUnreadOf(st({ user_id: "cam", preview: "x", created_at: 5 }, 0), "cam")).toBe(null);
-    expect(dmUnreadOf(st(null), "someone-else")).toBe(null);
   });
 });
 

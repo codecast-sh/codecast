@@ -23,6 +23,7 @@ import { Switch } from "../ui/switch";
 import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
 import { WeekCardFrame } from "./WeekCardFrame";
 import { weekCardLedger } from "./weekCardLedger";
+import { Button } from "../ui/button";
 
 type CardRow = {
   _id: string;
@@ -146,13 +147,13 @@ function CardPanel({ card, name, which }: { card: CardRow; name: string | null; 
             onTurnOff={unpublish}
             trigger={({ on, press }) =>
               on ? (
-                <button type="button" onClick={press} className="h-8 rounded-md border border-sol-border px-3 text-sol-text-muted hover:text-sol-text" data-week-unpublish>
+                <Button type="button" variant="outline" size="sm" onClick={press} data-week-unpublish>
                   Unpublish
-                </button>
+                </Button>
               ) : (
-                <button type="button" onClick={press} className="h-8 rounded-md bg-sol-cyan px-4 font-semibold text-sol-bg hover:brightness-110" data-week-share>
+                <Button type="button" variant="cyan" size="sm" onClick={press} data-week-share>
                   Share
-                </button>
+                </Button>
               )
             }
           />
@@ -189,7 +190,7 @@ function ShareRow({ token, stats }: { token: string; stats: WeekCardStats }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sol-border bg-sol-bg-alt/40 p-2 text-[13px]" data-week-share-row>
-      <a href={url} target="_blank" rel="noopener" className="min-w-0 flex-1 truncate px-2 text-sol-blue hover:underline">{url}</a>
+      <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate px-2 text-sol-blue hover:underline">{url}</a>
       <button
         type="button"
         onClick={() => {
@@ -208,7 +209,7 @@ function ShareRow({ token, stats }: { token: string; stats: WeekCardStats }) {
           key={t.id}
           href={t.href(url, text)}
           target="_blank"
-          rel="noopener"
+          rel="noopener noreferrer"
           onClick={() => track("weekly_card_share_pressed", { target: t.id })}
           className="inline-flex h-8 items-center rounded-md border border-sol-border px-3 text-sol-text hover:bg-sol-bg-alt"
           data-week-target={t.id}

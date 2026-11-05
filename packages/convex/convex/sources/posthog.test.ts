@@ -14,6 +14,7 @@ import {
   decompressPostHogEvent,
   fetchMetricValue,
   fetchRecordingEvents,
+  SNAPSHOT_FIRST_PART_BYTES,
   hogqlScalar,
   importRecording,
   insightPath,
@@ -313,6 +314,19 @@ describe("recordings", () => {
     expect(read.next_blob).toBe(1);
     expect(urls.slice(1)).toEqual([path("start_blob_key=0&end_blob_key=1"), path("start_blob_key=0&end_blob_key=0"), path("start_blob_key=1&end_blob_key=1")]);
   });
+
+  test("an over-budget first range is halved, a later one ends the part, and one blob past the whole budget fails plainly", async () => {
+    const urls: string[] = [];
+    const blob = (i: number, kb: number) => [JSON.stringify(["w", { ...CLICK, timestamp: CLICK.timestamp + i, pad: "x".repeat(kb * 1024) }])];
+    const read = await fetchRecordingEvents(conn, "rec-1", blobServer([0, 1, 2, 3].map((i) => blob(i, 400)), urls), 0, 1024 * 1024);
+    expect(read.ok && [read.events.length, read.truncated, read.next_blob]).toEqual([2, true, 2]);
+    expect(urls.slice(1)).toEqual([path("start_blob_key=0&end_blob_key=3"), path("start_blob_key=0&end_blob_key=1"), path("start_blob_key=2&end_blob_key=3")]);
+    const huge = await fetchRecordingEvents(conn, "rec-1", blobServer([blob(0, 2048)], []), 0, 1024 * 1024);
+    expect(huge.ok).toBe(false);
+    expect(!huge.ok && huge.error).toMatch(/over 1 MB, too large to read/);
+    // The first part of an import reads less than a later part: the action that holds it also converts and stores it.
+    expect(SNAPSHOT_FIRST_PART_BYTES).toBeLessThan(24 * 1024 * 1024);
+  });
 });
 
 // ── The public actions, over the fake db ──
@@ -367,6 +381,14 @@ function actionCtx(w: ReturnType<typeof world>, userId: string, actions: Array<{
       actions.push({ name: getFunctionName(fn), args });
       return { replay_id: "rp_row", short_id: "rp-1", chunks: 1, saved: true };
     },
+    // The import's own writes (lib/replayImport.ts importExternalCore runs in the calling action).
+    runMutation: async (fn: any, args: any) => {
+      const name = getFunctionName(fn);
+      actions.push({ name, args });
+      if (name === "replays:openImport") return { replay_id: "rp_row", short_id: "rp-1" };
+      if (name === "replays:saveImported") return { saved: true };
+      return null;
+    },
   } as any;
 }
 
@@ -375,6 +397,7 @@ describe("actions", () => {
   afterEach(() => {
     globalThis.fetch = realFetch;
     delete process.env.CONNECTION_SECRETS_KEY;
+    for (const k of ["R2_ENDPOINT", "REPLAYS_R2_ACCESS_KEY_ID", "REPLAYS_R2_SECRET_ACCESS_KEY"]) delete process.env[k];
   });
 
   test("query passes rows through, capped, and refuses an empty query before any call", async () => {
@@ -424,18 +447,16 @@ describe("actions", () => {
       if (url.endsWith("/snapshots")) return json({ sources: [{ source: "blob_v2", blob_key: "0" }] });
       return new Response([META, FULL, CLICK].map((e) => JSON.stringify(["w", e])).join("\n"));
     }) as any;
+    process.env.R2_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
+    process.env.REPLAYS_R2_ACCESS_KEY_ID = "rk";
+    process.env.REPLAYS_R2_SECRET_ACCESS_KEY = "rs";
     const actions: Array<{ name: string; args: any }> = [];
     const first = await h(importRecording)(actionCtx(w, "u1", actions), { ...TEAM, source: "product", recording: "rec-1" });
     expect(first).toEqual({ replay_id: "rp_row", short_id: "rp-1", imported: true, truncated: false });
-    expect(actions).toHaveLength(1);
-    expect(actions[0].name).toBe("replays:importExternal");
-    expect(actions[0].args).toMatchObject({
-      provider: "posthog",
-      external_id: "rec-1",
-      started_at: Date.parse("2026-10-01T10:00:00Z"),
-      user: { id: "d1", email: "a@example.com" },
-    });
-    expect(actions[0].args.events.map((e: any) => e.type)).toEqual(["nav", "click"]);
+    // Stored in this action: no runAction carries the events.
+    expect(actions.map((a) => a.name)).toEqual(["replays:openImport", "replays:saveImported"]);
+    expect(actions[0].args).toMatchObject({ external_id: "rec-1", started_at: Date.parse("2026-10-01T10:00:00Z") });
+    expect(actions[1].args).toMatchObject({ provider: "posthog", user: { id: "d1", email: "a@example.com" }, counts: { clicks: 1 } });
 
     // importExternal stamps imported_at on the row; the second read is ours.
     const source = w.db._tables.event_sources[0];
@@ -444,7 +465,7 @@ describe("actions", () => {
     const again = await h(importRecording)(actionCtx(w, "u1", actions), { ...TEAM, source: "product", recording: "rec-1" });
     expect(again).toMatchObject({ short_id: "rp-1", imported: false });
     expect(urls).toEqual([]);
-    expect(actions).toHaveLength(1);
+    expect(actions).toHaveLength(2);
     await expect(h(importRecording)(actionCtx(w, "u1"), { ...TEAM, source: "product", recording: "../x" })).rejects.toThrow(/not a PostHog recording id/);
   });
 });

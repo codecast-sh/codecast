@@ -13,7 +13,7 @@ import { clearHold, readHold, writeHold } from "./hold.js";
 
 const NOW = 1_800_000_000_000;
 const facts = (over: Partial<VerdictFacts>): VerdictFacts => ({
-  primary: false, locked: false, liveOwner: false, processInside: false, run: false, held: null,
+  primary: false, locked: false, liveOwner: false, processInside: false, run: false, liveRun: false, held: null,
   lastActivity: NOW - 3 * 86_400_000, counts: { same: 0, absorbed: 0, only: 0, both: 0 }, now: NOW, ...over,
 });
 
@@ -49,6 +49,17 @@ describe("treeVerdict", () => {
     expect(treeVerdict(facts({ run: true })).verdict).toBe("empty");
     expect(treeVerdict(facts({ run: true, counts: { same: 2, absorbed: 0, only: 0, both: 0 } })).verdict).toBe("landed");
     expect(treeVerdict(facts({ run: true, lastActivity: NOW - STALE_MS - 1, counts: { same: 0, absorbed: 0, only: 2, both: 0 } })).verdict).toBe("stale");
+  });
+  // ct-68695 waited 8 days at the Eval wallet and was pruned as stale; ct-62158's change reached main outside its run
+  // and its tree was pruned as landed. Both runs were live and failed at Eval on a missing workspace.
+  test("a live run's tree is the run's whatever it holds or however long it waited, and so is one whose run cannot be told", () => {
+    for (const liveRun of [true, null]) {
+      expect(treeVerdict(facts({ run: true, liveRun, lastActivity: NOW - STALE_MS - 1, counts: { same: 0, absorbed: 0, only: 6, both: 2 } })).verdict).toBe("run");
+      expect(treeVerdict(facts({ run: true, liveRun, counts: { same: 2, absorbed: 0, only: 0, both: 0 } })).verdict).toBe("run");
+      expect(treeVerdict(facts({ run: true, liveRun })).verdict).toBe("run");
+    }
+    // A tree no run made is unaffected by what the runs are doing.
+    expect(treeVerdict(facts({ liveRun: null, counts: { same: 2, absorbed: 0, only: 0, both: 0 } })).verdict).toBe("landed");
   });
   test("a held tree is held whatever it holds, its reason in the report, and never prunable", () => {
     const work = { same: 0, absorbed: 0, only: 2, both: 1 };

@@ -63,6 +63,13 @@ describe("removeSourceLedger", () => {
     expect(l.pick).toBeUndefined();
     expect(l.confirm).toBe("Remove for good");
   });
+  test("Pause names each kind it keeps with its count; a source that cannot record drops replays", () => {
+    const l = removeSourceLedger({ ...base, choice: "Pause", canPause: true });
+    expect(l.rows.filter((r) => r.tone === "ok").map((r) => [r.k, r.v])).toEqual([["Issues", "300 kept"], ["Replays", "1,000+ kept"], ["Watches", "11 kept"]]);
+    const app = removeSourceLedger({ ...base, replays: { n: 0 }, holdsReplays: false, choice: "Pause", canPause: true });
+    expect(app.figures.map((f) => f.label)).not.toContain("replays");
+    expect(app.rows.some((r) => r.k === "Replays")).toBe(false);
+  });
   test("a keyed source says its key is refused", () => {
     expect(removeSourceLedger({ ...base, keyed: true, choice: "Remove", canPause: false }).rows.some((r) => r.k === "Its key")).toBe(true);
   });

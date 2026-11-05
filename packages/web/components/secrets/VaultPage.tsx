@@ -29,7 +29,8 @@ import { SaveSigninDialog } from "./SaveSignin";
 import { SecretDetail } from "./SecretDetail";
 import { DeclineRequest, ValueEditor } from "./ValueForm";
 import { CommandDisclosure, KindGlyph, RequestHead, ScopeMark } from "./parts";
-import { KIND, VAULT_PRIMARY } from "../../lib/secretLook";
+import { KIND } from "../../lib/secretLook";
+import { Button } from "../ui/button";
 import { HEALTH, envPairLabel, filterSecrets, formatIn, isStub, secretHealth, whereUsed, type Scope } from "./vaultModel";
 import { useSampleVault } from "./sampleVault";
 import { VaultSource } from "./VaultSource";
@@ -52,11 +53,11 @@ function AddMenu({ onPick, compact }: { onPick: (m: AddMode) => void; compact?: 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" aria-label="Add to Vault" className={`inline-flex h-7 items-center gap-1.5 rounded-md pl-2.5 pr-2 text-[12.5px] ${VAULT_PRIMARY}`} data-vault-add-menu>
-          <Plus size={14} />
+        <Button type="button" variant="yellow" size="xs" aria-label="Add to Vault" className="pr-2" data-vault-add-menu>
+          <Plus />
           {compact ? null : "Add"}
-          <ChevronDown size={13} className="opacity-70" />
-        </button>
+          <ChevronDown className="opacity-70" />
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[11rem]">
         {kinds.map((k) => {
@@ -373,14 +374,9 @@ function EmptyVault({ onPick }: { onPick: (m: AddMode) => void }) {
           <h2 className="text-[14px] font-semibold text-sol-text">Keys and logins for your agents</h2>
           <p className="text-[12.5px] text-sol-text-muted">Agents use them at run time; values stay out of transcripts.</p>
         </div>
-        <button
-          type="button"
-          onClick={() => onPick({ kind: "key" })}
-          className={`inline-flex h-9 items-center gap-2 rounded-md px-4 text-[13px] ${VAULT_PRIMARY}`}
-          data-vault-empty-primary
-        >
-          <Plus size={15} /> Add key
-        </button>
+        <Button type="button" variant="yellow" onClick={() => onPick({ kind: "key" })} data-vault-empty-primary>
+          <Plus /> Add key
+        </Button>
         <div className="flex flex-wrap justify-center gap-2">
           <button type="button" className={more} onClick={() => onPick({ import: "" })}>
             <FileUp size={13} /> Import .env

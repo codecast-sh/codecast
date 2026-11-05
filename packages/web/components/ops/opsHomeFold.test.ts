@@ -41,3 +41,32 @@ test("the home lists the folded pair once, with no phone number in its title", (
   expect(items).toHaveLength(1);
   expect(itemTitle(items[0])).toBe("GET /api/contacts/by-phone/:id answers 404");
 });
+
+test("request ids name no cause: one function's errors fold into one row titled without them, two functions never fold", async () => {
+  const { dropRequestIds } = await import("@codecast/shared/contracts/signalFingerprint");
+  const { errorTitle } = await import("@codecast/shared/contracts/ingest");
+  const convex = (id: string, fn: string, rid: string, count: number) => group({ _id: id, short_id: `eg-${id}`, kind: "error", last_release: "unknown", count, title: `[CONVEX M(${fn})] [Request ID: ${rid}] Server Error` });
+  const rows = [convex("1809", "dispatch:dispatch", "65293c3ba5e64535", 3), convex("1427", "dispatch:dispatch", "9453b3fc4914731c", 8), convex("626", "orgHealth:healthReport", "0eb30e7cfd1fc93d", 38)];
+  const out = foldIssueRows(rows, (g) => g, (g) => g.count);
+  expect(out.map((c) => c.map((g) => g._id).sort())).toEqual([["1427", "1809"], ["626"]]);
+  expect(foldedTitle(out[0].map((g) => g.title))).toBe("[CONVEX M(dispatch:dispatch)] Server Error");
+  expect(dropRequestIds("[CONVEX Q(org:tree)] [Request ID: 5349b679b4bfcf3b] Server Error")).toBe("[CONVEX Q(org:tree)] Server Error");
+  // New groups are titled without it on the server (errorTitle is the ingest's title rule).
+  expect(errorTitle("[CONVEX Q(org:tree)] [Request ID: 5349b679b4bfcf3b] Server Error").title).toBe("[CONVEX Q(org:tree)] Server Error");
+  // A single issue's row reads the same way.
+  const items = attentionItems({ sources: [source({ provider: "sdk" })], groups: [rows[2]], watches: [], replays: [] }, NOW, () => undefined);
+  expect(itemTitle(items[0])).toBe("[CONVEX M(orgHealth:healthReport)] Server Error");
+});
+
+test("two causes filed under one problem task fold into one row under it, and Nobody on it counts issues", () => {
+  const a = group({ _id: "a", short_id: "eg-2071", title: "Failed to update call status: RpcError: HTTP 502", count: 4, signal_task_id: "t1" });
+  const b = group({ _id: "b", short_id: "eg-2056", title: "Failed to update call status", count: 1, signal_task_id: "t1" });
+  const c = group({ _id: "c", short_id: "eg-9", title: "Something else entirely broke here today", count: 2 });
+  const items = attentionItems({ sources: [source()], groups: [a, b, c], watches: [], replays: [], taskOf: () => ({ status: "open", assignee: null }) }, NOW, () => undefined);
+  expect(items).toHaveLength(2);
+  const folded = items.find((it) => it.kind === "issue" && it.variants)!;
+  expect(folded.kind === "issue" && folded.variants!.map((g) => g.short_id)).toEqual(["eg-2071", "eg-2056"]);
+  expect(itemTitle(folded)).toBe("Failed to update call status …");
+  expect(folded.taskId).toBe("t1");
+  expect(folded.unowned).toBe(2);
+});

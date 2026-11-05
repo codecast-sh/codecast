@@ -611,3 +611,32 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .otl-cluster-wrap[data-pin="end"] .ops-tl-mark { transform: translate(-100%, -50%) rotate(45deg); }
 .otl-cluster-wrap[data-pin="start"] .ops-tl-cluster:hover { transform: translate(-2px, -50%) scale(1.15); }
 .otl-cluster-wrap[data-pin="end"] .ops-tl-cluster:hover { transform: translate(calc(-100% + 2px), -50%) scale(1.15); }
+/* Narrow lanes: each name sits over its track at full width, so names that share a prefix stay readable; the bubbles take the whole width under it. */
+.otl-lanes-unit-row { padding: 6px 10px 0; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); }
+.otl-lanes[data-stacked="true"] .ops-tl-axis { margin-left: 10px; margin-right: 10px; }
+.otl-lanes[data-stacked="true"] .ops-tl-lane { flex-direction: column; height: auto; }
+.otl-lanes[data-stacked="true"] .ops-tl-name { width: auto; height: 22px; padding: 0 10px; border-right: 0; }
+.otl-lanes[data-stacked="true"] .ops-tl-track { height: 26px; flex: none; margin: 0 10px; }
+/* Apps: the board's shape while its app row is read. */
+.ops-skel { display: block; border-radius: 4px; background: color-mix(in srgb, var(--sol-text-muted) 14%, transparent); }
+.ops-skel-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 16px; }
+.ops-skel-panel { display: flex; flex-direction: column; gap: 10px; padding: 14px; min-height: 120px; border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); }
+/* Narrow stream (lanes stacked): the chart drops its name gutter and carries its count labels inside the plot, and the
+   stacked tracks keep the chart's insets, so the bars and the bubbles under them share one x scale at every width. */
+.otl-main[data-narrow="true"] { --otl-gutter: 10px; }
+.otl-main[data-narrow="true"] .otl-chart .ovc-grid { left: 0; }
+.otl-main[data-narrow="true"] .otl-chart .ovc-y { left: 0; transform: translateY(-50%); padding: 0 4px 0 2px; border-radius: 3px; background: color-mix(in srgb, var(--sol-bg-alt) 82%, transparent); }
+.otl-lanes[data-stacked="true"] .ops-tl-axis { margin: 0 14px 0 10px; }
+.otl-lanes[data-stacked="true"] .ops-tl-track { margin: 0 14px 0 10px; }
+/* A watches tile that links (every watch unjudged): the stat's own look, with the press shown on hover. */
+a.ops-stat { color: inherit; text-decoration: none; }
+a.ops-stat:hover .ops-stat-label { color: var(--sol-text); text-decoration: underline; text-underline-offset: 2px; }
+/* Narrow overview: the facts sit on a six-track grid, two to a row, and five fall 3 + 2 rather than leaving one alone on a row. */
+@container (max-width: 560px) {
+  .sov-facts { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .sov-facts > .sov-fact, .sov-facts > .sov-fact:last-child:nth-child(odd) { grid-column: span 3; }
+  .sov-facts > .sov-fact:first-child:nth-last-child(5),
+  .sov-facts > .sov-fact:first-child:nth-last-child(5) ~ .sov-fact:nth-child(-n + 3),
+  .sov-facts > .sov-fact:first-child:nth-last-child(3),
+  .sov-facts > .sov-fact:first-child:nth-last-child(3) ~ .sov-fact { grid-column: span 2; }
+}

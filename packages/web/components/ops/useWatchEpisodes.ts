@@ -3,7 +3,7 @@
 // issue card, the issue page's header and its metric card all read this.
 import { useMemo } from "react";
 import { useOpsEvents } from "../../hooks/useSyncOps";
-import { alertEpisodes, currentEpisodeSince, episodeSummary, type Episode, type TransitionRow } from "./metricModel";
+import { alertEpisodes, currentEpisodeSince, episodeSummary, type Episode, type TransitionRow } from "./metricEvents";
 import { regressedAt } from "./issuesModel";
 import type { OpsEvent, OpsGroup, OpsWatch } from "./opsTypes";
 

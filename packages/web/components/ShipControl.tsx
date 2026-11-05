@@ -15,6 +15,7 @@ import { useShipTarget, type ShipTargetRef, type ShipTargetRow } from "../hooks/
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
+import { Button } from "./ui/button";
 
 const PHASE_TONE: Record<ShipPhase, string> = {
   starting: "var(--sol-text-dim)",
@@ -147,15 +148,9 @@ function ShipPlanView({ row, onShip, onCancel }: { row: ShipTargetRow | undefine
         <button type="button" onClick={onCancel} className="h-7 rounded px-2.5 text-xs text-sol-text-muted hover:bg-sol-bg-alt">
           Cancel <KeyCap size="xs">Esc</KeyCap>
         </button>
-        <button
-          type="button"
-          onClick={onShip}
-          disabled={!!plan.blocked}
-          data-ship-confirm
-          className="inline-flex h-7 items-center gap-1.5 rounded bg-sol-green px-3 text-xs font-semibold text-sol-bg hover:opacity-90 disabled:opacity-40"
-        >
+        <Button type="button" variant="green" size="xs" onClick={onShip} disabled={!!plan.blocked} data-ship-confirm>
           Ship it <KeyCap size="xs">Enter</KeyCap>
-        </button>
+        </Button>
       </div>
     </div>
   );

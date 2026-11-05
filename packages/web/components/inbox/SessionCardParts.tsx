@@ -302,24 +302,22 @@ const CLOSE_PATH = "M6 18L18 6M6 6l12 12";
 const STASH_PATH = "M7 7l10 10M17 17h-6m6 0v-6";
 const RESTORE_PATH = "M17 17L7 7M7 7h6M7 7v6";
 
-/** The ONE pin a pinned session shows: a persistent, interactive badge anchored
- *  top-right. It stays put on hover (z above the toolbar) and the hover toolbar
- *  omits its own pin button for pinned rows, so the pin never duplicates or
- *  cross-fades into a second copy. `fadeGround` is the tinted card's ground
- *  under the fade; null is the resting card. */
-export function CardPinBadge({ session, fadeGround, onPin }: { session: InboxSession; fadeGround: string | null; onPin?: (id: string, e: React.MouseEvent) => void }) {
+/** A pinned session's pin, beside its time on the meta row: it says the row
+ *  is pinned and unpins on press. The hover toolbar's pin slot does the same
+ *  for a pinned row, so the pin never moves under the pointer. */
+export function CardPinMark({ session, onPin }: { session: InboxSession; onPin?: (id: string, e: React.MouseEvent) => void }) {
   if (!onPin || !session.is_pinned) return null;
   return (
-    <div data-sv-fade data-sv-pin className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: `linear-gradient(to right, transparent, ${fadeGround ?? "var(--sol-bg-alt)"} 60%)` }}>
-      <ShortcutTooltip label="Unpin" action="session.pin" side="left">
-        <button
-          onClick={(e) => { e.stopPropagation(); onPin(session._id, e); }}
-          className="p-1 rounded text-sol-magenta transition-opacity hover:opacity-70 pointer-events-auto"
-        >
-          <PinGlyph filled />
-        </button>
-      </ShortcutTooltip>
-    </div>
+    <ShortcutTooltip label="Unpin" action="session.pin" side="left">
+      <button
+        data-sv-pin
+        aria-label="Unpin"
+        onClick={(e) => { e.stopPropagation(); onPin(session._id, e); }}
+        className="flex-shrink-0 -my-0.5 text-sol-magenta/80 transition-opacity hover:opacity-70 [&>svg]:w-3 [&>svg]:h-3"
+      >
+        <PinGlyph filled />
+      </button>
+    </ShortcutTooltip>
   );
 }
 
@@ -344,27 +342,18 @@ export function CardHoverToolbar({
 }) {
   return (
         <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${fadeGround ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={fadeGround ? { background: `linear-gradient(to right, transparent, color-mix(in srgb, ${fadeGround} 50%, transparent), color-mix(in srgb, ${fadeGround} 85%, transparent))` } : undefined}>
-          {/* Pin slot, first so it anchors the top of the toolbar. When the row is
-              already pinned, the persistent badge above IS the pin — here we render
-              only an invisible spacer the same size, so the remaining actions sit
-              exactly where they do for an unpinned row and the badge has a clear slot
-              to occupy. When unpinned, this is the live "Pin" affordance. */}
+          {/* Pin first, so it anchors the top of the toolbar: Pin on a free
+              row, Unpin (filled) on a pinned one. */}
           {onPin && (
-            session.is_pinned ? (
-              <div className="p-1 pointer-events-none" aria-hidden="true">
-                <div className="w-3.5 h-3.5" />
-              </div>
-            ) : (
-              <ShortcutTooltip label="Pin" action="session.pin" side="left">
-                <button
-                  aria-label="Pin"
-                  onClick={(e) => { e.stopPropagation(); onPin(session._id, e); }}
-                  className="p-1 rounded transition-colors text-sol-text-dim hover:text-sol-magenta pointer-events-auto"
-                >
-                  <PinGlyph filled={false} />
-                </button>
-              </ShortcutTooltip>
-            )
+            <ShortcutTooltip label={session.is_pinned ? "Unpin" : "Pin"} action="session.pin" side="left">
+              <button
+                aria-label={session.is_pinned ? "Unpin" : "Pin"}
+                onClick={(e) => { e.stopPropagation(); onPin(session._id, e); }}
+                className={`p-1 rounded transition-colors pointer-events-auto ${session.is_pinned ? "text-sol-magenta hover:opacity-70" : "text-sol-text-dim hover:text-sol-magenta"}`}
+              >
+                <PinGlyph filled={!!session.is_pinned} />
+              </button>
+            </ShortcutTooltip>
           )}
           {/* Kill — the PRIMARY remove: done with it, clears to the Killed
               group and tears the (usually idle) agent down. Undoable. */}

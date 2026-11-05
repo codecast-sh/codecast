@@ -111,6 +111,14 @@ describe("hook ingress admission", () => {
     expect(h.delivered[0]!.data.status).toBe("idle");
   });
 
+  test("a PermissionRequest's dialog flag reaches the daemon typed", () => {
+    const h = harness();
+    const url = "/hook/status?session_id=9f8c1e2a-4b6d-4f31-9c0a-1b2c3d4e5f60&status=permission_blocked&ts=1700000000" +
+      "&permission_mode=bypassPermissions&message=Bash%3A%20echo%20hi&dialog=1";
+    handleHookIngressHttp(fakeReq(url, { authorization: `Bearer ${TOKEN}` }), fakeRes(), h.deps);
+    expect(h.delivered[0]!.data.dialog).toBe(true);
+  });
+
   test("a hook script from before the token is still believed while the grace holds", () => {
     const h = harness({ legacy: true });
     const res = fakeRes();

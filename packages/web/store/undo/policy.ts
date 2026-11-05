@@ -9,6 +9,7 @@
 import type { UndoSpec } from "@platform/engine";
 import { NEVER_UNDO_POLICY } from "./policies/never";
 import { revivesKilledRow, SESSIONS_UNDO_POLICY } from "./policies/sessions";
+import { TRIGGER_UNDO_POLICY } from "./policies/triggers";
 import { WORK_UNDO_POLICY } from "./policies/work";
 import { keepConversationRows, priorUnknown } from "./thinConversation";
 
@@ -16,9 +17,10 @@ export type UndoPolicyEntry = { spec: UndoSpec } | { never: string };
 export type UndoPolicy = Record<string, UndoPolicyEntry>;
 
 /** The policy files, by owner, so the guard can prove each name appears once. */
-export const UNDO_POLICY_FILES: Record<"never" | "sessions" | "work", UndoPolicy> = {
+export const UNDO_POLICY_FILES: Record<"never" | "sessions" | "triggers" | "work", UndoPolicy> = {
   never: NEVER_UNDO_POLICY,
   sessions: SESSIONS_UNDO_POLICY,
+  triggers: TRIGGER_UNDO_POLICY,
   work: WORK_UNDO_POLICY,
 };
 

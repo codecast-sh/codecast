@@ -36,6 +36,10 @@ import { roleAuthorOf } from "../lib/sessionIdentity";
 import { useLiveIdentityRow } from "../hooks/useLiveIdentityRow";
 import { useGuestSuggestions } from "../hooks/useGuestSuggestions";
 import { useIdentityPrefs } from "../hooks/useIdentityPrefs";
+import { ReviewBar } from "./ReviewBar";
+import { useReviewComposer } from "./reviewContext";
+import { appendToDraft } from "../lib/quoteFormat";
+import { attachReviewToMessage } from "../lib/reviewActions";
 // ── Live composer co-presence ────────────────────────────────────────────────
 // Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
 // synthetic "compose:<conversationId>" id, so each side sees who else is in the box
@@ -230,10 +234,13 @@ export const CollabComposer = memo(function CollabComposer({
   conversation,
   onForkReply,
   autoFocusInput,
+  onPopulateInput,
 }: {
   conversation: ConversationData;
   onForkReply?: (content: string) => void;
   autoFocusInput?: boolean;
+  /** The view's composer bridge: quotes and "Edit in input" from the thread land here. */
+  onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>;
 }) {
   const { isAuthenticated } = useConvexAuth();
   const convId = conversation._id as Id<"conversations">;
@@ -253,6 +260,22 @@ export const CollabComposer = memo(function CollabComposer({
   const textareaRef = useHeldTextareaRef();
 
   useMountEffect(() => { if (autoFocusInput) textareaRef.current?.focus(); });
+  // Quotes and margin replies from the thread reach this box the way they
+  // reach the owner's composer (MessageInput): appended, or replacing it.
+  useWatchEffect(() => {
+    if (!onPopulateInput) return;
+    onPopulateInput.current = (text, opts) => {
+      setMessage((cur) => (opts?.append ? appendToDraft(cur, text) : text));
+      setTimeout(() => {
+        const el = textareaRef.current;
+        if (el) { el.focus(); const end = el.value.length; el.setSelectionRange(end, end); }
+      }, 0);
+    };
+    return () => { onPopulateInput.current = null; };
+  }, [onPopulateInput]);
+  // Margin replies wait in the review batch; the next send carries them.
+  const convKey = conversation._id.toString();
+  const hasBatch = useInboxStore((s) => (s.reviewComments[convKey]?.length ?? 0) > 0);
   useWatchEffect(() => {
     const el = textareaRef.current;
     if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
@@ -297,8 +320,10 @@ export const CollabComposer = memo(function CollabComposer({
   async function handleSend(together = false, queue = false) {
     // Together: one turn, my words and the others' live drafts each under
     // their author's name; the server checks each part against its draft.
-    const body = together ? composeJointTurn(me, message.trim(), candidates) : message.trim();
-    if (!body || busy) return;
+    if (busy) return;
+    const mine = attachReviewToMessage(convKey, message).trim();
+    const body = together ? composeJointTurn(me, mine, candidates) : mine;
+    if (!body) return;
     setBusy(true);
     try {
       // direct: a person typed this, not a session — the agent sees
@@ -311,9 +336,27 @@ export const CollabComposer = memo(function CollabComposer({
         : "Sent into the live session");
       setTimeout(() => setSentHint(null), 4000);
     } catch (e: any) {
+      // The batch was already taken out of the tray; keep it as text in the box.
+      setMessage(mine);
       setSentHint(e?.message?.includes("granted") ? "Access was revoked" : "Couldn't send");
       setTimeout(() => setSentHint(null), 4000);
     } finally { setBusy(false); }
+  }
+
+  // A proposal ledger in the thread presses this composer's send (reviewContext).
+  const reviewComposer = useReviewComposer();
+  const attachSend = canSend && reviewComposer?.conversationId === convKey ? reviewComposer.attachSend : undefined;
+  const sendRef = useRef(handleSend);
+  sendRef.current = handleSend;
+  useWatchEffect(() => {
+    if (!attachSend) return;
+    attachSend(() => { void sendRef.current(); });
+    return () => attachSend(null);
+  }, [attachSend]);
+
+  function forkWithBatch() {
+    const text = attachReviewToMessage(convKey, message).trim();
+    if (text) onForkReply?.(text);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -331,17 +374,17 @@ export const CollabComposer = memo(function CollabComposer({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (canSend) handleSend();
-      else if (message.trim()) onForkReply?.(message.trim());
+      else forkWithBatch();
     }
   }
 
-  // The status strip above the box: tells the viewer exactly what their Send does.
+  // The status strip above the box, only when Send does something other than
+  // deliver now: it waits, it needs a grant, or it cannot happen.
   const strip = (() => {
     switch (level) {
       case "granted":
       case "team":
-        if (runnerSilence) return { tone: "muted", icon: <Send className="w-3 h-3" />, text: <>What you send waits for <b>{owner}</b>'s machine: {runnerSilence}.</> };
-        return { tone: "cyan", icon: <Send className="w-3 h-3" />, text: roleName ? <>You can send to <b>{roleName}</b>. Messages run as commands.</> : <>You can send into <b>{owner}</b>'s live session — they run as commands.</> };
+        return runnerSilence ? { tone: "muted", icon: <Send className="w-3 h-3" />, text: <>What you send waits for <b>{owner}</b>'s machine: {runnerSilence}.</> } : null;
       case "requested":
         return { tone: "amber", icon: <Loader2 className="w-3 h-3 animate-spin" />, text: <>Waiting for <b>{owner}</b> to allow you to send…</> };
       case "denied":
@@ -354,7 +397,9 @@ export const CollabComposer = memo(function CollabComposer({
     }
   })();
 
-  const toneClass = strip.tone === "cyan"
+  const toneClass = !strip
+    ? "border-transparent"
+    : strip.tone === "cyan"
     ? "text-sol-cyan border-sol-cyan/15 bg-sol-cyan/5"
     : strip.tone === "amber"
     ? "text-amber-400 border-amber-500/15 bg-amber-500/5"
@@ -381,20 +426,22 @@ export const CollabComposer = memo(function CollabComposer({
         shared={shared.active ? { editors: shared.editors } : null}
         chat={people.length > 0 ? <ConversationChat conversationId={conversation._id.toString()} people={people} /> : null}
       />
-      <div className={`flex items-center gap-2 px-4 py-1.5 text-[11px] border-t ${toneClass}`}>
-        <span className="shrink-0">{strip.icon}</span>
-        <span className="truncate">{strip.text}</span>
+      {(strip || sentHint) && <div className={`flex items-center gap-2 px-4 py-1.5 text-[11px] border-t ${toneClass}`}>
+        {strip && <span className="shrink-0">{strip.icon}</span>}
+        {strip && <span className="truncate">{strip.text}</span>}
         {sentHint && (
           <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium text-sol-green shrink-0">
             <Check className="w-3 h-3" />{sentHint}
           </span>
         )}
-      </div>
+      </div>}
       <form
-        onSubmit={(e) => { e.preventDefault(); if (canSend) handleSend(); else if (message.trim()) onForkReply?.(message.trim()); }}
+        onSubmit={(e) => { e.preventDefault(); if (canSend) handleSend(); else forkWithBatch(); }}
         className="mx-auto conv-col px-2 sm:px-4 pb-3 pt-1.5"
       >
-        <div className={`flex items-end gap-2 border px-4 py-2 rounded-2xl bg-sol-bg-alt shadow-lg ${canSend ? "border-sol-cyan/30" : "border-sol-border/50"}`}>
+        <div className={`border px-4 py-2 rounded-2xl bg-sol-bg-alt shadow-lg ${canSend ? "border-sol-cyan/30" : "border-sol-border/50"}`}>
+        <ReviewBar conversationId={convKey} />
+        <div className="flex items-end gap-2">
           <div className="grid flex-1 min-w-0">
             <textarea
               ref={textareaRef}
@@ -411,10 +458,10 @@ export const CollabComposer = memo(function CollabComposer({
           </div>
 
           {/* Fork: copy the session and continue as your own (owner or team access). */}
-          {onForkReply && message.trim() && (
+          {onForkReply && (message.trim() || hasBatch) && (
             <button
               type="button"
-              onClick={() => onForkReply(message.trim())}
+              onClick={forkWithBatch}
               title="Fork this session and reply as your own"
               className="shrink-0 h-8 px-2.5 rounded-full transition-colors flex items-center gap-1 text-xs font-medium border border-sol-violet/40 text-sol-violet hover:bg-sol-violet/15"
             >
@@ -425,9 +472,9 @@ export const CollabComposer = memo(function CollabComposer({
           {canSend ? (
             <button
               type="submit"
-              disabled={!message.trim() || busy}
+              disabled={(!message.trim() && !hasBatch) || busy}
               className={`shrink-0 h-8 px-3 rounded-full transition-colors flex items-center gap-1.5 text-xs font-medium border ${
-                !message.trim() || busy
+                (!message.trim() && !hasBatch) || busy
                   ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed"
                   : "border-sol-cyan/50 bg-sol-cyan/20 text-sol-cyan hover:bg-sol-cyan/30 hover:border-sol-cyan"
               }`}
@@ -450,6 +497,7 @@ export const CollabComposer = memo(function CollabComposer({
               {level === "denied" || level === "revoked" ? "Request again" : "Request to send"}
             </button>
           )}
+        </div>
         </div>
       </form>
     </div>

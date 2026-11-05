@@ -160,7 +160,16 @@
 .mx-table tbody tr:hover, .mx-table tbody tr[data-cursor] { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
 .mx-table tbody tr[data-cursor] td:first-child { box-shadow: inset 2px 0 0 var(--sol-cyan); }
 .mx-table .mx-name { display: block; max-width: 320px; }
-.mx-table-spark { width: 140px; }
+.mx-table-spark { width: 140px; min-width: 72px; }
+/* The table drops columns by the width it really has (the sessions panel open or not), least needed first: Tells and Every, then Source and Line, then Issue, then the spark. */
+.mx-table-wrap { container-type: inline-size; width: 100%; overflow-x: auto; }
+@container (max-width: 1180px) { .mx-table .mx-col-4 { display: none; } }
+@container (max-width: 1000px) { .mx-table .mx-col-3 { display: none; } }
+@container (max-width: 830px) { .mx-table .mx-col-2 { display: none; } }
+@container (max-width: 690px) { .mx-table .mx-col-1 { display: none; } }
+/* The state pill already says how long an alert has run: the Alerting column goes first when even the core columns are tight. */
+@container (max-width: 520px) { .mx-table .mx-col-0 { display: none; } }
+@container (max-width: 600px) { .mx-table .mx-name { max-width: 150px; } .mx-table th, .mx-table td { padding-left: 5px; padding-right: 5px; } }
 .mx-keys { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-text-dim); }
 
 .mx-empty-state { max-width: 460px; margin: 56px auto; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
@@ -285,6 +294,10 @@
 .mx-query-answer b { font-size: 15px; color: var(--sol-violet); }
 
 /* The fix, as stages. */
+/* The Issue card's head: the id and its status never shrink; the episode summary drops to its own line when they cannot share one. */
+.mx-fix > .ops-card-head { flex-wrap: wrap; row-gap: 2px; column-gap: 10px; }
+.mx-fix-id { flex-shrink: 0; white-space: nowrap; }
+.mx-fix-sum { margin-left: auto; white-space: nowrap; }
 .mx-fix-title { display: block; padding: 8px 12px 0; font-size: 12px; color: var(--sol-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mx-fix-title:hover { text-decoration: underline; }
 .mx-steps { list-style: none; margin: 0; padding: 8px 12px 10px; display: flex; flex-direction: column; }
@@ -341,21 +354,28 @@ a.mx-starter-v { text-decoration: underline dotted color-mix(in srgb, var(--sol-
   .mx-page > .mx-chart-card { order: 2; }
   .mx-page > .mx-stats { order: 3; margin-top: 10px; }
   .mx-page > * { order: 4; }
-  .mx-stat[data-minor] { display: none; }
-  .mx-page .mx-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /* Every cell stays on a phone, two to a row: the running episode and the episode count first after the value and its change, the line and the window's spread after them. */
+  .mx-page .mx-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mx-page .mx-stats > .mx-stat:last-child { grid-column: auto; }
+  .mx-page .mx-stats > .mx-stat[data-stat="mean"] { grid-column: span var(--phone-span, 1); }
+  .mx-page .mx-stats > .mx-stat[data-stat="current"] { order: 1; }
+  .mx-page .mx-stats > .mx-stat[data-stat="episodes"] { order: 2; }
+  .mx-page .mx-stats > .mx-stat[data-stat="line"] { order: 3; }
+  .mx-page .mx-stats > .mx-stat[data-stat="range"] { order: 4; }
+  .mx-page .mx-stats > .mx-stat[data-stat="mean"] { order: 5; }
   .mx-chart-bar .mx-legend { display: none; }
   .mx-grid-cards { grid-template-columns: minmax(0, 1fr); }
   .mx-search { width: 100%; order: 10; }
   /* The overview's bar in three short rows: the states that hold watches (one scrolling row), then range, sort, view and New, then the filter. */
   [data-metrics-overview] .mx-bar { gap: 6px; margin-bottom: 10px; }
   [data-metrics-overview] .mx-bar > * { order: 2; }
-  [data-metrics-overview] .mx-states { order: 0; flex: 1 0 calc(100% - 48px); min-width: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  /* The states wrap beside New rather than scroll under it: every chip stays in view. */
+  [data-metrics-overview] .mx-states { order: 0; flex: 1 1 calc(100% - 64px); min-width: 0; flex-wrap: wrap; }
   [data-metrics-overview] .mx-state[data-zero]:not([aria-pressed="true"]) { display: none; }
   [data-metrics-overview] .mx-bar-fill, [data-metrics-overview] .mx-group-select, [data-metrics-overview] .mx-btn-label { display: none; }
   [data-metrics-overview] .mx-bar .mx-select { min-width: 0; flex: 0 1 108px; }
   [data-metrics-overview] .mx-bar .mx-seg button { padding: 0 6px; }
-  [data-metrics-overview] .mx-bar [data-metrics-new] { order: 1; }
+  [data-metrics-overview] .mx-bar [data-metrics-new] { order: 1; flex: none; align-self: flex-start; }
   [data-metrics-overview] .mx-bar .mx-search { order: 10; }
   .mx-table .mx-hide-sm { display: none; }
 }
@@ -379,6 +399,10 @@ a.mx-starter-v { text-decoration: underline dotted color-mix(in srgb, var(--sol-
 .mx-table tr:hover .mx-noline, .mx-noline:focus-visible { opacity: 1; }
 .mx-table tr:hover .mx-noline span:first-child, .mx-noline:focus-visible span:first-child { display: none; }
 .mx-table tr:hover .mx-noline span + span, .mx-noline:focus-visible span + span { display: inline; }
+button.mx-noline { border: 0; cursor: pointer; font: inherit; font-size: 10.5px; font-weight: 500; }
+button.mx-noline:hover { opacity: 1; }
+button.mx-noline:hover span:first-child { display: none; }
+button.mx-noline:hover span + span { display: inline; }
 /* Series codecast counts for a source: name, spark, value, Watch. */
 .mx-volume-list { list-style: none; margin: 0; padding: 0; }
 .mx-volume-list li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(80px, 200px) 72px auto; align-items: center; gap: 12px; padding: 8px 14px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); }
@@ -492,3 +516,7 @@ a.mx-starter-v { text-decoration: underline dotted color-mix(in srgb, var(--sol-
 .mx-sheet { display: flex; flex-direction: column; overflow: hidden; }
 .mx-sheet-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .mx-sheet-head, .mx-sheet-foot { flex: none; }
+
+/* An erroring watch's last value is old: dimmed with its change, its age beside it. */
+.mx-card[data-health="error"] .mx-value, .mx-card[data-health="error"] .mx-delta { opacity: 0.5; }
+.mx-value-age { font-size: 11px; color: var(--sol-text-dim); font-variant-numeric: tabular-nums; }

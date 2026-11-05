@@ -9,7 +9,8 @@ import { describeOrgChange, editedOrgChange, isOrgQuietChange, quietChangeSenten
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import type { OrgParentRef, OrgTree } from "./orgTypes";
 import type { OrgProposalChange } from "./orgStaffingTypes";
-import { ghostsFor, refResolves, roleNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgGhostStub } from "./orgLayout";
+import { roleNodeId, type OrgGhostPlan, type OrgGhostStub } from "./orgLayout";
+import { ghostsFor, refResolves, type OrgGhostOptions } from "./orgGhostsFor";
 import { CHANGE_KIND_WORD } from "./orgMeta";
 
 /** One face on a row: a person, a role (live or a stub), an offered session,
