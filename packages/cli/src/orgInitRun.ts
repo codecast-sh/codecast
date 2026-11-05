@@ -226,7 +226,9 @@ export async function propose(deps: OrgInitDeps, options: any): Promise<void> {
   if (!result || result.error) fail(result?.error ?? `You are not a member of ${deps.workspaceLabel(ws)}.`);
   if (options.json) { console.log(JSON.stringify({ ...result, url: proposalUrl(deps, result.short_id) }, null, 2)); return; }
   const n = result.changes?.length ?? parsed.spec.changes.length;
-  console.log(`${fmt.success("✓")} ${fmt.highlight(result.short_id)} ${parsed.spec.title} ${fmt.muted(`· ${n} change${n === 1 ? "" : "s"} · ${parsed.spec.mode}`)}`);
+  // What happened goes on the first line: a reader that keeps one line must not take an applied proposal for one waiting on a person.
+  const posted = result.applied ? (result.status === "open" ? "applied in part as posted" : "applied as posted, nothing waits on a person") : result.routed_to ? `sent to @${result.routed_to}` : `${parsed.spec.mode}, waiting on a person`;
+  console.log(`${fmt.success("✓")} ${fmt.highlight(result.short_id)} ${parsed.spec.title} ${fmt.muted(`· ${n} change${n === 1 ? "" : "s"} · ${posted}`)}`);
   // The numbers are the server's: the parser may fold two spec rows into one,
   // so a change's number is read here, never counted from the spec.
   for (const row of result.changes ?? []) console.log(`  ${changeRow(row)}`);

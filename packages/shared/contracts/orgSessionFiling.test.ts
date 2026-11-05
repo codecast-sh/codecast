@@ -21,7 +21,9 @@ describe("a filing", () => {
   test("reads as where the session goes, by its title", () => {
     expect(changeLine(row(1, "jx7abcd", "@growth", "Launch thread").change, { brief: true, names: { role: (h) => (h === "growth" ? "Growth lead" : undefined) } })).toBe("Put the session Launch thread under Growth lead");
     expect(changeLine(row(1, "jx7abcd", "done", "Bump Node").change, { brief: true })).toBe("Close the session Bump Node as done");
-    expect(changeWords(row(1, "jx7abcd", "ct-7", "Refunds").change).fields.map((f) => [f.label, f.after?.text])).toEqual([["Session", "Refunds"], ["Joins", "ct-7"]]);
+    expect(changeWords(row(1, "jx7abcd", "ct-7", "Refunds").change).fields.map((f) => [f.label, f.after?.text])).toEqual([["Joins", "ct-7"]]);
+    // The sentence already says a close as done; the card draws the session as the sentence's pill.
+    expect(changeWords(row(1, "jx7abcd", "done", "Bump Node").change).fields).toEqual([]);
   });
 
   test("a batch is its own kind of work and one ask that says where they go", () => {

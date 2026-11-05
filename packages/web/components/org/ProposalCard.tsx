@@ -18,7 +18,7 @@ import { ProposalAuthorPill } from "./ProposalAuthorPill";
 import { proposalProgressWords } from "./proposalSubjects";
 import type { OrgProposalChange, OrgProposalListRow } from "./orgStaffingTypes";
 import { LEDGER_INKS } from "./ProposalSubjectCard";
-import { ProposalEntries, ProposalFoot, ProposalLoading, useProposalBatch, useProposalEntries } from "./ProposalLedger";
+import { authorAppliedWords, ProposalEntries, ProposalFoot, ProposalLoading, useProposalBatch, useProposalEntries } from "./ProposalLedger";
 
 // ---------------------------------------------------------------- the meta line
 
@@ -36,7 +36,7 @@ export function ProgressWords({ words }: { words: string }) {
 export function ProposalMeta({ proposal, changes }: { proposal: OrgProposalListRow; changes: readonly OrgProposalChange[] }) {
   const entries = useProposalEntries(proposal, changes);
   const total = proposal.counts?.total ?? 0;
-  const words = proposal.status === "withdrawn" ? "withdrawn" : proposalProgressWords(entries.cards, entries.records ? changes : undefined) || (total ? `${total} ${total === 1 ? "change" : "changes"}` : "proposal");
+  const words = proposal.status === "withdrawn" ? "withdrawn" : authorAppliedWords(proposal, entries.work, proposalProgressWords(entries.cards, entries.records ? changes : undefined)) || (total ? `${total} ${total === 1 ? "change" : "changes"}` : "proposal");
   const [count, decided] = words.split(" · ");
   return (
     <div className={cn("not-prose mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-snug text-[color:var(--ink-quiet)]", LEDGER_INKS)} data-proposal-meta={words}>
@@ -50,7 +50,7 @@ export function ProposalMeta({ proposal, changes }: { proposal: OrgProposalListR
       {/* The separator travels with "from": a wrapped author pill never leaves a dot dangling at a line's end. */}
       <span className="inline-flex min-w-0 items-center gap-1">
         {decided && <span aria-hidden className="mr-1">·</span>}
-        <span>from</span>
+        <span>{proposal.applied_by_author ? "by" : "from"}</span>
         <ProposalAuthorPill author={proposal.author} size="sm" withHandle={false} />
       </span>
     </div>
@@ -82,7 +82,7 @@ export function ProposalBody({ proposal, changes, compact, onMap }: {
   const totals = entries.records && entries.groups.length === 1 ? null : entries.totals.line;
   return (
     <div className={cn("not-prose min-w-0", LEDGER_INKS)} data-proposal-card={proposal.short_id} data-proposal-work={entries.work ?? undefined} data-proposal-readonly={readonly || undefined}>
-      {changes.length === 0 ? <ProposalLoading /> : (
+      {changes.length === 0 ? <ProposalLoading rows={proposal.counts?.total} /> : (
         <>
           {proposal.summary_md?.trim() && (
             <div className={cn("mb-2.5 text-[13px] leading-[20px] text-[color:var(--sol-text-secondary)] [&_p]:my-0 [&_p+p]:mt-1.5", compact && "line-clamp-2")} data-proposal-summary>
