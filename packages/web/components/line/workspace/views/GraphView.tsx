@@ -249,8 +249,10 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
     if (!n) {
       const held = !whole && live?.size ? layout.list.filter((m) => live.has(m.id)) : [];
       const sz = pz.size();
-      const fits = layout.bounds.w * FIT_MIN_K <= sz.w - insets.left - insets.right && layout.bounds.h * FIT_MIN_K <= sz.h - insets.top - insets.bottom;
-      if (!held.length || fits) { pz.fit(anim); return; }
+      const fitsAt = (k: number) => layout.bounds.w * k <= sz.w - insets.left - insets.right && layout.bounds.h * k <= sz.h - insets.top - insets.bottom;
+      if (!held.length || fitsAt(FIT_MIN_K)) { pz.fit(anim); return; }
+      // Drawn live, the quiet stretches are folded, so the whole flow usually holds at the live size: open on all of it.
+      if (live && fitsAt(LIVE_FIT_K)) { pz.fit(anim, undefined, LIVE_FIT_K); return; }
       // Room for each step's badge above it and its name beside a dot.
       const l = Math.min(...held.map((m) => m.x - Math.max(m.w / 2, 70))) - 40, r = Math.max(...held.map((m) => m.x + Math.max(m.w / 2, 70))) + 40;
       const t = Math.min(...held.map((m) => m.y - m.h / 2)) - 50, b = Math.max(...held.map((m) => m.y + m.h / 2)) + 60;
@@ -316,7 +318,8 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
   const settledFor = useRef<string | null>(null);
   useWatchEffect(() => {
     // The live counts arriving after the first paint move the rest onto them once.
-    const key = `${mode}:${drawerStep ?? ""}:${live?.size ? "live" : ""}`;
+    // So does a fold opening or closing, which changes the graph's size.
+    const key = `${mode}:${drawerStep ?? ""}:${live?.size ? "live" : ""}:${Math.round(layout.bounds.w)}x${Math.round(layout.bounds.h)}`;
     if (settledFor.current === null) { settledFor.current = key; return; }
     if (settledFor.current === key) return;
     settledFor.current = key;
