@@ -38,7 +38,6 @@ export type LineSliceActions = {
   landLineRun: (runId: string) => Promise<{ ok: true } | null | undefined>;
   /** Deploy on the Deploys view (deploys.md DP2): one deploy sending the project's waiting fixes, painted at once as
    *  requested; the server row supersedes the stub by its client key (convex deploys requestDeployCore). */
-  deployLine: (clientKey: string, projectId: string, stub: DeployStub) => Promise<{ _id: string; short_id: string; carries: number } | null | undefined>;
   /** Deploy, redeploy or roll back one of a team's targets (Deploys page); the requested deploy paints at once. */
   deployTarget: (clientKey: string, teamId: string, repository: string, target: string, action: "deploy" | "redeploy" | "rollback", of: string | null, stub: { started_by: string; sha: string | null; previous_sha: string | null; commits: number; sessions: Array<{ conversation_id: string; short_id?: string | null; title?: string | null }> }) => Promise<{ _id: string; short_id: string } | null | undefined>;
   /** Stop a live run (convex workflow_runs cancelRunByPerson): it ends at once, as a person's cancel. */
@@ -69,7 +68,6 @@ export type LineSliceActions = {
 };
 
 /** What the Deploys view knows of a deploy it asks for: its target, who pressed, the fixes waiting. */
-export type DeployStub = { target: string; started_by: { kind: "person"; name: string; user_id?: string }; carries: Array<{ task_id: string; run_id?: string; how: "sent"; merge_sha?: string; merged_at?: number }> };
 
 export type LineGraphEditInput = { node: string; field?: "prompt" | "script"; text: string; base_hash?: string | null; base_text?: string | null };
 /** `project_id` paints the cases into the project's feed; the server reads it off each case's run. */
@@ -154,16 +152,6 @@ export function createLineSlice(): LineSliceActions {
       const run = this.workflowRuns[runId];
       if (run) { const now = Date.now(); run.status = "running"; run.current_node_id = "rebase"; run.fail_reason = undefined; run.resume_requested_at = now; run.updated_at = now; }
     }) as LineSliceActions["landLineRun"],
-
-    deployLine: asyncAction(function (this: { lineDeploys: Record<string, any> }, clientKey: string, projectId: string, stub: DeployStub) {
-      const now = Date.now();
-      this.lineDeploys[clientKey] = {
-        _id: clientKey, client_key: clientKey, deploy_id: clientKey, short_id: "", project_id: projectId, status: "requested", trigger: "person",
-        target: stub.target, started_by: stub.started_by, source: "line", carries: stub.carries, commits: [], sha: null, previous_sha: null, version: null,
-        repository: null, url: null, note: null, created_at: now, live_at: null, finished_at: null, at: now, surface: stub.target, environment: null,
-        via: "source", title: `Deploy to ${stub.target}`, after: null,
-      };
-    }) as LineSliceActions["deployLine"],
 
     deployTarget: asyncAction(function (this: { teamDeploys: Record<string, any> }, clientKey: string, teamId: string, repository: string, target: string, action: "deploy" | "redeploy" | "rollback", of: string | null, stub: { started_by: string; sha: string | null; previous_sha: string | null; commits: number; sessions: Array<{ conversation_id: string; short_id?: string | null; title?: string | null }> }) {
       const now = Date.now();
