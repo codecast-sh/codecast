@@ -22,7 +22,7 @@ export function users() {
     { _id: ALICE, name: "Alice", email: "alice@example.test", github_username: "alice" },
     { _id: BOB, name: "Bob", email: "bob@example.test", github_username: "bob" },
     { _id: CAROL, name: "Carol", email: "carol@example.test", github_username: "carol" },
-    { _id: BOT, name: "Anchor", is_bot: true, bot_kind: "anchor" },
+    { _id: BOT, name: "Codecast", is_bot: true, bot_kind: "anchor" },
   ];
 }
 
