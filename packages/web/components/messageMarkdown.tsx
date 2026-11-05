@@ -63,9 +63,10 @@ export const USER_MD_REMARK = [...entityRemarkPlugins, remarkBreaks, remarkUserH
 // proposal and writes its `op-N` on its own line), and so is a call: `cl-42`
 // alone on its line is the call's card, `cl-42:15-25` the words said in those
 // turns, embedded, and a replay likewise: `rp-12` alone is its card,
-// `rp-12@1:23` the recorded page playing from that second. Only those types are promoted here, so a lone task id in a
+// `rp-12@1:23` the recorded page playing from that second, and a flow: `flow:change` alone is the flow drawn, each step
+// open to what it does and the words it runs. Only those types are promoted here, so a lone task id in a
 // transcript keeps the inline pill it always had; team chat (ChatMessage)
 // promotes every shared reference to a card. Alone on its line only: the same
 // reference mid-sentence is a citation and keeps its pill.
-const ASSISTANT_CARDS: EntityCardsOptions = { types: ["proposal", "call", "replay"], aloneOnly: true };
+const ASSISTANT_CARDS: EntityCardsOptions = { types: ["proposal", "call", "replay", "flow"], aloneOnly: true };
 export const ASSISTANT_MD_REMARK = [...entityRemarkPlugins, [remarkEntityCards, ASSISTANT_CARDS] as [typeof remarkEntityCards, EntityCardsOptions]];

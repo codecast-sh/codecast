@@ -259,9 +259,11 @@ bun test lib/markdown.test.ts
 a fence with no language
 \`\`\``;
 
-const REFS = `References alone on their own line draw as cards.
+const REFS = `References alone on their own line draw as cards, and flow:review in a sentence is a pill.
 
 cl-42:15-25
+
+flow:change
 
 jx7bm3n
 
