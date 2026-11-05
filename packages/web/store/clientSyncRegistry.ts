@@ -816,7 +816,7 @@ export const CLIENT_SYNC_REGISTRY = {
     // A node's session is a join that moves no scalar on the row (a feed with
     // budget attaches it where another had none), so the nodes compare by content.
     sync: { isDelta: true, deepFields: ["node_statuses", "superseded"] },
-    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.listRuns", "sessionFlowRuns.forConversation", "sessionFlowRuns.forTeam"],
+    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.byIds", "workflow_runs.listRuns", "sessionFlowRuns.forConversation", "sessionFlowRuns.forTeam"],
   },
   // Signals (the-line-end-to-end.md LE3, LE13): the active workspace's last
   // two weeks, bodies left out, and every finding of a problem opened in the
