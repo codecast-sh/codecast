@@ -28,7 +28,7 @@ import {
 
 /** Kinds the proposal vocabulary does not have: a change made at a door that
  *  is not a proposal, or the inverse of a proposal kind. */
-export const ORG_LOG_ONLY_KINDS = ["session", "lead", "initiative_cancel", "role_edit", "restore", "unseat", "routine_stop", "routine_tune", "project_remove"] as const;
+export const ORG_LOG_ONLY_KINDS = ["session", "lead", "initiative_cancel", "restore", "unseat", "routine_stop", "routine_tune", "project_remove"] as const;
 export type OrgLogOnlyKind = (typeof ORG_LOG_ONLY_KINDS)[number];
 export type OrgLogKind = OrgChangeKind | OrgLogOnlyKind;
 
@@ -534,7 +534,6 @@ function logOnlySentence(row: OrgLogRow): string {
     }
     case "lead": return row.after.owner_role_id ? `${nameOf(row, row.after.owner_role_id)} now leads the project ${row.subject.label}` : `the project ${row.subject.label} has no lead`;
     case "initiative_cancel": return `cancel the goal ${row.subject.label}; it stays on the goals page as cancelled`;
-    case "role_edit": { const words = (Object.keys(row.after) as Array<keyof OrgLogFields>).map((k) => EDIT_WORDS[k]).filter(Boolean) as string[]; return `change the ${andList(words) || "settings"} of ${at(handleOf(row))}`; }
     case "restore": return `bring back ${at(handleOf(row))}, with its area of work, its limits and its routines`;
     case "unseat": return `${at(handleOf(row))} gives up its standing session${row.before.standing_session ? ` ${row.before.standing_session.short_id}` : ""}; the session keeps running under its person`;
     case "routine_stop": return `${at(handleOf(row))} stops running "${row.before.routine?.title ?? ""}"`;
@@ -571,6 +570,11 @@ export function orgLogLine(row: OrgLogRow): string {
     return `Change the ${andList(words) || "record"} of the goal ${row.subject.label}`;
   }
   if (row.kind === "file_session") return `Put session ${row.subject.label} back where it was`;
+  // A role's settings say which moved; the row holds every door's edit, a proposal's or not.
+  if (row.kind === "role_edit") {
+    const words = (Object.keys(row.after) as Array<keyof OrgLogFields>).map((k) => EDIT_WORDS[k]).filter(Boolean) as string[];
+    return `Change the ${andList(words) || "settings"} of ${at(handleOf(row))}`;
+  }
   const line = (ORG_LOG_ONLY_KINDS as readonly string[]).includes(row.kind) ? logOnlySentence(row) : null;
   if (!line) return changeLine({ kind: row.kind } as any);
   return capitalize(line);

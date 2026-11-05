@@ -123,7 +123,7 @@ function subjectName(c: OrgChange, names?: OrgAskNames): string | null {
   switch (c.kind) {
     case "role": return c.name.trim();
     case "projects": { const x = c.changes[0]; return !x ? null : x.op === "create" ? x.title.trim() : project(x.from); }
-    case "move": case "retire": case "scope": case "budget": case "trust": case "routine": case "adopt": case "authority": case "hire": case "charter_edit": return role(c.handle);
+    case "move": case "retire": case "scope": case "budget": case "trust": case "routine": case "adopt": case "authority": case "hire": case "charter_edit": case "role_edit": return role(c.handle);
     case "project_meta": return project(c.project);
     case "file": return names?.plan?.(c.plan) ?? c.plan;
     case "file_session": return c.title?.trim() || names?.session?.(c.session) || c.session;
@@ -274,13 +274,26 @@ function fieldsOf(c: OrgChange, ctx: ChangeWordsCtx): Draft[] {
     }
     case "adopt": return [field("session", "Session", "text", text(names?.session?.(c.conversation) ?? c.conversation, { ref: { kind: "session", id: c.conversation } }), read("standing_session", (raw) => words((raw as { short_id?: string } | null)?.short_id, NONE.unset)))];
     case "file": return [field("project", "Project", "ref", projectText(c.project), read("project_id", named("project", NONE.project)))];
-    // The session itself, one press away, and where it goes.
+    // The sentence names the session (a card draws it as its pill) and a close
+    // as done; what is left to show is where a moved session goes.
     case "file_session": {
       const d = sessionDestination(c.to);
-      const goes = !d || d.kind === "done" ? text("done") : d.kind === "task" ? text(names?.task?.(d.task) ?? d.task, { ref: { kind: "task", id: d.task } }) : roleText(d.handle);
+      if (!d || d.kind === "done") return [];
+      return [set("goes", d.kind === "task" ? "Joins" : "Reports to", "ref", d.kind === "task" ? text(names?.task?.(d.task) ?? d.task, { ref: { kind: "task", id: d.task } }) : roleText(d.handle))];
+    }
+    case "role_edit": {
+      const until = c.tenure ? stays(c.tenure) ?? "standing" : null;
+      const runs = (raw: unknown) => text(raw === "paused" ? "paused" : "active");
       return [
-        set("session", "Session", "text", text(c.title?.trim() || names?.session?.(c.session) || c.session, { ref: { kind: "session", id: c.session } })),
-        set("goes", d?.kind === "done" ? "Closes as" : d?.kind === "task" ? "Joins" : "Reports to", d?.kind === "done" ? "text" : "ref", goes),
+        ...(c.name !== undefined ? [field("name", "Name", "text", text(c.name.trim()), read("name", (raw) => words(raw, NONE.unset)))] : []),
+        ...(c.new_handle !== undefined ? [field("handle", "Handle", "text", text(at(c.new_handle)), text(at(c.handle)))] : []),
+        ...(c.given_name !== undefined ? [set("given_name", "Goes by", "text", c.given_name === null ? none(NONE.unset) : text(c.given_name.trim()))] : []),
+        ...(c.avatar !== undefined ? [set("face", "Face", "text", text(c.avatar))] : []),
+        ...(until ? [set("stays", "Stays", "text", text(until))] : []),
+        ...(c.line !== undefined ? [set("line", "Runs on", "text", text(`the ${c.line} flow`))] : []),
+        ...(c.hires_freely !== undefined ? [set("hires", "Its hires", "text", text(c.hires_freely ? "start without approval" : "wait for approval"))] : []),
+        ...(c.keeps_reports_inside !== undefined ? [set("reports_inside", "Roles under it", "text", text(c.keeps_reports_inside ? "stay inside its area" : "may work outside its area"))] : []),
+        ...(c.paused !== undefined ? [field("status", "Runs", "text", runs(c.paused ? "paused" : "active"), read("status", runs))] : []),
       ];
     }
     case "charter_edit": return c.edits.map((e, i): Draft => {
@@ -452,6 +465,7 @@ function bucketsOf(c: OrgChange): Bucket[] {
     case "scope": return ["area"];
     case "retire": return ["retire"];
     case "charter_edit": return ["rewrite"];
+    case "role_edit": return ["setting"];
     case "plan_status": case "task_status": case "project_status": return ["record"];
     case "initiative": case "initiative_projects": case "initiative_owner": case "initiative_shape": return ["goal"];
     default: return ["setting"];

@@ -150,6 +150,29 @@ export type OrgCharterEdit =
   | { op: "remove"; before: string };
 export type OrgCharterEditChange = { kind: "charter_edit"; handle: string; edits: OrgCharterEdit[] };
 
+/** A role's own settings changed in place, through the role's own setters:
+ *  its title (`name`), its handle (`new_handle`), the person like name it
+ *  wears (`given_name`, null clears it), its face, its tenure, the workflow
+ *  its line runs on, its two structure switches, and whether it runs
+ *  (`paused`). `handle` is the role as it stands; each other field is
+ *  optional and an absent one stays as it is. A renamed role still answers
+ *  to its old handle wherever a change names it. */
+export type OrgRoleEditChange = {
+  kind: "role_edit";
+  handle: string;
+  name?: string;
+  new_handle?: string;
+  given_name?: string | null;
+  avatar?: string;
+  tenure?: OrgTenureSpec;
+  line?: string;
+  hires_freely?: boolean;
+  keeps_reports_inside?: boolean;
+  paused?: boolean;
+};
+/** The fields a role_edit may set, in the order its words say them. */
+export const ORG_ROLE_EDIT_FIELDS = ["name", "new_handle", "given_name", "avatar", "tenure", "line", "hires_freely", "keeps_reports_inside", "paused"] as const;
+
 // Bring records in line (org-staffing.md S9): a plan, task or project whose
 // evidence says it is finished gets its status set, through the same update
 // paths a person uses. `reason` is the evidence, for the person deciding.
@@ -218,10 +241,10 @@ export type OrgInitiativeOwnerChange = { kind: "initiative_owner"; initiative: s
 export type OrgInitiativeShapeChange = { kind: "initiative_shape"; initiative: string; parent?: string | null; metrics?: OrgInitiativeMetric[]; title?: string } & OrgInitiativeRecord;
 export type OrgGoalChange = OrgInitiativeChange | OrgInitiativeProjectsChange | OrgInitiativeOwnerChange | OrgInitiativeShapeChange;
 
-export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange | OrgCharterEditChange
+export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange | OrgCharterEditChange | OrgRoleEditChange
   | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange | OrgAuthorityChange | OrgHireChange | OrgUpgradeChange | OrgGoalChange | OrgFileSessionChange;
 
-export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "charter_edit", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner", "initiative_shape", "file_session"] as const;
+export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "charter_edit", "role_edit", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner", "initiative_shape", "file_session"] as const;
 /** The kinds the pane groups under "Bring records in line" (S9). */
 export const ORG_SYNC_KINDS: readonly OrgChangeKind[] = ["plan_status", "task_status", "project_status"];
 /** The kinds that set, extend or staff a goal; one ask holds them (I1, revised). */
@@ -315,12 +338,14 @@ export function orgProposalWorkErrors(changes: ReadonlyArray<{ change: { kind: s
  *  writes names them; an upgrade stands alone. A goal lands after the
  *  projects and the roles it names (a project created in the same proposal,
  *  an owner role it creates), and before the moves and scopes: an owner role
- *  gains the goal's projects in its scope when the owner is set. */
+ *  gains the goal's projects in its scope when the owner is set. A role's own
+ *  settings (role_edit) land after every other change on the role, so a
+ *  change that names it by the handle it had when proposed finds it. */
 export const ORG_CHANGE_APPLY_RANK: Record<OrgChangeKind, number> = {
   task_status: 0, plan_status: 1, project_status: 2,
   projects: 3, file: 4, role: 5, project_meta: 6, initiative: 7, initiative_projects: 8, initiative_owner: 9, initiative_shape: 10,
-  move: 11, scope: 12, charter_edit: 13, budget: 14, trust: 15, authority: 16, adopt: 17, routine: 18, hire: 19, upgrade: 20, retire: 21,
-  file_session: 22,
+  move: 11, scope: 12, charter_edit: 13, budget: 14, trust: 15, authority: 16, adopt: 17, routine: 18, hire: 19, upgrade: 20, role_edit: 21, retire: 22,
+  file_session: 23,
 };
 const UNRANKED = Math.max(...Object.values(ORG_CHANGE_APPLY_RANK)) + 1;
 
@@ -503,6 +528,17 @@ export function orgChangeError(raw: any): string | null {
         const fault = orgCharterEditError(e); if (fault) return fault;
       }
       return null;
+    }
+    case "role_edit": {
+      const h = handle(); if (h) return h;
+      if (raw.name !== undefined && !nonEmpty(raw.name)) return "role_edit name is the role's title, a non-empty string";
+      if (raw.new_handle !== undefined && !(nonEmpty(raw.new_handle) && HANDLE_RE.test(raw.new_handle.replace(/^@/, "")))) return `role_edit new_handle ${JSON.stringify(raw.new_handle)} is not a-z, 0-9 and - (2 to 32 chars)`;
+      if (raw.given_name !== undefined && raw.given_name !== null && !nonEmpty(raw.given_name)) return "role_edit given_name is a name, or null to clear it";
+      if (raw.avatar !== undefined && !nonEmpty(raw.avatar)) return "avatar is an avatar key";
+      if (raw.tenure !== undefined) { const t = orgTenureError(raw.tenure); if (t) return t; }
+      if (raw.line !== undefined && !(typeof raw.line === "string" && LINE_SLUG_RE.test(raw.line))) return "line is a workflow slug: 1 to 64 characters of a-z, 0-9 and -";
+      for (const k of ["hires_freely", "keeps_reports_inside", "paused"] as const) if (raw[k] !== undefined && typeof raw[k] !== "boolean") return `role_edit ${k} is true or false`;
+      return ORG_ROLE_EDIT_FIELDS.some((k) => raw[k] !== undefined) ? null : `role_edit changes nothing: set one of ${ORG_ROLE_EDIT_FIELDS.join(", ")}`;
     }
     case "plan_status":
       if (!nonEmpty(raw.plan)) return "plan_status needs a plan ref";
@@ -1263,6 +1299,7 @@ export function orgChangeKey(c: OrgChange): string | null {
     case "file_session": return `file_session:${c.session.trim().toLowerCase()}`;
     case "project_meta": return `project_meta:${c.project.trim().toLowerCase()}`;
     case "charter_edit": return `charter_edit:${h(c.handle)}`;
+    case "role_edit": return `role_edit:${h(c.handle)}`;
     case "role": return `role:${h(c.handle)}`;
     case "adopt": return `adopt:${h(c.handle)}`;
     case "retire": return `retire:${h(c.handle)}`;
@@ -1522,6 +1559,7 @@ export function describeOrgChange(c: OrgChange): string {
     case "file": return `file plan ${c.plan} under project ${c.project}`;
     case "file_session": return `file session ${c.session} ${sessionDestination(c.to)?.kind === "done" ? "as done" : `under ${c.to.trim()}`}`;
     case "charter_edit": return `charter ${at(c.handle)}: ${c.edits.map(charterEditTerse).join("; ")}`;
+    case "role_edit": return `edit ${at(c.handle)}: ${roleEditTerse(c)}`;
     case "plan_status": return `mark plan ${c.plan} ${c.status}`;
     case "task_status": return `mark task ${c.task} ${c.status}`;
     case "project_status": return `mark project ${c.project} ${c.status}`;
@@ -1700,6 +1738,22 @@ export function changeClauses(c: OrgChange, words: ChangeWords = {}): string[] {
         k("remove") > 0 && ((r: string) => `cut ${k("remove") === 1 ? "a passage" : `${k("remove")} passages`} from ${own(r)}`),
       ].filter(isClause);
       // The card reads one clause per thing done; every other form is one sentence.
+      return brief ? clausesAbout(s, clauses) : [andList(clausesAbout(s, clauses))];
+    }
+    case "role_edit": {
+      const s = subject(who(c.handle));
+      const own = (r: string) => (r === "it" ? "its" : `${r}'s`);
+      const renamed = c.name?.trim() ? `${c.name.trim()}${c.new_handle ? ` (${at(c.new_handle)})` : ""}` : c.new_handle ? at(c.new_handle) : "";
+      const clauses = [
+        renamed && ((r: string) => `rename ${r} to ${renamed}`),
+        c.given_name !== undefined && ((r: string) => (c.given_name ? `have ${r} go by ${c.given_name.trim()}` : `drop the name ${r} goes by`)),
+        c.avatar !== undefined && ((r: string) => `give ${r} a new face`),
+        c.tenure !== undefined && ((r: string) => (c.tenure!.kind === "standing" ? `make ${r} a standing role` : `make ${r} a program that ends ${describeTenure(c.tenure).replace(/^program · ends /, "")}`)),
+        c.line !== undefined && ((r: string) => `run ${own(r)} tasks on the ${c.line} flow`),
+        c.hires_freely !== undefined && ((r: string) => (c.hires_freely ? `let ${r} bring its hires online without approval` : `have ${own(r)} hires wait for approval`)),
+        c.keeps_reports_inside !== undefined && ((r: string) => (c.keeps_reports_inside ? `keep the roles under ${r} inside its area` : `let the roles under ${r} look after work outside its area`)),
+        c.paused !== undefined && ((r: string) => `${c.paused ? "pause" : "resume"} ${r}`),
+      ].filter(isClause);
       return brief ? clausesAbout(s, clauses) : [andList(clausesAbout(s, clauses))];
     }
     case "plan_status": case "task_status": case "project_status": {
@@ -1945,6 +1999,18 @@ export function orgCharterEditError(e: any): string | null {
 /** A long passage shortened for a terminal line. */
 const clip = (text: string, n = 48): string => { const t = text.trim().replace(/\s+/g, " "); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const charterEditTerse = (e: OrgCharterEdit): string => (e.op === "replace" ? `replace "${clip(e.before)}" with "${clip(e.after)}"` : e.op === "add" ? `add "${clip(e.line)}"` : `remove "${clip(e.before)}"`);
+const onOff = (b: boolean) => (b ? "on" : "off");
+const roleEditTerse = (c: OrgRoleEditChange): string => [
+  c.name !== undefined && `name "${c.name.trim()}"`,
+  c.new_handle !== undefined && `handle ${at(c.new_handle)}`,
+  c.given_name !== undefined && (c.given_name === null ? "given name cleared" : `called ${c.given_name.trim()}`),
+  c.avatar !== undefined && `face ${c.avatar}`,
+  c.tenure !== undefined && describeTenure(c.tenure),
+  c.line !== undefined && `line ${c.line}`,
+  c.hires_freely !== undefined && `hires freely ${onOff(c.hires_freely)}`,
+  c.keeps_reports_inside !== undefined && `keeps reports inside ${onOff(c.keeps_reports_inside)}`,
+  c.paused !== undefined && (c.paused ? "paused" : "resumed"),
+].filter(Boolean).join(", ");
 
 /**
  * The charter after the edits, or why they do not apply: a passage must
