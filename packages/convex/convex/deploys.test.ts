@@ -66,6 +66,13 @@ describe("deploy markers (DP1)", () => {
     ]);
   });
 
+  test("a marker for a target no line deploys to (a web build, a second app) carries no line fixes", async () => {
+    const t = await seed();
+    const ctx = ctxFor(t);
+    await recordDeployMarker(ctx, { ...marker(), target: "dashboard" });
+    expect(t.deploys[0]).toMatchObject({ target: "dashboard", status: "live", carries: [] });
+  });
+
   test("the same version reported twice is one deploy, and the second report adds what it knows", async () => {
     const t = await seed();
     const ctx = ctxFor(t);
