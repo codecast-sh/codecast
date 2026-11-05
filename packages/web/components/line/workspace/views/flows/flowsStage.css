@@ -1,52 +1,112 @@
-/* The Flows stage (FlowsStage): the live flow's head and lanes, its map, its queue. */
+/* The Flows stage (FlowsStage): the live flow's head; the flows, the drawn flow's map and the activity rail as one
+   frame that fills the stage; the queue under it. */
 .fs { padding: var(--lw-s4) var(--lw-s5) var(--lw-s6); display: flex; flex-direction: column; gap: var(--lw-s4); }
 .fs-lib { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.fs-live { padding: 12px 16px; gap: 10px; }
 
-.fs-lanes { display: flex; flex-direction: column; border-top: 1px solid var(--lw-rule-2); }
-.fs-lane {
-  display: grid; grid-template-columns: minmax(170px, 15%) minmax(160px, 22%) minmax(0, 1fr); gap: 6px 18px; align-items: center;
-  padding: 10px 0; border-bottom: 1px solid var(--lw-rule-2);
+/* The frame: the stage's height less its head, so the map has room and each column scrolls on its own. */
+.fs-app {
+  display: grid; grid-template-columns: minmax(230px, 270px) minmax(0, 1fr) minmax(250px, 300px);
+  height: clamp(520px, calc(100dvh - 250px), 1200px);
+  border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); overflow: hidden; background: var(--lw-paper);
 }
-.fs-lane:last-child { border-bottom: 0; }
-.fs-lane[aria-current] .fs-lane-name { color: var(--lw-ink); }
-.fs-lane[aria-current] { box-shadow: inset 3px 0 0 var(--lw-person); padding-left: 10px; }
-.fs-lane-id { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.fs-lane-name { font-weight: 650; color: var(--lw-ink-2); text-decoration: none; text-wrap: balance; overflow-wrap: anywhere; }
-a.fs-lane-name:hover { color: var(--lw-ink); text-decoration: underline; text-underline-offset: 3px; }
-.fs-lane[data-kind="off"] .fs-lane-name { color: color-mix(in srgb, var(--lw-warn) 75%, var(--lw-ink)); }
-.fs-lane[data-kind="unfiled"] .fs-lane-name { color: var(--lw-bad); }
-.fs-lane-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
-.fs-lane-sub b { color: var(--lw-ink); }
-.fs-lane-sub [data-tone="bad"], .fs-lane-sub [data-tone="bad"] b { color: var(--lw-bad); }
-.fs-lane-edit { color: var(--lw-ink-3); text-decoration: none; }
-.fs-lane-edit:hover { color: var(--lw-ink); text-decoration: underline; }
-.fs-lane-src { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
-.fs-lane-src .flv-chip { font-size: var(--lw-fs-2xs); }
-/* With no steps (the sources that file nowhere), the chips take the steps' column too. */
-.fs-lane[data-kind="unfiled"] .fs-lane-src { grid-column: 2 / -1; }
-
-.fs-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 0; align-items: center; }
-.fs-steps li { display: inline-flex; align-items: center; }
-.fs-steps li + li::before { content: ""; width: 10px; height: 1px; background: var(--lw-edge-faint); margin: 0 2px; }
-.fs-step {
-  display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 8px; border-radius: 7px; border: 1px solid var(--lw-rule-2);
-  background: var(--lw-paper-2); font: inherit; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); white-space: nowrap;
+.fs[data-full] { padding-top: var(--lw-s3); }
+.fs[data-full] .fs-app { grid-template-columns: minmax(0, 1fr); height: clamp(520px, calc(100dvh - 150px), 2000px); }
+.fs-col-h {
+  display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 14px 16px 8px;
+  font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ink-3); letter-spacing: .02em;
 }
-button.fs-step { cursor: pointer; transition: border-color var(--lw-fast), color var(--lw-fast); }
-button.fs-step:hover { border-color: var(--lw-rule); color: var(--lw-ink); }
-.fs-step-n { font-weight: 700; color: var(--lw-ink); }
-.fs-step-n[data-zero] { font-weight: 400; color: var(--lw-ink-3); }
-.fs-steps li[data-stalled] .fs-step { border-color: color-mix(in srgb, var(--lw-bad) 45%, transparent); background: var(--lw-bad-soft); }
-.fs-step-stall { color: var(--lw-bad); font-weight: 650; }
+.fs-col-h .lw-num { font-weight: 500; }
 
-/* The map: a frame of its own height, the graph filling it. */
-.fs-map { position: relative; height: clamp(440px, 64vh, 820px); border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); overflow: hidden; background: var(--lw-paper); }
-.fs-map[data-mode="table"] { height: auto; overflow: visible; border: 0; }
+/* The flows. */
+.fs-list { min-height: 0; overflow-y: auto; border-right: 1px solid var(--lw-rule-2); background: var(--lw-card); }
+.fs-list ul { list-style: none; margin: 0; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.fs-list-rest { border-top: 1px solid var(--lw-rule-2); padding-top: 8px !important; margin-top: 4px !important; }
+.fs-list li { border-radius: 10px; padding: 2px 0 8px; }
+.fs-list li[aria-current] { background: color-mix(in srgb, var(--lw-person) 11%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lw-person) 30%, transparent); }
+.fs-list li:not([aria-current]):has(> .fs-row[data-link]):hover { background: color-mix(in srgb, var(--lw-ink) 4%, transparent); }
+.fs-row { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px 0; color: inherit; text-decoration: none; min-width: 0; }
+.fs-row[data-link] { cursor: pointer; }
+.fs-row-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fs-row-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--lw-ink-3); opacity: .5; }
+.fs-row-dot[data-state="live"] { background: var(--lw-live); opacity: 1; }
+.fs-row-dot[data-state="you"] { background: var(--lw-person); opacity: 1; }
+.fs-row-dot[data-state="bad"] { background: var(--lw-bad); opacity: 1; }
+.fs-row-name { font-weight: 650; color: var(--lw-ink); text-decoration: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.fs-row-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.fs-list li[data-idle] .fs-row-name { color: var(--lw-ink-2); font-weight: 550; }
+.fs-row-role { margin-left: auto; flex: none; font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.fs-row-figs { display: flex; flex-wrap: wrap; gap: 2px 12px; padding-left: 15px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fs-row-figs b { color: var(--lw-ink); font-weight: 650; }
+.fs-row-figs [data-tone="you"], .fs-row-figs [data-tone="you"] b { color: var(--lw-person); }
+.fs-row-figs a[data-tone="you"] { text-decoration: none; }
+.fs-row-figs a[data-tone="you"]:hover { text-decoration: underline; text-underline-offset: 3px; }
+.fs-row-figs [data-tone="bad"], .fs-row-figs [data-tone="bad"] b { color: var(--lw-bad); }
+
+/* The stations holding work: name, then the runs there, colored by what needs a look. */
+.fs-hot { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 10px 0 25px; }
+.fs-hot-s {
+  display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; padding: 2px 8px; border-radius: 6px;
+  background: var(--lw-paper-2); border: 1px solid var(--lw-rule-2); color: var(--lw-ink-2); text-decoration: none;
+  font-size: var(--lw-fs-2xs); white-space: nowrap;
+}
+a.fs-hot-s:hover { border-color: var(--lw-rule); color: var(--lw-ink); }
+.fs-hot-l { overflow: hidden; text-overflow: ellipsis; }
+.fs-hot-s b { color: var(--lw-ink); font-weight: 700; }
+.fs-hot-s b[data-tone="you"] { color: var(--lw-person); }
+.fs-hot-s b[data-tone="bad"] { color: var(--lw-bad); }
+.fs-hot-more { align-self: center; font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+
+/* The map fills the middle column; its table scrolls there. */
+.fs-map { position: relative; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--lw-paper); }
+.fs-map[data-mode="table"] { overflow-y: auto; }
+/* With no live flow the map stands alone in its own frame. */
+.fs > .fs-map { height: clamp(440px, 64vh, 820px); border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); }
+.fs > .fs-map[data-mode="table"] { height: auto; overflow: visible; border: 0; }
+.fs-full-btn { display: inline-flex; align-items: center; gap: 6px; }
+
+/* What just happened. */
+.fs-rail { min-height: 0; overflow-y: auto; border-left: 1px solid var(--lw-rule-2); background: var(--lw-card); display: flex; flex-direction: column; }
+.fs-rail-f { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 12px 8px; }
+.fs-rail-f button {
+  display: inline-flex; align-items: baseline; gap: 5px; padding: 2px 9px; border-radius: 999px; border: 1px solid transparent;
+  background: none; font: inherit; font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); cursor: pointer;
+}
+.fs-rail-f button:hover { color: var(--lw-ink); }
+.fs-rail-f button[aria-selected="true"] { color: var(--lw-ink); border-color: var(--lw-rule); background: var(--lw-paper-2); }
+.fs-rail-f button b { font-weight: 700; color: var(--lw-ink-2); }
+.fs-rail-f button[data-tone="you"] b { color: var(--lw-person); }
+.fs-rail-f button[data-tone="stalled"] b, .fs-rail-f button[data-tone="failed"] b { color: var(--lw-bad); }
+.fs-acts { list-style: none; margin: 0; padding: 0 6px 8px; }
+.fs-act {
+  display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; column-gap: 9px; row-gap: 1px; align-items: baseline;
+  padding: 7px 8px; border-radius: 8px; color: inherit; text-decoration: none;
+}
+.fs-act:hover { background: color-mix(in srgb, var(--lw-ink) 5%, transparent); }
+.fs-act-dot { width: 7px; height: 7px; border-radius: 50%; align-self: center; background: var(--lw-ink-3); opacity: .45; }
+.fs-act-dot[data-state="live"] { background: var(--lw-live); opacity: 1; }
+.fs-act-dot[data-state="you"] { background: var(--lw-person); opacity: 1; }
+.fs-act-dot[data-state="stalled"], .fs-act-dot[data-state="failed"] { background: var(--lw-bad); opacity: 1; }
+.fs-act-what { font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-act[data-state="you"] .fs-act-what { color: var(--lw-person); }
+.fs-act[data-state="stalled"] .fs-act-what, .fs-act[data-state="failed"] .fs-act-what { color: var(--lw-bad); }
+.fs-act[data-state="done"] .fs-act-what { color: var(--lw-ink-2); font-weight: 500; }
+.fs-act-age { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.fs-act-task, .fs-act-flow { grid-column: 2 / -1; font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-act-ref { margin-right: 6px; color: var(--lw-ink-2); }
+.fs-act-flow { opacity: .8; }
+.fs-none { margin: 0; padding: 4px 16px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fs-more { margin: 0 14px 12px; align-self: flex-start; background: none; border: 0; padding: 0; font: inherit; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); cursor: pointer; }
+.fs-more:hover { color: var(--lw-ink); text-decoration: underline; }
+
 .fs-work { gap: 0; }
 
-@media (max-width: 1000px) {
-  .fs-lane { grid-template-columns: 1fr; }
-  .fs-lane[data-kind="unfiled"] .fs-lane-src { grid-column: auto; }
+/* Narrow: the rail moves under the frame. */
+@media (max-width: 1200px) {
+  .fs-app { grid-template-columns: minmax(210px, 240px) minmax(0, 1fr); }
+  .fs-app > .fs-rail { display: none; }
 }
-.fs-step-wait { color: var(--lw-person); font-weight: 600; }
-.fs-lane-sub [data-tone="you"], .fs-lane-sub [data-tone="you"] b { color: var(--lw-person); }
+@media (max-width: 800px) {
+  .fs-app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(440px, 1fr); height: auto; }
+  .fs-list { border-right: 0; border-bottom: 1px solid var(--lw-rule-2); max-height: 280px; }
+}
