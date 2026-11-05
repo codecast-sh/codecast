@@ -1,7 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import { HerdTitles, herdMembers, planHerd, type HerdMember } from "./herdMirror.js";
+import "./test-helpers/isolatedTmuxServer.js";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
+import * as net from "node:net";
+import * as path from "node:path";
+import { listCodecastPanesComplete } from "./herdCommand.js";
+import { HerdFocus, HerdTitles, herdMembers, planHerd, type HerdMember } from "./herdMirror.js";
 import type { HerdrPane, HerdrSnapshot } from "./herdr.js";
 import type { CodecastPane } from "./tmux.js";
+import { sessionSocketName, tmuxSocketDir } from "./tmuxRoute.js";
 
 const pane = (over: Partial<CodecastPane>): CodecastPane => ({
   tmux: "cc-claude-abc",
@@ -138,5 +144,157 @@ describe("HerdTitles", () => {
     await titles.refresh(["a"]);
     await titles.refresh(["a"]);
     expect(calls).toBe(1);
+  });
+});
+
+describe("HerdFocus", () => {
+  const session = "cc-claude-focusunit";
+  const socket = sessionSocketName(session);
+  const tty = "/dev/ttys900";
+  const SHELL = 100;
+  const focusMember = member({ tmux: session, sessionId: "s1" });
+  let dir = "";
+  let server: net.Server;
+  let herdrSocket = "";
+  let herd: { focused: string; foreground: number; sent: string[]; holdSend: boolean };
+  let clients: string[];
+  let calls: string[][];
+  const responds = (id: string, result: unknown) => JSON.stringify({ id, result }) + "\n";
+  const tmux = (async (args: string[]) => {
+    calls.push(args);
+    onTmux();
+    return { status: 0, stdout: `${clients.join("\n")}\n`, stderr: "" };
+  }) as never;
+  let onTmux = () => {};
+
+  beforeAll(async () => {
+    dir = fs.mkdtempSync("/tmp/hf-");
+    fs.mkdirSync(tmuxSocketDir(), { recursive: true });
+    fs.writeFileSync(path.join(tmuxSocketDir(), socket), "");
+    herdrSocket = path.join(dir, "s.sock");
+    server = net.createServer((conn) => {
+      conn.on("data", (raw) => {
+        const { id, method, params } = JSON.parse(String(raw));
+        if (method === "session.snapshot") {
+          const panes = [{ pane_id: "p1", tokens: { codecast_session: "s1" } }, { pane_id: "p2", tokens: {} }];
+          conn.write(responds(id, { snapshot: { panes, workspaces: [], focused_pane_id: herd.focused } }));
+        } else if (method === "pane.process_info") {
+          conn.write(responds(id, { process_info: { tty, shell_pid: SHELL, foreground_process_group_id: herd.foreground } }));
+        } else if (method === "pane.send_text") {
+          herd.sent.push(params.text);
+          if (!herd.holdSend) conn.write(responds(id, {}));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(herdrSocket, resolve));
+  });
+
+  afterAll(() => {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(path.join(tmuxSocketDir(), socket), { force: true });
+  });
+
+  const reset = () => {
+    herd = { focused: "p1", foreground: SHELL, sent: [], holdSend: false };
+    clients = [];
+    calls = [];
+    onTmux = () => {};
+  };
+  afterEach(reset);
+  const detaches = () => calls.filter((c) => c.includes("detach-client"));
+
+  test("attaches and detaches on the session's own server", async () => {
+    reset();
+    onTmux = () => { if (herd.sent.length) clients = [tty]; };
+    const focus = new HerdFocus(tmux);
+    await focus.sync(herdrSocket, [focusMember]);
+    expect(herd.sent).toEqual([`env -u TMUX tmux '-L' '${socket}' 'attach-session' '-f' 'ignore-size' '-t' '=${session}'\r`]);
+    herd.focused = "p2";
+    await focus.sync(herdrSocket, [focusMember]);
+    expect(detaches()).toEqual([["-L", socket, "detach-client", "-t", tty]]);
+  });
+
+  test("a pane already holding a client is adopted, and nothing is typed into it", async () => {
+    reset();
+    herd.foreground = 200;
+    clients = [tty];
+    const focus = new HerdFocus(tmux);
+    await focus.sync(herdrSocket, [focusMember]);
+    expect(herd.sent).toEqual([]);
+    herd.focused = "p2";
+    await focus.sync(herdrSocket, [focusMember]);
+    expect(detaches()).toEqual([["-L", socket, "detach-client", "-t", tty]]);
+  });
+
+  test("nothing is typed while another program holds the terminal", async () => {
+    reset();
+    herd.foreground = 200;
+    await new HerdFocus(tmux).sync(herdrSocket, [focusMember]);
+    expect(herd.sent).toEqual([]);
+  });
+
+  test("a line whose reply came late is not typed again until the shell has had time, and then it is", async () => {
+    reset();
+    herd.holdSend = true;
+    const focus = new HerdFocus(tmux);
+    await expect(focus.sync(herdrSocket, [focusMember])).rejects.toThrow("timed out");
+    await focus.sync(herdrSocket, [focusMember]);
+    expect(herd.sent).toHaveLength(1);
+    herd.holdSend = false;
+    onTmux = () => { clients = [tty]; };
+    const later = Date.now() + 61_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => later);
+    try {
+      await focus.sync(herdrSocket, [focusMember]);
+      expect(herd.sent).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  }, 10_000);
+
+  test("an attach never confirmed is typed again only after the shell has had time to read it", async () => {
+    reset();
+    let now = 1_000_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    onTmux = () => { now += 11_000; };
+    try {
+      const focus = new HerdFocus(tmux);
+      await expect(focus.sync(herdrSocket, [focusMember])).rejects.toThrow("did not attach");
+      await focus.sync(herdrSocket, [focusMember]);
+      expect(herd.sent).toHaveLength(1);
+      now += 61_000;
+      await expect(focus.sync(herdrSocket, [focusMember])).rejects.toThrow("did not attach");
+      expect(herd.sent).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
+
+describe("listCodecastPanesComplete", () => {
+  const failed = (async () => ({ status: null, stdout: "", stderr: "" })) as never;
+  const server = { pid: 2, ppid: 1, uid: process.getuid?.(), command: "/opt/bin/tmux -L cast-cc-claude-a new-session -d" };
+
+  test("a failed listing with a server alive is incomplete, not empty", async () => {
+    await expect(listCodecastPanesComplete(failed, async () => [server] as never)).rejects.toThrow("incomplete");
+  });
+
+  test("a server Linux has retitled still counts as alive", async () => {
+    await expect(listCodecastPanesComplete(failed, async () => [{ ...server, command: "tmux: server (/tmp/tmux-1000/default)" }] as never)).rejects.toThrow("incomplete");
+  });
+
+  test("a process table that came back empty proves nothing", async () => {
+    await expect(listCodecastPanesComplete(failed, async () => [])).rejects.toThrow("incomplete");
+  });
+
+  test("a server under a user-level init still counts as alive", async () => {
+    await expect(listCodecastPanesComplete(failed, async () => [{ ...server, ppid: 900 }] as never)).rejects.toThrow("incomplete");
+  });
+
+  test("a failed listing with nothing on the sockets it asked means nothing is running", async () => {
+    for (const command of ["/bin/zsh", "tmux -L work new-session -d", "tmux: server (/tmp/tmux-1000/work)", "tmux -S /tmp/mine attach"]) {
+      expect(await listCodecastPanesComplete(failed, async () => [{ ...server, command }] as never)).toEqual([]);
+    }
   });
 });

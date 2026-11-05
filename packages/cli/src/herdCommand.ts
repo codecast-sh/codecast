@@ -1,5 +1,6 @@
 // `cast herd` and `cast gc`: the person's view onto this machine's tmux agents.
 
+import * as path from "node:path";
 import { spawn } from "./proc.js";
 import { HERD_PROJECT_TOKEN, HERD_SESSION, HERDR_INSTALL_HINT, herdrAlive, herdrBin, herdrRequest, herdrSnapshot, herdrSocketPath } from "./herdr.js";
 import { HerdFocus, herdMembers, serverTitles, syncHerd } from "./herdMirror.js";
@@ -7,7 +8,9 @@ import { claimHerdViewer } from "./herdViewer.js";
 import { formatElapsed, formatProgress, requestHerdTake, resolveSessionRef } from "./herdTake.js";
 import { readLocalConversationMap } from "./localConversationMap.js";
 import { readTitleCache } from "./titleCache.js";
-import { ensureTmux, listCodecastPanes, listCodecastPanesAsync, tmuxRun, type CodecastPane } from "./tmux.js";
+import { SESSION_SOCKET_PREFIX } from "./tmuxRoute.js";
+import { snapshotProcessTableAsync, type ProcRow } from "./processTable.js";
+import { ensureTmux, listCodecastPanes, parseCodecastPaneRows, PANE_LIST_FORMAT, tmuxRun, tmuxRunAsync, type CodecastPane } from "./tmux.js";
 
 /** The environment herdr's server hands its panes. A server started from
  *  inside tmux would pass TMUX on, and every pane's `tmux attach` would refuse
@@ -45,6 +48,35 @@ async function clearRestoredWorkspaces(socketPath: string): Promise<void> {
   }
 }
 
+/** Whether a process is tmux on a socket the fleet listing asks: the shared one or a session's own. Linux retitles a server `tmux: server (<socket path>)`. */
+function onListedSocket(command: string): boolean {
+  const argv = command.trim().split(/\s+/);
+  if (!/^tmux:?$/.test(path.basename(argv[0] ?? ""))) return false;
+  const flag = argv.findIndex((a) => a === "-L" || a === "-S");
+  const socket = path.basename(command.match(/\(([^)]*)\)\s*$/)?.[1] ?? (flag >= 0 ? argv[flag + 1] ?? "" : "default"));
+  return socket === "default" || socket.startsWith(SESSION_SOCKET_PREFIX);
+}
+
+/**
+ * The panes for a caller that closes what a listing leaves out: a failed
+ * listing with tmux alive on a socket it asked is incomplete and throws, because
+ * one server too busy to answer must not read as every session gone. So is one
+ * with no process table, which comes back empty when ps fails. With a table and
+ * nothing on those sockets, nothing is running.
+ */
+export async function listCodecastPanesComplete(
+  run: typeof tmuxRunAsync = tmuxRunAsync,
+  procs: () => Promise<ProcRow[]> = snapshotProcessTableAsync,
+): Promise<CodecastPane[]> {
+  const r = await run(["list-sessions", "-F", PANE_LIST_FORMAT]);
+  if (r.status === 0) return parseCodecastPaneRows(r.stdout);
+  const uid = process.getuid?.();
+  const table = await procs();
+  const serverAlive = table.some((p) => p.uid === uid && onListedSocket(p.command));
+  if (serverAlive || table.length === 0) throw new Error(`tmux listing incomplete: ${r.stderr.trim() || "a server did not answer"}`);
+  return [];
+}
+
 export async function runHerdCommand(
   config: { auth_token?: string; convex_url?: string } | null,
   options: { open?: boolean } = {},
@@ -69,6 +101,7 @@ export async function runHerdCommand(
   const release = await claimHerdViewer(socketPath);
   const titles = serverTitles(config);
   const focus = new HerdFocus();
+  const problems = new Set<string>();
   let viewer: ReturnType<typeof spawn> | undefined;
   let closed = false;
   const stop = () => { closed = true; viewer?.kill("SIGTERM"); };
@@ -82,18 +115,24 @@ export async function runHerdCommand(
     viewer.once("error", (err) => { console.error(err.message); closed = true; });
     let nextRefresh = 0;
     let members: ReturnType<typeof herdMembers> = [];
+    // One failed pass must not close the viewer, and a failing refresh must not starve focus; each retries on its own. Stderr would draw over herdr's screen, so problems wait for it to exit.
+    const note = (err: unknown) => { problems.add(err instanceof Error ? err.message : String(err)); };
     while (!closed) {
       if (Date.now() >= nextRefresh) {
-        const panes = await listCodecastPanesAsync();
-        await titles.refresh(panes.flatMap((p) => p.sessionId ?? []));
-        const cachedTitles = readTitleCache();
-        members = herdMembers(panes, { status: () => null, title: (sid) => titles.get(sid) ?? cachedTitles[sid] });
-        if (closed) break;
-        await syncHerd(socketPath, members, (message) => console.error(`herd: ${message}`), () => !closed);
+        try {
+          const panes = await listCodecastPanesComplete();
+          await titles.refresh(panes.flatMap((p) => p.sessionId ?? []));
+          const cachedTitles = readTitleCache();
+          members = herdMembers(panes, { status: () => null, title: (sid) => titles.get(sid) ?? cachedTitles[sid] });
+          if (closed) break;
+          await syncHerd(socketPath, members, (message) => problems.add(message), () => !closed);
+        } catch (err) {
+          note(err);
+        }
         nextRefresh = Date.now() + 3000;
       }
       if (closed) break;
-      await focus.sync(socketPath, members, () => !closed);
+      await focus.sync(socketPath, members, () => !closed).catch(note);
       await new Promise((r) => setTimeout(r, 500));
     }
   } finally {
@@ -102,6 +141,7 @@ export async function runHerdCommand(
       await release();
       await syncHerd(socketPath, []);
     } finally {
+      for (const problem of problems) console.error(`herd: ${problem}`);
       process.removeListener("SIGTERM", stop);
       process.removeListener("SIGINT", stop);
       process.removeListener("SIGHUP", stop);

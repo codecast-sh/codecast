@@ -152,21 +152,27 @@ function socketOf(argv: string[]): string | null {
 
 /**
  * Whether a server's failure leaves a fleet listing complete. A socket file
- * that is gone held nothing. A socket nobody accepts on is either a server too
+ * that is gone held nothing, and neither did a running server with no sessions
+ * (`exit-empty off`), which tmux 3.7c answers with "no current target". A socket nobody accepts on is either a server too
  * busy to answer or one that exited (tmux leaves its socket behind), and tmux
  * says "no server running" for both, so the process table decides: no server
  * process on it means it held nothing, and a session server's leftover socket
  * is removed so later listings do not ask it again. A server that is alive and
  * did not answer leaves the listing incomplete, and callers read a session
- * missing from a listing as gone, so that fails the listing.
+ * missing from a listing as gone, so that fails the listing. So does a table
+ * that came back empty, which is what a failed ps returns: it decides nothing,
+ * and removing a live server's socket would strand the server.
  */
-function holdsNothing(err: unknown, argv: string[], procs: () => ProcRow[], env: NodeJS.ProcessEnv): boolean {
+export function holdsNothing(err: unknown, argv: string[], procs: () => ProcRow[], env: NodeJS.ProcessEnv): boolean {
   const text = errText(err);
-  if (/error connecting to .+ \(No such file or directory\)/i.test(text)) return true;
+  if (/error connecting to .+ \(No such file or directory\)|no current target/i.test(text)) return true;
   if (!/no server running on |error connecting to .+ \(Connection refused\)/i.test(text)) return false;
   const socket = socketOf(argv) ?? "default";
-  if (socket === "default") return !!env.TMUX_TMPDIR || tmuxServerRows(procs(), process.getuid?.()).length === 0;
-  if (procs().some((p) => p.command.includes(` -L ${socket} `))) return false;
+  if (socket === "default" && env.TMUX_TMPDIR) return true;
+  const table = procs();
+  if (table.length === 0) return false;
+  if (socket === "default") return tmuxServerRows(table, process.getuid?.()).length === 0;
+  if (table.some((p) => p.command.includes(` -L ${socket} `))) return false;
   try { fs.rmSync(path.join(tmuxSocketDir(env), socket), { force: true }); } catch {}
   return true;
 }

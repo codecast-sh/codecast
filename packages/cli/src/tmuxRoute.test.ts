@@ -3,12 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  holdsNothing,
   joinListings,
   listEveryServer,
   ownServerSession,
   paneOwnerEnv,
   paneOwnerId,
   routeTmuxArgs,
+  runRouted,
   sessionServerSockets,
   socketOfTmuxEnv,
   targetSession,
@@ -128,6 +130,32 @@ describe("helpers", () => {
     const own = paneOwnerEnv("%3@cast-cc-x", env);
     expect(own.TMUX_PANE).toBe("%3");
     expect(paneOwnerId(own.TMUX_PANE, socketOfTmuxEnv(own.TMUX))).toBe("%3@cast-cc-x");
+  });
+});
+
+describe("holdsNothing", () => {
+  const refused = { stderr: "no server running on /tmp/x\n" };
+  const argv = ["-L", "cast-cc-claude-own", "list-sessions"];
+
+  test("a process table that came back empty decides nothing and keeps the socket", () => {
+    expect(holdsNothing(refused, argv, () => [], env)).toBe(false);
+    expect(fs.existsSync(path.join(tmuxSocketDir(env), "cast-cc-claude-own"))).toBe(true);
+  });
+
+  test("a server process on the socket means busy, not gone", () => {
+    const table = [{ command: "tmux -L cast-cc-claude-own new-session -d" }] as never;
+    expect(holdsNothing(refused, argv, () => table, env)).toBe(false);
+  });
+});
+
+describe("runRouted", () => {
+  test("a server with no sessions leaves a fleet listing complete", async () => {
+    const exec = async (argv: string[]) => {
+      if (argv[0] !== "-L") throw Object.assign(new Error("Command failed"), { stderr: "no current target\n" });
+      return `${argv[1]}\n`;
+    };
+    const argvs = routeTmuxArgs(["list-clients"], env, undefined);
+    expect(await runRouted(argvs, exec, joinListings, env)).toBe("cast-cc-claude-own\ncast-cx-resume-two\n");
   });
 });
 
