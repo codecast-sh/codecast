@@ -56,7 +56,7 @@ import {
   type HibernationCandidate,
   type HibernationPolicy,
 } from "./hibernation.js";
-import { openTaskStart } from "./backgroundTaskStart.js";
+import { scanOpenBackgroundTasksInto, type OpenTaskInfo, type OpenTaskTimes, type PendingTaskCall } from "./backgroundTaskScan.js";
 import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunLastActivity } from "./workflowRunLive.js";
 import { HibernationWorkScan, subagentFilesAccounted } from "./hibernationWork.js";
 import { governor, sampleLoad, describeLoad, readGovernorState, writeGovernorState, SAMPLE_INTERVAL_MS as GOVERNOR_SAMPLE_INTERVAL_MS } from "./loadGovernor.js";
@@ -73,7 +73,8 @@ import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilit
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, recordRemoteLaunch, stableHostnameAsync } from "./remote/device.js";
 import { UNSAFE_PATH_RE, creatableStartFolder, missingFolderError, missingResumeFolderError, noLocalCheckoutBannerActionable, noLocalCheckoutError, placeFreshDeliverySession, type ConversationProjectInfo } from "./resumePlacement.js";
-import { closeDeadRunPanes, liveRunnerPid, paneReplaceable, restartsForNewerFlow, runnerPidFile, runPaneLaunchLine, runPaneName } from "./workflow/runResume.js";
+import { closeDeadRunPanes, liveRunnerPid, paneReplaceable, restartsForNewerFlow, runPaneLaunchLine, runPaneName } from "./workflow/runResume.js";
+import { liveRunIdsOf, type LiveRunsOnDevice } from "./workflow/liveRuns.js";
 import {
   accountSwitchRestartReason,
   previousAccountToClaim,
@@ -310,7 +311,7 @@ import {
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, transcriptScopeRefusal, watchDirFilter, watchFilter } from "./syncScope.js";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
-import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync } from "./tmux.js";
+import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync, tmuxRunAsync } from "./tmux.js";
 import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
 import { HERD_TAKE_PATH, SwapHeldError, abortableWait, closeHerdrPane, pollUntilUp, serveHerdTake, swapHeld, takeBusy, type HerdTakeDeps } from "./herdTake.js";
@@ -1628,7 +1629,6 @@ async function launchWorkflowRun(siteUrl: string, apiToken: string, runId: strin
 const WORKFLOW_RESUME_TICK_MS = 2 * 60_000;
 const workflowResumes = new Map<string, number[]>();
 const runnerRestarts = new Map<string, number>();
-type LiveRunsOnDevice = { runs?: Array<{ run_id: string; status: string; current_node_id: string | null; updated_at: number; restart_at?: number | null }>; failed?: string[] };
 async function fetchLiveRunsOnDevice(): Promise<LiveRunsOnDevice | null> {
   const siteUrl = getSiteUrl();
   const token = getAuthToken();
@@ -1644,30 +1644,17 @@ async function fetchLiveRunsOnDevice(): Promise<LiveRunsOnDevice | null> {
   return data;
 }
 
-// LIVE_RUNS_PAGE: the server answers at most this many runs of a status (workflow_runs.liveRunsForDevice).
-const LIVE_RUNS_PAGE = 100;
-/**
- * The runs live on this machine: the server's running and paused runs here
- * (a run at a card, or one a restart left without a runner) and every run a
- * live runner here holds. Null when the server cannot say, or its answer may
- * be cut short: a worktree is then kept (worktreeGc.ts).
- */
+/** The runs live on this machine (workflow/liveRuns.ts); null keeps every run tree (worktreeGc.ts). */
 async function liveWorkflowRunIds(): Promise<Set<string> | null> {
-  const data = await fetchLiveRunsOnDevice().catch(() => null);
-  if (!data?.runs) return null;
-  for (const status of ["running", "paused"]) if (data.runs.filter((r) => r.status === status).length >= LIVE_RUNS_PAGE) return null;
-  const ids = new Set(data.runs.map((r) => String(r.run_id)));
-  try {
-    for (const f of fs.readdirSync(path.dirname(runnerPidFile("run")))) {
-      const id = f.endsWith(".pid") ? f.slice(0, -4) : null;
-      if (id && liveRunnerPid(id)) ids.add(id);
-    }
-  } catch { /* no runner has run here */ }
-  return ids;
+  return liveRunIdsOf(await fetchLiveRunsOnDevice().catch(() => null));
 }
 
 async function resumeOrphanedWorkflowRuns(): Promise<void> {
-  closeDeadRunPanes((args) => tmuxExecSync(args, { timeout: 5000 }), log);
+  await closeDeadRunPanes(async (args) => {
+    const r = await tmuxRunAsync(args, { timeout: 5000 });
+    if (r.status !== 0) throw new Error(r.stderr || `tmux ${args[0]} failed`);
+    return r.stdout;
+  }, log);
   const data = await fetchLiveRunsOnDevice();
   const siteUrl = getSiteUrl();
   const token = getAuthToken();
@@ -1940,13 +1927,19 @@ export type HookStatusData = {
   // Which LAUNCH posted this (ct-49532). Forwarded by codecast-status.sh from
   // the pane env; absent from a hook script installed before it shipped.
   launch_token?: string;
+  // Claude Code is showing a permission dialog: a PermissionRequest event,
+  // which fires only for a prompt it puts on screen, in every permission mode.
+  // A hook's "ask" (cc-plugin-privacy confirming a command that holds an email)
+  // raises one even under bypassPermissions, so it is never a phantom.
+  dialog?: boolean;
 };
 // The wire form of the record above. The hook builds ONE dict of extras,
 // urlencodes it for the push and writes the same dict to the fallback file, so
 // both transports deliver the extras as strings. Coercing them in one place
 // keeps every reader (the HTTP handler, the watcher, the boot replay) honest.
-type HookStatusWire = Omit<HookStatusData, "session_boundary" | "turn_completed_at"> & {
+type HookStatusWire = Omit<HookStatusData, "session_boundary" | "turn_completed_at" | "dialog"> & {
   session_boundary?: boolean | string;
+  dialog?: boolean | string;
   turn_completed_at?: number | string;
 };
 export function normalizeHookStatus(raw: HookStatusWire): HookStatusData {
@@ -1954,6 +1947,7 @@ export function normalizeHookStatus(raw: HookStatusWire): HookStatusData {
   return {
     ...raw,
     session_boundary: raw.session_boundary === true || raw.session_boundary === "1" || raw.session_boundary === "true" ? true : undefined,
+    dialog: raw.dialog === true || raw.dialog === "1" || raw.dialog === "true" ? true : undefined,
     turn_completed_at: typeof stamp === "number" && Number.isFinite(stamp) && stamp > 0 ? stamp : undefined,
   };
 }
@@ -2798,6 +2792,7 @@ export function handleHookIngressHttp(
     const launchToken = url.searchParams.get("launch_token") || undefined;
     const sessionBoundary = url.searchParams.get("session_boundary") || undefined;
     const turnCompletedAt = url.searchParams.get("turn_completed_at") || undefined;
+    const dialog = url.searchParams.get("dialog") || undefined;
 
     if (!sessionId || !status || !ts) {
       res.writeHead(400);
@@ -2825,6 +2820,7 @@ export function handleHookIngressHttp(
       ...(launchToken && { launch_token: launchToken }),
       ...(sessionBoundary && { session_boundary: sessionBoundary }),
       ...(turnCompletedAt && { turn_completed_at: turnCompletedAt }),
+      ...(dialog && { dialog }),
     });
 
     if (deps.deliver(sessionId, data) === "delivered") {
@@ -3163,11 +3159,11 @@ const permissionRecordIds = new Map<string, Promise<string | null>>();
 const permissionHookWaiters = new PermissionHookWaiters();
 let permissionHookHandler: ((input: PermissionHookInput, res: http.ServerResponse) => void) | null = null;
 const permissionJustResolved = new VersionedObservationSet<string>();
-// One-shot cleanup tracking: when a session is first observed in
-// bypassPermissions mode (post-daemon-restart or post-upgrade), sweep any
-// stale pending_permissions records left over from before the phantom-suppression
-// fix shipped. After the first sweep per session we leave it alone.
-const bypassPermissionsCleaned = new Set<string>();
+// Sessions with a permission dialog on screen, opened by a PermissionRequest and
+// held until a non-blocked status arrives. The Notifications Claude Code sends while
+// the dialog waits carry no tool name, so without this they read as bypass phantoms.
+// See classifyBypassBlock.
+const openPermissionDialogs = new Set<string>();
 // Sessions currently blocked on an AskUserQuestion. A PreToolUse AskUserQuestion hook
 // is the one timely, reliable signal that the agent is waiting for input: Claude Code
 // buffers the tool_use so the JSONL stays empty until answered, and a raw-iTerm
@@ -6090,6 +6086,7 @@ export function clearSessionTrackingForKill(sessionId: string | null | undefined
   resumeInFlightStarted.delete(sessionId);
   restartingSessionIds.delete(sessionId);
   awaitingAskUserQuestion.delete(sessionId);
+  openPermissionDialogs.delete(sessionId);
   preAskUserQuestionStatus.delete(sessionId);
   lastAgentStatusSentAt.delete(sessionId);
   keystrokeInference.cancel(sessionId);
@@ -14875,11 +14872,20 @@ export function pollMenuSteps(poll: PollMessage): Array<{ key: string; text?: st
 // addMessages idempotent: addMessages upserts by (conversation_id, message_uuid),
 // so identical prompts collapse to a single row no matter how many callers detect
 // them. Distinct prompts still get distinct ids and render separately.
-export function interactivePromptMessageUuid(sessionId: string, prompt: InteractivePrompt): string {
+//
+// Content alone does not name ONE prompt: Claude Code asks "Do you want to
+// proceed?" with the same two options for every permission dialog. `anchor`
+// is the newest transcript message the prompt sits under (jsonlPromptAnchor),
+// so a later dialog with the same words, raised after more of the turn ran,
+// gets its own row. Without it the new card upserted onto the answered one and
+// rendered pre-answered, and the session sat on a dialog nobody was shown for
+// 9 hours (jx7e7zm, 2026-11-04). Re-renders of one dialog share the anchor.
+export function interactivePromptMessageUuid(sessionId: string, prompt: InteractivePrompt, anchor?: string | null): string {
   const canonical = JSON.stringify({
     q: prompt.question,
     o: prompt.options.map(o => [o.label, o.description ?? ""]),
     c: !!prompt.isConfirmation,
+    ...(anchor && { a: anchor }),
   });
   const digest = createHash("sha256").update(canonical).digest("hex").slice(0, 16);
   return `interactive-prompt-${sessionId}-${digest}`;
@@ -14992,6 +14998,28 @@ function sessionJsonlHasAssistantProse(sessionId: string, prose: string): boolea
   const jsonlPath = findSessionJsonlPath(sessionId);
   if (!jsonlPath) return false;
   try { return jsonlHasAssistantProse(readFileTailSync(jsonlPath, 65536), prose); } catch { return false; }
+}
+
+/** The uuid of the newest user or assistant entry in a transcript tail: what a
+ *  dialog on screen now was raised after. Bookkeeping entries (queued
+ *  messages, attachments, system lines) can land while the dialog is open, so
+ *  they never move the anchor. */
+export function jsonlPromptAnchor(jsonlText: string): string | null {
+  const lines = jsonlText.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    let entry: any;
+    try { entry = JSON.parse(trimmed); } catch { continue; }
+    if ((entry?.type === "user" || entry?.type === "assistant") && typeof entry.uuid === "string" && entry.uuid) return entry.uuid;
+  }
+  return null;
+}
+
+function sessionPromptAnchor(sessionId: string): string | null {
+  const jsonlPath = findSessionJsonlPath(sessionId);
+  if (!jsonlPath) return null;
+  try { return jsonlPromptAnchor(readFileTailSync(jsonlPath, 65536)); } catch { return null; }
 }
 
 export function sessionHasPendingAskUserQuestion(sessionId: string): boolean {
@@ -15178,7 +15206,7 @@ async function checkForInteractivePrompt(
     // a fresh uuid though — the upsert would revive the old row, whose existing
     // tool_result makes the new card render pre-answered. The close count keeps
     // racing callers agreeing on the same suffixed id.
-    const promptUuid = nextSyntheticPromptUuid(interactivePromptMessageUuid(sessionId, prompt));
+    const promptUuid = nextSyntheticPromptUuid(interactivePromptMessageUuid(sessionId, prompt, sessionPromptAnchor(sessionId)));
 
     // Don't re-emit (and re-surface) a synthetic prompt we already emitted for this
     // session — a re-rendered blocking menu after a heartbeat guard-clear is the same
@@ -15708,182 +15736,8 @@ export function classifyTranscriptTail(tailContent: string): TranscriptTurnState
   return "unknown";
 }
 
-// Open background work in a Claude JSONL transcript: tasks the harness started
-// (run_in_background Bash, a command moved to the background on timeout, a
-// Monitor, a Workflow run) that have not yet reached a terminal state. While any is open, the
-// harness re-invokes the agent when it finishes — so a turn that ended with an
-// open task is "waiting" (an active substate), not idle/needs-input.
-//
-// Opens come from tool_result text (the id is only ever surfaced there);
-// closes come from:
-//   - a <task-notification> carrying a <status> tag. Terminal notifications
-//     (completed/failed/stopped) always carry one; Monitor interim event
-//     notifications carry none and must NOT close the task. Delivery shapes
-//     vary: a plain user message, a queue-operation "remove" (top-level
-//     content), or an attachment (prompt) — an enqueue alone is not delivery.
-//   - a TaskStop tool_use (the agent tore the task down; no notification comes).
-// Lines are scoped to `currentSessionId` when given: a resumed session's file
-// replays prior-run history verbatim (original sessionId preserved per line),
-// and those runs' tasks died with their process — counting them would latch a
-// phantom "waiting".
-export function scanOpenBackgroundTasks(content: string, currentSessionId?: string): Set<string> {
-  return scanOpenBackgroundTasksInto(new Set<string>(), content, currentSessionId);
-}
-
-// When each open task was armed (ms), keyed by task id — the restart fence's
-// input. A background task is a child of the agent process that started it;
-// when that process is replaced (crash, kill, account switch, `claude
-// --resume`) the task dies with it and no terminal notification is ever
-// written, so its start line would keep the session "waiting" forever (the
-// 1h decay merely rate-limits the lie). Same rule the web's monitor rows apply
-// (monitorRows.effectiveMonitorStatus over agent_started_at).
-export type OpenTaskTimes = Map<string, number>;
-
-// The scanner core, threading an existing `open` set so a caller that already
-// scanned the first N bytes can feed it only the bytes after N. Open/close are
-// order-dependent but purely sequential (a task opens on its start line and
-// closes on a later notification/TaskStop line), so scanning the file in two
-// halves against the same set gives the same answer as scanning it whole.
-// The harness's own "this is now a background task" results, anchored to the
-// START of the tool_result: the harness always leads with them, and an
-// unanchored scan also fired on a foreground command whose OUTPUT quoted one (an
-// agent grepping a transcript for these phrases parked its own session in
-// "waiting" on a task id nothing would ever close). Same rule as the web's
-// monitorRows scanner.
 export { openTaskStart } from "./backgroundTaskStart.js";
-export function openTaskStartId(text: string): string | undefined {
-  return openTaskStart(text)?.id;
-}
-
-// What the scanner knows about one open task: the shared report shape (what
-// gets published) plus the tool call that armed it. `command` is the FULL
-// script here — the process check needs it — and is cut to its first line
-// only when reported.
-export type OpenTaskInfo = OpenTaskReport & { openedAt?: number };
-
-// The tool_use blocks that can arm a task, remembered until their result lands
-// (a result always follows its call closely) so the start result can be joined
-// to the description/command the agent gave. Bounded: a call whose result was
-// lost (an interrupted turn) must not leak forever.
-type PendingTaskCall = { name: string; description?: string; command?: string };
-const PENDING_TASK_CALLS_MAX = 200;
-const TASK_ARMING_TOOLS = new Set(["Bash", "Monitor", "Workflow", "Agent"]);
-
-function scanOpenBackgroundTasksInto(
-  open: Set<string>,
-  content: string,
-  currentSessionId?: string,
-  openedAt?: OpenTaskTimes,
-  info?: Map<string, OpenTaskInfo>,
-  pendingCalls?: Map<string, PendingTaskCall>,
-): Set<string> {
-  for (const rawLine of content.split("\n")) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    let d: {
-      type?: string;
-      sessionId?: string;
-      timestamp?: string;
-      operation?: string;
-      content?: unknown;
-      attachment?: { prompt?: unknown; hookName?: unknown };
-      message?: { role?: string; content?: unknown };
-    };
-    try {
-      d = JSON.parse(line);
-    } catch {
-      continue; // partial/corrupt line (mid-write tail) -> skip
-    }
-    if (currentSessionId && d.sessionId && d.sessionId !== currentSessionId) continue;
-    const lineAt = d.timestamp ? Date.parse(d.timestamp) : NaN;
-    // A notification that arrives while the agent is mid-turn is recorded as a
-    // queue-operation (top-level content) and an attachment (prompt), never as
-    // a plain user message — close on the delivered forms. "remove" = dequeued
-    // for delivery; an enqueue alone is left open (the wake hasn't happened
-    // yet, so the session is still the harness's move).
-    if (d.type === "queue-operation") {
-      if (d.operation === "remove" && typeof d.content === "string") closeNotifiedTasks(d.content, open);
-      continue;
-    }
-    if (d.type === "attachment") {
-      const prompt = d.attachment?.prompt;
-      if (typeof prompt === "string") closeNotifiedTasks(prompt, open);
-      // A new agent process starts here: the harness records its SessionStart
-      // hooks on startup and on every resume (not on compaction, which keeps
-      // the process). Each task still open was a child of an earlier process
-      // and died with it, unnoticed. The restart fence (notBefore) drops them
-      // too, but only while the daemon still holds the process's start, which
-      // it forgets once the process is gone. So the watchdog, which only sees
-      // dead processes, revived a dormant session on every exit for ten days
-      // over a Monitor that had died on Oct 22 (jx71nrj).
-      else if (d.attachment?.hookName === "SessionStart:startup" || d.attachment?.hookName === "SessionStart:resume") {
-        for (const id of open) { openedAt?.delete(id); info?.delete(id); }
-        open.clear();
-      }
-      continue;
-    }
-    if (d.type !== "user" && d.type !== "assistant") continue;
-    const blocks = d.message?.content;
-    const surface = typeof blocks === "string" ? blocks : "";
-    if (!Array.isArray(blocks)) {
-      closeNotifiedTasks(surface, open);
-      continue;
-    }
-    for (const b of blocks) {
-      if (!b || typeof b !== "object") continue;
-      const block = b as { type?: string; id?: string; name?: string; input?: unknown; content?: unknown; text?: string; tool_use_id?: string };
-      if (block.type === "text" && block.text) {
-        closeNotifiedTasks(block.text, open);
-      } else if (block.type === "tool_result") {
-        const text = typeof block.content === "string"
-          ? block.content
-          : Array.isArray(block.content)
-            ? block.content.map((c) => (c && typeof c === "object" ? String((c as { text?: unknown }).text ?? "") : "")).join(" ")
-            : "";
-        const started = openTaskStart(text);
-        const call = block.tool_use_id && pendingCalls ? pendingCalls.get(block.tool_use_id) : undefined;
-        if (block.tool_use_id) pendingCalls?.delete(block.tool_use_id);
-        if (started) {
-          open.add(started.id);
-          if (openedAt && Number.isFinite(lineAt)) openedAt.set(started.id, lineAt);
-          info?.set(started.id, {
-            id: started.id,
-            kind: started.kind,
-            ...(call?.description ? { description: call.description } : {}),
-            ...(call?.command ? { command: call.command } : {}),
-            ...(Number.isFinite(lineAt) ? { started_at: lineAt, openedAt: lineAt } : {}),
-            ...(block.tool_use_id ? { tool_use_id: block.tool_use_id } : {}),
-          });
-        }
-      } else if (block.type === "tool_use" && block.name === "TaskStop") {
-        const taskId = (block.input as { task_id?: unknown } | undefined)?.task_id;
-        if (typeof taskId === "string") open.delete(taskId);
-      } else if (block.type === "tool_use" && block.id && block.name && TASK_ARMING_TOOLS.has(block.name) && pendingCalls) {
-        const input = (block.input ?? {}) as { description?: unknown; command?: unknown };
-        pendingCalls.set(block.id, {
-          name: block.name,
-          ...(typeof input.description === "string" ? { description: input.description } : {}),
-          ...(typeof input.command === "string" ? { command: input.command } : {}),
-        });
-        if (pendingCalls.size > PENDING_TASK_CALLS_MAX) {
-          const oldest = pendingCalls.keys().next().value;
-          if (oldest !== undefined) pendingCalls.delete(oldest);
-        }
-      }
-    }
-  }
-  return open;
-}
-
-// One notification can carry SEVERAL <task-id> tags (the harness batches an
-// orphan sweep into a single <status>stopped</status> notification) — close
-// every id it names, but only when a <status> tag marks it terminal (Monitor
-// interim events carry no status and must not close their task).
-function closeNotifiedTasks(text: string, open: Set<string>): void {
-  if (!text.includes("<task-notification>")) return;
-  if (!/<status>[^<]+<\/status>/.test(text)) return;
-  for (const m of text.matchAll(/<task-id>([^<]+)<\/task-id>/g)) open.delete(m[1]);
-}
+export { openTaskStartId, scanOpenBackgroundTasks, type OpenTaskInfo, type OpenTaskTimes } from "./backgroundTaskScan.js";
 
 // Incremental wrapper for scanOpenBackgroundTasks. Turn-end and reconcile both
 // consult it, and reconcile runs on every heartbeat. The old version cached by
@@ -16445,42 +16299,50 @@ export function permissionBlockedRecoveryTarget(
 // In bypassPermissions mode Claude Code still emits permission_prompt
 // Notifications for tools it auto-approves; those are phantom blocks (the agent
 // never pauses) and must be rewritten to "working" to avoid a dangling web
-// Approve/Deny dialog. AskUserQuestion is the exception: it genuinely blocks the
-// agent on a user prompt regardless of permission mode, so the status hook tags
-// it via `message` and we let that one through to the "needs input" bucket.
+// Approve/Deny dialog. Two blocks are real in every mode: AskUserQuestion (the
+// status hook tags it via `message`) and a PermissionRequest (`dialog`), which
+// Claude Code fires only for a dialog it puts on screen, such as a hook's "ask".
 export function isPhantomBypassPermissionBlock(
   status: string | undefined,
   permissionMode: string | undefined,
   message: string | undefined,
+  dialog?: boolean,
 ): boolean {
   if (status !== "permission_blocked") return false;
   if (permissionMode !== "bypassPermissions") return false;
+  if (dialog) return false;
   return !(message || "").startsWith("AskUserQuestion");
 }
 
 // Decide whether one hook event's permission_blocked should be suppressed as a phantom
-// bypass auto-approve, accounting for an in-progress AskUserQuestion block. `blocked` is
-// mutated in place across the event stream for a session:
-//   - a PreToolUse AskUserQuestion hook (message="AskUserQuestion") opens the block
-//   - any non-blocked status closes it (the answer landed and the agent moved on)
-// While the block is open, a context-free permission_blocked Notification is the agent
+// bypass auto-approve, accounting for a real block already open. Both sets are mutated
+// in place across the event stream for a session:
+//   - a PreToolUse AskUserQuestion hook (message="AskUserQuestion") opens `blocked`
+//   - a PermissionRequest (`dialog`) opens `dialogs`
+//   - any non-blocked status closes both (the answer landed and the agent moved on)
+// While either is open, a context-free permission_blocked Notification is the agent
 // genuinely waiting — not a phantom — so it must not be suppressed. This is what keeps
-// the web honest ("waiting for input", not "working/stuck") for raw-iTerm sessions whose
-// question can't be scraped from a pane or read from the buffered JSONL until answered.
+// the web honest ("waiting for input", not "working/stuck") while a prompt is on screen.
 export function classifyBypassBlock(
   blocked: Set<string>,
   sessionId: string,
   status: string | undefined,
   permissionMode: string | undefined,
   message: string | undefined,
+  dialogs?: Set<string>,
+  dialog?: boolean,
 ): { suppress: boolean } {
   if (status === "permission_blocked" && (message || "").startsWith("AskUserQuestion")) {
     blocked.add(sessionId);
   } else if (status && status !== "permission_blocked") {
     blocked.delete(sessionId);
+    dialogs?.delete(sessionId);
   }
+  if (status === "permission_blocked" && dialog) dialogs?.add(sessionId);
   const suppress =
-    isPhantomBypassPermissionBlock(status, permissionMode, message) && !blocked.has(sessionId);
+    isPhantomBypassPermissionBlock(status, permissionMode, message, dialog)
+    && !blocked.has(sessionId)
+    && !dialogs?.has(sessionId);
   return { suppress };
 }
 
@@ -24063,6 +23925,7 @@ async function collectResourceSnapshot(): Promise<void> {
   }
 }
 
+let processCaptureFailing = false;
 async function collectResourceSnapshotNow(): Promise<void> {
   await ensureTmuxCarriesSessionIds();
 
@@ -24079,9 +23942,12 @@ async function collectResourceSnapshotNow(): Promise<void> {
   try {
     const collectionStartedAt = Date.now();
     const processSnapshot = await captureProcessSnapshot().catch(err => {
-      log(`[RESOURCES] Process details unavailable: ${String(err)}`, "debug");
+      // Logged once per outage: a lost process list blanks the Resources page's usage and moves.
+      if (!processCaptureFailing) log(`[RESOURCES] Process details unavailable after ${Date.now() - collectionStartedAt}ms: ${String(err)}`);
+      processCaptureFailing = true;
       return undefined;
     });
+    if (processSnapshot && processCaptureFailing) { processCaptureFailing = false; log(`[RESOURCES] Process details back after ${Date.now() - collectionStartedAt}ms`); }
     const machine = await collectMachineResources(deviceId(), processSnapshot, sessionPids);
     machine.collectionDurationMs = Date.now() - collectionStartedAt;
     machine.sample.governor = governor.level;
@@ -30717,18 +30583,9 @@ async function main(): Promise<void> {
       } else if (data.status && data.status !== "permission_blocked") {
         preAskUserQuestionStatus.delete(sessionId);
       }
-      if (classifyBypassBlock(awaitingAskUserQuestion, sessionId, data.status, inheritedMode, data.message).suppress) {
+      if (classifyBypassBlock(awaitingAskUserQuestion, sessionId, data.status, inheritedMode, data.message, openPermissionDialogs, data.dialog).suppress) {
         log(`Suppressing phantom permission_blocked in bypassPermissions mode for session ${sessionId.slice(0, 8)}`);
         data = { ...data, status: "working" };
-      }
-
-      // One-shot sweep for sessions in bypass mode. Catches stale records
-      // from before the phantom-suppression fix shipped.
-      if (inheritedMode === "bypassPermissions" && !bypassPermissionsCleaned.has(sessionId)) {
-        bypassPermissionsCleaned.add(sessionId);
-        syncService.cancelPendingPermissions(sessionId, Date.now())
-          .then((n) => { if (n > 0) log(`Swept ${n} pre-existing pending permission(s) for bypass-mode session ${sessionId.slice(0, 8)}`); })
-          .catch((err) => log(`Bypass-mode permission sweep failed: ${err instanceof Error ? err.message : String(err)}`));
       }
 
       // A finished turn with open background work (run_in_background command,
@@ -31008,6 +30865,7 @@ async function main(): Promise<void> {
       ...(input.permissionMode && { permission_mode: input.permissionMode as PermissionMode }),
       ...(input.launchToken && { launch_token: input.launchToken }),
       message: preview ? `${toolName}: ${preview}` : toolName,
+      dialog: true,
     }));
     const idPromise = record?.id ?? opened;
     if (!idPromise) { reply(null); return; }
@@ -31086,7 +30944,7 @@ async function main(): Promise<void> {
         preAskUserQuestionStatus.delete(f.sessionId);
         lastAgentStatusSentAt.delete(f.sessionId);
         keystrokeInference.cancel(f.sessionId);
-        bypassPermissionsCleaned.delete(f.sessionId);
+        openPermissionDialogs.delete(f.sessionId);
       }
       await sweepStatusLineStamps(now - ttlMs);
     })().catch(() => {});

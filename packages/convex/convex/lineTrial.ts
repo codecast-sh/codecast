@@ -43,7 +43,7 @@ import { validateJudgeFixCard, type JudgeFixCard } from "@codecast/shared/contra
 import { isJudgeProblem, JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
 import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, resumeRunAt, stationSession, type GateChoice } from "./workflow_runs";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, routeToRole, syncDecisionInbox, tellHearingRole, userMayRead, withdrawClosedProblemAsks, withdrawCore } from "./sessionDecisions";
-import { alignGateChoices } from "./lib/gateChoices";
+import { gateMirror } from "./lib/gateChoices";
 import { fileTrialCard, trialDeciderOf, trialProjectOf, trialStackOf } from "./lib/trialDecision";
 import { retireOnClose } from "./findingGroups";
 import { fateOf, problemEvidence, type FindingFate } from "./lib/problemEvidence";
@@ -112,11 +112,7 @@ export async function askTrialGate(
     await syncDecisionInbox(ctx, own._id, routed.people, now, routed.trial === "role" && !told && woken.length === 0);
     const adopted = await ctx.db.get(own._id);
     if (adopted) await refreshHolder(ctx, adopted as any, now);
-    const aligned = alignGateChoices(own.options, args.choices);
-    await ctx.db.patch(run._id, {
-      gate_decision_id: own._id,
-      gate_choices: aligned.map((c, i) => (c ? { key: c.key, label: c.label, target: c.target } : { key: "", label: own.options[i].label, target: "" })),
-    });
+    await ctx.db.patch(run._id, { gate_decision_id: own._id, gate_choices: gateMirror(own.options, args.choices) });
     decision = own;
   } else {
     // Only a station of the run asks: its own station, else the run's primary conversation. Never the session that
