@@ -4,12 +4,18 @@
 // on the machine it was seated from; its origin, read from that machine's git
 // plane, names the repository, and the subpath under the repository root
 // names the same folder on every machine in the pool.
+//
+// A runner with no such machine takes the team's pool: the machines any member
+// of the role's team offers for that repository. A run placed on another
+// account's machine runs and bills as that account, the way any session placed
+// on a teammate's machine does, and the seat's person stays its owner, so its
+// cards reach who they reach on the seat's own machine (orgLine.startRoleRun).
 import { normalizeGitOrigin, pathUnderRoot } from "@codecast/shared/contracts";
 import { isDeviceOnline } from "../ccAccountsShared";
 
 type Ctx = { db: any };
 
-export type LineSlot = { device: string; root: string; runs: number; working: number };
+export type LineSlot = { device: string; user: string; root: string; runs: number; working: number };
 export type LinePool = { origin: string; subpath: string; slots: LineSlot[] };
 
 // A run works while it is pending or running. A run paused at its card, or
@@ -73,8 +79,31 @@ export async function poolDeviceIds(ctx: Ctx, runner: string): Promise<Set<strin
   return new Set(devices.filter((d) => d.line_slots?.length).map((d) => String(d.device_id)));
 }
 
-/** The pool for a role whose folder is `projectPath`, or null when no online machine of the runner offers its repository. */
-export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string | undefined, now: number): Promise<LinePool | null> {
+/** The slots the runs on a machine use now: a run waiting on a person, parked, or with no role or task uses none. */
+export async function deviceWorking(ctx: Ctx, device: string, waiting: Set<string>): Promise<number> {
+  let working = 0;
+  for (const status of WORKING_RUN_STATUSES) {
+    const runs: any[] = await ctx.db
+      .query("workflow_runs")
+      .withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", device).eq("status", status))
+      .collect();
+    for (const r of runs) if (await holdsSlot(ctx, r, waiting)) working++;
+  }
+  return working;
+}
+
+/** The members of a team, the people whose machines make up its line pool. */
+async function teamMemberIds(ctx: Ctx, teamId: string): Promise<string[]> {
+  const rows: any[] = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect();
+  return [...new Set(rows.map((m) => String(m.user_id)))];
+}
+
+/**
+ * The pool for a role whose folder is `projectPath`: the runner's online machines that offer its repository, else,
+ * when the runner has none and the role belongs to a team, the team's (every member's). Null when neither has one,
+ * and the run stays on the runner's own machine.
+ */
+export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string | undefined, now: number, teamId?: string | null): Promise<LinePool | null> {
   if (!projectPath) return null;
   const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", runner)).collect();
   let checkout: { root: string; origin: string } | null = null;
@@ -87,7 +116,20 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
   const origin = checkout && normalizeGitOrigin(checkout.origin);
   if (!checkout || !origin) return null;
   const subpath = projectPath.slice(checkout.root.length).replace(/^\/+/, "");
-  const waiting = await runsWaitingOnAPerson(ctx, runner);
+  const own = await slotsFor(ctx, devices, origin, now);
+  if (own.length) return { origin, subpath, slots: own };
+  if (!teamId) return null;
+  const team: any[] = [];
+  for (const member of await teamMemberIds(ctx, teamId)) {
+    if (member === runner) continue;
+    team.push(...await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", member)).collect());
+  }
+  const shared = await slotsFor(ctx, team, origin, now);
+  return shared.length ? { origin, subpath, slots: shared } : null;
+}
+
+async function slotsFor(ctx: Ctx, devices: any[], origin: string, now: number): Promise<LineSlot[]> {
+  const waiting = new Map<string, Set<string>>();
   const slots: LineSlot[] = [];
   for (const d of devices) {
     if (!isDeviceOnline(d, now)) continue;
@@ -96,17 +138,12 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
     // the laptop).
     const slot = (d.line_slots ?? []).find((s: any) => s.origin === origin);
     if (!slot) continue;
-    let working = 0;
-    for (const status of WORKING_RUN_STATUSES) {
-      const runs: any[] = await ctx.db
-        .query("workflow_runs")
-        .withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", String(d.device_id)).eq("status", status))
-        .collect();
-      for (const r of runs) if (await holdsSlot(ctx, r, waiting)) working++;
-    }
-    slots.push({ device: String(d.device_id), root: slot.root, runs: slotRuns(d, slot), working });
+    const user = String(d.user_id);
+    // A run's decisions are asked by its sessions, which run as the machine's account.
+    if (!waiting.has(user)) waiting.set(user, await runsWaitingOnAPerson(ctx, user));
+    slots.push({ device: String(d.device_id), user, root: slot.root, runs: slotRuns(d, slot), working: await deviceWorking(ctx, String(d.device_id), waiting.get(user)!) });
   }
-  return slots.length ? { origin, subpath, slots } : null;
+  return slots;
 }
 
 export const poolFree = (pool: LinePool): number => pool.slots.reduce((n, s) => n + Math.max(0, s.runs - s.working), 0);
@@ -114,9 +151,9 @@ export const poolCap = (pool: LinePool): number => pool.slots.reduce((n, s) => n
 export const poolWorking = (pool: LinePool): number => pool.slots.reduce((n, s) => n + s.working, 0);
 
 /** The slot with the most free runs, and the run's folder there; null when every slot is full. Counts the run on it. */
-export function takeSlot(pool: LinePool): { device: string; project_path: string } | null {
+export function takeSlot(pool: LinePool): { device: string; user: string; project_path: string } | null {
   const slot = [...pool.slots].sort((a, b) => (b.runs - b.working) - (a.runs - a.working))[0];
   if (!slot || slot.runs - slot.working <= 0) return null;
   slot.working++;
-  return { device: slot.device, project_path: pool.subpath ? `${slot.root.replace(/\/+$/, "")}/${pool.subpath}` : slot.root };
+  return { device: slot.device, user: slot.user, project_path: pool.subpath ? `${slot.root.replace(/\/+$/, "")}/${pool.subpath}` : slot.root };
 }

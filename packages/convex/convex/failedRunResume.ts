@@ -10,7 +10,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { trialProjectOf } from "./lineTrial";
 import { repinRunForResume } from "./flowVersions";
-import { canReadRun, resumeRunAt } from "./workflow_runs";
+import { canReadRun, ownsRun, resumeRunAt } from "./workflow_runs";
 
 type Ctx = { db: any };
 
@@ -28,7 +28,7 @@ const resumable = (run: Doc<"workflow_runs">): boolean => endedFailing(run) || e
 export async function resumeFailedRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow_runs">, at: string, opts: { check?: boolean; currentFlow?: boolean; queue?: boolean } = {}, now = Date.now()) {
   const run = await ctx.db.get(runId);
   if (!run || !(await canReadRun(ctx, userId, run))) throw new ConvexError("Run not found");
-  if (String(run.user_id) !== String(userId)) throw new ConvexError("Only the run's owner resumes it");
+  if (!(await ownsRun(ctx, userId, run))) throw new ConvexError("Only the run's owner resumes it");
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task && isTerminalTaskStatus(task.status)) throw new ConvexError(`${task.short_id} is ${task.status}: a closed problem is not resumed`);
   if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast flow trial rerun ${task.short_id} --at <station> resumes it under the trial's budget`);
