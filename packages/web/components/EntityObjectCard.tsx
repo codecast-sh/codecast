@@ -13,6 +13,7 @@ import {
   Phone,
   Film,
   Rocket,
+  Workflow,
   Signpost,
   Radio,
   Target,
@@ -100,6 +101,7 @@ const TYPE_ICON: Record<EntityType, any> = {
   role: Hexagon,
   person: UserRound,
   secret: KeyRound,
+  flow: Workflow,
 };
 
 /** An object's mark as its card and every list of it draw it: a task's

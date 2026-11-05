@@ -62,6 +62,7 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   role: "Role",
   person: "Person",
   secret: "Secret",
+  flow: "Flow",
 };
 
 

@@ -20,7 +20,7 @@ import { flowRunState, readFlowFence } from "../../../lib/line/flowFence";
 import { CodeBlock } from "../../CodeBlock";
 import { lineWorkspaceHref } from "../../../lib/line/lineWorkspaceUrl";
 import { useInboxStore } from "../../../store/inboxStore";
-import { FlowDiagram } from "./FlowDiagram";
+import { FlowExplorer } from "./FlowStationPanel";
 import "../workspace/workspace.css";
 
 export default function FlowFence({ code }: { code: string }) {
@@ -71,7 +71,7 @@ export const FlowCard = memo(function FlowCard({ slug, title }: { slug: string; 
   return (
     <div className="lw-widget lw-flow" data-flow-card={flow.slug}>
       <FlowHead flow={flow} title={title} library={library} />
-      <FlowDiagram flow={flow} />
+      <FlowExplorer flow={flow} />
     </div>
   );
 });
@@ -94,7 +94,7 @@ export const FlowRunCard = memo(function FlowRunCard({ runId, title }: { runId: 
           <button type="button" className="lw-flow-stop" onClick={() => void useInboxStore.getState().stopLineRun(runId)} data-flow-stop={runId}>Stop</button>
         ) : null}
       </FlowHead>
-      <FlowDiagram flow={flow} run={run} />
+      <FlowExplorer flow={flow} run={run} />
       {state.why ? <div className="lw-flow-why">{state.why}</div> : null}
     </div>
   );
@@ -112,7 +112,7 @@ function ShipRunCard({ run, flow, title, library }: { run: any; flow: AppFlow; t
         {run.task_short_id ? <a className="lw-flow-task" href={`/tasks/${run.task_short_id}`}>{run.task_short_id}</a> : null}
         <button type="button" className="lw-flow-save" onClick={() => setGraph((g) => !g)} aria-pressed={graph} data-flow-graph-toggle>{graph ? "Stages" : "Graph"}</button>
       </FlowHead>
-      {graph ? <FlowDiagram flow={flow} run={run} /> : null}
+      {graph ? <FlowExplorer flow={flow} run={run} /> : null}
       <JourneyView journey={journey} run={run} now_ms={now} compact={graph} actions={
         live ? <button type="button" className="sj-btn" data-quiet onClick={() => void useInboxStore.getState().stopLineRun(run._id)} data-flow-stop={run._id}>Stop</button> : null
       } />
