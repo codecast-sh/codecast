@@ -6,7 +6,7 @@ import { Fragment } from "react";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { useShaCommit, useSyncShaCommit } from "../../hooks/useSyncOps";
-import { commitPath } from "../../lib/externalEvents";
+import { commitPath, prPath } from "../../lib/externalEvents";
 import { relTimeShort } from "../../lib/utils";
 import { EntityIdPill } from "../EntityIdPill";
 import { commitMessageParts, squashPr, type CiRunRow } from "./issuesModel";
@@ -19,11 +19,17 @@ export function CommitMessage({ message, repository }: { message: string | undef
       {parts.map((p, i) =>
         p.t === "text" ? <Fragment key={i}>{p.v}</Fragment>
           : p.t === "task" ? <EntityIdPill key={i} shortId={p.v} compact />
-          : repository ? <EntityIdPill key={i} type="pr" id={`${repository}#${p.n}`} certain compact />
+          : repository ? <PrRef key={i} repository={repository} n={p.n} />
           : <Fragment key={i}>#{p.n}</Fragment>,
       )}
     </span>
   );
+}
+
+/** A pull request by its number alone, linked: never a fragment of its title. */
+export function PrRef({ repository, n }: { repository: string; n: number }) {
+  const href = prPath({ repository, number: n });
+  return href ? <Link href={href} className="ops-mono hover:underline" title={`${repository}#${n}`}>#{n}</Link> : <span className="ops-mono">#{n}</span>;
 }
 
 /**
@@ -44,7 +50,7 @@ export function SuspectCommit({ sha, why, now, compare, label = "Suspect" }: { s
       <div className="iss-suspect-head">
         <span className="iss-suspect-k" data-label={label}>{label}</span>
         {href ? <Link href={href} className="ops-mono hover:underline">{sha.slice(0, 7)}</Link> : <span className="ops-mono">{sha.slice(0, 7)}</span>}
-        <span className="ops-dim">{why}</span>
+        {why && <span className="ops-dim">{why}</span>}
         {compare && <a href={compare} target="_blank" rel="noopener noreferrer" className="iss-suspect-cmp">commits between <ExternalLink className="w-3 h-3" /></a>}
       </div>
       {commit ? (
@@ -53,7 +59,7 @@ export function SuspectCommit({ sha, why, now, compare, label = "Suspect" }: { s
           <div className="iss-suspect-refs">
             {commit.conversation_id ? <EntityIdPill type="session" id={commit.conversation_id} compact /> : <span className="ops-quiet">{commit.author_login ?? commit.author_name}</span>}
             {tasks.slice(0, 3).map((t) => <EntityIdPill key={t} type="task" id={t} compact />)}
-            {pr && commit.repository ? <EntityIdPill type="pr" id={`${commit.repository}#${pr}`} certain compact /> : null}
+            {pr && commit.repository ? <PrRef repository={commit.repository} n={pr} /> : null}
             {commit.timestamp ? <span className="ops-dim ops-num">{relTimeShort(commit.timestamp, now)} ago</span> : null}
             {commit.conversation_id && <Link href={`/conversation/${commit.conversation_id}`} className="ops-btn iss-suspect-open">Open its session</Link>}
           </div>

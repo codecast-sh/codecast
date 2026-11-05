@@ -4,7 +4,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { carryLogins, lastMutatingIndex, parseEngineRefs, translate, rankByVisibility, readEvalScript, loginRaisePlan, withOrdinals, LOGIN_RAISE_COOLDOWN_MS } from "./cliEngine.js";
+import { carryLogins, lastMutatingIndex, translate, readEvalScript, loginRaisePlan, LOGIN_RAISE_COOLDOWN_MS } from "./cliEngine.js";
+import { parseEngineRefs, rankByVisibility, withOrdinals } from "./engineRefs.js";
 
 describe("carryLogins on the cloud host", () => {
   // The host's clone of its own ~/.config/google-chrome carries a

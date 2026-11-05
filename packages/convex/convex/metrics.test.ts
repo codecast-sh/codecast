@@ -5,8 +5,9 @@ import { makeFakeDb, schemaIndexes } from "./testDb";
 import { GROUP_RULES, METRIC_WATCH_LIMITS } from "@codecast/shared/contracts/ingest";
 import { createSource, sourceConnectionLost } from "./ingest";
 import { createWatch, getWatch, historyInputs, listWatches, loadHistory, pollDue, pollInputs, pollWatch, readHistory, readNow, recordHistory, recordPoint, removeWatch, updateWatch, volumeRead } from "./metrics";
-import { bindHogqlNow, fetchMetricHistory, insightSeries, sourceForPoll } from "./sources/posthog";
-import { METRIC_HISTORY_READS, historyInstants, mergeMetricHistory } from "./lib/ingestGroups";
+import { fetchMetricHistory, insightSeries, sourceForPoll } from "./sources/posthog";
+import { bindHogqlNow } from "./lib/hogqlNow";
+import { METRIC_HISTORY_READS, historyInstants, mergeMetricHistory } from "./lib/watchSeries";
 import { encryptConnectionSecret, tokenConnectionRow } from "./tokenConnectors";
 
 const h = (fn: any) => fn._handler;

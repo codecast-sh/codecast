@@ -198,12 +198,15 @@ export function useSyncSessionFlowRuns(conversationId: string | null | undefined
 /** Reader: a session's own flow runs, newest first (undefined while cold and empty). */
 export function useSessionFlowRuns(conversationId: string | null | undefined): any[] | undefined {
   const { ready } = useSyncSessionFlowRuns(conversationId);
-  // A team's own flow counts when its graph in the store says it takes a branch.
-  const teamFlows = useInboxStore((s) => {
+  // A team's own flow counts when its graph in the store says it takes a branch:
+  // the viewer's own flows and those published to the workspace.
+  const { workflows: own } = useWorkflows();
+  const published = useWorkspaceCollection<any>("workflows", workflowSig);
+  const teamFlows = useMemo(() => {
     const out: string[] = [];
-    for (const w of Object.values((s.workflows ?? {}) as Record<string, any>)) if (graphTakesBranch(w)) out.push(w.slug, w.name);
+    for (const w of [...own, ...published]) if (graphTakesBranch(w)) out.push(w.slug, w.name);
     return out.sort().join("|");
-  });
+  }, [own, published]);
   const where = useMemo(() => {
     const ok = new Set([...SHIPPED_SESSION_FLOWS, ...teamFlows.split("|").filter(Boolean)]);
     return (r: any) => !!conversationId && String(r.spawner_conversation_id ?? "") === conversationId && r.run_kind !== "workflow" && (ok.has(r.workflow_slug ?? "") || ok.has(r.workflow_name ?? ""));

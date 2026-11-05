@@ -14,7 +14,8 @@ import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { FieldProblem, Row } from "./parts";
-import { DROP_OVER, FIELD, FIELD_MONO, KIND, VAULT_DIALOG, VAULT_PRIMARY, defaultWhere } from "../../lib/secretLook";
+import { DROP_OVER, FIELD, FIELD_MONO, KIND, VAULT_DIALOG, defaultWhere } from "../../lib/secretLook";
+import { Button } from "../ui/button";
 import { useFileDrop } from "../../hooks/useFileDrop";
 import { useCreate } from "../../hooks/useCreateSecret";
 import { ValueFields } from "./ValueForm";
@@ -87,11 +88,12 @@ function Footer({ onClose, submit, label, disabled }: { onClose: () => void; sub
       <button type="button" onClick={onClose} className="inline-flex h-8 items-center gap-2 rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text-muted hover:text-sol-text">
         Cancel <span className="hidden sm:inline-flex"><KeyCap size="xs">esc</KeyCap></span>
       </button>
-      <button
+      <Button
         type="button"
+        variant="yellow"
+        size="sm"
         disabled={disabled}
         onClick={submit}
-        className={`inline-flex h-8 items-center gap-2 rounded-md px-3.5 text-[12.5px] ${VAULT_PRIMARY}`}
         data-vault-add-submit
       >
         {label}
@@ -100,7 +102,7 @@ function Footer({ onClose, submit, label, disabled }: { onClose: () => void; sub
           <KeyCap size="xs" tone="onAccent">{isMac ? "⌘" : "ctrl"}</KeyCap>
           <KeyCap size="xs" tone="onAccent">↵</KeyCap>
         </span>
-      </button>
+      </Button>
     </footer>
   );
 }

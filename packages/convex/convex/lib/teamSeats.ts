@@ -23,10 +23,14 @@
 // Everything is off unless STRIPE_PRICE_TEAM_SEAT and both Stripe secrets are
 // set: with no price nobody is limited and nothing syncs, and with no secrets
 // there would be no way to upgrade, so nothing is limited either.
+// STRIPE_PRICE_TEAM_SEAT is the monthly price; STRIPE_PRICE_TEAM_SEAT_ANNUAL,
+// when set, is offered beside it as yearly billing.
 //
 // Teams already over the free capacity when the gate first judges them are
-// grandfathered: stamped once, they keep adding seats with no plan. That
-// never breaks a working team; an operator clears `grandfathered_at` to end it.
+// grandfathered: stamped once, they keep adding seats with no plan until
+// TEAM_SEAT_GRANDFATHER_UNTIL (one date for every such team, so it can be
+// announced), and then need Pro to add more. Grandfathering never removes a
+// member; an operator clears `grandfathered_at` to end it early.
 import { isLiveSubscription } from "@platform/billing";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -48,8 +52,15 @@ export const CHECKOUT_GRACE_MS = 60 * 60 * 1000;
 /** Statuses Stripe reports for a subscription that no longer pays for anything. */
 const LAPSED_STATUSES: readonly string[] = ["canceled", "unpaid", "incomplete_expired", "paused"];
 
+export type SeatBilling = "monthly" | "annual";
+
 export interface SeatBillingEnv {
+  /** The monthly per-seat price. */
   priceId?: string;
+  /** The yearly per-seat price, offered beside the monthly one when set. */
+  annualPriceId?: string;
+  /** When grandfathering ends, in ms; unset means it never does. */
+  grandfatherUntil?: number;
   trialDays: number;
   secretKey?: string;
   webhookSecret?: string;
@@ -60,13 +71,26 @@ export interface SeatBillingEnv {
 export function seatBillingEnv(env: Record<string, string | undefined> = process.env): SeatBillingEnv {
   const read = (name: string) => env[name]?.trim() || undefined;
   const trial = Number(read("TEAM_SEAT_TRIAL_DAYS") ?? 0);
+  const until = Date.parse(read("TEAM_SEAT_GRANDFATHER_UNTIL") ?? "");
   return {
     priceId: read("STRIPE_PRICE_TEAM_SEAT"),
+    annualPriceId: read("STRIPE_PRICE_TEAM_SEAT_ANNUAL"),
+    grandfatherUntil: Number.isFinite(until) ? until : undefined,
     trialDays: Number.isFinite(trial) && trial > 0 ? Math.floor(trial) : 0,
     secretKey: read("STRIPE_SECRET_KEY"),
     webhookSecret: read("STRIPE_WEBHOOK_SECRET"),
     portalConfiguration: read("STRIPE_TEAM_PORTAL_CONFIGURATION"),
   };
+}
+
+/** The seat price for a billing choice; annual falls back to monthly where no annual price is set. */
+export function seatPriceId(env: SeatBillingEnv, billing: SeatBilling = "monthly"): string | undefined {
+  return billing === "annual" ? env.annualPriceId ?? env.priceId : env.priceId;
+}
+
+/** Whether a price is one of the team seat prices. */
+export function isSeatPrice(env: SeatBillingEnv, priceId: string | null | undefined): boolean {
+  return !!priceId && (priceId === env.priceId || priceId === env.annualPriceId);
 }
 
 /** Whether seat billing is on: a seat price, and the secrets to sell it and hear back. */
@@ -105,6 +129,8 @@ export interface SeatInput {
   /** Seats the operation adds: 1 for an invite or a join. */
   adding: number;
   now: number;
+  /** When grandfathering ends (SeatBillingEnv.grandfatherUntil). */
+  grandfatherUntil?: number;
 }
 
 export function seatLimit(code: SeatLimit["code"], counts: SeatCounts): SeatLimit {
@@ -131,18 +157,20 @@ export function isLapsed(status: string | null | undefined): boolean {
 
 /** Whether the team was over the free capacity before seat billing judged it:
  *  stamped already, or never subscribed and over capacity now. Only a team
- *  that existed before the gate can be over it without a plan. */
-export function grandfathered(row: SeatInput["row"], counts: SeatCounts): boolean {
+ *  that existed before the gate can be over it without a plan. Nobody is
+ *  grandfathered from `until` on. */
+export function grandfathered(row: SeatInput["row"], counts: SeatCounts, now: number, until?: number): boolean {
+  if (until !== undefined && now >= until) return false;
   if (row?.grandfathered_at) return true;
   return !row?.stripe_customer_id && counts.members + counts.pending > STARTER_FREE_CAPACITY;
 }
 
 /** The pure decision; `checkSeat` adds the reads, the stamp and the log. */
-export function decideSeat({ on, row, counts, adding, now }: SeatInput): SeatDecision {
+export function decideSeat({ on, row, counts, adding, now, grandfatherUntil }: SeatInput): SeatDecision {
   if (!on) return { kind: "allowed", plan: "starter", why: "billing_off" };
   if (seatPlan(row) === "pro") return { kind: "allowed", plan: "pro", why: "subscribed" };
   if (counts.members + counts.pending + adding <= STARTER_FREE_CAPACITY) return { kind: "allowed", plan: "starter", why: "within_free" };
-  if (grandfathered(row, counts)) return { kind: "allowed", plan: "starter", why: "grandfathered" };
+  if (grandfathered(row, counts, now, grandfatherUntil)) return { kind: "allowed", plan: "starter", why: "grandfathered" };
   const status = row?.subscription_status;
   if (row?.refresh_failed_at && row.refresh_failed_at > (row.subscription_read_at ?? 0)) return { kind: "fail_open", why: "plan_unconfirmed" };
   if (status === "incomplete") return { kind: "fail_open", why: "payment_processing" };
@@ -193,11 +221,12 @@ export async function checkSeat(
   operation: string,
   opts: { adding?: number; exclude?: SeatExclusion } = {},
 ): Promise<SeatDecision> {
-  const on = seatBillingOn();
+  const env = seatBillingEnv();
+  const on = seatBillingOn(env);
   if (!on) return { kind: "allowed", plan: "starter", why: "billing_off" };
   const row = await teamSubscriptionRow(ctx, team._id);
   const counts = await countSeats(ctx, team, opts.exclude);
-  const decision = decideSeat({ on, row, counts, adding: opts.adding ?? 1, now: Date.now() });
+  const decision = decideSeat({ on, row, counts, adding: opts.adding ?? 1, now: Date.now(), grandfatherUntil: env.grandfatherUntil });
   const where = `team=${team._id} op=${operation} members=${counts.members} pending=${counts.pending} status=${row?.subscription_status ?? "none"}`;
   if (decision.kind === "allowed" && decision.why === "grandfathered" && !row?.grandfathered_at) {
     if (row) await ctx.db.patch(row._id, { grandfathered_at: Date.now() });

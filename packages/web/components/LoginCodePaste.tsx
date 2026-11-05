@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
+import { Button } from "./ui/button";
 
 export function LoginCodePaste({
   deviceId,
@@ -59,9 +60,9 @@ export function LoginCodePaste({
           placeholder="2. Paste the code it shows"
           className="h-7 min-w-0 flex-1 rounded border border-sol-border bg-sol-bg px-2 font-mono text-[11px] text-sol-text"
         />
-        <button type="submit" disabled={sending || !code} className="h-7 rounded bg-amber-500 px-2.5 text-[11px] font-bold text-sol-bg disabled:opacity-60">
+        <Button type="submit" variant="amber" size="xs" disabled={sending || !code}>
           {sending ? "Sending…" : "Send"}
-        </button>
+        </Button>
       </div>
     </form>
   );

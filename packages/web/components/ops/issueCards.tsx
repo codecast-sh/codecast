@@ -17,6 +17,7 @@ import { entityQueryArgs } from "../../lib/entityDisplay";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { opsHref } from "./opsPaths";
+import { taskByRef } from "../../lib/taskRef";
 import { FixStageGlyph } from "./issueParts";
 import { useResolverWords, type TaskRow } from "./useIssueFix";
 import { CiRunStrip, SuspectCommit } from "./issueSuspect";
@@ -356,7 +357,7 @@ function TaskLinkForm({ groupId, onDone }: { groupId: string; onDone: () => void
     const ref = value.trim().toLowerCase();
     if (!ref) return;
     const tasks = useInboxStore.getState().tasks as Record<string, TaskRow>;
-    const hit = tasks[ref] ?? Object.values(tasks).find((t) => t.short_id?.toLowerCase() === ref);
+    const hit = taskByRef(tasks, ref);
     if (!hit) return setMissing(true);
     useInboxStore.getState().setOpsGroupTask(groupId, hit._id);
     onDone();
@@ -427,7 +428,8 @@ export function HealthChart({ group, events, now }: { group: OpsGroup; events: O
       </div>
       <div className="iss-chart-x" style={{ marginLeft: 0 }}>
         {/* A tick close to the right edge gives way to "now" where the strip is narrow. */}
-        {ticks.map((t) => <span key={t.at} data-edge={t.x < 1 && t.x > 0.86 ? "true" : undefined} style={{ left: `${t.x * 100}%`, transform: t.x < 0.03 ? "none" : t.x === 1 ? "translateX(-100%)" : undefined }}>{t.x === 1 ? "now" : fmt(t.at)}</span>)}
+        {/* Every other date gives way on a phone, where a day's label is wider than a day. */}
+        {ticks.map((t, i) => <span key={t.at} data-alt={t.x < 1 && i % 2 === 1 ? "true" : undefined} data-edge={t.x < 1 && t.x > 0.86 ? "true" : undefined} style={{ left: `${t.x * 100}%`, transform: t.x < 0.03 ? "none" : t.x === 1 ? "translateX(-100%)" : undefined }}>{t.x === 1 ? "now" : fmt(t.at)}</span>)}
       </div>
     </div>
   );

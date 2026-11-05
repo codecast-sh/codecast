@@ -197,10 +197,12 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "hooks/useStorageImageUrl.ts:waiters": IMAGE_URLS,
   "hooks/useStorageImageUrl.ts:flushScheduled": IMAGE_URLS,
   "hooks/useConversationMessages.ts:LIVENESS_ONLY_CONV_FIELDS": CONSTANT,
+  "hooks/useConversationMessages.ts:navIndexRequested": { shared: "the conversations whose prompt index a mounted view already asked for; the sim mounts no React, so it stays empty" },
 
   // lib/
   "lib/inputQuiet.ts:lastInputAt": { shared: "the person's last keystroke, one keyboard for every window; the sim types nothing, so it never moves" },
   "lib/settingsData.ts:TEAM_SCOPED_SETTINGS": CONSTANT,
+  "lib/settingsSections.ts:pendingAnchor": { shared: "the fragment a clicked settings link carried, read once by the panel that opens; the sim clicks no links" },
   "lib/analytics.ts:runtime": ANALYTICS,
   "lib/analytics.ts:initPromise": ANALYTICS,
   "lib/appWindowRegistry.ts:present": DESKTOP,

@@ -14,7 +14,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Check, Loader2, Send, X } from "lucide-react";
 import { APP_DESCRIPTORS, type AppConnectionScope, type AppConnectionsResult } from "@codecast/shared/contracts";
-import { useOpsSources } from "../../hooks/useSyncOps";
+import { useOpsScope, useOpsSources } from "../../hooks/useSyncOps";
 import { useSettingsData } from "../../hooks/useSyncSettings";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useAppConnection } from "../../lib/integrations";
@@ -28,7 +28,8 @@ import { CONVEX_URL } from "../../lib/convexUrl";
 import { HealthFixButton } from "./SourceHealthParts";
 import { connectWait, sendTestEvent, type TestSend } from "./connectWait";
 import type { OpsSource } from "./opsTypes";
-import { useConnectedProviders, useSourceHealth } from "./useSourceHealth";
+import { useSourceHealth } from "./useSourceHealth";
+import { useVendorProjects } from "./useVendorProjects";
 import "./connectSheet.css";
 
 const VENDORS: readonly Vendor[] = ["sentry", "posthog"];
@@ -37,6 +38,21 @@ const isVendor = (k: string): k is Vendor => (VENDORS as readonly string[]).incl
 /** Where a vendor connection made from Ops is stored: the team being looked at when the vendor binds to teams, else the person. */
 function connectScope(vendor: Vendor, team: AppConnectionsResult["team"] | undefined): AppConnectionScope {
   return team && APP_DESCRIPTORS[vendor].scopes.includes("team") ? "team" : "personal";
+}
+
+/**
+ * The vendor connections of the workspace Ops is looking at, or null until
+ * that answer is in. A connections answer for another workspace (the feed
+ * re-reading while the active team settles) is not this one's: reading it
+ * would offer a token form that stores the token in the wrong place.
+ */
+function useScopedConnections(): AppConnectionsResult | null {
+  const scope = useOpsScope();
+  const { data } = useSettingsData("connections");
+  const result = data as AppConnectionsResult | undefined;
+  if (!result || scope === "skip") return null;
+  if (scope.workspace === "team" ? result.team?.id !== scope.team_id : !!result.team) return null;
+  return result;
 }
 
 /** Every kind a person can connect, in the sheet's picker. SDK also carries moments (a keyed source's recorded moments). */
@@ -58,7 +74,8 @@ export function ConnectSheet({ kind: initial, onClose }: { kind: SheetKind; onCl
   const [known] = useState(() => new Set(sources.map((s) => s._id)));
   const [created, setCreated] = useState(false);
   const [reveal, setReveal] = useState<Reveal | null>(null);
-  const connected = useConnectedProviders();
+  const connections = useScopedConnections();
+  const connected = connections ? new Set(connections.apps.filter((a) => a.status === "connected").map((a) => a.id as string)) : null;
   const vendors = VENDORS.filter((v) => connected?.has(v));
   const fresh = created ? sources.find((s) => !known.has(s._id) && (!reveal || s.name === reveal.name)) ?? null : null;
   const health = useSourceHealth(fresh);
@@ -80,6 +97,8 @@ export function ConnectSheet({ kind: initial, onClose }: { kind: SheetKind; onCl
   const existing = isVendor(kind) ? sources.filter((s) => s.provider === kind) : [];
   const [addingAnother, setAddingAnother] = useState(false);
   const showExisting = existing.length > 0 && !needsConnection && !created && !addingAnother;
+  // A vendor's form waits for this workspace's connections: before them the sheet cannot tell a token step from a project step.
+  const resolving = kind !== "github" && isVendor(kind) && connected === null && !created;
 
   // Escape closes the sheet from anywhere in it, its fields included, before the shell's go-up-a-level sees it.
   useWatchEffect(() => {
@@ -131,6 +150,8 @@ export function ConnectSheet({ kind: initial, onClose }: { kind: SheetKind; onCl
             </>
           )}
         </div>
+      ) : resolving ? (
+        <div className="ops-connect-row ops-dim" role="status" data-ops-connect-resolving><Loader2 className="w-3.5 h-3.5 animate-spin" />Reading {label} connection</div>
       ) : showExisting && isVendor(kind) ? (
         <ExistingVendor vendor={kind} sources={existing} onAdd={() => setAddingAnother(true)} onClose={onClose} />
       ) : needsConnection ? (
@@ -182,14 +203,17 @@ function ExistingVendor({ vendor, sources, onAdd, onClose }: { vendor: Vendor; s
   const { data } = useSettingsData("connections");
   const conn = (data as AppConnectionsResult | undefined)?.apps.find((a) => a.id === vendor && a.status === "connected");
   const account = conn && conn.status === "connected" ? conn.detail ?? null : null;
-  const reads = (s: OpsSource) => (vendor === "posthog" ? (s.config?.project_id ? `project ${s.config.project_id}` : account) : s.config?.projects?.length ? s.config.projects.join(", ") : account ? `${account} · every project` : "every project");
+  // A PostHog source's project by the name the picker gives it, its id on hover.
+  const listed = useVendorProjects(vendor === "posthog" ? "posthog" : null);
+  const projectName = (id: string) => (listed?.ok ? listed.projects.find((p) => p.id === id)?.name : undefined);
+  const reads = (s: OpsSource) => (vendor === "posthog" ? (s.config?.project_id ? projectName(s.config.project_id) ?? `project ${s.config.project_id}` : account) : s.config?.projects?.length ? s.config.projects.join(", ") : account ? `${account} · every project` : "every project");
   return (
     <div className="ops-connect-existing" data-ops-connect-existing={vendor}>
       {sources.map((s, i) => (
         <div key={s._id} className="ops-connect-row">
           <Check className="w-3.5 h-3.5 ops-connect-ok" />
           <span className="ops-connect-name">{s.name}</span>
-          {reads(s) && <span className="ops-dim ops-mono ops-connect-reads">{reads(s)}</span>}
+          {reads(s) && <span className="ops-dim ops-connect-reads" title={s.config?.project_id ? `project ${s.config.project_id}` : undefined}>{reads(s)}</span>}
           <span className="flex-1" />
           <Link href={opsHref.home({ source: s.name })} className="ops-btn" data-tone={i === 0 ? "primary" : undefined} onClick={onClose} data-ops-connect-open-existing>Open {s.name}</Link>
         </div>

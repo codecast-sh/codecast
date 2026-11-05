@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { countLanded, patchSourceStats, withHourCount } from "./ingest";
+import { countLanded, patchSourceStats, withHourCount } from "./lib/sourceStats";
 import { addPoint, mergeVolume, recordingVolume } from "./sourceVolume";
 
 const NOW = Date.parse("2026-11-03T15:30:00Z");

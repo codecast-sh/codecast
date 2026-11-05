@@ -1,29 +1,17 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { commentRow, storedComments } from "./testComments";
-import { makeFakeDb } from "./testDb";
 import { sendMessage } from "./chat";
 import { addComment as addConversationComment, mirrorAgentReply } from "./comments";
 import { addComment as cliAddTaskComment, webAddComment } from "./tasks";
 import { deleteForWeb, submitComments } from "./artifacts";
-import { hashToken } from "./apiTokens";
 import {
   backfillThreadReads,
   purgeUserTeam,
   taskThreadParticipants,
   touchThread,
 } from "./threadReads";
-import { dismiss, listMine, markAllRead, markRead, unreadByWorkspace, unreadCount } from "./threads";
-
-const ALICE = "user-alice" as any;
-const BOB = "user-bob" as any;
-const CAROL = "user-carol" as any;
-const BOT = "user-bot" as any;
-const TEAM = "team-main" as any;
-const CHANNEL = "chat_channels_1" as any;
-const CONVERSATION = "conversation-main" as any;
-const PERSONAL_CONVERSATION = "conversation-personal" as any;
-const TASK = "tasks_1" as any;
-const TOKEN = "cast-token-alice";
+import { dismiss, markAllRead, markRead, unreadByWorkspace, unreadCount } from "./threads";
+import { ALICE, BOB, CAROL, BOT, TEAM, CHANNEL, CONVERSATION, PERSONAL_CONVERSATION, TASK, TOKEN, users, conversation, context, call, as, rows, rowOf, inbox } from "./testThreads";
 
 // Every write stamps Date.now(); a monotonic clock keeps "after the mark"
 // honest when two writes land inside one millisecond.
@@ -31,105 +19,6 @@ const realNow = Date.now;
 let tick = 1_000_000;
 beforeAll(() => { Date.now = () => ++tick; });
 afterAll(() => { Date.now = realNow; });
-
-function users() {
-  return [
-    { _id: ALICE, name: "Alice", email: "alice@example.test", github_username: "alice" },
-    { _id: BOB, name: "Bob", email: "bob@example.test", github_username: "bob" },
-    { _id: CAROL, name: "Carol", email: "carol@example.test", github_username: "carol" },
-    { _id: BOT, name: "Anchor", is_bot: true, bot_kind: "anchor" },
-  ];
-}
-
-function conversation(_id: string, extra: Record<string, unknown> = {}) {
-  return { _id, user_id: ALICE, is_private: false, team_id: TEAM, status: "active", ...extra };
-}
-
-async function context(authenticatedUser: string | null, seed: Record<string, any[]> = {}) {
-  const db = makeFakeDb({
-    users: users(),
-    teams: [{ _id: TEAM, name: "Main", invite_code: "MAIN", created_at: 1, features: { chat: true } }],
-    team_memberships: [
-      { _id: "m-alice", user_id: ALICE, team_id: TEAM, role: "member" },
-      { _id: "m-bob", user_id: BOB, team_id: TEAM, role: "admin" },
-      { _id: "m-carol", user_id: CAROL, team_id: TEAM, role: "member" },
-      { _id: "m-bot", user_id: BOT, team_id: TEAM, role: "member" },
-    ],
-    api_tokens: [
-      { _id: "tok-alice", user_id: ALICE, token_hash: await hashToken(TOKEN), name: "cli", created_at: 1, last_used_at: 1 },
-    ],
-    chat_channels: [
-      { _id: CHANNEL, team_id: TEAM, name: "general", created_by: ALICE, created_at: 1_000, updated_at: 1_000 },
-    ],
-    chat_messages: [],
-    chat_reads: [],
-    chat_channel_members: [],
-    thread_reads: [],
-    rate_limits: [],
-    notifications: [],
-    push_outbox: [],
-    entity_subscriptions: [],
-    user_presence: [],
-    anchors: [],
-    anchor_channels: [],
-    pending_messages: [],
-    conversations: [conversation(CONVERSATION), conversation(PERSONAL_CONVERSATION, { team_id: undefined, session_id: "sess-personal" })],
-    comments: [],
-    messages: [],
-    pull_requests: [],
-    local_view_heads: [],
-    local_command_receipts: [],
-    conversation_execution_heads: [],
-    execution_bindings: [],
-    tasks: [{
-      _id: TASK,
-      short_id: "ct-1",
-      title: "Ship threads",
-      status: "open",
-      user_id: ALICE,
-      assignee: BOB,
-      team_id: TEAM,
-      workspace: `team:${TEAM}`,
-      created_at: 1,
-      updated_at: 1,
-    }],
-    task_comments: [],
-    task_history: [],
-    change_log: [],
-    ...seed,
-  });
-  const emitted: Array<{ reference: unknown; args: any }> = [];
-  const scheduled: Array<{ delay: number; reference: unknown; args: any }> = [];
-  return {
-    db,
-    auth: {
-      async getUserIdentity() {
-        return authenticatedUser ? { subject: `${authenticatedUser}|session` } : null;
-      },
-    },
-    async runMutation(reference: unknown, args: any) {
-      emitted.push({ reference, args });
-      return undefined;
-    },
-    scheduler: {
-      async runAfter(delay: number, reference: unknown, args: any) {
-        scheduled.push({ delay, reference, args });
-      },
-    },
-    _emitted: emitted,
-    _scheduled: scheduled,
-  } as any;
-}
-
-const call = (fn: any, ctx: any, args: any) => (fn as any)._handler(ctx, args);
-const as = (ctx: any, userId: string) => ({
-  ...ctx,
-  auth: { async getUserIdentity() { return { subject: `${userId}|session` }; } },
-});
-const rows = (ctx: any) => ctx.db._tables.thread_reads as any[];
-const rowOf = (ctx: any, userId: string, kind: string) =>
-  rows(ctx).find((r) => r.user_id === userId && r.kind === kind);
-const inbox = (ctx: any, args: any = { team_id: TEAM }) => call(listMine, ctx, args);
 
 describe("touch per kind", () => {
   test("a chat reply files the thread as kind chat, keyed by the root", async () => {
@@ -833,5 +722,29 @@ describe("unreadByWorkspace", () => {
     // On the team itself, nothing: its count belongs to unreadCount.
     expect(await call(unreadByWorkspace, ctx, { active: TEAM })).toEqual([]);
     expect(await call(unreadByWorkspace, await context(null), { active: "personal" })).toEqual([]);
+  });
+
+  test("a personal page thread counts under Personal only, never under every team", async () => {
+    const SIDE = "team-side" as any;
+    const ctx = await context(ALICE, pageSeed({
+      teams: [
+        { _id: TEAM, name: "Main", invite_code: "MAIN", created_at: 1, features: { chat: true } },
+        { _id: SIDE, name: "Side", invite_code: "SIDE", created_at: 1 },
+      ],
+      team_memberships: [
+        { _id: "m-alice", user_id: ALICE, team_id: TEAM, role: "member" },
+        { _id: "m-alice-side", user_id: ALICE, team_id: SIDE, role: "member" },
+      ],
+    }));
+    await submitPageComment(ctx, { token: "page-token-bob", text: "chart looks off" });
+    // The team view carries the page into its own list and badge...
+    expect(await call(unreadCount, ctx, { team_id: TEAM })).toBe(1);
+    // ...so from there it is on screen: no other team claims it, and Personal leaves it out.
+    expect(await call(unreadByWorkspace, ctx, { active: TEAM })).toEqual([]);
+    // From another team's view the same: the team view carries it.
+    expect(await call(unreadByWorkspace, ctx, { active: SIDE })).toEqual([]);
+    // From Personal it is home, and no team badge counts it.
+    expect(await call(unreadByWorkspace, ctx, { active: "personal" })).toEqual([]);
+    expect(await call(unreadCount, ctx, {})).toBe(1);
   });
 });

@@ -14,7 +14,7 @@ import {
   graphOfRun,
   pollGateResponse,
 } from "./workflow_runs";
-import { resolve, withdraw, withdrawCore, GATE_PRESENT_AGAIN, answerCore, askCore, settleClientResolution } from "./sessionDecisions";
+import { resolve, withdraw, withdrawCore, GATE_PRESENT_AGAIN, answerCore, askCore, settleClientResolution, edit } from "./sessionDecisions";
 import { hashToken } from "./apiTokens";
 
 const HOST = "users_host" as any; // owns the run and the asking session
@@ -533,6 +533,32 @@ describe("a gate asks from the station that wrote its card", () => {
     await answerCore(ctx, { userId: HOST }, { decision_id: String(row._id), answer_index: 1 });
     expect(tables.workflow_runs[0]).toMatchObject({ status: "running", gate_response: "S" });
   });
+
+  // sd-2373: re-asked with its options reordered, "1" moved from Ship to the agent-only fix; the run read the answer 1
+  // by position as Ship and ct-61509 went on toward a merge, and the ladder kept "recommends 1" beside a Ship note.
+  const shipFirst = [{ label: "Ship the separate read: it blocks texts" }, { label: "Let the agent handle it: remove the separate read" }, { label: "Drop it" }];
+  const fixFirst = [shipFirst[1], shipFirst[0], shipFirst[2]];
+  const question = "Should our agent alone handle an ask for email?";
+  for (const via of ["a re-ask", "cast decide edit"] as const) {
+    test(`an answer binds to the option's words after ${via} reorders the options, and so does the ladder's recommendation`, async () => {
+      const { ctx, tables } = await seed();
+      tables.conversations.push(station);
+      const posted = await askCore(ctx, { userId: HOST }, { session_id: "sess-card", question, options: shipFirst, blocking: true });
+      await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card" });
+      expect(tables.workflow_runs[0].gate_choices.map((c: any) => c.key)).toEqual(["S", "", "D"]);
+      tables.session_decisions[0].hops = [{ role_id: "org_roles_lead", recommendation: 0, note: "Ship it.", at: NOW }];
+
+      if (via === "a re-ask") await askCore(ctx, { userId: HOST }, { session_id: "sess-card", question, options: fixFirst, blocking: true });
+      else expect((await (edit as any)._handler(ctx, { api_token: TOKEN, decision_id: String(posted.id), options: fixFirst })).error).toBeUndefined();
+
+      expect(tables.session_decisions).toHaveLength(1);
+      expect(tables.workflow_runs[0].gate_choices.map((c: any) => c.key)).toEqual(["", "S", "D"]);
+      expect(tables.session_decisions[0].hops[0]).toMatchObject({ recommendation: 1, note: "Ship it." });
+
+      await answerCore(ctx, { userId: HOST }, { decision_id: String(posted.id), answer_index: 0 });
+      expect(tables.workflow_runs[0]).toMatchObject({ status: "running", gate_response: fixFirst[0].label });
+    });
+  }
 
   test("the runner names the station by its short id, and the gate still adopts its decision", async () => {
     const { ctx, tables } = await seed();
