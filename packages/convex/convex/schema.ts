@@ -724,6 +724,10 @@ export default defineSchema({
 
   conversations: defineTable({
     user_id: v.id("users"),
+    // Created for a session that started more than HISTORY_IMPORT_INBOX_MS
+    // before it was uploaded (a newly linked machine's history): the inbox
+    // shows it only while its activity is that recent (isStaleHistoryImport).
+    history_import: v.optional(v.boolean()),
     team_id: v.optional(v.id("teams")),
     agent_type: v.union(
       v.literal("claude_code"),
@@ -2033,6 +2037,10 @@ export default defineSchema({
     // "Replaced by op-6" instead of leaving two open proposals with no signal.
     supersedes: v.optional(v.id("org_proposals")),
     superseded_by: v.optional(v.id("org_proposals")),
+    // When the author applied its own changes as it posted them, because a
+    // person let it start work on its own (session filings, a free hire): the
+    // card then says the author did it, and no person answered.
+    applied_by_author: v.optional(v.number()),
     // The conversation a person talks to about this proposal (org-staffing.md
     // S18): the session that posted it, or the standing session of the role
     // that did. Unset for a proposal a person posted: there is no agent to

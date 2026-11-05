@@ -775,6 +775,7 @@ async function routeHire(ctx: Ctx & { runMutation?: (ref: any, args: any) => Pro
   const hire = await hireOf(ctx, proposal, await changesOf(ctx, proposal._id));
   if (!hire) return {};
   if (hire.author.hires_freely) {
+    await ctx.db.patch(proposal._id, { applied_by_author: Date.now() });
     const out = await decideHireAs(ctx, userId, proposal, hire, hire.author, { verdict: "accept" });
     return { applied: true, remaining: out.remaining ?? 0 };
   }
@@ -799,7 +800,8 @@ async function routeFilings(ctx: Ctx & { runMutation?: (ref: any, args: any) => 
   const rows = (await changesOf(ctx, proposal._id)).filter(decidable);
   if (!rows.length || !rows.every((c) => (ORG_SESSION_KINDS as readonly string[]).includes(c.change.kind))) return {};
   const now = Date.now();
-  for (const row of rows) await ctx.db.patch(row._id, { reply: { verdict: "approve", text: `Filed by @${author.handle}, which starts work on its own`, at: now, by: userId } });
+  await ctx.db.patch(proposal._id, { applied_by_author: now });
+  for (const row of rows) await ctx.db.patch(row._id, { reply: { verdict: "approve", at: now, by: userId } });
   const out = await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: rows.map((c) => c.seq), continuation: true, lead: true, log_head: { door: "proposal", gesture: "accept_all", key: `proposal:${proposal._id}:filed:${now}`, proposal: { id: proposal._id, short_id: proposal.short_id, ...(proposal.title ? { title: proposal.title } : {}) } } });
   return { applied: true, remaining: out.remaining ?? 0 };
 }

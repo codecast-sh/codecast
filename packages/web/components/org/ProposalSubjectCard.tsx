@@ -517,13 +517,14 @@ export function Sentence({ text, span, name, subject }: { text: string; span: [n
 }
 
 /** The pill for a record a change names, when the change names one that already exists. */
-export function recordRef(change: OrgProposalChange["change"]): { type: "task" | "plan"; id: string } | null {
+export function recordRef(change: OrgProposalChange["change"]): { type: "task" | "plan" | "session"; id: string } | null {
   if (change.kind === "task_status") return { type: "task", id: change.task };
   if (change.kind === "plan_status") return { type: "plan", id: change.plan };
+  if (change.kind === "file_session") return { type: "session", id: change.session };
   return null;
 }
 
-export function RecordPill({ type, id, title }: { type: "task" | "plan" | "project"; id: string; title: string }) {
+export function RecordPill({ type, id, title }: { type: "task" | "plan" | "project" | "session"; id: string; title: string }) {
   return <span className="inline-flex min-w-0 max-w-full align-bottom" {...LEDGER_STOP} data-subject-pill={type}><EntityIdPill id={id} type={type} label={title} wide /></span>;
 }
 
@@ -541,9 +542,9 @@ export const AT = {
     auto: "[--num:20px] grid-cols-[var(--num)_minmax(0,1fr)] [@container_(min-width:561px)]:[--num:28px] [@container_(min-width:561px)]:grid-cols-[var(--num)_minmax(0,1fr)_196px]",
   },
   pad: {
-    narrow: "pt-[13px] pb-[14px]",
-    wide: "pt-[14px] pb-[15px]",
-    auto: "pt-[13px] pb-[14px] [@container_(min-width:561px)]:pt-[14px] [@container_(min-width:561px)]:pb-[15px]",
+    narrow: "pt-[9px] pb-[10px]",
+    wide: "pt-[10px] pb-[11px]",
+    auto: "pt-[9px] pb-[10px] [@container_(min-width:561px)]:pt-[10px] [@container_(min-width:561px)]:pb-[11px]",
   },
   // One text line tall: the 28px buttons overhang it, so they never push the fields down.
   verdicts: {
@@ -582,6 +583,8 @@ export type ProposalSubjectCardProps = {
   why?: boolean;
   /** The proposal author's name, beside its answers. */
   author?: string;
+  /** The author applied the proposal itself as it posted it: no person answered, so no "You" line. */
+  authorApplied?: boolean;
   className?: string;
 };
 
@@ -618,7 +621,7 @@ export function useFocusScroll(ref: React.RefObject<HTMLElement | null>, focused
   }, [focused, ref]);
 }
 
-export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, takeover, revisedNew, focused, why: showWhy = true, author, className }: ProposalSubjectCardProps) {
+export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, takeover, revisedNew, focused, why: showWhy = true, author, authorApplied, className }: ProposalSubjectCardProps) {
   const hover = useOrgHover();
   // A ghost line on the company document points at one of this card's
   // changes, or this card points at its line (lightChanges on hover).
@@ -652,7 +655,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
   const staged = !!answer && !!onAnswer && card.waiting > 0;
   const pendingText = answer?.text?.trim() ? answer.text : null;
   const storedYou = (change: OrgProposalChange | null) => {
-    const reply = stored(change);
+    const reply = authorApplied ? null : stored(change);
     return reply?.text?.trim() ? <LedgerYou text={reply.text} onEdit={onAnswer && card.waiting > 0 ? () => setFieldOpen(true) : undefined} className="mt-1.5" data-subject-you={reply.verdict} /> : null;
   };
 
@@ -669,7 +672,8 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
   const home = card.changes[0] ? recordHome(card.changes[0].change) : null;
 
   const mode: LedgerLayout = layout ?? "auto";
-  const groups = settled && state === "skipped" ? [] : groupsOf(card, split);
+  // A settled entry reads as its sentence and its state; the proposal page keeps the whole of it.
+  const groups = settled && (state === "skipped" || state === "applied") ? [] : groupsOf(card, split);
   const groupTone = (status: OrgChangeStatus | SubjectStatus) => (status === "applied" ? SOFT : status === "skipped" ? QUIET : TEXT);
   // Notes with no group to sit under: the whole card failed, or something that rides along did.
   const looseNotes = [...new Set(card.failed.filter((f) => !split || !card.seqs.includes(f.seq)).map((f) => f.note))];
@@ -723,7 +727,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
         {groups.map((group, i) => {
           const status = group.change?.status ?? card.status;
           const failed = split && group.change ? card.failed.find((f) => f.seq === group.change!.seq) : undefined;
-          const reply = split ? stored(group.change) : null;
+          const reply = split && !authorApplied ? stored(group.change) : null;
           return (
             <React.Fragment key={group.key}>
               <div className={cn("col-start-2 min-w-0", i === 0 ? "mt-2" : "mt-[18px]")} data-subject-group={group.change?.seq ?? "all"}>

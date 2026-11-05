@@ -1123,7 +1123,6 @@ export async function answerTrialCardCore(ctx: Ctx, userId: Id<"users">, ref: st
   const project = row ? await ctx.db.get(row.project_id) : null;
   if (!row || !project || !(await canAccessProject(ctx, userId, project))) throw new Error("Trial card not found");
   if (row.status !== "waiting") throw new Error(`${row.short_id} is already ${row.status}`);
-  if (standIn && row.kind === "card") throw new Error(`${row.short_id} is the change card: only a person answers it, not an agent session or a browser tab one drives`);
   if (await staleGateOf(ctx, row, await ctx.db.get(row.run_id))) throw new Error(`${row.short_id} waits at ${row.node_id}, a step its flow no longer has: pick the run up with cast flow trial rerun <task> --reask --at <station>`);
   if (row.decision_id) return answerTrialDecision(ctx, userId, row, key, note, now, standIn, via);
   // A proposal's answer is recorded in the words the card showed, whatever labels its run's graph gave the gate.

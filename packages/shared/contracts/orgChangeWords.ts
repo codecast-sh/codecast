@@ -274,14 +274,12 @@ function fieldsOf(c: OrgChange, ctx: ChangeWordsCtx): Draft[] {
     }
     case "adopt": return [field("session", "Session", "text", text(names?.session?.(c.conversation) ?? c.conversation, { ref: { kind: "session", id: c.conversation } }), read("standing_session", (raw) => words((raw as { short_id?: string } | null)?.short_id, NONE.unset)))];
     case "file": return [field("project", "Project", "ref", projectText(c.project), read("project_id", named("project", NONE.project)))];
-    // The session itself, one press away, and where it goes.
+    // The sentence names the session (a card draws it as its pill) and a close
+    // as done; what is left to show is where a moved session goes.
     case "file_session": {
       const d = sessionDestination(c.to);
-      const goes = !d || d.kind === "done" ? text("done") : d.kind === "task" ? text(names?.task?.(d.task) ?? d.task, { ref: { kind: "task", id: d.task } }) : roleText(d.handle);
-      return [
-        set("session", "Session", "text", text(c.title?.trim() || names?.session?.(c.session) || c.session, { ref: { kind: "session", id: c.session } })),
-        set("goes", d?.kind === "done" ? "Closes as" : d?.kind === "task" ? "Joins" : "Reports to", d?.kind === "done" ? "text" : "ref", goes),
-      ];
+      if (!d || d.kind === "done") return [];
+      return [set("goes", d.kind === "task" ? "Joins" : "Reports to", "ref", d.kind === "task" ? text(names?.task?.(d.task) ?? d.task, { ref: { kind: "task", id: d.task } }) : roleText(d.handle))];
     }
     case "charter_edit": return c.edits.map((e, i): Draft => {
       const key = `charter_edit:${i}`, lab = "Charter";
