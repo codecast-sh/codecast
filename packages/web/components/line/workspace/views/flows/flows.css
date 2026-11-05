@@ -1,5 +1,7 @@
 /* The Flows view (flows.md FL6): the pool on the left, the picked flow on the right. */
-.flv { display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 22px; align-items: start; }
+.flv { display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 22px; align-items: start; padding: var(--lw-s4) var(--lw-s5) var(--lw-s6); }
+/* The list's headings and its way back line up with the rows' own text (a row's 9px padding and 1px border). */
+.flv-list > .flv-back, .flv-list .flv-h { padding-left: 10px; }
 .flv-list { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 16px; }
 .flv-list ul, .flv-runs ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .flv-h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px; font-size: var(--lw-fs-xs); font-weight: 700; letter-spacing: .02em; color: var(--lw-ink-2); }
@@ -48,7 +50,7 @@
 .flv-steps:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
 
 /* The flow list (/flows): one row per owned flow, then the pool. */
-.flh { display: flex; flex-direction: column; gap: 26px; }
+.flh { display: flex; flex-direction: column; gap: 26px; padding: var(--lw-s4) var(--lw-s5) var(--lw-s6); }
 .flh-table { width: 100%; border-collapse: collapse; font-size: var(--lw-fs-sm); }
 .flh-table th { text-align: left; font-size: var(--lw-fs-2xs); font-weight: 600; color: var(--lw-ink-3); padding: 0 10px 6px 0; white-space: nowrap; }
 .flh-table td { padding: 8px 10px 8px 0; border-top: 1px solid var(--lw-rule); vertical-align: baseline; }
