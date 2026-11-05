@@ -11,7 +11,7 @@
 
 import { v } from "convex/values";
 import { makeFunctionReference } from "convex/server";
-import { internalMutation } from "./_generated/server";
+import { internalMutation } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { isNavigableUserMessage } from "./userMessagesFilter";
 

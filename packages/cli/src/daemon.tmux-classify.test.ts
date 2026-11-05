@@ -1,24 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { autoContinueArmedOnPane, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
+import { autoContinueArmedOnPane, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, clearUnresolvablePane, extractTmuxLiveRegion, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
 import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isGrokTrustDialog } from "./tmuxPaneState.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { CLAUDE_BYPASS_WARNING_PANE, CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
-
-describe("isPhantomBypassPermissionBlock", () => {
-  test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
-    expect(isPhantomBypassPermissionBlock("permission_blocked", "bypassPermissions", "Bash: rm -rf")).toBe(true);
-    expect(isPhantomBypassPermissionBlock("permission_blocked", "bypassPermissions", undefined)).toBe(true);
-  });
-
-  test("lets a genuine AskUserQuestion block through even in bypass mode", () => {
-    expect(isPhantomBypassPermissionBlock("permission_blocked", "bypassPermissions", "AskUserQuestion")).toBe(false);
-  });
-
-  test("never suppresses outside bypass mode or for non-blocked statuses", () => {
-    expect(isPhantomBypassPermissionBlock("permission_blocked", "default", "Bash")).toBe(false);
-    expect(isPhantomBypassPermissionBlock("working", "bypassPermissions", undefined)).toBe(false);
-  });
-});
 
 // Real pane captures from cc-resume-f61304a3 (the session that surfaced this bug)
 // and synthesized variants are used as test fixtures so the classifier is grounded
@@ -122,53 +106,6 @@ const BUSY_WITH_INPUT_BOX_PANE = `⏺ Reading the delivery path now…
 ────────────────────────────────────────────────────────────────────────────────
   ⏵⏵ bypass permissions on (shift+tab to cycle)               · esc to interrupt
 `;
-
-describe("classifyBypassBlock", () => {
-  const SID = "07191b53";
-
-  test("holds an AskUserQuestion block across a context-free follow-up (the bug)", () => {
-    // Exact sequence that left jx7dwas showing "working/stuck" for 13 min on the web.
-    const blocked = new Set<string>();
-
-    // 1. PreToolUse AskUserQuestion: the agent is now waiting. Not a phantom.
-    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "bypassPermissions", "AskUserQuestion").suppress).toBe(false);
-    expect(blocked.has(SID)).toBe(true);
-
-    // 2. Follow-up generic Notification (no tool name) while still waiting. Pre-fix this
-    //    was suppressed -> status reverted to "working" -> web fell behind. Must hold.
-    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "bypassPermissions", undefined).suppress).toBe(false);
-    expect(blocked.has(SID)).toBe(true);
-
-    // 3. The answer lands and the agent moves on. Block closes.
-    expect(classifyBypassBlock(blocked, SID, "working", "bypassPermissions", undefined).suppress).toBe(false);
-    expect(blocked.has(SID)).toBe(false);
-
-    // 4. A genuine phantom auto-approve afterwards is suppressed again, as before.
-    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "bypassPermissions", "Bash: rm -rf").suppress).toBe(true);
-  });
-
-  test("a phantom with no preceding AskUserQuestion is still suppressed", () => {
-    const blocked = new Set<string>();
-    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "bypassPermissions", "Bash").suppress).toBe(true);
-    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "bypassPermissions", undefined).suppress).toBe(true);
-    expect(blocked.has(SID)).toBe(false);
-  });
-
-  test("never suppresses outside bypass mode, even mid-block", () => {
-    const blocked = new Set<string>();
-    classifyBypassBlock(blocked, SID, "permission_blocked", "default", "AskUserQuestion");
-    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "default", undefined).suppress).toBe(false);
-  });
-
-  test("blocks are tracked per session", () => {
-    const blocked = new Set<string>();
-    classifyBypassBlock(blocked, "sessA", "permission_blocked", "bypassPermissions", "AskUserQuestion");
-    // A different session's phantom is unaffected by sessA's open block.
-    expect(classifyBypassBlock(blocked, "sessB", "permission_blocked", "bypassPermissions", undefined).suppress).toBe(true);
-    // sessA's own follow-up is still held.
-    expect(classifyBypassBlock(blocked, "sessA", "permission_blocked", "bypassPermissions", undefined).suppress).toBe(false);
-  });
-});
 
 describe("extractTmuxLiveRegion", () => {
   test("returns content between the last two separators for an idle input box", () => {

@@ -15,6 +15,7 @@
 // pass.
 
 import { mutation, query } from "./functions";
+import type { CommentWithUser, ListMinePayload, PageComment, PageThreadEntity, ThreadInboxEntry, ThreadLastReply, ThreadRead } from "./threadsTypes";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -29,7 +30,6 @@ import {
   requireCaller,
   threadSummariesFor,
   threadUnreadFor,
-  type ThreadSummary,
 } from "./chat";
 import { isInCommentThread } from "./comments";
 import { listConversationComments } from "./commentStore";
@@ -52,86 +52,6 @@ import {
 } from "./threadReads";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
-
-export type ThreadRead = Doc<"thread_reads">;
-
-export type ThreadLastReply = {
-  _id: string;
-  user_id?: string;
-  author_kind?: "user" | "agent";
-  author_name?: string;
-  /** An agent's reply names the session it came from, when the viewer may
-   *  see that session: the author string is the token owner's name. */
-  session_title?: string;
-  created_at: number;
-  preview: string;
-};
-
-export type ThreadInboxEntry = {
-  _id: string;
-  kind: ThreadKind;
-  root_key: string;
-  team_id?: string;
-  channel_id?: string;
-  conversation_id?: string;
-  task_id?: string;
-  artifact_id?: string;
-  message_id?: string;
-  file_path?: string;
-  line_number?: number;
-  repository?: string;
-  ref?: string;
-  pull_request_id?: string;
-  decision_id?: string;
-  /** The thread's subject when the kind names one: a decision's question. */
-  title?: string;
-  last_activity_at: number;
-  last_read_at: number;
-  updated_at: number;
-  unread: number;
-  unread_capped?: boolean;
-  last_reply?: ThreadLastReply | null;
-};
-
-export type CommentWithUser = ConversationComment & {
-  user: {
-    _id?: Id<"users">;
-    name?: string;
-    github_username?: string;
-    github_avatar_url?: string;
-  };
-};
-
-/** A page discussion's comment as shipped to participants: everything the
- *  public page shows, minus the commenter's email. */
-export type PageComment = Omit<Doc<"artifact_comments">, "author_email">;
-
-/** The slice of an artifact a Threads card needs. Never the whole row: it
- *  carries owner_key, edit_key and password_hash, which are secrets. */
-export type PageThreadEntity = {
-  _id: string;
-  slug: string;
-  title: string;
-  kind?: string;
-  user_id: string;
-  updated_at: number;
-  comments: PageComment[];
-};
-
-export type ListMinePayload = {
-  chat: {
-    roots: Doc<"chat_messages">[];
-    threads: ThreadSummary[];
-    authors: Awaited<ReturnType<typeof authorsFor>>;
-  };
-  comments: CommentWithUser[];
-  tasks: Array<Doc<"tasks"> & { comments: Doc<"task_comments">[] }>;
-  pages: PageThreadEntity[];
-  /** Code comment threads (review_comments), each thread's newest rows. The
-   *  web lands them in its codeComments collection, the one the commit and
-   *  pull request pages read. */
-  codeComments: Doc<"review_comments">[];
-};
 
 /** Per-request memo: the same channel, conversation, task and author repeat
  *  across a page of rows, and a subscription read set should not grow with
@@ -727,18 +647,17 @@ export const unreadCount = query({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
     if (!userId) return 0;
-    return countUnread(ctx, userId, args.team_id);
+    return countUnread(ctx, userId, [
+      ...(await personalPageRows(ctx, userId, args.team_id)),
+      ...(await scopeQuery(ctx, userId, args.team_id).take(THREAD_BADGE_SCAN)),
+    ]);
   },
 });
 
-/** How many of the viewer's threads in one workspace (a team, or personal when
- *  `teamId` is undefined) have unseen activity. A bounded scan of the
- *  newest-activity rows, so a deep unread tail shows a floor, never a lie. */
-async function countUnread(ctx: ReadCtx, userId: Id<"users">, teamId: Id<"teams"> | undefined): Promise<number> {
-  const rows = [
-    ...(await personalPageRows(ctx, userId, teamId)),
-    ...(await scopeQuery(ctx, userId, teamId).take(THREAD_BADGE_SCAN)),
-  ];
+/** How many of these thread rows have unseen activity the viewer may see.
+ *  Callers pass a bounded scan of the newest-activity rows, so a deep unread
+ *  tail shows a floor, never a lie. */
+async function countUnread(ctx: ReadCtx, userId: Id<"users">, rows: ThreadRead[]): Promise<number> {
   const cache = newPageCache();
   let count = 0;
   for (const row of rows) {
@@ -757,10 +676,12 @@ async function countUnread(ctx: ReadCtx, userId: Id<"users">, teamId: Id<"teams"
   return count;
 }
 
-// The workspace switcher's badges: the same count as unreadCount for every
-// OTHER workspace the viewer is in, so a reply in one team shows while another
-// is on screen. The active workspace is skipped: its count is unreadCount's,
-// and the store holds each fact once. Only workspaces with unread come back.
+// The workspace switcher's badges: unread threads the viewer cannot see from
+// the workspace on screen, each counted once, under the workspace it lives in.
+// The active workspace is skipped (its count is unreadCount's), and so are the
+// personal page rows a team view carries: they are already on screen there,
+// and they belong to no team, so no team badge counts them. Only workspaces
+// with unread come back.
 export const unreadByWorkspace = query({
   args: {
     api_token: v.optional(v.string()),
@@ -778,7 +699,11 @@ export const unreadByWorkspace = query({
     const out: Array<{ team_id: string | null; count: number }> = [];
     for (const teamId of workspaces) {
       if ((teamId ?? "personal") === args.active) continue;
-      const count = await countUnread(ctx, userId, teamId);
+      let rows = await scopeQuery(ctx, userId, teamId).take(THREAD_BADGE_SCAN);
+      if (!teamId && args.active !== undefined && args.active !== "personal") {
+        rows = rows.filter((r) => r.kind !== "page");
+      }
+      const count = await countUnread(ctx, userId, rows);
       if (count > 0) out.push({ team_id: teamId ? String(teamId) : null, count });
     }
     return out;

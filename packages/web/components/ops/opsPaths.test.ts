@@ -24,7 +24,12 @@ describe("parseOpsPath", () => {
 
   test("detail pages carry their id, and a replay its scrubber time", () => {
     expect(parseOpsPath("/ops/issues/eg-12")).toEqual({ view: "issue", id: "eg-12" });
-    expect(parseOpsPath("/ops/replays/rp-3", "t=4200")).toEqual({ view: "replay", id: "rp-3", t: 4200 });
+    // Seconds, as the vendors write them; a bare integer also carries its older ms reading for the page to weigh against the length.
+    expect(parseOpsPath("/ops/replays/rp-3", "t=4200")).toEqual({ view: "replay", id: "rp-3", t: 4_200_000, t_alt: 4200 });
+    expect(parseOpsPath("/ops/replays/rp-3", "t=83.2")).toEqual({ view: "replay", id: "rp-3", t: 83_200 });
+    expect(parseOpsPath("/ops/replays/rp-3", "t=2h0m0s")).toEqual({ view: "replay", id: "rp-3", t: 7_200_000 });
+    expect(parseOpsPath("/ops/replays/rp-3", "t=1:02:03")).toEqual({ view: "replay", id: "rp-3", t: 3_723_000 });
+    expect(parseOpsPath("/ops/replays/rp-3", "t=x")).toEqual({ view: "replay", id: "rp-3", t: null });
     expect(parseOpsPath("/ops/replays/rp-3", "t=-1")).toEqual({ view: "replay", id: "rp-3", t: null });
     expect(parseOpsPath("/ops/replays/rp-3")).toEqual({ view: "replay", id: "rp-3", t: null });
     expect(parseOpsPath("/ops/metrics/mw-8")).toEqual({ view: "metric", id: "mw-8" });

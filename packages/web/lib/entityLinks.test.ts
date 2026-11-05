@@ -784,9 +784,11 @@ describe("replays (rp-N) and their moments (rp-N@m:ss)", () => {
 
   test("a replay opens its Ops page, a moment opens it at that time, and the link reads back", () => {
     expect(entityRoute("replay", "rp-12")).toBe("/ops/replays/rp-12");
-    expect(entityRoute("replay", "rp-12@1:23")).toBe("/ops/replays/rp-12?t=83000");
-    expect(entityRoute("replay", "rp-12@1:00-2:30")).toBe("/ops/replays/rp-12?t=60000");
-    expect(parseEntityUrl("https://codecast.sh/ops/replays/rp-12?t=83500")).toEqual({ type: "replay", id: "rp-12@1:23" });
+    // ?t is seconds, as PostHog's and Sentry's links write it.
+    expect(entityRoute("replay", "rp-12@1:23")).toBe("/ops/replays/rp-12?t=83");
+    expect(entityRoute("replay", "rp-12@1:00-2:30")).toBe("/ops/replays/rp-12?t=60");
+    expect(parseEntityUrl("https://codecast.sh/ops/replays/rp-12?t=83.5")).toEqual({ type: "replay", id: "rp-12@1:23" });
+    expect(parseEntityUrl("https://codecast.sh/ops/replays/rp-12?t=1m23s")).toEqual({ type: "replay", id: "rp-12@1:23" });
     expect(parseEntityUrl("/ops/replays/rp-12")).toEqual({ type: "replay", id: "rp-12" });
     // The rest of Ops is still a source or a view.
     expect(parseEntityUrl("/ops?source=src-2")).toEqual({ type: "source", id: "src-2" });

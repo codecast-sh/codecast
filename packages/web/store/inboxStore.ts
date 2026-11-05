@@ -6554,6 +6554,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string; workspace?: "personal" | "team"; team_id?: string; client_key?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   promoteDocToPlan: (docId: string) => Promise<any>;
   ensurePlanDoc: (planShortId: string) => Promise<any>;
+  /** Asks the server to index a long conversation's prompts for the navigator; nothing to paint (getUserMessages switches to the index when it finishes). */
+  requestNavPromptIndex: (conversationId: string, shareToken?: string) => void;
+  /** A replay's capture ran past its stored length: the server reads the capture and keeps the longer length. Nothing to paint until it does. */
+  checkReplayCaptureLength: (replayId: string) => void;
   publishToDirectory: (opts: { conversation_id: string; title: string; description?: string; tags?: string[] }) => Promise<any>;
   moveDoc: (id: string, parentId?: string, sortOrder?: number) => Promise<any>;
   // Charter fields (components/charter/charterMeta CharterPatch): null clears
@@ -13440,6 +13444,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // callers that navigate to / read the returned record.
   promoteDocToPlan: asyncAction(function (this: Draft, _docId: string) {}),
   ensurePlanDoc: asyncAction(function (this: Draft, _planShortId: string) {}),
+  requestNavPromptIndex: action(function (this: Draft, _conversationId: string, _shareToken?: string) {}),
+  checkReplayCaptureLength: action(function (this: Draft, _replayId: string) {}),
   publishToDirectory: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
 
   // -- Manual session buckets --

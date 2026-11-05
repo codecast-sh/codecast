@@ -263,6 +263,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   sessionReads: "Read state; never undoable.",
   trialCards: "Written only by trialAnswer, which moves a paused trial run on, and trialReask, which has its machine ask it again; like answerDecision, never undoable.",
   trialRuns: "Written only by trialRerun, which starts a new run, and trialClose, which closes the problem for everyone watching; never undoable.",
+  weeklyCards: "Written only by setWeeklyCardOptions, a setting, and setObjectShareLink, a sharing change; neither is undoable.",
   mods: "Written only by setModEnabled and setModLocalDevice, settings; never undoable.",
   lineLabels: "Written only by labelDecision, the viewer's own label, taken back in the same control; never undoable.",
   orgTemplateInstances: "Written only by answerOrgTemplateInput, a hire answer that queues the host step on the role's machine; changed back on the same row, never undoable.",

@@ -52,6 +52,15 @@ export function sentryIssueFingerprint(issueId: string | number): string {
 }
 
 /**
+ * A message without its request ids (`[Request ID: 65293c3ba5e64535]`,
+ * `(request id: abc-123)`): one per call, they name no cause, and in a title
+ * they push the part that does (the function, the error) out of sight.
+ */
+export function dropRequestIds(text: string): string {
+  return text.replace(/\s*[\[(]request[ _-]?id:?\s*[\w-]+[\])]/gi, "").replace(/ {2,}/g, " ").trim();
+}
+
+/**
  * An error message with the parts that differ per occurrence removed: uuids,
  * hex runs (addresses, hashes, ids) and numbers. "User 42 not found" and
  * "User 97 not found" are one error.

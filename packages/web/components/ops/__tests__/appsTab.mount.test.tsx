@@ -78,7 +78,7 @@ test("a failing watch turns the head red and opens its full error on demand", as
   expect(head.getAttribute("data-tone")).toBe("bad");
   expect(text(head.querySelector(".ops-app-verdict"))).toBe("Failing");
   expect(text(head.querySelector(".ops-stat .ops-stat-value"))).toBe("1/2");
-  expect(text(head.querySelector(".ops-stat .ops-stat-label"))).toBe("watches failing");
+  expect(text(head.querySelector(".ops-stat .ops-stat-label"))).toBe("watches ok · 1 failing");
   const watch = row(panel("Checks"), "Recent job failures");
   // The Recent calls shape: a Failing pill in the state column, why it fails under the name.
   expect(rowState(watch)).toEqual(["Failing", "Recent job failures", "bad"]);
@@ -286,7 +286,7 @@ test("the head names the one shared reading, and metric watches reading through 
   expect(text(head.querySelector(".ops-app-verdict"))).toBe("Reader failing");
   expect(text(head.querySelector("[data-ops-health-reason]"))).toBe(health.reason);
   const stats = [...head.querySelectorAll(".ops-stat")].map((s) => [text(s.querySelector(".ops-stat-value")), text(s.querySelector(".ops-stat-label"))]);
-  expect(stats).toEqual([["1/4", "watches failing"], ["0", "calls failing"]]);
+  expect(stats).toEqual([["1/4", "watches ok · 1 failing · 1 no line"], ["0", "calls failing"]]);
   const rows = [...panel("Watches").querySelectorAll("[data-ops-metric-watch]")];
   expect(rows.map((r) => [text(r.querySelector(".ops-state")), text(r.querySelector(".ops-row-title"))])).toEqual([["Timed out", "Dollars per intro"], ["No line", "Signups"]]);
   expect(rows[0].querySelector("a")!.getAttribute("href")).toContain("mw-1");

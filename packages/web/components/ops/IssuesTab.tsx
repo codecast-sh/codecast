@@ -14,22 +14,24 @@ import { Check, Search, SlidersHorizontal, UserPlus, Wand2, X } from "lucide-rea
 import type { GroupKind } from "@codecast/shared/contracts/ingest";
 import { isRecordNotIssue } from "@codecast/shared/contracts/signalFingerprint";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { OPS_OPEN_GROUPS_LIMIT, useOpsEvents, useOpsGroups, useOpsReplays, useOpsSources, useOpsWatches, useSyncOpsGroupSearch, useSyncOpsOlderGroups, useSyncOpsStatusGroups } from "../../hooks/useSyncOps";
+import { OPS_OPEN_GROUPS_LIMIT, useOpsEvents, useOpsGroups, useOpsSources, useSyncOpsGroupSearch, useSyncOpsOlderGroups, useSyncOpsStatusGroups } from "../../hooks/useSyncOps";
 import { hasOpenModal, isEditableTarget } from "../../shortcuts";
 import { relTimeShort } from "../../lib/utils";
 import { useInboxStore } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Spark } from "../Spark";
-import { opsHref, sourceConnectHref } from "./opsPaths";
-import { KIND_LOOK, KindGlyph, OpsFeedEmpty, ProviderIcon, SETUP_HREF, SOURCE_PROVIDER_LABEL, SourceChip, sourceFacts, useOpsFeed } from "./parts";
+import { opsHref } from "./opsPaths";
+import { KIND_LOOK, KindGlyph, ProviderIcon, useOpsFeed } from "./parts";
 import type { OpsGroup, OpsSource } from "./opsTypes";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   DEFAULT_QUERY,
   effectiveSort,
   countWords,
+  lastFailedAt,
   countColumnLabel,
   FIX_STAGE_LABEL,
+  FIX_STAGE_SHORT,
   resolverOf,
   FLAP_DAYS,
   FLAP_MIN,
@@ -85,8 +87,7 @@ import { assignIssues, ownerInfo, useOwnerOptions, type OwnerOption } from "./is
 import { TRIAGE_CONFIRM_AT, setTaskStatusUndoable, triage, undoTriage } from "./issueUndo";
 import { useFixSessions, useResolverWords } from "./useIssueFix";
 import { issueListFocus, rememberIssueFocus, rememberIssueList } from "./issueNav";
-import { HealthBadge, HealthFixButton } from "./SourceHealthParts";
-import { useSourceHealth } from "./useSourceHealth";
+import { IssuesEmpty, SourceNoIssues } from "./issueEmpty";
 import "./issues.css";
 
 const ref = (g: OpsGroup) => g.short_id || g._id;
@@ -150,7 +151,7 @@ export function IssuesTab({ source }: { source: string | null }) {
   const totals = useMemo(() => issueTotals(all, sources, sourceId ?? null, openCapped), [all, sources, sourceId, openCapped]);
   const counts = useMemo(() => {
     const held = statusCounts(all, query, ctx, now);
-    const unfiltered = !query.q.trim() && !query.kind && !query.mine && !Object.values(query.facets).some(Boolean);
+    const unfiltered = !query.q.trim() && !query.kind && !query.mine && !query.nobody && !Object.values(query.facets).some(Boolean);
     if (!unfiltered) return held;
     let oldest: number | null = null;
     for (const g of all) if (g.status === "open" && (!sourceId || g.source_id === sourceId) && (oldest === null || g.last_seen < oldest)) oldest = g.last_seen;
@@ -308,7 +309,7 @@ export function IssuesTab({ source }: { source: string | null }) {
   const leads = useMemo(() => sharedTitleLeads(groups), [groups]);
   // The sources that send people at all: a row of one that does not says so on hover; every surface draws an unknown count as one dash.
   const peopleSources = useMemo(() => new Set(all.filter((g) => (g.users ?? 0) > 0).map((g) => g.source_id)), [all]);
-  if (all.length === 0 || preview === "empty" || preview === "nosources") return <IssuesEmpty feed={feed} sources={preview === "nosources" ? [] : sources} />;
+  if (all.length === 0 || preview === "empty" || preview === "nosources") return <IssuesEmpty feed={feed} sources={preview === "nosources" ? [] : preview === "empty" ? sources.map((s) => ({ ...s, groups_open: 0 })) : sources} />;
   // A source that never produced an issue is its own state, not a finished triage.
   if (sourceRow && feed?.ready && !sourceRow.groups_open && !all.some((g) => g.source_id === sourceRow._id)) return <SourceNoIssues source={sourceRow} />;
 
@@ -317,6 +318,8 @@ export function IssuesTab({ source }: { source: string | null }) {
   const sortBy = (s: IssueSort) => setQuery({ sort: s });
   // People are counted only where a source sends who hit it; with none counted the column and its sort would do nothing.
   const showUsers = usersCounted(groups);
+  // The ring's meaning sits in the Fix column's head whenever a shown row wears it.
+  const anyNobody = groups.some((g) => g.status === "open" && !issueOnIt(g, ctx));
   const activeFacets = (query.kind ? 1 : 0) + Object.values(query.facets).filter(Boolean).length;
   const clearAll = () => setQuery({ ...DEFAULT_QUERY, status: query.status, lane: query.lane, sort: query.sort, range: query.range, facets: { level: "", type: "", release: "", fix: "" }, mine: false, nobody: false });
   const pickOwner = (o: OwnerOption) => {
@@ -392,7 +395,7 @@ export function IssuesTab({ source }: { source: string | null }) {
           </button>
         )}
         {(query.status === "open" || query.nobody) && (
-          <button type="button" className="iss-mine iss-nobody" aria-pressed={!!query.nobody} data-on={query.nobody ? "true" : undefined} data-zero={nobodyCount === 0 ? "true" : undefined} onClick={() => setQuery({ nobody: !query.nobody })} title="No fix session, no task being worked and nobody assigned">
+          <button type="button" className="iss-mine iss-nobody" aria-pressed={!!query.nobody} data-on={query.nobody ? "true" : undefined} data-zero={nobodyCount === 0 ? "true" : undefined} onClick={() => setQuery({ nobody: !query.nobody })} title={`No fix session, no task being worked and nobody assigned, in ${LANE_FILTERS.find((f) => f.key === query.lane)?.label ?? "Open"}`}>
             <span className="iss-nobody-ring" aria-hidden /> Nobody on it <span className="iss-seg-n ops-num">{nobodyCount.toLocaleString()}</span>
           </button>
         )}
@@ -419,30 +422,6 @@ export function IssuesTab({ source }: { source: string | null }) {
         </div>
       )}
 
-      {confirm ? (
-        <div className="iss-bulk" role="alertdialog" aria-label="Confirm" data-confirm="true">
-          <span className="ops-num">{confirm === "resolved" ? "Resolve" : "Ignore"} <b>{targets().length.toLocaleString()}</b> issues?</span>
-          <button type="button" className="ops-btn" data-tone="primary" autoFocus onClick={() => setStatus(targets(), confirm, true)}>
-            {confirm === "resolved" ? "Resolve" : "Ignore"} {targets().length.toLocaleString()} <KeyCap size="xs" tone="onAccent">Enter</KeyCap>
-          </button>
-          <button type="button" className="ops-btn" onClick={() => setConfirm(null)}>Cancel <KeyCap size="xs">esc</KeyCap></button>
-        </div>
-      ) : selected.size > 0 && (
-        <div className="iss-bulk" role="toolbar" aria-label="Selected issues">
-          <span className="ops-num"><b>{selected.size}</b> selected</span>
-          <button type="button" className="ops-btn" onClick={() => setStatus(targets(), "resolved")}><Check className="w-3.5 h-3.5" /> Resolve <KeyCap size="xs">e</KeyCap></button>
-          <button type="button" className="ops-btn" onClick={() => setStatus(targets(), "ignored")}>Ignore <KeyCap size="xs">i</KeyCap></button>
-          {query.status !== "open" && <button type="button" className="ops-btn" onClick={() => setStatus(targets(), "open")}>Reopen</button>}
-          <span className="iss-assign-anchor">
-            <button type="button" className="ops-btn" aria-expanded={!!assignFor} onClick={() => setAssignFor(assignFor ? null : targets())}><UserPlus className="w-3.5 h-3.5" /> Assign <KeyCap size="xs">a</KeyCap></button>
-            {assignFor && <AssignMenu options={owners} onPick={pickOwner} onClose={() => setAssignFor(null)} />}
-          </span>
-          <button type="button" className="ops-btn" onClick={() => setFixFor(targets())}><Wand2 className="w-3.5 h-3.5" /> Start fix <KeyCap size="xs">f</KeyCap></button>
-          <div className="flex-1" />
-          <button type="button" className="ops-btn" onClick={() => setSelected(new Set())}>Clear <KeyCap size="xs">esc</KeyCap></button>
-        </div>
-      )}
-
       {groups.length === 0 ? (
         <NoneShown query={query} counts={counts} filtered={filtered} source={source} clearAll={clearAll} setQuery={setQuery} />
       ) : (
@@ -457,8 +436,32 @@ export function IssuesTab({ source }: { source: string | null }) {
             <SortHead className="iss-c-events" label={countColumnLabel(groups)} sort="events" current={effectiveSort(query)} onSort={sortBy} />
             <SortHead className="iss-c-users" label="Users" sort="users" current={effectiveSort(query)} onSort={sortBy} />
             <SortHead className="iss-c-seen" label="Seen" sort="last" current={effectiveSort(query)} onSort={sortBy} />
-            <span role="columnheader" className="iss-c-fix">Fix</span>
+            <span role="columnheader" className="iss-c-fix">Fix{anyNobody && <span className="iss-fix-legend" title="Nobody on it: no fix session, no task being worked, nobody assigned"><span className="iss-nobody-ring" aria-hidden /> nobody</span>}</span>
             <span role="columnheader" className="iss-c-status">Status</span>
+            {/* Over the table head, never above it: ticking a row moves no row. */}
+            {confirm ? (
+              <div className="iss-bulk" role="alertdialog" aria-label="Confirm" data-confirm="true">
+                <span className="ops-num">{confirm === "resolved" ? "Resolve" : "Ignore"} <b>{targets().length.toLocaleString()}</b> issues?</span>
+                <button type="button" className="ops-btn" data-tone="primary" autoFocus onClick={() => setStatus(targets(), confirm, true)}>
+                  {confirm === "resolved" ? "Resolve" : "Ignore"} {targets().length.toLocaleString()} <KeyCap size="xs" tone="onAccent">Enter</KeyCap>
+                </button>
+                <button type="button" className="ops-btn" onClick={() => setConfirm(null)}>Cancel <KeyCap size="xs">esc</KeyCap></button>
+              </div>
+            ) : selected.size > 0 && (
+              <div className="iss-bulk" role="toolbar" aria-label="Selected issues">
+                <span className="ops-num"><b>{selected.size}</b> selected</span>
+                <button type="button" className="ops-btn" data-tone="primary" onClick={() => setFixFor(targets())}><Wand2 className="w-3.5 h-3.5" /> Start fix <KeyCap size="xs" tone="onAccent">f</KeyCap></button>
+                <button type="button" className="ops-btn" onClick={() => setStatus(targets(), "resolved")}><Check className="w-3.5 h-3.5" /> Resolve <KeyCap size="xs">e</KeyCap></button>
+                <button type="button" className="ops-btn" onClick={() => setStatus(targets(), "ignored")}>Ignore <KeyCap size="xs">i</KeyCap></button>
+                {query.status !== "open" && <button type="button" className="ops-btn" onClick={() => setStatus(targets(), "open")}>Reopen</button>}
+                <span className="iss-assign-anchor">
+                  <button type="button" className="ops-btn" aria-expanded={!!assignFor} onClick={() => setAssignFor(assignFor ? null : targets())}><UserPlus className="w-3.5 h-3.5" /> Assign <KeyCap size="xs">a</KeyCap></button>
+                  {assignFor && <AssignMenu options={owners} onPick={pickOwner} onClose={() => setAssignFor(null)} />}
+                </span>
+                <div className="flex-1" />
+                <button type="button" className="ops-btn" onClick={() => setSelected(new Set())}>Clear <KeyCap size="xs">esc</KeyCap></button>
+              </div>
+            )}
           </div>
           <div ref={bodyRef} role="rowgroup">
             {groups.map((g, i) => (
@@ -662,10 +665,10 @@ function IssueRow({ group: g, now, range, focused, selected, source, countsPeopl
           {knownRelease(g.last_release) ? <span className="ops-mono iss-sub-rel">{knownRelease(g.last_release)}</span> : null}
           {g.culprit ? <span className="ops-mono iss-sub-cut">{g.culprit}</span> : null}
           <span className="iss-narrow-meta ops-num">
-            <span>{relTimeShort(g.last_seen, now)}</span>
-            <span>{g.count.toLocaleString()} {countWords(g.kind, g.count).short ?? "ev"}</span>
+            <span>{relTimeShort(lastFailedAt(g), now)}</span>
+            <span>{g.count.toLocaleString()} {countWords(g.kind, g.count).short ?? (g.count === 1 ? "event" : "events")}</span>
             {usersOf(g) ? <span className="iss-narrow-users">{usersText(usersOf(g)!)}</span> : null}
-            {stage !== "none" ? <span className="iss-narrow-fix" data-stage={stage}>{FIX_STAGE_LABEL[stage]}{agentAwake ? <span className="iss-live-dot" aria-label="agent working now" /> : null}</span> : null}
+            {stage !== "none" ? <span className="iss-narrow-fix" data-stage={stage}>{FIX_STAGE_SHORT[stage]}{agentAwake ? <span className="iss-live-dot" aria-label="agent working now" /> : null}</span> : null}
             {nobody ? <span className="iss-narrow-nobody">nobody on it</span> : null}
           </span>
         </span>
@@ -673,11 +676,11 @@ function IssueRow({ group: g, now, range, focused, selected, source, countsPeopl
       <span className="iss-c-spark" role="cell">
         <Spark values={series} bar={range === "72h" ? 1.5 : 3.5} gap={0.5} height={18} tone={tone} stretch className="w-full" label={`${g.short_id}, per ${daily ? "day" : "hour"} over ${range}`} />
       </span>
-      <span className="iss-c-events ops-num" role="cell" title={`${g.count.toLocaleString()} ${countWords(g.kind, g.count).long}`}>{g.count.toLocaleString()}{countWords(g.kind, g.count).short && <span className="iss-unit"> {countWords(g.kind, g.count).short}</span>}</span>
+      <span className="iss-c-events ops-num" role="cell" title={`${g.count.toLocaleString()} ${countWords(g.kind, g.count).long}`}>{g.count.toLocaleString()}{countWords(g.kind, g.count).short && <span className="iss-unit"> <span className="iss-unit-full">{countWords(g.kind, g.count).short}</span><span className="iss-unit-tiny">{countWords(g.kind, g.count).tiny}</span></span>}</span>
       <span className="iss-c-users ops-num" role="cell" title={g.users_since ? `counted since ${new Date(g.users_since).toLocaleDateString()}` : !usersOf(g) && !countsPeople ? `${source?.name ?? "its source"} sends no people` : undefined}>
         {usersOf(g) ? usersText(usersOf(g)!, false) : <span className="ops-dim">–</span>}
       </span>
-      <span className="iss-c-seen ops-num ops-quiet" role="cell" title={`last ${new Date(g.last_seen).toLocaleString()}, first ${new Date(g.first_seen).toLocaleString()}`}>{relTimeShort(g.last_seen, now)}</span>
+      <span className="iss-c-seen ops-num ops-quiet" role="cell" title={`${lastFailedAt(g) < g.last_seen ? "last failed" : "last"} ${new Date(lastFailedAt(g)).toLocaleString()}, first ${new Date(g.first_seen).toLocaleString()}`}>{relTimeShort(lastFailedAt(g), now)}</span>
       <span className="iss-c-fix" role="cell">
         {/* A dropped fix is a decision someone made: it opens the issue's Fix card, where the task and its Refile are. */}
         {stage === "dropped" ? (
@@ -689,104 +692,24 @@ function IssueRow({ group: g, now, range, focused, selected, source, countsPeopl
           <>
             <FixStageGlyph stage={stage} word />
             <button type="button" className="iss-fix-open iss-fix-close" onClick={(e) => { e.stopPropagation(); setTaskStatusUndoable({ short_id: closable.short_id!, status: closable.status }, "done"); }} title={`${closable.short_id} is still ${FIX_STAGE_LABEL[stage].toLowerCase()}: close it`} aria-label={`Close ${closable.short_id}`} data-ops-fix-close>
-              <Check className="w-3 h-3" aria-hidden />
+              <Check className="w-3 h-3" aria-hidden /> Close
             </button>
           </>
-        ) : (
+        ) : nobody && !owner && stage === "none" ? null : (
           <>
             <FixStageGlyph stage={stage} word />
             {agentAwake && <span className="iss-live-dot" title="The fix session is working now" aria-label="agent working now" />}
           </>
         )}
-        {nobody && !owner ? <span className="iss-nobody-ring" title="Nobody on it: no fix session, no task being worked, nobody assigned" aria-label="nobody on it" data-ops-nobody /> : <OwnerFace owner={owner} />}
+        {nobody && !owner ? (
+          <span className="iss-nobody-mark" title="Nobody on it: no fix session, no task being worked, nobody assigned" data-ops-nobody>
+            <span className="iss-nobody-ring" aria-hidden />
+            {/* An untriaged row has no stage word: the mark says it in words, as the narrow meta line does. */}
+            {stage === "none" ? <span className="iss-nobody-word">nobody on it</span> : <span className="sr-only">nobody on it</span>}
+          </span>
+        ) : <OwnerFace owner={owner} />}
       </span>
       <span className="iss-c-status" role="cell"><IssueStatePill group={g} release={release} now={now} flaps={isFlapping(g, flaps) ? flaps : undefined} row stage={stage} resolvedBy={resolvedBy} /></span>
-    </div>
-  );
-}
-
-/** No groups at all: whether anything is connected, and if so, what each source last sent. */
-export function IssuesEmpty({ feed, sources }: { feed: ReturnType<typeof useOpsFeed>; sources: OpsSource[] }) {
-  if (!feed?.ready || feed.error) return <OpsFeedEmpty feeds={[feed]} what="issues" title="No issues" />;
-  if (sources.length === 0) {
-    return (
-      <div className="iss-empty">
-        <div className="text-[14px] text-sol-text font-medium">No sources connected</div>
-        <div className="iss-providers">
-          {(["sentry", "posthog", "app", "github", "sdk"] as const).map((p) => (
-            <a key={p} href={sourceConnectHref(p)} className="iss-provider" data-provider={p}><ProviderIcon provider={p} className="w-4 h-4" />{p === "sdk" ? "Ingest key" : p === "github" ? "GitHub CI" : SOURCE_PROVIDER_LABEL[p]}</a>
-          ))}
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="iss-empty">
-      <div className="text-[14px] text-sol-text font-medium">No issues yet</div>
-      <div className="iss-quiet-sources">
-        {sources.map((s) => (
-          <div key={s._id} className="iss-quiet-source">
-            <SourceChip source={s} href={opsHref.tab("timeline", { source: s.name })} />
-            <span className="ops-dim text-[11.5px] truncate">{sourceFacts(s).join(" · ")}</span>
-          </div>
-        ))}
-      </div>
-      <a href={SETUP_HREF} className="ops-btn">Sources</a>
-    </div>
-  );
-}
-
-/**
- * A source that has never produced an issue: its health first (with the
- * press that fixes it when something is wrong), then where its data does
- * land, each a count that opens the tab holding it. Not "all clear": a
- * source that sends moments or replays never makes issues at all.
- */
-function SourceNoIssues({ source }: { source: OpsSource }) {
-  const health = useSourceHealth(source);
-  const replays = useOpsReplays();
-  const watches = useOpsWatches();
-  const now = useCoarseNow(60_000);
-  const nReplays = replays.filter((r) => r.source_id === source._id).length;
-  const nWatches = watches.filter((w) => w.source_id === source._id).length;
-  const days = source.days ?? [];
-  const nEvents = days.reduce((a, d) => a + d.events, 0);
-  const lands = [
-    { tab: "timeline" as const, label: "Timeline", n: nEvents, unit: "events, 30d" },
-    { tab: "replays" as const, label: "Replays", n: nReplays, unit: nReplays === 1 ? "replay" : "replays" },
-    { tab: "metrics" as const, label: "Metrics", n: nWatches, unit: nWatches === 1 ? "watch" : "watches" },
-  ].filter((l) => l.n > 0);
-  const bad = health && (health.tone === "bad" || health.tone === "warn");
-  return (
-    <div className="ops-pad iss-list">
-      <div className="iss-src-empty" data-bad={bad ? "true" : undefined}>
-        <div className="iss-src-empty-head">
-          <ProviderIcon provider={source.provider} className="w-4 h-4" />
-          <span className="text-[14px] text-sol-text font-medium">{source.name}</span>
-          {health && <HealthBadge health={health} />}
-          <span className="ops-num ops-dim text-[12px]">0 issues</span>
-        </div>
-        <dl className="iss-src-facts ops-num">
-          <dt>last event</dt>
-          <dd>{health?.lastAt ?? source.last_event_at ? `${relTimeShort((health?.lastAt ?? source.last_event_at)!, now)} ago` : "never"}</dd>
-          {health?.polledAt ? (<><dt>last poll</dt><dd>{relTimeShort(health.polledAt, now)} ago</dd></>) : null}
-          {bad && health?.reason ? (<><dt>problem</dt><dd className="iss-src-reason" title={health.reason}>{health.reason}</dd></>) : null}
-        </dl>
-        {lands.length > 0 && (
-          <div className="iss-src-lands">
-            {lands.map((l) => (
-              <a key={l.tab} href={opsHref.tab(l.tab, { source: source.name })} className="iss-src-land">
-                <span className="iss-src-land-k">{l.label}</span>
-                <span className="ops-num"><b>{l.n.toLocaleString()}</b> <span className="ops-dim">{l.unit}</span></span>
-              </a>
-            ))}
-          </div>
-        )}
-        <div className="flex gap-2 flex-wrap">
-          {health && bad && <HealthFixButton source={source} health={health} primary />}
-          <a href={opsHref.home({ source: source.name })} className="ops-btn" data-tone={bad ? undefined : "primary"}>Open {source.name}</a>
-        </div>
-      </div>
     </div>
   );
 }

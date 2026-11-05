@@ -244,6 +244,20 @@ export function exactReplayId(q: string | undefined): string | null {
   return id && /^rp-\d+$/.test(id) ? id : null;
 }
 
+/** The active time the list starts past by default (REPLAY_ACTIVE_DEFAULT), in ms: what the stored tallies count as hidden. */
+export const REPLAY_ACTIVE_DEFAULT_MS = ACTIVE_MS[REPLAY_ACTIVE_DEFAULT];
+
+/**
+ * Whether an active-time floor hides a recording: the least-activity default
+ * hides tabs left open, never a recording an issue points at, and never one
+ * whose active time nobody knows yet.
+ */
+export function belowActiveFloor(row: Pick<ReplayListRow, "shape" | "facts" | "group_ids">, minMs: number): boolean {
+  if (!minMs || row.group_ids?.length) return false;
+  const active = activeMsOf(row);
+  return active !== undefined && active < minMs;
+}
+
 export function replayMatches(row: ReplayListRow, m: ReplayMatch): boolean {
   // A recording asked for by its id is that recording, whatever else the list filters by, as in Sentry and PostHog.
   const exact = exactReplayId(m.q);
@@ -256,11 +270,7 @@ export function replayMatches(row: ReplayListRow, m: ReplayMatch): boolean {
     if (m.min_ms !== undefined && row.duration_ms < m.min_ms) return false;
     if (m.max_ms !== undefined && row.duration_ms > m.max_ms) return false;
   }
-  // The least-activity default hides tabs left open, never a recording an issue points at.
-  if (m.active_min_ms && !row.group_ids?.length) {
-    const active = activeMsOf(row);
-    if (active !== undefined && active < m.active_min_ms) return false;
-  }
+  if (m.active_min_ms && belowActiveFloor(row, m.active_min_ms)) return false;
   if (m.group && !row.group_ids?.includes(m.group)) return false;
   for (const h of m.has ?? []) {
     if (h === "errors" && !(row.counts.errors > 0)) return false;
@@ -319,6 +329,12 @@ export interface ReplayPerson {
   url?: string | null;
   /** Where their newest recording ran (browser, OS, country): the other way an anonymous person is told apart. */
   env?: string | null;
+  /** Where their newest recording ran, as the vendor names each part, for a list to name the way its rows do. */
+  where?: { browser?: string; os?: string; country?: string; device?: string } | null;
+  /** Their recordings the active-time floor hides, when the list counts them (the server's tallies). */
+  short?: number;
+  /** Their raw id when it is not their label (an anonymous person's distinct id). */
+  id?: string | null;
 }
 
 /** A recording's environment as one short line: "Chrome · macOS · US". Null when the vendor said nothing. */
@@ -326,6 +342,12 @@ export function envLine(facts: ReplayFacts | null | undefined): string | null {
   if (!facts) return null;
   const parts = [facts.browser, facts.os, facts.country].filter(Boolean);
   return parts.length ? parts.join(" · ") : null;
+}
+
+/** A recording's environment, as the vendor names each part; null when it said nothing. */
+export function whereOf(facts: ReplayFacts | null | undefined): ReplayPerson["where"] {
+  if (!facts || !(facts.browser || facts.os || facts.country || facts.device)) return null;
+  return { ...(facts.browser ? { browser: facts.browser } : {}), ...(facts.os ? { os: facts.os } : {}), ...(facts.country ? { country: facts.country } : {}), ...(facts.device ? { device: facts.device } : {}) };
 }
 
 /** The orders the grouped list sorts people in. */
@@ -359,6 +381,7 @@ export function replayPeople(rows: readonly ReplayListRow[], max = Infinity): Re
       p.last_at = r.started_at;
       p.url = r.url ?? p.url ?? null;
       p.env = envLine(r.facts) ?? p.env ?? null;
+      p.where = whereOf(r.facts) ?? p.where ?? null;
     }
     by.set(key, p);
   }

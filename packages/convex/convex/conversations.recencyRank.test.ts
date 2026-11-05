@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { recencyRankOf } from "./conversations";
+import { recencyRankOf } from "./cliSessionClassifier";
 import { PROMPT_CACHE_LIFETIME_MS } from "./wakeCost";
 
 // `cast search` and `cast context` break ties below relevance with this rank,
