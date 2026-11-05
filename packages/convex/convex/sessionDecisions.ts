@@ -50,7 +50,7 @@ import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./
 import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded } from "./lib/superseded";
-import { validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -1161,6 +1161,12 @@ async function upsertDecisionDoc(
   });
 }
 
+/** Whether `userId` drives the run `runId`, and that run was started by `conversationId`. */
+async function runAsksThrough(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow_runs"> | undefined, conversationId: Id<"conversations">): Promise<boolean> {
+  const run: any = runId ? await ctx.db.get(runId) : null;
+  return !!run && String(run.user_id) === String(userId) && String(run.spawner_conversation_id ?? "") === String(conversationId);
+}
+
 export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: AskArgs): Promise<any> {
   const kind: DecisionKind = args.kind ?? "single";
   const shapeError = validateShape(kind, args) ?? (await missingOptionPage(ctx, args.options));
@@ -1172,7 +1178,10 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     .first();
   if (!conversation) return { error: "Session not found" };
   if (conversation.user_id.toString() !== auth.userId.toString()) {
-    return { error: "Unauthorized: not your session" };
+    // A run on another account's machine (a role's run on the team's line pool) asks its own decisions through the
+    // session that started it, the role's standing session, as that session's account (as pauseAtGateCore does).
+    if (!(await runAsksThrough(ctx, auth.userId, args.workflow_run_id, conversation._id))) return { error: "Unauthorized: not your session" };
+    auth = { userId: conversation.user_id };
   }
 
   const now = Date.now();
@@ -1920,6 +1929,8 @@ export const recommend = mutation({
 // in that conversation. It is recorded as their answer with the session as
 // its route (answered_by.via). An agent account speaks for nobody, and a
 // session never answers a question it asked.
+const isChangeCard = (row: DecisionRow): boolean => !!row.card || (!!row.workflow_run_id && row.gate_node_id === CARD_GATE_NODE_ID);
+
 export const SESSION_CANNOT_ANSWER_AS_PERSON =
   "A session cannot answer as a person on its own judgment. If your human explicitly told you in this conversation to answer this decision (or agreed to this choice), pass --for-human. Otherwise they answer it from the web or a plain shell; only the holder role under a grant answers on its own.";
 
@@ -1947,6 +1958,13 @@ async function answererFor(
     }
     const role = await roleOfConversation(ctx, conversation);
     if (!role) return { error: SESSION_CANNOT_ANSWER_AS_PERSON };
+    // A line run's change card: the lead on its ladder answers it when the
+    // lead starts work on its own, whatever its category; the session that
+    // asked it never does.
+    if (isChangeCard(row) && (row.hops ?? []).some((h) => String(h.role_id) === String(role._id)) && roleStartsOnItsOwn(role)) {
+      if (String(row.conversation_id) === String(conversation._id)) return { error: "A session cannot answer its own question" };
+      return { kind: "role", id: String(role._id) };
+    }
     if (row.holder?.kind !== "role" || String(role._id) !== row.holder.id) {
       return { error: `${role.name} does not hold this decision; recommend instead (cast decide recommend), or a person answers it` };
     }

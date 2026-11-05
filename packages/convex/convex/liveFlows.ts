@@ -21,7 +21,7 @@ import { barWords, byStartOrder, clearsBar, startValue, type FlowBar } from "./l
 import { problemSourceOf } from "./workflows";
 import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
 import { flowRouteFor } from "./lib/flowRoute";
-import { agentAssignee, claimSlot, freeSlots, isReadyCause, lineLoadFor, lineOwnerOf, takeAdmissible, type LineLoad, type LineLoads } from "./orgLine";
+import { agentAssignee, claimSlot, freeSlots, isReadyCause, lineLoadFor, lineOwnerOf, takeAdmissible, type LineLoad, type LineLoads, type RunPlace } from "./orgLine";
 
 type Ctx = { db: any };
 
@@ -99,7 +99,7 @@ async function judgeRouteOf(ctx: Ctx, flow: any) {
   return flowRouteFor({ flow: { ...flow, on: true }, spine: await ctx.db.get(flow.workflow_id), rows, source: null, judge: true });
 }
 
-export type LivePlanned = { role_id: string; task_id: string; place?: { device: string; project_path: string }; live_flow_id: string };
+export type LivePlanned = { role_id: string; task_id: string; place?: RunPlace; live_flow_id: string };
 
 /**
  * What one sweep pass starts from a live flow: its queue in order while
@@ -295,11 +295,7 @@ export const showFromCli = query({
   },
 });
 
-/**
- * `cast flow on|off`: a person's act, and a token cannot tell a person from an
- * agent, so every CLI call is refused with where a person switches it. The
- * flow is resolved first, so a wrong name gets its own error.
- */
+/** `cast flow on|off`: a team admin's switch, the same act as the Flows page's. */
 export const setOnFromCli = mutation({
   args: { api_token: v.string(), from_session: v.optional(v.string()), on: v.boolean(), team_id: v.optional(v.string()), flow: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -307,12 +303,27 @@ export const setOnFromCli = mutation({
     if (!auth) throw new ConvexError("Unauthorized");
     const flows = await teamFlows(ctx, auth.userId, args.team_id);
     if (!flows) throw new ConvexError("Your personal workspace has no live flow: name a team");
-    await pickFlow(ctx, flows, args.flow);
-    throw new ConvexError(`A person switches a live flow ${args.on ? "on" : "off"}, from the Flows page in the browser; no CLI call or agent session may.`);
+    const flow = await pickFlow(ctx, flows, args.flow);
+    await setOnCore(ctx, auth.userId, flow, args.on);
+    return cliRow(ctx, await ctx.db.get(flow._id));
   },
 });
 
-/** The longest a hold may stand: it waits out a reset, never a person's call. */
+/** `cast flow hold --clear`: a team admin clears the hold, as on the Flows page. */
+export const clearHoldFromCli = mutation({
+  args: { api_token: v.string(), from_session: v.optional(v.string()), team_id: v.optional(v.string()), flow: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new ConvexError("Unauthorized");
+    const flows = await teamFlows(ctx, auth.userId, args.team_id);
+    if (!flows) throw new ConvexError("Your personal workspace has no live flow: name a team");
+    const flow = await pickFlow(ctx, flows, args.flow);
+    await clearHoldCore(ctx, auth.userId, flow);
+    return cliRow(ctx, await ctx.db.get(flow._id));
+  },
+});
+
+/** The longest a hold may stand: it waits out a reset; a longer stop is the switch. */
 export const MAX_HOLD_MS = 48 * 3_600_000;
 
 /**
@@ -325,7 +336,7 @@ export async function holdCore(ctx: Ctx, flow: any, o: { why: string; until: num
   if (!why) throw new ConvexError("Say why the live flow holds");
   if (why.length > 300) throw new ConvexError("Keep the hold's reason under 300 characters");
   if (!(o.until > now)) throw new ConvexError("A hold ends in the future");
-  if (o.until - now > MAX_HOLD_MS) throw new ConvexError("A hold lasts at most 48 hours; a longer stop is a person's, with the switch");
+  if (o.until - now > MAX_HOLD_MS) throw new ConvexError("A hold lasts at most 48 hours; a longer stop is the switch");
   const standing = flowHold(flow, now);
   const hold = { why, until: Math.max(o.until, standing?.until ?? 0), by: o.by, at: now };
   await ctx.db.patch(flow._id, { hold });
