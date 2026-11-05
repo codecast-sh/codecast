@@ -1,14 +1,19 @@
 // Count over time as stacked bars, the chart every tool in this space leads
-// with. A count axis on the left and time ticks under it; hover a bar for its
-// time and each series' count; drag across it to pick a range (the stream
-// below narrows to it). Deploys stand as lines over the bars, merged into one
+// with, drawn by ECharts like the metric chart (chart/OpsChart). A count
+// scale on the left and time ticks under it stay HTML, so the Timeline's
+// lanes below line up with them to the pixel; hover a bar for its time and
+// each series' count; drag across it to pick a range (the stream below
+// narrows to it). Deploys stand as lines over the bars, merged into one
 // "3 deploys" mark where their labels would collide. A span nothing recorded
 // (before a counter's first day) is shaded and named, never drawn as zero.
-import { useState, type PointerEvent, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import Link from "next/link";
 import { clusterByPixels, isMidnight, niceMax, rangeTicks, seriesLabel, stackKeys, STACK_INK, tickBudget, unknownUntil, type HistBin } from "./timelineModel";
 import { MARK_PX, endAnchored, mergeFacing, useWidth } from "./volumeChartLayout";
 import { tickLabel } from "./timelineTabModel";
+import { OpsChart } from "./chart/OpsChart";
+import { alpha, esc, resolveColor, tipRow, tooltipBase, type ChartTheme } from "./chart/chartTheme";
+import type { ECharts, EChartsOption } from "./chart/echarts";
 import "./sourceView.css";
 
 export type ChartMark = { at: number; label: string; href?: string; title?: string };
@@ -56,53 +61,70 @@ export function VolumeChart({
   dated?: boolean;
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
-  const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
-  const [hover, setHover] = useState<number | null>(null);
   const keys = stackKeys(bins);
   const max = niceMax(Math.max(1, ...bins.map((b) => b.total)));
   const span = Math.max(1, range.to - range.from);
   const total = bins.reduce((n, b) => n + b.total, 0);
-  const frac = (e: PointerEvent) => {
-    const r = ref.current!.getBoundingClientRect();
-    return Math.min(1, Math.max(0, (e.clientX - r.left) / Math.max(1, r.width)));
-  };
-  const at = (f: number) => range.from + f * span;
   const xOf = (t: number) => Math.min(1, Math.max(0, (t - range.from) / span));
   const groups = mergeFacing(clusterByPixels(marks.filter((m) => m.at >= range.from && m.at <= range.to).map((m) => ({ ...m, x: xOf(m.at) })), width, MARK_PX), width);
-  const hb = hover !== null ? bins[hover] : null;
   const ticks = rangeTicks(range, tickBudget(width));
   const unknownTo = unknownUntil(bins);
   const known = bins.filter((b) => !b.unknown);
+  // Handlers bound once on mount read the latest range and callback through here.
+  const live$ = useRef({ range, onBrush });
+  live$.current = { range, onBrush };
+  const mid = (b: HistBin) => (b.from + b.to) / 2;
+  const binAt = (at: number) => bins.find((b) => at >= b.from && at < b.to) ?? bins.reduce<HistBin | null>((best, b) => (!best || Math.abs(mid(b) - at) < Math.abs(mid(best) - at) ? b : best), null);
+  const color = (k: string) => { const css = ink(k); return css.includes("transparent") ? alpha(css, 0.45) : resolveColor(css); };
+
+  const option = (t: ChartTheme): EChartsOption => ({
+    animation: false,
+    grid: { left: 0, right: 0, top: 0, bottom: 0 },
+    xAxis: { type: "time", min: range.from, max: range.to, show: false, axisPointer: { label: { show: false } } },
+    yAxis: { type: "value", min: 0, max, show: false },
+    tooltip: {
+      ...tooltipBase(t), trigger: "axis",
+      axisPointer: { type: "shadow", shadowStyle: { color: alpha(t.text, 0.05) } },
+      formatter: ((ps: { axisValue: number }[]) => {
+        const b = binAt(Number(ps[0]?.axisValue));
+        if (!b) return "";
+        let s = `<div style="color:${t.dim};font-size:11px">${esc(binWhen(b))}</div>`;
+        if (b.unknown) return s + `<div style="color:${t.muted}">No data recorded</div>`;
+        s += `<div style="font-family:${t.mono};font-size:16px;font-weight:600;margin:1px 0 2px">${b.estimated ? "≥ " : ""}${b.total.toLocaleString()}</div>`;
+        if (b.estimated) return s + `<div style="color:${t.dim};max-width:220px;white-space:normal">no counter here; drawn from the issues and replays kept</div>`;
+        return s + keys.filter((k) => b.parts[k]).map((k) => tipRow(t, `<i style="display:inline-block;width:7px;height:7px;border-radius:2px;background:${color(k)}"></i>`, name(k), b.parts[k].toLocaleString())).join("");
+      }) as never,
+    },
+    toolbox: onBrush ? { show: true, right: -400, feature: { brush: { type: ["lineX"] } } } : undefined,
+    brush: onBrush ? { xAxisIndex: 0, brushType: "lineX", brushMode: "single", transformable: false, brushStyle: { color: alpha(t.blue, 0.12), borderColor: alpha(t.blue, 0.5), borderWidth: 1 }, outOfBrush: { colorAlpha: 1 } } : undefined,
+    series: [
+      // Every bin as a point, so the tip lands on a bin nothing was counted in, or nothing recorded.
+      { id: "bins", type: "line", data: bins.map((b) => [mid(b), 0]), symbol: "none", silent: true, lineStyle: { opacity: 0 }, tooltip: { show: true } },
+      ...keys.map((k) => ({
+        id: k, name: name(k), type: "bar" as const, stack: "all", barWidth: "86%", silent: true,
+        itemStyle: { color: color(k), borderRadius: 1.5 },
+        data: bins.map((b) => [mid(b), b.unknown ? null : b.parts[k] || null]),
+      })),
+    ] as never,
+  });
+
+  const onReady = (c: ECharts) => {
+    if (!live$.current.onBrush) return;
+    c.dispatchAction({ type: "takeGlobalCursor", key: "brush", brushOption: { brushType: "lineX", brushMode: "single" } });
+    c.on("brushEnd", (e: unknown) => {
+      const r = (e as { areas?: { coordRange?: [number, number] }[] }).areas?.[0]?.coordRange;
+      c.dispatchAction({ type: "brush", areas: [] });
+      const { range: w, onBrush: pick } = live$.current;
+      if (!r || !pick) return;
+      const lo = Math.max(w.from, Math.min(r[0], r[1]));
+      const hi = Math.min(w.to, Math.max(r[0], r[1]));
+      if (hi - lo > (w.to - w.from) * 0.01) pick(lo, hi);
+    });
+  };
 
   return (
     <div className="ovc" data-ops-volume={label ?? ""}>
-      <div
-        ref={ref}
-        className="ovc-plot"
-        style={{ height }}
-        role="img"
-        aria-label={`${label ?? "Volume"}: ${total.toLocaleString()} in range`}
-        data-brush={onBrush ? "true" : undefined}
-        onPointerDown={(e) => {
-          if (!onBrush || e.button !== 0 || (e.target as Element).closest("a")) return;
-          (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-          const f = frac(e);
-          setDrag({ a: f, b: f });
-        }}
-        onPointerMove={(e) => {
-          const f = frac(e);
-          if (drag) setDrag({ ...drag, b: f });
-          setHover(Math.min(bins.length - 1, Math.floor(f * bins.length)));
-        }}
-        onPointerLeave={() => setHover(null)}
-        onPointerUp={() => {
-          if (!drag || !onBrush) return;
-          const lo = Math.min(drag.a, drag.b);
-          const hi = Math.max(drag.a, drag.b);
-          setDrag(null);
-          if (hi - lo > 0.01) onBrush(at(lo), at(hi));
-        }}
-      >
+      <div ref={ref} className="ovc-plot" style={{ height }} aria-label={`${label ?? "Volume"}: ${total.toLocaleString()} in range`} data-brush={onBrush ? "true" : undefined}>
         {/* No axis over nothing: a count scale on an empty chart is a made-up number. */}
         {total > 0 && (
           <div className="ovc-grid" aria-hidden>
@@ -111,15 +133,7 @@ export function VolumeChart({
             {Number.isInteger(max / 2) && <span className="ovc-y ops-num" style={{ top: `calc(50% + ${GRID_PAD / 2}px)` }}>{compact(max / 2)}</span>}
           </div>
         )}
-        <div className="ovc-bars">
-          {bins.map((b, i) => (
-            <div key={b.from} className="ovc-col" data-hover={hover === i ? "true" : undefined} data-unknown={b.unknown ? "true" : undefined} data-estimated={b.estimated ? "true" : undefined}>
-              {keys.map((k) =>
-                b.parts[k] ? <i key={k} style={{ height: `${(b.parts[k] / max) * 100}%`, background: ink(k) }} /> : null,
-              )}
-            </div>
-          ))}
-        </div>
+        <OpsChart className="ovc-canvas" option={option} deps={[bins, range.from, range.to, max, keys.join(), !!onBrush]} height="100%" onReady={onReady} ariaLabel={`${label ?? "Volume"}: ${total.toLocaleString()} in range`} />
         {unknownTo !== null && (
           <div className="ovc-nodata" style={{ width: unknownTo === Infinity ? "100%" : `${xOf(unknownTo) * 100}%` }} data-ops-nodata>
             {/* An empty range says so once, centred over the whole chart, rather than two labels fighting for a strip. */}
@@ -145,27 +159,6 @@ export function VolumeChart({
             </div>
           );
         })}
-        {drag && <div className="ovc-brush" style={{ left: `${Math.min(drag.a, drag.b) * 100}%`, width: `${Math.abs(drag.b - drag.a) * 100}%` }} />}
-        {hb && !drag && (
-          <div className="ovc-tip" style={{ left: `${((hover! + 0.5) / bins.length) * 100}%` }} data-edge={hover! / bins.length > 0.7 ? "end" : hover! / bins.length < 0.2 ? "start" : undefined} data-ops-tip>
-            <span className="ops-dim">{binWhen(hb)}</span>
-            {hb.unknown ? (
-              <span className="ops-dim">No data recorded</span>
-            ) : hb.estimated ? (
-              <>
-                <b className="ops-num">≥ {hb.total.toLocaleString()}</b>
-                <span className="ops-dim">no counter here; drawn from the issues and replays kept</span>
-              </>
-            ) : (
-              <>
-                <b className="ops-num">{hb.total.toLocaleString()}</b>
-                {keys.filter((k) => hb.parts[k]).map((k) => (
-                  <span key={k} className="ovc-tip-row"><i style={{ background: ink(k) }} />{name(k)}<b className="ops-num">{hb.parts[k].toLocaleString()}</b></span>
-                ))}
-              </>
-            )}
-          </div>
-        )}
       </div>
       <div className="ovc-x" aria-hidden>
         {ticks.map((t, i) => <span key={t.at} className="ovc-tick ops-num" style={{ left: `${t.x * 100}%` }}>{tickLabel(t.at, span, !!dated && (i === 0 || isMidnight(t.at)))}</span>)}
