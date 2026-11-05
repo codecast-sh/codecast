@@ -4,7 +4,9 @@ import schema from "../schema";
 import { armedTriggerRows, makeFakeDb, schemaIndexes } from "../testDb";
 import { hex, hmacSha256, verifyHmacHex } from "../lib/hmac";
 import { HOUR_MS, hourStart } from "../lib/ingestGroups";
-import { applyMirrorBatch, createSource, mirrorGroups, sourceStats } from "../ingest";
+import { applyMirrorBatch, createSource } from "../ingest";
+import { mirrorGroups } from "../lib/groupWrite";
+import { sourceStats } from "../lib/sourceStats";
 import { encryptConnectionSecret } from "../tokenConnectors";
 import * as tokenConnectorsModule from "../tokenConnectors";
 import * as ingestModule from "../ingest";
@@ -449,30 +451,39 @@ describe("replays", () => {
         if (name === "tokenConnectors:tokenConnectionRow") return sentryConnectionRow("tok");
         throw new Error(`unexpected query ${name}`);
       },
-      runAction: async (fn: any, args: any) => {
+      runAction: async (fn: any) => {
+        throw new Error(`unexpected action ${getFunctionName(fn)}`);
+      },
+      // The import stores in this action (lib/replayImport.ts importExternalCore): its writes are recorded here.
+      runMutation: async (fn: any, args: any) => {
         const name = getFunctionName(fn);
         actions.push({ name, args });
-        imported = true;
-        return { replay_id: "rp_row", short_id: "rp-4", chunks: 1, saved: true };
+        if (name === "replays:openImport") return { replay_id: "rp_row", short_id: "rp-4" };
+        if (name === "replays:saveImported") return (imported = true, { saved: true });
+        return null;
       },
     } as any;
     const real = globalThis.fetch;
     const s = sentryReplayRoutes();
-    globalThis.fetch = s.fetchImpl as any;
+    const r2 = ["R2_ENDPOINT", "REPLAYS_R2_ACCESS_KEY_ID", "REPLAYS_R2_SECRET_ACCESS_KEY"];
+    Object.assign(process.env, { R2_ENDPOINT: "https://acct.r2.cloudflarestorage.com", REPLAYS_R2_ACCESS_KEY_ID: "rk", REPLAYS_R2_SECRET_ACCESS_KEY: "rs" });
+    globalThis.fetch = (async (url: any, init?: RequestInit) => (String(url).includes("r2.cloudflarestorage.com") ? new Response(null, { status: init?.method === "HEAD" ? 404 : 200 }) : s.fetchImpl(url, init as any))) as any;
     try {
       const first = await h(importReplay)(ctx, { source_id: "s1", external_id: REPLAY_ID });
       expect(first).toEqual({ replay_id: "rp_row", short_id: "rp-4", imported: true, truncated: false });
-      expect(actions).toHaveLength(1);
-      expect(actions[0]).toMatchObject({ name: "replays:importExternal", args: { source_id: "s1", provider: "sentry", external_id: REPLAY_ID, started_at: R0, user: { id: "user-9", email: "ada@example.com" } } });
-      expect(actions[0].args.events.map((e: any) => e.type)).toEqual(["nav", "click", "console", "network"]);
+      const save = actions.find((a) => a.name === "replays:saveImported")!;
+      expect(actions.find((a) => a.name === "replays:openImport")).toMatchObject({ args: { source_id: "s1", external_id: REPLAY_ID, started_at: R0 } });
+      expect(save.args).toMatchObject({ provider: "sentry", started_at: R0, user: { id: "user-9", email: "ada@example.com" }, counts: { clicks: 1, errors: 1, failed_requests: 1 } });
+      const writes = actions.length;
 
       s.calls.length = 0;
       expect(await h(importReplay)(ctx, { source_id: "s1", external_id: REPLAY_ID })).toMatchObject({ short_id: "rp-4", imported: false });
       expect(s.calls).toEqual([]);
-      expect(actions).toHaveLength(1);
+      expect(actions).toHaveLength(writes);
       await expect(h(importReplay)(ctx, { source_id: "s1", external_id: "../../x" })).rejects.toThrow(/not a Sentry replay id/);
     } finally {
       globalThis.fetch = real;
+      for (const k of r2) delete process.env[k];
     }
   });
 });

@@ -536,7 +536,7 @@ export function useOpsReplayTimeline(replayId: string | undefined): OpsReplayTim
   return useCollectionRows<OpsReplayTimeline>("opsReplayTimelines", { where, sig: timelineSig })[0];
 }
 
-const tallySig = (t: OpsReplayTally) => `${t.total}|${t.capped ? 1 : 0}|${t.people_total}|${t.people_anonymous ?? -1}|${t.rage_unchecked ?? -1}|${t.below_active ?? -1}|${(t.people ?? []).reduce((h, p) => (Math.imul(h, 31) + p.key.length * 131 + p.key.charCodeAt(0) + p.sessions) | 0, 7)}|${(t.people ?? []).reduce((n, p) => n + p.sessions * 31 + p.errors + p.failed + p.last_at, 0)}|${t.facets ? Object.values(t.facets).reduce((n, f) => n + f.length * 7 + f.reduce((m, [v, c]) => m + v.length * 13 + c, 0), 0) : -1}`;
+const tallySig = (t: OpsReplayTally) => `${t.total}|${t.capped ? 1 : 0}|${t.people_total}|${t.people_anonymous ?? -1}|${t.rage_unchecked ?? -1}|${t.below_active ?? -1}|${(t.people ?? []).reduce((h, p) => (Math.imul(h, 31) + p.key.length * 131 + p.key.charCodeAt(0) + p.sessions) | 0, 7)}|${(t.people ?? []).reduce((n, p) => n + p.sessions * 31 + p.errors + p.failed + p.last_at + (p.short ?? 0) * 7 + (p.url?.length ?? 0), 0)}|${t.facets ? Object.values(t.facets).reduce((n, f) => n + f.length * 7 + f.reduce((m, [v, c]) => m + v.length * 13 + c, 0), 0) : -1}`;
 
 /** What one replay browse counted (useSyncOpsReplayBrowse), by its key. */
 export function useOpsReplayTally(key: string | null): OpsReplayTally | undefined {

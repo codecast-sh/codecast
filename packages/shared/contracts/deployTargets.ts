@@ -3,10 +3,9 @@
 // where that runs, how codecast reads what is live there, how it rolls back,
 // and who starts it.
 //
-// The list is the checkout's own config. A `[[ship.deploy]]` entry of
-// .codecast/workspace.toml that names a `target` is a target (codecast's
-// backend, web, CLI release, mobile OTA, desktop); a line profile's
-// `[line.deploy]` (Union) is one more. Both normalize here, so the CLI that
+// The list is the checkout's own config: the `[[target]]` tables of
+// .codecast/deploy.toml (codecast's backend, web, CLI release, mobile OTA,
+// desktop), and a line profile's `[line.deploy]` (Union) as one more. Both normalize here, so the CLI that
 // runs a target, the server that records it and the Deploys page that shows
 // it read the same shape.
 
@@ -99,38 +98,72 @@ export function readJsonLive(r: Extract<DeployLiveReader, { kind: "json" }>, doc
   return { sha: sha && /^[0-9a-f]{7,40}$/i.test(sha) ? sha.toLowerCase() : null, version: r.version_field ? readJsonField(doc, r.version_field) : null };
 }
 
-/** The shape a `[[ship.deploy]]` entry has once the manifest has read it. */
-export type ShipDeployEntry = {
-  name: string;
-  when: string[];
-  run?: string;
-  stage: "before_push" | "after_push" | "press";
-  target?: string;
-  live?: string;
-  rollback?: string;
-  policy?: string;
-  runs?: string;
-};
+/** A `[[ship.deploy]]` step of .codecast/workspace.toml, as far as a target needs it. */
+export type ShipStepRef = { name: string; when: string[]; run: string; stage: "before_push" | "after_push" };
 
-/** A `[[ship.deploy]]` entry as a target, or null for a step that names none (a gate like the typing guard). */
-export function targetFromShipEntry(e: ShipDeployEntry): DeployTarget | null {
-  if (!e.target) return null;
-  const name = e.target.trim().toLowerCase();
-  if (!DEPLOY_TARGET_NAME_RE.test(name)) throw new DeployTargetError(`target "${e.target}" is not a target name (lowercase letters, digits and dashes)`);
-  const runs = (e.runs ?? "here") as DeployTargetRuns;
+const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy"] as const;
+
+/**
+ * The `[[target]]` tables of .codecast/deploy.toml as targets. The file is the targets' own: workspace.toml keeps
+ * the schema every released CLI reads, so a target never puts a key there that an older CLI refuses. A target that
+ * the ship sends names its step (`ship = "convex"`) and takes that step's command, paths and stage; it may still
+ * say `when` or `run` itself. Throws DeployTargetError naming the table on anything it cannot read.
+ */
+export function parseDeployTargets(raw: unknown, ship: readonly ShipStepRef[]): DeployTarget[] {
+  return parseDeployTargetEntries(raw, ship).map((e) => e.target);
+}
+
+/** The same, each with the [[ship.deploy]] step that sends it at a ship. */
+export function parseDeployTargetEntries(raw: unknown, ship: readonly ShipStepRef[]): Array<{ target: DeployTarget; ship_step?: string }> {
+  if (raw === undefined || raw === null) return [];
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new DeployTargetError("deploy.toml must be a TOML table");
+  for (const key of Object.keys(raw)) if (key !== "target") throw new DeployTargetError(`unknown top-level key '${key}' (the file holds [[target]] tables)`);
+  const list = (raw as Record<string, unknown>)["target"] ?? [];
+  if (!Array.isArray(list)) throw new DeployTargetError("'target' must be an array of tables ([[target]])");
+  const out: Array<{ target: DeployTarget; ship_step?: string }> = [];
+  list.forEach((entry, i) => {
+    const at = `target[${i}]`;
+    try {
+      const t = targetFromEntry(entry, ship);
+      if (out.some((o) => o.target.name === t.name)) throw new DeployTargetError(`target ${t.name} is declared twice`);
+      const step = (entry as Record<string, unknown>)["ship"];
+      out.push({ target: t, ...(typeof step === "string" ? { ship_step: step } : {}) });
+    } catch (err) {
+      throw err instanceof DeployTargetError ? new DeployTargetError(`${at}: ${err.message}`) : err;
+    }
+  });
+  return out;
+}
+
+function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget {
+  if (!e || typeof e !== "object" || Array.isArray(e)) throw new DeployTargetError("must be a table");
+  const r = e as Record<string, unknown>;
+  for (const key of Object.keys(r)) if (!(TARGET_KEYS as readonly string[]).includes(key)) throw new DeployTargetError(`unknown key '${key}'`);
+  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy"]) {
+    if (r[key] !== undefined && typeof r[key] !== "string") throw new DeployTargetError(`'${key}' must be a string`);
+  }
+  const name = String(r["name"] ?? "").trim().toLowerCase();
+  if (!DEPLOY_TARGET_NAME_RE.test(name)) throw new DeployTargetError(`name "${r["name"] ?? ""}" is not a target name (lowercase letters, digits and dashes)`);
+  const step = r["ship"] !== undefined ? ship.find((s) => s.name === r["ship"]) : undefined;
+  if (r["ship"] !== undefined && !step) throw new DeployTargetError(`target ${name}: ship = "${r["ship"]}" names no [[ship.deploy]] step in workspace.toml`);
+  const whenRaw = r["when"] ?? step?.when ?? [];
+  const when = typeof whenRaw === "string" ? [whenRaw] : whenRaw;
+  if (!Array.isArray(when) || when.some((w) => typeof w !== "string")) throw new DeployTargetError(`target ${name}: 'when' must be a string or a list of strings`);
+  const command = ((r["run"] as string | undefined) ?? step?.run ?? "").trim();
+  const runs = (r["runs"] ?? "here") as DeployTargetRuns;
   if (!(DEPLOY_TARGET_RUNS as readonly string[]).includes(runs)) throw new DeployTargetError(`target ${name}: runs must be one of ${DEPLOY_TARGET_RUNS.join(", ")}`);
-  if (runs === "here" && !e.run) throw new DeployTargetError(`target ${name}: runs = "here" needs run, the command that sends it`);
-  const policy = (e.policy ?? "press") as DeployTargetPolicy;
+  if (runs === "here" && !command) throw new DeployTargetError(`target ${name}: runs = "here" needs run (or ship), the command that sends it`);
+  const policy = (r["policy"] ?? "press") as DeployTargetPolicy;
   if (!(DEPLOY_TARGET_POLICIES as readonly string[]).includes(policy)) throw new DeployTargetError(`target ${name}: policy must be one of ${DEPLOY_TARGET_POLICIES.join(", ")}`);
   return {
     name,
-    ...(e.run ? { command: e.run } : {}),
+    ...(command ? { command } : {}),
     runs,
-    live: parseLiveReader(e.live),
-    ...(e.rollback ? { rollback: e.rollback } : {}),
+    live: parseLiveReader(r["live"] as string | undefined),
+    ...(r["rollback"] ? { rollback: r["rollback"] as string } : {}),
     policy,
-    paths: e.when,
-    ship_stage: e.stage,
+    paths: when as string[],
+    ship_stage: step?.stage ?? "press",
   };
 }
 

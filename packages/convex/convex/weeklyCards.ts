@@ -74,7 +74,6 @@ export const sessionPage = internalQuery({
         device_id: c.owner_device_id ?? null,
         project: basename(c.git_root || c.project_path),
         private: c.is_private || c.team_visibility === "private",
-        persistent: !!(c.persistent || c.org_role_id || c.standing_role_id || c.anchor_id),
       });
     }
     return { sessions, cursor: page.continueCursor, done: page.isDone };

@@ -25,6 +25,23 @@ export function alignGateChoices(options: ReadonlyArray<{ label: string }>, choi
   });
 }
 
+// The run's gate mirror for a decision's options (gate_choices): entry i is
+// the edge option i names, or a keyless entry in that option's words. Every
+// reader maps an answer's option index through it, so it is rebuilt from the
+// options' words whenever they change (followOptions), never kept by position.
+export function gateMirror(options: ReadonlyArray<{ label: string }>, choices: ReadonlyArray<GateChoice>): GateChoice[] {
+  return alignGateChoices(options, choices.filter((c) => c.key)).map((c, i) => (c ? { key: c.key, label: c.label, target: c.target } : { key: "", label: options[i].label, target: "" }));
+}
+
+// Where each of a decision's old options sits among its new ones, matched by
+// its words (then its verdict), or undefined when no new option says it. A
+// re-ask may reorder its options (sd-2373 moved Ship from 1 to 2), so anything
+// that names an option by index follows it through this.
+export function optionMoves(before: ReadonlyArray<{ label: string }>, after: ReadonlyArray<{ label: string }>): Array<number | undefined> {
+  const newToOld = alignGateChoices(after, before.map((o, i) => ({ key: String(i), label: o.label, target: "" })));
+  return before.map((_, i) => { const at = newToOld.findIndex((c) => c?.key === String(i)); return at < 0 ? undefined : at; });
+}
+
 // The card a gate decides on is the one its presenting station posted; the
 // gate asks no question of its own. That card stands while it waits on a
 // person, and once a person answered it after the station last started

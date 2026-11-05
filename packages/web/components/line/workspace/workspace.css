@@ -561,6 +561,8 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-route { display: grid; grid-template-columns: 13px 1fr; font-size: var(--lw-fs-2xs); line-height: 1.35; color: var(--lw-ink-3); }
 .fd-route b { font-weight: 600; color: var(--lw-ink-2); }
 .fd-route-mark { text-align: left; color: var(--lw-ink-3); }
+/* A stage's findings going back to the session the change came from: the session's violet, as on the run card. */
+.fd-route[data-session], .fd-route[data-session] b, .fd-route[data-session] .fd-route-mark { color: color-mix(in srgb, var(--sol-violet) 85%, var(--lw-ink-3)); }
 .fd-route-to { color: var(--lw-ink-3); }
 /* On a run, the route it took: red only where it stopped. */
 .fd-route[data-taken] b { color: var(--lw-ink); }

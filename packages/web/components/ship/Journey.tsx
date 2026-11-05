@@ -12,8 +12,8 @@ import { WHO_WORDS, targetsFromLine, type Journey as JourneyModel, type JourneyS
 import { ageShort } from "../../lib/lineFlow";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
-import { sessionTargets, targetNow } from "../../lib/deploys/targets";
-import { useDeployPress } from "../deploys/DeployPress";
+import { deploysHref, sessionTargets, targetNow } from "../../lib/deploys/targets";
+import { useDeployPress } from "../../hooks/useDeployPress";
 import "./ship.css";
 
 export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false, open, onOpen }: { stages: JourneyStage[]; compact?: boolean; open?: string | null; onOpen?: (id: string | null) => void }) {
@@ -87,14 +87,6 @@ function Mark({ state }: { state: JourneyStage["state"] }) {
   if (state === "active") return <i className="sj-pulse" />;
   if (state === "waiting") return <i className="sj-wait" />;
   return null;
-}
-
-/** The Deploys page for the run's team, at one target when the words name one ("web dp-12"). */
-export function deploysHref(run: any, words?: string | null): string {
-  const team = typeof run?.workspace === "string" && run.workspace.startsWith("team:") ? run.workspace.slice(5) : null;
-  const target = words?.match(/\b([a-z][a-z0-9-]{0,31}) dp-\d+/)?.[1] ?? null;
-  const q = [team ? `team=${team}` : null, target ? `target=${encodeURIComponent(target)}` : null].filter(Boolean).join("&");
-  return `/deploys${q ? `?${q}` : ""}`;
 }
 
 /** What is happening now, and the person's part in it. */

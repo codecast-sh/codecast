@@ -36,6 +36,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileAsync, spawn } from "../proc.js";
 import { readHold } from "./hold.js";
+import type { RunTreesInUse } from "../worktreeGc.js";
 
 /** A tree touched this recently is treated as in use whatever the roster says. */
 export const ACTIVE_MS = 2 * 60 * 60_000;
@@ -310,6 +311,8 @@ export interface VerdictFacts {
   processInside: boolean;
   /** A line run made it: its run files sit under the checkout's run dirs by the tree's name (runDirs.ts lineRunsRoot). */
   run: boolean;
+  /** Whether that run is still live on this machine (workflow/liveRuns.ts), or null when that cannot be told. */
+  liveRun: boolean | null;
   /** The reason a session gave when it marked the tree held, or null. */
   held: string | null;
   lastActivity: number;
@@ -335,6 +338,10 @@ export function treeVerdict(f: VerdictFacts): { verdict: TreeVerdict; reason: st
   const { same, absorbed, only, both } = f.counts;
   const open = `${only} files only it changed, ${both} where main lacks its change`;
   if (f.held !== null) return { verdict: "held", reason: `held: ${f.held}; ${open}` };
+  // A live run's tree is the run's, whatever it holds or however long it waited: a run at a hold or a card has no
+  // process in it for days, and one whose change reached main another way still runs Eval in it. Released as
+  // stale (ct-68695, 8 days at the Eval wallet) or landed (ct-62158), each failed at Eval on a missing workspace.
+  if (f.run && f.liveRun !== false) return { verdict: "run", reason: f.liveRun ? `its line run is still live; ${open}` : `a line run's tree, and whether its run is live cannot be told; ${open}` };
   // A run's own work is the run's to ship, while a hand is in it as much as while it waits on a person.
   if (f.run && only + both > 0 && (inUse || quiet < STALE_MS)) return { verdict: "run", reason: `a line run's change, which the run ships after its decision; ${open}` };
   if (inUse) return { verdict: "live", reason: inUse };
@@ -353,6 +360,8 @@ export interface ScanContext {
   processCwds: string[];
   /** Names that have run files in this checkout: the trees line runs made. */
   runTrees: ReadonlySet<string>;
+  /** The trees a live run on this machine works in (worktreeGc.ts runTreesInUseVia), or null when that cannot be told. */
+  liveRunTrees: ReadonlySet<string> | null;
   now: number;
 }
 
@@ -377,6 +386,7 @@ export async function scanTree(entry: WorktreeEntry, ctx: ScanContext): Promise<
     liveOwner: !!ownerRow && ownerIsLive(ownerRow, ctx.now),
     processInside: ctx.processCwds.some((c) => c === entry.path || c.startsWith(`${entry.path}/`)),
     run: !entry.primary && ctx.runTrees.has(path.basename(entry.path)),
+    liveRun: ctx.liveRunTrees ? ctx.liveRunTrees.has(path.basename(entry.path)) : null,
     held: entry.primary ? null : readHold(entry.path)?.reason ?? null,
     lastActivity,
     counts: { same: 0, absorbed: 0, only: 0, both: 0 },
@@ -452,7 +462,7 @@ export interface RepoScan {
 }
 
 /** Scan every worktree of one repo. `roster` null means the owner roster could not be read. */
-export async function scanRepo(root: string, opts: { roster: RosterRow[] | null; processCwds: string[]; concurrency?: number; fetch?: boolean; now?: number; only?: string[] }): Promise<RepoScan> {
+export async function scanRepo(root: string, opts: { roster: RosterRow[] | null; processCwds: string[]; runTreesInUse?: RunTreesInUse; concurrency?: number; fetch?: boolean; now?: number; only?: string[] }): Promise<RepoScan> {
   const origin = await tryGit(root, ["remote", "get-url", "origin"]);
   if (opts.fetch !== false && origin) await tryGit(root, ["fetch", "--quiet", "origin"], { timeoutMs: 60_000 });
   const defaultBranch = (await tryGit(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])) || "origin/main";
@@ -466,6 +476,7 @@ export async function scanRepo(root: string, opts: { roster: RosterRow[] | null;
     roster: opts.roster,
     processCwds: opts.processCwds,
     runTrees: (await import("../workflow/runDirs.js")).runTreeNames(root),
+    liveRunTrees: opts.runTreesInUse ? await opts.runTreesInUse(root).catch(() => null) : null,
     now,
   };
   // `only`: the named trees and those nested above or below them, whose verdicts decide whether a named one may go.

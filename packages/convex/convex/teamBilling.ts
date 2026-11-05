@@ -41,10 +41,12 @@ import {
   countSeats,
   grandfathered,
   isLapsed,
+  isSeatPrice,
   scheduleSeatSync,
   seatBillingEnv,
   seatBillingOn,
   seatPlan,
+  seatPriceId,
   teamSubscriptionRow,
   type SeatPlan,
 } from "./lib/teamSeats";
@@ -66,8 +68,13 @@ export type SeatState =
       pending: number;
       free_capacity: number;
       grandfathered: boolean;
+      /** When grandfathering ends for every team, if it ends. */
+      grandfathered_until: number | null;
       /** Starter with no free seat left: the next invite needs Pro. */
       full: boolean;
+      /** Starter with more members than it covers and no grandfathering left: the team should be on Pro. */
+      needs_pro: boolean;
+      team_name: string;
       is_admin: boolean;
       /** A Stripe customer exists, so the portal has something to show. */
       has_billing: boolean;
@@ -84,13 +91,14 @@ export const getSeatState = query({
     if (!userId) return null;
     const membership = await membershipOf(ctx, userId, team_id);
     if (!membership) return null;
-    if (!seatBillingOn()) return { enforced: false };
+    const env = seatBillingEnv();
+    if (!seatBillingOn(env)) return { enforced: false };
     const team = await ctx.db.get(team_id);
     if (!team || team.deleted_at) return null;
     const row = await teamSubscriptionRow(ctx, team_id);
     const counts = await countSeats(ctx, team);
     const plan = seatPlan(row);
-    const old = plan === "starter" && grandfathered(row, counts);
+    const old = plan === "starter" && grandfathered(row, counts, Date.now(), env.grandfatherUntil);
     return {
       enforced: true,
       plan,
@@ -103,7 +111,10 @@ export const getSeatState = query({
       pending: counts.pending,
       free_capacity: STARTER_FREE_CAPACITY,
       grandfathered: old,
+      grandfathered_until: env.grandfatherUntil ?? null,
       full: plan === "starter" && !old && counts.members + counts.pending >= STARTER_FREE_CAPACITY,
+      needs_pro: plan === "starter" && !old && counts.members > STARTER_FREE_CAPACITY,
+      team_name: team.name,
       is_admin: membership.role === "admin",
       has_billing: !!row?.stripe_customer_id,
     };
@@ -173,10 +184,23 @@ async function portal(stripe: StripeClient, customer: string): Promise<BillingRe
   return { ok: true, url: session.url, via: "portal" };
 }
 
-/** The price the upgrade review shows, read from Stripe so the screen says what Stripe will charge. */
+/** One seat price as Stripe will charge it. */
+export type SeatPrice = { unit_amount: number; currency: string; interval: string; interval_count: number };
+
+/** The prices the upgrade review shows, read from Stripe so the screen says
+ *  what Stripe will charge. `annual` is null where no yearly price is set. */
 export type SeatOffer =
-  | { ok: true; unit_amount: number; currency: string; interval: string; interval_count: number; trial_days: number; seats: number }
+  | { ok: true; monthly: SeatPrice; annual: SeatPrice | null; trial_days: number; seats: number }
   | { ok: false; error: string };
+
+async function readSeatPrice(stripe: StripeClient, name: string, priceId: string): Promise<SeatPrice | null> {
+  const price = await stripe.getPrice(priceId);
+  if (price.active === false || typeof price.unit_amount !== "number" || !price.recurring) {
+    console.error(`[seat-billing] ${name} ${priceId} is not an active recurring price with a unit amount`);
+    return null;
+  }
+  return { unit_amount: price.unit_amount, currency: price.currency ?? "usd", interval: price.recurring.interval, interval_count: price.recurring.interval_count };
+}
 
 export const seatOffer = action({
   args: { team_id: v.id("teams") },
@@ -186,17 +210,16 @@ export const seatOffer = action({
     const admin = await adminContext(ctx, team_id);
     if ("refusal" in admin) return { ok: false, error: refusalText(admin.refusal) };
     try {
-      const price = await createStripe({ secretKey: env.secretKey! }).getPrice(env.priceId!);
-      if (price.active === false || typeof price.unit_amount !== "number" || !price.recurring) {
-        console.error(`[seat-billing] STRIPE_PRICE_TEAM_SEAT ${env.priceId} is not an active recurring price with a unit amount`);
-        return { ok: false, error: "The team plan's price is not set up." };
-      }
+      const stripe = createStripe({ secretKey: env.secretKey! });
+      const [monthly, annual] = await Promise.all([
+        readSeatPrice(stripe, "STRIPE_PRICE_TEAM_SEAT", env.priceId!),
+        env.annualPriceId ? readSeatPrice(stripe, "STRIPE_PRICE_TEAM_SEAT_ANNUAL", env.annualPriceId) : null,
+      ]);
+      if (!monthly) return { ok: false, error: "The team plan's price is not set up." };
       return {
         ok: true,
-        unit_amount: price.unit_amount,
-        currency: price.currency ?? "usd",
-        interval: price.recurring.interval,
-        interval_count: price.recurring.interval_count,
+        monthly,
+        annual,
         trial_days: admin.context.ever_subscribed ? 0 : env.trialDays,
         seats: Math.max(1, admin.context.members),
       };
@@ -206,12 +229,15 @@ export const seatOffer = action({
   },
 });
 
-/** Starts Pro for a team: Stripe checkout for one seat per member, with the
- *  trial on a team's first subscription. A team Stripe already holds a live
- *  seat subscription for gets the portal instead of a second subscription. */
+const seatBillingArg = v.union(v.literal("monthly"), v.literal("annual"));
+
+/** Starts Pro for a team: Stripe checkout for one seat per member, billed
+ *  monthly or yearly, with the trial on a team's first subscription. A team
+ *  Stripe already holds a live seat subscription for gets the portal instead
+ *  of a second subscription. */
 export const startSeatCheckout = action({
-  args: { team_id: v.id("teams") },
-  handler: async (ctx, { team_id }): Promise<BillingRedirect> => {
+  args: { team_id: v.id("teams"), billing: v.optional(seatBillingArg) },
+  handler: async (ctx, { team_id, billing }): Promise<BillingRedirect> => {
     const env = seatBillingEnv();
     if (!seatBillingOn(env)) return UNAVAILABLE;
     const admin = await adminContext(ctx, team_id);
@@ -223,7 +249,7 @@ export const startSeatCheckout = action({
       const metadata = { kind: TEAM_SEATS_KIND, team_id };
       const params = checkoutParams({
         mode: "subscription",
-        price: env.priceId!,
+        price: seatPriceId(env, billing)!,
         quantity: Math.max(1, context.members),
         successUrl: teamReturnUrl("done"),
         cancelUrl: teamReturnUrl("canceled"),
@@ -236,7 +262,7 @@ export const startSeatCheckout = action({
       const trialDays = context.ever_subscribed ? 0 : env.trialDays;
       params.subscription_data = { metadata, ...(trialDays > 0 ? { trial_period_days: trialDays } : {}) };
       const session = await stripe.request<{ id?: string; url?: string }>("POST", "checkout/sessions", params, {
-        idempotencyKey: `team-checkout:${team_id}:${userId}:${context.customer ?? "new"}:${Math.floor(Date.now() / CHECKOUT_REUSE_MS)}`,
+        idempotencyKey: `team-checkout:${team_id}:${userId}:${context.customer ?? "new"}:${billing ?? "monthly"}:${Math.floor(Date.now() / CHECKOUT_REUSE_MS)}`,
       });
       if (!session.url) throw new StripeError("Stripe returned a checkout session without a url", 200);
       await ctx.runMutation(internal.teamBilling.markCheckoutStarted, { team_id });
@@ -356,7 +382,7 @@ export const syncSeats = internalAction({
         await apply(sub);
         return "cancel_at_period_end";
       }
-      const item = sub.items?.data?.find((i) => i.price?.id === env.priceId) ?? sub.items?.data?.[0];
+      const item = sub.items?.data?.find((i) => isSeatPrice(env, i.price?.id)) ?? sub.items?.data?.[0];
       if (!item) return "no_item";
       let quantity = item.quantity ?? null;
       const before = quantity;

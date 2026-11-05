@@ -24,7 +24,8 @@ import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import type { ReplayFacts } from "@codecast/shared/replay";
 import { replayFactsValidator } from "../ingestSchema";
-import { connFor, hogqlBody, hogqlInstant, posthogRequest, type PostHogConn } from "./posthog";
+import { connFor, hogqlBody, posthogRequest, type PostHogConn } from "./posthog";
+import { hogqlInstant } from "../lib/hogqlNow";
 import { patchReplay } from "../lib/replayIndex";
 
 export const FACTS_PAGE = 500;

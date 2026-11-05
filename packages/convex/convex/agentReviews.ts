@@ -32,7 +32,7 @@ import { scopeOf, sourceByRef, sourceFilingScope } from "./lib/ingestScope";
 import { MOMENTS_30D_ROOT, MOMENTS_KEPT_ROOT, replaysBucketFromEnv } from "./lib/r2";
 import { sha256Hex } from "./lib/hash";
 import { liveBodyKey, readKeptBody, readKeptJson } from "./lib/momentBody";
-import { putChunk } from "./replays";
+import { putChunk } from "./lib/replayChunks";
 import { retireSignals } from "./judgeRetire";
 import { embedFinding, momentEvidence } from "./findingGroups";
 import { firstSentence } from "@codecast/shared/contracts/judges";
