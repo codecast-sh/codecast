@@ -267,10 +267,11 @@ export const ChatMessage = memo(function ChatMessage({
   // (Mutable tuple: unified's Pluggable type refuses a readonly one.)
   //
   // remarkEntityCards is chat's own upgrade on top of that shared pipeline:
-  // a message (or line) that is nothing but object references is someone
-  // SHARING those objects, and each renders as a browsable preview card
-  // instead of an inline pill. Registered last so it sees the entity links
-  // remarkEntityIds already produced.
+  // a line that is nothing but object references is someone SHARING those
+  // objects, and each renders as a browsable preview card in place. A
+  // reference inside a sentence stays its pill and its card unfurls under the
+  // paragraph. Registered last so it sees the entity links remarkEntityIds
+  // already produced.
   //
   // The mention plugin runs FIRST, before the entity id plugin: a session
   // mention is "@jx7abcd", and the id plugin would otherwise split it into a

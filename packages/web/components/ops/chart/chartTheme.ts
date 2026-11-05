@@ -3,7 +3,7 @@
 // `--sol-*` tokens resolved through a probe element (the browser does the
 // var() and color-mix() work and hands back rgb), and is read again
 // whenever the theme changes (`useChartTheme`).
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 export type ChartTheme = {
   dark: boolean;
@@ -101,15 +101,17 @@ export function chartTheme(): ChartTheme {
 
 /** The chart theme, re-read when the app's theme changes. */
 export function useChartTheme(): ChartTheme {
-  const [, setV] = useState(version);
-  useEffect(() => {
-    ensureObserver();
-    const l = () => setV(version);
-    listeners.add(l);
-    return () => { listeners.delete(l); };
-  }, []);
+  useSyncExternalStore(subscribeTheme, themeVersion, themeVersion);
   return chartTheme();
 }
+
+function subscribeTheme(l: () => void): () => void {
+  ensureObserver();
+  listeners.add(l);
+  return () => { listeners.delete(l); };
+}
+
+const themeVersion = () => version;
 
 // Shared pieces every Ops chart starts from, so axes, tooltips and labels
 // read the same everywhere.

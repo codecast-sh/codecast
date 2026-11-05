@@ -8,6 +8,7 @@ import { query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canReadRun, enrichRun, withAgentSessions } from "./workflow_runs";
 import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
+import { workspaceGrantsAccess } from "./lib/access";
 
 /** A run of a flow a session's change goes through (its graph takes a branch: the session's edits frozen onto one), not a deploy or a line run it also started. */
 async function takesSessionChange(ctx: any, run: any, cache: Map<string, boolean>): Promise<boolean> {
@@ -45,5 +46,35 @@ export const forConversation = query({
     const budget = { reads: 120 };
     const out = await Promise.all(readable.map(async (r) => enrichRun(ctx, await withAgentSessions(ctx, r, budget))));
     return out.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+  },
+});
+
+const RECENT_RUNS = 120;
+
+/**
+ * A team's sessions' newest change runs, one per session (the newest it started): what an inbox card reads to say
+ * where the session's change is. Runs of other flows a session started (a deploy, a line run) are left out.
+ */
+export const forTeam = query({
+  args: { team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const workspace = `team:${args.team_id}`;
+    if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return [];
+    const runs = await ctx.db.query("workflow_runs").withIndex("by_workspace_updated", (q) => q.eq("workspace", workspace)).order("desc").take(RECENT_RUNS);
+    const kinds = new Map<string, boolean>();
+    const seen = new Set<string>();
+    const picked: any[] = [];
+    for (const r of runs) {
+      if (!r.spawner_conversation_id || r.run_kind === "workflow" || seen.has(String(r.spawner_conversation_id))) continue;
+      if (!(await takesSessionChange(ctx, r, kinds))) continue;
+      seen.add(String(r.spawner_conversation_id));
+      if (await canReadRun(ctx, userId, r)) picked.push(r);
+    }
+    // The same rows every run feed writes (one home: workflowRuns), so an inbox card and a run card read one run.
+    const budget = { reads: 150 };
+    const out = await Promise.all(picked.map(async (r) => enrichRun(ctx, await withAgentSessions(ctx, r, budget))));
+    return out;
   },
 });
