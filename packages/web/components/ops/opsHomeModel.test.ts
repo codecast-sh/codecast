@@ -197,11 +197,11 @@ describe("replay errors, one row per root cause", () => {
     const rs = [
       replay({ _id: "a", group_ids: ["g9"], user: { id: "ada" }, started_at: NOW - 5 * H }),
       replay({ _id: "b", group_ids: ["g9"], user: { id: "ada" }, started_at: NOW - 4 * H }),
-      // One that names no issue the store holds is its own row.
+      // One that names no issue the store holds is its own row, keyed by the issue it names.
       replay({ _id: "solo", group_ids: ["unheld"], user: { id: "cy" }, started_at: NOW - H }),
     ];
     const items = attentionItems({ sources: [source()], groups: [old], watches: [], replays: rs }, NOW);
-    expect(items.map((i) => i.key)).toEqual(["replay:solo"]);
+    expect(items.map((i) => i.key)).toEqual(["replays:unheld"]);
     expect(homeIssueRefs(items, NOW)).toEqual([]);
     expect(replayUsers(rs.slice(0, 2))).toBe(1);
   });
