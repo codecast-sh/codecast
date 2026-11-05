@@ -485,7 +485,7 @@ test("a gesture continued after a later edit still finds that edit as a dependen
 // its ended status, and that is the one way the restored state may differ. A
 // kind whose way back is not the log's says so here, with the contract's words.
 const ORG_STATE: Record<string, string[]> = {
-  org_roles: ["status", "name", "handle", "avatar", "charter", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id", "authority"],
+  org_roles: ["status", "name", "handle", "avatar", "charter", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id", "authority", "given_name", "previous_handles", "line_workflow_slug", "hires_freely", "keeps_reports_inside"],
   conversations: ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id", "title", "title_is_custom", "seat_previous", "persistent", "status", "inbox_pinned_at", "owner_user_id"],
   anchors: ["org_role_id", "status"],
   agent_tasks: ["status"],
@@ -531,6 +531,8 @@ const CASES: Case[] = [
   { kind: "project_meta", change: { kind: "project_meta", project: "pr-1", goal: "Grow", priority: "p1" } },
   // A charter edited in place (S7): the row holds the charter before and after, so the undo restores the words.
   { kind: "charter_edit", setup: async (f) => { const r = await f.role(); await f.db.patch(r._id, { charter: "Keeps paid acquisition on budget and pointed at the funnel." }); }, change: { kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "on budget", after: "under budget" }, { op: "add", line: "Reports spend every Monday." }] } },
+  // A role's own settings, each through its own setter: the rename, the switches, the line and the pause all go back.
+  { kind: "role_edit", setup: (f) => f.role(), change: { kind: "role_edit", handle: "growth", name: "Head of Funnel", new_handle: "head-of-funnel", given_name: "Rosa", line: "quick-change", hires_freely: true, keeps_reports_inside: true, paused: true } },
   { kind: "adopt", setup: (f) => f.role(), change: { kind: "adopt", handle: "growth", conversation: "jx70001" } },
   { kind: "file", change: { kind: "file", plan: "pl-1", project: "pr-1" } },
   { kind: "plan_status", change: { kind: "plan_status", plan: "pl-1", status: "done", reason: "finished" } },
@@ -660,5 +662,21 @@ describe("S21: the record stays one chain under attack", () => {
     expect((await planUndo(f.ctx(), ME as any, batch)).preview.left_alone).toHaveLength(1);
     await expect(f.undo(batch)).rejects.toThrow("Nothing can be restored");
     expect((await f.db.get(instance._id)).version).toBe("1.1.0");
+  });
+});
+
+describe("role_edit: a renamed role still answers to its old handle", () => {
+  test("a change accepted after the rename finds the role by the handle it was proposed with; a role holding that handle now wins", async () => {
+    const f = fixture();
+    const grown = await f.role();
+    await f.db.patch(grown._id, { charter: "Owns the funnel on budget." });
+    expect((await f.apply({ kind: "role_edit", handle: "growth", name: "Head of Funnel", new_handle: "head-of-funnel" })).status).toBe("applied");
+    expect(await f.db.get(grown._id)).toMatchObject({ handle: "head-of-funnel", name: "Head of Funnel", previous_handles: ["growth"] });
+    expect((await f.apply({ kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "on budget", after: "under budget" }] })).status).toBe("applied");
+    expect((await f.db.get(grown._id)).charter).toBe("Owns the funnel under budget.");
+    const fresh = await performCreateRole(f.ctx(), ME as any, { name: "Growth", handle: "growth", team_id: TEAM, scope: { project_ids: [], plan_ids: [] } });
+    expect((await f.apply({ kind: "role_edit", handle: "growth", given_name: "Rosa" })).status).toBe("applied");
+    expect((await f.db.get(fresh._id)).given_name).toBe("Rosa");
+    expect((await f.db.get(grown._id)).given_name).toBeUndefined();
   });
 });
