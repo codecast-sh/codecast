@@ -39,7 +39,7 @@ import {
   AssignedPingStrip,
   CardHoverToolbar,
   CardParentLinks,
-  CardPinBadge,
+  CardPinMark,
   CardRestoreCluster,
   CardStartupLine,
   CardStatusSignals,
@@ -486,7 +486,7 @@ export function SessionCardView({
     );
   }
 
-  // The ground under the right-edge fades (pin badge, hover toolbar), so a
+  // The ground under the hover toolbar's right-edge fade, so a
   // tinted card does not show a pale patch there. Null = the resting card.
   const fadeGround = isActive
     ? "color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt))"
@@ -542,7 +542,7 @@ export function SessionCardView({
       <div className="flex items-center gap-2.5">
       {/* data-sv-body / -titlerow / -status / -ping: the compact list
           (clientState.ui.inbox_compact) lays these out as one grid row. */}
-      <div data-sv-body className="min-w-0 flex-1">
+      <div data-sv-body data-sv-thumbed={hasThumb ? "" : undefined} className="min-w-0 flex-1">
         <div data-sv-titlerow className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text-muted" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
@@ -552,33 +552,40 @@ export function SessionCardView({
               opens the picker; hovering it says who they are, and the agent
               brand rides it as a corner badge so one glyph carries both. A
               row nobody opted in keeps the icon it has always had. 22px: at
-              18 the painted faces were a smudge. */}
-          {isPersonified ? (
-            <IdentityFace
-              prefs={chrome.prefs}
-              row={identity as typeof session}
-              size={22}
-              onPick={(e) => onPickCharacter?.(session, e)}
-              side="bottom"
-              align="start"
-              className="mt-[1px]"
-              badge={showAgentIcon ? <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-full h-full p-[1px]" /> : undefined}
-            />
-          ) : session.is_anchor ? (
-            <span className="flex-shrink-0 flex items-center" title="The workspace's agent">
-              <HeadOfPeopleFace size={14} />
+              18 the painted faces were a smudge. Whatever leads the row sits
+              in one 22px slot, so every title starts on the same edge. */}
+          {(isPersonified || session.is_anchor || showAgentIcon) && (
+            <span data-sv-lead className="flex-shrink-0 w-[22px] flex items-center justify-center">
+            {isPersonified ? (
+              <IdentityFace
+                prefs={chrome.prefs}
+                row={identity as typeof session}
+                size={22}
+                onPick={(e) => onPickCharacter?.(session, e)}
+                side="bottom"
+                align="start"
+                className="mt-[1px]"
+                badge={showAgentIcon ? <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-full h-full p-[1px]" /> : undefined}
+              />
+            ) : session.is_anchor ? (
+              <span className="flex-shrink-0 flex items-center" title="The workspace's agent">
+                <HeadOfPeopleFace size={14} />
+              </span>
+            ) : showAgentIcon ? (
+              <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
+                <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
+              </span>
+            ) : null}
             </span>
-          ) : showAgentIcon ? (
-            <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
-              <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
-            </span>
-          ) : null}
+          )}
           {isStashed && isStashHidden(session) && (
             <span className="flex-shrink-0 flex items-center text-sol-text-dim" title="Stashed and hidden — trigger wakes don't bring it back; only an ask does">
               <EyeOff className="w-3 h-3" />
             </span>
           )}
-          {isUnread && !isActive && <UnreadDot />}
+          {/* Unread sits in the card's left margin, beside the title, so it
+              marks the row without pushing the title off the shared edge. */}
+          {isUnread && !isActive && <span data-sv-unread className="absolute left-[4px] flex"><UnreadDot /></span>}
           {/* A stop is a small dot in the dot slot; its word follows the
               title in faint ink. The danger colour is said once, by the
               Couldn't finish section, not by every row in it. A wait for an
@@ -638,82 +645,86 @@ export function SessionCardView({
               {NOTICE_ROW_WORD[liveness.stopped]}
             </span>
           )}
-          {session.is_anchor && anchorIdentity && <AnchorScopePill anchor={anchorIdentity} className="flex-shrink-0" />}
-          {/* A role's sessions are the role's (S23.3): never rows under its
-              card, one count that opens the role's page. Silent at zero. */}
-          {roleSessions > 0 && session.role?.short_id && (
-            <Link
-              href={`/org/${session.role.short_id}`}
-              data-role-sessions={roleSessions}
-              onClick={(e) => e.stopPropagation()}
-              className="flex-shrink-0 px-1 rounded border border-sol-border/50 bg-sol-bg-alt text-[10px] font-medium text-sol-text-muted tabular-nums whitespace-nowrap hover:text-sol-text"
-              title={`${roleSessions} ${roleSessions === 1 ? "session" : "sessions"} under this role; its page lists them`}
-            >
-              {roleSessions} {roleSessions === 1 ? "session" : "sessions"}
-            </Link>
-          )}
         </div>
         <AssignedPingStrip session={session} now={now} onAckAssignment={onAckAssignment} />
-        {stateView && !session.implementation_session && (
-          <div data-sv-state className="mt-0.5 flex items-start gap-1" title={stateView.text}>
-            <Pin
-              className={`w-2.5 h-2.5 mt-[3px] shrink-0 ${stateView.status ? THREAD_STATE_STATUS_META[stateView.status].dot : THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
-              strokeWidth={2.4}
+        {/* The card's middle band: what the agent says and what you last said.
+            A thumb takes the top right corner beside the title and the band
+            (data-sv-thumbed, globals.css); the meta row spans the card below,
+            so the time sits on one right edge on every card, thumb or none. */}
+        <div data-sv-band className="mt-0.5 min-w-0">
+          <div data-sv-lines className="min-w-0 space-y-0.5">
+            {stateView && !session.implementation_session && (
+              <div data-sv-state className={`flex items-baseline gap-1.5 ${stateView.freshness === "aging" ? "opacity-70" : ""}`} title={stateView.text}>
+                {/* The declared status is a coloured word that leads the line, so
+                    every line of the card starts on the same edge. Working stays
+                    quiet: the liveness dot already says "running". */}
+                {stateView.status && stateView.status !== "working" && stateView.status !== sectionStatus && (
+                  <span data-sv-status-chip className={`shrink-0 text-[11px] font-semibold ${THREAD_STATE_STATUS_META[stateView.status].dot}`}>
+                    {THREAD_STATE_STATUS_META[stateView.status].label}
+                  </span>
+                )}
+                <span className="min-w-0 text-[11px] truncate leading-snug text-sol-text-secondary">
+                  {stateView.cardLine}
+                </span>
+              </div>
+            )}
+            {cardSummary && !stateView && !session.implementation_session && (
+              <div data-sv-summary className="text-[11px] text-sol-text-muted line-clamp-2 leading-snug whitespace-pre-line">
+                <FormattedSummary text={cardSummary} />
+              </div>
+            )}
+            {/* The user's own verdict has no declaration or wake row of its own to
+                explain it, so the card says what will happen: the next activity —
+                any message, trigger, or turn — files the row on its own again. */}
+            {variant === "snoozed" && session.inbox_snoozed_until && (
+              <div className="flex items-center gap-1 text-[10px] text-sol-blue">
+                <Clock className="h-3 w-3 shrink-0" />
+                <span>Until {new Date(session.inbox_snoozed_until).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+              </div>
+            )}
+            {session.user_rest && !isDismissed && (
+              <div data-sv-rest className="flex items-center gap-1.5 text-[10px] text-sol-blue/70">
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-blue/60" />
+                <span>{USER_REST_CARD_LINE[session.user_rest]}</span>
+              </div>
+            )}
+            {cleanedUserMsg && (
+              <div data-sv-prompt className="text-[11px] text-sky-700/90 dark:text-sky-300/90 truncate leading-snug">
+                <span className="text-sky-600/50 dark:text-sky-400/40 mr-1">&gt;</span>
+                {cleanedUserMsg}
+              </div>
+            )}
+            {session._hasDraft && (
+              <div data-sv-draft className="flex items-start gap-1.5">
+                <span className="shrink-0 mt-[1px] px-1 py-[1px] rounded text-[9px] font-medium uppercase tracking-wide bg-sol-yellow/15 text-sol-yellow border border-sol-yellow/30">
+                  Draft
+                </span>
+                {draftPreview && (
+                  <span className="text-[11px] text-sol-text-dim truncate leading-snug">{draftPreview}</span>
+                )}
+              </div>
+            )}
+            {/* A row waiting on an OK says only "OK?": the start line would claim work is under way. */}
+            {session.message_count === 0 && !session.last_user_message && !session._hasDraft && !liveness.asksOk && <div data-sv-startup className="contents"><CardStartupLine session={session} /></div>}
+          </div>
+        </div>
+        {hasThumb && (
+          <button
+          data-sv-thumb
+            onClick={(e) => { e.stopPropagation(); setThumbZoom(true); }}
+            className={`shrink-0 rounded-md overflow-hidden border border-sol-border/60 cursor-zoom-in transition-transform duration-300 ease-out ${thumbHoverShift}`}
+            title="View image"
+          >
+            <img
+              src={thumbSrc!}
+              alt=""
+              loading="lazy"
+              draggable={false}
+              onError={() => setThumbBroken(true)}
+              className="w-9 h-9 object-cover"
             />
-            {/* Blocked and done earn a loud chip — those are the states the
-                human must act on or can stop thinking about. Working stays
-                quiet: the liveness pulse already says "running". */}
-            {stateView.status && stateView.status !== "working" && stateView.status !== sectionStatus && (
-              <span
-                data-sv-status-chip
-                className={`shrink-0 mt-[1px] px-1 py-0 rounded border text-[9px] font-semibold uppercase tracking-wide ${THREAD_STATE_STATUS_META[stateView.status].chip}`}
-              >
-                {THREAD_STATE_STATUS_META[stateView.status].label}
-              </span>
-            )}
-            <span className="text-[11px] truncate leading-snug text-sol-text-secondary">
-              {stateView.cardLine}
-            </span>
-          </div>
+          </button>
         )}
-        {cardSummary && !stateView && !session.implementation_session && (
-          <div data-sv-summary className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
-            <FormattedSummary text={cardSummary} />
-          </div>
-        )}
-        {/* The user's own verdict has no declaration or wake row of its own to
-            explain it, so the card says what will happen: the next activity —
-            any message, trigger, or turn — files the row on its own again. */}
-        {variant === "snoozed" && session.inbox_snoozed_until && (
-          <div className="mt-1 flex items-center gap-1 text-[10px] text-sol-blue">
-            <Clock className="h-3 w-3 shrink-0" />
-            <span>Until {new Date(session.inbox_snoozed_until).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
-          </div>
-        )}
-        {session.user_rest && !isDismissed && (
-          <div data-sv-rest className="mt-0.5 flex items-center gap-1.5 text-[10px] text-sol-blue/70">
-            <span className="w-1.5 h-1.5 rounded-full bg-sol-blue/60" />
-            <span>{USER_REST_CARD_LINE[session.user_rest]}</span>
-          </div>
-        )}
-        {cleanedUserMsg && (
-          <div data-sv-prompt className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug font-semibold">
-            <span className="text-sky-600/60 dark:text-sky-400/50 mr-0.5">&gt;</span>
-            {cleanedUserMsg}
-          </div>
-        )}
-        {session._hasDraft && (
-          <div data-sv-draft className="mt-0.5 flex items-start gap-1.5">
-            <span className="shrink-0 mt-[1px] px-1 py-[1px] rounded text-[9px] font-medium uppercase tracking-wide bg-sol-yellow/15 text-sol-yellow border border-sol-yellow/30">
-              Draft
-            </span>
-            {draftPreview && (
-              <span className="text-[11px] text-sol-text-dim truncate leading-snug">{draftPreview}</span>
-            )}
-          </div>
-        )}
-        {/* A row waiting on an OK says only "OK?": the start line would claim work is under way. */}
-        {session.message_count === 0 && !session.last_user_message && !session._hasDraft && !liveness.asksOk && <div data-sv-startup className="contents"><CardStartupLine session={session} /></div>}
         <div data-sv-meta className="flex items-center gap-1.5 mt-1">
           {author && (
             <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
@@ -742,6 +753,21 @@ export function SessionCardView({
             onFilterProject={onFilterProject && ((e) => onFilterProject(session, e))}
             onFilterLabel={onFilterLabel && ((e) => onFilterLabel(session, e))}
           />
+          {session.is_anchor && anchorIdentity && <><MetaSep /><AnchorScopePill anchor={anchorIdentity} quiet className="flex-shrink-0" /></>}
+          {/* A role's sessions are the role's (S23.3): never rows under its
+              card, one count that opens the role's page. Silent at zero. */}
+          {roleSessions > 0 && session.role?.short_id && <MetaSep />}
+          {roleSessions > 0 && session.role?.short_id && (
+            <Link
+              href={`/org/${session.role.short_id}`}
+              data-role-sessions={roleSessions}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-shrink-0 text-[10px] text-sol-text-dim tabular-nums whitespace-nowrap hover:text-sol-text hover:underline underline-offset-2"
+              title={`${roleSessions} ${roleSessions === 1 ? "session" : "sessions"} under this role; its page lists them`}
+            >
+              {roleSessions} {roleSessions === 1 ? "session" : "sessions"}
+            </Link>
+          )}
           {worktreeChip}
           {fleetChip}
           {/* The task this session owns: the fact that ties the card to its
@@ -787,6 +813,7 @@ export function SessionCardView({
             {/* A running workflow renders as its own ↳ WorkflowBar under the
                 card (same family as schedule/monitor bars) — no chip here. */}
             <CommentThreadsChip session={session} viewerId={viewerId} onOpenComments={onOpenComments} />
+            <CardPinMark session={session} onPin={onPin} />
             <CardStatusSignals
               session={session}
               showBlockedBadge={showBlockedBadge}
@@ -812,28 +839,11 @@ export function SessionCardView({
           onNavigateToSession={onNavigateToSession}
         />
       </div>
-      {hasThumb && (
-        <button
-          onClick={(e) => { e.stopPropagation(); setThumbZoom(true); }}
-          className={`shrink-0 self-center rounded-md overflow-hidden border border-sol-border/60 cursor-zoom-in transition-transform duration-300 ease-out ${thumbHoverShift}`}
-          title="View image"
-        >
-          <img
-            src={thumbSrc!}
-            alt=""
-            loading="lazy"
-            draggable={false}
-            onError={() => setThumbBroken(true)}
-            className="w-9 h-9 object-cover"
-          />
-        </button>
-      )}
       </div>
       {thumbZoom && thumbSrc && (
         <ImageLightbox src={thumbSrc} onClose={() => setThumbZoom(false)} />
       )}
       </div>
-      <CardPinBadge session={session} fadeGround={fadeGround} onPin={onPin} />
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
         <CardHoverToolbar session={session} labels fadeGround={fadeGround} onPin={onPin} onDismiss={onDismiss} onOpenLabels={onOpenLabels} onStash={onStash} />
       )}
@@ -842,6 +852,11 @@ export function SessionCardView({
       )}
     </div>
   );
+}
+
+/** The dim dot between plain-text facts on the meta row. */
+function MetaSep() {
+  return <span aria-hidden className="flex-shrink-0 text-[10px] text-sol-text-dim/50">·</span>;
 }
 
 // What the card says under a user-filed row: the next activity re-files it.
