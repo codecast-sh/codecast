@@ -1,0 +1,46 @@
+# This repository's deploy targets (docs/architecture/deploys.md DP10): the places
+# its code goes live. The Deploys page shows what runs on each and the commits on
+# main waiting for it (those touching its `when` paths), and Deploy sends it from
+# this checkout.
+#
+#   ship      the [[ship.deploy]] step in workspace.toml that sends it at a ship;
+#             the target takes that step's run and when
+#   run       the command that sends it, from the checkout root ($sha, $deploy, $actor)
+#   runs      here (this checkout runs `run`, the default) or push (it deploys
+#             itself when main moves)
+#   live      how codecast reads what runs there: marker (the deploy path records
+#             it), github-status:<context>, or json:<url>#<sha field>[,<version field>]
+#   rollback  the command that puts the previous version back
+#   policy    press (a person's Deploy, the default) or auto (CI on main going green)
+#
+# These live apart from workspace.toml because every released CLI validates that
+# file strictly and refuses keys it does not know.
+
+[[target]]
+name = "backend"
+ship = "convex"
+live = "marker"                       # deploy.sh and the ship record each deploy
+
+# Railway builds every push to main and posts a commit status per deploy.
+[[target]]
+name = "web"
+runs = "push"
+when = ["packages/web/**", "packages/shared/**", "platform/**"]
+live = "github-status:codecast - web"
+
+# Cut in CI; live once dl.codecast.sh/latest.json names the commit (CLAUDE.md, CLI releases).
+[[target]]
+name = "cli"
+when = ["packages/cli/**", "packages/shared/**", "platform/**"]
+run = "gh workflow run cut-cli-release.yml -R codecast-sh/codecast"
+live = "json:https://dl.codecast.sh/latest.json#sourceCommit,version"
+
+[[target]]
+name = "mobile"
+when = ["packages/mobile/**", "packages/shared/**"]
+run = "cd packages/mobile && eas update --branch production --message \"$(git log -1 --format=%s -- .)\" --non-interactive"
+
+[[target]]
+name = "desktop"
+when = ["packages/electron/**"]
+run = "packages/electron/scripts/release.sh patch --no-floor"
