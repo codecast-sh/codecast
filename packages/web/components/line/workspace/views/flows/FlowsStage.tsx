@@ -13,6 +13,8 @@ import { BookOpen, Maximize, Minimize } from "lucide-react";
 import { useFlowMapRow } from "../../../../../hooks/useFlowMap";
 import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import type { LineSelectionPatch } from "../../../../../lib/line/lineWorkspaceUrl";
+import { processKeyOf } from "../../../../../lib/line/lineGraphs";
+import type { LiveAtStep } from "../graph/GraphCanvas";
 import { hasOpenModal } from "../../../../../shortcuts";
 import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
 import { KeyCap } from "../../../../KeyCap";
@@ -35,7 +37,23 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
     const keys = map?.lanes.length ? map.lanes.map((l) => l.key) : live ? [live.flow.slug] : [];
     return keys.flatMap((k) => runsOf.get(k) ?? []);
   }, [map?.lanes, live, runsOf]);
-  const flowLabel = useCallback((r: FlowRun) => (laneLabel.size > 1 ? laneLabel.get(r.workflow_slug ?? "") ?? null : null), [laneLabel]);
+  // The drawn flow's live runs by station, keyed by its graph's node ids (and by label, for a station the graph names
+  // under another id), so the map badges each step that holds work.
+  const drawnLane = map?.lanes.find((l) => processKeyOf(l.key) === model.graphKey) ?? null;
+  const liveAt = useMemo(() => {
+    if (!drawnLane) return undefined;
+    const byLabel = new Map(model.graph.nodes.map((n) => [model.steps[n.id]?.label ?? n.id, n.id]));
+    const out = new Map<string, LiveAtStep>();
+    for (const s of drawnLane.steps) {
+      if (!s.running) continue;
+      const id = model.steps[s.id] ? s.id : byLabel.get(s.label);
+      if (id) out.set(id, { running: s.running, stalled: s.stalled });
+    }
+    return out;
+  }, [drawnLane, model.graph.nodes, model.steps]);
+  // A run is tagged with its flow only when that is not the flow drawn beside it.
+  const drawnSlug = drawnLane?.key ?? null;
+  const flowLabel = useCallback((r: FlowRun) => (laneLabel.size > 1 && r.workflow_slug !== drawnSlug ? laneLabel.get(r.workflow_slug ?? "") ?? null : null), [laneLabel, drawnSlug]);
   // Esc leaves full view once nothing nearer (the step drawer, a lit run, a popover) takes it.
   const drawer = !!selection.step;
   useWatchEffect(() => {
@@ -54,10 +72,21 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
   if (!live) return landing && !graph && !step && !run ? <FlowsView {...props} /> : <div className="fs"><div className="fs-map" data-mode={selection.mode}><ProcessView {...props} /></div></div>;
   const library: LineSelectionPatch = { view: "flows", item: null, run: null };
   const stalled = (map?.liveFlow?.stalled ?? 0) + (map?.off.stalled ?? 0);
+  const drawnFigs = drawnLane ? { running: drawnLane.steps.reduce((n, x) => n + x.running, 0), waiting: drawnLane.steps.reduce((n, x) => n + x.waiting, 0), stalled: drawnLane.steps.reduce((n, x) => n + x.stalled, 0) } : null;
   const expand = (
+    <>
+    {full && drawnLane && drawnFigs ? (
+      <span className="fs-full-name" data-flows-full-name={drawnLane.key}>
+        <b>{drawnLane.label}</b>
+        {drawnFigs.running ? <span><b className="lw-num">{drawnFigs.running}</b> running</span> : null}
+        {drawnFigs.waiting ? <a data-tone="you" href={href({ view: "foryou", process: model.graphKey, step: null, show: null })} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select({ view: "foryou", process: model.graphKey, step: null, show: null }); }}><b className="lw-num">{drawnFigs.waiting}</b> on a person</a> : null}
+        {drawnFigs.stalled ? <span data-tone="bad"><b className="lw-num">{drawnFigs.stalled}</b> stalled</span> : null}
+      </span>
+    ) : null}
     <button type="button" className="lwg-btn fs-full-btn" data-ghost="" aria-pressed={full} onClick={() => setFull(!full)} title={full ? "Back to every flow (Esc)" : "Full view"} aria-label={full ? "Exit full view" : "Full view"} data-flows-full={full ? "on" : "off"}>
       {full ? <><Minimize className="w-3.5 h-3.5" aria-hidden />Exit <KeyCap size="xs">Esc</KeyCap></> : <><Maximize className="w-3.5 h-3.5" aria-hidden /><span className="fs-full-label">Full view</span></>}
     </button>
+    </>
   );
   return (
     <div className="fs" data-flows-stage={live.flow.slug} data-full={full ? "" : undefined}>
@@ -70,7 +99,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
       )}
       <div className="fs-app">
         {map && !full ? <FlowList map={map} drawn={model.graphKey} select={select} href={href} /> : null}
-        <div className="fs-map" data-mode={selection.mode}><ProcessView {...props} expand={expand} /></div>
+        <div className="fs-map" data-mode={selection.mode}><ProcessView {...props} expand={expand} live={liveAt} /></div>
         {full ? null : <FlowActivity runs={runs} flowLabel={flowLabel} now={workspace.now} href={href} />}
       </div>
       {full ? null : <section className="fll-live fs-work" id="fs-queue"><LiveFlowWork live={live} workspace={workspace} href={href} /></section>}

@@ -10,6 +10,7 @@ import { emitSyncWake } from "./syncWake";
 import { useSyncMentionTasks } from "./useSyncTasks";
 import { useSyncMentionDocs } from "./useSyncDocs";
 import { useSyncMentionPlans } from "./useSyncPlans";
+import { useSyncTeamShipFeeds } from "./useSessionShipState";
 
 export type SyncCoreProfile = "web" | "mobile";
 
@@ -55,6 +56,8 @@ export function useSyncCore(profile: SyncCoreProfile): void {
   useSyncMentionTasks();
   useSyncMentionDocs();
   useSyncMentionPlans();
+  // Where each session's work is on its way to production: the team's change runs and deploy records every inbox card reads.
+  useSyncTeamShipFeeds();
 
   // eslint-disable-next-line no-restricted-syntax -- platform wake-source wiring
   useEffect(() => {

@@ -11,7 +11,7 @@
   border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); overflow: hidden; background: var(--lw-paper);
 }
 .fs[data-full] { padding-top: var(--lw-s3); }
-.fs[data-full] .fs-app { grid-template-columns: minmax(0, 1fr); height: clamp(520px, calc(100dvh - 150px), 2000px); }
+.fs[data-full] .fs-app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: clamp(520px, calc(100dvh - 150px), 2000px); }
 .fs-col-h {
   display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 14px 16px 8px;
   font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ink-3); letter-spacing: .02em;
@@ -73,9 +73,9 @@ a.fs-hot-s:hover { border-color: var(--lw-rule); color: var(--lw-ink); }
 
 /* What just happened. */
 .fs-rail { min-height: 0; overflow-y: auto; border-left: 1px solid var(--lw-rule-2); background: var(--lw-card); display: flex; flex-direction: column; }
-.fs-rail-f { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 12px 8px; }
+.fs-rail-f { display: flex; gap: 2px; padding: 0 10px 8px; overflow-x: auto; scrollbar-width: none; }
 .fs-rail-f button {
-  display: inline-flex; align-items: baseline; gap: 5px; padding: 2px 9px; border-radius: 999px; border: 1px solid transparent;
+  display: inline-flex; align-items: baseline; gap: 5px; padding: 2px 7px; border-radius: 999px; border: 1px solid transparent; flex: none; white-space: nowrap;
   background: none; font: inherit; font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); cursor: pointer;
 }
 .fs-rail-f button:hover { color: var(--lw-ink); }
@@ -107,12 +107,25 @@ a.fs-hot-s:hover { border-color: var(--lw-rule); color: var(--lw-ink); }
 
 .fs-work { gap: 0; }
 
-/* Narrow: the rail moves under the frame. */
-@media (max-width: 1200px) {
-  .fs-app { grid-template-columns: minmax(210px, 240px) minmax(0, 1fr); }
+/* A narrower stage: the flows become a strip of cards over the map and the rail, so the map keeps its width; narrower
+   still, the rail goes and the strip scrolls sideways. */
+.fs { container: fs / inline-size; }
+@container fs (max-width: 1300px) {
+  .fs-app { grid-template-columns: minmax(0, 1fr) minmax(220px, 260px); grid-template-rows: auto minmax(0, 1fr); }
+  .fs-list { grid-column: 1 / -1; display: flex; align-items: stretch; gap: 0; border-right: 0; border-bottom: 1px solid var(--lw-rule-2); overflow: auto hidden; max-height: 168px; }
+  .fs-list > .fs-col-h { display: none; }
+  .fs-list ul { flex-direction: row; padding: 8px; gap: 6px; flex: none; }
+  .fs-list li { width: 236px; flex: none; }
+  .fs-list-rest { border-top: 0; border-left: 1px solid var(--lw-rule-2); margin: 0 !important; padding-top: 8px !important; }
+}
+@container fs (max-width: 820px) {
+  .fs-app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(440px, 1fr); }
   .fs-app > .fs-rail { display: none; }
 }
-@media (max-width: 800px) {
-  .fs-app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(440px, 1fr); height: auto; }
-  .fs-list { border-right: 0; border-bottom: 1px solid var(--lw-rule-2); max-height: 280px; }
-}
+
+/* Full view names the drawn flow and its counts beside Exit. */
+.fs-full-name { display: inline-flex; align-items: baseline; gap: 12px; margin: 0 4px 0 8px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; }
+.fs-full-name > b { font-size: var(--lw-fs-sm); color: var(--lw-ink); font-weight: 650; }
+.fs-full-name span b, .fs-full-name a b { color: var(--lw-ink); }
+.fs-full-name [data-tone="you"], .fs-full-name [data-tone="you"] b { color: var(--lw-person); text-decoration: none; }
+.fs-full-name [data-tone="bad"], .fs-full-name [data-tone="bad"] b { color: var(--lw-bad); }
