@@ -59,6 +59,21 @@ export type LaunchVerdict = {
   notable: boolean;
 };
 
+/**
+ * When a session was last started by hand, from its SessionStart claim in
+ * ~/.codecast/session-registry/<id>.json (sessionRegisterHook.ts): epoch ms
+ * when the claim carries an EMPTY launch token, which the hook writes for a
+ * claude codecast did not launch. Undefined for a codecast launch, for a claim
+ * from a hook too old to write the field, and for anything unreadable.
+ */
+export function handStartedAt(registration: unknown): number | undefined {
+  if (!registration || typeof registration !== "object") return undefined;
+  const reg = registration as { ts?: unknown; launch_token?: unknown };
+  if (reg.launch_token !== "") return undefined;
+  if (typeof reg.ts !== "number" || !Number.isFinite(reg.ts)) return undefined;
+  return reg.ts * 1000;
+}
+
 /** Bounded so a long-lived daemon cannot accumulate one entry per launch ever made. */
 const MAX_ENTRIES = 512;
 
@@ -198,7 +213,7 @@ export class LaunchTokenLedger {
    * retired pane is owned again rather than being written to by whatever
    * survived the kill.
    */
-  admit(evt: { sessionId?: string; token?: string; newTurn?: boolean; legacyScripts?: boolean }): LaunchVerdict {
+  admit(evt: { sessionId?: string; token?: string; newTurn?: boolean; legacyScripts?: boolean; handStartedAt?: number }): LaunchVerdict {
     const token = isLaunchToken(evt.token) ? evt.token : undefined;
     const entry = token ? this.entries.get(token) : undefined;
     const sessionHead = evt.sessionId ? this.sessionHead.get(evt.sessionId) : undefined;
@@ -214,6 +229,13 @@ export class LaunchTokenLedger {
       // than on a release date. Defaults to believed, so a caller that knows
       // nothing about installed scripts behaves as it always did.
       if (evt.legacyScripts === false) {
+        // A session started again by hand after our launch (`claude --resume`
+        // in the person's own terminal) posts without a token because nothing
+        // stamped one, not because its script is old. Its SessionStart claim
+        // says so; from then on it is a session we did not launch.
+        if (evt.handStartedAt !== undefined && evt.handStartedAt >= this.launchedAt(evt.sessionId, pane)) {
+          return { decision: "accept", reason: "unmanaged", notable: false };
+        }
         return { decision: "drop", reason: "legacy", notable: true };
       }
       const notable = !this.legacyLogged.has(pane);
@@ -252,6 +274,14 @@ export class LaunchTokenLedger {
       this.persist();
     }
     return { decision: "accept", reason: "current", notable: false };
+  }
+
+  /** When the launch a tokenless post would be held to was issued, floored to
+   *  the second because a registry claim's `ts` is whole seconds. */
+  private launchedAt(sessionId: string | undefined, pane: string): number {
+    const head = (sessionId ? this.sessionHead.get(sessionId) : undefined) ?? this.paneHead.get(pane);
+    const issuedAt = head ? this.entries.get(head)?.issuedAt : undefined;
+    return issuedAt === undefined ? Number.POSITIVE_INFINITY : Math.floor(issuedAt / 1000) * 1000;
   }
 
   private record(pane: string, token: string, sessionId?: string): void {
