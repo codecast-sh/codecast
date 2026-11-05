@@ -98,6 +98,18 @@ export function taskCommentIsNews(
   return NEEDS_PERSON_TYPES.has(comment.comment_type ?? "note");
 }
 
+/** Whether one task comment waits on the viewer (the Threads count): a
+ *  person writing, an agent naming them, or an agent's blocker or review ask.
+ *  An agent's progress note is news at the "all" level but never for you. */
+export function taskCommentIsForYou(
+  comment: { comment_type?: string },
+  author: TaskCommentAuthorKind,
+  mentioned: boolean,
+): boolean {
+  if (author === "self") return false;
+  return author === "person" || mentioned || NEEDS_PERSON_TYPES.has(comment.comment_type ?? "note");
+}
+
 export type ThreadRefs = {
   channel_id?: Id<"chat_channels">;
   conversation_id?: Id<"conversations">;
