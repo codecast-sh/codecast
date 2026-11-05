@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from "react";
+import { useMemo } from "react";
 import { isHiddenSystemNotice } from "../lib/conversationProcessor";
 import { isRecoveryContinueClientId } from "@codecast/shared/contracts";
 import { hasAgentSetupMarker } from "@codecast/shared/contracts";
@@ -157,30 +157,6 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
     return { turnKeyOf, firstAssistOf, lastTextOf, statsOf, receiptOf, absorbed, routingOf, setupResults };
   }, [timeline, messages, userMsgKindMap, messageAuthors, hasMoreBelow]);
 
-  // The turn the agent is in or just finished (the last assistant message's)
-  // and where its last answer sits. Fold mode keeps an ask card only while
-  // it is open: in the live turn, with no user row after it. An answered
-  // prompt (a poll reply already sent, even one still delivering) is a
-  // dangling permission prompt to the reader and folds with the turn.
-  const liveTurn = useMemo(() => {
-    if (!foldWorkingTurns) return { key: null as string | null, lastUserIndex: -1 };
-    let key: string | null = null;
-    let lastUserIndex = -1;
-    for (let i = timeline.length - 1; i >= 0; i--) {
-      const item = timeline[i];
-      if (item.type !== 'message') continue;
-      const m = item.data as Message;
-      if (m.role === 'user' && lastUserIndex < 0) lastUserIndex = i;
-      if (m.role !== 'assistant' || key) continue;
-      key = turnAggregates.turnKeyOf.get(m._id) ?? null;
-    }
-    return { key, lastUserIndex };
-  }, [foldWorkingTurns, timeline, turnAggregates]);
-  const liveTurnKey = liveTurn.key;
-  const openAsk = useCallback((msg: Message, index: number, turnKey: string | undefined) =>
-    turnKey === liveTurn.key && index > liveTurn.lastUserIndex && !!msg.tool_calls?.some((tc) => isAlwaysVisibleToolCall(tc, turnAggregates.setupResults.get(tc.id))),
-  [liveTurn, turnAggregates]);
-
   const commandExpansionMap = useMemo(() => pairCommandExpansions(timeline, userMsgKindMap), [timeline, userMsgKindMap]);
 
   // Bare nudges ("continue") render as one compact line, and a run of the same
@@ -231,5 +207,5 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
     return !!(hasThinkingContent && !hasVisibleContent);
   }, [conversation, timeline, hasMoreBelow]);
 
-  return { userMsgKindMap, turnAggregates, openAsk, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse };
+  return { userMsgKindMap, turnAggregates, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse };
 }

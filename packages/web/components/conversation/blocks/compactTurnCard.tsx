@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { LogoIcon } from "../../Logo";
 import { formatRunDuration } from "../../../lib/workflowRun";
 
@@ -7,28 +7,11 @@ import { formatRunDuration } from "../../../lib/workflowRun";
 // glyph, the first sentence of the reply, how long the agent worked (prompt to
 // last reply) and a count of what's inside. Click
 // anywhere to expand the turn to full.
-// `steps`: the turn's reply is shown right below, so the card is only the
-// work before it: a slim toggle, no preview that would read as a second reply.
-export const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, toolCount, workedMs = 0, onExpand, variant = "card" }: { preview: string; messageCount: number; toolCount: number; workedMs?: number; onExpand: () => void; variant?: "card" | "steps" }) {
+export const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, toolCount, workedMs = 0, onExpand }: { preview: string; messageCount: number; toolCount: number; workedMs?: number; onExpand: () => void }) {
   const bits: string[] = [];
   if (workedMs >= 1000) bits.push(`Worked ${formatRunDuration(0, workedMs)}`);
-  if (variant === "steps") {
-    if (messageCount > 1) bits.push(`${messageCount - 1} earlier ${messageCount - 1 === 1 ? "message" : "messages"}`);
-  } else if (messageCount > 1) bits.push(`${messageCount} messages`);
+  if (messageCount > 1) bits.push(`${messageCount} messages`);
   if (toolCount > 0) bits.push(`${toolCount} ${toolCount === 1 ? "tool" : "tools"}`);
-  if (variant === "steps") {
-    return (
-      <button
-        data-cc-compact-turn="steps"
-        onClick={onExpand}
-        className="group/turn not-prose mb-1.5 inline-flex items-center gap-1 rounded-md border border-dashed border-sol-border/70 px-2 py-0.5 text-[11px] text-sol-text-dim tabular-nums hover:border-sol-cyan/40 hover:text-sol-text-secondary transition-colors"
-        title="Show the work before this reply"
-      >
-        <ChevronRight className="w-3 h-3 shrink-0 opacity-70 group-hover/turn:text-sol-cyan" />
-        {bits.join(" · ")}
-      </button>
-    );
-  }
   return (
     <button
       data-cc-compact-turn

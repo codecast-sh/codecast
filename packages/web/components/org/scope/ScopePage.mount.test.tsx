@@ -174,8 +174,8 @@ async function verifyScopePage() {
   assert.equal(q("[data-thread]")!.getAttribute("data-thread"), "fixture-growth-conv", "the role's standing conversation is mounted inline");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-owner"), "1", "the host talks to the seat: the composer sends");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold"), "1", "the seat's provisioning prompt folds away");
-  assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold-working"), "1", "working turns and machine prompts fold away (F4.1)");
-  assert.equal(q("[data-thread]")!.getAttribute("data-thread-density"), "condensed", "working turns fold to receipts");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold-working"), "1", "machine prompts fold away (F4.1)");
+  assert.equal(q("[data-thread]")!.getAttribute("data-thread-density"), "condensed", "tools fold to receipts");
   assert.equal(q("[data-scope-lead]"), null, "the role's head says what it carries, so its thread opens on the thread itself");
   assert.equal(q("[data-scope-stripe]"), null, "a seated role's state line is pinned above its composer, so the header leaves it out");
   assert.equal(q("[data-scope-lead-ask]"), null, "the lead never counts sessions waiting on a person: those wait on the role, which raises what it cannot answer in its own thread");
