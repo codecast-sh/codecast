@@ -9,7 +9,7 @@ import type { LineViewProps } from "../types";
 
 export function DeploysMoved({ selection }: LineViewProps) {
   const router = useRouter();
-  const to = selection.deploy ? entityRoute("deploy", selection.deploy) : "/deploys";
+  const to = (selection.deploy ? entityRoute("deploy", selection.deploy) : null) ?? "/deploys";
   useWatchEffect(() => { router.replace(to); }, [to]);
   return null;
 }

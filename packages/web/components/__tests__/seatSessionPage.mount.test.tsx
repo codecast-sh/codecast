@@ -97,20 +97,24 @@ mock.module("../ConversationDiffLayout", () => ({
 }));
 
 const queuePage = await import("../../app/inbox/QueuePageClient");
+const { SeatHeadControls } = await import("../org/scope/SeatHead");
 // The role page's own body has its mount test (org/scope/ScopePage.mount.test);
 // here it is the frame plus the conversation it really mounts: the pane, with
-// the seat's options and the pane's props handed through.
-mock.module("../org/scope/ScopePage", () => ({
-  ScopePageInner: ({ id, session }: any) => {
-    const { onSessionView, ...pane } = session;
-    return (
-      <div data-scope-page={id}>
-        <aside data-scope-aside="side" />
-        <queuePage.InboxConversation {...pane} seat={{ layout: { initialDensity: "condensed", hideDiff: true, leadNode: <p data-lead /> }, seedOwnership: true, onSessionView }} />
-      </div>
-    );
-  },
-}));
+// the seat's options and the pane's props handed through, and the role
+// header's Session view and expander, which own the session header's fold.
+function ScopeFrame({ id, session }: any) {
+  const [open, setOpen] = React.useState(false);
+  const { onSessionView, ...pane } = session;
+  const head = { open, onToggle: () => setOpen((v) => !v) };
+  return (
+    <div data-scope-page={id}>
+      <header data-scope-head><SeatHeadControls open={open} onToggle={head.onToggle} onSessionView={onSessionView} /></header>
+      <aside data-scope-aside="side" />
+      <queuePage.InboxConversation {...pane} seat={{ layout: { initialDensity: "condensed", hideDiff: true, leadNode: <p data-lead /> }, seedOwnership: true, onSessionView, head }} />
+    </div>
+  );
+}
+mock.module("../org/scope/ScopePage", () => ({ ScopePageInner: ScopeFrame }));
 
 const { useInboxStore } = await import("../../store/inboxStore");
 const { createRoot } = await import("react-dom/client");
@@ -268,7 +272,7 @@ test("a surface's own end controls ride along in both views", async () => {
   expect(q("[data-seat-role-page]")).not.toBeNull();
 }, 600_000);
 
-test("the seat keeps the session header and every slot, resting on one row", async () => {
+test("the seat keeps the session header and every slot, folded behind the role header's expander", async () => {
   await mount();
   await open(SEAT);
   const layout = q("[data-layout]")!;
