@@ -62,14 +62,17 @@ export function dropRequestIds(text: string): string {
 
 /**
  * An error message with the parts that differ per occurrence removed: uuids,
- * hex runs (addresses, hashes, ids) and numbers. "User 42 not found" and
- * "User 97 not found" are one error.
+ * hex runs (addresses, hashes), ids that mix letters and digits (a Convex id,
+ * a short id, a bundle hash) and numbers. "User 42 not found" and "User 97
+ * not found" are one error, and so are two validator refusals that quote
+ * different ids.
  */
 export function normalizeErrorMessage(message: string): string {
   return message
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
     .replace(/\b0x[0-9a-f]+\b/gi, "<hex>")
     .replace(/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b/gi, "<hex>")
+    .replace(/\b(?=[a-z0-9]*\d)(?=[a-z0-9]*[a-z])[a-z0-9]{8,}\b/gi, "<id>")
     .replace(/\d+(\.\d+)?/g, "<n>")
     .replace(/\s+/g, " ")
     .trim();
@@ -126,14 +129,53 @@ export function parseStackFrame(raw: string): StackFrame | null {
   return { fn: (m[1] ?? "").trim(), loc, file, in_app };
 }
 
+/** `[CONVEX Q(module:fn)] ...`: a Convex function's error, relayed to the client that called it. */
+const CONVEX_RELAYED = /^\[CONVEX [QMA]\(([^)\s]+)\)\]/;
+
+/**
+ * Convex stopping a function that did too much: out of time, out of memory or
+ * past a read limit, with whatever detail it appends. One function hits
+ * whichever limit the data reaches first, and the one fix (do less work) ends
+ * all of them, so they are one error.
+ */
+const CONVEX_LIMIT = /^(?:Uncaught Error: )?(?:Function execution timed out|JavaScript execution ran out of memory|Too many (?:reads|bytes read|documents read))\b.*$/gm;
+
+/**
+ * Where an error was thrown, as `fn@file`. A Convex error reaching the client
+ * was thrown on the server: its client stack only shows the Convex client
+ * receiving the reply, and reads differently per browser engine and per
+ * build. Its own message carries the server's stack when there is one, and
+ * otherwise the function names the place.
+ */
+export function errorCulprit(error: { message: string; stack?: string }): string | undefined {
+  const relayed = CONVEX_RELAYED.exec(error.message.trimStart());
+  if (relayed) return topInAppFrame(error.message) ?? relayed[1];
+  return topInAppFrame(error.stack);
+}
+
+/**
+ * What an error says, as it keys a group: the message without the stack
+ * frames written into it (those name the culprit, and move with every call
+ * path and build), without request ids, normalized, with Convex's limit
+ * messages read as one.
+ */
+function errorKey(message: string): string {
+  const text = dropRequestIds(message)
+    .split("\n")
+    .filter((line) => !parseStackFrame(line))
+    .join("\n")
+    .replace(CONVEX_LIMIT, "<convex limit>");
+  return normalizeErrorMessage(text);
+}
+
 /**
  * An SDK error's fingerprint: the caller's own when it sent one, else a hash
- * of the normalized message and the top in-app frame.
+ * of what the error says (errorKey) and where it was thrown (errorCulprit).
  */
 export function sdkErrorFingerprint(error: { message: string; stack?: string; fingerprint?: string }): string {
   const explicit = error.fingerprint?.trim();
   if (explicit) return explicit;
-  return hex8(`${normalizeErrorMessage(error.message)}|${topInAppFrame(error.stack) ?? ""}`);
+  return hex8(`${errorKey(error.message)}|${errorCulprit(error) ?? ""}`);
 }
 
 /** A check is identified by the id its product gives it. */
