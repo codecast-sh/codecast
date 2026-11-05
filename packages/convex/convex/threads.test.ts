@@ -109,8 +109,9 @@ describe("touch per kind", () => {
     expect(comment.created_at).toBeGreaterThan(1);
     const view = await inbox(ctx);
     expect(view.entries.length).toBe(1);
-    // Alice's own user_id is on the row, but it is the agent's reply: news.
-    expect(view.entries[0].unread).toBe(1);
+    // Alice's own user_id is on the row, but it is the agent's reply: news,
+    // and it answers her ask, so it waits on her.
+    expect(view.entries[0]).toMatchObject({ unread: 1, for_you: true });
     expect(view.entries[0].last_activity_at).toBe(comment.created_at);
     expect(view.entries[0].last_reply).toMatchObject({ author_kind: "agent", preview: "The answer" });
   });
@@ -218,16 +219,20 @@ describe("touch per kind", () => {
       expect((await inbox(ctx)).entries[0].last_reply).toMatchObject({ author_kind: "agent", preview: "trying the first" });
     });
 
-    test("the badge counts only rows with unread under the reader's level", async () => {
+    test("an agent's progress is activity: unread at the 'all' level, never on the badge", async () => {
       const ctx = await context(ALICE);
       setLevel(ctx, ALICE, "all");
       await agentPost(ctx, "started", "progress");
+      expect((await inbox(ctx)).entries[0]).toMatchObject({ unread: 1, for_you: false });
+      expect(await call(unreadCount, ctx, { team_id: TEAM })).toBe(0);
+      // A blocker asks the person: counted.
+      await agentPost(ctx, "need the key", "blocker");
+      expect((await inbox(ctx)).entries[0]).toMatchObject({ unread: 2, for_you: true });
       expect(await call(unreadCount, ctx, { team_id: TEAM })).toBe(1);
-      // The level changed under an already-moved row: the row holds nothing
+      // The level changed under an already-moved row: the row holds only what
       // the new level counts, so the badge says so without a sweep.
       setLevel(ctx, ALICE, "needs_person");
-      expect(await call(unreadCount, ctx, { team_id: TEAM })).toBe(0);
-      expect((await inbox(ctx)).entries[0].unread).toBe(0);
+      expect((await inbox(ctx)).entries[0].unread).toBe(1);
     });
   });
 
@@ -400,6 +405,31 @@ describe("dismiss", () => {
 
     await call(cliAddTaskComment, ctx, { api_token: TOKEN, short_id: "ct-1", text: "more", comment_type: "blocker", conversation_id: "sess-personal" });
     expect(rowOf(ctx, ALICE, "task")).toMatchObject({ last_read_at: 0 });
+  });
+});
+
+describe("for_you: a person's reply waits on you, an agent's only when it asks", () => {
+  test("chat: a bot in someone else's thread is activity until it names you; a person always counts", async () => {
+    const ctx = await context(ALICE);
+    const bob = as(ctx, BOB);
+    const root = await call(sendMessage, bob, { channel_id: CHANNEL, content: "root" });
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "me too", thread_root_id: root.message_id });
+    await call(sendMessage, as(ctx, BOT), { channel_id: CHANNEL, content: "status: 2 of 5", thread_root_id: root.message_id });
+    expect((await inbox(ctx)).entries[0]).toMatchObject({ unread: 1, for_you: false });
+    expect(await call(unreadCount, ctx, { team_id: TEAM })).toBe(0);
+    await call(sendMessage, as(ctx, BOT), { channel_id: CHANNEL, content: "@alice which branch?", thread_root_id: root.message_id });
+    expect((await inbox(ctx)).entries[0]).toMatchObject({ unread: 2, for_you: true });
+    expect(await call(unreadCount, ctx, { team_id: TEAM })).toBe(1);
+    await call(markRead, ctx, { kind: "chat", root_key: String(root.message_id) });
+    await call(sendMessage, bob, { channel_id: CHANNEL, content: "thoughts?", thread_root_id: root.message_id });
+    expect((await inbox(ctx)).entries[0]).toMatchObject({ unread: 1, for_you: true });
+  });
+
+  test("a bot answering under your own root answers you", async () => {
+    const ctx = await context(ALICE);
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "how do I deploy?" });
+    await call(sendMessage, as(ctx, BOT), { channel_id: CHANNEL, content: "run deploy.sh", thread_root_id: root.message_id });
+    expect((await inbox(ctx)).entries[0]).toMatchObject({ unread: 1, for_you: true });
   });
 });
 
@@ -718,7 +748,9 @@ describe("unreadByWorkspace", () => {
     const teamCount = await call(unreadCount, ctx, { team_id: TEAM });
     expect(teamCount).toBeGreaterThan(0);
     // From Personal, the team's unread peeks through with the badge's own count.
-    expect(await call(unreadByWorkspace, ctx, { active: "personal" })).toEqual([{ team_id: String(TEAM), count: teamCount }]);
+    expect(await call(unreadByWorkspace, ctx, { active: "personal" })).toEqual([
+      { team_id: String(TEAM), count: teamCount, newest_at: expect.any(Number) },
+    ]);
     // On the team itself, nothing: its count belongs to unreadCount.
     expect(await call(unreadByWorkspace, ctx, { active: TEAM })).toEqual([]);
     expect(await call(unreadByWorkspace, await context(null), { active: "personal" })).toEqual([]);
