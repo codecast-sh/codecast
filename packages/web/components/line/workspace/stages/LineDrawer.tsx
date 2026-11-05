@@ -8,6 +8,7 @@ import { type ReactNode } from "react";
 import { X } from "lucide-react";
 import { KeyCap } from "../../../KeyCap";
 import { LINE_STAGES, type LineStage } from "../../../../lib/line/lineWorkspaceUrl";
+import type { LineModel } from "../../../../lib/line/lineModel";
 import type { LineViewProps } from "../views/types";
 import { MomentsStage } from "./MomentsStage";
 import { ExpectationsStage } from "./ExpectationsStage";
@@ -62,5 +63,29 @@ export function StageDrawer(props: LineViewProps & { stage: LineStage; projectId
     <LineDrawer label={STAGE_NAMES[stage]} onClose={() => select({ stage: null })} nav={nav}>
       <Page {...props} />
     </LineDrawer>
+  );
+}
+
+/** A station's drawer: its page, headed by where it sits in the line, with the stations either side a press (or ← →) away. */
+export function StationDrawer({ model, at, select, children }: { model: LineModel; at: string; select: LineViewProps["select"]; children: ReactNode }) {
+  return (
+    <LineDrawer label={model.steps[at]?.label ?? "Step"} onClose={() => select({ step: null })} nav={<StationWalk order={model.order} at={at} labelOf={(id) => model.steps[id]?.label ?? id} go={(id) => select({ step: id }, undefined, { replace: true })} />}>
+      {children}
+    </LineDrawer>
+  );
+}
+
+/** A station's drawer head: where it sits in the line, and the stations either side (← → walk them too). */
+function StationWalk({ order, at, labelOf, go }: { order: readonly string[]; at: string; labelOf: (id: string) => string; go: (id: string) => void }) {
+  const i = order.indexOf(at);
+  const prev = i > 0 ? order[i - 1] : null;
+  const next = i >= 0 && i < order.length - 1 ? order[i + 1] : null;
+  return (
+    <nav className="sd-flow sd-walk" aria-label="Stations">
+      <button type="button" className="lw-iconbtn" disabled={!prev} onClick={() => prev && go(prev)} title={prev ? `${labelOf(prev)} (←)` : undefined} aria-label="Previous station">‹</button>
+      <span className="sd-walk-at"><span className="lw-num">{i + 1}</span> of <span className="lw-num">{order.length}</span> stations</span>
+      <button type="button" className="lw-iconbtn" disabled={!next} onClick={() => next && go(next)} title={next ? `${labelOf(next)} (→)` : undefined} aria-label="Next station">›</button>
+      {next && <span className="sd-dim sd-walk-next">next: {labelOf(next)}</span>}
+    </nav>
   );
 }
