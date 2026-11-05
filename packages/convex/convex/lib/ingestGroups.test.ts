@@ -5,7 +5,6 @@ import {
   HOUR_MS,
   addFailure,
   addToBuckets,
-  appendMetricPoint,
   applyMirror,
   applyOccurrence,
   bucketCount,
@@ -28,6 +27,7 @@ import {
   type GroupState,
   type Occurrence,
 } from "./ingestGroups";
+import { appendMetricPoint } from "./watchSeries";
 
 const NOW = Date.UTC(2026, 9, 3, 12, 30);
 const HOUR = hourStart(NOW);

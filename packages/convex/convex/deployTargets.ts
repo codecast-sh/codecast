@@ -42,7 +42,7 @@ import {
   type DeployLiveReader,
 } from "@codecast/shared/contracts/deployTargets";
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
-import { commitBySha, deployCommitOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
+import { commitBySha, deployCommitsOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
 
 /** Commits kept on one deploy's record. */
 const COMMITS_MAX = 200;
@@ -197,8 +197,15 @@ export const shipPasses = query({
  */
 export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promise<void> {
   const d: Doc<"deploys"> | null = await ctx.db.get(deployId);
-  if (!d || d.status !== "live" || !d.sha || !d.repository) return;
+  if (!d || d.status !== "live" || !d.sha) return;
   const patch: Partial<Doc<"deploys">> = {};
+  if (!d.repository) {
+    // A source's marker names its environment, not a repository (Union's errors source posts `production`): the
+    // repository is the one whose published target has that name in the workspace, when exactly one does.
+    const repos = [...new Set((await targetRows(ctx, d.workspace)).filter((r) => r.name === d.target).map((r) => r.repository))];
+    if (repos.length !== 1) return;
+    d.repository = patch.repository = repos[0];
+  }
   let previous = d.previous_sha ?? null;
   if (!previous) {
     const before = (await targetDeploys(ctx, d.workspace, d.target, 30)).find((x) => x._id !== d._id && x.status === "live" && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at));
@@ -206,13 +213,12 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
   }
   if (!d.commits?.length && previous) {
     const t = (await targetRows(ctx, d.workspace, d.repository)).find((r) => r.name === d.target);
-    const range = await mainCommitsAfter(ctx, d.repository, previous, d.sha);
+    const range = await mainCommitsAfter(ctx, d.repository!, previous, d.sha);
     if (range.known) {
-      const commits = range.commits
+      const commits = await deployCommitsOf(ctx, range.commits
         .filter((c) => commitTouchesTarget(t?.paths ?? [], (c.files ?? []).map((f) => f.filename)))
         .reverse()
-        .slice(0, COMMITS_MAX)
-        .map(deployCommitOf);
+        .slice(0, COMMITS_MAX));
       if (commits.length) patch.commits = commits;
     }
   }
@@ -265,11 +271,10 @@ export async function requestTargetDeployCore(
   let commits: Doc<"deploys">["commits"] & {} = [];
   if (action === "deploy") {
     const after = await mainCommitsAfter(ctx, t.repository, live?.sha ?? null);
-    commits = after.commits
+    commits = await deployCommitsOf(ctx, after.commits
       .filter((c) => commitTouchesTarget(t.paths, (c.files ?? []).map((f) => f.filename)))
       .reverse()
-      .slice(0, COMMITS_MAX)
-      .map(deployCommitOf);
+      .slice(0, COMMITS_MAX));
   }
   const now = Date.now();
   const user = await ctx.db.get(userId);
@@ -711,27 +716,28 @@ export const correctDeploySha = internalMutation({
 });
 
 /**
- * Fill what a target's past deploys carried, for deploys recorded before their range and task links were kept:
- * a live deploy with no commits gets its range on main, and carried commits get the tasks they link.
+ * Fill what a target's past deploys carried, for deploys recorded before their range and links were kept: a live
+ * deploy with no commits gets its range on main, and carried commits get the tasks they link and their session.
  */
 export const backfillDeployRanges = internalMutation({
-  args: { team_id: v.id("teams"), target: v.string() },
+  args: { team_id: v.id("teams"), target: v.string(), take: v.optional(v.number()) },
   handler: async (ctx, args) => {
     let ranged = 0, linked = 0;
-    for (const d of await targetDeploys(ctx, teamKey(args.team_id), args.target, 60)) {
+    // Oldest first, so each deploy's previous live deploy is already settled when its range is read.
+    for (const d of (await targetDeploys(ctx, teamKey(args.team_id), args.target, args.take ?? 60)).reverse()) {
       if (d.status !== "live") continue;
       if (!d.commits?.length) {
         await fillDeployRange(ctx, d._id);
         if ((await ctx.db.get(d._id))?.commits?.length) ranged++;
         continue;
       }
-      if (!d.repository || d.commits.every((c) => c.task_ids)) continue;
-      const commits = [];
-      for (const c of d.commits) {
-        const row = c.task_ids ? null : await commitBySha(ctx, d.repository, c.sha);
-        commits.push(row?.task_ids?.length ? { ...c, task_ids: row.task_ids } : c);
-      }
-      if (commits.some((c, i) => c !== d.commits![i])) {
+      if (!d.repository) continue;
+      // Re-read each carried commit, so it keeps the tasks it links and the session behind it (commitSession).
+      const rows = [];
+      for (const c of d.commits) rows.push(await commitBySha(ctx, d.repository, c.sha));
+      if (rows.some((r) => !r)) continue;
+      const commits = await deployCommitsOf(ctx, rows as Doc<"commits">[]);
+      if (JSON.stringify(commits) !== JSON.stringify(d.commits)) {
         await ctx.db.patch(d._id, { commits, updated_at: Date.now() });
         linked++;
       }

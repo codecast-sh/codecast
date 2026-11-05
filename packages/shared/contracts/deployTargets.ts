@@ -227,7 +227,8 @@ export type QueueCommit = {
   subject: string;
   at: number;
   author: string | null;
-  session: { conversation_id: string; short_id: string | null; title: string | null } | null;
+  /** The session that wrote it: its Codecast-Session trailer, or (`via: "task"`) the newest session on the task it names. */
+  session: { conversation_id: string; short_id: string | null; title: string | null; via?: "task" } | null;
   tasks: Array<{ task_id: string; short_id: string | null; title: string | null }>;
   ci: CommitCiState;
   ci_url: string | null;

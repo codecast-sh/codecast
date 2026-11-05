@@ -194,12 +194,31 @@ describe("shared-object detection", () => {
     expect(html).not.toContain('class="not-prose entity-ref');
   });
 
-  test("an id inside a sentence becomes a card between intact prose blocks", () => {
+  // A card splitting a sentence in two left "Nov 2 (" and ")." stranded
+  // around it (team chat, 2026-11-05): the sentence keeps its pill and reads
+  // whole, and the card unfurls under the paragraph.
+  test("an id inside a sentence stays the pill and its card unfurls under the paragraph", () => {
     const html = render("Picked up ct-46943 this morning.");
-    expect(html).toContain("entity-card-row");
-    expect(html).toContain("<p>Picked up </p>");
-    expect(html).toContain("<p> this morning.</p>");
-    expect(html).toContain("Rich object preview cards in chat");
+    expect(html).toMatch(/<p>Picked up <a [^>]*entity-ref.*<\/a> this morning\.<\/p>\s*<div class="entity-card-row" data-card-count="1">/s);
+    expect(html).toContain("Preview-tier rendering for shared object references");
+  });
+
+  test("references in a list's items unfurl once, under the whole list", () => {
+    const html = render("- Eval spend review (ct-46943). See the page.\n- The plan pl-476 and ct-46943 again");
+    expect(html).toMatch(/<\/ul>\s*<div class="entity-card-row" data-card-count="2">/);
+    expect(html.match(/entity-card-row/g)?.length).toBe(1);
+    expect(html).toContain("Eval spend review (");
+  });
+
+  test("a message naming more than three objects in prose keeps them all as pills", () => {
+    const html = render("Closed ct-46943, pl-476, jx84qtv and tr-476 today.");
+    expect(html).not.toContain("entity-card-row");
+    expect(html.match(/entity-ref/g)?.length).toBe(4);
+  });
+
+  test("an object with its own card line is not unfurled a second time", () => {
+    const html = render("ct-46943\n\nAs ct-46943 says, ship it.");
+    expect(html.match(/entity-card-row/g)?.length).toBe(1);
   });
 
   // A moment's card is a picture: in running text it would cut the sentence
@@ -221,13 +240,13 @@ describe("shared-object detection", () => {
     expect(html).toContain('data-replay-moment="rp-7@1:23"');
     // The pill names the page and the second, and both open the replay there.
     expect(html).toMatch(/<p>Paying failed at .*shop\.example\.com\/checkout @1:23.* for the second time\.<\/p>/s);
-    expect(html.match(/href="\/ops\/replays\/rp-7\?t=83000"/g)?.length).toBe(2);
+    expect(html.match(/href="\/ops\/replays\/rp-7\?t=83"/g)?.length).toBe(2);
   });
 
   test("a stretch of a replay on its own line opens the player at its start", () => {
     const html = render("rp-7@1:00-2:30");
     expect(html).toContain('data-replay-moment="rp-7@1:00-2:30"');
-    expect(html).toContain('href="/ops/replays/rp-7?t=60000"');
+    expect(html).toContain('href="/ops/replays/rp-7?t=60"');
   });
 
   test("a whole replay alone on its line is its card", () => {
@@ -252,25 +271,24 @@ describe("shared-object detection", () => {
     expect(html).toContain('data-card-count="1"');
   });
 
-  test("the screenshot shape promotes adjacent mentions followed by prose", () => {
+  test("a reference line becomes a card in place; one leading a sentence unfurls below it", () => {
     const html = render("I'm confused on this one — why is it asking me?\n@[First task ct-46943]\n@[Related plan pl-476] and what about this one?");
-    expect(html).toContain('data-card-count="2"');
+    expect(html.match(/data-card-count="1"/g)?.length).toBe(2);
     expect(html).toContain("why is it asking me?");
     expect(html).toContain("and what about this one?");
     expect(html).not.toMatch(/<p>\s*<div/);
   });
 
-  test("emphasized references are lifted out without losing surrounding formatting", () => {
+  test("an emphasized reference stays inside its emphasis and unfurls below", () => {
     const html = render("Review **the task ct-46943 today** please.");
-    expect(html).toContain("<strong>the task </strong>");
-    expect(html).toContain("<strong> today</strong>");
+    expect(html).toMatch(/<strong>the task <a [^>]*entity-ref.*<\/a> today<\/strong>/s);
     expect(html).toContain("entity-card-row");
     expect(html).not.toMatch(/<strong>\s*<div/);
   });
 
   test("object URLs get the same cards as short references", () => {
     const html = render("Review https://codecast.sh/tasks/ct-46943 and [the plan](/plans/pl-476).");
-    expect(html.match(/entity-card-row/g)?.length).toBe(2);
+    expect(html).toContain('data-card-count="2"');
     expect(html).toContain("Rich object preview cards in chat");
     expect(html).toContain("Rich inline object embeds");
   });
@@ -346,8 +364,8 @@ describe("card previews per type", () => {
     expect(render("ct-46943")).toContain(FAKE_TASK.title);
   });
 
-  test("all six object types become cards when mentioned together in prose", () => {
-    const html = render(`Review ct-46943 pl-476 jx84qtv doc:${DOC_CONVEX_ID} tr-476 ${PROJECT_CONVEX_ID} today.`);
+  test("all six object types become cards when shared together", () => {
+    const html = render(`ct-46943 pl-476 jx84qtv doc:${DOC_CONVEX_ID} tr-476 ${PROJECT_CONVEX_ID}`);
     expect(html).toContain('data-card-count="6"');
     expect(html).toContain("Check the release");
     expect(html).toContain("Product improvements");
@@ -451,11 +469,9 @@ describe("shared conversation messages", () => {
     expect(html).toContain("entity-card-row");
   });
 
-  test("a share link inside a sentence becomes a card with the surrounding prose", () => {
+  test("a share link inside a sentence keeps the sentence whole and unfurls the message below", () => {
     const html = render(`As I said in ${shareUrl} yesterday.`);
-    expect(html).toContain("entity-card-row");
-    expect(html).toContain("<p>As I said in </p>");
-    expect(html).toContain("<p> yesterday.</p>");
+    expect(html).toMatch(/<p>As I said in .* yesterday\.<\/p>\s*<div class="entity-card-row"/s);
     expect(html).toContain("card plugin</strong>");
   });
 

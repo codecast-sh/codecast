@@ -33,12 +33,13 @@ function ModeSwitch({ mode, select }: { mode: LineMode; select: LineViewProps["s
   );
 }
 
-export function ProcessView(props: LineViewProps) {
+/** `expand`: a host's own control beside the mode switch (the Flows stage's Full view). */
+export function ProcessView({ expand, ...props }: LineViewProps & { expand?: ReactNode }) {
   const { selection, select } = props;
   const mode = selection.mode;
   const toggle = <ModeSwitch mode={mode} select={select} />;
-  if (mode === "map") return <GraphView {...props} lead={toggle} />;
-  return <StepsPage {...props} toggle={toggle} />;
+  if (mode === "map") return <GraphView {...props} lead={toggle} trail={expand} />;
+  return <StepsPage {...props} toggle={<>{toggle}{expand}</>} />;
 }
 
 /** The Problems chips the summary row points at: the line's own queue, problems a new run must ask again, problems

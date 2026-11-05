@@ -138,7 +138,7 @@ const ARROW_BELOW_ROW = 78;
 /** How far in from each side of the stage its edge fade hides words, in px (graph.css .lwg::before: 112px, nearly opaque for the first third). */
 const EDGE_FADE = 40;
 
-export function GraphView({ model, workspace, selection, select, href, lead }: LineViewProps & { lead?: ReactNode }) {
+export function GraphView({ model, workspace, selection, select, href, lead, trail }: LineViewProps & { lead?: ReactNode; trail?: ReactNode }) {
   const nav = useLineNav();
   const [mode, setModeState] = useState<GraphMode>(readMode);
   const [peek, setPeek] = useState<string | null>(null);
@@ -425,6 +425,7 @@ export function GraphView({ model, workspace, selection, select, href, lead }: L
           </button>
           <button type="button" className="lwg-btn" data-ghost="" data-icon="" onClick={() => settle(true)} title="Fit (F)" aria-label="Fit the graph"><Maximize2 className="w-3.5 h-3.5" /></button>
           <button type="button" className="lwg-btn" data-ghost="" data-icon="" onClick={() => setHelp(true)} title="Keys (?)" aria-label="Keys">?</button>
+          {trail}
         </div>
       </div>
 

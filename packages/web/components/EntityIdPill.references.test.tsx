@@ -777,7 +777,7 @@ describe("replays (rp-N)", () => {
   test("a moment reads as the page and the second, and opens the replay there", () => {
     const html = render("It broke at rp-7@1:23 after the second click.");
     expect(pillText(html)).toBe("shop.example.com/checkout @1:23");
-    expect(html).toContain('href="/ops/replays/rp-7?t=83000"');
+    expect(html).toContain('href="/ops/replays/rp-7?t=83"');
   });
 
   test("a replay this viewer cannot read stays the text it was written as", () => {
