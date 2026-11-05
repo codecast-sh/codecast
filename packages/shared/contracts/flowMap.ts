@@ -84,9 +84,6 @@ export type FlowMap = {
     finishedToday: number;
   } | null;
   lanes: FlowMapLane[];
-  /** Every live run in the workspace (pending, running or paused), as the server reads them now: what a client holding a
-   *  run as live checks its row against. Absent from a map written before the field. */
-  liveRunIds?: string[];
   /** The workspace's live problem runs on flows outside the family (a person's plain line), by the station they stand at. */
   off: { running: number; stalled: number; steps: FlowMapStep[] };
   sources: FlowMapSource[];
