@@ -14,7 +14,7 @@
 // PostHog source is offered a starter set read before it is added; an error,
 // SDK or CI source is offered the series codecast already counts for it,
 // each one press from being watched.
-import { useMemo, useState, type ReactNode } from "react";
+import { useContext, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, LayoutGrid, Loader2, Plus, RefreshCw, Rows3, Wand2 } from "lucide-react";
@@ -34,12 +34,14 @@ import { hasOpenModal, isEditableTarget } from "../../shortcuts";
 import { relTimeShort } from "../../lib/utils";
 import { HealthPill, MetricChart } from "./MetricChart";
 import {
-  HEALTH, HEALTH_LOOK, METRIC_RANGES, WATCH_GROUPS, WATCH_SORTS, cardWindow, changeAmount, changeTone, chartPoints, currentEpisodeSince, durationShort, errorRollups, filterWatches, fitStart, formatPct, formatValue, groupWatches,
-  healthCounts, inWindow, intervalLabel, isMutedAt, metricsQueryParams, parseMetricsQuery, rangeChange, changeRange, changeSpan, rangeWindow, readerFixPrompt, sortWatches, spanLabel, spanOf, stampLabel, watchErrorText, watchHealth,
-  type ErrorRollup, type WindowDelta, type MetricRange, type MetricsQuery, type OpsWatchSeries, type SeriesPt, type Win,
+  HEALTH_LOOK, METRIC_RANGES, WATCH_STATES, WATCH_STATE_LOOK, blindWatchIds, watchStateCounts, WATCH_GROUPS, WATCH_SORTS, durationShort, filterWatches, fitStart, formatPct, formatValue, groupWatches, inWindow, isMutedAt, metricsQueryParams,
+  parseMetricsQuery, rangeWindow, sortWatches, spanLabel, spanOf, stampLabel, watchHealth, type MetricRange, type MetricsQuery, type Win,
 } from "./metricModel";
+import { cardWindow, changeAmount, changeTone, chartPoints, rangeChange, changeRange, changeSpan, type WindowDelta, type OpsWatchSeries, type SeriesPt } from "./metricSeries";
+import { currentEpisodeSince, errorRollups, readerFixPrompt, watchErrorText, type ErrorRollup } from "./metricEvents";
+import { intervalLabel } from "./metricEditing";
 import { opsHref } from "./opsPaths";
-import { OpsFeedEmpty, ProviderIcon, SETUP_HREF, SOURCE_PROVIDER_LABEL, StatusPill, useOpsFeed } from "./parts";
+import { OpsFeedEmpty, ProviderIcon, SETUP_HREF, SOURCE_PROVIDER_LABEL, SourceHealthContext, StatusPill, useOpsFeed } from "./parts";
 import { NewWatchSheet } from "./WatchEditor";
 import { watchKindsOf } from "./watchQuery";
 import { StarterWatches } from "./StarterWatches";
@@ -106,7 +108,10 @@ export function MetricsTab({ source }: { source: string | null }) {
   }, [search]);
 
   const scoped = useMemo(() => (source ? all.filter((w) => w.source_name === source) : all), [all, source]);
-  const counts = useMemo(() => healthCounts(scoped), [scoped]);
+  // The home band's states and counts (metricModel watchState): a watch blind behind its source's failing reader is Blind on both.
+  const sourceHealth = useContext(SourceHealthContext);
+  const blind = useMemo(() => blindWatchIds(scoped, (id) => sourceHealth?.get(id)), [scoped, sourceHealth]);
+  const counts = useMemo(() => watchStateCounts(scoped, blind), [scoped, blind]);
   const groupShort = useMemo(() => new Map(groups.map((g) => [g._id, g.short_id])), [groups]);
   const groupById = useMemo(() => new Map(groups.map((g) => [g._id, g])), [groups]);
   const sinceOf = (w: OpsWatch) => currentEpisodeSince(w, w.group_id ? groupById.get(w.group_id) : null);
@@ -123,7 +128,7 @@ export function MetricsTab({ source }: { source: string | null }) {
       return memo.get(w._id)!;
     };
   }, [changeMap, prevMap, range, now]);
-  const rows = useMemo(() => sortWatches(filterWatches(scoped, { health, search }), sort, changeOf), [scoped, health, search, sort, changeOf]);
+  const rows = useMemo(() => sortWatches(filterWatches(scoped, { health, search, blind }), sort, changeOf), [scoped, health, search, sort, changeOf, blind]);
   const grouped = useMemo(() => groupWatches(rows, grouping), [rows, grouping]);
   const flat = useMemo(() => grouped.flatMap((g) => g.rows), [grouped]);
   const win = useMemo<Win>(() => {
@@ -169,7 +174,7 @@ export function MetricsTab({ source }: { source: string | null }) {
       <WatchSeriesFeeders ids={ids} range={range} />
       <div className="mx-bar">
         <div className="mx-states" role="group" aria-label="Filter by state">
-          {HEALTH.map((h) => (
+          {WATCH_STATES.map((h) => (
             <button
               key={h}
               type="button"
@@ -177,11 +182,11 @@ export function MetricsTab({ source }: { source: string | null }) {
               aria-pressed={health === h}
               data-zero={counts[h] ? undefined : ""}
               disabled={!counts[h] && health !== h}
-              style={{ ["--ink" as string]: HEALTH_LOOK[h].ink }}
+              style={{ ["--ink" as string]: WATCH_STATE_LOOK[h].ink }}
               onClick={() => { setQuery({ health: health === h ? null : h }); setCursor(-1); }}
               data-metrics-state={h}
             >
-              <i aria-hidden />{HEALTH_LOOK[h].label}<b>{counts[h]}</b>
+              <i aria-hidden />{WATCH_STATE_LOOK[h].label}<b>{counts[h]}</b>
             </button>
           ))}
         </div>
@@ -276,6 +281,7 @@ function WatchCard({ watch: w, range, drawn, change, now, since, issue, provider
       <div className="mx-value-row">
         <span className="mx-value">{w.last_value === null ? "–" : formatValue(w.last_value, w.unit)}</span>
         <Delta watch={w} d={change} span={changeSpan(range)} />
+        {h === "error" && w.last_at && <span className="mx-value-age" data-value-age>last {relTimeShort(w.last_at, now)} ago</span>}
         <span className="flex-1" />
         {lineTag(w) && <span className="mx-line-tag">line {lineTag(w)}</span>}
       </div>
@@ -298,7 +304,7 @@ function WatchCard({ watch: w, range, drawn, change, now, since, issue, provider
         <span className="ops-mono">{w.short_id}</span>
         {issue && <Link href={opsHref.issue(issue)} className="ops-mono hover:underline" onClick={(e) => e.stopPropagation()}>{issue}</Link>}
         <span className="flex-1" />
-        <span className="ops-num" title={w.last_at ? new Date(w.last_at).toLocaleString() : undefined}>{w.last_at ? relTimeShort(w.last_at, now) : "never read"}</span>
+        {!(h === "error" && w.last_at) && <span className="ops-num" title={w.last_at ? new Date(w.last_at).toLocaleString() : undefined}>{w.last_at ? relTimeShort(w.last_at, now) : "never read"}</span>}
       </div>
     </div>
   );
@@ -309,13 +315,13 @@ const COLUMNS: { label: string; sort?: MetricsQuery["sort"]; num?: boolean; cls?
   { label: "Watch", sort: "name" },
   { label: "Now", num: true },
   { label: "Change", sort: "change", num: true },
-  { label: "Line", num: true, cls: "mx-hide-sm" },
-  { label: "", cls: "mx-table-spark mx-hide-sm" },
-  { label: "Alerting", sort: "alerting", num: true },
-  { label: "Source", sort: "source", cls: "mx-hide-sm" },
-  { label: "Every", sort: "interval", num: true, cls: "mx-hide-sm" },
-  { label: "Issue", cls: "mx-hide-sm" },
-  { label: "Tells", cls: "mx-hide-sm" },
+  { label: "Line", num: true, cls: "mx-hide-sm mx-col-3" },
+  { label: "", cls: "mx-table-spark mx-hide-sm mx-col-1" },
+  { label: "Alerting", sort: "alerting", num: true, cls: "mx-col-0" },
+  { label: "Source", sort: "source", cls: "mx-hide-sm mx-col-3" },
+  { label: "Every", sort: "interval", num: true, cls: "mx-hide-sm mx-col-4" },
+  { label: "Issue", cls: "mx-hide-sm mx-col-2" },
+  { label: "Tells", cls: "mx-hide-sm mx-col-4" },
   { label: "Read", sort: "updated", num: true },
 ];
 
@@ -330,6 +336,7 @@ function WatchTable({ rows, range, drawn, changeOf, groupById, win, now, sinceOf
   const tells = rows.some((w) => w.notify);
   const columns = tells ? COLUMNS : COLUMNS.filter((c) => c.label !== "Tells");
   return (
+    <div className="mx-table-wrap">
     <table className="mx-table" data-metrics-table>
       <thead>
         <tr>
@@ -361,19 +368,20 @@ function WatchTable({ rows, range, drawn, changeOf, groupById, win, now, sinceOf
               </td>
               <td data-num="">{w.last_value === null ? "–" : formatValue(w.last_value, w.unit)}</td>
               <td data-num=""><Delta watch={w} d={changeOf(w)} span={changeSpan(range)} blank /></td>
-              <td data-num="" className="mx-hide-sm ops-dim">{lineTag(w) ?? ""}</td>
-              <td className="mx-table-spark mx-hide-sm"><MetricChart points={d.points} win={d.win} interval_ms={d.step} threshold={w.threshold} direction={w.direction} unit={w.unit} height={26} paused={w.status === "paused"} /></td>
-              <td data-num="" style={since ? { color: "var(--sol-red)" } : undefined}>{since ? durationShort(now - since) : ""}</td>
-              <td className="mx-hide-sm"><span className="inline-flex items-center gap-1 ops-dim"><ProviderIcon provider={providerOf.get(w.source_id) ?? "posthog"} />{w.source_name ?? "removed"}</span></td>
-              <td data-num="" className="mx-hide-sm ops-dim">{intervalLabel(w.interval_ms)}</td>
-              <td className="mx-hide-sm">{w.group_id && groupById.get(w.group_id) ? <IssueCell group={groupById.get(w.group_id)!} health={watchHealth(w)} /> : issue ? <Link href={opsHref.issue(issue)} className="ops-mono hover:underline">{issue}</Link> : null}</td>
-              {tells && <td className="mx-hide-sm ops-dim mx-tells" data-watch-tells={w.notify ? "" : undefined}>{notifySummary(w.notify, notifyTargets(w.notify, options, channels)) ?? ""}</td>}
+              <td data-num="" className="mx-hide-sm mx-col-3 ops-dim">{lineTag(w) ?? ""}</td>
+              <td className="mx-table-spark mx-hide-sm mx-col-1"><MetricChart points={d.points} win={d.win} interval_ms={d.step} threshold={w.threshold} direction={w.direction} unit={w.unit} height={26} paused={w.status === "paused"} /></td>
+              <td data-num="" className="mx-col-0" style={since ? { color: "var(--sol-red)" } : undefined}>{since ? durationShort(now - since) : ""}</td>
+              <td className="mx-hide-sm mx-col-3"><span className="inline-flex items-center gap-1 ops-dim"><ProviderIcon provider={providerOf.get(w.source_id) ?? "posthog"} />{w.source_name ?? "removed"}</span></td>
+              <td data-num="" className="mx-hide-sm mx-col-4 ops-dim">{intervalLabel(w.interval_ms)}</td>
+              <td className="mx-hide-sm mx-col-2">{w.group_id && groupById.get(w.group_id) ? <IssueCell group={groupById.get(w.group_id)!} health={watchHealth(w)} /> : issue ? <Link href={opsHref.issue(issue)} className="ops-mono hover:underline">{issue}</Link> : null}</td>
+              {tells && <td className="mx-hide-sm mx-col-4 ops-dim mx-tells" data-watch-tells={w.notify ? "" : undefined}>{notifySummary(w.notify, notifyTargets(w.notify, options, channels)) ?? ""}</td>}
               <td data-num="" className="ops-dim">{w.last_at ? relTimeShort(w.last_at, now) : "never"}</td>
             </tr>
           );
         })}
       </tbody>
     </table>
+    </div>
   );
 }
 
@@ -397,7 +405,6 @@ function CardError({ watch }: { watch: OpsWatch }) {
     <div className="mx-card-error" data-health={h} data-watch-error-inline onClick={(e) => e.stopPropagation()}>
       <AlertTriangle aria-hidden />
       <span className="mx-card-error-text" title={watchErrorText(watch) ?? undefined}>{watchErrorText(watch)}</span>
-      {h !== "error" && <span className="ops-dim ops-num">1 miss</span>}
       <button type="button" className="mx-icon-btn" disabled={asking} onClick={readNow} aria-label="Read now" title="Read now" data-watch-read-now>
         {asking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
       </button>
@@ -438,7 +445,7 @@ function RollupRow({ rollup: r, source }: { rollup: ErrorRollup; source?: OpsSou
   );
 }
 
-/** How many of a rollup's watches are erroring (the state chip's count) and how many missed one read only. */
+/** How many of a rollup's watches are erroring and how many retrying (one read missed), each the state chip's count. */
 function RollupCount({ watches, kind }: { watches: OpsWatch[]; kind: string }) {
   const erroring = watches.filter((w) => watchHealth(w) === "error").length;
   const once = watches.length - erroring;
@@ -446,7 +453,7 @@ function RollupCount({ watches, kind }: { watches: OpsWatch[]; kind: string }) {
     <b className="ops-num" data-rollup-erroring={erroring} data-rollup-once={once}>
       {erroring > 0 && (erroring === watches.length ? `${erroring} ${kind} erroring` : `${erroring} erroring`)}
       {erroring > 0 && once > 0 && <span className="ops-dim font-normal"> · </span>}
-      {once > 0 && <span className={erroring ? "ops-dim font-normal" : undefined}>{erroring ? `${once} missed once` : `${once} ${kind} missed once`}</span>}
+      {once > 0 && <span className={erroring ? "ops-dim font-normal" : undefined}>{erroring ? `${once} retrying` : `${once} ${kind} retrying`}</span>}
     </b>
   );
 }

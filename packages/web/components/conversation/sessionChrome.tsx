@@ -33,6 +33,7 @@ import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../l
 import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
 import { DENSITY_OPTIONS } from "../../lib/conversationDensity";
+import { Button } from "../ui/button";
 
 // The density dropdown's option list. Guests (unauthenticated share-link
 // viewers) get the local render densities only — the AI retellings need an
@@ -477,7 +478,6 @@ function ContextParkActions({ conversationId }: { conversationId?: string }) {
     store.sendMessage(conversationId, command);
     store.markBlockedReviveRequested([conversationId]);
   };
-  const button = "rounded px-2 py-0.5 text-[11px] font-semibold";
   return (
     <div className="mt-1.5 flex items-center gap-x-3 gap-y-1 flex-wrap text-xs text-sol-text-dim">
       <span className="min-w-0 flex-1">
@@ -486,22 +486,24 @@ function ContextParkActions({ conversationId }: { conversationId?: string }) {
       </span>
       {conversationId && (
         <span className="ml-auto flex items-center gap-2 shrink-0">
-          <button
+          <Button
             type="button"
+            variant="amber"
+            size="xs"
             onClick={() => send("/compact")}
             title="Send /compact — replaces the conversation so far with a summary and keeps going"
-            className={`${button} bg-amber-500 text-sol-bg hover:bg-amber-400`}
           >
             Compact
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="outline"
+            size="xs"
             onClick={() => send("/clear")}
             title="Send /clear — drops the conversation history and starts fresh in this session"
-            className={`${button} border border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10`}
           >
             Clear
-          </button>
+          </Button>
         </span>
       )}
     </div>

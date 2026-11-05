@@ -8,7 +8,8 @@ import { useInboxStore } from "../../store/inboxStore";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import type { SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { useOwnerOptions, type OwnerOption } from "./issueAssign";
-import { spanLabel, type TransitionRow } from "./metricModel";
+import { spanLabel } from "./metricModel";
+import { type TransitionRow } from "./metricEvents";
 import type { OpsSource, OpsWatch } from "./opsTypes";
 
 export type ChannelOption = { _id: string; name: string };

@@ -1,100 +1,14 @@
 import { describe, expect, setSystemTime, test } from "bun:test";
-import { getFunctionName } from "convex/server";
-import { gzipSync, strToU8 } from "fflate";
-import schema from "./schema";
-import { armedTriggerRows, makeFakeDb, schemaIndexes } from "./testDb";
 import { sha256Hex } from "./lib/hash";
 import { HOUR_MS, hourStart } from "./lib/ingestGroups";
-import { INGEST_LIMITS, isIngestKey } from "@codecast/shared/contracts/ingest";
-import {
-  OVERFLOW_FP,
-  SOURCE_CAPS,
-  applyBatch,
-  backfillGroupUsers,
-  createSource,
-  dailyUpkeep,
-  flushGroupTally,
-  getGroup,
-  purgeSourceRows,
-  removeSource,
-  getSource,
-  listEvents,
-  listGroups,
-  listSources,
-  linkSignal,
-  promoteDue,
-  promotionInputs,
-  rotateKey,
-  setGroupFix,
-  setGroupStatus,
-  setGroupTask,
-  groupTransitions,
-  sourceForKey,
-  updateSource,
-} from "./ingest";
+import { isIngestKey } from "@codecast/shared/contracts/ingest";
+import { applyBatch, backfillGroupUsers, createSource, dailyUpkeep, endOldKey, flushGroupTally, getGroup, purgeSourceRows, removeSource, getSource, listEvents, listGroups, listSources, linkSignal, promoteDue, promotionInputs, OLD_KEY_GRACE_MS, rotateKey, setGroupFix, setGroupStatus, setGroupTask, groupTransitions, sourceForKey, updateSource } from "./ingest";
+import { OVERFLOW_FP, SOURCE_CAPS } from "./lib/groupWrite";
 import { PROMOTE_RETRY_MS, PROMOTE_SPACING_MS, PROMOTE_TRIES, queuePromotions, settlePromotion } from "./ingestPromotions";
 import { promotionSignal } from "./lib/ingestPayloads";
 import { listForTask, listForTeam } from "./externalEvents";
-import { bumpWindow } from "./ipRateLimit";
 import { applyTaskUpdate, insertTask, nextArmingAfterRun } from "./agentTasks";
-import { admitIngestKey, decodeIngestBody, INGEST_PREFIXES, UNKNOWN_KEY_RATE, ingestErrorStatus, ingestKeyFrom, ingestServe, originAllowed } from "./ingestHttp";
-import { backoffMs, classifyStatus, DEFAULT_CODECAST_INGEST_ENDPOINT } from "@platform/analytics/codecast";
-
-const h = (fn: any) => fn._handler;
-
-function world() {
-  const scheduled: Array<{ name: string; args: any }> = [];
-  const db = makeFakeDb(
-    {
-      users: [{ _id: "u1", active_team_id: "team_1" }, { _id: "u2" }],
-      teams: [{ _id: "team_1", name: "Acme" }],
-      team_memberships: [{ _id: "m1", user_id: "u1", team_id: "team_1" }],
-      counters: [],
-      projects: [],
-      event_sources: [],
-      event_groups: [],
-      event_samples: [],
-      external_events: [],
-      agent_tasks: [],
-      conversations: [],
-    },
-    { indexes: schemaIndexes(schema as any) },
-  );
-  const scheduler = { runAfter: async (_ms: number, fn: any, args: any) => void scheduled.push({ name: getFunctionName(fn), args }) };
-  const as = (userId: string) => ({ auth: { getUserIdentity: async () => ({ subject: `${userId}|sess` }) }, db, scheduler }) as any;
-  return { db: db as any, scheduled, as, internalCtx: { db, scheduler } as any };
-}
-
-/** A world with a trigger armed on every name an ingest transition fires. */
-async function armedWorld() {
-  const w = world();
-  for (const row of armedTriggerRows("error_new", "error_regressed", "error_spike", "check_failed", "check_recovered", "job_failed", "metric_alert", "metric_recovered", "deploy")) {
-    await w.db.insert("agent_tasks", row);
-  }
-  return w;
-}
-
-const TEAM = { workspace: "team" as const, team_id: "team_1" as any };
-
-async function teamSource(w: ReturnType<typeof world>, extra: Record<string, unknown> = {}) {
-  const out = await h(createSource)(w.as("u1"), { ...TEAM, name: " Union ", provider: "sdk", ...extra });
-  return out as { source: any; ingest_key: string };
-}
-
-const NOW = Date.now();
-const err = (message: string, over: Record<string, unknown> = {}) => ({ type: "error", message, at: NOW, ...over });
-const batch = (w: ReturnType<typeof world>, sourceId: string, items: unknown[], extra: Record<string, unknown> = {}) =>
-  h(applyBatch)(w.internalCtx, { source_id: sourceId, items_json: JSON.stringify(items), ...extra });
-const names = (w: ReturnType<typeof world>) => w.scheduled.map((s) => s.name);
-/** A group as a detail reader sees it: the row with its tally (occurrences held off the row) laid over. */
-const live = (w: ReturnType<typeof world>, i = 0) => {
-  const g = w.db._tables.event_groups[i];
-  const t = (w.db._tables.event_group_tallies ?? []).find((x: any) => x.group_id === g._id);
-  if (!t) return g;
-  return { ...g, ...Object.fromEntries(Object.entries(JSON.parse(t.fields_json)).map(([k, value]) => [k, value ?? undefined])) };
-};
-/** A source's counters, which live on event_source_stats. */
-const stats = (w: ReturnType<typeof world>, i = 0) => (w.db._tables.event_source_stats ?? []).find((x: any) => x.source_id === w.db._tables.event_sources[i]._id) ?? {};
+import { h, world, armedWorld, TEAM, teamSource, NOW, err, batch, names, live, stats } from "./ingest.testkit";
 
 describe("sources", () => {
   test("create returns the key once and stores only its hash", async () => {
@@ -136,13 +50,28 @@ describe("sources", () => {
     expect(w.db._tables.event_sources[0].ingest_key_hash).toBeUndefined();
   });
 
-  test("rotate replaces the hash, so the old key stops resolving", async () => {
+  test("rotate keeps the old key for its grace window; end_old, endOldKey or the window's end stop it", async () => {
     const w = world();
     const { ingest_key } = await teamSource(w);
+    const resolve = async (key: string) => h(sourceForKey)(w.internalCtx, { key_hash: await sha256Hex(key) });
     const { ingest_key: next } = await h(rotateKey)(w.as("u1"), { ...TEAM, source: "union" });
     expect(next).not.toBe(ingest_key);
-    expect(await h(sourceForKey)(w.internalCtx, { key_hash: await sha256Hex(ingest_key) })).toBeNull();
-    expect(await h(sourceForKey)(w.internalCtx, { key_hash: await sha256Hex(next) })).toMatchObject({ status: "active" });
+    expect(await resolve(next)).toMatchObject({ status: "active" });
+    expect((await resolve(next)).old_key).toBeUndefined();
+    expect(await resolve(ingest_key)).toMatchObject({ status: "active", old_key: true });
+    setSystemTime(new Date(Date.now() + OLD_KEY_GRACE_MS + 1_000));
+    try {
+      expect(await resolve(ingest_key)).toBeNull();
+    } finally {
+      setSystemTime();
+    }
+    const { ingest_key: third } = await h(rotateKey)(w.as("u1"), { ...TEAM, source: "union" });
+    expect(await resolve(next)).toMatchObject({ old_key: true });
+    await h(endOldKey)(w.as("u1"), { ...TEAM, source: "union" });
+    expect(await resolve(next)).toBeNull();
+    const { ingest_key: fourth } = await h(rotateKey)(w.as("u1"), { ...TEAM, source: "union", end_old: true });
+    expect(await resolve(third)).toBeNull();
+    expect(await resolve(fourth)).toMatchObject({ status: "active" });
   });
 
   test("someone outside the workspace cannot see or change it", async () => {
@@ -599,59 +528,6 @@ describe("what one source can cost (review fixes)", () => {
   });
 });
 
-describe("the door's admission", () => {
-  const req = (origin?: string) => new Request("https://x/cli/ingest/k", { method: "POST", headers: origin ? { origin } : {} });
-  const ctxWith = (source: any, limited: boolean) => ({
-    runQuery: async () => source,
-    runMutation: async () => (limited ? { ok: false, retry_after_ms: 30_000 } : { ok: true }),
-  });
-  const rate = { prefix: "ingest", max: 1, window_ms: 60_000 };
-  const key = "cc_ing_" + "a".repeat(32);
-
-  test("unknown key 401, refused origin 403, paused 503, limited 429 a browser can read", async () => {
-    const source = { _id: "s1", status: "active", allowed_origins: ["https://app.union.dev"] };
-    expect(((await admitIngestKey(ctxWith(null, false), req(), key, rate)) as Response).status).toBe(401);
-    expect(((await admitIngestKey(ctxWith(source, false), req("https://evil.example"), key, rate)) as Response).status).toBe(403);
-    expect(((await admitIngestKey(ctxWith({ ...source, status: "paused" }, false), req("https://app.union.dev"), key, rate)) as Response).status).toBe(503);
-    const limited = (await admitIngestKey(ctxWith(source, true), req("https://app.union.dev"), key, rate)) as Response;
-    expect(limited.status).toBe(429);
-    expect(limited.headers.get("Access-Control-Allow-Origin")).toBe("https://app.union.dev");
-    expect(limited.headers.get("Access-Control-Expose-Headers")).toContain("Retry-After");
-    expect(limited.headers.get("Retry-After")).toBe("30");
-    const ok = await admitIngestKey(ctxWith(source, false), req("https://app.union.dev"), key, rate);
-    expect(ok).toMatchObject({ source: { _id: "s1" }, cors: { "Access-Control-Allow-Origin": "https://app.union.dev" } });
-  });
-});
-
-describe("guessing keys at the door", () => {
-  test("an address runs out of unknown keys, and then even a right one earns nothing until the window passes", async () => {
-    const w = world();
-    (w.db._tables.ip_rate_limits ??= []);
-    const { ingest_key } = await teamSource(w);
-    const ctx = {
-      runQuery: async (_fn: any, args: any) => h(sourceForKey)(w.internalCtx, args),
-      runMutation: async (_fn: any, args: any) => bumpWindow(w.db, args.key, args.max, args.window_ms),
-    };
-    const from = (ip: string) => new Request("https://x/cli/ingest/k", { method: "POST", headers: { "x-forwarded-for": ip } });
-    const rate = { prefix: "ingest", max: 100, window_ms: 60_000 };
-    const wrong = (i: number) => "cc_ing_" + String(i).padStart(32, "x");
-    for (let i = 0; i < UNKNOWN_KEY_RATE.max; i++) {
-      expect(((await admitIngestKey(ctx, from("1.2.3.4"), wrong(i), rate)) as Response).status).toBe(401);
-    }
-    const spent = (await admitIngestKey(ctx, from("1.2.3.4"), wrong(999), rate)) as Response;
-    expect(spent.status).toBe(429);
-    expect(Number(spent.headers.get("Retry-After"))).toBeGreaterThan(0);
-    // The right key from the spent address is refused before it is looked up.
-    expect(((await admitIngestKey(ctx, from("1.2.3.4"), ingest_key, rate)) as Response).status).toBe(429);
-    // Another address, and a known key, are untouched.
-    expect(await admitIngestKey(ctx, from("5.6.7.8"), ingest_key, rate)).toMatchObject({ source: { status: "active" } });
-    expect(((await admitIngestKey(ctx, from("5.6.7.8"), wrong(1), rate)) as Response).status).toBe(401);
-    // A known key spends nothing from the window.
-    const row = w.db._tables.ip_rate_limits.find((r: any) => r.key === `${UNKNOWN_KEY_RATE.name}:5.6.7.8`);
-    expect(row.count).toBe(1);
-  });
-});
-
 describe("trigger payload", () => {
   test("an event trigger spends its pending events when it re-arms", () => {
     expect(nextArmingAfterRun({ schedule_type: "event" } as any, NOW)).toHaveProperty("pending_events", undefined);
@@ -690,66 +566,6 @@ describe("trigger source filters", () => {
     const w = world();
     await armed(w, "  ");
     expect(w.db._tables.agent_tasks[0].event_filter).toEqual({ event_type: "error_new" });
-  });
-});
-
-describe("the door", () => {
-  test("the key comes from the path on either prefix, else the bearer header", () => {
-    expect(ingestKeyFrom("/cli/ingest/cc_ing_abc", null)).toBe("cc_ing_abc");
-    expect(ingestKeyFrom("/api/ingest/cc_ing_abc/extra", null)).toBe("cc_ing_abc");
-    expect(ingestKeyFrom("/cli/ingest/", "Bearer cc_ing_xyz")).toBe("cc_ing_xyz");
-    expect(ingestKeyFrom("/cli/ingest/", null)).toBeNull();
-  });
-
-  test("origins: no list allows any, a list allows only its members", () => {
-    expect(originAllowed(null, "https://evil.example")).toBe(true);
-    expect(originAllowed(["https://app.union.dev/"], "https://app.union.dev")).toBe(true);
-    expect(originAllowed(["https://app.union.dev"], "https://evil.example")).toBe(false);
-    expect(originAllowed(["https://app.union.dev"], null)).toBe(true);
-  });
-
-  test("bodies: plain, gzip, a gzip bomb, junk", () => {
-    const body = JSON.stringify({ items: [] });
-    expect(decodeIngestBody(strToU8(body), null)).toEqual({ text: body });
-    expect(decodeIngestBody(gzipSync(strToU8(body)), "gzip")).toEqual({ text: body });
-    const bomb = gzipSync(new Uint8Array(INGEST_LIMITS.max_bytes + 10));
-    expect(bomb.byteLength).toBeLessThan(INGEST_LIMITS.max_bytes);
-    expect(decodeIngestBody(bomb, "gzip")).toMatchObject({ status: 413 });
-    expect(decodeIngestBody(new Uint8Array(INGEST_LIMITS.max_bytes + 1), null)).toMatchObject({ status: 413 });
-    expect(decodeIngestBody(strToU8("not gzip"), "gzip")).toMatchObject({ status: 400 });
-    expect(decodeIngestBody(strToU8(body), "br")).toMatchObject({ status: 400 });
-  });
-
-  test("a paused source asks the SDK to back off, not to stop, so resuming brings it back", async () => {
-    const w = world();
-    const { ingest_key } = await teamSource(w);
-    w.db._tables.event_sources[0].config = { ...w.db._tables.event_sources[0].config, allowed_origins: ["https://app.union.dev"] };
-    const serve = (origin: string) =>
-      h(ingestServe)(
-        { runQuery: async (_fn: any, args: any) => h(sourceForKey)(w.internalCtx, args) },
-        new Request(`https://convex.codecast.sh/cli/ingest/${ingest_key}`, { method: "POST", headers: { origin }, body: "{}" }),
-      ) as Promise<Response>;
-    w.db._tables.event_sources[0].status = "paused";
-    const paused = await serve("https://app.union.dev");
-    expect(paused.status).toBe(503);
-    expect(paused.headers.get("Retry-After")).toBe("60");
-    expect(paused.headers.get("Access-Control-Expose-Headers")).toContain("Retry-After");
-    expect(classifyStatus(paused.status)).toBe("retry");
-    expect(backoffMs(0, paused.headers.get("Retry-After"))).toBe(60_000);
-    // A refused origin never gets better by retrying, so it still stops the SDK.
-    const refused = await serve("https://evil.example");
-    expect(refused.status).toBe(403);
-    expect(classifyStatus(refused.status)).toBe("stop");
-  });
-
-  test("the SDK's default endpoint lands on one of the door's prefixes", () => {
-    expect(INGEST_PREFIXES).toContain(new URL(DEFAULT_CODECAST_INGEST_ENDPOINT).pathname + "/");
-  });
-
-  test("errors map like the CLI routes", () => {
-    expect(ingestErrorStatus({ data: { code: "FORBIDDEN" } })).toBe(403);
-    expect(ingestErrorStatus({ data: { code: "RATE_LIMITED" } })).toBe(429);
-    expect(ingestErrorStatus(new Error("boom"))).toBe(500);
   });
 });
 

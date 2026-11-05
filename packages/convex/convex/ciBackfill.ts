@@ -16,7 +16,7 @@ import { GITHUB_CI_SOURCE_NAME } from "@codecast/shared/contracts/ingest";
 import { CI_RUNS_DAYS, CI_RUNS_KEPT, withCiRuns, type CiRunFact } from "@codecast/shared/contracts/volumeWatch";
 import { normalizeRepository } from "./lib/gitRefs";
 import { defaultBranchCiRun } from "./githubWebhooks";
-import { patchSourceStats } from "./ingest";
+import { patchSourceStats } from "./lib/sourceStats";
 
 const GITHUB_API = "https://api.github.com";
 const DAY = 86_400_000;

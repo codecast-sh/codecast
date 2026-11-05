@@ -168,16 +168,7 @@ export function DeviceSetupDialog() {
           <span className="text-xs text-sol-text-dim">
             {allRequiredOn ? "All set." : "You can finish this later from Settings."}
           </span>
-          <Button
-            size="sm"
-            variant={allRequiredOn ? "default" : "outline"}
-            onClick={close}
-            className={
-              allRequiredOn
-                ? "bg-sol-blue text-sol-bg"
-                : "border-sol-border bg-transparent text-sol-text shadow-none hover:bg-sol-bg-highlight/60"
-            }
-          >
+          <Button size="sm" variant={allRequiredOn ? "blue" : "outline"} onClick={close}>
             {allRequiredOn ? "Done" : "Later"}
           </Button>
         </div>

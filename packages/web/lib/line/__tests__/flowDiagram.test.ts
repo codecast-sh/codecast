@@ -8,11 +8,11 @@ const pool = appPool();
 const change = flowBySlug(pool, "change")!;
 
 describe("a flow as a diagram", () => {
-  test("the change line reads as its four segments, each holding its own steps, ending at Done", () => {
+  test("the change line reads as its five segments, each holding its own steps, ending at Live", () => {
     const d = flowDiagram(change);
-    expect(d.steps.map((s) => s.label)).toEqual(["Check", "Review", "Decide", "Ship"]);
-    expect(d.steps.map((s) => s.inner.map((i) => i.label))).toEqual([["Verify"], ["Review"], ["Decide"], ["Rebase", "Land"]]);
-    expect(d.end).toBe("Done");
+    expect(d.steps.map((s) => s.label)).toEqual(["Check", "Review", "Decide", "Land", "Deploy"]);
+    expect(d.steps.map((s) => s.inner.map((i) => i.label))).toEqual([["Verify"], ["Review"], ["Decide"], ["Rebase", "Land"], ["Wait for live"]]);
+    expect(d.end).toBe("Live");
     expect(d.steps[3].inner[0].id).toBe("ship__rebase");
   });
 
@@ -68,13 +68,13 @@ describe("a run in words", () => {
   });
   test("a live run says where it is, a segment's step under the segment's name", () => {
     expect(flowRunState({ status: "running", current_node_id: "review__review" }, change).words).toBe("At Review");
-    expect(flowRunState({ status: "running", current_node_id: "ship__rebase" }, change).words).toBe("At Ship: Rebase");
+    expect(flowRunState({ status: "running", current_node_id: "ship__rebase" }, change).words).toBe("At Land: Rebase");
   });
 });
 
 describe("the pool", () => {
   test("holds the shipped flows, and a pushed one by its slug, reading its kind from its source", () => {
-    expect(pool.filter((f) => f.kind === "segment").map((f) => f.slug).sort()).toEqual(["check", "decide", "eval", "prove-implement", "review", "ship"]);
+    expect(pool.filter((f) => f.kind === "segment").map((f) => f.slug).sort()).toEqual(["check", "decide", "deploy", "eval", "prove-implement", "review", "ship"]);
     const pushed = pushedFlow({
       _id: "w1", slug: "polish", name: "polish",
       source: 'digraph polish { graph [kind="segment", label="Polish", description="Critique then fix"] }',

@@ -7,7 +7,7 @@ import { resolveOrgAsks, type OrgAskNames, isOrgQuietChange } from "@codecast/sh
 import type { OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import type { OrgTree } from "./orgTypes";
 import { isDecidable, isSyncChange, orderChanges, recordsInLine, splitAsk } from "./staffingModel";
-import { refMatches, refResolves } from "./orgLayout";
+import { refMatches, refResolves } from "./orgGhostsFor";
 
 /** Where one ask stands. `open` = something in it still waits on the person
  *  (a failed row does, the server takes it again); the other two are decided. */

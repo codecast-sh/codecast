@@ -22,6 +22,7 @@ import { ACTIVE_AGENT_STATUSES, HEARTBEAT_ALIVE_MS } from "@codecast/shared/cont
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { sessionStructuralSig } from "../../store/inboxStore";
+import { Button } from "../../components/ui/button";
 
 type Session = FunctionReturnType<typeof api.managedSessions.listActiveSessions>[number];
 // Cleanup-oriented buckets, computed from liveness + sleep-aware idle — NOT from
@@ -583,12 +584,9 @@ export function SessionsView() {
                 <span className="text-red-300">
                   Kill {bulkKillCount}{bulkPruneCount > 0 ? ` · prune ${bulkPruneCount}` : ""}? Terminates tmux + claude.
                 </span>
-                <button
-                  onClick={() => { handleBulk(bulkRows); setBulkConfirm(false); }}
-                  className="px-3 py-1.5 bg-red-600/90 text-white border border-red-500 rounded-md hover:bg-red-600 transition-colors"
-                >
+                <Button variant="red" size="sm" onClick={() => { handleBulk(bulkRows); setBulkConfirm(false); }}>
                   Confirm kill
-                </button>
+                </Button>
                 <button
                   onClick={() => setBulkConfirm(false)}
                   className="px-2 py-1.5 text-zinc-400 hover:text-zinc-200 transition-colors"

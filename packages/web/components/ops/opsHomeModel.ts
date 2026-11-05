@@ -14,8 +14,8 @@ import { formatCallTime } from "@codecast/shared/entities";
 import { replayTitle } from "./opsModel";
 import type { OpsHomeShow } from "./opsPaths";
 import type { SourceHealth } from "./sourceHealth";
-import { HEALTH, healthCounts, sortWatches, watchHealth, type Health } from "./metricModel";
-import { attentionLane, escalation, foldIssueRows, issueLane, regressedAt, someoneOnIt, type AttentionLane } from "./issuesModel";
+import { WATCH_STATES, sortWatches, watchHealth, watchRetrying as metricWatchRetrying, watchState, watchStateCounts, type WatchState } from "./metricModel";
+import { attentionLane, escalation, foldIssueRows, regressedAt, someoneOnIt, type AttentionLane } from "./issuesModel";
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -61,6 +61,10 @@ type Base = {
   at: number;
   /** Other states it holds as well (an alerting watch whose issue regressed): its tiles count it under each, so every tile equals its lane. */
   also?: AttentionState[];
+  /** The Issues lane of every issue the row holds, one entry per issue (a folded row holds several): the issue tiles count these, so each equals its lane in the Issues list. */
+  lanes?: AttentionLane[];
+  /** How many of the issues the row holds nobody is on (someoneOnIt, issue by issue): Nobody on it counts these, as the Issues list's Nobody on it does. */
+  unowned?: number;
   /** How much of it there is: an issue's events in the last day. Orders rows inside a severity. */
   volume: number;
   sourceId: string | null;
@@ -183,7 +187,8 @@ export function attentionItems(input: AttentionInput, now: number, healthOf: (s:
   const blindBy = new Map<string, OpsWatch[]>();
 
   for (const w of input.watches) {
-    if (w.group_id) watchGroups.add(w.group_id);
+    // Only a watch that is a row (or rides its reader's row) lists its issue: one that reads fine leaves its issue to be listed as itself, as the Issues list does.
+    if (w.group_id && (watchAlerting(w) || watchHealth(w) === "error")) watchGroups.add(w.group_id);
     const group = w.group_id ? groupById.get(w.group_id) ?? null : null;
     const taskId = group?.signal_task_id ?? null;
     // The issue a watch files is listed through the watch, once; the lane it sits in (regressed, escalating, new) rides along so that tile still counts it.
@@ -192,7 +197,7 @@ export function attentionItems(input: AttentionInput, now: number, healthOf: (s:
       out.push({
         kind: "watch", key: `watch:${w._id}`, state: "alerting", severity: 3, volume: Infinity,
         at: group?.last_transition_at ?? group?.first_seen ?? w.last_at ?? w.updated_at,
-        ...(lane ? { also: [lane] } : {}),
+        ...(lane ? { also: [lane], lanes: [lane] } : {}),
         sourceId: w.source_id, taskId, task: taskOf(taskId), sessionId: group?.fix_conversation_id ?? null, watch: w, group,
       });
     } else if (watchHealth(w) === "error") {
@@ -206,7 +211,7 @@ export function attentionItems(input: AttentionInput, now: number, healthOf: (s:
         kind: "watch", key: `watch-error:${w._id}`, state: "erroring", severity: 2, volume: w.missed ?? 1,
         // Blind since its last good read.
         at: w.last_at ?? w.updated_at,
-        ...(lane ? { also: [lane] } : {}),
+        ...(lane ? { also: [lane], lanes: [lane] } : {}),
         sourceId: w.source_id, taskId, task: taskOf(taskId), sessionId: group?.fix_conversation_id ?? null, watch: w, group,
       });
     }
@@ -214,13 +219,11 @@ export function attentionItems(input: AttentionInput, now: number, healthOf: (s:
 
   const replaysOf = new Map<string, OpsReplay[]>();
   for (const r of input.replays) for (const gid of r.group_ids) replaysOf.set(gid, [...(replaysOf.get(gid) ?? []), r]);
-  const listedGroups = new Set<string>();
   for (const g of input.groups) {
     if (watchGroups.has(g._id)) continue;
     const reading = issueAttention(g, now, input.failures?.(g));
     if (!reading) continue;
     const { regressed, spike, fresh } = reading;
-    listedGroups.add(g._id);
     const loud = g.kind !== "log" || LOUD_LEVELS.has(g.level ?? "");
     // A group born today has had every event today, whatever its buckets hold.
     const volume = Math.max(dayVolume(g, now), fresh ? g.count : 0);
@@ -229,7 +232,7 @@ export function attentionItems(input: AttentionInput, now: number, healthOf: (s:
     const state = reading.state;
     const own = (replaysOf.get(g._id) ?? []).sort((a, b) => b.started_at - a.started_at);
     out.push({
-      kind: "issue", key: `issue:${g._id}`, state,
+      kind: "issue", key: `issue:${g._id}`, state, lanes: [state], unowned: someoneOnIt(g.fix_conversation_id, taskOf(g.signal_task_id)) ? 0 : 1,
       // A steady flood (firing) is the loudest thing that does not page: it sits with the sizable new issues, above the ones seen once.
       severity: regressed || spike ? 3 : state === "firing" || (loud && sizable) ? 2 : 1,
       at: issueStarted(g, state, now),
@@ -248,12 +251,11 @@ export function attentionItems(input: AttentionInput, now: number, healthOf: (s:
   const partial = !!input.replaysCapped && input.replays.length > 0 && Math.min(...input.replays.map((r) => r.started_at)) > since;
   for (const r of input.replays) {
     if (r.started_at < since || r.counts.errors <= 0) continue;
-    if (r.group_ids.some((id) => listedGroups.has(id))) continue;
+    // A replay naming an issue the store holds is that issue's evidence: on its row when the issue needs a person, on its
+    // page when not (ongoing, quiet, settled). A row of its own here would list an issue the Issues list's Needs attention
+    // lane leaves out, so the home and that lane would hold two sets under one name.
+    if (r.group_ids.some((id) => groupById.has(id))) continue;
     const sig = replaySignature(r, groupById);
-    // A replay of an issue someone settled (ignored, muted, resolved and not back) is that issue's history, not a new problem:
-    // the issue rows' own rule (issueLane) leaves it out, so its replays stay out too.
-    const named = sig.startsWith("replays:") ? groupById.get(sig.slice(8)) : undefined;
-    if (named && !issueLane(named, now)) continue;
     signatures.set(sig, [...(signatures.get(sig) ?? []), r]);
   }
   for (const [sig, rs] of signatures) {
@@ -320,9 +322,23 @@ export function foldVariants(items: AttentionItem[]): void {
   const issues = items.filter((it): it is Extract<AttentionItem, { kind: "issue" }> => it.kind === "issue");
   if (issues.length < 2) return;
   const drop = new Set<AttentionItem>();
-  for (const rows of foldIssueRows(issues, (it) => it.group, (it) => it.volume)) {
+  // Two causes filed under one problem task are one fix: their rows fold under it as well, heaviest first.
+  const clusters: (typeof issues)[] = [];
+  const byTask = new Map<string, typeof issues>();
+  for (const c of foldIssueRows(issues, (it) => it.group, (it) => it.volume)) {
+    const task = c.find((r) => r.taskId)?.taskId;
+    const into = task ? byTask.get(task) : undefined;
+    if (into) into.push(...c);
+    else {
+      clusters.push(c);
+      if (task) byTask.set(task, c);
+    }
+  }
+  for (const rows of clusters) {
     if (rows.length < 2) continue;
+    rows.sort((a, b) => b.volume - a.volume || b.group.count - a.group.count || a.group.title.localeCompare(b.group.title));
     const lead = rows[0];
+    const filed = rows.find((r) => r.taskId);
     const states = new Set(rows.flatMap((r) => [r.state, ...(r.also ?? [])]));
     states.delete(lead.state);
     const newest = rows.map((r) => r.replay).filter((r): r is OpsReplay => !!r).sort((a, b) => b.started_at - a.started_at)[0] ?? null;
@@ -332,6 +348,9 @@ export function foldVariants(items: AttentionItem[]): void {
       volume: rows.reduce((n, r) => n + r.volume, 0),
       at: Math.min(...rows.map((r) => r.at)),
       ...(states.size ? { also: [...states] } : {}),
+      lanes: rows.flatMap((r) => r.lanes ?? []),
+      unowned: rows.reduce((n, r) => n + (r.unowned ?? 0), 0),
+      ...(lead.taskId || !filed ? {} : { taskId: filed.taskId, task: filed.task }),
       replay: newest,
       replays: rows.reduce((n, r) => n + r.replays, 0),
       sessionId: lead.sessionId ?? working?.sessionId ?? null,
@@ -363,6 +382,8 @@ export function handled(item: Pick<AttentionItem, "sessionId" | "task">): boolea
 
 /** Whether an item is something nobody has picked up. Sources and their readers are fixed by a person, not a task; a replay's errors are read first. */
 export function unassigned(item: AttentionItem): boolean {
+  // A folded row is nobody's while any issue in it is: Nobody on it lists the row and counts those issues.
+  if (item.unowned !== undefined) return item.unowned > 0;
   return item.kind !== "source" && item.kind !== "reader" && item.kind !== "replay" && !handled(item);
 }
 
@@ -406,7 +427,15 @@ export const filterWords = (f: { label: string; one?: string }, n: number): stri
  */
 export function attentionCounts(items: AttentionItem[]): Record<OpsHomeShow, number> {
   const out = { snoozed: 0, ...Object.fromEntries(ATTENTION_FILTERS.map((f) => [f.key, 0])) } as Record<OpsHomeShow, number>;
-  for (const it of items) for (const f of ATTENTION_FILTERS) if (admitsShow(it, f.key)) out[f.key] += 1;
+  for (const it of items) {
+    for (const f of ATTENTION_FILTERS) {
+      const lane = TILE_LANE[f.key];
+      // An issue tile counts issues, not rows: a folded row of five regressions is five, as the Issues lane lists them.
+      if (lane && it.lanes) out[f.key] += it.lanes.filter((l) => l === lane).length;
+      else if (f.key === "unassigned" && it.unowned !== undefined) out[f.key] += it.unowned;
+      else if (admitsShow(it, f.key)) out[f.key] += 1;
+    }
+  }
   return out;
 }
 
@@ -454,40 +483,30 @@ export function isNewSince(item: Pick<AttentionItem, "at">, seenAt: number | nul
 
 // ── The watch band ──
 
-/** The monitor summary's states, worst first: what a person reads at a glance before the band. */
-export const BAND_STATES: readonly Health[] = ["alert", "warn", "error", "nodata", "ok"];
+/** The monitor summary's states, worst first: the Metrics chips' own states and words (metricModel WATCH_STATES), paused left out. */
+export const BAND_STATES: readonly WatchState[] = WATCH_STATES.filter((s) => s !== "paused");
 
-/** The healths a band draws as tiles up front; the rest (OK, plain series) fold behind their count. */
-export const BAND_ATTENTION: ReadonlySet<Health> = new Set(["alert", "error", "warn", "nodata"]);
+/** The states a band draws as tiles up front; the rest (Retrying, OK, No line) fold behind their count. */
+export const BAND_ATTENTION: ReadonlySet<WatchState> = new Set(["alert", "blind", "error", "warn", "nodata"]);
 
 /**
- * Every watch under its one health (metricModel watchHealth), worst first and
- * the healthy ones by how close they sit to their line, with the summary
- * counts the band leads with. Paused watches stay out. `attention` is what
- * the band shows as tiles (alerting, erroring, warning, no data); `healthy`
- * (OK and plain series) folds behind the OK count, and `retrying` behind the
- * Retrying count, until each is opened: one reader timing out is one count
- * (its cause is the source's row), never a tile per watch it feeds.
+ * Every watch under its one state (metricModel watchState, the Metrics chips'
+ * classifier), worst first and the healthy ones by how close they sit to
+ * their line, with the summary counts the band leads with. Paused watches
+ * stay out. `attention` is what the band shows as tiles; the rest fold behind
+ * their count until opened: one reader timing out is one count (its cause is
+ * the source's row), never a tile per watch it feeds.
  */
-export function watchBand(watches: readonly OpsWatch[]): { counts: Record<Health, number>; watches: OpsWatch[]; attention: OpsWatch[]; healthy: OpsWatch[]; retrying: OpsWatch[] } {
+export function watchBand(watches: readonly OpsWatch[], blind?: ReadonlySet<string>): { counts: Record<WatchState, number>; watches: OpsWatch[]; attention: OpsWatch[]; stateOf: (w: OpsWatch) => WatchState } {
   const live = watches.filter((w) => w.status !== "paused");
-  const sorted = sortWatches([...live], "state").sort((a, b) => HEALTH.indexOf(watchHealth(a)) - HEALTH.indexOf(watchHealth(b)));
-  const up = (w: OpsWatch) => BAND_ATTENTION.has(watchHealth(w)) && !watchRetrying(w);
-  return { counts: healthCounts(live), watches: sorted, attention: sorted.filter(up), healthy: sorted.filter((w) => !up(w) && !watchRetrying(w)), retrying: sorted.filter(watchRetrying) };
+  const states = new Map(live.map((w) => [w._id, watchState(w, blind)]));
+  const stateOf = (w: OpsWatch) => states.get(w._id) ?? watchState(w, blind);
+  const sorted = sortWatches([...live], "state").sort((a, b) => WATCH_STATES.indexOf(stateOf(a)) - WATCH_STATES.indexOf(stateOf(b)));
+  return { counts: watchStateCounts(live, blind), watches: sorted, attention: sorted.filter((w) => BAND_ATTENTION.has(stateOf(w))), stateOf };
 }
 
-/**
- * A watch whose last read failed while an older value still stands: not
- * erroring yet (watchHealth needs two failed reads in a row), but not fine
- * either. The band shows it as Retrying, the word a source's overview and the
- * Apps board give it (appsModel watchVerdict), so no surface paints it red
- * while another calls it healthy.
- */
-export function watchRetrying(w: Pick<OpsWatch, "status" | "state" | "last_error" | "last_value" | "threshold"> & Partial<Pick<OpsWatch, "missed" | "warn" | "direction">>): boolean {
-  if (w.status === "paused" || !w.last_error) return false;
-  const h = watchHealth(w);
-  return h !== "error" && h !== "alert";
-}
+/** A watch whose last read failed while an older value still stands (metricModel watchRetrying, the classifier's Retrying). */
+export const watchRetrying = metricWatchRetrying;
 
 // ── A source's last day ──
 
@@ -537,7 +556,7 @@ export function groupSources(sources: OpsSource[], q: string): { provider: Sourc
  * hands over; `merges` the variants' own open tasks, which fold into the task
  * the session works as its duplicates, so one cause keeps one task.
  */
-export function fixLedger(ref: string, title: string, folder: string | undefined, task: string | null = null, more: { seeds?: string[]; merges?: string[] } = {}): SwitchLedger {
+export function fixLedger(ref: string, title: string, folder: string | undefined, task: string | null = null, more: { seeds?: string[]; merges?: string[]; /** The task is closed (dropped, done): the start reopens it. */ reopens?: boolean } = {}): SwitchLedger {
   const seeds = more.seeds && more.seeds.length > 1 ? more.seeds : null;
   const merges = task && more.merges?.length ? more.merges : null;
   return {
@@ -547,7 +566,7 @@ export function fixLedger(ref: string, title: string, folder: string | undefined
     figures: [{ value: "1", label: "session starts" }, ...(merges ? [{ value: String(merges.length), label: merges.length === 1 ? "task merged" : "tasks merged" }] : [])],
     rows: [
       { k: "Seeded with", v: seeds ? seeds.join(", ") : ref },
-      ...(task ? [{ k: "Works task", v: task }] : []),
+      ...(task ? [{ k: more.reopens ? "Reopens task" : "Works task", v: task }] : []),
       ...(merges ? [{ k: "Merges into it", v: merges.join(", ") }] : []),
       { k: "Folder", v: folder ?? "Your default folder", ...(folder ? {} : { tone: "warn" as const }) },
       { k: "Lands in", v: "Your inbox" },
@@ -557,16 +576,29 @@ export function fixLedger(ref: string, title: string, folder: string | undefined
 }
 
 /**
- * The issues a person walks with j and k after opening one from here: every
- * row that opens an issue page (an issue, or a replay row naming one), in the
- * list's order, once each.
+ * The issues the listed rows hold, in the list's order, once each: a folded
+ * row's every variant and an alerting watch's metric issue, narrowed as the
+ * filter on narrows the Issues list (a lane tile to that lane, Nobody on it to
+ * the issues nobody is on). The Issues list's Needs attention lane lists
+ * exactly these, one row each, so the list header's issue count, its link,
+ * the tiles and an issue page's "of N" all read one number.
  */
-export function homeIssueRefs(items: readonly AttentionItem[]): string[] {
-  const out: string[] = [];
+export function listedIssues(items: readonly AttentionItem[], now: number, input: Pick<AttentionInput, "failures" | "taskOf"> = {}, show: OpsHomeShow | null = null): OpsGroup[] {
+  const lane = show ? TILE_LANE[show] : undefined;
+  const out = new Map<string, OpsGroup>();
   for (const it of items) {
-    const g = it.kind === "issue" || it.kind === "replay" ? it.group : null;
-    const ref = g ? g.short_id || g._id : null;
-    if (ref && !out.includes(ref)) out.push(ref);
+    const gs = it.kind === "issue" ? it.variants ?? [it.group] : it.kind === "watch" && it.group ? [it.group] : [];
+    for (const g of gs) {
+      const l = out.has(g._id) ? null : attentionLane(g, now, input.failures?.(g));
+      if (!l || (lane && l !== lane)) continue;
+      if (show === "unassigned" && someoneOnIt(g.fix_conversation_id, g.signal_task_id ? input.taskOf?.(g.signal_task_id) : undefined)) continue;
+      out.set(g._id, g);
+    }
   }
-  return out;
+  return [...out.values()];
+}
+
+/** The issues a person walks with j and k after opening one from here (listedIssues), by the ref an issue page reads. */
+export function homeIssueRefs(items: readonly AttentionItem[], now: number, input: Pick<AttentionInput, "failures" | "taskOf"> = {}, show: OpsHomeShow | null = null): string[] {
+  return listedIssues(items, now, input, show).map((g) => g.short_id || g._id);
 }

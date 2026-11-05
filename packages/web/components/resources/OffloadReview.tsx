@@ -454,7 +454,7 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
           <LoadBar label="Memory" before={source.before.memory} after={going.length ? source.after.memory : undefined} />
         </div>
 
-        {plan.destinations.length > 0 && canMove.length > 0 && (
+        {plan.destinations.length > 0 && poolShare > 0 && (
           <LoadDial value={slice?.pct ?? achieved} count={going.length} freed={leaving} onChange={setDial} />
         )}
 

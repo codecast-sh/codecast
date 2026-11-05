@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ReplayEvent } from "@codecast/shared/contracts/replay";
+import { REPLAY_REST_NO_MORE, type ReplayEvent } from "@codecast/shared/contracts/replay";
 import {
   failureReasons,
   restHold,
@@ -8,51 +8,55 @@ import {
   REST_STALL_MS,
   restDue,
   restState,
-  activityBins,
-  describeEvent,
-  selectorName,
   importedUntil,
   compactCount,
   railRowAt,
   restLine,
   restQueued,
   restTrend,
+  etaText,
+  recordingLive,
   replayPagePath,
-  pagePathParts,
   shortBrowser,
   withRemoteAssets,
   playerImportedUntil,
   captureEndFrom,
   vendorUrlAt,
-  eventHas,
   isReplayFiltered,
   momentRef,
-  foldRail,
-  netGrade,
-  netPath,
   onReplayClock,
   parseReplayQuery,
   peopleSortFor,
+  previewAt,
+  spanText,
+  replayFixLedger,
+  replayLengthText,
+  replayQueryParams,
+  totalText,
+} from "./replayModel";
+import {
+  activityBins,
+  describeEvent,
+  selectorName,
+  pagePathParts,
+  eventHas,
+  foldRail,
+  netGrade,
+  netPath,
   railRunKey,
   railAdmits,
   actionDetail,
-  previewAt,
   netParts,
   issueTitleParts,
   railCounts,
   allKindCounts,
-  spanText,
   ALL_KINDS_HIDDEN_BY_DEFAULT,
-  replayFixLedger,
-  replayLengthText,
-  replayQueryParams,
   skipTarget,
   stepTo,
   isUserAction,
   endpointOf,
   issueMoments,
-  totalText,
-} from "./replayModel";
+} from "./replayRail";
 import { isFailure } from "@codecast/shared/replay";
 import type { OpsReplay } from "./opsTypes";
 import { importBar } from "./ReplayImport";
@@ -278,7 +282,9 @@ describe("a total", () => {
     expect(totalText(0, true, 2000)).toBe("No recordings in the newest 2,000");
     expect(totalText(36, true, 2000)).toBe("36+ recordings");
     expect(totalText(1, false, 2000)).toBe("1 recording");
-    expect(totalText(1360, true, 2000, "person", "people")).toBe("1,360+ people");
+    // A floor reads as the tab badge reads it (floorShown): rounded down to the hundred.
+    expect(totalText(1360, true, 2000, "person", "people")).toBe("1,300+ people");
+    expect(totalText(1495, true, 2000)).toBe("1,400+ recordings");
   });
 });
 
@@ -436,7 +442,11 @@ describe("rest of a long recording", () => {
   });
 
   test("failures that share a reason are said once", () => {
-    expect(failureReasons([{ id: "a", error: "429" }, { id: "b", error: "429" }, { id: "c", error: "gone" }])).toEqual([{ error: "429", ids: ["a", "b"] }, { error: "gone", ids: ["c"] }]);
+    expect(failureReasons([{ id: "a", error: "429" }, { id: "b", error: "429" }, { id: "c", error: "gone" }]).map((r) => [r.plain, r.ids])).toEqual([["Rate limited by the vendor", ["a", "b"]], ["gone", ["c"]]]);
+    // The out-of-memory death reads as what it means; the raw words stay on the group.
+    const oom = "the import died: JavaScript execution ran out of memory (maximum memory usage: 64 MB): request stream size was 0 bytes";
+    const [r] = failureReasons([{ id: "x", error: oom }]);
+    expect([r.plain, r.error]).toEqual(["Too large to read in one pass", oom]);
   });
 });
 
@@ -459,7 +469,8 @@ describe("where reading the rest stands, in one set of words", () => {
   test("reading, waiting, held, stopped", () => {
     expect(restLine({ state: "reading", share: 0.38, error: null }, null, false, "PostHog", now)).toMatchObject({ text: "reading now", tone: "busy", share: 0.38 });
     // Never "caught up" while the copy is short of the recording.
-    expect(restLine({ state: "reading", share: 0.57, error: null, caught_up: true }, null, false, "PostHog", now).text).toBe("reading · PostHog still recording");
+    expect(restLine({ state: "reading", share: 0.57, error: null, caught_up: true, live: true }, null, false, "PostHog", now).text).toBe("reading · PostHog still recording");
+    expect(restLine({ state: "reading", share: 0.57, error: null, caught_up: true }, null, false, "PostHog", now).text).toBe("reading now");
     // Gone quiet with no word: stalled since its last step, not "reading".
     expect(restLine({ state: "stopped", share: 0.9, error: null, since: now - 3 * 3_600_000 }, null, false, "PostHog", now).text).toMatch(/^stalled since /);
     expect(restLine(null, null, false, "PostHog", now, { pos: 4, reading: "rp-9" }).text).toBe("queued · #4");
@@ -511,9 +522,46 @@ describe("the rest backlog", () => {
     expect(restQueued({ ...r, captured_ms: 3_600_000 }, source, now)).toBeUndefined();
     expect(restQueued({ ...r, vendor_refresh_after: now + 1 }, source, now)).toBeUndefined();
   });
+  test("a chain the import line does not name waits its turn, and only the named one reads", () => {
+    const chainRow = { short_id: "rp-5393", provider: "posthog" as const, captured_ms: 600_000, duration_ms: 2_000_000, started_at: now - 7 * 3_600_000, imported_at: now - 1, vendor_refresh_after: null, import_rest: { next_blob: 4, blobs: 4, retry_at: null, error: null, updated_at: now - 5_000 } } as any;
+    const source = { replay_rest: { cut: 3, unknown: 0, at: now, queue: ["rp-1"], reading: "rp-5468" } };
+    const other = restState(chainRow, now, "rp-5468");
+    expect(other).toMatchObject({ state: "reading", elsewhere: "rp-5468" });
+    expect(restLine(other, null, false, "PostHog", now, restQueued(chainRow, source, now))).toMatchObject({ text: "queued", tone: "idle" });
+    // Named, ended hours ago, every listed part read: it reads, and never says PostHog is still recording.
+    expect(restLine(restState(chainRow, now, "rp-5393"), null, false, "PostHog", now).text).toBe("reading now");
+    // Still recording only while the recording's last moment is recent.
+    const live = { ...chainRow, started_at: now - chainRow.duration_ms - 60_000 };
+    expect(restLine(restState(live, now, "rp-5393"), null, false, "PostHog", now).text).toBe("reading · PostHog still recording");
+    expect([recordingLive(live, now), recordingLive(chainRow, now)]).toEqual([true, false]);
+  });
+  test("PostHog answering no more of an ended recording reads as its copy ending there", () => {
+    const row = { short_id: "rp-5460", captured_ms: 93_000, duration_ms: 303_000, started_at: now - 2 * 3_600_000, import_rest: { next_blob: 3, blobs: 3, retry_at: null, error: REPLAY_REST_NO_MORE, updated_at: now - 5_000 } } as any;
+    const line = restLine(restState(row, now), { why: "failed", until: now + 3_600_000 }, false, "PostHog", now);
+    expect(line.text).toMatch(/^PostHog has no more · retry /);
+    expect(line.tone).toBe("held");
+  });
   test("the trend compares the live count with the recount before the last", () => {
-    expect(restTrend({ cut: 863, unknown: 0, at: now, prev: { cut: 875, at: now - 3_600_000 } }, now)).toEqual({ text: "−12 in 1h", tone: "down" });
+    expect(restTrend({ cut: 863, unknown: 0, at: now, prev: { cut: 875, at: now - 3_600_000 } }, now)).toMatchObject({ text: "−12/h", tone: "down" });
+    // Falling, it says how long until none is cut at that rate; rising or flat it cannot.
+    expect(etaText(restTrend({ cut: 863, unknown: 0, at: now, prev: { cut: 875, at: now - 3_600_000 } }, now)!.eta_ms!)).toBe("3d");
+    expect(restTrend({ cut: 880, unknown: 0, at: now, prev: { cut: 875, at: now - 3_600_000 } }, now)?.eta_ms).toBeUndefined();
+    expect([etaText(30 * 60_000), etaText(5 * 3_600_000), etaText(72 * 3_600_000)]).toEqual(["<1h", "5h", "3d"]);
+    expect(restTrend({ cut: 863, unknown: 0, at: now, prev: { cut: 875, at: now - 1_800_000 } }, now)?.text).toBe("−24/h");
     expect(restTrend({ cut: 875, unknown: 0, at: now, prev: { cut: 875, at: now - 3_600_000 } }, now)?.tone).toBe("flat");
     expect(restTrend({ cut: 875, unknown: 0, at: now }, now)).toBeNull();
+  });
+});
+
+describe("where a replay link opens", () => {
+  test("?t is seconds; an older link's ms is taken only when the seconds run past the recording", async () => {
+    const { startTime } = await import("./replayPlayerModel");
+    const H = 3_600_000;
+    // ?t=7200 on an eight hour recording: two hours in.
+    expect(startTime(7_200_000, 7200, 8 * H)).toBe(7_200_000);
+    // ?t=7200 on a one minute recording can only have been ms.
+    expect(startTime(7_200_000, 7200, 60_000)).toBe(7200);
+    expect(startTime(83_200, undefined, 60_000)).toBe(83_200);
+    expect(startTime(null, undefined, 60_000)).toBe(null);
   });
 });

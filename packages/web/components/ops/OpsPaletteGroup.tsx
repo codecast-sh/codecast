@@ -11,6 +11,7 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { opsHref, opsRefHref } from "./opsPaths";
 import { issueAttention, replayName, watchAlerting } from "./opsHomeModel";
 import { PALETTE_LIVE } from "../../lib/paletteActions";
+import { dropRequestIds } from "@codecast/shared/contracts/signalFingerprint";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { ATTENTION_CLOCK_MS } from "./useOpsAttention";
 import { useSourceHealthMap } from "./useSourceHealth";
@@ -44,7 +45,7 @@ export function OpsPaletteGroup({ query, navigate }: { query: string; navigate: 
     const exact = opsRefHref(q);
     if (exact) {
       const named =
-        exact.kind === "issue" ? groups.find((g) => g.short_id === exact.ref)?.title
+        exact.kind === "issue" ? dropRequestIds(groups.find((g) => g.short_id === exact.ref)?.title ?? "") || undefined
         : exact.kind === "watch" ? watches.find((w) => w.short_id === exact.ref)?.name
         : exact.kind === "replay" ? (() => { const r = replays.find((x) => x.short_id === exact.ref); return r ? replayName(r) : undefined; })()
         : sources.find((s) => s.short_id === exact.ref)?.name;
@@ -76,7 +77,7 @@ export function OpsPaletteGroup({ query, navigate }: { query: string; navigate: 
     for (const g of groups) {
       if (!hit(g.title) && !hit(g.culprit)) continue;
       const state = issueAttention(g, now)?.state;
-      out.push({ key: g._id, ref: g.short_id, kind: "issue", title: g.title, href: opsHref.issue(g.short_id || g._id), status: state ?? g.status, live: state === "regressed" || state === "escalating" });
+      out.push({ key: g._id, ref: g.short_id, kind: "issue", title: dropRequestIds(g.title), href: opsHref.issue(g.short_id || g._id), status: state ?? g.status, live: state === "regressed" || state === "escalating" });
     }
     for (const s of sources) if (hit(s.name) && !out.some((r) => r.key === `dest-${s._id}`)) {
       const st = sourceState(s);
