@@ -598,7 +598,16 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
     const alt = inner.filter((s) => s !== start).map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
     const varRefs = new RegExp(`\\$(${alt})(?=\\.)`, "g");
     const condRefs = new RegExp(`(^|[^\\w.$])(${alt})(?=\\.)`, "g");
-    const rewrite = (text: string) => (alt ? text.replace(varRefs, (_m, sid: string) => `$${p}${sid}`) : text);
+    // A segment's params (`params="except"`): `$except` in its stations reads the composing node's attribute, empty
+    // when the node sets none. A value lands in a script as written, so it is held to words and names.
+    const params = String(seg.attrs.params ?? "").split(/[\s,]+/).filter(Boolean);
+    const paramValues = params.map((name) => {
+      const value = attrs[name] === undefined ? "" : String(attrs[name]);
+      if (!/^[\w .,:@/+-]*$/.test(value)) throw new Error(`${raw.name}: ${id}'s ${name}="${value}" may hold only words, names and paths`);
+      return { ref: new RegExp(`\\$${name}(?![\\w.])`, "g"), value };
+    });
+    const withParams = (text: string) => paramValues.reduce((t, { ref, value }) => t.replace(ref, value), text);
+    const rewrite = (text: string) => withParams(alt ? text.replace(varRefs, (_m, sid: string) => `$${p}${sid}`) : text);
     const rewriteCondition = (c: string) => (alt ? c.replace(condRefs, (_m, pre: string, sid: string) => `${pre}${p}${sid}`) : c);
     const out = edges.filter((e) => e.from === id);
     const routesFailure = out.some(mentionsFailure);
