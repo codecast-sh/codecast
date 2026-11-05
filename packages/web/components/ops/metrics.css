@@ -1,97 +1,14 @@
-/* Metrics: the overview's cards and table, the watch page and its chart.
+/* Metrics: the overview's cards and table, and the watch page's panels
+   (the chart is chart/metricPlot.css, the page's layout metricPage.css).
    Sol tokens only. Red is the alert's alone; a healthy line is cyan, paused
    is dim and hatched. */
 
-/* ── The chart ── */
-.mx-chart { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 8px; }
-.mx-chart:not([data-full]) { display: block; }
-.mx-y { position: relative; min-width: 28px; font-size: 10px; color: var(--sol-text-dim); text-align: right; font-variant-numeric: tabular-nums; }
-.mx-y span { position: absolute; right: 0; transform: translateY(-50%); white-space: nowrap; }
-.mx-plot { position: relative; user-select: none; touch-action: none; }
-.mx-plot[data-zoomable] { cursor: crosshair; }
-.mx-plot svg { display: block; overflow: visible; }
-.mx-x { grid-column: 2; position: relative; height: 18px; font-size: 10px; color: var(--sol-text-dim); font-variant-numeric: tabular-nums; }
-.mx-x span { position: absolute; top: 4px; transform: translateX(-50%); white-space: nowrap; }
-.mx-x span[data-x-end] { transform: translateX(-100%); color: var(--sol-text-muted); }
-.mx-grid { stroke: color-mix(in srgb, var(--sol-border) 70%, transparent); stroke-width: 1; }
-.mx-line { fill: none; stroke-linejoin: round; stroke-linecap: round; }
-.mx-prev { fill: none; stroke: var(--sol-text-dim); stroke-width: 1.25; stroke-dasharray: 4 3; opacity: 0.8; }
-.mx-threshold { stroke: var(--sol-red); stroke-width: 1; stroke-dasharray: 5 4; opacity: 0.85; }
-.mx-side { fill: color-mix(in srgb, var(--sol-red) 3%, transparent); }
-.mx-band { fill: color-mix(in srgb, var(--sol-red) 6%, transparent); }
-.mx-warn { stroke: var(--sol-yellow); stroke-width: 1; stroke-dasharray: 3 4; opacity: 0.9; }
-.mx-range { stroke: none; }
-
-/* Event markers: a hairline down the plot, a head on top, a card on hover. */
-.mx-mark { position: absolute; top: 0; bottom: 0; width: 0; z-index: 2; --mk: var(--sol-text-muted); }
-.mx-mark::before { content: ""; position: absolute; top: 6px; bottom: 0; left: 0; border-left: 1px dashed color-mix(in srgb, var(--mk) 70%, transparent); pointer-events: none; }
-.mx-mark[data-kind="crossed"] { --mk: var(--sol-red); }
-.mx-mark[data-kind="recovered"], .mx-mark[data-kind="resolved"] { --mk: var(--sol-green); }
-.mx-mark[data-kind="fix"], .mx-mark[data-kind="task"] { --mk: var(--sol-violet); }
-.mx-mark[data-kind="ship"] { --mk: var(--sol-blue); }
-.mx-mark-head { position: absolute; top: -2px; left: -5px; width: 10px; height: 10px; border-radius: 50%; background: var(--mk); box-shadow: 0 0 0 2px var(--sol-bg-alt); cursor: pointer; display: block; }
-.mx-mark[data-kind="crossed"] .mx-mark-head, .mx-mark[data-kind="recovered"] .mx-mark-head { width: 8px; height: 8px; left: -4px; top: -1px; border-radius: 2px; transform: rotate(45deg); }
-.mx-mark-card {
-  position: absolute; top: 10px; display: none; flex-direction: column; gap: 1px; z-index: 4;
-  padding: 5px 8px; border-radius: 6px; font-size: 11px; white-space: nowrap; color: var(--sol-text-muted);
-  background: var(--sol-bg); border: 1px solid var(--sol-border); box-shadow: 0 4px 14px color-mix(in srgb, black 18%, transparent);
-}
-.mx-mark-card[data-side="right"] { left: 8px; }
-.mx-mark-card[data-side="left"] { right: 8px; }
-.mx-mark-card b { color: var(--mk); font-weight: 600; }
-.mx-mark:hover .mx-mark-card, .mx-mark:focus-within .mx-mark-card { display: flex; }
-/* A bridge from the head to its card, so the pointer can reach the card's links. */
-.mx-mark-card::before { content: ""; position: absolute; top: -12px; width: 14px; height: 28px; }
-.mx-mark-card[data-side="right"]::before { left: -12px; }
-.mx-mark-card[data-side="left"]::before { right: -12px; }
-.mx-mark-card a { color: var(--sol-link, var(--sol-blue)); }
-.mx-mark-card a:hover { text-decoration: underline; }
-.mx-mark-links { display: flex; gap: 10px; margin-top: 3px; }
-/* Ships in the window: a faint solid hairline and a small square on the time axis, under the watch's own story. */
-.mx-mark[data-kind="deploy"] { --mk: var(--sol-text-dim); z-index: 1; }
-.mx-mark[data-kind="deploy"]::before { top: 0; border-left: 1px solid color-mix(in srgb, var(--mk) 45%, transparent); }
-.mx-mark[data-kind="deploy"] .mx-mark-head { top: auto; bottom: -4px; left: -3.5px; width: 7px; height: 7px; border-radius: 1.5px; box-shadow: 0 0 0 1.5px var(--sol-bg-alt); }
-.mx-mark[data-kind="deploy"] .mx-mark-card { top: auto; bottom: 12px; }
-.mx-mark[data-kind="deploy"] .mx-mark-card b { color: var(--sol-text); max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
-.mx-mark[data-kind="deploy"] .mx-mark-card::before { top: auto; bottom: -14px; }
-.mx-mark[data-kind="deploy"]:hover { --mk: var(--sol-text-muted); }
+/* The overview's legend. */
 .mx-legend i[data-k="deploy"] { width: 7px; height: 7px; border: 0; border-radius: 1.5px; background: var(--sol-text-dim); }
 .mx-legend button { all: unset; cursor: pointer; display: inline-flex; align-items: center; }
 .mx-legend button[aria-pressed="false"] { opacity: 0.45; text-decoration: line-through; }
 .mx-legend i[data-k="warn"] { border-top: 1.5px dashed var(--sol-yellow); }
 .mx-legend i[data-k="range"] { height: 8px; border: 0; background: color-mix(in srgb, var(--sol-cyan) 18%, transparent); }
-.mx-sel { fill: color-mix(in srgb, var(--sol-cyan) 14%, transparent); stroke: color-mix(in srgb, var(--sol-cyan) 50%, transparent); }
-.mx-cross { stroke: color-mix(in srgb, var(--sol-text-muted) 60%, transparent); stroke-width: 1; }
-.mx-band-strip { position: absolute; bottom: -3px; height: 3px; border-radius: 2px; background: var(--sol-red); }
-.mx-dot { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 2px var(--sol-bg-alt); }
-.mx-dot[data-hover] { width: 8px; height: 8px; margin: -4px 0 0 -4px; }
-.mx-chart[data-paused] .mx-plot {
-  background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--sol-text-dim) 10%, transparent) 6px 7px);
-  border-radius: 4px;
-}
-.mx-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--sol-text-dim); pointer-events: none; }
-.mx-tip {
-  position: absolute; top: 0; z-index: 3; pointer-events: none;
-  display: flex; flex-direction: column; gap: 1px;
-  padding: 5px 8px; border-radius: 6px; margin: 0 8px;
-  font-size: 11px; line-height: 1.3; white-space: nowrap;
-  background: var(--sol-bg); border: 1px solid var(--sol-border);
-  box-shadow: 0 4px 14px color-mix(in srgb, black 18%, transparent);
-  color: var(--sol-text-muted);
-}
-.mx-tip b { color: var(--sol-text); font-size: 12.5px; font-weight: 600; }
-.mx-tip [data-past] { color: var(--sol-red); }
-.mx-tip-time { color: var(--sol-text-dim); font-size: 10.5px; }
-.mx-tip-prev { color: var(--sol-text-dim); }
-.mx-handle {
-  position: absolute; left: calc(100% + 4px); transform: translateY(-50%); z-index: 2;
-  height: 18px; padding: 0 6px; border-radius: 9px; cursor: ns-resize;
-  display: inline-flex; align-items: center; white-space: nowrap;
-  font-size: 10.5px; color: var(--sol-red); background: var(--sol-bg);
-  border: 1px solid color-mix(in srgb, var(--sol-red) 55%, var(--sol-border));
-}
-.mx-handle b { font-weight: 600; font-variant-numeric: tabular-nums; }
-.mx-handle:hover, .mx-chart[data-dragging] .mx-handle { background: color-mix(in srgb, var(--sol-red) 12%, var(--sol-bg)); }
 
 /* ── The overview ── */
 .mx-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
@@ -126,7 +43,7 @@
 .mx-grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
 .mx-card {
   display: block; padding: 11px 13px 9px; border-radius: 8px; border: 1px solid var(--sol-border); background: var(--sol-bg-alt);
-  color: inherit; position: relative; min-width: 0;
+  color: inherit; position: relative; min-width: 0; --mp-bg: var(--sol-bg-alt);
 }
 .mx-card:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 45%, var(--sol-border)); }
 .mx-card:focus-visible, .mx-card[data-cursor] { outline: 2px solid color-mix(in srgb, var(--sol-cyan) 60%, transparent); outline-offset: 1px; }
@@ -260,19 +177,8 @@
 .mx-insights button[aria-selected="true"] { background: color-mix(in srgb, var(--sol-cyan) 12%, transparent); }
 .mx-trans tbody tr { cursor: zoom-in; }
 .mx-trans tbody tr:hover, .mx-trans tbody tr:focus-visible { background: color-mix(in srgb, var(--sol-text) 4%, transparent); outline: none; }
-
-/* Values read far apart (a daily backfill, a reader's own daily series): lighter, dotted, never joined to the polls. */
-.mx-line[data-sparse-tick] { opacity: 0.8; }
-.mx-line[data-sparse-dot] { opacity: 0.9; }
-.mx-preview-line { stroke: var(--sol-violet); stroke-dasharray: 5 3; fill: none; }
-.mx-ghost { stroke: var(--sol-violet); stroke-width: 1.25; stroke-dasharray: 2 3; }
 .mx-legend i[data-k="past"] { border-top-color: var(--sol-red); }
 .mx-legend i[data-k="preview"] { border-top: 1.5px dashed var(--sol-violet); }
-.mx-loading { position: absolute; left: 0; right: 0; top: 0; height: 2px; overflow: hidden; border-radius: 1px; background: color-mix(in srgb, var(--sol-cyan) 14%, transparent); }
-.mx-loading::after { content: ""; position: absolute; top: 0; bottom: 0; width: 30%; background: var(--sol-cyan); animation: mx-loading 1.1s ease-in-out infinite; }
-@keyframes mx-loading { from { left: -30%; } to { left: 100%; } }
-@media (prefers-reduced-motion: reduce) { .mx-loading::after { animation: none; left: 0; width: 100%; opacity: 0.5; } }
-.mx-spark-start { position: absolute; left: 0; bottom: -1px; font-size: 9.5px; line-height: 1; color: var(--sol-text-dim); font-variant-numeric: tabular-nums; pointer-events: none; padding-right: 3px; background: var(--sol-bg-alt); }
 
 /* The page header's mute. */
 .mx-muted { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--sol-text-muted); }
@@ -386,7 +292,6 @@ a.mx-starter-v { text-decoration: underline dotted color-mix(in srgb, var(--sol-
 .mx-gap-label > * { pointer-events: auto; }
 .mx-gap-label > span { pointer-events: none; }
 /* A card's alert stretches read as the alert's, not as grey. */
-.mx-chart:not([data-full]) .mx-band { fill: color-mix(in srgb, var(--sol-red) 14%, transparent); }
 .mx-tip-band { color: var(--sol-red); }
 .mx-steps li[data-state="bad"] i { background: var(--sol-red); border-color: var(--sol-red); }
 .mx-steps li[data-state="bad"] .mx-step-label, .mx-steps li[data-state="bad"] a { color: var(--sol-red); }
