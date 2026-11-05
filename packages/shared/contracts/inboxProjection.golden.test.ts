@@ -101,6 +101,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // v23: a standing session whose live work is a nested subagent (child_live)
   // files by its own state: the `nested_role` row in roles.json.
   23: "873f7c5eaedf6e64",
+  // v24: a session imported from history holds a recent seat only while its
+  // activity is recent (isStaleHistoryImport); no fixture row is an import.
+  24: "873f7c5eaedf6e64",
 };
 
 type Expected = {
