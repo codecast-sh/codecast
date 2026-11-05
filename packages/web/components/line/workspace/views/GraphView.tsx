@@ -19,6 +19,7 @@ import { KeyCap } from "../../../KeyCap";
 import { RunTrail, dayWords, durationWords, useLineNav } from "../../widgets";
 import { GraphCanvas, GraphDefs, type LiveAtStep } from "./graph/GraphCanvas";
 import { GraphOverview } from "./graph/GraphOverview";
+import { foldIdle, isFold } from "./graph/foldIdle";
 import { litRun } from "./graph/litRun";
 import { DOT_LINE, EXIT_LEAD, essenceExits, exitWords, graphLayout, textW, withFailures, type GEdge, type GraphMode } from "./graph/graphLayout";
 import { stepFailures, stepPassed, stepWaits } from "../../../../lib/line/stepTable";
@@ -148,7 +149,17 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
   const [runsOpen, setRunsOpen] = useState(false);
   const [help, setHelp] = useState(false);
   const [intro, setIntro] = useState(true);
-  const layout = useMemo(() => graphLayout(model.graph, { mode }), [model.graph, mode]);
+  const drawerStep = selection.step && model.steps[selection.step] ? selection.step : null;
+  // Drawn live, the idle stretches fold (foldIdle) so the busy part reads without panning; a fold a person opens stays open.
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
+  const liveKeys = live ? [...live.keys()].sort().join(",") : "";
+  const graph = useMemo(
+    () => (live ? foldIdle(model.graph, (id) => live.has(id) || id === drawerStep, unfolded) : model.graph),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- liveKeys carries which steps hold runs, all the fold reads of live
+    [model.graph, liveKeys, drawerStep, unfolded],
+  );
+  const drawn = useMemo(() => (graph === model.graph ? model : { ...model, graph }), [model, graph]);
+  const layout = useMemo(() => graphLayout(graph, { mode }), [graph, mode]);
   // Each step's failures as the Steps table counts them: the Map draws the same number.
   const tableRows = useStepTable(model, workspace);
   const failed = useMemo(() => stepFailures(tableRows), [tableRows]);
@@ -161,7 +172,6 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
   const runIndex = run ? model.runs.indexOf(run) : -1;
   const uid = `lwg${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const active = useTabActive();
-  const drawerStep = selection.step && model.steps[selection.step] ? selection.step : null;
 
   const rootRef = useRef<HTMLDivElement>(null);
   const openRef = useRef(drawerStep);
@@ -317,7 +327,11 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
     setModeState(m);
     try { localStorage.setItem(MODE_KEY, m); } catch { /* private mode */ }
   }, []);
-  const open = useCallback((id: string) => { setFocus(id); setTip(null); select({ step: id }); }, [select]);
+  // A fold opens in place: its steps come back into the graph.
+  const open = useCallback((id: string) => {
+    if (isFold(id)) { setUnfolded((u) => new Set(u).add(id)); return; }
+    setFocus(id); setTip(null); select({ step: id });
+  }, [select]);
   const openWaiting = useCallback((id: string) => { setFocus(id); setTip(null); select({ step: id, show: "waiting" }); }, [select]);
   const pickRun = useCallback((r: LineRunModel | null) => { setRunsOpen(false); select({ run: r?.id ?? null }, r?.caseId ?? null); }, [select]);
   const stepRun = useCallback((dir: 1 | -1) => {
@@ -423,7 +437,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
         <rect width="100%" height="100%" fill={`url(#${uid}-dots)`} />
         <g ref={worldRef}>
           <GraphCanvas
-            model={model}
+            model={drawn}
             layout={layout}
             uid={uid}
             lit={lit}

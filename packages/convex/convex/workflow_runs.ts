@@ -928,14 +928,17 @@ export const RUNS_BY_IDS_MAX = 200;
 // names the workspace's live runs, and the client asks here for any row it
 // holds as live that the map does not (useHealLiveRuns), so the row heals.
 export const byIds = query({
-  args: { ids: v.array(v.id("workflow_runs")) },
+  // Strings, not ids: one row a client made up (a fixture, a stub) must not fail the whole answer, so each is checked.
+  args: { ids: v.array(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const workflows = new Map<string, any>();
     const budget = { reads: 300 };
     const out = [];
-    for (const id of args.ids.slice(0, RUNS_BY_IDS_MAX)) {
+    for (const raw of args.ids.slice(0, RUNS_BY_IDS_MAX)) {
+      const id = ctx.db.normalizeId("workflow_runs", raw);
+      if (!id) continue;
       const run = await ctx.db.get(id);
       if (!run || !(await canReadRun(ctx, userId, run))) continue;
       out.push(await enrichRun(ctx, await withAgentSessions(ctx, run, budget), workflows));
