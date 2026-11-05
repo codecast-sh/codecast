@@ -523,8 +523,11 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 /* The flow diagram (FlowDiagram): the passing path, segments as frames, routes off the path, a run's state. */
 .fd { padding: 12px 12px 10px; overflow-x: auto; background:
   radial-gradient(circle at 1px 1px, var(--lw-grid, color-mix(in srgb, var(--sol-border) 30%, transparent)) 1px, transparent 0) 0 0 / 18px 18px, var(--lw-paper); scrollbar-width: thin; }
-.fd-path { display: flex; align-items: flex-start; gap: 0; margin: 0; padding: 0; list-style: none; width: max-content; min-width: 100%; }
-.fd-cell, .fd-seg-cell { display: flex; align-items: flex-start; }
+.fd-path { display: flex; align-items: stretch; gap: 0; margin: 0; padding: 0; list-style: none; width: max-content; min-width: 100%; }
+/* A cell is its step and, at its foot, its stretch of the rail back to the Session: every cell stretches to the
+   tallest, so the rail runs level under the path. */
+.fd-cell { display: flex; flex-direction: column; }
+.fd-cell-main, .fd-seg-cell { display: flex; align-items: flex-start; }
 .fd-arrow { flex: none; width: 18px; height: 32px; position: relative; }
 .fd-arrow::before { content: ""; position: absolute; left: 3px; right: 6px; top: 50%; border-top: 1.5px solid var(--lw-ink-3); opacity: .55; }
 .fd-arrow::after { content: ""; position: absolute; right: 3px; top: calc(50% - 3.5px); border: 3.5px solid transparent; border-left: 5px solid var(--lw-ink-3); opacity: .55; }
@@ -557,16 +560,48 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-seg[data-state="done"] .fd-seg-name { color: var(--lw-ok); }
 .fd-seg[data-state="stopped"] .fd-seg-name { color: var(--lw-bad); }
 
-.fd-routes { margin: 0; padding: 0 0 0 4px; list-style: none; display: flex; flex-direction: column; gap: 2px; }
-.fd-route { display: grid; grid-template-columns: 13px 1fr; font-size: var(--lw-fs-2xs); line-height: 1.35; color: var(--lw-ink-3); }
-.fd-route b { font-weight: 600; color: var(--lw-ink-2); }
-.fd-route-mark { text-align: left; color: var(--lw-ink-3); }
-/* A stage's findings going back to the session the change came from: the session's violet, as on the run card. */
-.fd-route[data-session], .fd-route[data-session] b, .fd-route[data-session] .fd-route-mark { color: color-mix(in srgb, var(--sol-violet) 85%, var(--lw-ink-3)); }
-.fd-route-to { color: var(--lw-ink-3); }
-/* On a run, the route it took: red only where it stopped. */
-.fd-route[data-taken] b { color: var(--lw-ink); }
-.fd-route[data-taken][data-tone="stop"], .fd-route[data-taken][data-tone="stop"] b, .fd-route[data-taken][data-tone="stop"] .fd-route-mark { color: var(--lw-bad); }
+.fd-routes { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px; max-width: 150px; }
+/* A route is a chip whose shape says what it does; its words are the outcome alone. */
+.fd-route {
+  display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; padding: 1px 7px; border-radius: 6px;
+  font-size: var(--lw-fs-2xs); line-height: 1.5; color: var(--lw-ink-2); border: 1px solid var(--lw-rule-2); background: var(--lw-card);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fd-route-mark { color: var(--lw-ink-3); }
+/* Back to the session: the rail's colour, the rail below carries it home. */
+.fd-route[data-form="session"] { color: color-mix(in srgb, var(--sol-violet) 85%, var(--lw-ink)); border-color: color-mix(in srgb, var(--sol-violet) 40%, transparent); background: color-mix(in srgb, var(--sol-violet) 8%, var(--lw-card)); }
+.fd-route[data-form="session"] .fd-route-mark { color: inherit; }
+/* An end: the flow's end pill, small, its border solid red when it stops the run. */
+.fd-route[data-form="end"] { border-radius: 999px; border-style: dashed; border-color: var(--lw-ink-3); background: var(--lw-paper); }
+.fd-route[data-form="end"][data-tone="stop"] { border-style: solid; border-color: color-mix(in srgb, var(--lw-bad) 45%, transparent); color: color-mix(in srgb, var(--lw-bad) 80%, var(--lw-ink-2)); background: color-mix(in srgb, var(--lw-bad) 6%, var(--lw-paper)); }
+.fd-route[data-taken] { color: var(--lw-ink); border-color: var(--lw-ink-3); }
+.fd-route[data-taken][data-tone="stop"] { color: var(--lw-bad); border-color: var(--lw-bad); background: var(--lw-bad-soft); }
+
+/* The way back to the session: the path opens on it, and a rail runs under every step up to the last that returns. */
+.fd-session {
+  display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 17px; font-size: var(--lw-fs-sm); font-weight: 650;
+  color: color-mix(in srgb, var(--sol-violet) 85%, var(--lw-ink)); border: 1.5px solid color-mix(in srgb, var(--sol-violet) 55%, transparent);
+  background: color-mix(in srgb, var(--sol-violet) 10%, var(--lw-card));
+}
+.fd-rail { margin-top: auto; height: 18px; position: relative; flex: none; }
+.fd-rail::before { content: ""; position: absolute; top: 50%; left: 0; right: 0; border-top: 1.5px solid color-mix(in srgb, var(--sol-violet) 55%, transparent); }
+.fd-cell[data-rail="end"] .fd-rail::before { right: auto; width: 31.5px; }
+.fd-cell[data-rail="start"] .fd-rail::before { left: 23px; }
+/* At the Session it turns up into the pill, an arrowhead under it. */
+.fd-cell[data-rail="start"], .fd-cell[data-drop] { position: relative; }
+.fd-cell[data-rail="start"]::after {
+  content: ""; position: absolute; left: 23px; top: 40px; bottom: 9px; border-left: 1.5px solid color-mix(in srgb, var(--sol-violet) 55%, transparent);
+}
+.fd-cell[data-rail="start"]::before {
+  content: ""; position: absolute; left: 20px; top: 34px; border: 3.5px solid transparent; border-bottom: 5px solid color-mix(in srgb, var(--sol-violet) 70%, transparent);
+}
+/* A step that sends work back drops a line from under it to the rail, behind its chips. */
+.fd-cell[data-drop]::after {
+  content: ""; position: absolute; left: 30px; top: 34px; bottom: 9px; z-index: 0;
+  border-left: 1.5px dashed color-mix(in srgb, var(--sol-violet) 45%, transparent);
+}
+.fd-cell[data-drop] .fd-route { position: relative; z-index: 1; }
+.fd-cell[data-rail] .fd-cell-main { padding-bottom: 6px; }
 .fd-end { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 17px; font-size: var(--lw-fs-sm); font-weight: 600; color: var(--lw-ink-2); border: 1.5px dashed var(--lw-ink-3); }
 .fd-end[data-reached] { border-style: solid; }
 .fd-end[data-reached] { color: var(--lw-ok); border-color: var(--lw-ok); background: var(--lw-ok-soft); }

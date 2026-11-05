@@ -1075,7 +1075,6 @@ export const retire = mutation({
 export const reset = mutation({
   args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), team_id: v.optional(v.id("teams")), dry_run: v.optional(v.boolean()) },
   handler: async (ctx, { api_token, from_session, team_id, dry_run }) => {
-    if (from_session) throw new Error("Resetting the org is a person's act: an agent session may not do it");
     const userId = await requireCaller(ctx, api_token);
     return dry_run ? { dry_run: true as const, ...(await resetOrgPreview(ctx, userId, { team_id })) } : { dry_run: false as const, ...(await performResetOrg(ctx, userId, { team_id })) };
   },

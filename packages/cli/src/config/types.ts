@@ -152,6 +152,10 @@ export interface Config extends CloudSessionSyncSettings {
   visual_version?: string;
   orch_enabled?: boolean;
   orch_version?: string;
+  /** Set when this machine is linked to an account (cast login, cast auth):
+   *  the daemon's next start uploads every transcript on disk, past the usual
+   *  7 day sweep, then clears it (daemon.ts runHistoryImport). */
+  history_import_pending?: boolean;
   /** The cast-* skills snippet (`cast install skills`). */
   skills_enabled?: boolean;
   skills_version?: string;
