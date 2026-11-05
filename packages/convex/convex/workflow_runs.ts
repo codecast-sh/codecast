@@ -919,6 +919,31 @@ export const get = query({
   },
 });
 
+/** The most rows one byIds answer carries. */
+export const RUNS_BY_IDS_MAX = 200;
+
+// Web: these runs as they stand now, each as `get` shapes it. The store's runs
+// arrive through windowed feeds (listRuns keeps a workspace's newest), so a run
+// that ended after it left every window would read live forever; the flow map
+// names the workspace's live runs, and the client asks here for any row it
+// holds as live that the map does not (useHealLiveRuns), so the row heals.
+export const byIds = query({
+  args: { ids: v.array(v.id("workflow_runs")) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const workflows = new Map<string, any>();
+    const budget = { reads: 300 };
+    const out = [];
+    for (const id of args.ids.slice(0, RUNS_BY_IDS_MAX)) {
+      const run = await ctx.db.get(id);
+      if (!run || !(await canReadRun(ctx, userId, run))) continue;
+      out.push(await enrichRun(ctx, await withAgentSessions(ctx, run, budget), workflows));
+    }
+    return out;
+  },
+});
+
 // Web: list the user's dynamic-workflow runs (run_kind=workflow) for the dashboard.
 export const listDynamicRuns = query({
   args: {},
