@@ -200,6 +200,21 @@ describe("line profile (LP2)", () => {
     expect(loadLineProfile(bare).profile.commands.check).toBe("cast ws check");
   });
 
+  test("[line.deploy] target names a deploy.toml target: the line sends that target's command, and a drifted copy warns", () => {
+    const targets = `[[target]]\nname = "production"\nrun = "./deploy.sh --sha $sha"\n`;
+    const only = tmpRepo({ ".codecast/line.toml": `[line.deploy]\ntarget = "production"\n`, ".codecast/deploy.toml": targets });
+    expect(loadLineProfile(only).profile.deploy?.command).toBe("./deploy.sh --sha $sha");
+    const copy = tmpRepo({ ".codecast/line.toml": `[line.deploy]\ntarget = "production"\ncommand = "./deploy.sh --sha $sha"\n`, ".codecast/deploy.toml": targets });
+    expect(loadLineProfile(copy).warnings).toEqual([]);
+    const drifted = tmpRepo({ ".codecast/line.toml": `[line.deploy]\ntarget = "production"\ncommand = "./old.sh"\n`, ".codecast/deploy.toml": targets });
+    const r = loadLineProfile(drifted);
+    expect(r.profile.deploy?.command).toBe("./deploy.sh --sha $sha");
+    expect(r.warnings.join("\n")).toContain('differs from target "production"');
+    // A target the file does not declare leaves line.toml's own command.
+    const other = tmpRepo({ ".codecast/line.toml": `[line.deploy]\ntarget = "web"\ncommand = "./web.sh"\n`, ".codecast/deploy.toml": targets });
+    expect(loadLineProfile(other).profile.deploy?.command).toBe("./web.sh");
+  });
+
   test("a .git directory that is no repository (a leftover of hooks) does not stop the walk", () => {
     const repo = tmpRepo({ ".codecast/line.toml": `[line]\nteam = "Union"\n`, "outreach/.git/hooks/pre-commit": "", "outreach/x.ts": "" });
     expect(loadLineProfile(path.join(repo, "outreach")).profile.team).toBe("Union");

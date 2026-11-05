@@ -113,6 +113,16 @@ describe("expanding a segment", () => {
     expect(() => parseWorkflowSource(`digraph m { start [shape=Mdiamond] x [flow="nowhere"] exit [shape=Msquare] start -> x -> exit }`, root)).toThrow(/not in the pool/);
   });
 
+  test("a segment's params read the composing node's attributes, empty when it sets none", () => {
+    const main = (attrs: string) => `digraph m { start [shape=Mdiamond] deploy [flow="deploy"${attrs}] exit [shape=Msquare] start -> deploy -> exit }`;
+    const wait = (attrs: string) => parseWorkflowSource(main(attrs), root).nodes.get("deploy__wait")!.script!;
+    expect(wait(`, except="aivery-operator"`)).toContain(`--except "aivery-operator"`);
+    expect(wait("")).toContain(`--except ""`);
+    // Run vars are left for the runner; only the declared param is filled in.
+    expect(wait(`, except="x"`)).toContain("--branch $branch");
+    expect(() => parseWorkflowSource(main(`, except="a; rm -rf ."`), root)).toThrow(/may hold only words/);
+  });
+
   test("a change to a segment changes the stations of every flow that uses it", () => {
     write(".codecast/flows/gate.cast", GATE);
     const main = `digraph m { start [shape=Mdiamond] gate [flow="gate"] exit [shape=Msquare] start -> gate -> exit }`;
