@@ -162,7 +162,7 @@ class Server {
       case "/cli/org/template/lessons": return body.instance_key ? this.lessons.filter((l) => l.instance_key === body.instance_key) : this.lessons.filter((l) => l.template_id === body.template_id);
       case "/cli/org/template/lesson-status": { const row = this.lessons.find((l) => l._id === body.lesson_id); if (!row) throw new Error("Lesson not found"); Object.assign(row, { status: body.status, released_in: body.released_in }); return row; }
       case "/cli/org/template/learning": return { workspace: `team:${body.team_id}`, enabled: this.learning, can_change: true };
-      case "/cli/org/template/learning/set": { if (body.from_session) throw new Error("a person's choice"); this.learning = body.enabled; return { workspace: `team:${body.team_id}`, enabled: this.learning, can_change: true }; }
+      case "/cli/org/template/learning/set": { this.learning = body.enabled; return { workspace: `team:${body.team_id}`, enabled: this.learning, can_change: true }; }
       case "/cli/org/template/learn/pass": { const part = this.passes.shift() ?? { template_id: body.template_id, read: 0, failed: 0, filed: [], refused: {}, remaining: 0 }; return part; }
       case "/cli/org/template/get": return { template_id: body.template_id, workspace: this.templateWorkspace, releases: Object.entries(this.releases).map(([digest, r]) => ({ version: r.manifest.version, digest, status: "canary" })) };
       case "/cli/images/upload-url": return "https://upload.test/snapshot";
@@ -991,13 +991,13 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     expect(await setLessonStatus(f.server.deps, ["lesson-1"], { accept: true })).toEqual([{ id: "lesson-1", status: "accepted", released_in: undefined }]);
     expect(await setLessonStatus(f.server.deps, ["lesson-1"], { releasedIn: "1.2.1" })).toEqual([{ id: "lesson-1", status: "released", released_in: "1.2.1" }]);
     await expect(setLessonStatus(f.server.deps, ["lesson-1"], {})).rejects.toThrow(/exactly one/);
-    // The switch is a person's: the session this test runs inside must not reach the server as the caller.
+    // The session this test runs inside must not reach the server as the caller.
     const env = { CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID, CODECAST_SESSION_ID: process.env.CODECAST_SESSION_ID, CODECAST_MANAGED_SESSION: process.env.CODECAST_MANAGED_SESSION };
     for (const key of Object.keys(env)) delete process.env[key];
     try {
       expect(await templateLearning(f.server.deps, undefined, f.options)).toMatchObject({ enabled: false });
       expect(await templateLearning(f.server.deps, "on", { team: "team-1" })).toMatchObject({ enabled: true });
-      await expect(templateLearning(f.server.deps, "off", { team: "team-1", session: "session-1" })).rejects.toThrow(/a person's choice/);
+      expect(await templateLearning(f.server.deps, "off", { team: "team-1", session: "session-1" })).toMatchObject({ enabled: false });
     } finally { for (const [key, value] of Object.entries(env)) if (value !== undefined) process.env[key] = value; }
     f.server.passes = [{ template_id: "growth", read: 2, failed: 0, filed: [{ id: "l-1" }], refused: { name: 1 }, remaining: 1 }, { template_id: "growth", read: 1, failed: 1, filed: [], refused: { url: 1 }, remaining: 1 }];
     expect(await learnPass(f.server.deps, "growth")).toEqual({ template_id: "growth", read: 3, failed: 1, filed: [{ id: "l-1" }], refused: { name: 1, url: 1 }, remaining: 1 });

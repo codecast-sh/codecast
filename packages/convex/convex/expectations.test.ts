@@ -203,16 +203,8 @@ describe("who may read and change a project's expectations", () => {
     expect(await run(forProject, await makeCtx(OUTSIDER), { project_id: "projects_calls" })).toBeNull();
   });
 
-  test("an agent session proposes but never applies or drops", async () => {
+  test("an agent session applies as a stand-in, and the version says so", async () => {
     const ctx = await makeCtx();
-    await run(propose, ctx, { ...scope(), summary: "Seed", ops: [{ op: "add", part: "Calls", text: "Card facts are true.", citations: [BARE] }] });
-    await expect(run(resolve, ctx, { api_token: `tok-${OWNER}`, proposal: "xp-1", action: "apply", conversation_id: "jx7abcd" })).rejects.toThrow(/a person's act/);
-    expect((await run(show, ctx, scope())).proposals[0].status).toBe("open");
-  });
-
-  test("in a trial project an agent session applies as a stand-in, and the version says so", async () => {
-    const ctx = await makeCtx();
-    await ctx.db.patch("projects_calls", { line_trial: { since: 1, by: OWNER } });
     await run(propose, ctx, { ...scope(), summary: "Seed", ops: [{ op: "add", part: "Calls", text: "Card facts are true.", citations: [BARE] }] });
     expect(await run(resolve, ctx, { api_token: `tok-${OWNER}`, proposal: "xp-1", action: "apply", conversation_id: "jx7abcd" })).toEqual({ short_id: "xp-1", status: "applied", version: 1 });
     expect((await run(show, ctx, scope())).doc).toMatchObject({ how: "stand_in", proposal: "xp-1" });

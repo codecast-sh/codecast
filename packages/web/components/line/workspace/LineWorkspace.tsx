@@ -34,7 +34,7 @@ import { useSyncTrial, useTrialCards } from "../../../hooks/useSyncTrial";
 import { useSyncWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { lineSelectionSearch, lineViewHome, readLineSelection, type LineSelection, type LineSelectionPatch } from "../../../lib/line/lineWorkspaceUrl";
 import { pipelineFigures, pipelineHome, pipelineStageForGoKey, pipelineStageOf, type PipelineStage } from "../../../lib/line/pipeline";
-import { HealLiveRuns, useFlowMap } from "../../../hooks/useFlowMap";
+import { useFlowMap } from "../../../hooks/useFlowMap";
 import { useLiveFlow } from "../../../hooks/useLiveFlow";
 import { PipelineNav } from "./PipelineNav";
 import { NO_PROJECT, type RollupRow } from "../../../lib/lineFlow";
@@ -301,7 +301,6 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
     <TaskHrefProvider place={problemPlace}>
       {!unresolved && ws.historyFeeds.map((f) => <HistoryFeed key={f.projectId} projectId={f.projectId} repositories={f.repositories} />)}
       {trialSpaces.map((key) => <TrialFeed key={key} workspace={key} />)}
-      <HealLiveRuns space={space?.key ?? null} />
       {ws.decisionRuns.map((id) => <RunFeed key={id} id={id} />)}
       <div className="lw lw-app" data-line-workspace={projectId ?? "all"} data-line-app data-view={selection.view}>
         <header className="lw-head">

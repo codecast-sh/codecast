@@ -225,10 +225,9 @@ as install does today.
 
 **The answers stay the person's after the hire.** The role page lists every
 non-secret answer with its value, and a person who may edit the role changes
-any of them there (`orgTemplates.answer`). Only a person in the browser can:
-an agent session or an api token is refused (`refuseUnlessHuman`), because
-answers like the budget set what the role may spend, and raising a money answer
-goes through the consequential review. A changed answer on a ready instance
+any of them there (`orgTemplates.answer`), and so may a session or the CLI
+with the same access. On the web, raising a money answer goes through the
+consequential review. A changed answer on a ready instance
 queues the host step on its machine. Bind and upgrade read the server's
 answers into the receipt first (`pullSetupMarks`) and render the instance file
 from the receipt, so the receipt is the authority and every upgrade renders
@@ -505,8 +504,8 @@ as Codecast's own work, lessons generalized before they leave the workspace.
 
 **The opt-in** is one row per workspace, `org_template_learning: { workspace
 (the access key), enabled, changed_by, changed_at }`; no row means off. It is
-a person's choice: a team's admin, or the owner of a personal workspace, never
-an agent session. One switch with one sentence
+set by a team's admin, or the owner of a personal workspace, from the web, the
+CLI or an agent session. One switch with one sentence
 (`LEARNING_OPT_IN_SENTENCE`, shared, so every surface says the same thing)
 shows where a person meets a template: the hire form and the role page's
 Template section. The sentence says what leaves (generalized lessons only:
@@ -572,7 +571,7 @@ without a person.
 The commands, left for a Codecast admin to run (none of them has run in prod):
 
 ```bash
-# Ashot's teams opt in, each from a person's terminal (an agent session is refused):
+# Ashot's teams opt in:
 cast org template learning on --team <team>
 # The loop, armed once from ~/src/platform by a Codecast team admin:
 cast trigger add - --every 1d --spawn --title "Template learning" \

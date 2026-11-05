@@ -193,9 +193,9 @@ same door errors and deploys use, `POST /cli/ingest/<key>`):
   the output back (`/cli/moments/complete`). The moment records the
   extractor's version and the gap between its last event and the extraction,
   which the judge is told.
-- **Storage is a person's choice.** A moment can carry customer
+- **Storage is chosen per source.** A moment can carry customer
   conversations, so its body stays on the extractor's machine
-  (`~/.local/share/codecast/moments-shadow/`, 30 days) unless a person sets
+  (`~/.local/share/codecast/moments-shadow/`, 30 days) unless someone sets
   the source's moment storage to codecast (`cast sources set <name>
   --moment-storage codecast`). Then the body goes to R2 beside replays and
   the row points at it. How long it stays is the source's retention
