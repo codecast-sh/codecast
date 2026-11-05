@@ -7,7 +7,7 @@ import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { ParkedClock, taskWaiting } from "./parkedClock.js";
 import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
-import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
+import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition } from "./condition";
 import { keepEnds } from "./keepEnds";
 import { executeCommand, expandScriptVars, recordNodeOutput } from "./commandStation";
@@ -44,11 +44,18 @@ function resolveNextNode(
     .filter(e => e.from === current.id && !(current.type === "human" && e.label))
     .sort((a, b) => (b.weight || 0) - (a.weight || 0));
 
+  // An edge that sends the run back without spending a visit marks the node it names (runNodeLoop reads the mark).
+  const follow = (edge: WorkflowEdge): WorkflowNode | null => {
+    const node = graph.nodes.get(edge.to) ?? null;
+    if (node && edge.free_visit) context[`${edge.free_visit}.free_visit`] = "1";
+    return node;
+  };
+
   // First pass: edges with conditions
   const conditional = outEdges.filter(e => e.condition);
   for (const edge of conditional) {
     if (evalCondition(edge.condition!, context)) {
-      const node = graph.nodes.get(edge.to);
+      const node = follow(edge);
       if (node) return node;
     }
   }
@@ -58,7 +65,7 @@ function resolveNextNode(
   for (const edge of unconditional) {
     // If there were conditional edges and none matched, skip unconditional
     if (conditional.length > 0) continue;
-    const node = graph.nodes.get(edge.to);
+    const node = follow(edge);
     if (node) return node;
   }
 
@@ -1942,7 +1949,14 @@ async function runNodeLoop(
     // Fabro: checked first, before anything else. Exceeding limit = hard abort.
     // Within an attempt visit counts are never reset (even after retry_target jumps); a gate's answer starts the next.
     state.currentNodeId = current.id;
-    const visits = (state.visitCounts[current.id] || 0) + 1;
+    // A round sent back only because main moved under the change (a clash) is not the station failing: up to its
+    // max_free_visits such rounds spend none of its visits (a person's answer starts the count again, clearVisits). Ten runs ran out of Build visits on clashes alone after the
+    // Nov 5 lift, each Eval finding that main had moved again while the run rebuilt and waited.
+    const freeUsed = Number(state.context[`${current.id}.free.visits`] || 0);
+    const free = state.context[`${current.id}.free_visit`] === "1" && (state.visitCounts[current.id] || 0) > 0 && freeUsed < (current.max_free_visits ?? 0);
+    delete state.context[`${current.id}.free_visit`];
+    if (free) state.context[`${current.id}.free.visits`] = String(freeUsed + 1);
+    const visits = (state.visitCounts[current.id] || 0) + (free ? 0 : 1);
     state.visitCounts[current.id] = visits;
     // Edges may route on how often a station has run (`build.visits >= 3`).
     state.context[`${current.id}.visits`] = String(visits);
@@ -2032,6 +2046,10 @@ async function runNodeLoop(
     }
     // A person's answer is the next attempt: a Revise sent back to a build that spent its visits is carried out (Oct 26).
     if (current.type === "human" && outcome !== "failure" && !options.dryRun && !state.context["human.gate.no_card"]) clearVisits(state.visitCounts, state.context);
+    // "No decision of yours stands" is news for the one visit the gate sent back. Left set, every later visit (a card
+    // the card station refused) read it too, and Present withdrew its open card and posted it again unchanged,
+    // dropping the ladder's recommendations each time (sd-2513, sd-2527, sd-2528 on ct-62633, Nov 5).
+    if (current.type !== "human" && presentsDecision(current, graph)) delete state.context["human.gate.no_card"];
 
     if (options.runId) {
       await reportProgress(options, {

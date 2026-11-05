@@ -29,6 +29,7 @@ import { formatIdleDuration } from "../../lib/sessionCard";
 import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { useInboxSelection } from "../../lib/inboxSelection";
+import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipState";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -156,6 +157,8 @@ export const SessionCard = memo(function SessionCard({
     // conversation the same way from its first seconds on. A string, so only a
     // changed name wakes the card.
     (s) => (hosted ? hostedRowTitle(s, cardId) : ""),
+    // Where its work is on its way to production, as the chip's words.
+    (s) => sessionShipSig(s as any, cardId),
   ]);
   const liveTitle = hosted ? hostedRowTitle(st, cardId) : "";
   const meId = st.currentUser?._id?.toString?.() ?? null;
@@ -334,6 +337,7 @@ export const SessionCard = memo(function SessionCard({
       author={author}
       identity={identity}
       viewers={viewers}
+      ship={sessionShipFromSig(sessionShipSig(st as any, cardId))}
       spawnedByTitle={spawnedByTitleOf(st, spawnedById)}
       anchorIdentity={anchorIdentity}
       runHost={runHost}
