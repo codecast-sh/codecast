@@ -311,8 +311,15 @@
 .lwg-canvas[data-live] .lwg-node:hover .lwg-exits,
 .lwg-canvas[data-live] .lwg-node[data-selected] .lwg-exits,
 .lwg-canvas[data-live] .lwg-node:focus-visible .lwg-exits { opacity: 1; }
-.lwg-canvas[data-live] .lwg-node:not([data-live]):not([data-waiting]) .lwg-s,
-.lwg-canvas[data-live] .lwg-node:not([data-live]):not([data-waiting]) .lwg-ran { opacity: .6; }
+.lwg-canvas[data-live] .lwg-s:not([data-now]),
+.lwg-canvas[data-live] .lwg-ran { opacity: .6; }
+.lwg-now { font-weight: 650; }
+.lwg-now[data-tone="live"] { fill: var(--lw-live); }
+.lwg-now[data-tone="bad"] { fill: var(--lw-bad); }
+.lwg-now[data-tone="you"] { fill: var(--lw-person); }
+.lwg-now[data-tone="wait"] { fill: var(--lw-ink-2); }
+/* A person's step waiting on the viewer is drawn filled: its line keeps the pill's own ink. */
+.lwg-node[data-kind="person"][data-waiting] .lwg-now { fill: inherit; }
 .lwg-canvas[data-live] .lwg-node[data-live="stalled"] .lwg-shape { stroke: color-mix(in srgb, var(--lw-bad) 65%, transparent); }
 .lwg-canvas[data-live] .lwg-lane-sub { display: none; }
 /* Drawn live, a branch's name shows where it matters: on the hovered step's edges (the peek layer), the open step's or
@@ -320,3 +327,18 @@
 .lwg-canvas[data-live] .lwg-elabels .lwg-elabel:not([data-shown]):not([data-owed]) { opacity: 0; pointer-events: none; }
 .lwg-canvas[data-live] .lwg-node:not(:hover):not([data-selected]) .lwg-trouble { fill: var(--lw-ink-3); }
 .lwg-canvas[data-live] .lwg-node:not(:hover):not([data-selected]) .lwg-bar { opacity: .3; }
+
+/* The overview (GraphOverview): the whole graph in the stage's bottom left corner, live steps colored, the view outlined. */
+.lwg-overview {
+  position: absolute; left: 14px; bottom: 14px; z-index: 3; width: 196px; height: 112px; padding: 6px; box-sizing: border-box;
+  border: 1px solid var(--lw-rule); border-radius: 10px; background: color-mix(in srgb, var(--lw-card) 94%, transparent); cursor: pointer;
+}
+.lwg[data-run-bar] .lwg-overview { bottom: 96px; }
+.lwg-ov-edges path { fill: none; stroke: var(--lw-edge-faint); stroke-width: 1; }
+.lwg-ov-nodes rect, .lwg-ov-nodes circle { fill: color-mix(in srgb, var(--lw-ink) 16%, transparent); }
+.lwg-ov-live [data-state="live"] { fill: var(--lw-live); }
+.lwg-ov-live [data-state="you"] { fill: var(--lw-person); }
+.lwg-ov-live [data-state="bad"] { fill: var(--lw-bad); }
+.lwg-ov-view { fill: color-mix(in srgb, var(--lw-ink) 6%, transparent); stroke: var(--lw-ink-2); stroke-width: 1.5; rx: 8; }
+/* Drawn live, the view rests on the step holding most work at the stage's middle: the edge arrows sit under the toolbar. */
+.lwg[data-live] > .line-edge-arrow { top: var(--lwg-arrow-y, 96px); }

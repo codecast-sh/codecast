@@ -16,7 +16,7 @@ import type { LineViewProps } from "../types";
 const SHOWN = 40;
 
 export type RunState = "live" | "you" | "stalled" | "failed" | "done";
-const FILTERS: Array<{ key: RunState | "all"; label: string }> = [
+const FILTERS: Array<{ key: ActivityFilter; label: string }> = [
   { key: "all", label: "All" },
   { key: "you", label: "On a person" },
   { key: "stalled", label: "Stalled" },
@@ -43,8 +43,10 @@ function runWords(r: FlowRun, st: RunState): string {
   }
 }
 
-export function FlowActivity({ runs, flowLabel, now, href }: { runs: FlowRun[]; flowLabel: (r: FlowRun) => string | null; now: number; href: LineViewProps["href"] }) {
-  const [filter, setFilter] = useState<RunState | "all">("all");
+export type ActivityFilter = RunState | "all";
+
+/** `filter`/`onFilter`: which runs it lists, held by the stage so the head's stalled count can narrow it. */
+export function FlowActivity({ runs, flowLabel, now, href, filter, onFilter: setFilter }: { runs: FlowRun[]; flowLabel: (r: FlowRun) => string | null; now: number; href: LineViewProps["href"]; filter: ActivityFilter; onFilter: (f: ActivityFilter) => void }) {
   const [more, setMore] = useState(false);
   const rows = useMemo(() => runs.map((r) => ({ r, st: runState(r, now) })).sort((a, b) => b.r.updated_at - a.r.updated_at), [runs, now]);
   const counts = useMemo(() => {

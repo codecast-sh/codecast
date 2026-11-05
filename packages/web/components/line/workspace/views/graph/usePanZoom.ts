@@ -24,10 +24,12 @@ const cancelFrame = (id: number) => { if (typeof cancelAnimationFrame === "funct
 
 export type PanZoom = {
   /** Fit a box (the whole graph by default) into the stage. */
-  fit: (anim?: boolean, box?: Box) => void;
+  /** `floor`: the smallest zoom this fit may pick, for a caller holding a group whose words it has already cut to the few that matter. */
+  fit: (anim?: boolean, box?: Box, floor?: number) => void;
   /** Bring a point (a step `half` wide) into view at a working zoom: the graph's own edges stay in when the step still shows whole. */
   /** `half`: how far the thing at (x, y) reaches each side, one number when it is symmetric. */
-  centerOn: (x: number, y: number, anim?: boolean, half?: number | { left: number; right: number }, opts?: { k?: number; middle?: boolean }) => void;
+  /** `exact`: center on the point itself (a jump), not on a step with what leads to it. */
+  centerOn: (x: number, y: number, anim?: boolean, half?: number | { left: number; right: number }, opts?: { k?: number; middle?: boolean; exact?: boolean }) => void;
   /** Zoom by a factor about the stage's center. */
   zoomBy: (f: number) => void;
   /** Pan by a share of the stage's width: positive brings what is to the right into view. */
@@ -75,7 +77,7 @@ export function usePanZoom(
     return { w: r?.width ?? 0, h: r?.height ?? 0 };
   }, [svgRef]);
 
-  const fit = useCallback((anim = true, box?: Box) => {
+  const fit = useCallback((anim = true, box?: Box, floor = FIT_MIN_K) => {
     const { w, h } = size();
     if (!w || !h) return;
     const B = box ?? o.current.bounds;
@@ -84,13 +86,13 @@ export function usePanZoom(
     const ah = Math.max(80, h - i.top - i.bottom);
     // Never fit so small that its words stop reading: past FIT_MIN_K the graph keeps its size, starts at its left
     // (where a problem comes in) and top, and pans for the rest.
-    const k = Math.max(FIT_MIN_K, Math.min(aw / B.w, ah / B.h, 1.2));
+    const k = Math.max(floor, Math.min(aw / B.w, ah / B.h, 1.2));
     const x = B.w * k > aw ? i.left - B.x * k : i.left + (aw - B.w * k) / 2 - B.x * k;
     const y = B.h * k > ah ? i.top - B.y * k : i.top + (ah - B.h * k) / 2 - B.y * k;
     tween({ x, y, k }, anim);
   }, [size, tween]);
 
-  const centerOn = useCallback((x: number, y: number, anim = true, half: number | { left: number; right: number } = 0, opts: { k?: number; middle?: boolean } = {}) => {
+  const centerOn = useCallback((x: number, y: number, anim = true, half: number | { left: number; right: number } = 0, opts: { k?: number; middle?: boolean; exact?: boolean } = {}) => {
     const reach = typeof half === "number" ? { left: half, right: half } : half;
     const { w, h } = size();
     if (!w || !h) return;
@@ -109,7 +111,7 @@ export function usePanZoom(
     const leftEdge = i.left - B.x * k;
     const keepRight = i.left + aw - 24 - (x + reach.right) * k;
     const keepLeft = i.left + 24 - (x - reach.left) * k;
-    const across = keepRight >= keepLeft ? Math.max(keepLeft, Math.min(leftEdge, keepRight)) : place(i.left + aw / 2 - x * k, B.x, B.w, aw, i.left);
+    const across = keepRight >= keepLeft && !opts.exact ? Math.max(keepLeft, Math.min(leftEdge, keepRight)) : place(i.left + aw / 2 - x * k, B.x, B.w, aw, i.left);
     tween({
       x: B.w * k <= aw ? place(0, B.x, B.w, aw, i.left) : across,
       y: place(i.top + ah * (opts.middle ? 0.5 : 0.4) - y * k, B.y, B.h, ah, i.top),
