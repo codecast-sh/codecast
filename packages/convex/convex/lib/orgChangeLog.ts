@@ -66,7 +66,8 @@ type State = {
 export type OrgWrite = { table: string; id: string; before: Record<string, any>; after: Record<string, any> };
 
 const FIELDS: Record<string, string[]> = {
-  org_roles: ["status", "name", "handle", "avatar", "charter", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id", "authority"],
+  // A role's own settings too (given name, the handles a rename left, its line, its two switches), so an undo takes back every one a role_edit or its own command moved.
+  org_roles: ["status", "name", "handle", "avatar", "charter", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id", "authority", "given_name", "previous_handles", "line_workflow_slug", "hires_freely", "keeps_reports_inside"],
   conversations: ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id", "title", "title_is_custom", "seat_previous", "persistent", "status", "inbox_pinned_at"],
   anchors: ["org_role_id", "status"],
   users: ["bot_kind"],

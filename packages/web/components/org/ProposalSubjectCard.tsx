@@ -517,11 +517,15 @@ export function Sentence({ text, span, name, subject }: { text: string; span: [n
 }
 
 /** The pill for a record a change names, when the change names one that already exists. */
-export function recordRef(change: OrgProposalChange["change"]): { type: "task" | "plan" | "session"; id: string } | null {
+export function recordRef(change: OrgProposalChange["change"]): { type: "task" | "plan"; id: string } | null {
   if (change.kind === "task_status") return { type: "task", id: change.task };
   if (change.kind === "plan_status") return { type: "plan", id: change.plan };
-  if (change.kind === "file_session") return { type: "session", id: change.session };
   return null;
+}
+
+/** The pill a card's sentence draws for its subject: a record, or the session a filing moves. */
+function subjectRef(change: OrgProposalChange["change"]): { type: "task" | "plan" | "session"; id: string } | null {
+  return change.kind === "file_session" ? { type: "session", id: change.session } : recordRef(change);
 }
 
 export function RecordPill({ type, id, title }: { type: "task" | "plan" | "project" | "session"; id: string; title: string }) {
@@ -666,7 +670,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
   const numberTone = card.status === "failed" ? RED : QUIET;
   const leadId = card.changes[0]?._id ?? card.change_ids[0];
   const record: RecordKind | undefined = card.face.kind === "record" ? card.face.record : card.kind === "project" ? "project" : undefined;
-  const pillRef = card.changes[0] ? recordRef(card.changes[0].change) : null;
+  const pillRef = card.changes[0] ? subjectRef(card.changes[0].change) : null;
   // A card that only moves a record's status says it twice in words ("Mark the task X as dropped", then Status): the record heads the entry and the move says the rest.
   const statusOnly = !!pillRef && !split && card.rows.some((r) => r.kind === "status" && r.op !== "same") && card.rows.every((r) => r.kind === "status");
   const home = card.changes[0] ? recordHome(card.changes[0].change) : null;
