@@ -42,6 +42,7 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   file: { kind: "file", plan: "pl-1", project: "Platform" },
   file_session: { kind: "file_session", session: "jx7abcd", to: "@sales", title: "Launch thread" },
   charter_edit: { kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "on budget", after: "under budget" }, { op: "add", line: "Reports spend every Monday." }] },
+  role_edit: { kind: "role_edit", handle: "growth", name: "Head of Funnel", new_handle: "head-of-funnel", given_name: null, line: "quick-change", keeps_reports_inside: true },
   plan_status: { kind: "plan_status", plan: "pl-7", status: "done", reason: "every task closed" },
   task_status: { kind: "task_status", task: "ct-42", status: "done", reason: "commits landed, still open" },
   project_status: { kind: "project_status", project: "Legacy", status: "paused", reason: "no activity 30d" },
@@ -76,6 +77,10 @@ describe("org change validation", () => {
       [{ kind: "routine", handle: "gr", title: "t", prompt: "p", every: "weekly" }, "duration like 7d"],
       [{ kind: "routine", handle: "gr", title: "t", every: "7d" }, "title and a prompt"],
       [{ kind: "project_meta", project: "pr-1" }, "changes nothing"],
+      [{ kind: "role_edit", handle: "gr" }, "role_edit changes nothing"],
+      [{ kind: "role_edit", handle: "gr", new_handle: "Head Of Funnel" }, "new_handle"],
+      [{ kind: "role_edit", handle: "gr", name: " " }, "role_edit name"],
+      [{ kind: "role_edit", handle: "gr", paused: "yes" }, "paused is true or false"],
       [{ kind: "project_meta", project: "pr-1", priority: "p9" }, "priority is one of"],
       [{ kind: "project_meta", project: "pr-1", success_metrics: "x" }, "lists of strings"],
       [{ kind: "adopt", handle: "head-of-people" }, "adopt needs the conversation"],
@@ -1229,5 +1234,15 @@ describe("a goal's numbers in a proposal carry their series and guardrails", () 
     expect(shape([{ name: "Dollars per intro", target: "under $250", series: "in-4" }])).toContain("metric watch's short id");
     expect(shape([{ name: "Bounce rate", target: "under 3%", guardrail: "yes" }])).toContain("guardrail is true or false");
     expect(metricsWords([{ name: "Dollars per intro", target: "under $250", series: "MW-12" }, { name: "Bounce rate", target: "under 3%", guardrail: true }])).toBe("Dollars per intro (target under $250, live from mw-12) and Bounce rate (target under 3%, a guardrail)");
+  });
+});
+
+describe("role_edit", () => {
+  test("says each setting it moves, and lands after the other changes on the role", () => {
+    const c: OrgChange = { kind: "role_edit", handle: "growth", name: "Head of Funnel", new_handle: "head-of-funnel", paused: true };
+    expect(describeOrgChange(c)).toBe(`edit @growth: name "Head of Funnel", handle @head-of-funnel, paused`);
+    expect(changeLine(c, { brief: true })).toBe("rename @growth to Head of Funnel (@head-of-funnel) and pause it");
+    const order = orderOrgChanges([c, { kind: "charter_edit", handle: "growth", edits: [{ op: "add", line: "x" }] } as OrgChange, { kind: "move", handle: "growth", reports_to: "me" } as OrgChange], (x) => x);
+    expect(order.map((x) => x.kind)).toEqual(["move", "charter_edit", "role_edit"]);
   });
 });
