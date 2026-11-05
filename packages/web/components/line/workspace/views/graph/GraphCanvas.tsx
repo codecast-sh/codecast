@@ -77,7 +77,10 @@ export function GraphDefs({ uid }: { uid: string }) {
 
 // ── lanes ────────────────────────────────────────────────────────────────────
 
-const Lanes = memo(function Lanes({ layout, uid }: { layout: GraphLayout; uid: string }) {
+/** The live map's key for runs that have not reached a step yet: they stand at the entry. */
+export const LIVE_ENTRY = "start";
+
+const Lanes = memo(function Lanes({ layout, uid, entryLive }: { layout: GraphLayout; uid: string; entryLive?: LiveAtStep }) {
   return (
     <g className="lwg-lanes">
       {layout.lanes.map((l) => (
@@ -95,6 +98,7 @@ const Lanes = memo(function Lanes({ layout, uid }: { layout: GraphLayout; uid: s
         <g className="lwg-terminus" transform={`translate(${layout.entry.x},${layout.entry.y})`}>
           <circle r={6} />
           <text y={24} textAnchor="middle">{layout.entry.label}</text>
+          {entryLive && entryLive.running + entryLive.waiting > 0 ? <LiveBadge live={entryLive} x={-liveBadgeW(entryLive) / 2} y={-22} /> : null}
         </g>
       )}
       {layout.entryEdge && <path className="lwg-edge lwg-edge-term" d={layout.entryEdge} markerEnd={`url(#${uid}-arrow)`} />}
@@ -522,7 +526,7 @@ export const GraphCanvas = memo(function GraphCanvas({ model, layout, uid, lit, 
   }, [layout, sel]);
   return (
     <g className="lwg-canvas" data-mode={layout.mode} data-run={lit ? "" : undefined} data-live={live ? "" : undefined}>
-      <Lanes layout={layout} uid={uid} />
+      <Lanes layout={layout} uid={uid} entryLive={live?.get(LIVE_ENTRY)} />
       <Edges layout={layout} lit={lit} selected={sel} uid={uid} intro={intro} onHover={onEdgeHover} />
       {peek && layout.nodes.has(peek) && <Peek layout={layout} id={peek} uid={uid} />}
       <g className="lwg-nodes">

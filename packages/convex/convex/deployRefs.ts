@@ -21,6 +21,8 @@ export const whereIs = query({
 });
 
 const RECENT = 80;
+/** The commits a deploy row lists by name; the rest are counted. */
+const COMMIT_ROWS = 40;
 
 /** A team's newest deploys, every target, each with the sessions whose commits it carried and the tasks it took out. */
 export const recentForTeam = query({
@@ -76,6 +78,14 @@ export const recentForTeam = query({
         started_by: d.started_by?.name ?? null,
         note: d.note ?? null,
         commits: d.commits?.length ?? 0,
+        // What it took out, change by change: each commit with the session that wrote it and the tasks it names.
+        commit_rows: await Promise.all((d.commits ?? []).slice(0, COMMIT_ROWS).map(async (c) => ({
+          sha: c.sha,
+          subject: c.subject,
+          ...(c.author ? { author: c.author } : {}),
+          ...(c.conversation_id ? { conversation_id: String(c.conversation_id) } : {}),
+          tasks: (await Promise.all((c.task_ids ?? []).slice(0, 3).map(async (t) => (await taskOf(t))?.short_id ?? null))).filter(Boolean),
+        }))),
         sessions,
         tasks: taskRows,
         created_at: d.created_at,

@@ -9,9 +9,12 @@
 // of the shipped line-deploy graph (DP8): `cast line deploy step` runs one,
 // and a failed one comes back to the line through `cast line deploy return`.
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { spawn, spawnSync } from "./proc.js";
 import { deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
 import { resolveCastInvocation } from "./castInvocation.js";
+import type { ResolvedLineProfile } from "./lineProfile.js";
 import { targetFromLineDeploy, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
 
 export type DeployStageReply = {
@@ -358,6 +361,40 @@ function ghCli(args: string[]): { code: number; out: string } {
 
 // ── any deploy target (deploys.md DP10 to DP13) ──────────────────────────────
 
+/**
+ * The line's deploy sends a target .codecast/deploy.toml declares (deploys.md DP10) when `[line.deploy] target`
+ * names one: that file holds the command, so the line runs the target's. A `[line.deploy] command` beside it is a
+ * copy for CLIs that read only line.toml, and a copy that drifted from the target is a warning. Every reader of the
+ * line's deploy goes through loadLineDeployProfile.
+ */
+export async function withDeclaredTarget(r: ResolvedLineProfile): Promise<ResolvedLineProfile> {
+  const deploy = r.profile.deploy;
+  if (!deploy?.target || !r.root) return r;
+  // Loaded here, not by lineProfile.ts: the daemon reads profiles and stays off the deploy files' graph.
+  const { DEPLOY_TARGETS_REL_PATH, readDeployTargets } = await import("./workspace/deployTargetsFile.js");
+  const { MANIFEST_REL_PATH, parseManifest } = await import("./workspace/manifest.js");
+  let target: DeployTarget | undefined;
+  try {
+    const manifest = path.join(r.root, MANIFEST_REL_PATH);
+    const steps = fs.existsSync(manifest) ? parseManifest(manifest)?.ship?.deploy ?? [] : [];
+    target = readDeployTargets(r.root, steps).find((t) => t.name === deploy.target);
+  } catch {
+    // An unreadable deploy.toml leaves line.toml's own command; `cast line deploy targets` says what is wrong.
+    return r;
+  }
+  if (!target?.command) return r;
+  const warnings = deploy.command && deploy.command !== target.command
+    ? [...r.warnings, `[line.deploy] command differs from target "${target.name}" in ${DEPLOY_TARGETS_REL_PATH}, which the line sends: ${target.command}`]
+    : r.warnings;
+  return { ...r, warnings, profile: { ...r.profile, deploy: { ...deploy, command: target.command } }, sources: { ...r.sources, "deploy.command": "file" } };
+}
+
+/** The checkout's line profile with its deploy resolved against .codecast/deploy.toml (withDeclaredTarget). */
+export async function loadLineDeployProfile(cwd?: string): Promise<ResolvedLineProfile> {
+  const { loadLineProfile } = await import("./lineProfile.js");
+  return withDeclaredTarget(loadLineProfile(cwd));
+}
+
 /** This checkout's deploy targets: the [[target]] tables of .codecast/deploy.toml, then the line profile's [line.deploy]. */
 export function targetsOf(read: { declared: () => DeployTarget[]; line: () => { command?: string | null; target?: string | null } | null | undefined }): DeployTarget[] {
   const out = [...read.declared()];
@@ -394,8 +431,7 @@ export async function deployProfileFor(d: { target: string; action?: string | nu
     if (!t) return { profile: null, root, why: `No target ${d.target} in this checkout's .codecast/deploy.toml` };
     return { profile: targetDeployProfile(t, d.action as "deploy" | "redeploy" | "rollback"), root };
   }
-  const { loadLineProfile } = await import("./lineProfile.js");
-  const { profile, root: profileRoot } = loadLineProfile(root);
+  const { profile, root: profileRoot } = await loadLineDeployProfile(root);
   return { profile: profile.deploy ?? null, root: profileRoot ?? root, ...(profile.deploy?.command ? {} : { why: "No [line.deploy] command in this checkout's .codecast/line.toml" }) };
 }
 

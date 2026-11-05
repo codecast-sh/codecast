@@ -47,7 +47,9 @@ import { MessageTickRail, MessageListButton } from '@/components/session/Message
 import { StickyPromptBanner, type StickyPrompt } from '@/components/session/StickyPromptBanner';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
-import { usePendingPermissions } from '@codecast/web/hooks/useSyncPendingPermissions';
+import { usePendingMessageStatus, usePendingPermissions } from '@codecast/web/hooks/useSyncPendingPermissions';
+import { pendingMessageHoldReason } from '@codecast/web/lib/pendingBanner';
+import { HeldSendRow } from '@/components/HeldSendRow';
 import { useConversationCommits, useConversationPullRequests, useSyncConversationCommits, useSyncConversationPullRequests } from '@codecast/web/hooks/useSyncTimeline';
 import { useForkTree, type FlatForkNode } from '@codecast/web/hooks/useForkTree';
 import { useConversationCommentsSync, useConversationCommentRows } from '@codecast/web/hooks/useConversationCommentsSync';
@@ -3272,7 +3274,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   });
   const parkedStatus = useManagedSessionFields(String(conversation?._id ?? id))?.agent_status === 'permission_blocked';
   const settledAnswer = hostedApprovals.length === 0 ? hostedApprovalAnswer(hostedApprovalAt) : null;
-  const hostedTurnRunning = useConversationWorking(String(conversation?._id ?? id)) && hosted;
+  const agentWorking = useConversationWorking(String(conversation?._id ?? id));
+  const hostedTurnRunning = agentWorking && hosted;
   const linkDown = useLinkDown();
   const cardPending = hostedApprovals.length === 0 && hostedApprovalAt === 'pending' && parkedStatus;
   // A failed send tries again through the store's one retry rule
@@ -4068,6 +4071,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     () => (conversation?._id ? ghostRestartContextFor(conversation._id) : {}),
     [conversation?._id],
   );
+  // The server's view of this conversation's queued sends, read while any wait: a held one says why under its bubble.
+  const hasPendingSends = useInboxStore((s) => (s.pendingMessages[conversation?._id ?? ''] ?? []).length > 0);
+  const conversationPending = usePendingMessageStatus(conversation?._id && isConvexId(conversation._id) ? conversation._id : null, hasPendingSends);
   const { restart: restartSession, isRestarting } = useSessionRestart({
     conversationId: conversation?._id ?? '',
     isLive: !!isActive,
@@ -4587,6 +4593,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const isQueued = !!item._isQueued;
     const isFailed = item._isFailed;
     const isPending = item._isOptimistic || isQueued;
+    const holdReason = isPending ? pendingMessageHoldReason(item._clientId ?? item._id, conversationPending) : undefined;
     const run = toolRuns.get(item._id);
     return (
       <RNView style={[
@@ -4638,7 +4645,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             />
           </RNView>
         ) : null}
-        {isQueued && (
+        {holdReason ? <HeldSendRow reason={holdReason} working={agentWorking} restarting={isRestarting} onRestart={restartSession} /> : null}
+        {isQueued && !holdReason && (
           <RNView style={styles.pendingStatusRow}>
             <RNText style={styles.pendingStatusText}>{hosted && linkDown ? hostedConnectionWords(linkDown, true) : 'Queued'}</RNText>
           </RNView>

@@ -20,6 +20,8 @@ import { redactSecrets } from "./redact";
 import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { SwapHeldError } from "./herdTake";
+import { TerminalHoldError } from "./terminalHold";
+import { unreachableTerminalOf } from "../../shared/contracts/deliveryHold";
 import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
@@ -44,7 +46,7 @@ let fixtureFactory: ((...args: any[]) => any) | undefined;
 function fixture(transport = "tmux", cached = true) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-prompt-guard-"));
   scratch.push(directory);
-  const state = { menu: menu as string | null, composer: "", history: "", busy: false, captureFailure: false, captures: 0 };
+  const state = { menu: menu as string | null, composer: "", history: "", busy: false, captureFailure: false, captures: 0, ghosttyScriptable: true };
   const events: string[] = [];
   const bodies: string[] = [];
   const commands: string[] = [];
@@ -169,7 +171,7 @@ function fixture(transport = "tmux", cached = true) {
     tmuxExec, execAsync, redactSecrets,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
     // No cloud agent owns this fixture's conversation, so every one goes to the pane.
-    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, pollPendingNow: () => {},
+    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, TerminalHoldError, pollPendingNow: () => {},
     cloudAgents: { deliver: async () => null, forConversation: () => undefined, interrupt: async () => null },
     // A recovery continue restarts a pane that holds its own credential first;
     // this fixture's machine has no fleet store, so no pane is restarted.
@@ -231,6 +233,12 @@ function fixture(transport = "tmux", cached = true) {
     // herdr's API answers, but no pane holds the agent's tty: the injector's
     // real failure when it cannot find the pane a person resumed the session in.
     findHerdrPaneForTty: async () => null, herdrRequest: fail("herdr request"),
+    // Ghostty's AppleScript dictionary: paste, named keys and the screen dump.
+    // Unscriptable stands for a Ghostty before 1.3, scripting turned off, or no Automation grant.
+    probeGhostty: async () => state.ghosttyScriptable ? { state: "ok" } : { state: "unscriptable", detail: "Not authorized to send Apple events to Ghostty. (-1743)" },
+    ghosttyInputText: async (_tty: string, text: string) => input("paste", text),
+    ghosttySendKeys: async (_tty: string, keys: string[]) => { for (const key of keys) input(["\r", "Return"].includes(key) ? "Enter" : key); },
+    readGhosttyScreen: async () => capture(),
     hasOpenBackgroundWork: () => false, subagentActiveAgoMs: () => Infinity,
     planSessionTeardown, acquireSessionProcessOwnership: async () => "owned",
     reapPidTree: async (pid: number) => { reaped.push(pid); return 1; }, sessionProcessCache: new Map(),
@@ -264,7 +272,7 @@ function fixture(transport = "tmux", cached = true) {
       "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption",
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
-      "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "herdrKey", "injectViaHerdr", "noteUnreachableAgent", "injectThroughPane", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
+      "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "injectViaGhostty", "herdrKey", "injectViaHerdr", "noteUnreachableAgent", "injectThroughPane", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
       "deliverMessage", "deliverMessageIntoSession", "launchPromptCarried", "settleLaunchPrompt", "injectedMarkSettled", "rependAfterAttempt",
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho", "heldFatal",
     ];
@@ -860,7 +868,7 @@ describe("machine prompt delivery safety", () => {
     await expect(f.probeStartedPane(entry, f.assertPromptAbsent)).rejects.toThrow("human answer");
   });
 
-  for (const transport of ["kitty", "WezTerm", "iTerm.app", "Apple_Terminal"]) {
+  for (const transport of ["kitty", "WezTerm", "ghostty", "iTerm.app", "Apple_Terminal"]) {
     for (const format of [session]) test.each([menu, confirmation])(`${transport}: ${format.name} literal dialog stays composer text: %s`, async literal => {
       const f = fixture(transport);
       f.state.menu = null;
@@ -902,7 +910,7 @@ describe("machine prompt delivery safety", () => {
     });
   }
 
-  test.each(["kitty", "WezTerm", "iTerm.app"])("%s rechecks after paste before submitting", async transport => {
+  test.each(["kitty", "WezTerm", "ghostty", "iTerm.app"])("%s rechecks after paste before submitting", async transport => {
     const f = fixture(transport);
     f.state.menu = null;
     f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = menu; };
@@ -931,6 +939,29 @@ describe("machine prompt delivery safety", () => {
     await expect(f.deliver(session("keep one copy"), "m5")).resolves.toBe(true);
     expect(f.reaped).toEqual([4242]);
     expect(resumes).toHaveLength(1);
+  });
+
+  // jx72xn9 (2026-11-04): a session resumed by hand in a plain Ghostty window
+  // took nothing for nine hours while every send retried as a failure, and the
+  // sender saw only "Connecting...". It is held now, naming the terminal, at a
+  // slow recheck that spends no retries, and the person's process is left alone.
+  // Ghostty is typed into through AppleScript, so it holds only when that is out of reach.
+  test.each([["Alacritty", "Alacritty"], ["ghostty", "Ghostty"]])("a live agent in %s is held with the terminal named, never retried or replaced", async (transport, label) => {
+    const f = fixture(transport);
+    f.state.ghosttyScriptable = false;
+    f.hooks.resume = () => { throw new Error("resumed beside the person's own process"); };
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await f.scan([{ _id: "update", content: session("are you there?"), retry_count: 0 } as any]);
+      f.clock.now += 60_000;
+    }
+    // The attempt's own delivery timeout aside, one recheck is armed, at the hold's pace.
+    const rechecks = f.timers.filter((t: { ms: number }) => t.ms < 180_000);
+    expect(rechecks.map((t: { ms: number }) => t.ms)).toEqual([60_000]);
+    await rechecks[0].fn();
+    expect(f.events).toEqual(["hold:update"]);
+    expect(unreachableTerminalOf(f.holds[0]?.holdReason)).toBe(label);
+    expect(f.reaped).toEqual([]);
+    expect(f.bodies).toEqual([]);
   });
 
   test("AppleScript defaults preserve human submit and explicit poll scripts", () => {
