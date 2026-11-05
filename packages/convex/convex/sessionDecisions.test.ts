@@ -5,6 +5,7 @@ import {
   askCore,
   answerCore,
   recommendCore,
+  withdrawCore,
   grantCore,
   listForUserCore,
   agreementHistory,
@@ -1061,6 +1062,32 @@ describe("a decision goes up the reporting line", () => {
     expect(new Set(tables.decision_inbox.map((i) => i.user_id))).toEqual(new Set([HOST, OWNER2, BOSS]));
     expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d.short_id)).toEqual(["sd-1"]);
     expect(tables.session_decisions).toHaveLength(1);
+  });
+
+  // sd-2514 became sd-2517, sd-2376 sd-2516 and sd-2513 sd-2528: a session withdrew its card and asked again as a
+  // new decision, and the ladder started over each time. What a role recommended carries to the option that says
+  // the same words, and the people see the card at once, since the role has already said its piece.
+  test("a card withdrawn and asked again on the same problem keeps the ladder's recommendation, by the option's words", async () => {
+    const { ctx, tables } = await seated();
+    const ask = (options: Array<{ label: string }>, question = "Keep the engine vendored?") =>
+      askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question, options, context_md: "Reasoning goes here.", category: "approach", task: "ct-7" });
+    const first = await ask([{ label: "Keep it vendored" }, { label: "Drop the vendored copy" }]);
+    await recommendCore(ctx, { userId: HOST }, { decision_id: String(first.short_id), session_id: "sess-standing", recommendation: 1, note: "cheaper to drop" });
+    const row = (id: unknown) => tables.session_decisions.find((d) => String(d._id) === String(id));
+    await withdrawCore(ctx, row(first.id), NOW + 1);
+    const lines = linesIn(tables, "conversations_standing").length;
+
+    const again = await ask([{ label: "Drop the vendored copy" }, { label: "Keep it vendored" }, { label: "Ask the platform lead" }], "Keep the engine vendored, now that main moved?");
+    expect(again.id).not.toBe(first.id);
+    expect(row(again.id).hops[0]).toMatchObject({ role_id: "org_roles_lead", recommendation: 0, note: "cheaper to drop" });
+    expect(linesIn(tables, "conversations_standing")).toHaveLength(lines);
+    expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d.short_id)).toContain(again.short_id);
+
+    // A recommendation whose option is gone is not carried, and the role hears the new card.
+    await withdrawCore(ctx, row(again.id), NOW + 2);
+    const third = await ask([{ label: "Keep it vendored" }, { label: "Ask the platform lead" }], "Keep the engine vendored, third try?");
+    expect(row(third.id).hops[0].recommendation).toBeUndefined();
+    expect(linesIn(tables, "conversations_standing").length).toBeGreaterThan(lines);
   });
 
   test("a pass hands the card up with only the role's note, and gives up any hold", async () => {
