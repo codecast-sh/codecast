@@ -4,11 +4,10 @@
 // deploy, live in dp-N, deploy failed. A deploy's state opens that deploy.
 import Link from "next/link";
 import { entityRoute } from "@codecast/shared/entities";
-import { useSessionShip } from "../../hooks/useSessionShipState";
+import type { SessionShip } from "../../lib/ship/sessionShip";
 import "./ship.css";
 
-export function SessionShipChip({ conversationId }: { conversationId: string }) {
-  const ship = useSessionShip(conversationId);
+export function SessionShipChip({ ship }: { ship: SessionShip | null }) {
   if (!ship) return null;
   const body = <><i aria-hidden />{ship.words}</>;
   const href = ship.deploy ? entityRoute("deploy", ship.deploy) : null;
