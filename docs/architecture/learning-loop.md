@@ -193,9 +193,9 @@ same door errors and deploys use, `POST /cli/ingest/<key>`):
   the output back (`/cli/moments/complete`). The moment records the
   extractor's version and the gap between its last event and the extraction,
   which the judge is told.
-- **Storage is a person's choice.** A moment can carry customer
+- **Storage is chosen per source.** A moment can carry customer
   conversations, so its body stays on the extractor's machine
-  (`~/.local/share/codecast/moments-shadow/`, 30 days) unless a person sets
+  (`~/.local/share/codecast/moments-shadow/`, 30 days) unless someone sets
   the source's moment storage to codecast (`cast sources set <name>
   --moment-storage codecast`). Then the body goes to R2 beside replays and
   the row points at it. How long it stays is the source's retention
@@ -459,8 +459,8 @@ decision card (`convex/lineTrial.ts`).
   and answer are read from the decision, and the session is one click away to
   talk it over. Its answer, from the page, the stack, the session's thread or
   `cast line trial answer`, rides the decision rail to the run. An agent
-  session may answer an earlier gate from the CLI, recorded as a stand-in, so a
-  run can reach its card; the change card is a person's answer only.
+  session may answer any gate from the CLI, the change card included,
+  recorded as a stand-in.
   `cast line trial rerun --reask` asks such a gate again from its station,
   which writes its decision anew. Cards from before keep their own question,
   options and answer.

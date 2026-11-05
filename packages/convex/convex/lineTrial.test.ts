@@ -198,14 +198,15 @@ describe("answering a trial card", () => {
     expect(tables.trial_cards[0]).toMatchObject({ status: "answered", answer: { key: "R", stand_in: true } });
   });
 
-  test("an agent stands in at an earlier gate, never at the change card", async () => {
+  test("an agent stands in at any gate, the change card included", async () => {
     const { ctx, tables } = seed();
     await pause(ctx, "proposal_gate", proposalChoices);
     await answerTrialCardCore(ctx, HOST, "tc-1", "A", undefined, NOW, true);
     expect(tables.trial_cards[0].answer.stand_in).toBe(true);
     await pause(ctx, "decide", cardChoices);
-    await expect(answerTrialCardCore(ctx, HOST, "tc-2", "S", undefined, NOW, true)).rejects.toThrow("only a person answers it");
-    expect(tables.workflow_runs[0].status).toBe("paused");
+    await answerTrialCardCore(ctx, HOST, "tc-2", "S", undefined, NOW, true);
+    expect(tables.trial_cards[1]).toMatchObject({ status: "answered", answer: { key: "S", stand_in: true } });
+    expect(tables.workflow_runs[0].gate_response).toBe("S");
   });
 
   test("a card whose run moved on is closed, not answered", async () => {

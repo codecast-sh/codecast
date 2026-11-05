@@ -321,8 +321,11 @@ a report that contradicts the facts (Ship over a red check or proof).
 
 ## LE11. Decide
 
-Decide is the only time a run asks a person anything, and it is the last thing
-the run does before landing the change.
+Decide is the only time a run asks anything, and it is the last thing the run
+does before landing the change. Its person answers, or the lead on the card's
+ladder does when the lead starts work on its own: that lead's session answers
+the card like any holder (`cast decide answer`), with no grant and whatever its
+category, and the session that asked it never does (`answererFor`).
 
 The question comes from a session, not from a form. The presenting station
 (`card_write`, named by the gate as `asker=card_write`) reads the base presenter
@@ -340,7 +343,7 @@ thread before answering.
 
 The `decide` gate adopts that session's pending decision and binds it to the
 task and run (the-line.md L4); it is one `session_decisions` row in the
-person's one queue, and the line files no stack of its own. The run routes on
+person's one queue (and on the lead's ladder), and the line files no stack of its own. The run routes on
 how the answer opens: `Ship` lands the change (LE12), `Drop` closes the problem
 with the reason, and any other answer goes back to the builder as the person's
 note. The answer patches the run through `finalizeAnswer`; nothing is relayed

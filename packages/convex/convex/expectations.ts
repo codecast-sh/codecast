@@ -629,24 +629,16 @@ export async function personEditCore(ctx: Ctx, userId: Id<"users">, projectId: s
 }
 
 /**
- * A person applies or drops a proposal (LM5): from a terminal or the web,
- * never from an agent session, which proposes and leaves the answer to the
- * person (resolveProposalCore). In a trial project (LL12) an agent session
- * may answer as a stand-in, the way it answers a trial run's earlier gates:
- * the version records that it did, and the proposal's trial decision is
- * withdrawn rather than answered in the person's name.
+ * Applies or drops a proposal (LM5), from a terminal, the web or an agent
+ * session. A session answers as a stand-in: the version records that it did,
+ * and the proposal's card is withdrawn rather than answered in the person's
+ * name.
  */
 export const resolve = mutation({
   args: { api_token: v.optional(v.string()), proposal: v.string(), action: v.union(v.literal("apply"), v.literal("drop")), conversation_id: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx, args.api_token);
-    if (args.conversation_id) {
-      const proposal = await proposalByRef(ctx, args.proposal);
-      const project = proposal ? await ctx.db.get(proposal.project_id) : null;
-      if (!project?.line_trial) throw new Error("Applying or dropping expectations is a person's act: an agent session proposes (cast expectations propose) and the project's person answers the card");
-      return resolveProposalCore(ctx, userId, args.proposal, args.action, { standIn: true });
-    }
-    return resolveProposalCore(ctx, userId, args.proposal, args.action);
+    return resolveProposalCore(ctx, userId, args.proposal, args.action, args.conversation_id ? { standIn: true } : {});
   },
 });
 
