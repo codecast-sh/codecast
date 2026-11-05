@@ -35,6 +35,18 @@ test("pins, unsupported harnesses and shared ownership are not offered", () => {
     expect(plan.notOffered).toHaveLength(1);
   }
 });
+test("a sample whose process list timed out still offers its sessions, with usage unknown", () => {
+  const args = input();
+  delete args.source.snapshot!.sample.processCount;
+  args.source.snapshot!.processes = [];
+  const plan = buildOffloadPlan(args)!;
+  expect(plan.notOffered).toEqual([]);
+  expect(plan.candidates[0].relief).toEqual({ rssLow: 0 });
+  expect(plan.candidates[0].perDestination.linux.readiness).toBe("preflight_required");
+  expect(plan.candidates[0].perDestination.linux.pending).toContain("Check for a local browser, app or simulator: the process list was not sampled");
+  args.source.snapshot!.sample.processCount = 1;
+  expect(buildOffloadPlan(args)!.notOffered[0].reason).toBe("No process found");
+});
 test("Apple-only tooling cannot be recommended to Linux", () => {
   const args = input();
   args.source.snapshot!.processes[0].name = "xcodebuild";

@@ -11,7 +11,7 @@ import { TeamIcon } from "../TeamIcon";
 import { hasOpenModal, isEditableTarget } from "../../shortcuts";
 import { useInboxStore } from "../../store/inboxStore";
 import { OPS_LIST_LIMIT, useOpsGroups, useOpsReplays, useOpsSources, useOpsWatches, useSyncOpsGroups, useSyncOpsOpenGroups, useSyncOpsSourceOpenGroups, OPS_OPEN_GROUPS_LIMIT, useSyncOpsReplays, useSyncOpsSources, useSyncOpsWatches } from "../../hooks/useSyncOps";
-import { useReplayTotal } from "./useReplayTotals";
+import { replayCountShown, useReplayTotal } from "./useReplayTotals";
 import { OPS_TABS, OPS_TAB_LABEL, opsHref, opsUpHref, opsViewItem, opsViewSource, opsViewTab, type OpsTab, type OpsView } from "./opsPaths";
 import { OpsFeedsContext, ProviderIcon, SETUP_HREF, SourceHealthContext, type OpsFeeds } from "./parts";
 import { itemsForSource, opsBadge, resolveSource, watchNeedsLook, type AttentionItem } from "./opsHomeModel";
@@ -21,7 +21,7 @@ import { issueTotals, openFeederFull } from "./issuesModel";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { AppHealthFeeders, useSourceHealthMap } from "./useSourceHealth";
 import type { SourceHealth } from "./sourceHealth";
-import { IssueStepper, OpsFreshness, OpsWorkspaceBar, TabMore } from "./OpsShellParts";
+import { IssueStepper, OpsFreshness, TabMore } from "./OpsShellParts";
 import { useForeignItemWorkspace, useTabFit } from "./opsShellHooks";
 import { issueOrigin } from "./issueNav";
 import { WATCH_KINDS_BY_PROVIDER } from "@codecast/shared/contracts/ingest";
@@ -69,7 +69,7 @@ function useTabCounts(sources: OpsSource[], sourceId: string | null, filtered: b
         return { n: t.open, more: !t.exact };
       })(),
       // A capped total is a floor that moves by one as recordings land between scans: the badge rounds it down to the hundred, so it reads one number from page to page.
-      replays: replayTotal !== null ? { n: replayTotal.capped && replayTotal.total >= 100 ? Math.floor(replayTotal.total / 100) * 100 : replayTotal.total, more: replayTotal.capped, provisional: replayTotal.provisional } : { n: mine(replays).length, more: replays.length >= OPS_LIST_LIMIT.replays },
+      replays: replayTotal !== null ? { n: replayCountShown(replayTotal), more: replayTotal.capped, provisional: replayTotal.provisional } : { n: mine(replays).length, more: replays.length >= OPS_LIST_LIMIT.replays },
       // The watches the overview sorts to the top: alerting, and erroring (their numbers are stale), the same set as its chips.
       metrics: { n: mine(watches).filter(watchNeedsLook).length, alert: true },
       apps: (() => {
@@ -85,6 +85,9 @@ function useTabCounts(sources: OpsSource[], sourceId: string | null, filtered: b
     };
   }, [sources, sourceId, filtered, groups, replays, watches, attention, replayTotal, vouched, health]);
 }
+
+/** The order a narrow bar keeps its tabs in: the ones opened most first. */
+const TAB_RANK: readonly CountKey[] = ["home", "issues", "replays", "metrics", "timeline", "apps"];
 
 /** The name of the workspace Ops is reading: the active team, else Personal. */
 function useWorkspaceFace(): { name: string; icon?: string; color?: string } {
@@ -131,10 +134,9 @@ export function OpsShell({ view, children }: { view: OpsView; children: ReactNod
   const tabs: CountKey[] = ["home", ...OPS_TABS.filter((t) => t !== "metrics" || !noMetrics)];
   const hrefOf = (tab: CountKey, src: string | null = sourceFilter) => (tab === "home" ? opsHref.home({ source: src }) : opsHref.tab(tab, { source: src }));
   const up = opsUpHref(view);
-  // An item opened from another workspace says whose it is, and the counts of this one stay off it.
+  // An item opened from another workspace is a not-found page that says whose it is (OpsArea's ItemGate): the tabs
+  // still go to this workspace's lists, so they keep this workspace's counts, as they do under a source link that resolves nowhere.
   const foreign = useForeignItemWorkspace(view);
-  // A page about a source that does not resolve here (its not-found page) shows no tab counts: neither the workspace's nor half of each.
-  const hideCounts = !!foreign || (!!sourceRef && !source);
   // An issue names the list it was opened from (the home's or the Issues tab's), so the crumb goes back there.
   const origin = view.view === "issue" ? issueOrigin(view.id) : null;
   // The tab lit is the list the person is in: an issue opened from the Overview keeps Overview lit, as its crumb says.
@@ -165,7 +167,8 @@ export function OpsShell({ view, children }: { view: OpsView; children: ReactNod
   const filterHref = (name: string | null) => (activeTab ? opsHref.tab(activeTab, { source: name }) : opsHref.home({ source: name, show: view.view === "home" ? view.show : null }));
 
   // A narrow bar folds the tabs past its width into a More menu, never cut mid-word.
-  const fitted = useTabFit(tabsRef, tabs, litTab, tabs.map((t) => counts[t]?.n ?? 0).join(","));
+  // The tabs people open most stay in the bar first (a phone keeps Overview, Issues and Replays); Timeline and Apps fold first.
+  const fitted = useTabFit(tabsRef, tabs, litTab, tabs.map((t) => counts[t]?.n ?? 0).join(","), TAB_RANK);
 
   // A narrow window scrolls the tab bar: keep the active tab in view.
   useWatchEffect(() => {
@@ -216,7 +219,6 @@ export function OpsShell({ view, children }: { view: OpsView; children: ReactNod
             </Link>
           </div>
         </div>
-        {foreign && item ? <OpsWorkspaceBar itemRef={item} workspace={foreign} /> : null}
         <nav ref={tabsRef} className="ops-tabs" aria-label="Ops views" data-fit={fitted ? "true" : undefined}>
           {tabs.map((tab) => {
             const c = counts[tab];
@@ -225,7 +227,7 @@ export function OpsShell({ view, children }: { view: OpsView; children: ReactNod
             return (
               <Link key={tab} href={hrefOf(tab)} className="ops-tab" data-active={litTab === tab ? "true" : undefined} data-ops-tab={tab} data-folded={fitted && !fitted.has(tab) ? "true" : undefined} data-empty={empty ? "true" : undefined} aria-disabled={empty || undefined} tabIndex={empty ? -1 : undefined} onClick={empty ? (e) => e.preventDefault() : undefined}>
                 {tab === "home" ? "Overview" : OPS_TAB_LABEL[tab]}
-                {c && c.n > 0 && !hideCounts ? <span className="ops-tab-count" data-alert={c.alert ? "true" : undefined} data-provisional={c.provisional ? "true" : undefined} title={c.words || (c.provisional ? "Counting" : undefined)}>{c.n.toLocaleString()}{c.more ? "+" : ""}</span> : null}
+                {c && c.n > 0 ? <span className="ops-tab-count" data-alert={c.alert ? "true" : undefined} data-provisional={c.provisional ? "true" : undefined} title={c.words || (c.provisional ? "Counting" : undefined)}>{c.n.toLocaleString()}{c.more ? "+" : ""}</span> : null}
               </Link>
             );
           })}
@@ -233,7 +235,7 @@ export function OpsShell({ view, children }: { view: OpsView; children: ReactNod
             <TabMore
               tabs={tabs.filter((t) => !fitted.has(t)).map((t) => {
                 const c = counts[t];
-                return { key: t, label: t === "home" ? "Overview" : OPS_TAB_LABEL[t], href: hrefOf(t), count: c && c.n > 0 && !hideCounts ? `${c.n.toLocaleString()}${c.more ? "+" : ""}` : undefined, alert: c?.alert && c.n > 0, disabled: t !== "home" && noSources };
+                return { key: t, label: t === "home" ? "Overview" : OPS_TAB_LABEL[t], href: hrefOf(t), count: c && c.n > 0 ? `${c.n.toLocaleString()}${c.more ? "+" : ""}` : undefined, alert: c?.alert && c.n > 0, disabled: t !== "home" && noSources };
               })}
             />
           ) : null}

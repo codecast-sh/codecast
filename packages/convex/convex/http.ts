@@ -19,7 +19,7 @@ import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
 import { ENROLL_PATH, enrollHttp } from "./managedDevices";
 import { REPLAY_CHUNK_PATH, REPLAY_FRAME_ADMIT_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayFrameAdmit, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
-import { signReplayChunks } from "./replays";
+import { signReplayChunks } from "./lib/replayChunks";
 import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
 import { handleFaceRequest } from "./callFace";
 import { sentryWebhook, setEventGroupStatus } from "./sources/sentry";

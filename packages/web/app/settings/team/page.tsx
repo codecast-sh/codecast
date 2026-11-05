@@ -550,7 +550,7 @@ export default function TeamPage() {
             <Button
               onClick={handleDeleteTeam}
               disabled={!deleteNameMatches || isDeleting}
-              className="bg-sol-red text-sol-base03"
+              variant="red"
             >
               {isDeleting ? "Deleting..." : "Delete team"}
             </Button>
@@ -577,7 +577,7 @@ export default function TeamPage() {
             <Button
               onClick={handleRemoveMember}
               disabled={isRemoving}
-              className="bg-sol-red text-sol-base03"
+              variant="red"
             >
               {isRemoving ? "Removing..." : "Remove member"}
             </Button>

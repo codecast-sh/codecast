@@ -255,19 +255,30 @@ export function watchWordBreakdown(rows: readonly { verdict: WatchVerdict; error
 }
 
 /**
- * A source's watches in one sentence, the same on every surface that counts
+ * A source's watches in one reading, the same on every surface that counts
  * them (the overview's header and tile, the Apps board's head, the Settings
- * row): how many of how many are failing or alerting, in one noun.
+ * row). `text` is the sentence a header says, led by the bad ones. A tile's
+ * big number (`value` of `total`, labelled `label`) is always the watches ok,
+ * whatever else is true, with the bad ones and the unjudged (reading fine, no
+ * line to judge by) named in `sub`. When every watch is unjudged there is
+ * nothing to count ok: `unjudged`, and the tile reads "11 watches · no lines".
  */
-export type WatchTally = { bad: number; total: number; word: string; tone: "bad" | "warn" | "ok"; text: string };
+export type WatchTally = { bad: number; total: number; ok: number; noLine: number; value: number; word: string; tone: "bad" | "warn" | "ok" | "off"; text: string; sub: string; /** The tile's label beside value/total. */ label: string; /** Every watch reads fine with no line: nothing is judged yet. */ unjudged: boolean };
 
-export function watchTally(verdicts: readonly WatchVerdict[]): WatchTally {
+export function watchTally(verdicts: readonly WatchVerdict[], opts: { noLine?: number } = {}): WatchTally {
   const c = verdictCounts(verdicts);
   const failing = c.failing + c.retrying;
+  const noLine = Math.min(opts.noLine ?? 0, c.ok);
+  const ok = c.total - c.notOk - noLine;
   const word = c.alerting && failing ? "alerting or failing" : c.alerting ? "alerting" : failing ? "failing" : "ok";
-  const tone = c.alerting || c.failing ? "bad" : c.retrying ? "warn" : "ok";
+  const tone = c.alerting || c.failing ? "bad" : c.retrying ? "warn" : !ok && noLine ? "off" : "ok";
   const n = (x: number) => x.toLocaleString();
-  return { bad: c.notOk, total: c.total, word, tone, text: c.notOk ? `${n(c.notOk)} of ${n(c.total)} ${c.total === 1 ? "watch" : "watches"} ${word}` : `${n(c.total)} ${c.total === 1 ? "watch" : "watches"} ok` };
+  const noun = (x: number) => (x === 1 ? "watch" : "watches");
+  const noLineWord = noLine ? `${n(noLine)} no line` : "";
+  const sub = [c.notOk ? verdictBreakdown(c) : "", noLineWord].filter(Boolean).join(" · ");
+  const text = c.notOk ? `${n(c.notOk)} of ${n(c.total)} ${noun(c.total)} ${word}` : noLine ? `${n(ok)} of ${n(c.total)} ${noun(c.total)} ok · ${noLineWord}` : `${n(c.total)} ${noun(c.total)} ok`;
+  const unjudged = c.total > 0 && noLine === c.total;
+  return { bad: c.notOk, total: c.total, ok, noLine, value: ok, word, tone, text: unjudged ? `${n(c.total)} ${noun(c.total)} · no lines` : text, sub: unjudged ? "" : sub, label: unjudged ? `${noun(c.total)} · no lines` : "watches ok", unjudged };
 }
 
 /** An app's own watch row (watchRows) under the one reading, so the board counts what the overview counts. */
@@ -277,7 +288,7 @@ export function watchRowVerdict(w: Pick<WatchRow, "paused" | "error" | "polledAt
 
 // ── Metric watches that read through the app ──
 
-export type MetricWatchRow = { id: string; ref: string; name: string; verdict: WatchVerdict; tone: AppTone; label: string; value: number | null; unit?: string; at: number | null; error: string | null; reader: string | null; paused: boolean; /** Its last read failed: the value shown is older than its last try. */ stale: boolean };
+export type MetricWatchRow = { id: string; ref: string; name: string; verdict: WatchVerdict; tone: AppTone; label: string; /** Reading fine with no line to judge it by. */ noLine: boolean; value: number | null; unit?: string; at: number | null; error: string | null; reader: string | null; paused: boolean; /** Its last read failed: the value shown is older than its last try. */ stale: boolean };
 
 /**
  * A metric watch as the board lists it, under the one reading (watchVerdict):
@@ -291,7 +302,7 @@ export function metricWatchRow(w: Pick<OpsWatch, "_id" | "short_id" | "name" | "
   const noLine = verdict === "ok" && w.threshold === undefined;
   const label = verdict === "paused" ? "Paused" : verdict === "alerting" ? "Alert" : verdict === "waiting" ? "Waiting" : noLine ? "No line" : verdict === "ok" ? "OK" : reason ?? "Failed";
   return {
-    id: w._id, ref: w.short_id || w._id, name: w.name, verdict, tone: noLine ? "off" : VERDICT_TONE[verdict], label,
+    id: w._id, ref: w.short_id || w._id, name: w.name, verdict, tone: noLine ? "off" : VERDICT_TONE[verdict], label, noLine,
     value: w.last_value, unit: w.unit, at: w.last_at, error: verdict === "paused" ? null : w.last_error ?? null,
     reader: w.query_kind === "reader" ? w.query.trim().split(/\s+/)[0] || null : null,
     paused: verdict === "paused", stale: verdict === "failing" || verdict === "retrying",

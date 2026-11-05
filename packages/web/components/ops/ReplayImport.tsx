@@ -17,12 +17,13 @@ import {
   type ReplayBackfill,
   type ReplayBackfillWindow,
 } from "@codecast/shared/contracts/replay";
-import { relTimeShort } from "../../lib/utils";
+import { formatRelative, relTimeShort } from "../../lib/utils";
 import Link from "next/link";
 import { opsHref } from "./opsPaths";
 import { ProviderIcon } from "./parts";
 import type { OpsSource } from "./opsTypes";
-import { failureReasons, restTrend, vendorRecordingUrl } from "./replayModel";
+import { failureReasons, pathOf, restTrend, vendorRecordingUrl } from "./replayModel";
+import { anonHandle, formatReplayTime } from "@codecast/shared/replay";
 import "./replays.css";
 
 const WINDOW_LABEL: Record<ReplayBackfillWindow, string> = { "7d": "7 days", "30d": "30 days", "90d": "90 days", all: "All" };
@@ -60,11 +61,12 @@ function FailedImports({ backfill: b, retry, source }: { backfill: ReplayBackfil
   const kept = b.failures ?? [];
   const reasons = failureReasons([...kept].reverse());
   const vendor = source.provider === "posthog" ? "PostHog" : source.provider === "sentry" ? "Sentry" : null;
+  const now = useCoarseNow(60_000);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type="button" className="rp-import-failed ops-num" aria-label={`${b.failed.toLocaleString()} recordings failed to import`}>
-          <b>{b.failed.toLocaleString()}</b> failed
+        <button type="button" className="rp-import-failed rp-cell ops-num" aria-label={`${b.failed.toLocaleString()} recordings failed to import`}>
+          <b>{b.failed.toLocaleString()}</b><small>failed</small>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="rp-failed-pop">
@@ -78,14 +80,20 @@ function FailedImports({ backfill: b, retry, source }: { backfill: ReplayBackfil
         </div>
         {kept.length > 0 ? (
           reasons.map((r) => (
-            <div key={r.error} className="rp-failed-group">
-              <div className="rp-failed-why" title={r.error}>{r.error}{reasons.length > 1 && <span className="ops-dim ops-num"> · {r.ids.length}</span>}</div>
+            <div key={r.plain} className="rp-failed-group">
+              <div className="rp-failed-why">{r.plain}{reasons.length > 1 && <span className="ops-dim ops-num"> · {r.items.length}</span>}</div>
               <ul className="rp-failed-list">
-                {r.ids.map((id) => {
-                  const href = vendorRecordingUrl(source.provider, id, source);
+                {r.items.map((f) => {
+                  const href = vendorRecordingUrl(source.provider, f.id, source);
+                  const who = f.person ? (f.person.includes("@") ? f.person : anonHandle(f.person)) : null;
                   return (
-                    <li key={id}>
-                      <span className="ops-mono truncate" title={id}>{id}</span>
+                    <li key={f.id} title={f.id}>
+                      <span className="rp-failed-rec">
+                        <b className="truncate">{who ?? <span className="ops-mono">{f.id.slice(0, 13)}…</span>}</b>
+                        <span className="ops-dim ops-num truncate">
+                          {[f.url ? pathOf(f.url) : null, f.length_ms ? formatReplayTime(f.length_ms) : null, f.at ? formatRelative(f.at, now) : null].filter(Boolean).join(" · ")}
+                        </span>
+                      </span>
                       {href && vendor && (
                         <a className="rp-failed-open" href={href} target="_blank" rel="noreferrer noopener">
                           {vendor} <ExternalLink className="w-3 h-3" aria-hidden />
@@ -95,6 +103,12 @@ function FailedImports({ backfill: b, retry, source }: { backfill: ReplayBackfil
                   );
                 })}
               </ul>
+              {r.error !== r.plain && (
+                <details className="rp-failed-raw">
+                  <summary>Details</summary>
+                  <pre className="ops-mono">{r.error}</pre>
+                </details>
+              )}
             </div>
           ))
         ) : b.last_error ? (
@@ -120,15 +134,17 @@ function RestTally({ source, now }: { source: OpsSource; now: number }) {
   const trend = restTrend(r, now);
   return (
     <span className="rp-rest-tally">
-      <Link className="rp-rest-tally-n" href={`${opsHref.tab("replays", { source: source.name })}&has=partial&active=any`} data-ops-partial-replays><b>{r.cut.toLocaleString()}</b> partly imported</Link>
-      {trend && <span className="rp-rest-trend" data-tone={trend.tone} title={`${(r.prev!.cut).toLocaleString()} at ${new Date(r.prev!.at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`}>{trend.text}</span>}
+      <Link className="rp-rest-tally-n rp-cell" href={`${opsHref.tab("replays", { source: source.name })}&has=partial&active=any`} data-ops-partial-replays>
+        <b>{r.cut.toLocaleString()}{trend && <span className="rp-rest-trend" data-tone={trend.tone} title={`${(r.prev!.cut).toLocaleString()} at ${new Date(r.prev!.at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`}>{trend.text}</span>}</b>
+        <small>partly imported</small>
+      </Link>
       {r.reading ? (
-        <span className="ops-dim">
-          · {waiting ? "waiting on" : "reading"} <Link className="ops-mono" href={opsHref.replay(r.reading)}>{r.reading}</Link>
-          {waiting ? ` · PostHog rate limit until ${new Date(r.waiting_until!).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : ""}
+        <span className="rp-cell" title={waiting ? `PostHog rate limit until ${new Date(r.waiting_until!).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : undefined}>
+          <b><Link className="ops-mono" href={opsHref.replay(r.reading)}>{r.reading}</Link></b>
+          <small>{waiting ? `waiting until ${new Date(r.waiting_until!).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : "reading"}</small>
         </span>
       ) : (
-        <span className="ops-dim">· next read starts within 15m</span>
+        <span className="rp-cell"><b>≤15m</b><small>next read</small></span>
       )}
     </span>
   );
@@ -185,17 +201,19 @@ export function ReplayImportLine({ source, showName = false, dismissible = false
           </span>
         )}
         <span className="rp-import-nums ops-num">
-          <span style={{ color: STATE_COLOR.done }}>Imported</span>
-          {b.finished_at && <span className="ops-dim">{relTimeShort(b.finished_at, now) === "now" ? "just now" : `${relTimeShort(b.finished_at, now)} ago`}</span>}
-          {b.imported > 0 && <span className="ops-dim" title="Imported by this run"><b>{b.imported.toLocaleString()}</b> new</span>}
+          <span className="rp-import-done-state" style={{ color: STATE_COLOR.done }} title={b.finished_at ? `Imported ${formatRelative(b.finished_at, now)}` : undefined}>Imported</span>
+          {b.finished_at && <span className="ops-dim rp-import-when">{formatRelative(b.finished_at, now)}</span>}
+          {b.imported > 0 && <span className="rp-cell rp-import-new" title="Imported by this run"><b>{b.imported.toLocaleString()}</b><small>new</small></span>}
           {b.failed > 0 && <FailedImports backfill={b} source={source} retry={inactive ? null : () => store().startOpsReplayImport(source._id, b.window)} />}
           {rest}
         </span>
         <span className="rp-import-acts">
           <Popover open={againOpen} onOpenChange={setAgainOpen}>
             <PopoverTrigger asChild>
-              <button type="button" className="ops-btn" disabled={inactive} title={inactive ? "Resume the source first" : undefined}>
-                Import again <ChevronDown className="w-3 h-3" aria-hidden />
+              <button type="button" className="ops-btn rp-again-btn" disabled={inactive} title={inactive ? "Resume the source first" : "Import again"} aria-label="Import again">
+                <RotateCw className="w-3 h-3 rp-again-icon" aria-hidden />
+                <span className="rp-again-label">Import again</span>
+                <ChevronDown className="w-3 h-3 rp-again-label" aria-hidden />
               </button>
             </PopoverTrigger>
             <PopoverContent align="end" className="rp-again-pop">
@@ -235,16 +253,16 @@ export function ReplayImportLine({ source, showName = false, dismissible = false
               <span className="rp-import-listing" role="status"><Loader2 className="w-3 h-3 animate-spin" aria-hidden />listing {source.provider === "sentry" ? "Sentry" : "PostHog"}…</span>
             ) : (
               <>
-                <span title="Imported by this run"><b>{b.imported.toLocaleString()}</b> new</span>
-                {b.skipped > 0 && <span title="Already here when the import reached them"><b>{b.skipped.toLocaleString()}</b> already here</span>}
+                <span className="rp-cell" title="Imported by this run"><b>{b.imported.toLocaleString()}</b><small>new</small></span>
+                {b.skipped > 0 && <span className="rp-cell" title="Already here when the import reached them"><b>{b.skipped.toLocaleString()}</b><small>already here</small></span>}
                 {b.failed > 0 && <FailedImports backfill={b} source={source} retry={state !== "done" || inactive ? null : () => store().startOpsReplayImport(source._id, b.window)} />}
               </>
             )}
-            <span className="ops-dim">{b.listed > 0 ? `of ${b.listed.toLocaleString()} listed · ` : ""}{b.window === "all" ? "everything kept" : `last ${b.window}`}</span>
+            <span className="rp-cell">{b.listed > 0 ? <b>{b.listed.toLocaleString()}</b> : <b>{b.window === "all" ? "all" : b.window}</b>}<small>{b.listed > 0 ? `listed, ${b.window === "all" ? "everything kept" : `last ${b.window}`}` : "window"}</small></span>
             {state === "running" && b.last_error && <span className="ops-dim truncate" title={b.last_error}>{b.last_error}</span>}
-            {state === "stalled" && <span className="ops-dim">no progress since {relTimeShort(b.updated_at, now)} ago</span>}
+            {state === "stalled" && <span className="rp-cell"><b>{relTimeShort(b.updated_at, now)}</b><small>no progress</small></span>}
             {(state === "paused" || state === "error") && b.last_error && <span className="rp-import-err truncate" title={b.last_error}>{b.last_error}</span>}
-            {state === "done" && b.finished_at && <span className="ops-dim">finished {relTimeShort(b.finished_at, now) === "now" ? "just now" : `${relTimeShort(b.finished_at, now)} ago`}</span>}
+            {state === "done" && b.finished_at && <span className="rp-cell" title={new Date(b.finished_at).toLocaleString()}><b>{relTimeShort(b.finished_at, now) === "now" ? "now" : `${relTimeShort(b.finished_at, now)} ago`}</b><small>finished</small></span>}
             {rest}
           </span>
         </>

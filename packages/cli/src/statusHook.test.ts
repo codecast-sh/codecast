@@ -19,6 +19,7 @@ type HookRecord = {
   transcript_path?: string;
   session_boundary?: string;
   turn_completed_at?: string;
+  dialog?: string;
 };
 
 function statusFile(sessionId: unknown): string {
@@ -174,6 +175,29 @@ describe("codecast-status hook event mapping", () => {
     });
     expect(out.status).toBe("permission_blocked");
     expect(out.message).toBe("Bash: rm -rf build");
+  });
+
+  // A hook's "ask" (cc-plugin-privacy) raises a real dialog under bypass mode.
+  // The daemon suppresses bypass permission_blocked as a phantom unless it knows a
+  // dialog is on screen, so the PermissionRequest says so (jx7e7zm sat 9 hours).
+  test("PermissionRequest marks a dialog on screen; a Notification does not", () => {
+    const req = runHook({
+      session_id: "perm-dialog",
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_input: { command: "cast task comment ct-1 hi" },
+      permission_mode: "bypassPermissions",
+    });
+    expect(req.status).toBe("permission_blocked");
+    expect(req.dialog).toBe("1");
+    const notif = runHook({
+      session_id: "perm-dialog-notif",
+      hook_event_name: "Notification",
+      notification_type: "permission_prompt",
+      permission_mode: "bypassPermissions",
+    });
+    expect(notif.status).toBe("permission_blocked");
+    expect(notif.dialog).toBeUndefined();
   });
 
   // AskUserQuestion arrives via PermissionRequest too; it must be tagged by name so

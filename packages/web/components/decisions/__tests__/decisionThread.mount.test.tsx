@@ -108,9 +108,10 @@ test("edit and remove sit only on your own comment, and resolve stamps the threa
   const cards = [...container.querySelectorAll(".cc-cmt-user")];
   const own = cards.find((c) => c.textContent?.includes("Thanks."))!;
   const theirs = cards.find((c) => c.textContent?.includes("Does this touch checkout?"))!;
-  expect(own.textContent).toContain("Edit");
-  expect(own.textContent).toContain("Remove");
-  expect(theirs.textContent).not.toContain("Edit");
+  expect(own.querySelector('[aria-label="Edit"]')).not.toBeNull();
+  expect(own.querySelector('[aria-label="Delete"]')).not.toBeNull();
+  expect(theirs.querySelector('[aria-label="Edit"]')).toBeNull();
+  expect(theirs.querySelector('[aria-label="Delete"]')).toBeNull();
   await click(container.querySelector("[data-comment-resolve=resolve]"));
   expect(sent).toEqual([["resolve", "d1", true]]);
   await unmount();

@@ -5,6 +5,8 @@ export { toRepro, placeholderValue, type ReproOptions } from "./repro";
 export { fromRrweb, fromRrwebPart, type RrwebEvent, type RrwebConverterState } from "./rrweb";
 export {
   formatReplayTime,
+  parseReplayT,
+  replayTParam,
   isFailedRequest,
   isFailure,
   isRecorderNoise,
@@ -52,7 +54,10 @@ export {
   REPLAY_ENV_KEYS,
   REPLAY_BROWSE_SCAN,
   activeMsOf,
+  belowActiveFloor,
+  REPLAY_ACTIVE_DEFAULT_MS,
   envLine,
+  whereOf,
   rageClicksOf,
   replayFacets,
   type ReplayEnvKey,

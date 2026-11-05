@@ -15,7 +15,7 @@ import { SelectBox } from "../../ui/select-box";
 import { cn } from "../../../lib/utils";
 import { GhostChips } from "../OrgNodeCards";
 import type { OrgGhostChip } from "../orgLayout";
-import { ghostChipOf, refMatches } from "../orgLayout";
+import { ghostChipOf, refMatches } from "../orgGhostsFor";
 import type { OrgRole, OrgScope, OrgTree } from "../orgTypes";
 import { TakeoverGate } from "../TakeoverEdit";
 import { isHeadOfPeopleRole, type OrgProposalChange } from "../orgStaffingTypes";

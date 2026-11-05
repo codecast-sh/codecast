@@ -26,7 +26,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { recordPRMergedActivity, resolveActorUserIdForTeam } from "./pull_requests";
 import { recordExternalEvent } from "./externalEvents";
 import { recordCiRun, type CiRun } from "./ingest";
-import { checkSuiteCi, deploymentStatusEventOf, recordCommitCi, recordGithubDeployStatus, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargets";
+import { checkSuiteCi, deploymentStatusEventOf, recordCommitCi, recordGithubDeployStatus, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
 import { markCommitDirty } from "./lib/changesDirty";
 import { claimDrain, releaseDrain, renewDrain } from "./lib/drainMarker";
 import { checkLabel, repositoryOwner } from "@codecast/shared/contracts";

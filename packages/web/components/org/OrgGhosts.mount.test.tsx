@@ -28,7 +28,8 @@ async function verifyGhostCards() {
   const { createRoot } = await import("react-dom/client");
   const { ReactFlowProvider } = await import("@xyflow/react");
   const { PersonCard, RoleCard, SessionCard } = await import("./OrgNodeCards");
-  const { ghostsFor, layoutOrgTree, personNodeId, roleNodeId, sessionNodeId } = await import("./orgLayout");
+  const { layoutOrgTree, personNodeId, roleNodeId, sessionNodeId } = await import("./orgLayout");
+  const { ghostsFor } = await import("./orgGhostsFor");
   const { CARD } = await import("./orgCardModel");
   const { ORG_FIXTURE } = await import("./orgFixture");
   const { ORG_STAFFING_FIXTURE_HEALTH } = await import("./orgStaffingFixture");

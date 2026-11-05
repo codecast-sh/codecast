@@ -24,7 +24,7 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { r2FreshGetUrl, r2Presign, replayChunkKey, replayDomChunkKey, replaysBucketFromEnv, safeReplayPathSegment } from "./lib/r2";
 import { openReplayCap, replayCapKey } from "./lib/replayCap";
-import { signPlayerManifest } from "./replays";
+import { signPlayerManifest } from "./lib/replayChunks";
 import { REPLAY_DOM_LIMITS, REPLAY_FRAME_ADMIT_PATH, REPLAY_FRAME_LIMITS, REPLAY_PLAYER_MANIFEST_PATH, type ReplayChunkKind } from "@codecast/shared/contracts/replayPlayer";
 import { keyRateLimited } from "./lib/httpRateLimit";
 import { sha256Hex } from "./lib/hash";

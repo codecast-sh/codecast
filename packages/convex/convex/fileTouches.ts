@@ -1,7 +1,7 @@
 import { mutation, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
-import { cliSessionClassifier } from "./conversations";
+import { cliSessionClassifier } from "./cliSessionClassifier";
 import { Doc, Id } from "./_generated/dataModel";
 
 export const recordTouch = internalMutation({

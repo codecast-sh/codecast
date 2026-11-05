@@ -8,9 +8,6 @@ import {
   REST_STALL_MS,
   restDue,
   restState,
-  activityBins,
-  describeEvent,
-  selectorName,
   importedUntil,
   compactCount,
   railRowAt,
@@ -18,41 +15,46 @@ import {
   restQueued,
   restTrend,
   replayPagePath,
-  pagePathParts,
   shortBrowser,
   withRemoteAssets,
   playerImportedUntil,
   captureEndFrom,
   vendorUrlAt,
-  eventHas,
   isReplayFiltered,
   momentRef,
-  foldRail,
-  netGrade,
-  netPath,
   onReplayClock,
   parseReplayQuery,
   peopleSortFor,
+  previewAt,
+  spanText,
+  replayFixLedger,
+  replayLengthText,
+  replayQueryParams,
+  totalText,
+} from "./replayModel";
+import {
+  activityBins,
+  describeEvent,
+  selectorName,
+  pagePathParts,
+  eventHas,
+  foldRail,
+  netGrade,
+  netPath,
   railRunKey,
   railAdmits,
   actionDetail,
-  previewAt,
   netParts,
   issueTitleParts,
   railCounts,
   allKindCounts,
-  spanText,
   ALL_KINDS_HIDDEN_BY_DEFAULT,
-  replayFixLedger,
-  replayLengthText,
-  replayQueryParams,
   skipTarget,
   stepTo,
   isUserAction,
   endpointOf,
   issueMoments,
-  totalText,
-} from "./replayModel";
+} from "./replayRail";
 import { isFailure } from "@codecast/shared/replay";
 import type { OpsReplay } from "./opsTypes";
 import { importBar } from "./ReplayImport";
@@ -278,7 +280,9 @@ describe("a total", () => {
     expect(totalText(0, true, 2000)).toBe("No recordings in the newest 2,000");
     expect(totalText(36, true, 2000)).toBe("36+ recordings");
     expect(totalText(1, false, 2000)).toBe("1 recording");
-    expect(totalText(1360, true, 2000, "person", "people")).toBe("1,360+ people");
+    // A floor reads as the tab badge reads it (floorShown): rounded down to the hundred.
+    expect(totalText(1360, true, 2000, "person", "people")).toBe("1,300+ people");
+    expect(totalText(1495, true, 2000)).toBe("1,400+ recordings");
   });
 });
 
@@ -436,7 +440,11 @@ describe("rest of a long recording", () => {
   });
 
   test("failures that share a reason are said once", () => {
-    expect(failureReasons([{ id: "a", error: "429" }, { id: "b", error: "429" }, { id: "c", error: "gone" }])).toEqual([{ error: "429", ids: ["a", "b"] }, { error: "gone", ids: ["c"] }]);
+    expect(failureReasons([{ id: "a", error: "429" }, { id: "b", error: "429" }, { id: "c", error: "gone" }]).map((r) => [r.plain, r.ids])).toEqual([["Rate limited by the vendor", ["a", "b"]], ["gone", ["c"]]]);
+    // The out-of-memory death reads as what it means; the raw words stay on the group.
+    const oom = "the import died: JavaScript execution ran out of memory (maximum memory usage: 64 MB): request stream size was 0 bytes";
+    const [r] = failureReasons([{ id: "x", error: oom }]);
+    expect([r.plain, r.error]).toEqual(["Too large to read in one pass", oom]);
   });
 });
 
@@ -512,8 +520,22 @@ describe("the rest backlog", () => {
     expect(restQueued({ ...r, vendor_refresh_after: now + 1 }, source, now)).toBeUndefined();
   });
   test("the trend compares the live count with the recount before the last", () => {
-    expect(restTrend({ cut: 863, unknown: 0, at: now, prev: { cut: 875, at: now - 3_600_000 } }, now)).toEqual({ text: "−12 in 1h", tone: "down" });
+    expect(restTrend({ cut: 863, unknown: 0, at: now, prev: { cut: 875, at: now - 3_600_000 } }, now)).toEqual({ text: "−12/h", tone: "down" });
+    expect(restTrend({ cut: 863, unknown: 0, at: now, prev: { cut: 875, at: now - 1_800_000 } }, now)?.text).toBe("−24/h");
     expect(restTrend({ cut: 875, unknown: 0, at: now, prev: { cut: 875, at: now - 3_600_000 } }, now)?.tone).toBe("flat");
     expect(restTrend({ cut: 875, unknown: 0, at: now }, now)).toBeNull();
+  });
+});
+
+describe("where a replay link opens", () => {
+  test("?t is seconds; an older link's ms is taken only when the seconds run past the recording", async () => {
+    const { startTime } = await import("./replayPlayerModel");
+    const H = 3_600_000;
+    // ?t=7200 on an eight hour recording: two hours in.
+    expect(startTime(7_200_000, 7200, 8 * H)).toBe(7_200_000);
+    // ?t=7200 on a one minute recording can only have been ms.
+    expect(startTime(7_200_000, 7200, 60_000)).toBe(7200);
+    expect(startTime(83_200, undefined, 60_000)).toBe(83_200);
+    expect(startTime(null, undefined, 60_000)).toBe(null);
   });
 });

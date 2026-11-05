@@ -14,6 +14,7 @@ import { hasOpenModal } from "../../shortcuts";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { DecisionCompactCard } from "./DecisionCompactCard";
+import { Button } from "../ui/button";
 
 // A message that names several open decisions gets one review under it: a
 // bar with the count, which opens a run through them one card at a time in
@@ -122,9 +123,9 @@ function Review({ refs }: { refs: string[] }) {
         <Layers className="w-4 h-4 text-sol-yellow shrink-0" />
         <span className="font-semibold text-sol-yellow">{waiting} decision{waiting === 1 ? "" : "s"}</span>
         {answered > 0 && <span className="text-sol-text-dim">{answered} answered</span>}
-        <button onClick={start} className="ml-auto rounded-md bg-sol-yellow px-3 py-1 text-[12px] font-semibold text-sol-bg hover:brightness-95">
+        <Button variant="yellow" size="xs" onClick={start} className="ml-auto">
           Review
-        </button>
+        </Button>
       </div>
     );
   }

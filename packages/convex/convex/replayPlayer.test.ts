@@ -8,7 +8,8 @@ import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import { parseReplayDomChunkKey, replayDomChunkKey } from "./lib/r2";
 import { mintReplayCap, openReplayCap, replayCapKey } from "./lib/replayCap";
-import { chunkDomEvents, chunkObject, playerLink, playerManifestRow, playerTarget, recordReplayChunk, saveDomSpans, saveImported, saveSummary, storeReplayDom } from "./replays";
+import { chunkObject, playerLink, playerManifestRow, playerTarget, recordReplayChunk, saveDomSpans, saveImported, saveSummary } from "./replays";
+import { chunkDomEvents, storeReplayDom } from "./lib/replayChunks";
 import { replayFrameAdmit, replayPlayerManifest, validateReplaySign } from "./replaysHttp";
 import { bump } from "./ipRateLimit";
 import { importVendorRecording } from "./sources/vendorReplay";
@@ -29,6 +30,24 @@ afterEach(() => {
   }
   globalThis.fetch = realFetch;
 });
+
+/** An action ctx for a vendor import: the mutations importExternalCore runs, answered, and what it saved. */
+function inProcessImport() {
+  const saved: any[] = [];
+  const ctx = {
+    runQuery: async () => ({}),
+    runAction: async (fn: any) => {
+      throw new Error(`unexpected action ${getFunctionName(fn)}`);
+    },
+    runMutation: async (fn: any, args: any) => {
+      const name = getFunctionName(fn);
+      if (name === "replays:openImport") return { replay_id: "r1", short_id: "rp-1" };
+      if (name === "replays:saveImported") return (saved.push(args), { saved: true });
+      return null;
+    },
+  };
+  return { ctx, saved };
+}
 
 function withBucket() {
   process.env.R2_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
@@ -200,28 +219,22 @@ describe("what an import records", () => {
   test("a vendor import stores the masked capture beside the stream", async () => {
     withBucket();
     globalThis.fetch = (async (_url: string, init?: RequestInit) => new Response(null, { status: init?.method === "HEAD" ? 404 : 200 })) as any;
-    const actions: any[] = [];
-    const ctx = {
-      runQuery: async () => ({}),
-      runAction: async (fn: any, args: any) => {
-        actions.push({ name: getFunctionName(fn), args });
-        return { replay_id: "r1", short_id: "rp-1", chunks: 1 };
-      },
-    };
+    const { ctx, saved } = inProcessImport();
     const rrweb = [
       { type: 4, timestamp: 1_000, data: { href: "https://shop.test/cart?token=abc", width: 800, height: 600 } },
       { type: 2, timestamp: 1_001, data: { node: { type: 0, id: 1, childNodes: [{ type: 2, id: 2, tagName: "input", attributes: { value: "secret" }, childNodes: [] }] } } },
       { type: 3, timestamp: 1_500, data: { source: 5, id: 2, text: "hunter2" } },
     ];
     await importVendorRecording(ctx as any, { source_id: "src_row" as any, provider: "posthog", external_id: "rec" }, async () => ({ events: rrweb, truncated: false }));
-    const args = actions[0].args;
-    expect(actions[0].name).toBe("replays:importExternal");
+    // The import runs in this action (importExternalCore), never through runAction with the events as its arguments.
+    expect(saved).toHaveLength(1);
+    const args = saved[0];
     expect(args.dom_chunk_keys).toHaveLength(1);
     expect(args.dom_t0).toBe(1_000);
     // Nothing was cut: the copy reaches the vendor's length though its events stop sooner.
     expect(args.whole).toBe(true);
     // The stream was read before the masking: the nav keeps its path.
-    expect(args.events.find((e: any) => e.type === "nav")?.url).toContain("shop.test/cart");
+    expect(args.url).toContain("shop.test/cart");
     expect(JSON.stringify(rrweb)).not.toContain("hunter2");
     expect(JSON.stringify(rrweb)).not.toContain("secret");
     expect(JSON.stringify(rrweb)).not.toContain("abc");
@@ -229,12 +242,14 @@ describe("what an import records", () => {
 
   test("a capture with no full snapshot is not kept: there is nothing to play", async () => {
     withBucket();
-    globalThis.fetch = (async () => new Response(null, { status: 500 })) as any;
-    const actions: any[] = [];
-    const ctx = { runQuery: async () => ({}), runAction: async (_fn: any, args: any) => (actions.push(args), { replay_id: "r1", short_id: "rp-1", chunks: 0 }) };
+    // R2 takes the stream's chunks; no DOM chunk is ever put.
+    const puts: string[] = [];
+    globalThis.fetch = (async (url: string, init?: RequestInit) => (init?.method === "PUT" && puts.push(url), new Response(null, { status: init?.method === "HEAD" ? 404 : 200 }))) as any;
+    const { ctx, saved } = inProcessImport();
     await importVendorRecording(ctx as any, { source_id: "src_row" as any, provider: "sentry", external_id: "rec" }, async () => ({ events: [{ type: 4, timestamp: 1, data: { href: "https://x.test/" } }], truncated: true }));
-    expect(actions[0].dom_chunk_keys).toBeUndefined();
-    expect(actions[0].whole).toBeUndefined();
+    expect(saved[0].dom_chunk_keys).toBeUndefined();
+    expect(puts.some((u) => u.includes("/dom/"))).toBe(false);
+    expect(saved[0].whole).toBeUndefined();
   });
 });
 

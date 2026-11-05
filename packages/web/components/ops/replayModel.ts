@@ -12,12 +12,7 @@ import {
   REPLAY_PEOPLE_SORTS,
   REPLAY_SORTS,
   formatReplayTime,
-  isFailedRequest,
-  isFailure,
-  isRecorderNoise,
-  isSlowRequest,
   rageClicksOf,
-  replayIssues,
   urlPath,
   type ReplayActive,
   type ReplayDate,
@@ -28,7 +23,7 @@ import {
   type ReplayPeopleSort,
   type ReplaySort,
 } from "@codecast/shared/replay";
-import { REPLAY_REST, needsRest, needsVendorImport, replayCutAt, type ReplayEvent, type VendorRefreshWhy } from "@codecast/shared/contracts/replay";
+import { REPLAY_REST, REPLAY_REST_NO_MORE, needsRest, needsVendorImport, replayCutAt, type ReplayEvent, type VendorRefreshWhy } from "@codecast/shared/contracts/replay";
 import { parseReplayPlayerUrl, replayPlayerUrl } from "@codecast/shared/contracts/replayPlayer";
 import { formatCallTime } from "@codecast/shared/entities";
 import type { OpsReplay, OpsSource } from "./opsTypes";
@@ -161,8 +156,11 @@ export function figuresWidthPx(rows: Pick<OpsReplay, "counts" | "shape" | "facts
 export function totalText(n: number, capped: boolean, scanned: number, one = "recording", many = `${one}s`): string {
   if (!capped) return plural(n, one, many);
   if (n === 0) return `No ${many} in the newest ${scanned.toLocaleString()}`;
-  return `${n.toLocaleString()}+ ${n === 1 ? one : many}`;
+  return `${floorShown(n).toLocaleString()}+ ${n === 1 ? one : many}`;
 }
+
+/** A floor as every surface prints it: 100 or more rounds down to the hundred, so the tab badge and the list header read one number that stops flipping as recordings land. */
+export const floorShown = (n: number) => (n >= 100 ? Math.floor(n / 100) * 100 : n);
 
 export const HAS_LABEL: Record<ReplayHas, string> = { errors: "Errors", failed: "Failed requests", rage: "Rage clicks", partial: "Partly imported" };
 export const DUR_LABEL: Record<ReplayDuration, string> = { lt30s: "Under 30s", gt1m: "Over 1m", gt5m: "Over 5m", gt30m: "Over 30m" };
@@ -213,22 +211,38 @@ export const REST_STALL_MS = REPLAY_REST.stall_ms;
  * every blob the vendor listed is read and the recording still runs past the
  * import, so the vendor is still recording it.
  */
-export type RestState = { state: "reading" | "waiting" | "stopped"; share: number; error: string | null; retry_at?: number | null; caught_up?: boolean; since?: number };
+export type RestState = { state: "reading" | "waiting" | "stopped"; share: number; error: string | null; retry_at?: number | null; caught_up?: boolean; since?: number; live?: boolean; elsewhere?: string; no_more?: boolean };
+
+/** A recording whose last moment is this recent may still be recording at the vendor (PostHog ends a session after 30 minutes idle). */
+export const RECORDING_LIVE_MS = 30 * 60_000;
+
+/** Whether the vendor may still be recording it: its last recorded moment (start plus length) is inside RECORDING_LIVE_MS. */
+export function recordingLive(r: Partial<Pick<OpsReplay, "started_at" | "duration_ms">>, now: number): boolean {
+  if (!r.started_at) return false;
+  return now - (r.started_at + (r.duration_ms ?? 0)) <= RECORDING_LIVE_MS;
+}
 
 /**
  * Where reading the rest of a long recording stands (convex sources/replayRest):
  * reading, waiting out the vendor's rate limit, or stopped (failed, or quiet
- * past REST_STALL_MS). Null when no chain was started.
+ * past REST_STALL_MS). Null when no chain was started. `reading` is the
+ * recording the source's import line names as read now
+ * (event_sources.replay_rest.reading): a chain that looks alive on another
+ * row is `elsewhere`, since the sweep reads one at a time. `live`: the vendor
+ * may still be recording it (recordingLive), the only time "still recording"
+ * is true. `no_more`: the vendor answered nothing past what is imported.
  */
-export function restState(r: Pick<OpsReplay, "import_rest"> & Partial<Pick<OpsReplay, "captured_ms" | "duration_ms">>, now: number): RestState | null {
+export function restState(r: Pick<OpsReplay, "import_rest"> & Partial<Pick<OpsReplay, "captured_ms" | "duration_ms" | "short_id" | "started_at">>, now: number, reading?: string | null): RestState | null {
   const c = r.import_rest;
   if (!c) return null;
   const share = r.duration_ms && r.duration_ms > 0 ? Math.min(1, Math.max(0, (r.captured_ms ?? 0) / r.duration_ms)) : 0;
+  const live = recordingLive(r, now) ? { live: true } : {};
   const caught = c.blobs > 0 && c.next_blob >= c.blobs && share < 1 ? { caught_up: true } : {};
-  if (c.error) return { state: "stopped", share, error: c.error };
+  if (c.error) return { state: "stopped", share, error: c.error, ...live, ...(c.error === REPLAY_REST_NO_MORE ? { no_more: true } : {}) };
   if (c.retry_at && c.retry_at > now) return { state: "waiting", share, error: null, retry_at: c.retry_at };
   if (now - c.updated_at > REST_STALL_MS) return { state: "stopped", share, error: null, since: c.updated_at };
-  return { state: "reading", share, error: null, ...caught };
+  const elsewhere = reading && r.short_id && reading !== r.short_id ? { elsewhere: reading } : {};
+  return { state: "reading", share, error: null, ...caught, ...live, ...elsewhere };
 }
 
 /** Whether opening this copy should ask the server to read the rest of its recording: the server's own rule (shared needsRest), so a press is offered only when the server will act on it. */
@@ -274,9 +288,13 @@ export function restHoldText(h: RestHold, vendor: string, now: number): string {
 export function restLine(rest: RestState | null, hold: RestHold | null, starting: boolean, vendor: string, now: number, queued?: RestQueued): { text: string; tone: "busy" | "held" | "stopped" | "idle"; share: number | null; title?: string } {
   const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   if (starting) return { text: "starting import", tone: "busy", share: null };
-  // Every part the vendor listed is read and the copy is still short: it reads on as the vendor writes more. Never "caught up" while time is missing.
-  if (rest?.state === "reading") return rest.caught_up ? { text: `reading · ${vendor} still recording`, tone: "busy", share: rest.share } : { text: "reading now", tone: "busy", share: rest.share };
+  // One chain reads at a time: a row the import line does not name waits its turn, whatever its own chain last wrote.
+  if (rest?.state === "reading" && rest.elsewhere) return { text: queued?.pos ? `queued · #${queued.pos}` : "queued", tone: "idle", share: null, title: `Read one at a time; ${rest.elsewhere} is being read now` };
+  // Every part the vendor listed is read and time is still missing: "still recording" only while the vendor may be.
+  if (rest?.state === "reading") return rest.caught_up && rest.live ? { text: `reading · ${vendor} still recording`, tone: "busy", share: rest.share } : { text: "reading now", tone: "busy", share: rest.share };
   if (rest?.state === "waiting") return { text: `${vendor} rate limit · next ${clock(rest.retry_at ?? now)}`, tone: "busy", share: rest.share };
+  // The vendor holds no more than is imported, on a recording that has ended: its copy is short, said as such, and asked again at the hold's end.
+  if (rest?.no_more && !rest.live) return { text: hold ? `${vendor} has no more · retry ${clock(hold.until)}` : `${vendor} has no more`, tone: "held", share: rest.share, title: `${vendor} answered nothing past the imported part` };
   if (hold) return { text: rest && hold.why !== "gone" ? `stopped · ${restHoldText(hold, vendor, now).replace(/^read failed · /, "")}` : restHoldText(hold, vendor, now), tone: "held", share: rest?.share ?? null, ...(rest?.error ? { title: rest.error } : {}) };
   if (rest && !rest.error && rest.since) return { text: `stalled since ${clock(rest.since)}`, tone: "stopped", share: rest.share, title: "Reading the rest went quiet" };
   if (rest) return { text: "stopped", tone: "stopped", share: rest.share, title: rest.error ?? "Reading the rest went quiet" };
@@ -292,11 +310,14 @@ export type RestQueued = { pos: number | null; reading: string | null };
  * holds now: its place in the source's queue, else null for "queued" alone.
  * Undefined when it is not waiting on the sweep.
  */
-export function restQueued(r: Pick<OpsReplay, "short_id" | "provider" | "captured_ms" | "duration_ms" | "import_rest" | "vendor_refresh_after" | "imported_at">, source: Pick<OpsSource, "replay_rest"> | null | undefined, now: number): RestQueued | undefined {
-  if (r.import_rest || !restDue(r, now)) return undefined;
+export function restQueued(r: Pick<OpsReplay, "short_id" | "provider" | "captured_ms" | "duration_ms" | "import_rest" | "vendor_refresh_after" | "imported_at"> & Partial<Pick<OpsReplay, "started_at">>, source: Pick<OpsSource, "replay_rest"> | null | undefined, now: number): RestQueued | undefined {
+  const reading = source?.replay_rest?.reading ?? null;
+  // A chain that looks alive while the import line names another recording waits its turn like the rest (restState elsewhere).
+  const waiting = r.import_rest ? restState(r, now, reading)?.elsewhere !== undefined : restDue(r, now);
+  if (!waiting) return undefined;
   const q = source?.replay_rest?.queue ?? [];
   const i = q.indexOf(r.short_id);
-  return { pos: i >= 0 ? i + 1 : null, reading: source?.replay_rest?.reading ?? null };
+  return { pos: i >= 0 ? i + 1 : null, reading };
 }
 
 /**
@@ -417,311 +438,6 @@ export function onReplayClock(events: ReplayEvent[]): ReplayEvent[] {
   return zero === 0 ? events : events.map((e) => ({ ...e, t: e.t - zero }));
 }
 
-// ── The player's event rail ──
-
-export const RAIL_TABS = ["all", "clicks", "nav", "console", "network", "errors"] as const;
-export type RailTab = (typeof RAIL_TABS)[number];
-// The first tab is what a person watching follows (allKindOf), not every event: "Activity", so it never reads as the sum of the tabs after it.
-// "Actions" holds clicks, typing, submits and keys, so its count never reads as the header's clicks.
-export const RAIL_LABEL: Record<RailTab, string> = { all: "Activity", clicks: "Actions", nav: "Pages", console: "Console", network: "Network", errors: "Errors" };
-
-/**
- * An issue title split for a narrow cell: everything from a path's last "/"
- * on is the tail that stays (`GET /api/users/claim 500` keeps `/claim 500`);
- * a title with no path is all head.
- */
-export function issueTitleParts(title: string): { head: string; tail: string } {
-  const i = title.lastIndexOf("/");
-  if (i <= 0 || title.length - i > 32 || title.length < 24) return { head: title, tail: "" };
-  return { head: title.slice(0, i), tail: title.slice(i) };
-}
-
-/** A page path split for a narrow cell: `head` gives way, `tail` (from the last "/") stays, so `/book/54333ea0` cut short reads `/bo…/54333ea0`. */
-export function pagePathParts(path: string): { head: string; tail: string } {
-  const i = path.lastIndexOf("/", path.length - 2);
-  return i > 0 ? { head: path.slice(0, i), tail: path.slice(i) } : { head: path, tail: "" };
-}
-
-/**
- * A request split so the rail can cut its middle: the method, then `head`
- * (the start of the path) which gives way first, then `tail` (the last
- * segment, two when the last is an id or too short to name anything), so
- * `GET /api/electric/v1/shape/calls` reads `GET /api/el…/shape/calls`.
- */
-export function netParts(method: string, url: string): { method: string; head: string; tail: string } {
-  const path = netPath(url).split("?")[0];
-  const segs = path.split("/").filter(Boolean);
-  if (segs.length < 2) return { method, head: "", tail: path };
-  const idLike = (x: string) => x.length < 4 || /^\d+$/.test(x) || /^[0-9a-f-]{12,}$/i.test(x) || (x.length >= 16 && /\d/.test(x) && /^[A-Za-z0-9_-]+$/.test(x));
-  const keep = idLike(segs[segs.length - 1]) && segs.length > 2 ? 2 : 1;
-  return { method, head: `/${segs.slice(0, -keep).join("/")}`, tail: `/${segs.slice(-keep).join("/")}` };
-}
-
-/** The kinds the All tab can show or hide, each a toggle with its count. */
-export const ALL_KINDS = ["actions", "pages", "errors", "warnings", "requests", "marks", "scrolls"] as const;
-export type AllKind = (typeof ALL_KINDS)[number];
-export const ALL_KIND_LABEL: Record<AllKind, string> = { actions: "Actions", pages: "Pages", errors: "Errors", warnings: "Warnings", requests: "Failed requests", marks: "Marks", scrolls: "Scrolls" };
-/** Off until a person turns them on: a scroll every second buries the few things a person did. */
-export const ALL_KINDS_HIDDEN_BY_DEFAULT: readonly AllKind[] = ["scrolls"];
-
-/**
- * Which All-tab kind an event is, or null when All never lists it: the page
- * outline, a request that answered (a long-poll every twenty seconds is only
- * in Network), and the recording SDK's own console lines.
- */
-export function allKindOf(e: ReplayEvent): AllKind | null {
-  if (isRecorderNoise(e)) return null;
-  switch (e.type) {
-    case "click": case "input": case "submit": case "key": return "actions";
-    case "nav": return "pages";
-    case "error": return "errors";
-    case "console": return e.level === "error" ? "errors" : "warnings";
-    case "network": return isFailedRequest(e) ? "requests" : null;
-    case "mark": return "marks";
-    case "scroll": return "scrolls";
-    case "view": return null;
-  }
-}
-
-/** How many events of each All kind a recording holds. */
-export function allKindCounts(events: readonly ReplayEvent[]): Record<AllKind, number> {
-  const out = Object.fromEntries(ALL_KINDS.map((k) => [k, 0])) as Record<AllKind, number>;
-  for (const e of events) {
-    const k = allKindOf(e);
-    if (k) out[k]++;
-  }
-  return out;
-}
-
-/** What each tab lists. All is what a person watching cares about (allKindOf), less the kinds they hid there. */
-export function railAdmits(tab: RailTab, e: ReplayEvent, hidden: ReadonlySet<AllKind> = new Set()): boolean {
-  switch (tab) {
-    case "all": {
-      const k = allKindOf(e);
-      return k !== null && !hidden.has(k);
-    }
-    case "clicks": return e.type === "click" || e.type === "input" || e.type === "submit" || e.type === "key";
-    case "nav": return e.type === "nav";
-    case "console": return (e.type === "console" && !isRecorderNoise(e)) || e.type === "error";
-    case "network": return e.type === "network";
-    case "errors": return isPageError(e);
-  }
-}
-
-/** An exception or a console error: what the Errors tab lists. A failed request is a Network row (its Failed filter), as in Sentry and PostHog. */
-export function isPageError(e: ReplayEvent): boolean {
-  return isFailure(e) && e.type !== "network";
-}
-
-/** A field a person entered and left without typing (focus, autofill probe): read as a focus, never as "typed 0 chars". */
-export const isEmptyInput = (e: ReplayEvent): boolean => e.type === "input" && e.length === 0;
-
-export function railCounts(events: readonly ReplayEvent[], hidden: ReadonlySet<AllKind> = new Set()): Record<RailTab, number> {
-  const out = Object.fromEntries(RAIL_TABS.map((t) => [t, 0])) as Record<RailTab, number>;
-  for (const e of events) for (const t of RAIL_TABS) if (railAdmits(t, e, hidden)) out[t]++;
-  return out;
-}
-
-/** A request's grade: failed (no answer, 4xx, 5xx), slow (answered, past the slow line), or fine. */
-export function netGrade(e: ReplayEvent): "failed" | "slow" | "ok" {
-  if (isFailedRequest(e)) return "failed";
-  if (isSlowRequest(e)) return "slow";
-  return "ok";
-}
-
-/** A URL's path without the query keys that carry no value (cleanUrl blanks every value), so `/shape/calls?cursor=&live=` reads `/shape/calls`. */
-export function netPath(url: string): string {
-  let path: string;
-  let search: URLSearchParams;
-  try {
-    const u = new URL(url, "http://x");
-    path = u.pathname || "/";
-    search = u.searchParams;
-  } catch {
-    return url;
-  }
-  const kept = [...search.entries()].filter(([, v]) => v !== "");
-  return kept.length ? `${path}?${new URLSearchParams(kept).toString()}` : path;
-}
-
-/**
- * What makes rows the same for the rail's fold: one request (method, path,
- * outcome), one console line, or clicks on one element with the same text
- * (a rage burst, or someone tapping a button that does nothing). Null for
- * anything else a person did, which is never folded.
- */
-export function railRunKey(e: ReplayEvent): string | null {
-  if (e.type === "click") return `k|${e.selector || e.label}|${e.text ?? ""}`;
-  if (e.type === "network") return `n|${e.method}|${netPath(e.url).split("?")[0]}|${e.status}|${netGrade(e)}`;
-  if (e.type === "console") return `c|${e.level}|${e.message}`;
-  if (e.type === "error") return `e|${e.message}`;
-  // Tabbing through a form touches each field: the run reads as one row that opens to the fields.
-  if (isEmptyInput(e)) return "f|";
-  return null;
-}
-
-/** Repeats further apart than this start a new run. */
-export const RAIL_RUN_GAP_MS = 2_000;
-
-/**
- * Consecutive rows that read the same (railRunKey), each no more than
- * RAIL_RUN_GAP_MS after the one before, folded into one run: the first row
- * leads, and the run holds every row it stands for so it can open.
- */
-export function foldRail<T extends readonly [ReplayEvent, number]>(rows: readonly T[], gap = RAIL_RUN_GAP_MS): { lead: T; members: T[] }[] {
-  const out: { lead: T; members: T[]; key: string | null }[] = [];
-  for (const row of rows) {
-    const key = railRunKey(row[0]);
-    const last = out[out.length - 1];
-    if (last && key !== null && last.key === key && row[0].t - last.members[last.members.length - 1][0].t <= gap) last.members.push(row);
-    else out.push({ lead: row, members: [row], key });
-  }
-  return out.map(({ lead, members }) => ({ lead, members }));
-}
-
-// Class names a stylesheet utility uses (Tailwind and kin): they say how an element looks, not what it is.
-const UTILITY_CLASS = /^(?:-?(?:[mp][xytrbl]?|w|h|size|min|max|gap|space|inset|top|left|right|bottom|z|order|col|row|basis|grow|shrink|flex|grid|items|justify|self|place|content|text|font|leading|tracking|bg|from|via|to|border|rounded|ring|outline|shadow|opacity|transition|duration|ease|delay|animate|transform|translate|scale|rotate|cursor|select|pointer|overflow|whitespace|break|truncate|line|aspect|object|fill|stroke|divide|decoration|underline|sr|not|group|peer|block|inline|hidden|visible|invisible|absolute|relative|fixed|sticky|static|container|isolate|antialiased|uppercase|lowercase|capitalize|italic|appearance|resize|list|align|backdrop|blur|filter|drop|mix|will|touch|snap|scroll|dark|hover|focus|active|disabled|sm|md|lg|xl|2xl)(?:-|$)|\w*\d)/;
-
-const TAG_WORD: Record<string, string> = { a: "link", img: "image", svg: "icon", path: "icon", li: "item", td: "cell", tr: "row", div: "element", span: "element" };
-
-const humanize = (s: string) => s.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[-_]+/g, " ").trim().toLowerCase();
-
-/**
- * An element named by its selector the way a person would: its tag (or role)
- * and whatever names it (a test id, an id, a form name, a class that says
- * what it is). When only utility classes are left, they are what identifies
- * it ("button .flex-shrink-0.p-1"); a bare tag reads as its kind.
- */
-export function selectorName(selector: string, role?: string): string {
-  const tag = /^([a-z][\w-]*)/i.exec(selector)?.[1]?.toLowerCase();
-  const kind = role || (tag && TAG_WORD[tag]) || tag || "element";
-  const quoted = /\[(?:data-testid|name)=("(?:[^"\\]|\\.)*"|[^\]]+)\]/.exec(selector)?.[1];
-  let hint: string | undefined;
-  if (quoted) {
-    try {
-      hint = JSON.parse(quoted);
-    } catch {
-      hint = quoted.replace(/^"|"$/g, "");
-    }
-  }
-  hint ??= /#([A-Za-z][\w-]*)/.exec(selector)?.[1];
-  hint ??= selector.split(".").slice(1).find((c) => c && !UTILITY_CLASS.test(c));
-  if (hint) return `${kind} ${humanize(hint)}`;
-  const classes = selector.split(".").slice(1).filter(Boolean).slice(0, 2);
-  return classes.length ? `${kind} .${classes.join(".")}` : kind;
-}
-
-/** What a control names: its label (and visible text when different), else its text, else its icon and place, else its selector read as words, or "unknown element" when the recorder lost it. */
-function clickTarget(e: Extract<ReplayEvent, { type: "click" | "input" | "submit" }>): { name: string; named: boolean } {
-  if (e.label) return { name: e.type === "click" && e.text && e.text !== e.label ? `${e.label} (${e.text})` : e.label, named: true };
-  if (e.type === "click" && e.text) return { name: e.text, named: true };
-  // An icon-only control: what it shows and where it sits, read at import (rrweb.ts clickContext).
-  if (e.type === "click" && e.context) return { name: e.context, named: true };
-  // The page removed the element before the recording was read: say what kind it was, which the event type tells.
-  if (!e.selector || /^\[rrweb-id=/.test(e.selector)) return { name: e.type === "click" ? "an element since removed" : "a field since removed", named: false };
-  return { name: selectorName(e.selector, e.type === "click" ? e.role : undefined), named: false };
-}
-
-/**
- * The facts behind a person's action, for its expanded row: how it was named,
- * the locator, and where on the page it landed. Only the facts the recording has.
- */
-export function actionDetail(e: ReplayEvent): { term: string; value: string; mono?: boolean }[] {
-  if (e.type !== "click" && e.type !== "input" && e.type !== "submit") return [];
-  const out: { term: string; value: string; mono?: boolean }[] = [];
-  if (e.label) out.push({ term: "Label", value: e.label });
-  if (e.type === "click" && e.text && e.text !== e.label) out.push({ term: "Text", value: e.text });
-  if (e.type === "click" && e.role) out.push({ term: "Role", value: e.role });
-  if (e.type === "click" && e.context) out.push({ term: "Context", value: e.context });
-  if (e.type === "input") out.push({ term: "Typed", value: e.length === 0 ? "nothing (focus only)" : `${plural(e.length, "char")}, value never recorded` });
-  out.push({ term: "Element", value: e.selector && !/^\[rrweb-id=/.test(e.selector) ? e.selector : "not in the capture (removed before it was read)", mono: true });
-  if (e.type === "click" && e.x !== undefined && e.y !== undefined) out.push({ term: "At", value: `${Math.round(e.x)}, ${Math.round(e.y)} px`, mono: true });
-  return out;
-}
-
-/** One line for an event in the rail, the scrubber's tooltips and the share text. */
-export function describeEvent(e: ReplayEvent): string {
-  switch (e.type) {
-    case "nav": return e.title ? `${pathOf(e.url)} · ${e.title}` : pathOf(e.url);
-    case "click": {
-      const target = clickTarget(e);
-      return target.named && e.role ? `${e.role} ${target.name}` : target.name;
-    }
-    case "input": return e.length === 0 ? clickTarget(e).name : `${clickTarget(e).name}, ${plural(e.length, "char")}`;
-    case "submit": return clickTarget(e).name;
-    case "key": return e.key;
-    case "scroll": return `to ${Math.round(e.y)} of ${Math.round(e.of)}`;
-    case "console": return e.message;
-    case "network": return `${e.method} ${netPath(e.url)}`;
-    case "error": return e.message;
-    case "view": return "page outline";
-    case "mark": return e.data ? `${e.name} ${JSON.stringify(e.data).slice(0, 120)}` : e.name;
-  }
-}
-
-/** A request's endpoint as a person names it to hide it: method and path, no query. */
-export function endpointOf(e: Extract<ReplayEvent, { type: "network" }>): string {
-  return `${e.method} ${netPath(e.url).split("?")[0]}`;
-}
-
-/** The kinds n/p and [/] walk through: failures, and what the person did. */
-export const isUserAction = (e: ReplayEvent) => e.type === "click" || e.type === "input" || e.type === "submit" || e.type === "nav";
-
-/**
- * The next (dir 1) or previous (dir -1) event after or before `t` that `pick`
- * keeps, more than a frame away so a press always moves; null at the end.
- */
-export function stepTo(events: readonly ReplayEvent[], t: number, dir: 1 | -1, pick: (e: ReplayEvent) => boolean): ReplayEvent | null {
-  if (dir === 1) return events.find((e) => e.t > t + 50 && pick(e)) ?? null;
-  for (let i = events.length - 1; i >= 0; i--) if (events[i].t < t - 50 && pick(events[i])) return events[i];
-  return null;
-}
-
-/**
- * When each linked issue first happens in this recording, by the group's
- * fingerprint (a replay issue's group ends in its fp), else its title. The
- * events are on the replay clock, so the times are seekable as they are.
- */
-export function issueMoments(events: readonly ReplayEvent[], startUrl: string | null, groups: readonly { _id: string; title: string; fingerprint?: string }[]): Map<string, number> {
-  const out = new Map<string, number>();
-  if (!groups.length || !events.length) return out;
-  const found = replayIssues(events, startUrl ?? undefined, 0);
-  for (const g of groups) {
-    const hit = found.find((i) => g.fingerprint && (g.fingerprint === i.fp || g.fingerprint.endsWith(`:${i.fp}`))) ?? found.find((i) => i.title === g.title);
-    if (hit) out.set(g._id, hit.t);
-  }
-  return out;
-}
-
-/** Whether an event's text holds a search, case aside. */
-export function eventHas(e: ReplayEvent, q: string): boolean {
-  if (!q) return true;
-  const needle = q.toLowerCase();
-  const extra = e.type === "network" ? `${e.url} ${e.status}` : e.type === "error" ? e.stack ?? "" : e.type === "click" || e.type === "input" || e.type === "submit" ? e.selector : "";
-  return `${e.type} ${describeEvent(e)} ${extra}`.toLowerCase().includes(needle);
-}
-
-/**
- * How busy each of `n` slices of the recording was (0 to 1), counting what
- * the person did: the activity strip under the scrubber.
- */
-export function activityBins(events: readonly ReplayEvent[], length: number, n: number): number[] {
-  const bins = new Array<number>(n).fill(0);
-  if (length <= 0) return bins;
-  for (const e of events) {
-    if (e.type === "view" || e.type === "console" || e.type === "network" || e.type === "mark") continue;
-    bins[Math.min(n - 1, Math.max(0, Math.floor((e.t / length) * n)))]++;
-  }
-  const peak = Math.max(1, ...bins);
-  return bins.map((b) => (b === 0 ? 0 : Math.sqrt(b / peak)));
-}
-
-/** Where idle time ends if `t` is inside an idle range, else null: what skip inactivity jumps to. */
-export function skipTarget(ranges: readonly { from: number; to: number }[], t: number): number | null {
-  for (const r of ranges) if (t >= r.from && t < r.to - 50) return r.to;
-  return null;
-}
-
 /** A moment as a reference (`rp-12@1:23`): alone on a line in a message, it plays the page there (ReplayMomentEmbed). */
 export function momentRef(shortId: string, t: number): string {
   return `${shortId}@${formatCallTime(Math.floor(t / 1000) * 1000)}`;
@@ -796,16 +512,43 @@ export function vendorRecordingUrl(provider: string, externalId: string, source:
 }
 
 /** A run's failures folded by reason: one shared reason is said once, above the ids. */
-export function failureReasons(failures: readonly { id: string; error: string }[]): { error: string; ids: string[] }[] {
-  const by = new Map<string, string[]>();
-  for (const f of failures) by.set(f.error, [...(by.get(f.error) ?? []), f.id]);
-  return [...by.entries()].map(([error, ids]) => ({ error, ids })).sort((a, b) => b.ids.length - a.ids.length);
+export function failureReasons<F extends { id: string; error: string }>(failures: readonly F[]): { error: string; ids: string[]; plain: string; items: F[] }[] {
+  const by = new Map<string, F[]>();
+  for (const f of failures) {
+    const plain = importErrorText(f.error);
+    by.set(plain, [...(by.get(plain) ?? []), f]);
+  }
+  return [...by.entries()]
+    .map(([plain, items]) => ({ plain, items, ids: items.map((f) => f.id), error: [...new Set(items.map((f) => f.error))].join("\n") }))
+    .sort((a, b) => b.items.length - a.items.length);
+}
+
+/**
+ * What an import failure means, in a person's words; the vendor's or the
+ * runtime's own message stays behind the popover's details. A read that ran
+ * out of memory was a first part too large for one pass: the import now reads
+ * a smaller first part and the rest in parts, so Retry gets it.
+ */
+export function importErrorText(error: string): string {
+  const e = error.replace(/^the import died: /, "");
+  if (/ran out of memory|maximum memory usage/i.test(e)) return "Too large to read in one pass";
+  if (/too large to read/i.test(e)) return "One part is too large to read";
+  if (/answered 4(?:04|10)\b|has nothing at|has no snapshots/i.test(e)) return "The vendor no longer has it";
+  if (/\b429\b|rate limit/i.test(e)) return "Rate limited by the vendor";
+  if (/timed out|timeout/i.test(e)) return "The vendor did not answer in time";
+  return e.length > 120 ? `${e.slice(0, 117)}…` : e;
 }
 
 /** How the backlog moved since the recount before the last: "−12 in 1h 5m", or null when there is no earlier recount. */
-export function restTrend(r: NonNullable<OpsSource["replay_rest"]>, now: number): { text: string; tone: "down" | "up" | "flat" } | null {
+export function restTrend(r: NonNullable<OpsSource["replay_rest"]>, now: number): { text: string; tone: "down" | "up" | "flat"; eta_ms?: number } | null {
   if (!r.prev) return null;
   const d = r.cut - r.prev.cut;
-  const span = relTimeShort(r.prev.at, now);
-  return { text: d === 0 ? `no change in ${span}` : `${d < 0 ? "−" : "+"}${Math.abs(d).toLocaleString()} in ${span}`, tone: d < 0 ? "down" : d > 0 ? "up" : "flat" };
+  // A rate with its unit (recordings an hour), so two readings taken over different spans compare.
+  // Over the span between the two recounts, not since: the rate is of what was counted.
+  const span = Math.max(60_000, r.at - r.prev.at);
+  const perHour = Math.round((Math.abs(d) * 3_600_000) / span);
+  const tone = d < 0 ? "down" : d > 0 ? "up" : "flat";
+  // At the rate it falls, how long until none is cut: whether the import keeps up.
+  const eta = d < 0 && perHour > 0 ? { eta_ms: Math.round((r.cut / perHour) * 3_600_000) } : {};
+  return { text: d === 0 || perHour === 0 ? `no change in ${relTimeShort(r.prev.at, now)}` : `${d < 0 ? "−" : "+"}${perHour.toLocaleString()}/h`, tone, ...eta };
 }

@@ -34,9 +34,10 @@ import { internalAction, internalMutation, internalQuery } from "../functions";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { carryFromCapture, readVendorCapturePart, type CaptureCarry } from "@codecast/shared/replay";
-import { VENDOR_REFRESH_RETRY, replayCutAt } from "@codecast/shared/contracts/replay";
+import { REPLAY_REST_NO_MORE, VENDOR_REFRESH_RETRY, replayCutAt } from "@codecast/shared/contracts/replay";
 import { replaysBucketFromEnv } from "../lib/r2";
-import { importExternalCore, readDomChunkEvents, readReplayChunks, storeReplayDom } from "../replays";
+import { importExternalCore } from "../lib/replayImport";
+import { readDomChunkEvents, readReplayChunks, storeReplayDom } from "../lib/replayChunks";
 import { connFor, fetchRecordingEvents, locateBlobAfter } from "./posthog";
 import type { R2Bucket } from "../lib/r2";
 import { REACH_UNKNOWN_MS as REPLAY_REST_UNKNOWN_MS, REST_STALL_MS, needsRest, readCarry, storeCarry, vendorRefreshHold } from "./vendorReplay";
@@ -325,7 +326,7 @@ async function stepPart(ctx: any, args: { replay_id: Id<"replays">; gen: number 
       if (read.status === 429) return void (await hold({ retry_at: Date.now() + Math.max(read.retry_after_ms ?? 0, REST_RATE_LIMIT_MS) }));
       return void (await hold({ error: read.error }));
     }
-    if (read.next_blob <= row.import_rest.next_blob) return void (await hold({ error: "PostHog answered no more of the recording" }));
+    if (read.next_blob <= row.import_rest.next_blob) return void (await hold({ error: REPLAY_REST_NO_MORE }));
 
     const after = row.import_rest.after_t;
     const part = readVendorCapturePart(after !== undefined ? read.events.filter((e) => typeof e?.timestamp === "number" && e.timestamp > after) : read.events, carry);

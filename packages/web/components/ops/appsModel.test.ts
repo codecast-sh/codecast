@@ -175,6 +175,21 @@ describe("one failing-call aggregate for the board and every health line", () =>
     expect(watchTally(["ok", "paused"])).toMatchObject({ bad: 0, text: "2 watches ok", tone: "ok" });
   });
 
+  test("watches with no line are counted apart, the same tally on the Apps head and the overview tile", () => {
+    const eleven = Array.from({ length: 11 }, () => "ok" as const);
+    // Every watch unjudged: nothing to count ok, so no "0/11" that reads as failure.
+    expect(watchTally(eleven, { noLine: 11 })).toMatchObject({ bad: 0, ok: 0, noLine: 11, total: 11, tone: "off", sub: "", unjudged: true, label: "watches · no lines", text: "11 watches · no lines" });
+    expect(watchTally(["alerting", "ok", "ok", "ok", "ok"], { noLine: 2 })).toMatchObject({ bad: 1, ok: 2, word: "alerting", tone: "bad", sub: "1 alerting · 2 no line", unjudged: false });
+  });
+
+  test("a tile's number is always the watches ok, whichever state the rest are in", () => {
+    expect(watchTally(["ok", "ok", "ok"])).toMatchObject({ value: 3, total: 3, label: "watches ok" });
+    expect(watchTally(["ok", "failing", "retrying", "ok", "ok"])).toMatchObject({ value: 3, total: 5, label: "watches ok", sub: expect.stringContaining("2") });
+    expect(watchTally(["alerting", "ok", "ok", "ok", "ok"], { noLine: 2 })).toMatchObject({ value: 2, label: "watches ok" });
+    // A no-line count can never exceed the watches reading fine.
+    expect(watchTally(["failing"], { noLine: 3 }).noLine).toBe(0);
+  });
+
   test("a reader settles once a metric watch reads through it cleanly after the failure", () => {
     const calls = [metricFail(NOW2 - 55 * 60_000, "metric metrics.read: no answer in 10s")];
     const watch = (over: object) => ({ query_kind: "reader" as const, query: 'metrics.read {"key":"x"}', last_error: undefined, last_at: NOW2 - 3 * 60_000, updated_at: NOW2 - 3 * 60_000, ...over });

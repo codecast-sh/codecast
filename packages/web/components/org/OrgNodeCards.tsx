@@ -16,7 +16,7 @@ import { cn } from "../../lib/utils";
 import { isHeadOfPeople } from "../../lib/retireRole";
 import type { OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "./orgTypes";
 import { ORG_STATE_ORDER } from "./orgTypes";
-import { GHOST, ORG_STATE_META, PRESENCE_COLOR, SEVERITY_META, standingLineOf } from "./orgMeta";
+import { GHOST, ORG_STATE_META, PRESENCE_COLOR, standingLineOf } from "./orgMeta";
 import { RoleFace } from "./RoleFace";
 import { OrgObjectLink } from "./company/OrgObjectLink";
 import { StandingLine, StateWords } from "./stateWords";
@@ -24,6 +24,7 @@ import { StandingLine, StateWords } from "./stateWords";
 // company line or a hover card can say them without loading the map.
 export { StandingLine, StateWords };
 import { useZoomLevel, zoomText } from "./orgZoom";
+import { StateBar, StateTally } from "./StateBar";
 import { GhostTag } from "./ghostChrome";
 import { CHIP_STATUS, ghostFrameStyle, stateWords } from "./orgMeta";
 import { RoleHoverCard, SessionMark } from "../identity";
@@ -34,54 +35,10 @@ import type { OrgGhostChip, OrgGhostMeta, OrgGhostMove, OrgGhostStub } from "./o
 import { ORG_SIZES, runningSessions } from "./orgLayout";
 import { CARD, roleCardRows, roleFarRows, roleMetaLine, sessionCardRows, sessionFarRows, standingText, type OrgSessionDetail, type RoleOpenDetail } from "./orgCardModel";
 import { seatSentence } from "@codecast/shared/contracts/orgProposal";
-import { FLAG_LABEL } from "./staffingModel";
+import { FlagDots } from "./FlagDots";
 import { RoleWeekBody } from "./orgFlowViz";
 import type { RoleFlow } from "./orgFlow";
 import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
-
-/** Five proportional segments in state order; an empty parent draws a hairline. */
-export function StateBar({ counts, className }: { counts: StateCounts; className?: string }) {
-  const total = ORG_STATE_ORDER.reduce((n, k) => n + (counts[k] ?? 0), 0);
-  return (
-    <div className={cn("flex h-[5px] w-full gap-[2px] rounded-full overflow-hidden", className)} aria-hidden>
-      {total === 0 ? (
-        <div className="flex-1 rounded-full" style={{ background: "color-mix(in srgb, var(--sol-border) 35%, transparent)" }} />
-      ) : (
-        ORG_STATE_ORDER.filter((k) => (counts[k] ?? 0) > 0).map((k) => (
-          <div
-            key={k}
-            className="rounded-full"
-            style={{ flex: counts[k], background: ORG_STATE_META[k].color, opacity: k === "idle" ? 0.45 : 0.9 }}
-            title={`${counts[k]} ${ORG_STATE_META[k].label}`}
-          />
-        ))
-      )}
-    </div>
-  );
-}
-
-/**
- * The state tally. With `labels` each count carries its word ("231 needs
- * input · 2 working"): the form for the one place per surface that teaches
- * the colours (the org header, the scope board line). Without, dots only, for
- * a cluster card sitting under its parent's StateBar; zero counts are then
- * dropped rather than faded, so nothing is drawn that cannot be read.
- */
-export function StateTally({ counts, dim, labels }: { counts: StateCounts; dim?: boolean; labels?: boolean }) {
-  const shown = labels ? ORG_STATE_ORDER : ORG_STATE_ORDER.filter((k) => (counts[k] ?? 0) > 0);
-  return (
-    <span className="inline-flex items-center gap-1.5 tabular-nums text-[10.5px] font-medium whitespace-nowrap">
-      {shown.map((k) => (
-        <span key={k} className="inline-flex items-center gap-[3px]" title={ORG_STATE_META[k].label}>
-          <span className="w-[6px] h-[6px] rounded-full" style={{ background: ORG_STATE_META[k].color, opacity: (counts[k] ?? 0) === 0 ? 0.3 : 1 }} />
-          <span style={{ color: (counts[k] ?? 0) === 0 || dim ? "var(--sol-text-dim)" : "var(--sol-text-secondary)" }}>{counts[k] ?? 0}</span>
-          {labels && <span className="font-normal" style={{ color: (counts[k] ?? 0) === 0 ? "var(--sol-text-dim)" : "var(--sol-text-muted)" }}>{ORG_STATE_META[k].label}</span>}
-        </span>
-      ))}
-      {shown.length === 0 && <span style={{ color: "var(--sol-text-dim)" }}>none</span>}
-    </span>
-  );
-}
 
 // ---------------------------------------------------------------- shared chrome
 
@@ -111,35 +68,6 @@ type CardData = {
 };
 
 // ---------------------------------------------------------------- ghosts + flags
-
-/** One dot per blocker or warning, worst first, the code and detail on hover.
- *  The severity is in the dot's shape (SEVERITY_META): a blocker is filled, a
- *  warning is a ring; an info flag draws nothing here (the pane lists it).
- *  Sits on the card's top right so it never competes with the name. */
-function FlagDots({ flags }: { flags?: HealthFlag[] }) {
-  const rank = { blocker: 0, warn: 1, info: 2 } as const;
-  const sorted = (flags ?? []).filter((f) => SEVERITY_META[f.severity].dot !== "none").sort((a, b) => rank[a.severity] - rank[b.severity]);
-  if (sorted.length === 0) return null;
-  return (
-    <span className="absolute -top-[5px] right-2.5 flex items-center gap-[3px]" data-flags={sorted.map((f) => f.code).join(",")}>
-      {sorted.map((f, i) => {
-        const m = SEVERITY_META[f.severity];
-        return (
-          <span
-            key={`${f.code}:${i}`}
-            className="w-[10px] h-[10px] rounded-full box-border"
-            style={m.dot === "filled"
-              ? { background: m.color, boxShadow: "0 0 0 2px var(--sol-card)" }
-              : { background: "var(--sol-card)", border: `2px solid ${m.color}`, boxShadow: "0 0 0 1.5px var(--sol-card)" }}
-            title={`${m.word}: ${FLAG_LABEL[f.code]}. ${f.detail}`}
-            aria-label={`${m.word}: ${FLAG_LABEL[f.code]}. ${f.detail}`}
-            data-severity={f.severity}
-          />
-        );
-      })}
-    </span>
-  );
-}
 
 /** One mark per change on this card. Each reads the delta alone (the card
  *  already names the role); the full sentence is its title. A change whose
