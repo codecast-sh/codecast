@@ -4056,7 +4056,7 @@ export default defineSchema({
     // The CI run or the page that shows the deploy.
     url: v.optional(v.string()),
     // What went out, with the session whose Codecast-Session trailer each commit carries.
-    commits: v.optional(v.array(v.object({ sha: v.string(), subject: v.string(), author: v.optional(v.string()), conversation_id: v.optional(v.id("conversations")) }))),
+    commits: v.optional(v.array(v.object({ sha: v.string(), subject: v.string(), author: v.optional(v.string()), conversation_id: v.optional(v.id("conversations")), task_ids: v.optional(v.array(v.id("tasks"))) }))),
     // The fixes it carried (contracts/deploys DeployCarry).
     carries: v.array(v.object({
       task_id: v.id("tasks"),

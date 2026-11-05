@@ -206,6 +206,33 @@ async function followOptions(ctx: Ctx, row: DecisionRow, options: DecisionRow["o
   return { hops: row.hops.map((h: Hop) => (h.recommendation === undefined ? h : { ...h, recommendation: moves[h.recommendation] })) };
 }
 
+// A card the presenting station of a run posts is the run's current card at once, before any
+// gate takes it up. The run's row named its previous card until a gate paused
+// on the new one, so a run whose next station failed (ct-62158: sd-2500 posted,
+// the card station then failed on a missing tree) read as standing on the old
+// answered card (sd-1676, Ship), and everything that follows the row's card
+// followed that Ship. The row names the new card and drops the old answer; the
+// gate aligns the card's options when it pauses on it (pauseAtGateCore).
+async function followStationCard(ctx: Ctx, conversation: Doc<"conversations">, id: Id<"session_decisions">, now: number): Promise<void> {
+  const runId = (conversation as any).workflow_run_id as Id<"workflow_runs"> | undefined;
+  if (!runId) return;
+  const run = await ctx.db.get(runId);
+  if (!run || run.status === "paused" || run.status === "completed" || !run.gate_decision_id || String(run.gate_decision_id) === String(id)) return;
+  const previous = await ctx.db.get(run.gate_decision_id);
+  // Only the station that presented the run's card replaces it; another station's question is not the run's card.
+  if (!previous || previous.status === "pending" || String(previous.conversation_id) !== String(conversation._id)) return;
+  // A gate with a stack keeps its stack through the new card, as adopting it would.
+  const stack = previous.stack_id ? await ctx.db.get(previous.stack_id) : null;
+  if (stack) {
+    const card = await ctx.db.get(id);
+    if (card) {
+      const joined = await joinStack(ctx, stack, card, now);
+      if ("stack_id" in joined) await ctx.db.patch(id, joined);
+    }
+  }
+  await ctx.db.patch(run._id, { gate_decision_id: id, gate_response: undefined, gate_choices: undefined, updated_at: now });
+}
+
 // The ladder (D2): the roles from the asker up to the first person. A paused
 // or retired role is recorded as a skipped hop so the card can show the gap;
 // only active roles may recommend, and only the first is told (routeFor).
@@ -1282,6 +1309,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   await syncDecisionInbox(ctx, id, people, now, woken.length === 0 && routed.trial !== "owner");
   if (areaOwner && woken.length === 0) await noticeAreaOwner(ctx, areaOwner, { question: args.question, short_id, conversation_id: conversation._id }, conversation.user_id);
   if (stack) await joinStack(ctx, stack, { _id: id, stack_id: stack._id, scope_keys: scopeKeys }, now);
+  if (!args.workflow_run_id) await followStationCard(ctx, conversation, id, now);
 
   return {
     id,

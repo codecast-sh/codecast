@@ -41,7 +41,7 @@ import { bootstrapCut, windowConversationSince, type WindowedConversation } from
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
 import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVisit";
 import { requestSessionRestart } from "../../lib/sessionCommands";
-import { SeatHeadControls, SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
+import { SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
 // the inbox loads it only when a seat is opened. The dynamic import also keeps
@@ -59,6 +59,9 @@ export type SeatConversation = {
   /** The person may talk to the seat (host, parent or admin): see useSeedOwnership. */
   seedOwnership: boolean;
   onSessionView: () => void;
+  /** The session's own header, folded at rest: the page that hosts the seat
+   *  draws Session view and the expander on its own header row. */
+  head: { open: boolean; onToggle: () => void };
 };
 
 export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetNonce, targetTimestamp, highlightQuery, onClearHighlight, seat, headerEnd, autoFocusInput = true }: { sessionId: string; isIdle: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetNonce?: number; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void; seat?: SeatConversation; headerEnd?: ReactNode; autoFocusInput?: boolean }) {
@@ -164,11 +167,11 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       : seatLead),
     [seatLead, earlierCount, earlierOpen, sessionId],
   );
-  // The seat's session header rests on one row and opens on demand (I3):
-  // at rest the one state word that is true, Session view and the expander.
-  // A stall replaces the state word instead of stacking a banner above it,
-  // and the context panels (a routine, a plan) wait behind the expander.
-  const [headOpen, setHeadOpen] = useState(false);
+  // The seat's session header folds away at rest and opens from the page's
+  // expander (I3). A stall keeps the row up with its notice instead of
+  // stacking a banner above it, and the context panels (a routine, a plan)
+  // wait behind the expander.
+  const headOpen = !!seat?.head.open;
   const stallWord = !seat || !isOwnSession ? null
     : resumeState === "resuming" || resumeState === "sent" ? "Resuming…"
     : resumeState === "failed" ? "Resume timed out"
@@ -181,13 +184,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     return <SeatHeadState stall={stall} />;
   }, [seat, headOpen, stallWord, stallAction, handleManualResume]);
   const chromeShown = !seat || headOpen;
-  const onSessionView = seat?.onSessionView;
-  // A surface that mounts the pane with its own end controls (the stage
-  // pane's expand and close) keeps them after the seat's.
-  const seatHeaderEnd = useMemo(
-    () => (onSessionView ? <><SeatHeadControls open={headOpen} onToggle={() => setHeadOpen((v) => !v)} onSessionView={onSessionView} />{headerEnd}</> : null),
-    [onSessionView, headOpen, headerEnd],
-  );
   // Element props for the memoized ConversationView: built once per input
   // change, not per render, or the memo below it never holds.
   const shareControls = useMemo(
@@ -243,7 +239,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           {...seat?.layout}
           leadNode={leadNode}
           headerLeft={seatHeadState}
-          headerEnd={seat ? seatHeaderEnd : headerEnd}
+          headerEnd={headerEnd}
           headerExtra={shareControls}
           hasMoreAbove={hasMoreAbove && !shown?.reachedStart}
           hasMoreBelow={hasMoreBelow}

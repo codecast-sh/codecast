@@ -137,10 +137,15 @@ export async function executeCommand(
       console.log(c.dim + keepEnds(output, 2000) + c.reset);
     }
 
-    recordNodeOutput(context, node.id, output.trim(), result.stdout);
+    // A station that succeeded is what it printed to stdout; what it logged to stderr while it worked is its log,
+    // shown above and never its result. A hold's wait narration ("line Evals are paused, so the run stays parked")
+    // stayed in Eval wallet's output after the pause lifted, and the card the run wrote next said the tests were
+    // paused (sd-2511, Nov 5). A failure keeps both, since a script says why it failed on either stream.
+    const ok = result.status === 0 && !result.timedOut;
+    recordNodeOutput(context, node.id, ok ? result.stdout.trim() || result.stderr.trim() : output.trim(), result.stdout);
     context[`${node.id}.exit_code`] = String(result.status ?? 0);
 
-    if (result.status === 0 && !result.timedOut) {
+    if (ok) {
       console.log(`  ${c.green}✓ success${c.reset}`);
       return "success";
     } else {

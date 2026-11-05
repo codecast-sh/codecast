@@ -13,6 +13,7 @@ import {
   Phone,
   Film,
   Rocket,
+  Workflow,
   Signpost,
   Radio,
   Target,
@@ -23,7 +24,8 @@ import {
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
-import { parseCallRef, parseReplayRef, replayRefStart, type EntityType } from "../lib/entityLinks";
+import { flowSlugOf, parseCallRef, parseReplayRef, replayRefStart, type EntityType } from "../lib/entityLinks";
+import { renderFlowCard } from "../lib/fenceRenderers";
 import { ACCENT, type Accent } from "../lib/entityCardAccent";
 import { SessionMark } from "./identity";
 import { cleanUserMessage } from "./sessionMessage";
@@ -100,6 +102,7 @@ const TYPE_ICON: Record<EntityType, any> = {
   role: Hexagon,
   person: UserRound,
   secret: KeyRound,
+  flow: Workflow,
 };
 
 /** An object's mark as its card and every list of it draw it: a task's
@@ -908,6 +911,11 @@ export function EntityObjectCard({ refId, count, unresolved }: {
   // A decision reads as the card the queue draws: the question, who asked,
   // the reasoning, and the answers right there (or the answer once settled).
   if (type === "decision" && entity) return <div className="min-w-0" data-entity-card="decision"><DecisionCompactCard decision={entity} /></div>;
+  // A flow reads as the flow itself: its steps drawn, each open to what it does and the words it runs.
+  if (type === "flow") {
+    const slug = flowSlugOf(rawId);
+    if (slug) return <div className="min-w-0" data-entity-card="flow">{renderFlowCard(slug, <EntityIdPill shortId={rawId} type="flow" />)}</div>;
+  }
   const isRepoObject = type === "pr" || type === "commit";
   // Same rule as the pill: a repository reference that names nothing codecast
   // knows is the text it was written as, not a "not available" card. One

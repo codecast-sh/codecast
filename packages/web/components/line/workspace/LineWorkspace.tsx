@@ -52,7 +52,7 @@ import { RunPage as RunPageView } from "./views/run/RunPage";
 import { FlowsStage } from "./views/flows/FlowsStage";
 import { SignalsView } from "./views/signals/SignalsView";
 import { ShippedView } from "./views/shipped/ShippedView";
-import { DeploysView } from "./views/deploys/DeploysView";
+import { DeploysMoved } from "./views/deploys/DeploysMoved";
 import { FlowsView } from "./views/flows/FlowsView";
 import { TimelineView } from "./views/events/TimelineView";
 import { LineSettingsStage } from "../settings/LineSettingsStage";
@@ -71,7 +71,7 @@ const Finder = memo(FinderPage);
 const Line = memo(FlowsStage);
 const Signals = memo(SignalsView);
 const Shipped = memo(ShippedView);
-const Deploys = memo(DeploysView);
+const Deploys = memo(DeploysMoved);
 const Flows = memo(FlowsView);
 const Timeline = memo(TimelineView);
 // ROUTES: the page a selection opens. A run is read under its problem (view=problems + run); a finder is a step of

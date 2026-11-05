@@ -44,6 +44,7 @@ const TYPE_LABEL: Record<EntityType, string> = {
   role: 'Role',
   person: 'Person',
   secret: 'Secret',
+  flow: 'Flow',
 };
 
 // Web pill palette: session=blue, plan=cyan, task=violet, doc=green,
@@ -67,6 +68,7 @@ const TYPE_COLOR: Record<EntityType, string> = {
   role: Theme.violet,
   person: Theme.green,
   secret: Theme.yellow,
+  flow: Theme.cyan,
 };
 
 const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']> = {
@@ -88,6 +90,7 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   role: 'hexagon',
   person: 'user',
   secret: 'key',
+  flow: 'git-merge',
 };
 
 // Mobile stand-in for web's StatusCircle glyphs: the circle "fills in" as the
@@ -214,8 +217,8 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   const route = targetId ? mobileEntityRoute(type, targetId) : null;
   // A replay has no screen on the phone: it opens the web replay page, at the
   // moment it names, in the in-app browser (the player needs a real page).
-  // A deploy (`dp-N`) has none either: it opens the web Line app's Deploys view on it.
-  const webPage = !route && type === 'replay' && entity ? entityRoute('replay', rawId) : !route && type === 'deploy' ? entityRoute('deploy', rawId) : null;
+  // A deploy (`dp-N`) and a flow (`flow:change`) have none either: each opens its web page.
+  const webPage = !route && type === 'replay' && entity ? entityRoute('replay', rawId) : !route && (type === 'deploy' || type === 'flow') ? entityRoute(type, rawId) : null;
 
   return (
     <RNText

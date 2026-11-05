@@ -186,7 +186,7 @@ async function verifyScopePage() {
   // Under the name, the head its sheet and its hover card say: whom it
   // reports to (their sheet one click away), its state, what it carries, since when.
   const headFacts = q("[data-scope-head-facts]")!;
-  assert.ok(headFacts, "the role's head sits under its name");
+  assert.ok(headFacts, "the role's head sits on its header row");
   const reportsTo = headFacts.querySelector("[data-scope-reports-to] a")!;
   assert.match(reportsTo.getAttribute("href")!, /^\/org\//, "whom it reports to opens their sheet on the Org screen");
   assert.ok(headFacts.querySelector("[data-role-state]"), "its state, in the word its line uses");
