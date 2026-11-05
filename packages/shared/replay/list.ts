@@ -215,14 +215,21 @@ const HANDLE_ADJ = ["Amber", "Brisk", "Calm", "Clever", "Coral", "Cosmic", "Dari
 const HANDLE_ANIMAL = ["Badger", "Bison", "Crane", "Dingo", "Falcon", "Ferret", "Finch", "Gecko", "Heron", "Ibis", "Jackal", "Koala", "Lemur", "Lynx", "Marten", "Moose", "Newt", "Ocelot", "Otter", "Panda", "Puffin", "Quail", "Raven", "Seal", "Shrew", "Stoat", "Tapir", "Toucan", "Vole", "Walrus", "Wombat", "Yak", "Zebra", "Bobcat", "Egret", "Hare"] as const;
 
 /**
- * A stable, readable name for someone known only by an id ("Quiet Otter"):
+ * A stable, readable name for someone known only by an id ("Quiet Otter ·3f2"):
  * the same id always reads the same, so two anonymous people tell apart at a
- * glance. The id stays the person's key; this is only how it reads.
+ * glance. The two words alone are 1,296 names, too few for a workspace's
+ * anonymous visitors, so three characters from a second hash of the id follow
+ * them: one name stays one person in the list, the card and search. The id
+ * stays the person's key; this is only how it reads.
  */
 export function anonHandle(id: string): string {
   let h = 2166136261;
-  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619) >>> 0;
-  return `${HANDLE_ADJ[h % HANDLE_ADJ.length]} ${HANDLE_ANIMAL[Math.floor(h / HANDLE_ADJ.length) % HANDLE_ANIMAL.length]}`;
+  let g = 5381;
+  for (let i = 0; i < id.length; i++) {
+    h = Math.imul(h ^ id.charCodeAt(i), 16777619) >>> 0;
+    g = (Math.imul(g, 33) ^ id.charCodeAt(i)) >>> 0;
+  }
+  return `${HANDLE_ADJ[h % HANDLE_ADJ.length]} ${HANDLE_ANIMAL[Math.floor(h / HANDLE_ADJ.length) % HANDLE_ANIMAL.length]} ·${(g % 46_656).toString(36).padStart(3, "0")}`;
 }
 
 /** How a person reads in a row: email or name, else a readable handle made from their anonymous id (anonHandle). */
@@ -244,6 +251,20 @@ export function exactReplayId(q: string | undefined): string | null {
   return id && /^rp-\d+$/.test(id) ? id : null;
 }
 
+/** The active time the list starts past by default (REPLAY_ACTIVE_DEFAULT), in ms: what the stored tallies count as hidden. */
+export const REPLAY_ACTIVE_DEFAULT_MS = ACTIVE_MS[REPLAY_ACTIVE_DEFAULT];
+
+/**
+ * Whether an active-time floor hides a recording: the least-activity default
+ * hides tabs left open, never a recording an issue points at, and never one
+ * whose active time nobody knows yet.
+ */
+export function belowActiveFloor(row: Pick<ReplayListRow, "shape" | "facts" | "group_ids">, minMs: number): boolean {
+  if (!minMs || row.group_ids?.length) return false;
+  const active = activeMsOf(row);
+  return active !== undefined && active < minMs;
+}
+
 export function replayMatches(row: ReplayListRow, m: ReplayMatch): boolean {
   // A recording asked for by its id is that recording, whatever else the list filters by, as in Sentry and PostHog.
   const exact = exactReplayId(m.q);
@@ -256,11 +277,7 @@ export function replayMatches(row: ReplayListRow, m: ReplayMatch): boolean {
     if (m.min_ms !== undefined && row.duration_ms < m.min_ms) return false;
     if (m.max_ms !== undefined && row.duration_ms > m.max_ms) return false;
   }
-  // The least-activity default hides tabs left open, never a recording an issue points at.
-  if (m.active_min_ms && !row.group_ids?.length) {
-    const active = activeMsOf(row);
-    if (active !== undefined && active < m.active_min_ms) return false;
-  }
+  if (m.active_min_ms && belowActiveFloor(row, m.active_min_ms)) return false;
   if (m.group && !row.group_ids?.includes(m.group)) return false;
   for (const h of m.has ?? []) {
     if (h === "errors" && !(row.counts.errors > 0)) return false;
@@ -319,6 +336,12 @@ export interface ReplayPerson {
   url?: string | null;
   /** Where their newest recording ran (browser, OS, country): the other way an anonymous person is told apart. */
   env?: string | null;
+  /** Where their newest recording ran, as the vendor names each part, for a list to name the way its rows do. */
+  where?: { browser?: string; os?: string; country?: string; device?: string } | null;
+  /** Their recordings the active-time floor hides, when the list counts them (the server's tallies). */
+  short?: number;
+  /** Their raw id when it is not their label (an anonymous person's distinct id). */
+  id?: string | null;
 }
 
 /** A recording's environment as one short line: "Chrome · macOS · US". Null when the vendor said nothing. */
@@ -326,6 +349,12 @@ export function envLine(facts: ReplayFacts | null | undefined): string | null {
   if (!facts) return null;
   const parts = [facts.browser, facts.os, facts.country].filter(Boolean);
   return parts.length ? parts.join(" · ") : null;
+}
+
+/** A recording's environment, as the vendor names each part; null when it said nothing. */
+export function whereOf(facts: ReplayFacts | null | undefined): ReplayPerson["where"] {
+  if (!facts || !(facts.browser || facts.os || facts.country || facts.device)) return null;
+  return { ...(facts.browser ? { browser: facts.browser } : {}), ...(facts.os ? { os: facts.os } : {}), ...(facts.country ? { country: facts.country } : {}), ...(facts.device ? { device: facts.device } : {}) };
 }
 
 /** The orders the grouped list sorts people in. */
@@ -359,6 +388,7 @@ export function replayPeople(rows: readonly ReplayListRow[], max = Infinity): Re
       p.last_at = r.started_at;
       p.url = r.url ?? p.url ?? null;
       p.env = envLine(r.facts) ?? p.env ?? null;
+      p.where = whereOf(r.facts) ?? p.where ?? null;
     }
     by.set(key, p);
   }

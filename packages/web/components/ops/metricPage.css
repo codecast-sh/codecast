@@ -1,0 +1,91 @@
+/* The watch page (mw-N) on the Ops layout (opsLayout.css): the page's own
+   background, the number it is about large, the chart on the page with its
+   controls above it, and sections under it separated by space and a heading.
+   The panels it hosts (fix, distribution, query, settings) are drawn as
+   sections here: their card boxes and grey fills are dropped on this page. */
+
+.mxp { max-width: var(--ops-page-max, 1320px); padding: 22px 32px 64px; }
+
+/* ── Header ── */
+.mxp-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.mxp-title { flex: 1; min-width: 240px; }
+.mxp-title h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25; word-break: break-word; color: var(--sol-text); }
+.mxp-facts { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 12.5px; color: var(--sol-text-muted); }
+.mxp-src { display: inline-flex; align-items: center; gap: 5px; }
+.mxp-src:hover, .mxp-link:hover { color: var(--sol-text); text-decoration: underline; }
+.mxp-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 2px; }
+.mxp-dim { color: var(--sol-text-dim); }
+
+/* ── The number the page is about, and its stat line ── */
+.mxp-hero { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 18px 48px; margin: 26px 0 6px; }
+.mxp-now { display: flex; align-items: flex-end; gap: 14px; }
+.mxp-now-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 54px; font-weight: 600; line-height: .9; letter-spacing: -0.05em; color: var(--sol-text); }
+.mxp-now-value[data-tone="bad"] { color: var(--sol-red); }
+.mxp-now-side { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; padding-bottom: 3px; font-size: 12px; }
+.mxp-hero .osx-stats { padding-bottom: 2px; }
+.mxp-hero[data-loading] .osx-stat-value { color: var(--sol-text-dim); }
+
+/* ── The chart, on the page ── */
+.mxp-plot { margin-top: 26px; }
+.mxp-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; font-size: 12px; color: var(--sol-text-muted); }
+.mxp-fill { flex: 1; min-width: 8px; }
+.mxp .mx-seg { border-color: var(--osx-line); background: transparent; border-radius: 8px; }
+.mxp .mx-seg button { height: 28px; padding: 0 10px; font-size: 12px; }
+.mxp .mx-seg button + button { border-left-color: var(--osx-line); }
+.mxp .mx-seg button[aria-pressed="true"] { background: var(--sol-text); color: var(--sol-bg); }
+
+/* A toggle or a filter: a quiet pill that fills with its state when on. */
+.mxp-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 14px;
+  font-size: 12px; color: var(--sol-text-muted); white-space: nowrap;
+  border: 1px solid var(--osx-line); background: transparent;
+}
+.mxp-chip:hover { color: var(--sol-text); border-color: color-mix(in srgb, var(--sol-text) 25%, transparent); }
+.mxp-chip[data-on] { color: var(--sol-text); background: var(--osx-sunk); border-color: transparent; }
+.mxp-chip:disabled { opacity: .55; cursor: default; }
+.mxp-chip b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.mxp-chip > span[aria-hidden] { margin-left: 2px; color: var(--sol-text-dim); }
+.mxp-chip i, .mxp-legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--sol-cyan); }
+.mxp-chip i[data-k="prev"] { border-top: 1.5px dashed var(--sol-text-dim); }
+.mxp-chip i[data-k="deploy"] { width: 7px; height: 7px; border: 0; border-radius: 1.5px; background: var(--sol-text-dim); }
+.mxp-chip[aria-pressed="false"] i { opacity: .5; }
+.mxp-legend { display: inline-flex; align-items: center; gap: 14px; font-size: 11.5px; color: var(--sol-text-dim); }
+.mxp-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.mxp-legend i[data-k="past"] { border-top-color: var(--sol-red); }
+.mxp-legend i[data-k="warn"] { border-top: 1.5px dashed var(--sol-yellow); }
+.mxp-legend i[data-k="preview"] { border-top: 1.5px dashed var(--sol-violet); }
+.mxp-legend i[data-k="range"] { height: 8px; border: 0; border-radius: 2px; background: color-mix(in srgb, var(--sol-cyan) 18%, transparent); }
+
+/* ── Sections under the chart: a main column and a rail ── */
+.mxp-cols { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 0 56px; margin-top: 8px; align-items: start; }
+@media (max-width: 1060px) { .mxp-cols { grid-template-columns: minmax(0, 1fr); } }
+.mxp-main, .mxp-rail { min-width: 0; }
+.mxp-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 40px; }
+.mxp-none { padding: 10px 0; font-size: 12.5px; color: var(--sol-text-dim); }
+
+/* The hosted panels as sections: a heading, no box, no fill. */
+.mxp .ops-card { margin-top: 34px; border: 0; border-radius: 0; background: none; }
+.mxp .ops-card-head { padding: 0 0 12px; border: 0; font-size: 13.5px; font-weight: 600; color: var(--sol-text); }
+.mxp .ops-card-body { padding: 0; font-size: 12.5px; }
+.mxp .mx-code { background: var(--osx-sunk); border: 0; border-radius: 10px; }
+.mxp .mx-query-edit, .mxp .mx-query-foot { padding-left: 0; padding-right: 0; border-top: 0; }
+.mxp .mx-input, .mxp .mx-select, .mxp .mx-textarea { background: var(--sol-card); border-color: var(--osx-line); border-radius: 7px; }
+.mxp .mx-steps { padding: 4px 0 0; }
+.mxp .mx-fix-title { padding: 0 0 4px; }
+.mxp .mx-kv { gap: 8px 12px; font-size: 12.5px; }
+
+/* Transitions: rows on hairlines, the outer table unboxed. */
+.mxp .mx-trans-toggles { display: inline-flex; gap: 6px; }
+.mxp .mx-trans { font-size: 12.5px; border-top: 1px solid var(--osx-line); }
+.mxp .mx-trans td { padding: 8px 8px; border-top: 0; border-bottom: 1px solid var(--osx-line); }
+.mxp .mx-trans tr.mx-sent td { padding-top: 0; }
+.mxp .mx-trans tbody tr:hover { background: var(--osx-hover); }
+
+/* The read error, as a line on the page rather than a box. */
+.mxp .mx-error { margin-top: 16px; border: 0; border-radius: 10px; background: color-mix(in srgb, var(--sol-orange) 9%, transparent); }
+
+@media (max-width: 640px) {
+  .mxp { padding: 16px 16px 48px; }
+  .mxp-now-value { font-size: 42px; }
+  .mxp-hero { gap: 14px 28px; }
+}

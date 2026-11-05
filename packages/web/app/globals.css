@@ -1840,7 +1840,7 @@ diffs-container {
   background: var(--sv-card-active-bg);
   border-color: transparent;
 }
-/* The pin badge and hover-toolbar overlays fade to the DEFAULT rail row
+/* The hover-toolbar overlay fades to the DEFAULT rail row
    color (--sol-bg-alt) via inline styles/utility classes; on simple-view
    cards that paints a mismatched band. Re-aim them at the card grounds. */
 .simple-view [data-sv-rail] [data-session-id] [data-sv-fade] {
@@ -1872,6 +1872,44 @@ diffs-container {
 .simple-view [data-sv-rail] [data-session-id][class*="ring-sol-cyan"]:has(+ [data-schedrow][data-row-active]) {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
+}
+/* The bars under a card (the folded trigger strip, a workflow run, a watch,
+   the dormant reason) are the card's own footer: they join the card's box,
+   take its ground, and their arrow starts on the card's text edge, so they
+   read as part of the card above rather than rows floating before the next
+   one. The last bar closes the box. The compact list and Minimal keep their
+   flat rows. */
+:root:not(.minimal-style) .simple-view:not(.inbox-compact) [data-sv-rail] [data-session-id]:has(+ [data-card-bar]) {
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: transparent;
+}
+:root:not(.minimal-style) .simple-view:not(.inbox-compact) [data-sv-rail] [data-card-bar] {
+  width: calc(100% - 12px);
+  margin: 0 6px;
+  padding-left: 4px;
+  background: var(--sv-card-bg);
+  border: 1px solid color-mix(in srgb, var(--sol-text) 9%, transparent);
+  border-block: 0;
+  border-top: 1px solid color-mix(in srgb, var(--sol-text) 6%, transparent);
+}
+:root:not(.minimal-style) .simple-view:not(.inbox-compact) [data-sv-rail] [data-card-bar]:not(:has(~ [data-card-bar])) {
+  margin-bottom: 3px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-text) 9%, transparent);
+  border-radius: 0 0 9px 9px;
+}
+:root:not(.minimal-style) .simple-view:not(.inbox-compact) [data-sv-rail] [data-schedstrip] {
+  padding-left: 12px;
+  padding-block: 4px 5px;
+}
+:root:not(.minimal-style) .simple-view:not(.inbox-compact) [data-sv-rail] [data-session-id][class*="ring-sol-cyan"] ~ [data-card-bar] {
+  background: color-mix(in srgb, var(--sol-cyan) 10%, var(--sv-card-bg));
+  border-inline-color: transparent;
+  border-top-color: color-mix(in srgb, var(--sol-cyan) 30%, transparent);
+}
+:root:not(.minimal-style) .simple-view:not(.inbox-compact) [data-sv-rail] [data-session-id][class*="ring-sol-cyan"] ~ [data-card-bar]:not(:has(~ [data-card-bar])) {
+  border-bottom-color: transparent;
 }
 .simple-view [data-sv-rail] [data-schedrow][data-attached][data-row-active] {
   background: color-mix(in srgb, var(--sol-cyan) 10%, var(--sv-card-bg));
@@ -1933,6 +1971,28 @@ diffs-container {
     inset 0 -1px 0 rgb(255 255 255 / 0.05);
 }
 
+/* ---- Session card with a thumbnail ----
+   The thumb takes the card's top right corner, beside the title and the line
+   under it, and the meta row runs the full width below, so the time keeps the
+   same right edge on every card and a one-line card grows no gap. The compact
+   list lays the body out as its own grid and hides the thumb. */
+[data-sv-body][data-sv-thumbed] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 10px;
+}
+[data-sv-body][data-sv-thumbed] > * {
+  grid-column: 1 / -1;
+}
+[data-sv-body][data-sv-thumbed] > :is([data-sv-titlerow], [data-sv-ping], [data-sv-band]) {
+  grid-column: 1;
+}
+[data-sv-body][data-sv-thumbed] > [data-sv-thumb] {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: start;
+}
+
 /* ---- Compact session list (clientState.ui.inbox_compact) ------------------
    One line per session, in every style: face or agent icon, title, the state
    chip when the agent declared one, the live signals, and when it last moved.
@@ -1948,7 +2008,7 @@ diffs-container {
    ground and shows no edge. A fill that runs edge to edge, like the section
    headers above it, marks the row under the pointer and the open one, and
    nothing else does. Both styles paint a row
-   from --sv-card-bg and aim the pin and toolbar fades at it, so the row sets
+   from --sv-card-bg and aim the toolbar fade at it, so the row sets
    that one variable and the fill and the fades move together. :root lifts
    these over the Classic and Minimal card rules wherever they sit in this
    file; both of those put !important on the background. */
@@ -2021,6 +2081,20 @@ diffs-container {
 .inbox-compact [data-sv-rail] :is([data-sv-state], [data-sv-meta], [data-sv-draft]) > * {
   display: none;
 }
+/* The middle band (the lines and the thumb) dissolves the same way, so its
+   state chip, Draft chip and start line reach the grid; the rest of it, the
+   thumb included, leaves the one-line row. */
+.inbox-compact [data-sv-rail] [data-sv-body] > [data-sv-band],
+.inbox-compact [data-sv-rail] [data-sv-band] > [data-sv-lines] {
+  display: contents;
+}
+.inbox-compact [data-sv-rail] [data-sv-band] > :not([data-sv-lines]),
+.inbox-compact [data-sv-rail] [data-sv-lines] > * {
+  display: none;
+}
+.inbox-compact [data-sv-rail] [data-sv-lines] > :is([data-sv-state], [data-sv-draft], [data-sv-startup]) {
+  display: contents;
+}
 .inbox-compact [data-sv-rail] [data-sv-state] > [data-sv-status-chip],
 .inbox-compact [data-sv-rail] [data-sv-draft] > span:first-child {
   display: inline-block;
@@ -2067,27 +2141,17 @@ diffs-container {
   grid-column: 1 / span 6;
   margin-top: 4px;
 }
-/* A pinned row's pin badge sits top right, which on one line is where the
-   time is. The line makes room for it, and the badge centers on the line. */
-.inbox-compact [data-sv-rail] [data-session-id]:has(> [data-sv-pin]) [data-sv-body] {
-  padding-right: 22px;
-}
-.inbox-compact [data-sv-rail] [data-session-id] > [data-sv-pin] {
-  top: 50%;
-  transform: translateY(-50%);
-  background: none !important;
-}
-/* A child row's badge (a trigger's countdown, "running") reads as quiet text
-   beside the line's time, not a colored box. The red states keep their color:
+/* A child row's badge (a trigger's countdown) reads as quiet text on the
+   card's right edge, under its time, not a colored box. The red states keep their color:
    a failed or overdue trigger is the one badge the person must see. */
-:is(.inbox-compact, .minimal-style) [data-sv-rail] [data-sv-wake-badge] {
+:is(.inbox-compact, .minimal-style, .simple-view) [data-sv-rail] [data-sv-wake-badge] {
   min-width: 0;
   padding: 0;
   border-color: transparent;
   background: none;
   font-weight: 400;
 }
-:is(.inbox-compact, .minimal-style) [data-sv-rail] [data-sv-wake-badge]:not([data-sv-wake-badge="alert"]) {
+:is(.inbox-compact, .minimal-style, .simple-view) [data-sv-rail] [data-sv-wake-badge]:not([data-sv-wake-badge="alert"]) {
   color: var(--sol-text-dim);
 }
 /* The thumbnail is taller than the line. */
@@ -2096,28 +2160,17 @@ diffs-container {
 }
 /* Nested rows (subagents, trigger runs) are already one line plus a state
    and a prompt line: drop those two. */
-.inbox-compact [data-sv-rail] [data-session-id] [data-sv-state]:not([data-sv-body] > *),
-.inbox-compact [data-sv-rail] [data-session-id] [data-sv-prompt]:not([data-sv-body] > *) {
+.inbox-compact [data-sv-rail] [data-session-id] [data-sv-state]:not([data-sv-body] *),
+.inbox-compact [data-sv-rail] [data-session-id] [data-sv-prompt]:not([data-sv-body] *) {
   display: none;
 }
-/* A ticked row's tick centers on the line and the line makes room for it,
-   as it does for the pin. */
+/* A ticked row's tick centers on the line and the line makes room for it. */
 .inbox-compact [data-sv-rail] [data-session-id]:has(> [data-sv-check]) [data-sv-body] {
   padding-right: 18px;
 }
 .inbox-compact [data-sv-rail] [data-session-id] > [data-sv-check] {
   top: 50%;
   transform: translateY(-50%);
-}
-.inbox-compact [data-sv-rail] [data-session-id]:has(> [data-sv-pin]):has(> [data-sv-check]) [data-sv-body] {
-  padding-right: 40px;
-}
-.inbox-compact [data-sv-rail] [data-session-id]:has(> [data-sv-pin]) > [data-sv-check] {
-  right: 26px;
-}
-/* The tick steps left of a pinned card's pin, in every layout. */
-[data-sv-rail] [data-session-id]:has(> [data-sv-pin]) > [data-sv-check] {
-  right: 26px;
 }
 
 /* ---- Left sidebar: smaller sections, counts pushed right, more air ---- */
@@ -5243,15 +5296,8 @@ diffs-container {
   padding-inline: var(--cc-inset);
   font-size: var(--t-sub);
 }
-.minimal-style [data-sv-rail] [data-sv-pin] button {
-  color: var(--sol-text-dim);
-}
-.minimal-style [data-sv-rail] [data-sv-pin] svg {
-  width: 12px;
-  height: 12px;
-}
 .minimal-style [data-sv-rail] [data-sv-pin] {
-  background: none !important;
+  color: var(--sol-text-dim);
 }
 .minimal-style [data-sv-rail] button.cursor-zoom-in {
   border-color: var(--cc-panel-rule);

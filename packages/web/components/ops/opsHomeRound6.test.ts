@@ -37,15 +37,16 @@ test("one reader timing out folds its watches behind the band's Retrying count: 
   const alert = watch({ _id: "a", state: "alert", threshold: 15, last_value: 132 });
   const band = watchBand([...timedOut, alert]);
   expect(band.attention.map((w) => w._id)).toEqual(["a"]);
-  expect(band.retrying).toHaveLength(6);
-  expect(band.healthy).toHaveLength(0);
+  expect(band.counts.retrying).toBe(6);
+  expect(band.counts.ok).toBe(0);
 });
 
-test("the list header's issue count is the rows that open an issue, one per folded cause: the stepper's 'of N'", () => {
+test("the list header's issue count is every issue the rows hold, variants included: the stepper's 'of N' and the Issues lane", () => {
   const titles = ["anthropic", "bedrock", "openrouter"].map((p) => `budget context missing: ${p}/create_match:reverse_grade (job=x, span=y) — wrap the origin in withBudget(...)`);
   const groups = titles.map((title, i) => group({ _id: `g${i}`, short_id: `eg-${i}`, title, count: 60, first_seen: NOW - H, last_release: "r1" }));
   const items = attentionItems({ sources: [source({ provider: "sdk" })], groups, watches: [], replays: [] }, NOW, () => undefined);
-  expect(homeIssueRefs(items)).toHaveLength(1);
+  expect(items).toHaveLength(1);
+  expect(homeIssueRefs(items, NOW)).toHaveLength(3);
 });
 
 test("the fold is one rule for every surface: clusters keep their first row's order, the heaviest leads", () => {
@@ -75,4 +76,25 @@ test("a folded fix names every issue it seeds and the variants' tasks it merges 
   expect(l.figures).toContainEqual({ value: "2", label: "tasks merged" });
   // Unbound, nothing merges.
   expect(fixLedger("eg-1", "x", undefined, null, { merges: ["ct-1"] }).rows.some((r) => r.k === "Merges into it")).toBe(false);
+});
+
+test("the Metrics chips, the Metrics tab's count and the home band name and count the same watches the same way", async () => {
+  const { blindWatchIds, filterWatches, watchStateCounts } = await import("./metricModel");
+  const { watchNeedsLook } = await import("./opsHomeModel");
+  const starved = Array.from({ length: 4 }, (_, i) => watch({ _id: `b${i}`, short_id: `mw-b${i}`, threshold: 10, last_error: "reader 500", missed: 3 }));
+  const ownError = watch({ _id: "e", short_id: "mw-e", threshold: 10, last_error: "bad query", missed: 2 });
+  const retrying = Array.from({ length: 3 }, (_, i) => watch({ _id: `r${i}`, short_id: `mw-r${i}`, threshold: undefined, last_error: "timed out", missed: 1, last_value: 3 }));
+  const alert = watch({ _id: "a", short_id: "mw-8", state: "alert", threshold: 15, last_value: 117 });
+  const plain = watch({ _id: "p", threshold: undefined });
+  const all = [...starved, ownError, ...retrying, alert, plain];
+  const reader = { starves: { watchIds: starved.map((w) => w._id) } };
+  const blind = blindWatchIds(all, () => reader);
+  const metrics = watchStateCounts(all, blind);
+  const band = watchBand(all, blind);
+  expect(band.counts).toEqual(metrics);
+  expect([metrics.alert, metrics.blind, metrics.error, metrics.retrying, metrics.series]).toEqual([1, 4, 1, 3, 1]);
+  // The tab's red number is the sum of the three chips that read nothing or page.
+  expect(all.filter(watchNeedsLook).length).toBe(metrics.alert + metrics.blind + metrics.error);
+  // The Blind chip filters to exactly the watches it counts.
+  expect(filterWatches(all, { health: "blind", search: "", blind }).map((w) => w._id)).toEqual(starved.map((w) => w._id));
 });

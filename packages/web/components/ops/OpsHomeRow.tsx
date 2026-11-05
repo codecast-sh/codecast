@@ -10,7 +10,7 @@ import Link from "next/link";
 import { BellOff, BellRing, Check, ChevronDown, Clock, EyeOff, Film, ListX, MessageSquare, MoreHorizontal, Pause, Pencil, Plug, RotateCcw, Search, Settings2, Unlink, UserPlus, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
-import { relTimeShort } from "../../lib/utils";
+import { formatRelative, relTimeShort } from "../../lib/utils";
 import { memberDisplayName, resolveAssigneeInfo } from "../../lib/liveEntities";
 import { taskVisual } from "../TaskStatusBadge";
 import { AssigneeFace } from "../identity/AssigneeFace";
@@ -46,7 +46,7 @@ const STARTED_WORD: Record<AttentionItem["state"], string> = { alerting: "Alerti
  * A row's one press in the same words for the same plan on every row: the task it works on is the chip beside it and the
  * confirm's own row, so the press never repeats the id (fixActionLabel's longer words are its tooltip).
  */
-const ROW_FIX_WORD: Record<NonNullable<FixPlan["primary"]>, string> = { open: "Open session", continue: "Continue fix", start: "Start fix", refile: "Reopen task", followup: "Follow-up fix", resolve: "Resolve" };
+const ROW_FIX_WORD: Record<NonNullable<FixPlan["primary"]>, string> = { open: "Open session", continue: "Continue fix", start: "Start fix", refile: "Reopen and fix", followup: "Follow-up fix", resolve: "Resolve" };
 
 /**
  * A source row's pill is its health's own label ("poll failing", "stopped"), the word its overview, the Sources table and
@@ -57,6 +57,12 @@ function stateWord(it: AttentionItem, now: number): string {
   // An escalating issue says how far over its usual day it runs, as its page's lane tag does ("escalating 2.1×").
   const factor = it.kind === "issue" && it.state === "escalating" ? escalationFactor(escalation(it.group, now)) : "";
   return factor ? `${STATE_WORD[it.state]} ${factor}` : STATE_WORD[it.state];
+}
+
+/** A row's state pill; `copy` is the one inside line two that a phone shows in place of the state column. */
+function StatePill({ item: it, now, copy }: { item: AttentionItem; now: number; copy?: boolean }) {
+  const also = it.also?.length ? `also ${it.also.map((st) => STATE_WORD[st]).join(", ")}` : undefined;
+  return <span className="ops-home-state" data-copy={copy ? "true" : undefined} data-state={it.state} data-reader={it.kind === "reader" ? "true" : undefined} title={also}>{stateWord(it, now)}</span>;
 }
 
 export type RowProps = {
@@ -109,6 +115,8 @@ export function AttentionRow({ item: it, source, groupById, now, snoozedTill, is
           {it.kind === "issue" ? <KindGlyph kind={it.group.kind} /> : it.kind === "reader" ? <span className="ops-kind ops-home-ico" data-k="watch-error"><Plug className="w-3.5 h-3.5" /></span> : it.kind === "watch" ? <span className="ops-kind ops-home-ico" data-k={it.state === "erroring" ? "watch-error" : "watch"}><BellRing className="w-3.5 h-3.5" /></span> : it.kind === "replay" ? <span className="ops-kind ops-home-ico" data-k="replay"><Film className="w-3.5 h-3.5" /></span> : <span className="ops-kind ops-home-ico" data-k={it.state === "degraded" ? "source-degraded" : "source"}><Plug className="w-3.5 h-3.5" /></span>}
         </span>
       </span>
+      {/* The state in a column of its own, as wide as the widest on the list, so every pill lines up down the rows. */}
+      <span className="ops-home-statecol"><StatePill item={it} now={now} /></span>
       <span className="ops-home-main">
         <span className="ops-home-line1">
           {isNew && <i className="ops-home-newdot" title="New since your last visit" data-ops-new />}
@@ -116,8 +124,8 @@ export function AttentionRow({ item: it, source, groupById, now, snoozedTill, is
           <a href={href} className="ops-home-title" onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) { e.stopPropagation(); return; } e.preventDefault(); }} title={itemTitle(it)}>{itemTitle(it)}</a>
         </span>
         <span className="ops-home-line2" data-ops-facts>
-          <span className="ops-home-state" data-state={it.state} data-reader={it.kind === "reader" ? "true" : undefined}>{stateWord(it, now)}</span>
-          {it.also?.map((st) => <span key={st} className="ops-home-state ops-home-also" data-state={st} data-ops-also={st}>{STATE_WORD[st]}</span>)}
+          {/* A phone has no state column: the pill leads line two there (opsHome.css). */}
+          <StatePill item={it} now={now} copy />
           {lead.map(fact)}
           {it.kind === "reader" && it.watches.length > 0 && (
             // The watches behind the reader, blind ones first: the count is the one thing on the line that opens.
@@ -135,6 +143,8 @@ export function AttentionRow({ item: it, source, groupById, now, snoozedTill, is
           {source && it.kind !== "source" && it.kind !== "reader" && <span className="ops-home-fact ops-home-src" data-rank="1" data-ops-src={source.name}><ProviderIcon provider={source.provider} />{source.name}</span>}
           {snoozedView && <span className="ops-home-fact ops-home-snz" data-rank="1"><Clock className="w-3 h-3" />{snoozedTill ? `back in ${relTimeShort(now, snoozedTill)}` : "until it gets worse"}</span>}
           {rest.map((f, i) => fact(f, i + lead.length))}
+          {/* A second state the row also holds (an alerting watch whose issue regressed) rides last, the first thing to drop; the pill's tooltip names it too. */}
+          {it.also?.map((st) => <span key={st} className="ops-home-state ops-home-also" data-state={st} data-ops-also={st}>{STATE_WORD[st]}</span>)}
         </span>
       </span>
       <span className="ops-home-spark" aria-hidden={!series.length}>
@@ -168,7 +178,7 @@ function BlindWatches({ watches, blind, now }: { watches: OpsWatch[]; blind: num
             <BellRing className="w-3 h-3" aria-hidden />
             <span className="ops-mono ops-dim">{w.short_id}</span>
             <span className="truncate">{w.name}</span>
-            <span className="ops-dim ops-num" data-blind={i < blind ? "true" : undefined}>{i < blind ? (w.last_at ? `blind ${relTimeShort(w.last_at, now)}` : "never read") : w.last_at ? `read ${relTimeShort(w.last_at, now)} ago` : "never read"}</span>
+            <span className="ops-dim ops-num" data-blind={i < blind ? "true" : undefined}>{i < blind ? (w.last_at ? `blind ${relTimeShort(w.last_at, now)}` : "never read") : w.last_at ? `read ${formatRelative(w.last_at, now)}` : "never read"}</span>
           </Link>
         </li>
       ))}
@@ -269,7 +279,8 @@ export function GroupFixSlots({ item: it, group, snoozedView = false, bare = fal
   } else if (plan.primary === "resolve") {
     primary = <button type="button" className="ops-btn" data-tone="primary" data-ops-fix-resolve onClick={() => triage([group], "resolved")} title="Its fix held: resolve it"><Check className="w-3.5 h-3.5" />Resolve</button>;
   } else if (plan.primary === "refile" && !mismatch && task?.short_id) {
-    primary = <button type="button" className="ops-btn" data-tone="primary" data-ops-fix-reopen onClick={() => setTaskStatusUndoable({ short_id: task.short_id!, status: task.status }, "open")} title={`${full}: set it back to open; z undoes it`}><RotateCcw className="w-3.5 h-3.5" />{label}</button>;
+    // The Fix card's press: reopen the dropped task and start its session, in one confirm.
+    primary = <StartFix item={it} label={label ?? undefined} taskId={it.taskId} title={full ?? undefined} reopen={{ short_id: task.short_id, status: task.status }} />;
   } else if (plan.primary) {
     primary = <StartFix item={it} label={label ?? undefined} taskId={mismatch ? null : it.taskId} title={full ?? undefined} />;
   } else if (!bare && !snoozedView && !handled(it)) {
@@ -293,7 +304,7 @@ export function GroupFixSlots({ item: it, group, snoozedView = false, bare = fal
 function RowSlots({ chip, primary, menu }: { chip: ReactNode; primary: ReactNode; menu: ReactNode }) {
   return (
     <>
-      <span className="ops-home-slot" data-slot="task">
+      <span className="ops-home-slot" data-slot="task" data-primary={primary ? "true" : undefined}>
         {chip}
         {primary ? <span className="ops-home-slot" data-slot="primary">{primary}</span> : null}
       </span>
@@ -519,7 +530,7 @@ export function SourceFix({ source, health }: { source: OpsSource; health: Sourc
   );
 }
 
-export function StartFix({ item: it, label, taskId: bind = it.taskId, title }: { item: Fixable; label?: string; /** The task the session binds to; null to start unbound (a task filed for another title). */ taskId?: string | null; title?: string }) {
+export function StartFix({ item: it, label, taskId: bind = it.taskId, title, reopen }: { item: Fixable; label?: string; /** The task the session binds to; null to start unbound (a task filed for another title). */ taskId?: string | null; title?: string; /** A dropped task the start reopens. */ reopen?: { short_id: string; status?: string } }) {
   const folder = useMemo(() => fixSessionPath(useInboxStore.getState() as any, it.sourceId), [it.sourceId]);
   const ref = itemRef(it);
   const bound = bind ? it.task?.short_id ?? null : null;
@@ -529,8 +540,9 @@ export function StartFix({ item: it, label, taskId: bind = it.taskId, title }: {
   return (
     <ConsequentialSwitch
       on={false}
-      ledger={fixLedger(ref, itemTitle(it), folder, bound, { seeds, merges })}
+      ledger={fixLedger(ref, itemTitle(it), folder, bound, { seeds, merges, reopens: !!reopen })}
       onTurnOn={() => {
+        if (reopen) setTaskStatusUndoable(reopen, "open");
         startOpsFixSession(fixFactsOf(it), it.sourceId, { taskId: bind, groupIds: fixGroups(it) });
         if (bound) for (const m of merges) void useInboxStore.getState().mergeProblem(m, bound);
       }}

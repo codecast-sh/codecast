@@ -19,7 +19,7 @@ import {
   derivePresenceState,
 } from "./presenceState";
 import { authorizeRoom, liveMembers } from "./callRooms";
-import { roomSeatClass, type SeatClass } from "./calls";
+import { roomSeatClass, type SeatClass } from "./lib/callSeats";
 import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
 import { teamFeatureEnabled } from "@codecast/shared/contracts";
 import { purgeChatMembership } from "./chat";

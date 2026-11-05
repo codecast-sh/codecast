@@ -6,6 +6,8 @@
 // the same view here (opsViewHref). This file is the only place that knows the
 // addresses. Pure: no React, no store.
 
+import { parseReplayT, replayTParam } from "@codecast/shared/replay";
+
 export const OPS_TABS = ["timeline", "issues", "replays", "metrics", "apps"] as const;
 export type OpsTab = (typeof OPS_TABS)[number];
 
@@ -25,7 +27,7 @@ export type OpsView =
   | { view: "home"; source: string | null; show: OpsHomeShow | null }
   | { view: "tab"; tab: OpsTab; source: string | null; app: string | null }
   | { view: "issue"; id: string }
-  | { view: "replay"; id: string; t: number | null }
+  | { view: "replay"; id: string; t: number | null; /** A bare number read as ms, as links before seconds wrote it: the replay page takes it when `t` runs past the recording. */ t_alt?: number }
   | { view: "metric"; id: string }
   | { view: "not-found"; path: string };
 
@@ -63,10 +65,10 @@ export const opsHref = {
   home: (opts: { source?: string | null; show?: OpsHomeShow | null } = {}) => withQuery(OPS_HOME, { source: opts.source, show: opts.show }),
   tab: (tab: OpsTab, opts: { source?: string | null; app?: string | null } = {}) => withQuery(`${OPS_HOME}/${tab}`, { source: opts.source, app: opts.app }),
   /** The Issues list on one lane (issuesModel LaneFilter), as the home's issue tiles open it. */
-  issues: (opts: { source?: string | null; lane?: string | null } = {}) => withQuery(`${OPS_HOME}/issues`, { source: opts.source, lane: opts.lane }),
+  issues: (opts: { source?: string | null; lane?: string | null; /** Only the issues nobody is on (issueQuery's nobody). */ nobody?: boolean } = {}) => withQuery(`${OPS_HOME}/issues`, { source: opts.source, lane: opts.lane, show: opts.nobody ? "nobody:1" : null }),
   issue: (id: string) => `${OPS_HOME}/issues/${enc(id)}`,
-  /** `t` is the scrubber position in ms from the start of the recording. */
-  replay: (id: string, t?: number | null) => withQuery(`${OPS_HOME}/replays/${enc(id)}`, { t: t ?? null }),
+  /** `t` is the scrubber position in ms from the start of the recording; the address carries it in seconds, as PostHog's and Sentry's do. */
+  replay: (id: string, t?: number | null) => withQuery(`${OPS_HOME}/replays/${enc(id)}`, { t: t == null ? null : replayTParam(t) }),
   /** One metric watch (mw-N). */
   metric: (id: string) => `${OPS_HOME}/metrics/${enc(id)}`,
 };
@@ -81,13 +83,17 @@ export function opsViewHref(view: OpsView): string {
   return OPS_HOME;
 }
 
+function replayView(id: string, raw: string | null): OpsView {
+  const t = parseReplayT(raw);
+  return { view: "replay", id, t: t?.t ?? null, ...(t?.alt !== undefined ? { t_alt: t.alt } : {}) };
+}
+
 /** The view an old Signals address names (its `sig`, `source`, `app`, `item`, `t`), or null for Signals' own list. */
 export function opsViewOf(q: { sig: string | null; source: string | null; app: string | null; item: string | null; t: string | null }): OpsView | null {
   const tab = (OPS_TABS as readonly string[]).includes(q.sig ?? "") ? (q.sig as OpsTab) : null;
   if (!tab) return null;
   if (q.item && tab === "issues") return { view: "issue", id: q.item };
-  const t = Number(q.t);
-  if (q.item && tab === "replays") return { view: "replay", id: q.item, t: q.t != null && Number.isFinite(t) && t >= 0 ? t : null };
+  if (q.item && tab === "replays") return replayView(q.item, q.t);
   if (q.item && tab === "metrics") return { view: "metric", id: q.item };
   return { view: "tab", tab, source: q.source, app: q.app };
 }
@@ -106,8 +112,7 @@ export function parseOpsPath(pathname: string | null | undefined, query = ""): O
   }
   if (first === "replays" && second) {
     const id = dec(second);
-    const t = Number(q.get("t"));
-    return id ? { view: "replay", id, t: q.has("t") && Number.isFinite(t) && t >= 0 ? t : null } : { view: "not-found", path };
+    return id ? replayView(id, q.get("t")) : { view: "not-found", path };
   }
   if (first === "metrics" && second) {
     const id = dec(second);

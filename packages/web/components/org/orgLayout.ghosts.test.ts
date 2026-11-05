@@ -3,7 +3,8 @@
 // per change kind, then the accept stub, supersession, skip and focus.
 import { isOrgQuietChange } from "@codecast/shared/contracts/orgProposal";
 import { describe, expect, it } from "bun:test";
-import { focusTargetNodeId, ghostNodeIdFor, ghostsFor, layoutOrgTree, personNodeId, quietChipLines, rectsOverlap, refResolves, resolveOrgParentRef, roleNodeId, sessionNodeId, ORG_SIZES, type OrgLayoutNode } from "./orgLayout";
+import { focusTargetNodeId, ghostNodeIdFor, layoutOrgTree, personNodeId, quietChipLines, rectsOverlap, roleNodeId, sessionNodeId, ORG_SIZES, type OrgLayoutNode } from "./orgLayout";
+import { ghostsFor, refResolves, resolveOrgParentRef } from "./orgGhostsFor";
 import { CARD, changeLines, roleCardRows, roleFarRows } from "./orgCardModel";
 import { ORG_FIXTURE } from "./orgFixture";
 import { ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";

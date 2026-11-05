@@ -34,6 +34,7 @@ const named = (ref: unknown) => getFunctionName(ref as any);
 const { makeFakeDb } = await import("@codecast/convex/convex/testDb");
 const comments = await import("@codecast/convex/convex/comments");
 const { conversationComments } = await import("@codecast/convex/convex/commentTwins");
+const { listConversationComments } = await import("@codecast/convex/convex/commentStore");
 const { CommentThread } = await import("./CommentThread");
 const { groupComments } = await import("../../lib/commentThread");
 const { buildConversationMessageMetadata } = await import("../../hooks/useConversationMessageMetadata");
@@ -104,7 +105,7 @@ async function seed() {
   await (comments.resolveThread as any)._handler(ctx, { conversation_id: CONV, message_id: MSG, resolved: true });
   await add(ctx, { file_path: "src/sync.ts", line_number: 42, anchor_lines: { before: ["a"], lines: ["b"], after: ["c"] }, content: "This loop never ends" });
   await (comments.askAgentInThreadV2 as any)._handler(ctx, { command_id: "ask", conversation_id: CONV, file_path: "src/sync.ts", line_number: 42, client_id: "ask" });
-  const agent = ctx.db._tables.comments.find((c: any) => c.author_kind === "agent");
+  const agent: any = (await listConversationComments(ctx, CONV)).find((c: any) => c.author_kind === "agent");
   ctx.db._tables.messages.push({ _id: "msg_reply", conversation_id: FORK, role: "assistant", content: "Fixed: it breaks on EOF.", timestamp: Date.now() + 5 });
   await (comments.mirrorAgentReply as any)._handler(ctx, { fork_conversation_id: agent.fork_conversation_id });
   const doomed = await add(as(ctx, MEMBER), { content: "global note" });
@@ -159,7 +160,9 @@ describe("flag on: the same rows render identically from review_comments", () =>
 
       const htmlComments = await renderThreads(fromComments, viewer);
       const htmlTwins = await renderThreads(fromTwins, viewer);
-      expect(htmlComments).toContain("It **drops** writes.");
+      // The resolved message thread folds to its first line and count; its reply is in the rows, not drawn.
+      expect(fromComments.some((c: any) => c.content === "It **drops** writes.")).toBe(true);
+      expect(htmlComments).toContain("data-comment-thread-folded");
       expect(htmlComments).toContain("Fixed: it breaks on EOF.");
       expect(htmlComments).toContain("reply to a deleted note");
       expect(htmlTwins).toBe(htmlComments);

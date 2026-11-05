@@ -17,6 +17,7 @@ import { isPrivateHost } from "../contracts/browserPaneOffer";
 import { callAnchorHref, callFrameHref, parseCallMomentParam } from "../contracts/callLinks";
 import { CALL_TIME_SOURCE, formatCallTime, parseCallTime } from "../contracts/callRecordings";
 import { parseReplayRef, replayRefId, type ReplayRef } from "../contracts/replayPlayer";
+import { parseReplayT, replayTParam } from "../replay/events";
 
 export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay" | "role" | "person" | "deploy" | "secret";
 
@@ -77,7 +78,7 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   // (`/ops?source=src-N`), since `/ops/<tab>` is a view, never a source.
   source: "/ops",
   // A product recording is an Ops page of its own (`/ops/replays/rp-N`), and
-  // a moment of it opens there at that time (`?t=<ms>`, see entityRoute).
+  // a moment of it opens there at that time (`?t=<seconds>`, see entityRoute).
   replay: "/ops/replays",
   // A deploy opens on the Deploys page at its target, the deploy open (`/deploys?deploy=dp-N`, see entityRoute).
   deploy: "/deploys",
@@ -194,7 +195,7 @@ export function entityRoute(type: string, id: string): string | null {
     const ref = parseReplayRef(id);
     const at = replayRefStart(ref);
     const base = `${ENTITY_ROUTE.replay}/${encodeURIComponent(ref?.replay ?? id)}`;
-    return at != null ? `${base}?t=${at}` : base;
+    return at != null ? `${base}?t=${replayTParam(at)}` : base;
   }
   if (norm === "call") {
     const ref = parseCallRef(id);
@@ -479,7 +480,7 @@ function stripGitSuffix(name: string): string {
  * Anything after the object (`/files`, `/checks`, a fragment) is dropped: it
  * addresses a view of the object, and the object is what the reference names.
  */
-/** `/ops/replays/<rp-N or id>[?t=<ms>]`: a replay, or the moment of it the
+/** `/ops/replays/<rp-N or id>[?t=<seconds>]`: a replay, or the moment of it the
  *  link opens at. The rest of `/ops` addresses a source (by query) or a view. */
 function parseReplayPath(segs: string[], search: string): string | null {
   if (segs.length !== 3 || segs[0].toLowerCase() !== "ops" || segs[1].toLowerCase() !== "replays") return null;
@@ -490,8 +491,8 @@ function parseReplayPath(segs: string[], search: string): string | null {
     id = segs[2].trim();
   }
   if (!/^rp-\d+$/i.test(id) && !isConvexId(id)) return null;
-  const t = search ? new URLSearchParams(search).get("t") : null;
-  const atMs = t !== null && /^\d+$/.test(t) ? Number(t) : null;
+  // ?t is seconds (or a clock, or 1h2m3s), as the replay page reads it (shared/replay parseReplayT).
+  const atMs = search ? (parseReplayT(new URLSearchParams(search).get("t"))?.t ?? null) : null;
   return /^rp-/i.test(id) ? replayRefId(id.toLowerCase(), atMs) : id;
 }
 

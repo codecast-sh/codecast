@@ -5,7 +5,7 @@
 // step. The model is lib/line/flowDiagram.ts; this only draws it.
 import { memo, useMemo } from "react";
 import { Bot, Sparkles, SquareTerminal, User, type LucideIcon } from "lucide-react";
-import { flowDiagram, routeTail, runReached, stepStates, type DiagramStep, type SideRoute, type StepState } from "../../../lib/line/flowDiagram";
+import { flowDiagram, routeTail, runReached, SESSION_WORDS, stepStates, type DiagramStep, type SideRoute, type StepState } from "../../../lib/line/flowDiagram";
 import type { ShippedFlow } from "../../../lib/line/flowPool";
 
 type RunLike = Parameters<typeof stepStates>[1];
@@ -103,7 +103,7 @@ function Routes({ routes, run }: { routes: SideRoute[]; run: RunLike }) {
   return (
     <ul className="fd-routes">
       {shown.map((r, i) => (
-        <li key={i} className="fd-route" data-tone={r.tone} data-taken={run ? "" : undefined} title={`${r.outcome}: ${routeTail(r)}`}>
+        <li key={i} className="fd-route" data-tone={r.tone} data-session={r.leadsTo === SESSION_WORDS ? "" : undefined} data-taken={run ? "" : undefined} title={`${r.outcome}: ${routeTail(r)}`}>
           <span className="fd-route-mark" aria-hidden>{TONE_MARK[r.tone]}</span>
           <span><b>{r.outcome}</b> <span className="fd-route-to">{routeTail(r)}</span></span>
         </li>

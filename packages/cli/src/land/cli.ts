@@ -78,6 +78,24 @@ export async function readRoster(): Promise<{ rows: RosterRow[] | null; status: 
   }
 }
 
+/** The runs live on this machine (workflow/liveRuns.ts), or null when the server cannot say: every run tree is then kept. */
+async function liveRunIds(): Promise<Set<string> | null> {
+  const log = console.log;
+  console.log = console.error;
+  try {
+    const { convexClient } = await import("../remote/convexClient.js");
+    const { deviceId } = await import("../remote/device.js");
+    const { liveRunIdsOf } = await import("../workflow/liveRuns.js");
+    const convex = await convexClient({ timeoutMs: 30_000 });
+    const data = await convex.client.mutation(convex.api.workflow_runs.liveRunsForDevice, { api_token: convex.token, device: deviceId() });
+    return liveRunIdsOf(data && !("error" in data) ? data : null);
+  } catch {
+    return null;
+  } finally {
+    console.log = log;
+  }
+}
+
 /**
  * The inbox listing (`cast sessions`) as roster rows. Without ids it omits
  * subagent and stashed rows; named ids answer whatever their state.
@@ -95,9 +113,11 @@ async function scanLocal(opts: ScanOpts): Promise<LandScan> {
     ? await Promise.all(opts.repo.map(repoRootOf))
     : opts.allRepos ? allRepoRoots() : [await repoRootOf(process.cwd())];
   const [roster, cwds] = await Promise.all([readRoster(), processCwds()]);
+  const { runTreesInUseVia } = await import("../worktreeGc.js");
+  const runTreesInUse = runTreesInUseVia(liveRunIds);
   const repos: RepoScan[] = [];
   for (const root of [...new Set(roots)]) {
-    repos.push(await scanRepo(root, { roster: roster.rows, processCwds: cwds, fetch: opts.fetch, only: opts.only }));
+    repos.push(await scanRepo(root, { roster: roster.rows, processCwds: cwds, runTreesInUse, fetch: opts.fetch, only: opts.only }));
   }
   return { scannedAt: new Date().toISOString(), machine: os.hostname(), roster: roster.status, repos };
 }

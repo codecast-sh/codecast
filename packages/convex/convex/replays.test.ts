@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { replayIndexFields } from "./lib/replayIndex";
+import { patchReplay } from "./lib/replayIndex";
 import { getFunctionName } from "convex/server";
 import { gunzipSync, gzipSync, strFromU8, strToU8 } from "fflate";
 import schema from "./schema";
@@ -9,34 +9,27 @@ import { replayChunkKey } from "./lib/r2";
 import { applyBatch, createSource } from "./ingest";
 import {
   chunkObject,
-  chunkReplayEvents,
   cliGet,
   get,
   webGetReplay,
-  gunzipCapped,
   linkReplayToGroup,
   list,
   browse,
-  REPLAY_BROWSE_SCAN_MAX,
   saveShape,
-  readBodyCapped,
-  putChunk,
-  readReplayChunks,
   recordReplayChunk,
-  REPLAY_CHUNK_MAX_INFLATED_BYTES,
   REPLAY_GROUP_LINKS_MAX,
-  REPLAY_GROUP_SCAN_MAX,
   saveImported,
   saveCaptureLength,
   saveSummary,
-  signReplayChunks,
   upsertReplayManifest,
-  writeReplayTimeline,
   CHUNK_LANDING_MS,
   REPLAYS_NEW_PER_HOUR,
   shouldQueueAssembly,
-  withCaptureLength,
 } from "./replays";
+import { chunkReplayEvents, gunzipCapped, putChunk, readReplayChunks, REPLAY_CHUNK_MAX_INFLATED_BYTES, signReplayChunks } from "./lib/replayChunks";
+import { withCaptureLength } from "./lib/replayImport";
+import { REPLAY_BROWSE_SCAN_MAX, REPLAY_GROUP_SCAN_MAX, writeReplayTimeline } from "./lib/replayReads";
+import { readBodyCapped } from "./lib/tokenHttp";
 import { handleReplaySign, replaySignKey, validateReplaySign } from "./replaysHttp";
 import { classifyStatus } from "@platform/analytics/codecast";
 import { REPLAY_LIMITS, type ReplayEvent } from "@codecast/shared/contracts/replay";
@@ -579,9 +572,8 @@ describe("browse", () => {
     const { source } = await teamSource(w);
     for (let i = 0; i < n; i++) {
       await upsertReplayManifest(w.internalCtx, source, replayItem({ replay_id: `r${i}`, started_at: NOW - i * 60_000 }), NOW);
-      await w.db.patch(w.db._tables.replays[i]._id, { started_at: NOW - i * 60_000, ...at(i) });
-      // The index fields every real writer stamps (lib/replayIndex.ts patchReplay).
-      await w.db.patch(w.db._tables.replays[i]._id, replayIndexFields(w.db._tables.replays[i]));
+      // Through the writer every real write uses (lib/replayIndex.ts patchReplay): the index fields and the person tallies follow.
+      await patchReplay(w.internalCtx, w.db._tables.replays[i], { started_at: NOW - i * 60_000, ...at(i) });
     }
     return { w, source };
   }

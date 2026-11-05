@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { formatVaultReady, parseVaultReady } from "./machineMessages";
+import { formatVaultReady, parseVaultReady } from "./vaultMessages";
 import { envFor } from "./secrets";
 
 const ready = (s: Parameters<typeof envFor>[0] & { short_id: string; sites?: string[]; has_otp?: boolean }) =>

@@ -86,6 +86,7 @@ import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { PaneControls } from "./stage/PaneControls";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { Button } from "./ui/button";
 const ConversationDiffLayout = React.lazy(() =>
   import("./ConversationDiffLayout").then((module) => ({ default: module.ConversationDiffLayout })),
 );
@@ -395,18 +396,19 @@ export function SignInCta({
         </div>
       )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <button
+        <Button
+          variant="amber"
+          size="sm"
           onClick={() => handleClick()}
           disabled={disabled}
           title={`Run /login on ${device.label || "your machine"} — opens the browser sign-in${email ? ` for ${email}` : ""}`}
-          className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-3.5 py-1.5 text-[12px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
         >
           <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
             <circle cx="7.5" cy="15.5" r="3.5" />
             <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           {rejectedRecent ? `Try signing in as ${who} again` : `Sign in as ${who}`}
-        </button>
+        </Button>
         <span className="text-[11px] leading-snug text-sol-text-dim">
           Opens your browser to re-authenticate, then restarts the signed-out session{authSessionIds.length === 1 ? "" : "s"} automatically.
         </span>
@@ -1071,11 +1073,12 @@ function BlockedSessionsBanner({
           </button>
         )}
         {pickable.length > 0 && <>
-        <button
+        <Button
+          variant="amber"
+          size="xs"
           onClick={handleContinue}
           disabled={busy !== null || chosen.length === 0}
           title={continueTitle}
-          className="rounded bg-amber-500 px-3 py-1 text-[11px] font-bold text-sol-bg shadow-sm transition-colors hover:bg-amber-400 disabled:opacity-60"
         >
           {busy !== null
             ? selectedAccount
@@ -1084,7 +1087,7 @@ function BlockedSessionsBanner({
             : selectedAccount
               ? `Switch & continue ${countLabel}`
               : `Continue ${countLabel}`}
-        </button>
+        </Button>
         {rankedAccounts.length > 0 && (
           <label
             className="flex min-w-0 items-center gap-1.5 text-[11px] text-sol-text-dim"
@@ -1180,7 +1183,8 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
       : "Background work — running inside this session";
   return (
     <button
-      data-schedstrip={primary ? session._id : undefined}
+      data-schedstrip={session._id}
+      data-card-bar
       onClick={() => {
         if (rows.length > 1) {
           onOpenSession(session);
@@ -1198,7 +1202,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
         <>
           <Zap className="w-2.5 h-2.5 shrink-0 text-sol-amber/70" fill="currentColor" strokeWidth={0} />
           <SchedHealthDot accent={schedAccent(primary.task)} task={primary.task} />
-          <span className="text-[11px] text-gray-400 truncate min-w-0">
+          <span className={`text-[11px] text-gray-400 ${rows.length === 1 ? "truncate min-w-0" : "shrink-0 whitespace-nowrap"}`}>
             {rows.length === 1 ? taskDisplayTitle(primary.task) : `${rows.length} triggers`}
           </span>
           {rows.length > 1 && (
@@ -1221,10 +1225,12 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
           {monCount > 0 ? `${monCount} watching` : ""}
         </span>
       )}
+      {/* The right edge carries the wake's state: a trigger's countdown, or
+          for work already named "running" on the left, only its live dot. */}
       {primary ? (
         <SchedFireBadge task={primary.task} className="ml-auto" />
       ) : (
-        <RunningBadge label="running" />
+        <span className="ml-auto flex h-3.5 w-3.5 shrink-0 items-center justify-center" title="Running"><LivePulseDot still className="w-2 h-2" /></span>
       )}
     </button>
   );
@@ -1295,7 +1301,7 @@ function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: b
   const total = session.workflow_run_agents_total ?? 0;
   const ariaLabel = "Workflow — running inside this session";
   return (
-    <div className={`group/wfrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
+    <div data-card-bar className={`group/wfrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
       <button
         className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-cyan/[0.05] transition-colors"
         disabled={opening}
@@ -1360,7 +1366,7 @@ export function MonitorBars({ session, isActive }: {
           ? "Background command — running inside this session"
           : "Monitor — watching inside this session";
         return (
-        <div key={row.toolUseId} className={`group/monrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
+        <div key={row.toolUseId} data-card-bar className={`group/monrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
           <button
             className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
             disabled={openingKey !== null}
@@ -1492,8 +1498,10 @@ function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: 
     title = "waiting on background work";
     detail = "the turn ended on an open task — the agent resumes when it finishes";
   } else if (status === "dormant") {
+    // The card above already shows the declared state, so the row adds only
+    // where the declaration came from.
     family = "Dormant";
-    title = ts?.headline || "parked on a machine wake";
+    title = ts ? "" : "parked on a machine wake";
     detail = ts?.provenance ? `declared by the agent · ${ts.provenance}` : "declared by the agent";
   } else if (session.user_rest === "dormant") {
     family = "Parked";
@@ -1501,7 +1509,7 @@ function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: 
     detail = "the next activity un-parks it; drag it to another section to re-file it";
   } else {
     family = "Dormant";
-    title = ts?.headline || "waiting on a machine wake";
+    title = ts ? "" : "waiting on a machine wake";
     detail = ts?.provenance || "";
   }
   return (
@@ -1515,10 +1523,9 @@ function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: 
   );
 }
 
-// The one row anatomy both wake-reason variants wear: ↳ child glyph, family
-// eyebrow, title, optional badge, optional detail line. Kept identical to the
-// trigger / monitor bars' two-line shape so a card's children always read as
-// one family. The badge slot means one thing on every child row: the state of
+// The one row anatomy both wake-reason variants wear, on one line like the
+// folded trigger strip: ↳ child glyph, family eyebrow, title, detail, optional
+// badge, so a card's children always read as one family. The badge slot means one thing on every child row: the state of
 // the WAKE (a trigger's countdown, a command "running", a claim "unverified").
 // The plain reason row has no wake to report, so it carries no badge — the
 // card's section already says the session is parked.
@@ -1533,34 +1540,30 @@ function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass
 }) {
   const ariaLabel = `${family} — why this session is parked`;
   return (
-    <div data-cc-tech className={`group/dormrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
+    <div data-cc-tech data-card-bar className={`group/dormrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
       <button
         className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
         onClick={onClick}
         title="Open the session"
       >
-        <div className="flex gap-1.5 min-w-0">
-          <span className="flex items-center mt-[2px] shrink-0 text-sol-blue/70" role="img" aria-label={ariaLabel}>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="flex items-center shrink-0 text-sol-blue/70" role="img" aria-label={ariaLabel}>
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <title>{ariaLabel}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
           </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
-              <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{title}</span>
-              {badge && (
-                <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${badgeClass ?? ""}`}>
-                  {badge}
-                </span>
-              )}
-            </div>
-            {detail && (
-              <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
-                <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-mono text-sol-text-dim">{detail}</span>
-              </div>
+          {/* One line, in the folded strip's type: family, what it waits on,
+              where that came from, and the wake's state when it has one. */}
+          <div className="min-w-0 flex-1 flex items-center gap-1.5">
+            <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
+            {title && <span className="text-[11px] truncate min-w-0 text-gray-400 font-normal">{title}</span>}
+            {detail && <span className="text-[10px] truncate min-w-0 text-sol-text-dim">{title ? "· " : ""}{detail}</span>}
+            {badge && (
+              <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${badgeClass ?? ""}`}>
+                {badge}
+              </span>
             )}
           </div>
         </div>

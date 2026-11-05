@@ -148,7 +148,7 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
     .command("targets")
     .description("This repository's deploy targets: what runs on each (its live deploy), what is going out, and the commits on main waiting for it, by session, with CI")
     .option("--target <name>", "One target")
-    .option("--publish", "Publish this checkout's declared targets ([[ship.deploy]] entries that name a target) first")
+    .option("--publish", "Publish this checkout's declared targets (.codecast/deploy.toml) first")
     .option("--team <id>", "With --publish: the team, for a repository no GitHub installation or published checkout ties to one")
     .option("--json", "Machine-readable output")
     .action(async (_opts: any, cmd: any) => {
