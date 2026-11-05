@@ -28,6 +28,7 @@ import {
   ChevronDown,
   Radio,
   Film,
+  Workflow,
   Hexagon,
   UserRound,
 } from "lucide-react";
@@ -396,6 +397,20 @@ function SourceHoverContent({ source }: { source: any }) {
           Open in Ops <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
+    </div>
+  );
+}
+
+// What a flow reference answers at a glance: its name, what it is for, and the
+// steps a change passes through. The steps themselves open from its card.
+function FlowHoverContent({ flow }: { flow: any }) {
+  const path = (flow.stations ?? []).filter((s: any) => s.main).map((s: any) => s.label).join(" → ");
+  return (
+    <div className="min-w-0">
+      <div className="text-xs font-medium text-sol-text leading-snug">{flow.label}<span className="ml-1.5 text-[10px] uppercase tracking-wide text-gray-500">{flow.kind === "segment" ? "Segment" : "Flow"}</span></div>
+      {flow.description ? <div className="mt-1 text-[11px] text-gray-400 leading-snug">{flow.description}</div> : null}
+      {path ? <div className="mt-1.5 text-[11px] text-sol-text-muted leading-snug">{path}</div> : null}
+      <ShortId id={flow.short_id} className="mt-1.5 text-[10px] text-gray-500" />
     </div>
   );
 }
@@ -1270,6 +1285,8 @@ export function EntityIdPill({
               ? Radio
             : type === "replay"
               ? Film
+            : type === "flow"
+              ? Workflow
             : isPr
               ? GitPullRequest
               : isCommit
@@ -1309,6 +1326,9 @@ export function EntityIdPill({
             // A replay wears the magenta of the replay issues on Ops.
             : type === "replay"
               ? "bg-sol-magenta/[0.08] text-sol-magenta hover:bg-sol-magenta/[0.16]"
+            // A flow wears the cyan of plans: both say the way the work goes, step by step.
+            : type === "flow"
+              ? "bg-sol-cyan/[0.08] text-sol-cyan hover:bg-sol-cyan/[0.16]"
             : isPr
               ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
@@ -1464,6 +1484,7 @@ export function EntityIdPill({
             : type === "call" ? <CallHoverContent call={entity} rawId={rawId} />
             : type === "source" ? <SourceHoverContent source={entity} />
             : type === "replay" ? <ReplayHoverContent replay={entity} rawId={rawId} />
+            : type === "flow" ? <FlowHoverContent flow={entity} />
             : isPr ? <PullRequestHoverContent pr={entity} />
             : isCommit ? <CommitHoverContent commit={entity} />
             : <GenericHoverContent entity={entity} type={type} />

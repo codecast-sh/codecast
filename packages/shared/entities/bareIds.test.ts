@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BARE_ID_AFTER, BARE_ID_BEFORE, BARE_ID_SOURCE, bareEntityIdRegex, entityRoute, entityTypeFromId } from "./index";
+import { BARE_ID_AFTER, BARE_ID_BEFORE, BARE_ID_SOURCE, bareEntityIdRegex, entityRoute, entityTypeFromId, flowSlugOf } from "./index";
 
 // A scanner that embeds the id branch in its own alternation (the phone's
 // markdown tokenizer) must bound it the way the shared scanner does, or a
@@ -38,3 +38,13 @@ describe("bare ids in prose", () => {
   });
 });
 
+
+describe("a flow, named by its slug", () => {
+  test("flow:<slug> scans in prose, types as a flow and routes to the library", () => {
+    const text = "Run it through flow:change, or flow:quick-change. Not overflow:x, flow:-bad or flow:bad-";
+    expect([...text.matchAll(bareEntityIdRegex())].map((m) => m[0])).toEqual(["flow:change", "flow:quick-change"]);
+    expect(entityTypeFromId("flow:change")).toBe("flow");
+    expect(flowSlugOf("Flow:Change")).toBe("change");
+    expect(entityRoute("flow", "flow:quick-change")).toBe("/flows?view=flows&item=quick-change");
+  });
+});

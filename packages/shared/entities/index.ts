@@ -19,7 +19,7 @@ import { CALL_TIME_SOURCE, formatCallTime, parseCallTime } from "../contracts/ca
 import { parseReplayRef, replayRefId, type ReplayRef } from "../contracts/replayPlayer";
 import { parseReplayT, replayTParam } from "../replay/events";
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay" | "role" | "person" | "deploy" | "secret";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay" | "role" | "person" | "deploy" | "secret" | "flow";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -85,6 +85,9 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   // A Vault secret opens on the Vault page with its panel (`/vault?s=sec-N`):
   // a path under /vault is a Files note, never a secret.
   secret: "/vault",
+  // A flow of the pool opens in the Flows app's library, that flow open
+  // (`/flows?view=flows&item=<slug>`, see entityRoute).
+  flow: "/flows",
 };
 
 /**
@@ -189,6 +192,10 @@ export function entityRoute(type: string, id: string): string | null {
   if (!norm) return null;
   if (isOrgObjectKind(norm)) return objectHref(norm, id);
   if (norm === "pr" || norm === "commit") return repoObjectRoute(id);
+  if (norm === "flow") {
+    const slug = flowSlugOf(id);
+    return slug ? `${ENTITY_ROUTE.flow}?view=flows&item=${encodeURIComponent(slug)}` : null;
+  }
   if (norm === "deploy") return `${ENTITY_ROUTE.deploy}?deploy=${encodeURIComponent(id)}`;
   if (norm === "replay") {
     // A moment, or the start of a stretch, opens the replay at that time.
@@ -283,6 +290,24 @@ export function buildEntityUrl(type: string, id: string, base: string = CODECAST
  * prefix, so the caller must supply the type (or default to session, the
  * historical `cast link` behavior).
  */
+/**
+ * A flow of the pool has no short id: it is named by its slug, the name every
+ * run, `cast flow show` and the .cast file already use. `flow:<slug>` is its
+ * reference (`flow:change`, `flow:quick-change`), the way `doc:<id>` names a
+ * doc. A slug is lowercase letters, digits and inner hyphens (lineSlug.ts).
+ */
+export const FLOW_REF_SOURCE = "flow:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?";
+const FLOW_REF_RE = new RegExp(`^${FLOW_REF_SOURCE}$`, "i");
+
+/** The slug a `flow:<slug>` reference names, or null when it names none. */
+export function flowSlugOf(ref: string): string | null {
+  const s = (ref || "").trim();
+  return FLOW_REF_RE.test(s) ? s.slice("flow:".length).toLowerCase() : null;
+}
+
+/** The reference that names a flow of the pool by its slug. */
+export const flowRefOf = (slug: string) => `flow:${slug}`;
+
 export function inferEntityTypeFromShortId(id: string): EntityType | null {
   const [prefix, ...rest] = (id || "").trim().toLowerCase().split("-");
   if (DIGITS_ONLY_PREFIX.has(prefix) && !/^\d+$/.test(rest.join("-"))) return null;
@@ -301,6 +326,7 @@ export function entityTypeFromId(id: string): EntityType | null {
   if (callRef?.turns || callRef?.at_ms != null) return "call";
   if (/^rp-\d+@/i.test(s)) return parseReplayRef(s) ? "replay" : null;
   if (/^doc:/i.test(s)) return "doc";
+  if (/^flow:/i.test(s)) return flowSlugOf(s) ? "flow" : null;
   if (isConvexId(s.toLowerCase())) return null;
   if (/^jx[a-z0-9]{5,}$/i.test(s)) return "session";
   const repoObject = parseRepoObjectId(s);
@@ -759,10 +785,10 @@ export function shortIdSource(tail = "[a-z0-9]+"): string {
  * alternation — mobile's markdown tokenizer scans every inline form in one
  * pass, so it needs the branch, not a standalone matcher.
  */
-export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${REPLAY_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource()}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
+export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${REPLAY_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource()}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|${FLOW_REF_SOURCE}|[a-z0-9]{32}`;
 
 /** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
-export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${REPLAY_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
+export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${REPLAY_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|${FLOW_REF_SOURCE}|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
 
 /** The bounds of a bare id in prose: anything but a letter, digit or hyphen
  *  on either side, so a scan can't split a longer token. A hyphen is a word

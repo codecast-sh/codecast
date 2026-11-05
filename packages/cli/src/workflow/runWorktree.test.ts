@@ -51,6 +51,24 @@ describe("a resumed run's worktree", () => {
     expect(await restoreRunWorktree(repoRoot, NAME, BRANCH)).toBe("present");
   });
 
+  // ct-68695: `cast land prune` read the tree of a run waiting 8 days at the Eval wallet as stale, freed its branch
+  // name and kept the head under refs/codecast/land-archive/; Eval then failed on "Workspace not found".
+  test("pruned with its branch, it comes back from the land archive ref on the run's branch", async () => {
+    const built = git(repoRoot, "rev-parse", BRANCH);
+    git(repoRoot, "update-ref", `refs/codecast/land-archive/${BRANCH}`, built);
+    git(repoRoot, "worktree", "remove", "--force", tree());
+    git(repoRoot, "branch", "-D", BRANCH);
+    expect(await restoreRunWorktree(repoRoot, NAME, BRANCH)).toBe("restored");
+    expect(git(tree(), "rev-parse", "HEAD")).toBe(built);
+    expect(git(tree(), "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
+  });
+
+  test("with neither the branch nor an archive of it, there is nothing to put back", async () => {
+    git(repoRoot, "worktree", "remove", "--force", tree());
+    git(repoRoot, "branch", "-D", BRANCH);
+    expect(await restoreRunWorktree(repoRoot, NAME, BRANCH)).toBe("no_branch");
+  });
+
   test("a run resumed past its card finds the checkout at its next station", async () => {
     const graph = parseWorkflowSource(`digraph line {
       start [shape=Mdiamond]

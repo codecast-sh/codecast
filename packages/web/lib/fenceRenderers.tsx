@@ -28,6 +28,12 @@ export function extractTextFromHast(node: any): string {
   return "";
 }
 
+/** A flow named by reference (`flow:change` alone on its line) draws as the `flow` fence's card; `fallback` is what it reads as
+ *  where the card cannot draw (Flows off). */
+export function renderFlowCard(slug: string, fallback: ReactNode): ReactNode {
+  return <Suspense fallback={<div className="my-2 h-24 max-w-[860px] rounded-xl border border-sol-border/30 bg-sol-bg-alt/40" aria-busy />}><FlowFence code={JSON.stringify({ flow: slug })} fallback={fallback} /></Suspense>;
+}
+
 export function renderFence(language: string | undefined, code: string, opts: { mermaid?: boolean } = {}): ReactNode {
   if (opts.mermaid && language === "mermaid") return <MermaidDiagram code={code} />;
   const canvas = tryRenderCanvas(language, code);

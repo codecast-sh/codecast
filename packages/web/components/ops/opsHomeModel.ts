@@ -445,11 +445,11 @@ export function attentionCounts(items: AttentionItem[]): Record<OpsHomeShow, num
 /** The Issues lane each issue tile counts the same as (issuesModel attentionLane). */
 export const TILE_LANE: Partial<Record<OpsHomeShow, AttentionLane>> = { regressed: "regressed", escalating: "escalating", new: "new", firing: "firing" };
 
-/** What pages a person, out of the list: the sidebar badge's count and its words. */
+/** What pages a person, out of the list: the Overview's count and its words. */
 export const BADGE_STATES: ReadonlySet<AttentionState> = new Set(["alerting", "check", "regressed", "escalating", "source"]);
 const BADGE_FILTERS = ATTENTION_FILTERS.filter((f) => BADGE_STATES.has(f.key === "sources" ? "source" : (f.key as AttentionState)));
 
-/** The badge's count is the sum of the red tiles, the same tiles its words name, so the strip, the Overview tab and the sidebar read one number. */
+/** The badge's count is the sum of the red tiles, the same tiles its words name, so the strip, the Overview tab and the palette read one number. */
 export function opsBadge(items: AttentionItem[]): { n: number; words: string } {
   const counts = attentionCounts(items);
   const on = BADGE_FILTERS.filter((f) => counts[f.key] > 0);

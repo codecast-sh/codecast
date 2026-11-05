@@ -121,17 +121,26 @@ describe("the waiting queue (DP12)", () => {
     expect(backend.queue.groups[0].commits[0].ci_url).toBe("https://ci/2");
   });
 
-  test("a deploy going live records the commits it carried and the sessions behind them", async () => {
+  test("a deploy going live records the commits it carried, the sessions and tasks behind them, and what came after", async () => {
     const { t, ctx } = await published();
     await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }], NOW - 10_000);
     await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(1), repository: REPO, source: "m", at: NOW - 9_000 });
-    await pushMain(t, ctx, [{ n: 2, files: ["api/b.ts"], conv: "conv_api_work" }, { n: 3, files: ["web/x.tsx"], conv: "conv_ui_work" }], NOW - 5_000);
+    await pushMain(t, ctx, [{ n: 2, files: ["api/b.ts"], conv: "conv_api_work", tasks: ["task_a"] }, { n: 3, files: ["web/x.tsx"], conv: "conv_ui_work" }], NOW - 5_000);
     await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(3), repository: REPO, source: "m", at: NOW - 1_000 });
     const dp2 = t.deploys.find((d) => d.short_id === "dp-2");
     expect(dp2.previous_sha).toBe(sha(1));
-    expect(dp2.commits).toEqual([{ sha: sha(2), subject: "change 2", author: "Ana", conversation_id: "conv_api_work" }]);
+    expect(dp2.commits).toEqual([{ sha: sha(2), subject: "change 2", author: "Ana", conversation_id: "conv_api_work", task_ids: ["task_a"] }]);
+    // An error group that started after dp-2 went live is its aftermath, not dp-1's.
+    t.event_groups.push({ _id: "eg_1", workspace: WS, kind: "error", short_id: "eg-1", title: "TypeError", first_seen: NOW - 500, last_seen: NOW - 400, count: 3 });
     const [backend] = await viewOf(ctx, "backend");
-    expect(backend.history[0]).toMatchObject({ short_id: "dp-2", sessions: [{ conversation_id: "conv_api_work", short_id: "conv_ap", title: "Fix the totals" }] });
+    expect(backend.history[0]).toMatchObject({
+      short_id: "dp-2",
+      sessions: [{ conversation_id: "conv_api_work", short_id: "conv_ap", title: "Fix the totals" }],
+      tasks: [{ task_id: "task_a", short_id: "ct-7", title: "Totals round wrong" }],
+      after: { new_errors: 1, regressions: 0, reopened: 0, quiet: false, open: true },
+    });
+    expect(backend.history[1]).toMatchObject({ short_id: "dp-1", tasks: [], after: { new_errors: 0, quiet: true, open: false } });
+    expect(backend.live.after).toEqual(backend.history[0].after);
     expect(backend.queue.commits).toBe(0);
   });
 

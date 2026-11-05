@@ -50,3 +50,12 @@ describe("sessionTargets", () => {
     expect(sessionTargets("other", ts, d)).toEqual([]);
   });
 });
+
+describe("dp-N is a reference", () => {
+  test("it reads as a deploy and opens on the Deploys page at that deploy", () => {
+    const { entityRoute, entityTypeFromId } = require("../../entityLinks");
+    expect(entityTypeFromId("dp-12")).toBe("deploy");
+    expect(entityTypeFromId("dp-x")).toBeNull();
+    expect(entityRoute("deploy", "dp-12")).toBe("/deploys?deploy=dp-12");
+  });
+});

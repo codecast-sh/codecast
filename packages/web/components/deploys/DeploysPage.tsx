@@ -80,6 +80,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy }: { ini
                   <span className="dpp-target-state">{targetWords(t, n, tone)}</span>
                   <span className="dpp-target-live">{n.live ? <><code>{short(n.live.sha)}</code> {ago(now, n.live.live_at ?? n.live.created_at)}</> : "no live version known"}</span>
                 </button>
+                {tone === "waiting" ? <WaitingSessions t={t} onOpen={(key) => { setPicked(t._id); requestAnimationFrame(() => document.querySelector(`[data-deploy-group="${key}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" })); }} /> : null}
               </li>
             );
           })}
@@ -88,6 +89,25 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy }: { ini
       {picked ? <TargetPane key={picked._id} target={picked} deploys={deploys} now={now} onPress={press.open} openDeploy={initialDeploy ?? null} /> : null}
       {press.review}
     </div>
+  );
+}
+
+/** The sessions a target's waiting commits came from, a press from their place in the queue. */
+function WaitingSessions({ t, onOpen }: { t: DeployTargetRow; onOpen: (key: string) => void }) {
+  const groups = t.queue.groups;
+  const shown = groups.slice(0, 3);
+  return (
+    <ul className="dpp-rail-sessions" data-deploy-rail-sessions={t.name}>
+      {shown.map((g) => (
+        <li key={g.key}>
+          <button type="button" onClick={() => onOpen(g.key)} title={g.session?.title ?? "Commits with no Codecast-Session trailer"}>
+            <span className="dpp-rail-session" data-none={g.session ? undefined : ""}>{g.session ? g.session.title || g.session.short_id : "Not from a session"}</span>
+            <span className="dpp-num">{g.commits.length}</span>
+          </button>
+        </li>
+      ))}
+      {groups.length > shown.length ? <li className="dpp-dim dpp-rail-more">+{groups.length - shown.length} more</li> : null}
+    </ul>
   );
 }
 
@@ -133,10 +153,10 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
       <header className="dpp-head">
         <div className="dpp-head-name">
           <h2>{t.name}</h2>
-          <span className="dpp-head-sub">{t.repository}</span>
           <span className="dpp-policy" data-policy={t.policy}>{t.runs === "push" ? "on every push" : t.policy === "auto" ? "on green CI" : "on a press"}</span>
         </div>
         <div className="dpp-live">
+          <span className="dpp-head-sub">{t.repository}</span>
           <span className="dpp-k">Live</span>
           {n.live ? (
             <span className="dpp-v"><code>{short(n.live.sha)}</code>{n.live.version ? <span className="dpp-ver">{n.live.version}</span> : null}<span className="dpp-dp">{n.live.short_id}</span><span className="dpp-age">{ago(now, n.live.live_at ?? n.live.created_at)}</span></span>
@@ -161,6 +181,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
 
       {n.open ? <GoingOut d={n.open} now={now} /> : n.failed ? <Failed d={n.failed} /> : null}
 
+      <div className="dpp-body">
       <section className="dpp-sec" data-deploy-waiting>
         <h3>Waiting on main<span className="dpp-num">{waiting} {waiting === 1 ? "commit" : "commits"}</span>{sessions ? <span className="dpp-h-sub">· {sessions} {sessions === 1 ? "session" : "sessions"}</span> : null}{t.queue.untouched ? <span className="dpp-h-sub" title={`${t.queue.untouched} commits on main change no file ${t.name} ships`}>· {t.queue.untouched} skip {t.name}</span> : null}</h3>
         {waiting === 0 ? <p className="dpp-none">Everything on main is live here.</p> : (
@@ -180,22 +201,20 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
               <StatusMark status={d.status} />
               <button type="button" className="dpp-dp-id" aria-expanded={open === d.short_id} onClick={() => setOpen(open === d.short_id ? null : d.short_id)} data-deploy-open={d.short_id}>{d.short_id || "…"}</button>
               <code className="dpp-dp-sha">{short(d.sha)}</code>
-              <span className="dpp-dp-what">
-                {d.action === "rollback" || d.action === "redeploy" ? `back to ${d.rollback_of ?? short(d.sha)}` : d.commits ? `${d.commits} ${d.commits === 1 ? "commit" : "commits"}` : d.note ?? ""}
-                <DeploySessions d={d} />
-              </span>
               <span className="dpp-dp-by">{d.started_by ?? sourceWord(d)}</span>
               <span className="dpp-age">{ago(now, d.live_at ?? d.created_at)}</span>
               {d._id === n.live?._id ? <span className="dpp-livenow" data-deploy-live-now>Live now</span>
               : d.status === "live" && d._id !== n.live?._id && d.sha && d.sha !== n.live?.sha && (t.can_redeploy_sha || t.can_rollback) && !n.open ? (
                 <button type="button" className="dpp-row-act" onClick={() => onPress({ target: t, action: t.can_redeploy_sha ? "redeploy" : "rollback", of: d })} data-deploy-redeploy={d.short_id}><RotateCcw className="w-3 h-3" aria-hidden />Go back</button>
               ) : <span />}
+              <DeployCarried d={d} />
             </div>
             {open === d.short_id ? <DeployDetail d={d} now={now} /> : null}
             </li>
           ))}
         </ul>
       </section>
+      </div>
     </section>
   );
 }
@@ -217,6 +236,34 @@ function DeployDetail({ d, now }: { d: TeamDeployRow; now: number }) {
       <span className="dpp-age">{ago(now, d.created_at)}</span>
     </div>
   );
+}
+
+/** What a deploy carried and what came of it, in place under its row: why it failed, the sessions and tasks it took
+ *  live, how many commits, and what happened after (errors that started or came back). */
+function DeployCarried({ d }: { d: TeamDeployRow }) {
+  const tasks = (d.tasks ?? []).filter((x) => x.short_id);
+  const back = d.action === "rollback" || d.action === "redeploy";
+  const after = d.after;
+  const failed = d.status === "failed";
+  const empty = !failed && !back && !d.commits && !sessionsOf(d).length && !tasks.length && !after;
+  if (empty) return null;
+  return (
+    <div className="dpp-carried">
+      {failed ? <span className="dpp-why">{d.note || "Failed"}</span> : null}
+      {back ? <span className="dpp-dim">back to {d.rollback_of ?? short(d.sha)}</span> : null}
+      <DeploySessions d={d} />
+      {tasks.slice(0, 3).map((x) => <Link key={x.short_id!} className="dpp-task" href={`/tasks/${x.short_id}`} title={x.title ?? undefined}>{x.short_id}</Link>)}
+      {d.commits && !sessionsOf(d).length ? <span className="dpp-dim">{d.commits} {d.commits === 1 ? "commit" : "commits"}</span> : null}
+      {after && !failed ? <AfterMark after={after} /> : null}
+    </div>
+  );
+}
+
+/** What happened after a deploy went live: quiet, or the errors that started or came back in its window. */
+function AfterMark({ after }: { after: NonNullable<TeamDeployRow["after"]> }) {
+  if (after.quiet) return <span className="dpp-after" data-tone="ok">{after.open ? "quiet so far" : "quiet"}</span>;
+  const parts = [after.new_errors ? `${after.new_errors} new ${after.new_errors === 1 ? "error" : "errors"}` : null, after.regressions ? `${after.regressions} came back` : null].filter(Boolean);
+  return parts.length ? <span className="dpp-after" data-tone="bad">{parts.join(" · ")}</span> : null;
 }
 
 /** The sessions a deploy carried, each a step from its thread. */
@@ -245,7 +292,7 @@ function SessionGroup({ g, now }: { g: QueueGroup; now: number }) {
   const authors = [...new Set(g.commits.map((c) => c.author).filter(Boolean))] as string[];
   const shown = all ? g.commits : g.commits.slice(0, GROUP_SHOWN);
   return (
-    <li className="dpp-group" data-deploy-session={g.session?.conversation_id ?? "none"}>
+    <li className="dpp-group" data-deploy-session={g.session?.conversation_id ?? "none"} data-deploy-group={g.key}>
       <div className="dpp-group-head">
         <CiMark ci={g.ci} />
         {g.session

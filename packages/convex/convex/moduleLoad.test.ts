@@ -52,10 +52,16 @@ function limit(width: number) {
   };
 }
 
+// A child the spawn timeout killed (SIGTERM, 143) says nothing about its module: on a machine at load average in
+// the hundreds a clean load can take minutes. It loads once more with nothing else in flight, and only that answer counts.
+const KILLED = 143;
+const alone = limit(1);
+const settle = (f: string) => loadAlone(f).catch((e) => ({ code: -1, stderr: String(e) }));
+
 let loads: Map<string, Promise<Load>>;
 beforeAll(() => {
   const slot = limit(Math.max(2, Math.min(8, availableParallelism())));
-  loads = new Map(entries.map((f) => [f, slot(() => loadAlone(f).catch((e) => ({ code: -1, stderr: String(e) })))]));
+  loads = new Map(entries.map((f) => [f, slot(() => settle(f)).then((r) => (r.code === KILLED ? alone(() => settle(f)) : r))]));
 });
 
 describe("every entry module loads on its own", () => {
@@ -70,7 +76,7 @@ describe("every entry module loads on its own", () => {
           stderr: "",
         });
       },
-      300_000,
+      600_000,
     );
   }
 });
