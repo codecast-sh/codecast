@@ -23,6 +23,7 @@ type Run = {
 
 /** A stage's name on a card, from the station a run stands at. */
 const STAGE: Record<string, string> = { check: "Checking", review: "In review", decide: "Your call", ship: "Landing", deploy: "Waiting to deploy" };
+const STOP_AT: Record<string, string> = { check: "Check", review: "Review", decide: "Decide", ship: "Land", deploy: "Deploy" };
 const FIX: Record<string, string> = { fix_check: "Check", fix_review: "Review", revise: "Decide", fix_conflict: "Land" };
 
 /** Where one run of a change flow stands, in a card's words, read from its node ids (no graph needed). */
@@ -37,7 +38,10 @@ export function runShip(run: Run): SessionShip | null {
   if (live) return { words: STAGE[top] ?? "Shipping", tone: top === "review" ? "agent" : "working", run: run._id };
   if (run.status === "completed") return top === "exit" || top === "deploy" ? { words: "Live", tone: "ok", run: run._id } : { words: "Landed", tone: "ok", run: run._id };
   if (/^Stopped: The deploy that carried/.test(run.fail_reason ?? "")) return { words: "Deploy failed", tone: "bad", run: run._id };
-  if (run.status === "failed") return { words: "Stopped", tone: "bad", run: run._id };
+  if (run.status === "failed") {
+    const where = STOP_AT[top] ?? STOP_AT[FIX[top] ? Object.keys(STOP_AT).find((k) => FIX[top] === STOP_AT[k]) ?? "" : ""];
+    return { words: where ? `Stopped · ${where}` : "Stopped", tone: "bad", run: run._id };
+  }
   return null;
 }
 
@@ -74,7 +78,7 @@ export function sessionShips(runs: ReadonlyArray<Run>, deploys: ReadonlyArray<Te
   for (const id of new Set([...live.keys(), ...failed.keys()])) {
     const cur = out.get(id);
     // A run in flight says more than an older deploy; a finished run is overtaken by where its commits went out.
-    if (cur && cur.tone !== "ok" && cur.words !== "Stopped") continue;
+    if (cur && cur.tone !== "ok" && !cur.words.startsWith("Stopped")) continue;
     const l = live.get(id);
     const f = failed.get(id);
     if (f && (!l || f.created_at > (l.live_at ?? l.created_at))) out.set(id, { words: `Deploy failed · ${f.target}`, tone: "bad", deploy: f.short_id });

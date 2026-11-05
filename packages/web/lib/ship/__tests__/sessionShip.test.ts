@@ -11,6 +11,8 @@ describe("runShip", () => {
     expect(runShip(run("r", "c", { current_node_id: "fix_check", waiting_on_session: { node_id: "fix_check" } }))).toMatchObject({ words: "Fixing · Check", tone: "session" });
     expect(runShip(run("r", "c", { current_node_id: "deploy__wait" }))).toMatchObject({ words: "Waiting to deploy" });
     expect(runShip(run("r", "c", { status: "completed", current_node_id: "exit" }))).toMatchObject({ words: "Live", tone: "ok" });
+    expect(runShip(run("r", "c", { status: "failed", current_node_id: "review__changes" }))).toMatchObject({ words: "Stopped · Review", tone: "bad" });
+    expect(runShip(run("r", "c", { status: "failed", current_node_id: "fix_review" }))).toMatchObject({ words: "Stopped · Review" });
     expect(runShip(run("r", "c", { status: "failed", current_node_id: "deploy__failed", fail_reason: "Stopped: The deploy that carried abc failed: web dp-9 (x)." }))).toMatchObject({ words: "Deploy failed" });
   });
 });

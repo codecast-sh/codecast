@@ -13,7 +13,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { activeTeamIdOf } from "../../lib/activeTeam";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
-import { orderTargets, recordTargets, rollbackTarget, sessionsOf, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
+import { orderTargets, recordTargets, rollbackTarget, sessionWords, sessionsOf, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
 import type { Press } from "./DeployPress";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { ageShort } from "../../lib/lineFlow";
@@ -149,7 +149,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
   const back = rollbackTarget(n.history, n.live);
   const waiting = t.queue.commits;
   const sessions = t.queue.groups.filter((g) => g.session).length;
-  const blocked = n.open ? `${n.open.short_id || "A deploy"} is going out` : !t.can_deploy ? (t.runs === "push" ? "Deploys itself when main moves" : "No machine publishes it") : waiting === 0 ? "Nothing waiting" : null;
+  const blocked = n.open ? `${n.open.short_id || "A deploy"} is going out` : !t.can_deploy ? (t.runs === "push" ? "Deploys itself when main moves" : "No machine publishes it") : waiting === 0 && t.queue.known ? "Nothing waiting" : null;
   return (
     <section className="dpp-main" data-deploy-pane={t.name}>
       <header className="dpp-head">
@@ -161,16 +161,16 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
           <span className="dpp-head-sub">{t.repository}</span>
           <span className="dpp-k">Live</span>
           {n.live ? (
-            <span className="dpp-v"><code>{short(n.live.sha)}</code>{n.live.version ? <span className="dpp-ver">{n.live.version}</span> : null}<span className="dpp-dp">{n.live.short_id}</span><span className="dpp-age">{ago(now, n.live.live_at ?? n.live.created_at)}</span></span>
+            <span className="dpp-v"><code>{short(n.live.sha)}</code>{n.live.version && !(n.live.sha ?? "").startsWith(n.live.version.slice(0, 7)) ? <span className="dpp-ver">{n.live.version}</span> : null}<span className="dpp-dp">{n.live.short_id}</span><span className="dpp-age">{ago(now, n.live.live_at ?? n.live.created_at)}</span></span>
           ) : <span className="dpp-v dpp-dim">no live version known</span>}
         </div>
         <div className="dpp-actions">
           {t.record_only ? null : t.runs === "push"
             ? <span className="dpp-auto">goes out when main moves</span>
-            : waiting === 0 && !n.open
+            : waiting === 0 && !n.open && t.queue.known
               ? <span className="dpp-current" data-deploy-current={t.name}><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />Up to date</span>
               : <button type="button" className="dpp-go" disabled={!!blocked} title={blocked ?? undefined} onClick={() => onPress({ target: t, action: "deploy", of: null })} data-deploy-go={t.name}>
-                  {n.open ? "Going out" : `Deploy ${waiting} ${waiting === 1 ? "commit" : "commits"}`}
+                  {n.open ? "Going out" : !t.queue.known ? "Deploy main" : `Deploy ${waiting} ${waiting === 1 ? "commit" : "commits"}`}
                 </button>}
           {waiting ? <HeadCi ci={t.queue.head_ci} url={t.queue.head_ci_url} /> : null}
           {back && (t.can_redeploy_sha || t.can_rollback) && !n.open ? (
@@ -183,16 +183,17 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
 
       {n.open ? <GoingOut d={n.open} now={now} /> : n.failed ? <Failed d={n.failed} /> : null}
 
-      <div className="dpp-body">
-      <section className="dpp-sec" data-deploy-waiting>
-        <h3>Waiting on main<span className="dpp-num">{waiting} {waiting === 1 ? "commit" : "commits"}</span>{sessions ? <span className="dpp-h-sub">· {sessions} {sessions === 1 ? "session" : "sessions"}</span> : null}{t.queue.untouched ? <span className="dpp-h-sub" title={`${t.queue.untouched} commits on main change no file ${t.name} ships`}>· {t.queue.untouched} skip {t.name}</span> : null}</h3>
-        {waiting === 0 ? <p className="dpp-none">Everything on main is live here.</p> : (
+      <div className="dpp-body" data-record-only={t.record_only ? "" : undefined}>
+      {t.record_only ? null : <section className="dpp-sec" data-deploy-waiting>
+        <h3>Waiting on main{t.queue.known ? <span className="dpp-num">{waiting} {waiting === 1 ? "commit" : "commits"}</span> : null}{sessions ? <span className="dpp-h-sub">· {sessions} {sessions === 1 ? "session" : "sessions"}</span> : null}{t.queue.untouched ? <span className="dpp-h-sub" title={`${t.queue.untouched} commits on main change no file ${t.name} ships`}>· {t.queue.untouched} skip {t.name}</span> : null}</h3>
+        {!t.queue.known ? <p className="dpp-none" data-deploy-queue-unknown>Live <code>{short(n.live?.sha)}</code> is not on main, so what waits here can't be counted.</p>
+        : waiting === 0 ? <p className="dpp-none">Everything on main is live here.</p> : (
           <ul className="dpp-groups">
             {t.queue.groups.map((g) => <SessionGroup key={g.key} g={g} now={now} />)}
             {t.queue.commits > t.queue.shown ? <li className="dpp-more">{t.queue.commits - t.queue.shown} older commits</li> : null}
           </ul>
         )}
-      </section>
+      </section>}
 
       <section className="dpp-sec" data-deploy-history>
         <h3>History<span className="dpp-num">{n.history.length}</span></h3>
@@ -227,12 +228,13 @@ function DeployDetail({ d, now }: { d: TeamDeployRow; now: number }) {
   return (
     <div className="dpp-detail" data-deploy-detail={d.short_id}>
       <dl>
-        <dt>Sent</dt><dd><code>{short(d.previous_sha)}</code> → <code>{short(d.sha)}</code>{d.version ? <span className="dpp-ver"> {d.version}</span> : null}</dd>
+        <dt>Sent</dt><dd><code>{short(d.previous_sha)}</code> → <code>{short(d.sha)}</code>{d.version && !(d.sha ?? "").startsWith(d.version.slice(0, 7)) ? <span className="dpp-ver"> {d.version}</span> : null}</dd>
         <dt>By</dt><dd>{d.started_by ?? sourceWord(d)} · {new Date(d.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}{d.live_at && d.live_at - d.created_at >= 60_000 ? ` · live after ${ageShort(d.live_at - d.created_at)}` : ""}</dd>
         {d.note ? <><dt>Note</dt><dd>{d.note}</dd></> : null}
         {d.steps?.length ? <><dt>Steps</dt><dd><ol className="dpp-steps">{d.steps.map((s) => <li key={s.id} data-status={s.status}>{s.id}</li>)}</ol></dd></> : null}
+        {d.tasks?.some((x) => x.short_id) ? <><dt>Tasks</dt><dd><ul className="dpp-detail-sessions">{d.tasks.filter((x) => x.short_id).map((x) => <li key={x.short_id!}><Link className="dpp-detail-task" href={`/tasks/${x.short_id}`}>{x.short_id}<span>{x.title}</span></Link></li>)}</ul></dd></> : null}
         <dt>Sessions</dt>
-        <dd>{ss.length ? <ul className="dpp-detail-sessions">{ss.map((x) => <li key={x.conversation_id}><Link href={`/conversation/${x.conversation_id}`}>{x.title || x.short_id || x.conversation_id.slice(0, 7)}</Link></li>)}</ul> : <span className="dpp-dim">{d.commits ? `${d.commits} commits, none from a session` : "Not recorded"}</span>}</dd>
+        <dd>{ss.length ? <ul className="dpp-detail-sessions">{ss.map((x) => <li key={x.conversation_id}><Link href={`/conversation/${x.conversation_id}`}>{sessionWords(x)}</Link></li>)}</ul> : <span className="dpp-dim">{d.commits ? `${d.commits} commits, none from a session` : "Not recorded"}</span>}</dd>
       </dl>
       {d.url ? <a className="dpp-log" href={d.url} target="_blank" rel="noreferrer">{logWord(d)}</a> : null}
       <span className="dpp-age">{ago(now, d.created_at)}</span>
@@ -277,7 +279,7 @@ function DeploySessions({ d }: { d: TeamDeployRow }) {
   const shown = ss.slice(0, 2);
   return (
     <span className="dpp-dp-sessions">
-      {shown.map((x) => <Link key={x.conversation_id} className="dpp-dp-session" href={`/conversation/${x.conversation_id}`} title={x.title ?? undefined}>{x.title || x.short_id || x.conversation_id.slice(0, 7)}</Link>)}
+      {shown.map((x) => <Link key={x.conversation_id} className="dpp-dp-session" href={`/conversation/${x.conversation_id}`} title={x.title ?? undefined}>{sessionWords(x)}</Link>)}
       {ss.length > shown.length ? <span className="dpp-dim">+{ss.length - shown.length}</span> : null}
     </span>
   );
@@ -300,7 +302,7 @@ function SessionGroup({ g, now }: { g: QueueGroup; now: number }) {
       <div className="dpp-group-head">
         <CiMark ci={g.ci} />
         {g.session
-          ? <Link className="dpp-session" href={`/conversation/${g.session.conversation_id}`}>{g.session.title || g.session.short_id || "Untitled session"}</Link>
+          ? <><Link className="dpp-session" href={`/conversation/${g.session.conversation_id}`}>{sessionWords(g.session)}</Link>{(g.session as { via?: string }).via === "task" ? <span className="dpp-via" title="These commits name a task, not a session; this is the task's newest session">by its task</span> : null}</>
           : <span className="dpp-session dpp-dim" title="Commits with no Codecast-Session trailer">Not from a session{authors.length ? <span className="dpp-authors"> · {authors.slice(0, 3).join(", ")}{authors.length > 3 ? ` +${authors.length - 3}` : ""}</span> : null}</span>}
         {tasks.map((t) => <Link key={t.task_id} className="dpp-task" href={`/tasks/${t.short_id ?? t.task_id}`} title={t.title ?? undefined}>{t.short_id}</Link>)}
         <span className="dpp-group-n">{g.commits.length} {g.commits.length === 1 ? "commit" : "commits"}</span>
