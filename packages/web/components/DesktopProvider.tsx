@@ -171,7 +171,9 @@ export function DesktopProvider() {
         Date.now() - n.created_at < BANNER_FRESH_MS
       ) {
         const actor = notificationActor(n).name;
-        const title = actor ? `${actor}` : "Codecast";
+        // The row's own title is the one its phone push carries: a session
+        // banner names the session, not the app.
+        const title = actor || n.title?.trim() || "Codecast";
         const body = cleanNotificationBody(n.message) || n.message;
         // The same click target the bell computes: a chat banner lands on the
         // message, a task banner on the task — not just "the app, focused".
