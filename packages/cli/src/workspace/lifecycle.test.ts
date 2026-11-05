@@ -690,7 +690,9 @@ enabled = true
 headless = true
 
 [browser.cdp_port]
-base = 39700
+# A base no other test file binds: chrome.test.ts launches real Chrome on 397xx
+# just before this file runs, and a port it has not released yet bumps the slot.
+base = 38700
 range = 100
 `,
     );
@@ -700,7 +702,7 @@ range = 100
     expect(r.workspace.chrome).toBeDefined();
     const chrome = r.workspace.chrome!;
     expect(chrome.pid).toBeGreaterThan(0);
-    expect(chrome.cdpPort).toBe(39700);
+    expect(chrome.cdpPort).toBe(38700);
 
     // CDP /json/version is reachable.
     const ver = (await fetch(`http://127.0.0.1:${chrome.cdpPort}/json/version`).then((res) =>
