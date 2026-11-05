@@ -8,7 +8,7 @@ describe("runShip", () => {
   test("each place a run stands reads as a card's words", () => {
     expect(runShip(run("r", "c", { current_node_id: "review__review" }))).toMatchObject({ words: "In review", tone: "agent" });
     expect(runShip(run("r", "c", { status: "paused", current_node_id: "decide__decide" }))).toMatchObject({ words: "Your call", tone: "you" });
-    expect(runShip(run("r", "c", { current_node_id: "fix_check", waiting_on_session: { node_id: "fix_check" } }))).toMatchObject({ words: "Fixing · Check", tone: "session" });
+    expect(runShip(run("r", "c", { current_node_id: "fix_check", waiting_on_session: { node_id: "fix_check" } }))).toMatchObject({ words: "Check failed · fixing", tone: "session" });
     expect(runShip(run("r", "c", { current_node_id: "deploy__wait" }))).toMatchObject({ words: "Waiting to deploy" });
     expect(runShip(run("r", "c", { status: "completed", current_node_id: "exit" }))).toMatchObject({ words: "Live", tone: "ok" });
     expect(runShip(run("r", "c", { status: "failed", current_node_id: "review__changes" }))).toMatchObject({ words: "Stopped · Review", tone: "bad" });
@@ -24,8 +24,8 @@ describe("sessionShips", () => {
       [dp("dp-1", "live", ["a", "b", "c"], 5), dp("dp-2", "failed", ["d"], 6), dp("dp-3", "live", ["d"], 4)],
     );
     expect(m.get("a")?.words).toBe("In review");
-    expect(m.get("b")).toMatchObject({ words: "Live · dp-1", deploy: "dp-1" });
-    expect(m.get("c")).toMatchObject({ words: "Live · dp-1" });
+    expect(m.get("b")).toMatchObject({ words: "Live · backend", deploy: "dp-1" });
+    expect(m.get("c")).toMatchObject({ words: "Live · backend" });
     expect(m.get("d")).toMatchObject({ words: "Deploy failed · backend", tone: "bad" });
     expect(m.get("e")).toBeUndefined();
   });
