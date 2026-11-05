@@ -209,13 +209,15 @@ function PersonGlyph({ x }: { x: number }) {
   );
 }
 
-/** The runs standing at a step now: running there, and of those, stalled. */
-export type LiveAtStep = { running: number; stalled: number };
+/** The runs standing at a step now (the flow map's counts): running there, of those stalled, and waiting on a person. */
+export type LiveAtStep = { running: number; stalled: number; waiting: number };
 
 type NodeProps = {
   n: GNode;
   /** The runs standing here now, when the graph is drawn live (the Flows stage). */
   here?: LiveAtStep;
+  /** The graph is drawn live: a card's second line says what stands at it now, its history the quiet fallback. */
+  liveMode?: boolean;
   model: LineModel;
   bars: Array<{ tone: BarTone; n: number }> | undefined;
   exits: GraphLayout["exits"];
@@ -271,7 +273,7 @@ function WaitBadge({ wait, x, y, onOpen }: { wait: StepWait; x: number; y: numbe
 
 /** The live runs standing at a step now (the flow map's count), over its top left corner: how many, and of them how
  *  many stalled, in red. Waiting runs are the wait badge's, on the other corner. */
-const liveWords = (l: LiveAtStep) => (l.stalled ? `${l.running} · ${l.stalled} stalled` : `${l.running} running`);
+const liveWords = (l: LiveAtStep) => [l.running ? (l.stalled ? `${l.running} · ${l.stalled} stalled` : `${l.running} running`) : null, l.waiting ? `${l.waiting} on a person` : null].filter(Boolean).join(" · ");
 const liveBadgeW = (l: LiveAtStep) => textW(liveWords(l), 11) + 26;
 function LiveBadge({ live, x, y }: { live: LiveAtStep; x: number; y: number }) {
   const words = liveWords(live);
@@ -286,7 +288,7 @@ function LiveBadge({ live, x, y }: { live: LiveAtStep; x: number; y: number }) {
   );
 }
 
-const Node = memo(function Node({ n, here, model, bars, exits, failed, passed, wait: tableWait, onWaiting, order, times, dim, soft, selected, focused, intro, back, onOpen, onHover }: NodeProps) {
+const Node = memo(function Node({ n, here, liveMode = false, model, bars, exits, failed, passed, wait: tableWait, onWaiting, order, times, dim, soft, selected, focused, intro, back, onOpen, onHover }: NodeProps) {
   const step = model.steps[n.id];
   const m = model.graph.nodes.find((x) => x.id === n.id);
   const { w, h } = n;
@@ -302,6 +304,17 @@ const Node = memo(function Node({ n, here, model, bars, exits, failed, passed, w
   const waiting = wait ? wait.onYou + wait.others : 0;
   // A step with something on the viewer opens where it waits, as its badge does: the node is the bigger target.
   const press = () => (wait?.onYou && onWaiting ? onWaiting(n.id) : onOpen(n.id));
+  // Drawn live, what stands here now, each part in its tone: running, stalled, on the viewer, on someone else.
+  // The flow map's counts, so a card and the flow list beside the map say the same numbers; parts that would run past
+  // the card are left to its hover and the open step.
+  const nowAll = liveMode ? [
+    here?.waiting ? { t: `${here.waiting} on a person`, tone: "you" } : null,
+    here?.stalled ? { t: `${here.stalled} stalled`, tone: "bad" } : null,
+    here?.running ? { t: `${here.running} running`, tone: "live" } : null,
+  ].filter((x): x is { t: string; tone: string } => !!x) : [];
+  const room = n.kind === "person" ? w - 62 : w - 32;
+  const nowParts = nowAll.filter((_, i) => i === 0 || textW(nowAll.slice(0, i + 1).map((p) => p.t).join(" · "), 14) <= room);
+  const nowLine = nowParts.length ? nowParts.map((p, i) => <tspan key={p.tone} className="lwg-now" data-tone={p.tone}>{`${i ? " · " : ""}${p.t}`}</tspan>) : null;
   let body;
   if (n.dot) {
     body = (
@@ -344,7 +357,7 @@ const Node = memo(function Node({ n, here, model, bars, exits, failed, passed, w
         <g className="lwg-box">
           <rect className="lwg-shape" x={-w / 2} y={-h / 2} width={w} height={h} rx={14} />
           <text className="lwg-t" x={-w / 2 + 16} y={-5}>{fit(n.label, w - 52, 16)}</text>
-          <text className="lwg-s" x={-w / 2 + 16} y={15} data-lwg-count="">{badAt < 0 ? subShown : <>{subShown.slice(0, badAt)}<tspan className="lwg-trouble">{bad}</tspan>{subShown.slice(badAt + bad!.length)}</>}</text>
+          <text className="lwg-s" x={-w / 2 + 16} y={15} data-lwg-count="" data-now={nowLine ? "" : undefined}>{nowLine ?? (badAt < 0 ? subShown : <>{subShown.slice(0, badAt)}<tspan className="lwg-trouble">{bad}</tspan>{subShown.slice(badAt + bad!.length)}</>)}</text>
           {total > 0 && (
             <g className="lwg-bar">
               {bars!.map((b) => {
@@ -379,7 +392,7 @@ const Node = memo(function Node({ n, here, model, bars, exits, failed, passed, w
           <rect className="lwg-shape" x={-w / 2} y={-h / 2} width={w} height={h} rx={h / 2} />
           <PersonGlyph x={-w / 2 + 25} />
           <text className="lwg-t" x={-w / 2 + 45} y={-4}>{fit(n.label, w - 62, 16)}</text>
-          <text className="lwg-s" x={-w / 2 + 45} y={15}>{answers}<title>{all.join(" · ")}</title></text>
+          <text className="lwg-s" x={-w / 2 + 45} y={15} data-now={nowLine ? "" : undefined}>{nowLine ?? answers}<title>{all.join(" · ")}</title></text>
         </g>
       </>
     );
@@ -424,7 +437,7 @@ const Node = memo(function Node({ n, here, model, bars, exits, failed, passed, w
       data-lwg-node={n.id}
       transform={`translate(${n.x},${n.y})`}
       data-waiting={wait?.onYou ? "" : undefined}
-      data-live={here?.running ? (here.stalled ? "stalled" : "running") : undefined}
+      data-live={here?.stalled ? "stalled" : here?.running ? "running" : here?.waiting ? "waiting" : undefined}
       role="button"
       tabIndex={0}
       aria-label={`${n.label}, ${n.kind === "person" ? "a person decides" : n.kind}${wait?.onYou ? `, ${wait.onYou} on you` : ""}${wait?.others ? `, ${wait.others} on someone else` : ""}`}
@@ -449,8 +462,8 @@ const Node = memo(function Node({ n, here, model, bars, exits, failed, passed, w
           </text>
         )}
         {/* An agent's exits line under it already says what came back of its closes; a badge over it would cover its border. */}
-        {here && here.running > 0 && <LiveBadge live={here} x={n.dot ? -liveBadgeW(here) / 2 : -w / 2 - 6} y={n.dot ? -24 : -h / 2 - 2} />}
-        {wait && waiting > 0 && <WaitBadge wait={wait} x={w / 2 + 6} y={-h / 2 - 2} onOpen={onWaiting ? () => onWaiting(n.id) : undefined} />}
+        {here && here.running + here.waiting > 0 && n.kind !== "agent" && n.kind !== "person" && <LiveBadge live={here} x={n.dot ? -liveBadgeW(here) / 2 : -w / 2 - 6} y={n.dot ? -24 : -h / 2 - 2} />}
+        {wait && waiting > 0 && !liveMode && <WaitBadge wait={wait} x={w / 2 + 6} y={-h / 2 - 2} onOpen={onWaiting ? () => onWaiting(n.id) : undefined} />}
         {back && n.kind !== "agent" && (n.dot ? <BackBadge words={back} x={textW(back, 11) / 2 + 7} y={-22} /> : <BackBadge words={back} x={w / 2 + 6} y={-h / 2 - 2} />)}
         {order != null && !n.dot && (
           <g className="lwg-order" transform={`translate(${-w / 2 + 2},${-h / 2 - 2})`}>
@@ -518,6 +531,7 @@ export const GraphCanvas = memo(function GraphCanvas({ model, layout, uid, lit, 
             key={n.id}
             n={n}
             here={live?.get(n.id)}
+            liveMode={!!live}
             model={model}
             bars={bars.get(n.id)}
             exits={exits}

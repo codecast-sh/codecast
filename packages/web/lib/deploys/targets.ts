@@ -103,7 +103,8 @@ export type TargetTone = "going" | "failed" | "waiting" | "current" | "unknown";
 export function targetTone(t: DeployTargetRow, now: ReturnType<typeof targetNow>): TargetTone {
   if (now.open) return "going";
   if (now.failed) return "failed";
-  if (!now.live && !t.queue.known) return "unknown";
+  // A target known only from its records has no queue: nobody knows whether it is up to date.
+  if (t.record_only || !t.queue.known) return "unknown";
   return t.queue.commits > 0 ? "waiting" : "current";
 }
 
@@ -157,4 +158,10 @@ export function recordTargets(declared: ReadonlyArray<DeployTargetRow>, deploys:
     record_only: true,
     queue: { known: false, truncated: false, commits: 0, untouched: 0, head_sha: null, head_ci: "none", head_ci_url: null, shown: 0, groups: [] },
   }));
+}
+
+/** A session's title as a person reads it: markup a prompt pasted into it (`<pasted_content id=…>`) left out. */
+export function sessionWords(s: { title?: string | null; short_id?: string | null; conversation_id: string }): string {
+  const t = (s.title ?? "").replace(/<\/?[a-z_][^>]*>/gi, " ").replace(/\s+/g, " ").trim();
+  return t || s.short_id || s.conversation_id.slice(0, 7);
 }

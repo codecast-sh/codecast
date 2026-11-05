@@ -125,7 +125,7 @@ function NoLiveFlow({ lines, space }: { lines: LibraryEntry[]; space: string | n
  *  and its hold with the way to clear it. */
 /** `flows`: how many flows the live family holds (the main flow, its variants, the judge flow), when the map knows; the
  *  head then names them by count, since the lanes below name each one. */
-export function LiveFlowHead({ live, workspace, onOpenFlow, stalled = 0, flows, children }: Pick<LineViewProps, "workspace"> & { live: LiveFlow; onOpenFlow: (slug: string) => void; stalled?: number; flows?: number; children?: ReactNode }) {
+export function LiveFlowHead({ live, workspace, onOpenFlow, stalled = 0, onStalled, flows, children }: Pick<LineViewProps, "workspace"> & { live: LiveFlow; onOpenFlow: (slug: string) => void; stalled?: number; onStalled?: () => void; flows?: number; children?: ReactNode }) {
   const queue = useLiveQueue(live);
   const turnOn = () => useInboxStore.getState().setLiveFlowOn(live._id, true);
   const turnOff = () => useInboxStore.getState().setLiveFlowOn(live._id, false);
@@ -149,8 +149,10 @@ export function LiveFlowHead({ live, workspace, onOpenFlow, stalled = 0, flows, 
           )}
         /> : <span className="flh-on" data-on={live.on ? "" : undefined} title="A team admin switches it" data-live-flow-switch="read">{live.on ? "On" : "Off"}</span>}
         <span className="fll-live-figs">
-          <span><b className="lw-num">{live.load.working}</b>/{live.load.cap} running</span>
-          {stalled > 0 ? <span data-tone="bad" data-live-flow-stalled={stalled}><b className="lw-num">{stalled}</b> stalled</span> : null}
+          <span title="Runs working now against the most the flow runs at once"><b className="lw-num">{live.load.working}</b>/{live.load.cap} slots</span>
+          {stalled > 0 ? (onStalled
+            ? <button type="button" className="fll-fig-btn" data-tone="bad" onClick={onStalled} data-live-flow-stalled={stalled}><b className="lw-num">{stalled}</b> stalled</button>
+            : <span data-tone="bad" data-live-flow-stalled={stalled}><b className="lw-num">{stalled}</b> stalled</span>) : null}
           <span><b className="lw-num">{queue.length.toLocaleString()}</b> queued</span>
           {live.hands_today || live.caps.hands_per_day != null ? <span><b className="lw-num">{live.hands_today}</b>{live.caps.hands_per_day != null ? `/${live.caps.hands_per_day}` : ""} started today</span> : null}
           {live.watcher ? <span>watched by <b>@{live.watcher.handle}</b></span> : null}
