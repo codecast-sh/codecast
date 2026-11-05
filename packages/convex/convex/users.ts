@@ -26,7 +26,7 @@ import { verifyApiToken } from "./apiTokens";
 import { findSessionCommandByRequest, hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { DAEMON_COMMAND_TTL_MS, repositoryKeyOfRemote } from "@codecast/shared/contracts";
-import { canAccessTask, canAccessDoc, patchConversationVisibility } from "./lib/access";
+import { canAccessTask, canAccessDoc, patchConversationVisibility, workspaceGrantsAccess } from "./lib/access";
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
 import { stripMessageTags, isUserMessageNoise, fetchUserSendDays } from "./lib/userSend";
 import { bucketActivityDays, loadUserActivity } from "./lib/profileActivity";
@@ -2218,6 +2218,7 @@ export const getUserProfileFeed = query({
       .take(20);
     for (const t of tasks as any[]) {
       if (args.team_id && t.team_id && String(t.team_id) !== String(args.team_id)) continue;
+      if (!(await canAccessTask(ctx, userId, t))) continue;
       items.push({
         type: "task",
         timestamp: t.updated_at || t.created_at || t._creationTime,
@@ -2238,6 +2239,7 @@ export const getUserProfileFeed = query({
     for (const d of docs as any[]) {
       if (d.archived_at) continue;
       if (args.team_id && d.team_id && String(d.team_id) !== String(args.team_id)) continue;
+      if (!(await canAccessDoc(ctx, userId, d))) continue;
       items.push({
         type: "doc",
         timestamp: d.updated_at || d.created_at || d._creationTime,
@@ -2256,6 +2258,7 @@ export const getUserProfileFeed = query({
       .take(20);
     for (const e of teamEvents) {
       if (args.team_id && String(e.team_id) !== String(args.team_id)) continue;
+      if (!(await workspaceGrantsAccess(ctx, userId, `team:${e.team_id}`))) continue;
       const typeMap: Record<string, string> = {
         commit_pushed: "pushed",
         pr_created: "opened PR",

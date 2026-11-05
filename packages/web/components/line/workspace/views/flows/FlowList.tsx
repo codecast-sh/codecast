@@ -4,7 +4,7 @@
 // names the flow and its role, counts what runs, what waits on a person (a
 // link to For you on that flow) and what stalled, and names only the stations
 // holding work, each opening that station. Pressing a row draws its map.
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import type { FlowMap, FlowMapLane, FlowMapStep } from "@codecast/shared/contracts/flowMap";
 import { processKeyOf } from "../../../../../lib/line/lineGraphs";
 import type { LineSelectionPatch } from "../../../../../lib/line/lineWorkspaceUrl";
@@ -69,7 +69,11 @@ function FlowRow({ laneKey, name, role, steps, current, draw, onPerson, openStep
   const waiting = sum(steps, "waiting");
   const stalled = sum(steps, "stalled");
   const busy = hot(steps);
+  const [all, setAll] = useState(false);
   const idle = !running && !waiting && !stalled;
+  // The stalled count opens the station holding most of them.
+  const worst = stalled && openStep ? [...steps].sort((a, b) => b.stalled - a.stalled)[0] : null;
+  const stalledTo = worst ? openStep!(worst.id) : null;
   const head = (
     <>
       <span className="fs-row-top">
@@ -82,7 +86,9 @@ function FlowRow({ laneKey, name, role, steps, current, draw, onPerson, openStep
         {waiting ? (onPerson
           ? <a data-tone="you" href={onPerson.href} onClick={follow(onPerson)} data-flow-lane-person={waiting}><b className="lw-num">{waiting}</b> on a person</a>
           : <span data-tone="you"><b className="lw-num">{waiting}</b> on a person</span>) : null}
-        {stalled ? <span data-tone="bad"><b className="lw-num">{stalled}</b> stalled</span> : null}
+        {stalled ? (stalledTo
+          ? <a data-tone="bad" href={stalledTo.href} onClick={follow(stalledTo)} data-flow-lane-stalled={stalled}><b className="lw-num">{stalled}</b> stalled</a>
+          : <span data-tone="bad"><b className="lw-num">{stalled}</b> stalled</span>) : null}
         {idle ? <span>Idle{sources ? ` · ${sources} ${sources === 1 ? "source" : "sources"}` : ""}</span> : null}
       </span>
     </>
@@ -93,15 +99,16 @@ function FlowRow({ laneKey, name, role, steps, current, draw, onPerson, openStep
       <div className="fs-row" data-link={draw ? "" : undefined} onClick={draw ? () => draw.go() : undefined}>{head}</div>
       {busy.length ? (
         <span className="fs-hot">
-          {busiest(busy).map((s) => {
-            const body = <><span className="fs-hot-l">{s.label}</span><b className="lw-num" data-tone={s.stalled ? "bad" : s.waiting ? "you" : undefined}>{s.running + s.waiting}</b></>;
+          {(all ? busy : busiest(busy)).map((s) => {
+            const tone = s.stalled ? "bad" : s.waiting ? "you" : undefined;
+            const body = <><span className="fs-hot-l">{s.label}</span><b className="lw-num" data-tone={tone}>{s.running + s.waiting}</b></>;
             const title = [s.running ? `${s.running} running` : null, s.waiting ? `${s.waiting} on a person` : null, s.stalled ? `${s.stalled} stalled` : null].filter(Boolean).join(" · ");
             const to = openStep?.(s.id);
             return to
-              ? <a key={s.id} className="fs-hot-s" href={to.href} onClick={follow(to)} title={title} data-flow-step={s.id}>{body}</a>
-              : <span key={s.id} className="fs-hot-s" title={title} data-flow-step={s.id}>{body}</span>;
+              ? <a key={s.id} className="fs-hot-s" data-tone={tone} href={to.href} onClick={follow(to)} title={title} data-flow-step={s.id}>{body}</a>
+              : <span key={s.id} className="fs-hot-s" data-tone={tone} title={title} data-flow-step={s.id}>{body}</span>;
           })}
-          {busy.length > HOT_SHOWN ? <span className="fs-hot-more">+{busy.length - HOT_SHOWN}</span> : null}
+          {busy.length > HOT_SHOWN ? <button type="button" className="fs-hot-more" aria-expanded={all} onClick={(e) => { e.stopPropagation(); setAll(!all); }} data-flow-hot-more="">{all ? "Fewer" : `+${busy.length - HOT_SHOWN}`}</button> : null}
         </span>
       ) : null}
     </li>
