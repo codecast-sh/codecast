@@ -900,7 +900,7 @@ describe("bucket cache hydration merge", () => {
   it("fill-strategy singletons never clobber a live value", () => {
     expect(hydrateMergeValue("currentUser", { name: "cached" }, { name: "live" }).apply).toBe(false);
     expect(hydrateMergeValue("currentUser", { name: "cached" }, null)).toEqual({ apply: true, value: { name: "cached" } });
-    expect(hydrateMergeValue("teamUnreadCount", 5, 2).apply).toBe(false);
+    expect(hydrateMergeValue("threadUnread", 5, 2).apply).toBe(false);
   });
 
   it("arrays fill only an empty slot; scalars replace", () => {

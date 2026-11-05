@@ -400,6 +400,27 @@ Examples:
     load: () => import("./stateCommand.js").then((m) => m.registerStateCommand),
   },
   {
+    token: "say",
+    args: ["[text...]"],
+    description: `Tell the person reading this thread something: the reply they see
+
+In a role's or the workspace agent's thread the person sees only what you say
+this way and their own messages; everything else you write is working notes.
+Say each thing once, whole: what you found, what you did and where it went,
+what you need from them. Markdown renders, so a table, a link, a page URL
+alone on a line or a cast-canvas block reads as it would anywhere.
+
+Examples:
+  cast say "Shipped the fix. CI is green on main."
+  cast say - <<'EOF'
+  The funnel this week:
+  | Stage | Now |
+  |---|---|
+  | Introductions | 24 |
+  EOF`,
+    load: () => import("./sayCommand.js").then((m) => m.registerSayCommand),
+  },
+  {
     token: "integrations",
     aliases: ["integration"],
     description: `Connect Slack, GitHub, Linear, Gmail and Notion; sync issues into tasks`,
