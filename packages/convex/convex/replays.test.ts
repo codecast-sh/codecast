@@ -705,3 +705,42 @@ describe("browse", () => {
     expect(res.rows[0].shape).toEqual(shape);
   });
 });
+
+describe("a recording as a moment", () => {
+  const assemble = (w: ReturnType<typeof world>, row: any, over: Record<string, unknown> = {}) =>
+    h(saveSummary)(w.internalCtx, { replay_id: row._id, chunk_keys: row.chunk_keys, timeline_md: "t", counts: { clicks: 5, errors: 0, failed_requests: 0 }, duration_ms: 60_000, ...over });
+
+  test("a complete assembly opens a replay moment once the source publishes a replay extractor", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await recordReplayChunk(w.internalCtx, source, "r1", 0, key(source, 0), NOW);
+    const row = () => w.db._tables.replays[0];
+    await assemble(w, row());
+    expect(w.db._tables.moments ?? []).toHaveLength(0);
+    await w.db.insert("moment_extractors", { source_id: source._id, kind: "replay", quiet_ms: 1_800_000 });
+    await assemble(w, row());
+    await assemble(w, row());
+    const moments = w.db._tables.moments;
+    expect(moments).toHaveLength(1);
+    expect(moments[0]).toMatchObject({ kind: "replay", subject: row().short_id, status: "waiting", events: 2 });
+  });
+
+  test("a recording nobody worked in opens nothing", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await w.db.insert("moment_extractors", { source_id: source._id, kind: "replay", quiet_ms: 1_800_000 });
+    await recordReplayChunk(w.internalCtx, source, "r1", 0, key(source, 0), NOW);
+    await assemble(w, w.db._tables.replays[0], { counts: { clicks: 1, errors: 1, failed_requests: 0 } });
+    await assemble(w, w.db._tables.replays[0], { duration_ms: 8_000 });
+    expect(w.db._tables.moments ?? []).toHaveLength(0);
+  });
+
+  test("an assembly still waiting on a chunk opens nothing", async () => {
+    const w = world();
+    const { source } = await teamSource(w);
+    await w.db.insert("moment_extractors", { source_id: source._id, kind: "replay", quiet_ms: 1_800_000 });
+    await recordReplayChunk(w.internalCtx, source, "r1", 0, key(source, 0), Date.now());
+    await assemble(w, w.db._tables.replays[0], { skipped: 1 });
+    expect(w.db._tables.moments ?? []).toHaveLength(0);
+  });
+});
