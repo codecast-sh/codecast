@@ -44,7 +44,7 @@ test("a burst of feeder applies costs one subscriber visit, not one per apply", 
   store.syncTable("sessions", [session(1)]);
   store.syncTable("sessions", [session(2)]);
   store.syncTable("sessions", [session(3)]);
-  store.syncTable("teamUnreadCount", 4, { kind: "scalar" });
+  store.syncTable("threadUnread", 4, { kind: "scalar" });
 
   // Every apply is already in the store; only the notification is held.
   expect(Object.keys(useInboxStore.getState().sessions)).toHaveLength(3);
