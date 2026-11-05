@@ -724,6 +724,10 @@ export default defineSchema({
 
   conversations: defineTable({
     user_id: v.id("users"),
+    // Created for a session that started more than HISTORY_IMPORT_INBOX_MS
+    // before it was uploaded (a newly linked machine's history): the inbox
+    // shows it only while its activity is that recent (isStaleHistoryImport).
+    history_import: v.optional(v.boolean()),
     team_id: v.optional(v.id("teams")),
     agent_type: v.union(
       v.literal("claude_code"),

@@ -477,10 +477,10 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     });
 
   // A hold parks every new run of a live flow while a wait no person needs to answer runs out (a spent budget until
-  // its roll-over). A hand or the watcher sets one; only a person clears it, in the browser.
+  // its roll-over). A hand or the watcher sets one; a team admin clears it with unhold or on the Flows page.
   flow
     .command("hold <until> <why>")
-    .description("Hold a live flow's new runs until a time (90m, 6h, 2d or a date and time, at most 48h): a second hold keeps the later end; a person clears it in the browser")
+    .description("Hold a live flow's new runs until a time (90m, 6h, 2d or a date and time, at most 48h): a second hold keeps the later end; cast flow unhold clears it")
     .option("--flow <flow>", "The live flow (default: the team's one)")
     .option("--team <name>", "The team whose live flow it is (default: the workspace this directory reads)")
     .option("--json", "Print the hold as JSON")
@@ -494,6 +494,19 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const hold = r?.hold as LiveFlow["hold"];
       console.log(hold ? `✓ held until ${new Date(hold.until).toLocaleString()}: ${hold.why}${hold.until > at ? dim("  (an earlier hold ends later, so it stands)") : ""}` : "✓ held");
       if (r?.waiting) console.log(dim(`  waiting: ${r.waiting}`));
+    });
+
+  flow
+    .command("unhold [flow]")
+    .description("Clear a live flow's hold: its queue starts runs again (a team admin's act)")
+    .option("--team <name>", "The team whose live flow it is (default: the workspace this directory reads)")
+    .option("--json", "Print the live flow as JSON")
+    .action(async (name: string | undefined, opts: { team?: string; json?: boolean }) => {
+      const ws = await deps.writeWorkspace(opts.team);
+      const l: LiveFlow | null = await deps.cliPost("/cli/flow/live/unhold", { ...(ws.kind === "team" ? { team_id: ws.teamId } : {}), ...(name ? { flow: name } : {}), from_session: deps.callingSession() });
+      if (opts.json) { console.log(JSON.stringify(l, null, 2)); return; }
+      if (!l) { console.error("No live flow to clear"); process.exit(1); }
+      for (const line of liveFlowLines(l, { top: 3, bold, dim })) console.log(line);
     });
 
   // The bar: which problems the flow's machines take. A team admin sets it; a problem under it waits for another finding.
@@ -516,11 +529,11 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       console.log(r?.bar ? `✓ the flow runs problems at ${r.words}; the rest wait for another finding, ${r.bar.quiet_days} days` : "✓ no bar: every problem runs, in score order");
     });
 
-  // A live flow's switch: the server holds who may turn it, and refuses everyone else in its own words.
+  // A live flow's switch: a team admin's, from here or the Flows page.
   for (const on of [true, false]) {
     flow
       .command(`${on ? "on" : "off"} [flow]`)
-      .description(on ? "Switch a live flow on: its queue starts problems by itself (a person's switch; the server refuses agents)" : "Switch a live flow off: nothing starts from its queue until it is on again (a person's switch)")
+      .description(on ? "Switch a live flow on: its queue starts problems by itself (a team admin's switch)" : "Switch a live flow off: nothing starts from its queue until it is on again (a team admin's switch)")
       .option("--team <name>", "The team whose live flow it is (default: the workspace this directory reads)")
       .option("--json", "Print the live flow as JSON")
       .action(async (name: string | undefined, opts: { team?: string; json?: boolean }) => {
