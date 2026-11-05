@@ -762,7 +762,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               <TeamSwitcher variant="rail" isNarrow={isNarrow} />
             </ErrorBoundary>
           ) : undefined}
-          workspaceColor={activeTeam?.icon_color}
         />
 
         <ModSidebarSections isNarrow={isNarrow} />

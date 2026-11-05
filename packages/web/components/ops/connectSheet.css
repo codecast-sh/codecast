@@ -42,3 +42,6 @@ button.ops-vproj-row:disabled { color: var(--sol-text-dim); cursor: default; }
 .ops-vproj-box[data-round="true"] { border-radius: 50%; }
 .ops-vproj-box[data-on="true"] { background: var(--sol-blue); border-color: var(--sol-blue); color: var(--sol-bg); }
 .ops-vproj-name { min-width: 0; }
+.ops-vproj-head { display: flex; justify-content: space-between; padding: 4px 10px; font-size: 10.5px; color: var(--sol-text-dim); border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); position: sticky; top: 0; background: var(--sol-bg); }
+.ops-vproj-n { font-size: 11.5px; color: var(--sol-text-muted); flex-shrink: 0; }
+.ops-vproj-n[data-zero="true"] { color: var(--sol-text-dim); }

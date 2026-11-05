@@ -302,7 +302,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
               {scope.some((m) => processesUnavailable(m.snapshot)) && (
                 <div className="border-b border-sol-border/20 bg-sol-bg-alt/60 px-4 py-2 text-[11px] text-sol-text-muted">
                   <span className="text-sol-text-secondary">Process details are unavailable in the latest sample{scope.length > 1 ? ` from ${scope.filter((m) => processesUnavailable(m.snapshot)).map((m) => m.name).join(", ")}` : ""}.</span>{" "}
-                  CPU, memory and load are current, but listing processes did not finish in time. Sessions are listed without usage so you can still park or open them; no move is suggested until a sample includes process ownership.
+                  CPU, memory and load are current, but listing processes did not finish in time. Sessions are listed without usage; you can still park, open or move them.
                 </div>
               )}
               {scope.every((m) => !m.snapshot) ? (

@@ -13,7 +13,8 @@ import type { FoundSecret } from "@codecast/shared/contracts/secretShapes";
 import { KeyCap } from "../KeyCap";
 import { useSecrets, useVaultScope } from "../../hooks/useSyncSecrets";
 import { ScopePicker } from "./AddSecretDialog";
-import { VAULT_PRIMARY, defaultWhere } from "../../lib/secretLook";
+import { defaultWhere } from "../../lib/secretLook";
+import { Button } from "../ui/button";
 import { useCreate } from "../../hooks/useCreateSecret";
 import { nameIssue, namesIn, saveRemaining, withVaultReferences } from "./vaultModel";
 
@@ -107,11 +108,12 @@ export function ComposerCatch({
           <button type="button" onClick={onCancel} className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-sol-text-muted hover:text-sol-text">
             Cancel <span className="hidden sm:inline-flex"><KeyCap size="xs">esc</KeyCap></span>
           </button>
-          <button
+          <Button
             type="button"
+            variant="yellow"
+            size="xs"
             onClick={() => void save()}
             disabled={!canSave}
-            className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 ${VAULT_PRIMARY}`}
             data-composer-catch-save
           >
             {/* Both labels share one cell, so the button keeps the width of the longer one while saving. */}
@@ -122,7 +124,7 @@ export function ComposerCatch({
             <span className={`hidden sm:inline-flex ${canSave ? "" : "opacity-40"}`}>
               <KeyCap size="xs" tone="onAccent">↵</KeyCap>
             </span>
-          </button>
+          </Button>
         </div>
       </div>
     </div>

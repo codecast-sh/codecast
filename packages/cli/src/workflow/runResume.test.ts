@@ -552,14 +552,14 @@ describe("workflow/runResume deadRunPanes", () => {
     ], now)).toEqual(["wf-8h0tdw", "wf-8gwa6d"]);
   });
 
-  test("closing kills each dead pane's session through the daemon's tmux, and a listing that fails closes nothing", () => {
+  test("closing kills each dead pane's session through the daemon's tmux, and a listing that fails closes nothing", async () => {
     const now = 1_800_000_000;
     const calls: string[][] = [];
-    const tmux = (args: string[]) => { calls.push(args); return args[0] === "list-panes" ? `wf-aaaaaa|bash|${now - DEAD_RUN_PANE_IDLE_S - 5}\nwf-bbbbbb|cast|${now - 99_999}\n` : ""; };
-    closeDeadRunPanes(tmux, () => {}, now);
+    const tmux = async (args: string[]) => { calls.push(args); return args[0] === "list-panes" ? `wf-aaaaaa|bash|${now - DEAD_RUN_PANE_IDLE_S - 5}\nwf-bbbbbb|cast|${now - 99_999}\n` : ""; };
+    await closeDeadRunPanes(tmux, () => {}, now);
     expect(calls.slice(1)).toEqual([["kill-session", "-t", "=wf-aaaaaa"]]);
     const none: string[][] = [];
-    closeDeadRunPanes((args) => { none.push(args); throw new Error("no server"); }, () => {}, now);
+    await closeDeadRunPanes(async (args) => { none.push(args); throw new Error("no server"); }, () => {}, now);
     expect(none).toHaveLength(1);
   });
 });

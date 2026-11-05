@@ -9,7 +9,7 @@ import { useMemo } from "react";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { cn } from "../../../lib/utils";
-import { StateBar } from "../OrgNodeCards";
+import { StateBar } from "../StateBar";
 import { RoleFace } from "../RoleFace";
 import { useOrgAsks } from "../useNeedsYou";
 import { workspaceOpenProposals } from "../staffingModel";

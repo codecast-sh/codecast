@@ -1513,10 +1513,11 @@ function GuestJoinCTA() {
 
 // Isolated component: keeps useConvexAuth() out of ConversationView's render
 // scope so auth-context re-renders don't cascade through the tooltip ref chain.
-export function NonOwnerMessageInput({ conversation, onForkReply, autoFocusInput }: {
+export function NonOwnerMessageInput({ conversation, onForkReply, autoFocusInput, onPopulateInput }: {
   conversation: ConversationData;
   onForkReply?: (content: string) => void;
   autoFocusInput?: boolean;
+  onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>;
 }) {
   const { isAuthenticated, isLoading } = useConvexAuth();
   if (!isAuthenticated && !isLoading) return <GuestJoinCTA />;
@@ -1528,6 +1529,7 @@ export function NonOwnerMessageInput({ conversation, onForkReply, autoFocusInput
       conversation={conversation}
       onForkReply={onForkReply}
       autoFocusInput={autoFocusInput}
+      onPopulateInput={onPopulateInput}
     />
   );
 }

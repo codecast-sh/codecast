@@ -12,6 +12,7 @@ import { buildDesktopDeepLink } from "../../../lib/desktop";
 import { oauthProviderButton } from "@platform/auth/web";
 import { useLocalAuth } from "../../../lib/localAuth";
 import { markCliConnected } from "../../../lib/cliConnected";
+import { Button } from "../../../components/ui/button";
 
 function CliAuthContent() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -255,19 +256,23 @@ function CliAuthContent() {
             {wrongAccount ? (
               // The profile names another person: the server would refuse this
               // account, so the one action is signing in as that person.
-              <button
+              <Button
+                variant="amber"
+                size="lg"
                 onClick={() => void signOut()}
-                className="w-full py-3 px-4 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg"
+                className="w-full"
               >
                 Sign in as {enrollment!.email}
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
+                variant="amber"
+                size="lg"
                 onClick={deliverAuth}
-                className="w-full py-3 px-4 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg"
+                className="w-full"
               >
                 Authorize
-              </button>
+              </Button>
             )}
             <p className="text-sol-text-dim text-sm mt-4">
               Didn&apos;t request this from {isDesktopMode ? "the Codecast app" : "cast auth"}? Close this page.
@@ -381,12 +386,9 @@ function CliAuthContent() {
                 Codecast will finish signing in on its own in a moment — you can
                 close this tab and switch back to it.
               </p>
-              <a
-                href={buildDesktopDeepLink("/inbox")}
-                className="inline-block py-3 px-6 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors"
-              >
-                Open Codecast
-              </a>
+              <Button asChild variant="amber" size="lg">
+                <a href={buildDesktopDeepLink("/inbox")}>Open Codecast</a>
+              </Button>
             </>
           ) : (
             <>

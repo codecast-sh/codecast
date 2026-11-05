@@ -18,6 +18,8 @@
  *   location      a memory router of the hero's own at /inbox, so the views'
  *                 links and location reads never see or move the visitor's page
  *   team features all off, whatever the visitor's team turned on
+ *   feed triage   off: a fixture card is never the visitor's session, so it
+ *                 never ticks from or selects into their inbox
  *   relative time measured from `now`, the instant the fixtures are stamped
  *                 against, so "2m ago" is the fixture's own offset however
  *                 long the page has been open
@@ -65,6 +67,7 @@ import { RelativeTimeNow } from "@/lib/conversationFormat";
 import { RevealInBandCtx } from "@/lib/revealHost";
 import { TeamFeatureOverride } from "@/lib/teamFeatures";
 import { TaskActiveSessionsOverride } from "@/components/tasks/taskActiveSession";
+import { FeedTriageOff } from "@/hooks/useFeedCardTriage";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { heroConvexStub } from "./convexStub";
 import { HERO_ENTITIES } from "./fixtures";
@@ -182,6 +185,7 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
               <LabelColorsReadOnly.Provider value={true}>
               <RelativeTimeNow.Provider value={now}>
               <TaskActiveSessionsOverride.Provider value={NO_ACTIVE_SESSIONS}>
+              <FeedTriageOff.Provider value={true}>
                 <HeroRouter>
                   <div
                     ref={rootRef}
@@ -215,6 +219,7 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
                     {children}
                   </div>
                 </HeroRouter>
+              </FeedTriageOff.Provider>
               </TaskActiveSessionsOverride.Provider>
               </RelativeTimeNow.Provider>
               </LabelColorsReadOnly.Provider>

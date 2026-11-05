@@ -26,38 +26,26 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
 import { requireTeamMembership } from "./lib/access";
 import { workspaceGrantsAccess } from "./lib/accessKeys";
-import { conversationFromSessionTrailer, normalizeRepository, resolveTaskLinksFromText } from "./lib/gitRefs";
+import { normalizeRepository } from "./lib/gitRefs";
 import { nextShortId } from "./counters";
 import { enqueueConfigCommand } from "./users";
 import { deployTeamFor } from "./changesDeploy";
 import { resolveTeamForRepository } from "./githubWebhooks";
-import { deployStepsOf, recordDeployMarker } from "./deploys";
+import { recordDeployMarker } from "./deploys";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
 import { DEPLOY_SHORT_ID_PREFIX } from "@codecast/shared/contracts/deploys";
 import {
   DEPLOY_TARGET_NAME_RE,
   canRedeploySha,
-  commitCiState,
   commitTouchesTarget,
-  groupQueueBySession,
   readJsonLive,
-  type CommitCiRun,
-  type CommitCiState,
   type DeployLiveReader,
-  type QueueCommit,
 } from "@codecast/shared/contracts/deployTargets";
+import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
+import { deployCommitOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
 
-const DAY = 86_400_000;
-/** Commits on main read for one target's queue. */
-const QUEUE_SCAN = 1500;
-/** Waiting commits a target's view carries whole, newest first; the rest are counted. */
-const QUEUE_SHOWN = 50;
-/** Deploys read per target for its history. */
-const HISTORY = 12;
 /** Commits kept on one deploy's record. */
 const COMMITS_MAX = 200;
-
-const teamKey = (teamId: Id<"teams">) => `team:${teamId}`;
 
 const liveReaderValidator = v.union(
   v.object({ kind: v.literal("marker") }),
@@ -157,110 +145,6 @@ export const publish = mutation({
   },
 });
 
-// ── CI on main, per commit ───────────────────────────────────────────────────
-
-export type CommitCiInput = {
-  repository: string;
-  sha: string;
-  name: string;
-  kind: "workflow" | "suite";
-  run_id?: string;
-  status: string;
-  conclusion?: string;
-  url?: string;
-  started_at: number;
-};
-
-/**
- * One workflow run or check suite on the default branch, as the commit's CI
- * row for that workflow or app: written once per run, updated as it moves,
- * and a rerun (a newer start) takes the row over. Returns false for a repository
- * no team's installation routes.
- */
-export async function recordCommitCi(ctx: any, row: CommitCiInput, teamId?: Id<"teams"> | null): Promise<boolean> {
-  const repository = normalizeRepository(row.repository);
-  const team = teamId ?? (await resolveTeamForRepository(ctx, repository));
-  if (!team) return false;
-  const sha = row.sha.toLowerCase();
-  const now = Date.now();
-  const rows: Doc<"commit_ci">[] = await ctx.db.query("commit_ci").withIndex("by_repository_sha", (q: any) => q.eq("repository", repository).eq("sha", sha)).take(50);
-  const same = rows.find((r) => r.name === row.name && r.kind === row.kind);
-  const fields = {
-    ...(row.run_id ? { run_id: row.run_id } : {}),
-    status: row.status,
-    ...(row.conclusion ? { conclusion: row.conclusion } : {}),
-    ...(row.url ? { url: row.url } : {}),
-    started_at: row.started_at,
-    updated_at: now,
-  };
-  if (same) {
-    // An older run's late delivery does not speak over a newer run of the same workflow.
-    if (row.started_at < same.started_at) return true;
-    if (same.status === "completed" && row.status !== "completed" && same.run_id === row.run_id) return true;
-    await ctx.db.patch(same._id, { ...fields, ...(row.conclusion ? {} : { conclusion: undefined }) });
-  } else {
-    await ctx.db.insert("commit_ci", { workspace: teamKey(team), team_id: team, repository, sha, name: row.name, kind: row.kind, ...fields });
-  }
-  return true;
-}
-
-/** A workflow_run payload on its repository's default branch as a commit CI row, whatever its status. */
-export function workflowRunCi(payload: any): CommitCiInput | null {
-  const run = payload?.workflow_run;
-  const repository = normalizeRepository(payload?.repository?.full_name);
-  const defaultBranch = payload?.repository?.default_branch;
-  if (!run?.head_sha || !repository || !defaultBranch || run.head_branch !== defaultBranch) return null;
-  if (String(run.event ?? "").startsWith("pull_request")) return null;
-  const headRepository = normalizeRepository(run.head_repository?.full_name);
-  if (headRepository && headRepository !== repository) return null;
-  const name = payload?.workflow?.name ?? run.name ?? run.path;
-  if (!name) return null;
-  const started = Date.parse(run.run_started_at ?? run.created_at ?? "");
-  return {
-    repository,
-    sha: run.head_sha,
-    name,
-    kind: "workflow",
-    ...(run.id != null ? { run_id: String(run.id) } : {}),
-    status: String(run.status ?? "queued"),
-    ...(run.conclusion ? { conclusion: String(run.conclusion) } : {}),
-    ...(run.html_url ? { url: run.html_url } : {}),
-    started_at: Number.isFinite(started) ? started : Date.now(),
-  };
-}
-
-/** A check_suite payload from an app other than Actions (whose workflow runs speak for it) on the default branch. */
-export function checkSuiteCi(payload: any): CommitCiInput | null {
-  const suite = payload?.check_suite;
-  const repository = normalizeRepository(payload?.repository?.full_name);
-  const defaultBranch = payload?.repository?.default_branch;
-  if (!suite?.head_sha || !repository || !defaultBranch || suite.head_branch !== defaultBranch) return null;
-  const app = suite.app?.slug ?? suite.app?.name;
-  if (!app || app === "github-actions") return null;
-  // Apps that report by commit status instead (Railway, GitGuardian) leave a suite queued forever: it says nothing.
-  if (suite.status === "queued" || suite.status === "requested") return null;
-  const started = Date.parse(suite.created_at ?? suite.updated_at ?? "");
-  return {
-    repository,
-    sha: suite.head_sha,
-    name: suite.app?.name ?? app,
-    kind: "suite",
-    ...(suite.id != null ? { run_id: String(suite.id) } : {}),
-    status: String(suite.status ?? "queued"),
-    ...(suite.conclusion ? { conclusion: String(suite.conclusion) } : {}),
-    started_at: Number.isFinite(started) ? started : Date.now(),
-  };
-}
-
-/** Each commit's CI, read from its rows. */
-async function ciOf(ctx: any, repository: string, sha: string): Promise<{ state: CommitCiState; url: string | null; runs: CommitCiRun[] }> {
-  const rows: Doc<"commit_ci">[] = await ctx.db.query("commit_ci").withIndex("by_repository_sha", (q: any) => q.eq("repository", repository).eq("sha", sha.toLowerCase())).take(50);
-  const runs = rows.map((r) => ({ name: r.name, status: r.status, conclusion: r.conclusion ?? null, url: r.url ?? null, at: r.started_at }));
-  const state = commitCiState(runs);
-  const red = runs.find((r) => r.status === "completed" && r.conclusion && !["success", "neutral", "skipped", "cancelled", "stale"].includes(r.conclusion));
-  return { state, url: red?.url ?? runs.find((r) => r.url)?.url ?? null, runs };
-}
-
 /** A repository's CI per commit, for shas a reader names (newest first as given). */
 export const ciForCommits = query({
   args: { api_token: v.optional(v.string()), team_id: v.id("teams"), repository: v.string(), shas: v.array(v.string()) },
@@ -276,184 +160,6 @@ export const ciForCommits = query({
     return out;
   },
 });
-
-// ── main's order ─────────────────────────────────────────────────────────────
-
-/**
- * A push to the default branch orders its commits on main: each a millisecond
- * after the one before, from the push's time. A commit already ordered keeps
- * its place (a redelivery, the same commit pushed again).
- */
-export async function stampMainOrder(ctx: any, commitIds: Id<"commits">[], at: number): Promise<number> {
-  let stamped = 0;
-  for (const [i, id] of commitIds.entries()) {
-    const c = await ctx.db.get(id);
-    if (!c || c.main_at != null) continue;
-    await ctx.db.patch(id, { main_at: at + i });
-    stamped++;
-  }
-  return stamped;
-}
-
-// ── the waiting queue and each target's state ────────────────────────────────
-
-async function commitBySha(ctx: any, repository: string, sha: string): Promise<Doc<"commits"> | null> {
-  const s = sha.toLowerCase();
-  if (s.length === 40) {
-    const rows: Doc<"commits">[] = await ctx.db.query("commits").withIndex("by_sha", (q: any) => q.eq("sha", s)).take(10);
-    return rows.find((c) => c.repository === repository) ?? null;
-  }
-  return null;
-}
-
-/** The commits on main after `fromSha` (exclusive), up to `toSha` when named, oldest first; past QUEUE_SCAN the oldest drop (truncated). */
-async function mainCommitsAfter(ctx: any, repository: string, fromSha: string | null, toSha?: string | null): Promise<{ commits: Doc<"commits">[]; known: boolean; truncated: boolean }> {
-  const from = fromSha ? await commitBySha(ctx, repository, fromSha) : null;
-  if (fromSha && from?.main_at == null) return { commits: [], known: false, truncated: false };
-  const to = toSha ? await commitBySha(ctx, repository, toSha) : null;
-  if (toSha && to?.main_at == null) return { commits: [], known: false, truncated: false };
-  const lo = from?.main_at ?? Date.now() - 14 * DAY;
-  const rows: Doc<"commits">[] = await ctx.db
-    .query("commits")
-    .withIndex("by_repository_main", (q: any) => {
-      const r = q.eq("repository", repository).gt("main_at", lo);
-      return to?.main_at != null ? r.lte("main_at", to.main_at) : r;
-    })
-    .order("desc")
-    .take(QUEUE_SCAN + 1);
-  return { commits: rows.slice(0, QUEUE_SCAN).reverse(), known: true, truncated: rows.length > QUEUE_SCAN };
-}
-
-async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<string, any>, taskCache: Map<string, any>): Promise<QueueCommit> {
-  let session: QueueCommit["session"] = null;
-  if (c.conversation_id) {
-    const key = String(c.conversation_id);
-    if (!convCache.has(key)) convCache.set(key, await ctx.db.get(c.conversation_id));
-    const conv = convCache.get(key);
-    session = { conversation_id: key, short_id: key.slice(0, 7), title: conv?.title ?? null };
-  }
-  const tasks = [];
-  for (const id of c.task_ids ?? []) {
-    const key = String(id);
-    if (!taskCache.has(key)) taskCache.set(key, await ctx.db.get(id));
-    const t = taskCache.get(key);
-    tasks.push({ task_id: key, short_id: t?.short_id ?? null, title: t?.title ?? null });
-  }
-  const ci = await ciOf(ctx, c.repository!, c.sha);
-  return {
-    sha: c.sha,
-    subject: c.message.split("\n")[0].slice(0, 200),
-    at: c.main_at ?? c.timestamp,
-    author: c.author_login ?? c.author_name ?? null,
-    session,
-    tasks,
-    ci: ci.state,
-    ci_url: ci.url,
-  };
-}
-
-/** A commit on main as a deploy's record keeps it, with the session that wrote it. */
-function deployCommitOf(c: Doc<"commits">) {
-  return {
-    sha: c.sha,
-    subject: c.message.split("\n")[0].slice(0, 200),
-    ...(c.author_login || c.author_name ? { author: c.author_login ?? c.author_name } : {}),
-    ...(c.conversation_id ? { conversation_id: c.conversation_id } : {}),
-  };
-}
-
-/** A deploy as the targets view lists it, with the sessions whose commits it carried. */
-async function deployLine(ctx: any, d: Doc<"deploys">, convCache: Map<string, any>) {
-  const sessions = [];
-  for (const id of new Set((d.commits ?? []).flatMap((c) => (c.conversation_id ? [String(c.conversation_id)] : [])))) {
-    if (!convCache.has(id)) convCache.set(id, await ctx.db.get(id as Id<"conversations">));
-    sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: convCache.get(id)?.title ?? null });
-  }
-  return {
-    _id: String(d._id),
-    short_id: d.short_id,
-    ...(d.client_key ? { client_key: d.client_key } : {}),
-    target: d.target,
-    repository: d.repository ?? null,
-    status: d.status,
-    trigger: d.trigger,
-    action: d.action ?? "deploy",
-    rollback_of: d.rollback_of ?? null,
-    sha: d.sha ?? null,
-    previous_sha: d.previous_sha ?? null,
-    version: d.version ?? null,
-    url: d.url ?? null,
-    source: d.source,
-    started_by: d.started_by?.name ?? null,
-    note: d.note ?? null,
-    dirty: d.dirty ?? null,
-    commits: d.commits?.length ?? 0,
-    sessions,
-    run_id: d.run_id ? String(d.run_id) : null,
-    created_at: d.created_at,
-    live_at: d.live_at ?? null,
-    finished_at: d.finished_at ?? null,
-  };
-}
-
-async function targetDeploys(ctx: any, workspace: string, target: string, take = 60): Promise<Doc<"deploys">[]> {
-  return await ctx.db
-    .query("deploys")
-    .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", workspace).eq("target", target))
-    .order("desc")
-    .take(take);
-}
-
-/** One target's state: live, going out, recent history, and what waits on main. */
-async function targetState(ctx: any, t: Doc<"deploy_targets">) {
-  const deploys = await targetDeploys(ctx, t.workspace, t.name);
-  const deploysHere = deploys.filter((d) => !d.repository || d.repository === t.repository);
-  const live = deploysHere.find((d) => d.status === "live") ?? null;
-  const open = deploysHere.find((d) => d.status === "requested" || d.status === "running") ?? null;
-  const convCache = new Map<string, any>();
-  const taskCache = new Map<string, any>();
-  const after = await mainCommitsAfter(ctx, t.repository, live?.sha ?? null);
-  const touching = after.commits.filter((c) => commitTouchesTarget(t.paths, (c.files ?? []).map((f) => f.filename)));
-  const skipped = after.commits.length - touching.length;
-  const head = after.commits[after.commits.length - 1] ?? null;
-  const headCi = head ? await ciOf(ctx, t.repository, head.sha) : live?.sha ? await ciOf(ctx, t.repository, live.sha) : null;
-  // The newest commits are shown whole, with their session, tasks and CI; the rest are counted.
-  const shown: QueueCommit[] = [];
-  for (const c of touching.slice(-QUEUE_SHOWN).reverse()) shown.push(await queueCommitOf(ctx, c, convCache, taskCache));
-  return {
-    name: t.name,
-    repository: t.repository,
-    runs: t.runs,
-    policy: t.policy,
-    live_reader: t.live,
-    command: t.command ?? null,
-    rollback: t.rollback ?? null,
-    paths: t.paths,
-    can_deploy: t.runs === "here" && !!t.command && !!t.device_id && !!t.root,
-    can_redeploy_sha: t.runs === "here" && canRedeploySha(t),
-    can_rollback: t.runs === "here" && !!t.rollback,
-    device_id: t.device_id ?? null,
-    publisher_user_id: String(t.publisher_user_id),
-    live: live ? await deployLine(ctx, live, convCache) : null,
-    open: open ? { ...(await deployLine(ctx, open, convCache)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,
-    history: await Promise.all(deploysHere.slice(0, HISTORY).map((d) => deployLine(ctx, d, convCache))),
-    last_read: t.last_read ?? null,
-    queue: {
-      // False when the live sha is not on main as codecast knows it (no deploy yet, or main's order not backfilled).
-      known: after.known,
-      truncated: after.truncated,
-      commits: touching.length,
-      // Commits on main after the live sha that touch none of this target's paths: they ship nothing here.
-      untouched: skipped,
-      head_sha: head?.sha ?? live?.sha ?? null,
-      // CI on main's newest commit: what a deploy now would send.
-      head_ci: headCi?.state ?? "none",
-      head_ci_url: headCi?.url ?? null,
-      shown: shown.length,
-      groups: groupQueueBySession(shown),
-    },
-  };
-}
 
 /** Every deploy target of a team: live, going out, history and the waiting queue grouped by session (DP12). */
 export const view = query({
@@ -802,92 +508,6 @@ export const pollLiveReaders = internalAction({
   },
 });
 
-// ── GitHub: a target that deploys on push (DP11) ─────────────────────────────
-
-const STATUS_TO_DEPLOY: Record<string, "running" | "live" | "failed" | undefined> = {
-  pending: "running",
-  queued: "running",
-  in_progress: "running",
-  success: "live",
-  failure: "failed",
-  error: "failed",
-};
-
-/**
- * A commit status (`status` webhook) or a deployment status on a repository's
- * default branch, as a deploy of every target whose reader names its context
- * or environment: pending is running, success is live, failure is failed.
- */
-export async function recordGithubDeployStatus(
-  ctx: any,
-  e: { repository: string; sha: string; context: string; state: string; url?: string; at: number; on_default_branch: boolean; actor?: string; description?: string },
-): Promise<string[]> {
-  const status = STATUS_TO_DEPLOY[e.state];
-  if (!status || !e.on_default_branch) return [];
-  const repository = normalizeRepository(e.repository);
-  const rows: Doc<"deploy_targets">[] = (await ctx.db.query("deploy_targets").withIndex("by_repository_name", (q: any) => q.eq("repository", repository)).take(50))
-    .filter((r: Doc<"deploy_targets">) => !r.retired_at && r.live.kind === "github-status" && r.live.context === e.context);
-  const out: string[] = [];
-  for (const t of rows) {
-    const deploy = await recordDeployMarker(ctx, {
-      workspace: t.workspace,
-      ...(t.team_id ? { team_id: t.team_id } : {}),
-      target: t.name,
-      sha: e.sha.toLowerCase(),
-      repository,
-      source: `github: ${e.context}`,
-      ...(e.url ? { url: e.url } : {}),
-      status,
-      // What GitHub says about a failure ("Deployment failed", "crashed"), as the deploy's note.
-      ...(status === "failed" && e.description ? { note: e.description } : {}),
-      ...(e.actor ? { started_by: { kind: "source" as const, name: e.actor } } : {}),
-      at: e.at,
-    });
-    if (deploy) out.push(deploy);
-  }
-  return out;
-}
-
-/** A `status` webhook payload as a deploy status, when it is on the default branch. */
-export function statusEventOf(payload: any): Parameters<typeof recordGithubDeployStatus>[1] | null {
-  const repository = payload?.repository?.full_name;
-  const defaultBranch = payload?.repository?.default_branch;
-  if (!repository || !payload?.sha || !payload?.context || !payload?.state) return null;
-  const branches: string[] = (payload.branches ?? []).map((b: any) => b?.name).filter(Boolean);
-  const at = Date.parse(payload.updated_at ?? payload.created_at ?? "");
-  return {
-    repository,
-    sha: payload.sha,
-    context: payload.context,
-    state: payload.state,
-    ...(payload.target_url ? { url: payload.target_url } : {}),
-    ...(payload.description ? { description: String(payload.description).slice(0, 500) } : {}),
-    at: Number.isFinite(at) ? at : Date.now(),
-    // GitHub lists the branches whose head holds the commit (up to ten); a status on main's commit names main.
-    on_default_branch: !!defaultBranch && branches.includes(defaultBranch),
-  };
-}
-
-/** A `deployment_status` webhook payload as a deploy status: the deployment's environment is the context. */
-export function deploymentStatusEventOf(payload: any): Parameters<typeof recordGithubDeployStatus>[1] | null {
-  const repository = payload?.repository?.full_name;
-  const dep = payload?.deployment;
-  const st = payload?.deployment_status;
-  if (!repository || !dep?.sha || !dep?.environment || !st?.state) return null;
-  const at = Date.parse(st.updated_at ?? st.created_at ?? "");
-  const ref = String(dep.ref ?? "");
-  return {
-    repository,
-    sha: dep.sha,
-    context: dep.environment,
-    state: st.state,
-    ...(st.log_url || st.target_url ? { url: st.log_url ?? st.target_url } : {}),
-    ...(st.description ? { description: String(st.description).slice(0, 500) } : {}),
-    at: Number.isFinite(at) ? at : Date.now(),
-    on_default_branch: ref === payload?.repository?.default_branch || ref === dep.sha,
-    ...(dep.creator?.login ? { actor: dep.creator.login } : {}),
-  };
-}
 
 // ── backfill: main's order, CI and GitHub deploy statuses (DP14) ─────────────
 
@@ -935,56 +555,6 @@ export const reportMainCommits = mutation({
     return await upsertMainCommits(ctx, { repository, team_id: args.team_id, branch: args.branch, commits: args.commits.slice(0, 300) });
   },
 });
-
-async function upsertMainCommits(ctx: any, args: { repository: string; team_id: Id<"teams">; branch: string; commits: Array<{ sha: string; message: string; author_name: string; author_email: string; author_login?: string; at: number; files?: string[] }> }) {
-  {
-    const repository = normalizeRepository(args.repository);
-    let inserted = 0;
-    let ordered = 0;
-    // Main's order from the commit history: each commit after the one before it, at its committer time or later.
-    let at = 0;
-    for (const c of args.commits) {
-      at = Math.max(at + 1, c.at);
-      const existing = (await ctx.db.query("commits").withIndex("by_sha", (q: any) => q.eq("sha", c.sha)).take(10)).find((r: Doc<"commits">) => r.repository === repository);
-      const files = c.files?.map((filename) => ({ filename, status: "modified", additions: 0, deletions: 0, changes: 0 }));
-      if (existing) {
-        const patch: Partial<Doc<"commits">> = {};
-        if (existing.main_at == null) { patch.main_at = at; ordered++; }
-        if (!existing.files?.length && files?.length) patch.files = files;
-        if (!existing.conversation_id) {
-          const conv = await conversationFromSessionTrailer(ctx, c.message, { teamId: args.team_id, current: undefined });
-          if (conv) patch.conversation_id = conv;
-        }
-        if (Object.keys(patch).length) await ctx.db.patch(existing._id, patch);
-        continue;
-      }
-      const conv = await conversationFromSessionTrailer(ctx, c.message, { teamId: args.team_id, current: undefined });
-      const links = await resolveTaskLinksFromText(ctx, c.message, args.branch);
-      await ctx.db.insert("commits", {
-        sha: c.sha,
-        message: c.message,
-        author_name: c.author_name,
-        author_email: c.author_email,
-        timestamp: c.at,
-        files_changed: files?.length ?? 0,
-        insertions: 0,
-        deletions: 0,
-        repository,
-        team_id: args.team_id,
-        branch: args.branch,
-        ...(c.author_login ? { author_login: c.author_login } : {}),
-        ...(conv ? { conversation_id: conv } : {}),
-        ...(links.task_ids.length ? { task_ids: links.task_ids } : {}),
-        ...(files?.length ? { files } : {}),
-        main_at: at,
-      });
-      inserted++;
-      ordered++;
-    }
-    return { inserted, ordered };
-  }
-}
-
 export const backfillCi = internalMutation({
   args: { team_id: v.id("teams"), rows: v.array(v.object({ repository: v.string(), sha: v.string(), name: v.string(), kind: v.union(v.literal("workflow"), v.literal("suite")), run_id: v.optional(v.string()), status: v.string(), conclusion: v.optional(v.string()), url: v.optional(v.string()), started_at: v.number() })) },
   handler: async (ctx, args) => {

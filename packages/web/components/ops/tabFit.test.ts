@@ -12,14 +12,24 @@ test("tabs that fit are all drawn; past the width the tail folds and the active 
   expect(fitTabs([0, 0, 0], 100, 76, 2, 0)).toEqual([0, 1, 2]);
 });
 
-test("j and k from the home walk every row that opens an issue: issues and replay rows naming one, once each", () => {
-  const g = (id: string) => ({ _id: id, short_id: id }) as any;
+test("a narrow bar keeps the most opened tabs first, drawn in bar order", () => {
+  // Overview, Timeline, Issues, Replays, Metrics, Apps; ranked Overview, Issues, Replays, Metrics, Timeline, Apps.
+  const w = [90, 80, 70, 80, 80, 60];
+  const rank = [0, 2, 3, 4, 1, 5];
+  expect(fitTabs(w, 250, 76, 2, 0, rank)).toEqual([0, 2]);
+  expect(fitTabs(w, 330, 76, 2, 0, rank)).toEqual([0, 2, 3]);
+  // Timeline open: it takes the last kept place.
+  expect(fitTabs(w, 330, 76, 2, 1, rank)).toEqual([0, 1, 2]);
+});
+
+test("j and k from the home walk every issue the rows hold, once each: a folded row's variants and an alerting watch's metric issue", () => {
+  const NOW = Date.UTC(2026, 10, 3, 12);
+  const g = (id: string) => ({ _id: id, short_id: id, kind: "error", status: "open", first_seen: NOW - 3_600_000, last_seen: NOW - 60_000, count: 3, buckets: [] }) as any;
   const items = [
     { kind: "watch", group: g("eg-1") },
-    { kind: "issue", group: g("eg-2") },
-    { kind: "replay", group: g("eg-3") },
+    { kind: "issue", group: g("eg-2"), variants: [g("eg-2"), g("eg-4")] },
     { kind: "replay", group: null },
     { kind: "issue", group: g("eg-2") },
   ] as any;
-  expect(homeIssueRefs(items)).toEqual(["eg-2", "eg-3"]);
+  expect(homeIssueRefs(items, NOW)).toEqual(["eg-1", "eg-2", "eg-4"]);
 });

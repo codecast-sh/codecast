@@ -45,7 +45,7 @@ test("both chat rows in the rail wear the same signals", () => {
 });
 
 test("the section count sits after the chevron, not inside the link", () => {
-  const nav = block("function NavSection(", "/** The needs-input count on the Inbox row", primitives);
+  const nav = block("function NavSection(", "/** The needs-input count.", primitives);
   const linkEnd = nav.indexOf("</Link>");
   const chevron = nav.indexOf("aria-expanded={expanded}");
   const badge = nav.indexOf("{!isNarrow && badge && (");

@@ -326,6 +326,12 @@ export class AwakeIdleClock {
   }
 }
 
+/** Under 1s on a calm machine, but 10 to 20s as a daemon child at load 200+ with 1,600 processes
+ *  (2026-11-04): it sits in uninterruptible kernel wait beside the daemon's other full listings.
+ *  A 5s budget blanked the Resources page and the move path exactly when load needed moving.
+ *  The resource tick runs every 30s and never overlaps itself, so a slow list is still worth having. */
+export const PROCESS_SNAPSHOT_BUDGET_MS = 20_000;
+
 export async function captureProcessSnapshot(): Promise<Map<number, ProcessInfo>> {
   if (process.platform !== "darwin" && process.platform !== "linux") return new Map();
 
@@ -333,9 +339,10 @@ export async function captureProcessSnapshot(): Promise<Map<number, ProcessInfo>
   // /dev, which made this ps 3 to 10 times slower under load (2026-10-09).
   const terminal = process.platform === "darwin" ? "tdev" : "tty";
   const captured = await resourceProbe("processes", () => execFileAsync("ps", ["-eo", `pid=,ppid=,pcpu=,rss=,etime=,pgid=,${terminal}=,comm=`], {
-    timeout: 5000,
+    timeout: PROCESS_SNAPSHOT_BUDGET_MS,
     killSignal: "SIGKILL",
-  }), 5000);
+    maxBuffer: 16 * 1024 * 1024,
+  }), PROCESS_SNAPSHOT_BUDGET_MS);
   if (!captured) throw new Error("Process snapshot unavailable within its time budget");
   return parseProcessSnapshot(captured.stdout);
 }
