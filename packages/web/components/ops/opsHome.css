@@ -23,26 +23,26 @@
 .ops-filter-btn {
   display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; max-width: 220px;
   border-radius: 6px; font-size: 12px; color: var(--sol-text);
-  border: 1px solid var(--sol-border); background: var(--sol-bg-alt);
+  border: 1px solid var(--osx-line); background: var(--sol-bg);
 }
 .ops-filter-btn:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 60%, var(--sol-border)); }
 /* A picked source is an ordinary "on" state, not an alarm: neutral ink, never red. */
-.ops-filter-btn[data-on="true"] { border-color: color-mix(in srgb, var(--sol-text-muted) 55%, var(--sol-border)); background: color-mix(in srgb, var(--sol-text-muted) 10%, var(--sol-bg-alt)); border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ops-filter-btn[data-on="true"] { border-color: color-mix(in srgb, var(--sol-text-muted) 55%, var(--sol-border)); background: color-mix(in srgb, var(--sol-text-muted) 10%, var(--sol-bg)); border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .ops-filter-n { font-size: 10.5px; color: var(--sol-text-dim); }
 .ops-filter-clear {
   display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 28px;
   border: 1px solid color-mix(in srgb, var(--sol-text-muted) 55%, var(--sol-border)); border-left: 0; border-radius: 0 6px 6px 0; color: var(--sol-text-muted);
-  background: color-mix(in srgb, var(--sol-text-muted) 10%, var(--sol-bg-alt));
+  background: color-mix(in srgb, var(--sol-text-muted) 10%, var(--sol-bg));
 }
 .ops-filter-clear:hover { color: var(--sol-text); }
 .ops-filter-pop.ops-filter-pop { width: 280px; padding: 0; background: var(--sol-bg); border-color: var(--sol-border); color: var(--sol-text); }
-.ops-filter-search { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--sol-border); }
+.ops-filter-search { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--osx-line); }
 .ops-filter-search input { flex: 1; min-width: 0; background: transparent; outline: none; font-size: 12.5px; color: var(--sol-text); }
 .ops-filter-search input::placeholder { color: var(--sol-text-dim); }
 .ops-filter-list { max-height: 340px; overflow: auto; padding: 4px 0; }
 .ops-filter-group { display: flex; align-items: center; gap: 6px; padding: 8px 12px 3px; font-size: 10.5px; font-weight: 600; color: var(--sol-text-dim); }
 .ops-filter-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 12px; font-size: 12.5px; text-align: left; color: var(--sol-text-muted); }
-.ops-filter-row:hover, .ops-filter-row[data-cursor="true"] { background: var(--sol-bg-alt); color: var(--sol-text); }
+.ops-filter-row:hover, .ops-filter-row[data-cursor="true"] { background: var(--sol-bg); color: var(--sol-text); }
 .ops-filter-row[aria-selected="true"] { color: var(--sol-text); font-weight: 500; }
 .ops-filter-name { flex: 1; min-width: 0; }
 .ops-filter-health { font-size: 10.5px; color: var(--sol-red); white-space: nowrap; }
@@ -73,36 +73,30 @@
 .ops-home-strip { display: flex; gap: 10px; align-items: stretch; }
 /* Each group is a row of equal tiles; the strip shares its width by tile count, so every tile is the same width. */
 .ops-home-tilegroup { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; flex-basis: 0; min-width: 0; }
-/* The counts that page a person (the Overview tab's and the sidebar's number) sit inside one red outline. */
-.ops-home-tilegroup[data-paging="true"] {
-  padding: 4px; margin: -5px 0; border-radius: 11px;
-  border: 1px solid color-mix(in srgb, var(--sol-red) 35%, var(--sol-border));
-  background: color-mix(in srgb, var(--sol-red) 5%, transparent);
-}
+/* The counts that page a person (the Overview tab's and the sidebar's number) come first; a hairline sets them apart from the rest. */
+.ops-home-tilegroup[data-paging="true"] { padding-right: 22px; border-right: 1px solid var(--osx-line); }
 /* "Nobody on it" and "Snoozed" overlap the kinds (an item can be under one of them and a kind), so they sit apart. */
-.ops-home-count[data-overlap="true"] { border-style: dashed; }
+.ops-home-count[data-overlap="true"] span { text-decoration: underline dotted color-mix(in srgb, var(--sol-text-dim) 70%, transparent); text-underline-offset: 3px; }
 .ops-home-count[data-ops-count="unassigned"] { margin-left: 6px; }
 .ops-home-count {
-  display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; min-width: 0;
-  border: 1px solid var(--sol-border); background: var(--sol-bg-alt); color: var(--sol-text-muted);
-  transition: border-color 120ms ease, background 120ms ease;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; border-radius: 10px; min-width: 0;
+  border: 0; background: transparent; color: var(--sol-text-muted);
+  transition: background 120ms ease;
 }
-.ops-home-count b { font-size: 22px; font-weight: 600; line-height: 1.1; color: var(--sol-text); }
+.ops-home-count b { font-family: var(--font-mono); font-size: 24px; font-weight: 600; line-height: 1.1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; color: var(--sol-text); }
 .ops-home-count span { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ops-home-count[data-tone="zero"] b { color: var(--sol-text-dim); }
 .ops-home-count[data-tone="bad"] b { color: var(--sol-red); }
 .ops-home-count[data-tone="warn"] b { color: var(--sol-orange); }
-.ops-home-count:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 50%, var(--sol-border)); }
+.ops-home-count:hover { background: var(--osx-hover); }
 /* The filter that is on is filled, so it reads as pressed from across the page. */
-.ops-home-count[data-on="true"] { border-style: solid; border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 16%, var(--sol-bg-alt)); }
+.ops-home-count[data-on="true"] { background: color-mix(in srgb, var(--sol-blue) 13%, transparent); }
 .ops-home-count[data-on="true"] span { color: var(--sol-text); }
 /* At every width the tiles are one-line chips, number beside label, that wrap to a second row: one look to learn, a label
    never cut, and the first screen keeps its height for the rows. */
-.ops-home-strip { flex-wrap: wrap; gap: 6px 10px; }
-.ops-home-strip .ops-home-tilegroup { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 1 auto !important; }
-.ops-home-tilegroup[data-paging="true"] { margin: 0; padding: 3px; }
-.ops-home-count { flex: 0 0 auto; flex-direction: row; align-items: baseline; gap: 6px; padding: 6px 11px; }
-.ops-home-count b { font-size: 15px; }
+.ops-home-strip { flex-wrap: wrap; gap: 6px 22px; margin-left: -10px; }
+.ops-home-strip .ops-home-tilegroup { display: flex; flex-wrap: wrap; gap: 4px 6px; flex: 0 1 auto !important; }
+.ops-home-count { flex: 0 0 auto; }
 .ops-home-count span { overflow: visible; }
 
 /* The filter that is on, beside the list's count: pressing it shows everything. */
@@ -154,25 +148,24 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-bulk .ops-btn { gap: 5px; }
 .ops-home-head [data-col="num"] { text-align: right; }
 .ops-home-head [data-col="spark"] { text-align: right; }
-.ops-home-list { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; list-style: none; margin: 0; padding: 0; border: 1px solid var(--sol-border); border-radius: 8px; overflow: hidden; background: var(--sol-bg-alt); }
+.ops-home-list { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--osx-line); }
 .ops-home-row {
   position: relative; grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; row-gap: 0;
-  padding: 6px 12px 6px 14px; cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  padding: 8px 12px 8px 14px; cursor: pointer; border-bottom: 1px solid var(--osx-line);
   /* The row's own fill, opaque, so the press that shows over its numbers covers them cleanly. */
-  --ops-row-bg: var(--sol-bg-alt); background: var(--ops-row-bg);
+  --ops-row-bg: var(--sol-bg); background: var(--ops-row-bg);
 }
 /* The keyboard cursor and the selection: a ring and a tint, never red. */
-.ops-home-row[data-cursor="true"] { --ops-row-bg: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg-alt)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-blue) 45%, transparent); }
-.ops-home-row[data-selected="true"] { --ops-row-bg: color-mix(in srgb, var(--sol-blue) 11%, var(--sol-bg-alt)); }
+.ops-home-row[data-cursor="true"] { --ops-row-bg: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-blue) 45%, transparent); }
+.ops-home-row[data-selected="true"] { --ops-row-bg: color-mix(in srgb, var(--sol-blue) 11%, var(--sol-bg)); }
 .ops-home-glyph { position: relative; display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; }
 .ops-home-check { position: absolute; inset: 3px; width: 16px; height: 16px; margin: 0; opacity: 0; cursor: pointer; accent-color: var(--sol-blue); }
 .ops-home-row:hover .ops-home-check, .ops-home-row[data-selected="true"] .ops-home-check, .ops-home-list[data-selecting="true"] .ops-home-check { opacity: 1; }
 .ops-home-row:hover .ops-home-glyph-ico, .ops-home-row[data-selected="true"] .ops-home-glyph-ico, .ops-home-list[data-selecting="true"] .ops-home-glyph-ico { opacity: 0; }
 .ops-home-glyph-ico { display: inline-flex; }
 .ops-home-newdot { display: inline-block; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--sol-blue); align-self: center; }
-.ops-home-row:last-child { border-bottom: 0; }
-.ops-home-row:hover, .ops-home-row:focus-visible { --ops-row-bg: color-mix(in srgb, var(--sol-text-muted) 6%, var(--sol-bg-alt)); outline: none; }
-.ops-home-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; }
+.ops-home-row:hover, .ops-home-row:focus-visible { --ops-row-bg: color-mix(in srgb, var(--sol-text) 4%, var(--sol-bg)); outline: none; }
+.ops-home-row::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 2px; background: transparent; }
 .ops-home-row[data-sev="3"]::before { background: var(--sol-red); }
 .ops-home-row[data-sev="2"]::before { background: var(--sol-orange); }
 .ops-home-ico[data-k="watch"] { color: var(--sol-violet); background: color-mix(in srgb, var(--sol-violet) 12%, transparent); }
@@ -267,7 +260,7 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-more { grid-column: 1 / -1; justify-self: start; margin-top: 8px; font-size: 12px; color: var(--sol-text-muted); }
 .ops-home-more:hover { color: var(--sol-text); }
 
-.ops-home-clear { display: flex; align-items: center; gap: 10px; padding: 14px 16px; font-size: 13px; border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); }
+.ops-home-clear { display: flex; align-items: center; gap: 10px; padding: 14px 16px; font-size: 13px; border-radius: 14px; background: var(--sol-card); box-shadow: var(--osx-shadow); }
 .ops-home-clear i { width: 8px; height: 8px; border-radius: 50%; background: var(--sol-green); }
 
 /* ── Sources table, edge to edge ── */
@@ -302,13 +295,13 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 @container ops-home (max-width: 600px) { .ops-home-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .ops-home-tile {
   display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 8px;
-  border: 1px solid var(--sol-border); background: var(--sol-bg-alt); font-size: 12.5px;
+  border: 1px solid var(--osx-line); background: var(--sol-bg); font-size: 12.5px;
   transition: border-color 120ms ease, transform 120ms ease;
 }
 .ops-home-tile { text-align: left; color: var(--sol-text); cursor: pointer; }
 .ops-home-tile span { font-size: 11.5px; }
 .ops-home-tile:hover { border-color: var(--sol-text-muted); transform: translateY(-1px); }
-.ops-home-tile[data-on="true"] { border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg-alt)); transform: none; }
+.ops-home-tile[data-on="true"] { border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg)); transform: none; }
 /* Opening a sheet leaves the tiles where they are: the picked one is marked, nothing reflows. */
 
 /* Connecting a source, in place: connectSheet.css, loaded by the sheet itself (it opens in Settings too). */
@@ -332,7 +325,7 @@ button.ops-band-ok:hover { background: color-mix(in srgb, var(--sol-text-muted) 
 .ops-band-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 6px; }
 .ops-band-tile {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 3px;
-  padding: 7px 10px; border-radius: 7px; border: 1px solid var(--sol-border); background: var(--sol-bg-alt); color: var(--sol-text);
+  padding: 7px 10px; border-radius: 7px; border: 1px solid var(--osx-line); background: var(--sol-bg); color: var(--sol-text);
   border-left: 3px solid var(--ink); transition: border-color 120ms ease;
 }
 .ops-band-tile:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 50%, var(--sol-border)); border-left-color: var(--ink); }
@@ -481,7 +474,7 @@ a.ops-fresh:hover span { text-decoration: underline; }
 .ops-notfound-search { display: inline-flex; gap: 4px; align-items: center; }
 .ops-notfound-search input {
   height: 28px; width: 180px; padding: 0 8px; border-radius: 6px; font-size: 12.5px;
-  border: 1px solid var(--sol-border); background: var(--sol-bg-alt); color: var(--sol-text);
+  border: 1px solid var(--osx-line); background: var(--sol-bg); color: var(--sol-text);
 }
 .ops-notfound-spin {
   width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--sol-text-dim); border-top-color: transparent;
