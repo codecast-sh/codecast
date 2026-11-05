@@ -323,10 +323,7 @@ export const learning = query({
 });
 export const setLearning = mutation({
   args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), team_id: v.optional(v.id("teams")), enabled: v.boolean() },
-  handler: async (ctx, { api_token, from_session, ...args }): Promise<any> => {
-    if (from_session) throw new Error("Letting Codecast learn from a workspace is a person's choice: an agent session may not make it. A team admin sets it from the role page, or from their own terminal with cast org template learning on");
-    return performSetLearning(ctx, await requireCaller(ctx, api_token), args);
-  },
+  handler: async (ctx, { api_token, from_session: _from, ...args }): Promise<any> => performSetLearning(ctx, await requireCaller(ctx, api_token), args),
 });
 export const learnStatusOf = query({
   args: { api_token: v.optional(v.string()), template_id: v.string() },

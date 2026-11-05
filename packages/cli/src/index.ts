@@ -1705,6 +1705,10 @@ function startDaemon(): void {
 // When there is no TTY (e.g. `curl | sh -s -- <token>` without /dev/tty), it
 // applies recommended defaults instead of blocking on prompts.
 async function runOnboarding(config: Config): Promise<void> {
+  // A machine linked just now uploads every transcript on disk on the
+  // daemon's next start, not only the last week's (daemon.ts runHistoryImport).
+  config.history_import_pending = true;
+  writeConfig(config);
   installSlashCommand();
   await syncHooks(config);
 
