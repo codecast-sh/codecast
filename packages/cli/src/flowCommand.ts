@@ -390,7 +390,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--run <id>", "The run whose station this is: each new line goes on the station while it waits")
     .option("--node <id>", "That station's id in the run")
     .option("--files <paths>", "The change's files, space-separated (the run's $change_files); else read from git")
-    .action(async (opts: { branch: string; base: string; interval: string; once?: boolean; run?: string; node?: string; files?: string }) => {
+    .option("--except <targets>", "Targets the change does not wait for, space- or comma-separated")
+    .action(async (opts: { branch: string; base: string; interval: string; once?: boolean; run?: string; node?: string; files?: string; except?: string }) => {
       const { landedCommit, targetTouches, targetState, deployWords, holds } = await import("./workflow/awaitDeploy.js");
       const cwd = deps.realCwd();
       const every = Math.max(5, Number(opts.interval) || 60) * 1000;
@@ -412,7 +413,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
           let targets: import("./workflow/awaitDeploy.js").DeployTargetRow[] | null = null;
           try { targets = JSON.parse(read.out).targets ?? []; } catch { say(`Waiting to read the deploy targets: ${(read.err || read.out).trim().split("\n").pop()}`); }
           if (targets) {
-            const touched = targets.filter((t) => targetTouches(t.paths, landed.files));
+            const skipped = new Set((opts.except ?? "").split(/[\s,]+/).filter(Boolean));
+            const touched = targets.filter((t) => !skipped.has(t.name) && targetTouches(t.paths, landed.files));
             const states = await Promise.all(touched.map((t) => targetState(t, (sha) => holds(cwd, landed.sha, sha))));
             const failed = states.some((s) => s.state === "failed");
             const live = states.every((s) => s.state === "live");
