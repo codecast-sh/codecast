@@ -5,8 +5,8 @@
 // a query's preview in violet, ships and moments as markers on the time
 // axis. The full chart adds axes, a drag-to-zoom brush, a line you drag by
 // its tab in the right gutter, and a tip that reads the value, its distance
-// to the line, the prior period and any stretch the moment falls in. Same
-// props as the SVG MetricChart it replaces; plotModel works out what to draw.
+// to the line, the prior period and any stretch the moment falls in. It is
+// MetricChart (MetricChart.tsx names its props); plotModel works out what to draw.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import type { ECharts, EChartsOption } from "./echarts";
@@ -80,7 +80,7 @@ export function MetricPlot(props: MetricChartProps) {
     if (line !== undefined) markLines.push({ yAxis: line, lineStyle: { color: red, type: [3, 4], width: 1.2 }, label: { show: false } });
     if (warn !== undefined) markLines.push({ yAxis: warn, lineStyle: { color: t.yellow, type: [3, 4], width: 1 } });
     if (ghostLine !== undefined && ghostLine !== threshold) markLines.push({ yAxis: ghostLine, lineStyle: { color: t.violet, type: [2, 3], width: 1.2 } });
-    const side = line === undefined || paused ? [] : [[{ yAxis: direction === "above" ? line : lo }, { yAxis: direction === "above" ? hi : line }]];
+    const side = line === undefined || paused || !full ? [] : [[{ yAxis: direction === "above" ? line : lo }, { yAxis: direction === "above" ? hi : line }]];
     const turnColor = (k: string) => (k === "crossed" ? t.red : t.green);
     return {
       animation: false,
@@ -123,7 +123,7 @@ export function MetricPlot(props: MetricChartProps) {
         { id: "shade", type: "line", data: [], silent: true,
           markArea: { silent: true, data: [
             ...side.map(([a, b]) => [{ ...a, itemStyle: { color: alpha(t.red, t.dark ? 0.05 : 0.035) } }, b]),
-            ...model.bands.map(b => [{ xAxis: Math.max(b.from, win.from), itemStyle: { color: alpha(t.red, t.dark ? 0.1 : 0.075) } }, { xAxis: Math.min(b.to, win.to) }]),
+            ...(full ? model.bands : []).map(b => [{ xAxis: Math.max(b.from, win.from), itemStyle: { color: alpha(t.red, t.dark ? 0.1 : 0.075) } }, { xAxis: Math.min(b.to, win.to) }]),
             ...model.holes.map(h => [{ xAxis: Math.max(h.from, win.from), itemStyle: { color: alpha(t.dim, t.dark ? 0.05 : 0.07) } }, { xAxis: Math.min(h.to, win.to) }]),
             ...(gap && gap.to > win.from ? [[{ xAxis: Math.max(gap.from, win.from), itemStyle: { color: alpha(t.dim, t.dark ? 0.03 : 0.05) } }, { xAxis: Math.min(gap.to, win.to) }]] : []),
           ] as never },

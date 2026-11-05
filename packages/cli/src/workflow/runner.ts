@@ -1505,8 +1505,8 @@ export function stopRunOnSignals(options: RunOptions): void {
   process.once("SIGHUP", () => process.exit(129));
 }
 
-async function reportProgress(options: RunOptions, payload: Record<string, any>): Promise<void> {
-  if (!options.runId || !options.convexSiteUrl || !options.apiToken) return;
+async function reportProgress(options: RunOptions, payload: Record<string, any>): Promise<boolean> {
+  if (!options.runId || !options.convexSiteUrl || !options.apiToken) return false;
   // A run that reported its end has nothing left to stop: forget it, so a late
   // signal cannot mark a finished run failed.
   const node = payload.current_node_id ?? payload.node_id;
@@ -1519,10 +1519,22 @@ async function reportProgress(options: RunOptions, payload: Record<string, any>)
   });
   try {
     const res = await post(payload);
+    if (res.ok) return true;
     // A backend older than this CLI rejects the whole report for an arg it does not know: the enrichments go, the report stays.
     const extras = PROGRESS_ENRICHMENTS.filter((k) => k in payload);
-    if (!res.ok && extras.length) await post(Object.fromEntries(Object.entries(payload).filter(([k]) => !extras.includes(k))));
+    if (extras.length) return (await post(Object.fromEntries(Object.entries(payload).filter(([k]) => !extras.includes(k))))).ok;
   } catch {}
+  return false;
+}
+
+/**
+ * A report about the runner itself (its machine, its graph), naming no station: a run resumed at a capped station
+ * waits outside it for a place, and marking the station running here read every waiting run as inside it (Eval 6
+ * and Prove 8 under caps of 4, 07:08 UTC Nov 5). A backend that still needs a node gets the station as before.
+ */
+async function reportRunner(options: RunOptions, nodeId: string, payload: Record<string, any>): Promise<void> {
+  if (await reportProgress(options, { current_node_id: nodeId, ...payload })) return;
+  await reportProgress(options, { current_node_id: nodeId, node_id: nodeId, node_status: "running", ...payload });
 }
 const PROGRESS_ENRICHMENTS = ["visits", "waiting_on_session"];
 
@@ -1767,14 +1779,7 @@ async function driveRun(
 
   // The machine driving the run, so the run is resumed there when its runner
   // dies (runResume.ts). Its own report: a server without the arg rejects it.
-  if (options.runId && !options.dryRun) {
-    await reportProgress(options, {
-      current_node_id: state.currentNodeId,
-      node_id: state.currentNodeId,
-      node_status: "running",
-      runner_device: deviceId(),
-    });
-  }
+  if (options.runId && !options.dryRun) await reportRunner(options, state.currentNodeId, { runner_device: deviceId() });
 
   if (options.runId && !resumeAt) {
     await reportProgress(options, {
@@ -1788,15 +1793,7 @@ async function driveRun(
   // one (line-versions.md LV4). Its own report: a server without the
   // graph_hash arg rejects the whole call, and the run must still read as
   // running there.
-  if (options.runId && !options.dryRun) {
-    await reportProgress(options, {
-      current_node_id: state.currentNodeId,
-      node_id: state.currentNodeId,
-      node_status: "running",
-      graph_hash: hash,
-      graph_nodes: graphNodeHashes(graph),
-    });
-  }
+  if (options.runId && !options.dryRun) await reportRunner(options, state.currentNodeId, { graph_hash: hash, graph_nodes: graphNodeHashes(graph) });
 
   console.log(`\n${c.bold}${c.cyan}━━━ Workflow: ${graph.name} ━━━${c.reset}`);
   if (graph.goal) console.log(`${c.dim}Goal: ${graph.goal}${c.reset}`);

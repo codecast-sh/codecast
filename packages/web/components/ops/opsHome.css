@@ -73,36 +73,30 @@
 .ops-home-strip { display: flex; gap: 10px; align-items: stretch; }
 /* Each group is a row of equal tiles; the strip shares its width by tile count, so every tile is the same width. */
 .ops-home-tilegroup { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; flex-basis: 0; min-width: 0; }
-/* The counts that page a person (the Overview tab's and the sidebar's number) sit inside one red outline. */
-.ops-home-tilegroup[data-paging="true"] {
-  padding: 4px; margin: -5px 0; border-radius: 11px;
-  border: 1px solid color-mix(in srgb, var(--sol-red) 35%, var(--sol-border));
-  background: color-mix(in srgb, var(--sol-red) 5%, transparent);
-}
+/* The counts that page a person (the Overview tab's and the sidebar's number) come first; a hairline sets them apart from the rest. */
+.ops-home-tilegroup[data-paging="true"] { padding-right: 22px; border-right: 1px solid var(--osx-line); }
 /* "Nobody on it" and "Snoozed" overlap the kinds (an item can be under one of them and a kind), so they sit apart. */
-.ops-home-count[data-overlap="true"] { border-style: dashed; }
+.ops-home-count[data-overlap="true"] span { text-decoration: underline dotted color-mix(in srgb, var(--sol-text-dim) 70%, transparent); text-underline-offset: 3px; }
 .ops-home-count[data-ops-count="unassigned"] { margin-left: 6px; }
 .ops-home-count {
-  display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; min-width: 0;
-  border: 1px solid var(--sol-border); background: var(--sol-bg-alt); color: var(--sol-text-muted);
-  transition: border-color 120ms ease, background 120ms ease;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; border-radius: 10px; min-width: 0;
+  border: 0; background: transparent; color: var(--sol-text-muted);
+  transition: background 120ms ease;
 }
-.ops-home-count b { font-size: 22px; font-weight: 600; line-height: 1.1; color: var(--sol-text); }
+.ops-home-count b { font-family: var(--font-mono); font-size: 24px; font-weight: 600; line-height: 1.1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; color: var(--sol-text); }
 .ops-home-count span { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ops-home-count[data-tone="zero"] b { color: var(--sol-text-dim); }
 .ops-home-count[data-tone="bad"] b { color: var(--sol-red); }
 .ops-home-count[data-tone="warn"] b { color: var(--sol-orange); }
-.ops-home-count:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 50%, var(--sol-border)); }
+.ops-home-count:hover { background: var(--osx-hover); }
 /* The filter that is on is filled, so it reads as pressed from across the page. */
-.ops-home-count[data-on="true"] { border-style: solid; border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 16%, var(--sol-bg-alt)); }
+.ops-home-count[data-on="true"] { background: color-mix(in srgb, var(--sol-blue) 13%, transparent); }
 .ops-home-count[data-on="true"] span { color: var(--sol-text); }
 /* At every width the tiles are one-line chips, number beside label, that wrap to a second row: one look to learn, a label
    never cut, and the first screen keeps its height for the rows. */
-.ops-home-strip { flex-wrap: wrap; gap: 6px 10px; }
-.ops-home-strip .ops-home-tilegroup { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 1 auto !important; }
-.ops-home-tilegroup[data-paging="true"] { margin: 0; padding: 3px; }
-.ops-home-count { flex: 0 0 auto; flex-direction: row; align-items: baseline; gap: 6px; padding: 6px 11px; }
-.ops-home-count b { font-size: 15px; }
+.ops-home-strip { flex-wrap: wrap; gap: 6px 22px; margin-left: -10px; }
+.ops-home-strip .ops-home-tilegroup { display: flex; flex-wrap: wrap; gap: 4px 6px; flex: 0 1 auto !important; }
+.ops-home-count { flex: 0 0 auto; }
 .ops-home-count span { overflow: visible; }
 
 /* The filter that is on, beside the list's count: pressing it shows everything. */
@@ -154,25 +148,24 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-bulk .ops-btn { gap: 5px; }
 .ops-home-head [data-col="num"] { text-align: right; }
 .ops-home-head [data-col="spark"] { text-align: right; }
-.ops-home-list { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; list-style: none; margin: 0; padding: 0; border: 1px solid var(--sol-border); border-radius: 8px; overflow: hidden; background: var(--sol-bg-alt); }
+.ops-home-list { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--osx-line); }
 .ops-home-row {
   position: relative; grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; row-gap: 0;
-  padding: 6px 12px 6px 14px; cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  padding: 8px 12px 8px 14px; cursor: pointer; border-bottom: 1px solid var(--osx-line);
   /* The row's own fill, opaque, so the press that shows over its numbers covers them cleanly. */
-  --ops-row-bg: var(--sol-bg-alt); background: var(--ops-row-bg);
+  --ops-row-bg: var(--sol-bg); background: var(--ops-row-bg);
 }
 /* The keyboard cursor and the selection: a ring and a tint, never red. */
-.ops-home-row[data-cursor="true"] { --ops-row-bg: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg-alt)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-blue) 45%, transparent); }
-.ops-home-row[data-selected="true"] { --ops-row-bg: color-mix(in srgb, var(--sol-blue) 11%, var(--sol-bg-alt)); }
+.ops-home-row[data-cursor="true"] { --ops-row-bg: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-blue) 45%, transparent); }
+.ops-home-row[data-selected="true"] { --ops-row-bg: color-mix(in srgb, var(--sol-blue) 11%, var(--sol-bg)); }
 .ops-home-glyph { position: relative; display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; }
 .ops-home-check { position: absolute; inset: 3px; width: 16px; height: 16px; margin: 0; opacity: 0; cursor: pointer; accent-color: var(--sol-blue); }
 .ops-home-row:hover .ops-home-check, .ops-home-row[data-selected="true"] .ops-home-check, .ops-home-list[data-selecting="true"] .ops-home-check { opacity: 1; }
 .ops-home-row:hover .ops-home-glyph-ico, .ops-home-row[data-selected="true"] .ops-home-glyph-ico, .ops-home-list[data-selecting="true"] .ops-home-glyph-ico { opacity: 0; }
 .ops-home-glyph-ico { display: inline-flex; }
 .ops-home-newdot { display: inline-block; flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--sol-blue); align-self: center; }
-.ops-home-row:last-child { border-bottom: 0; }
-.ops-home-row:hover, .ops-home-row:focus-visible { --ops-row-bg: color-mix(in srgb, var(--sol-text-muted) 6%, var(--sol-bg-alt)); outline: none; }
-.ops-home-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; }
+.ops-home-row:hover, .ops-home-row:focus-visible { --ops-row-bg: color-mix(in srgb, var(--sol-text) 4%, var(--sol-bg)); outline: none; }
+.ops-home-row::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 2px; background: transparent; }
 .ops-home-row[data-sev="3"]::before { background: var(--sol-red); }
 .ops-home-row[data-sev="2"]::before { background: var(--sol-orange); }
 .ops-home-ico[data-k="watch"] { color: var(--sol-violet); background: color-mix(in srgb, var(--sol-violet) 12%, transparent); }
