@@ -13,7 +13,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { activeTeamIdOf } from "../../lib/activeTeam";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
-import { orderTargets, rollbackTarget, sessionsOf, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
+import { orderTargets, recordTargets, rollbackTarget, sessionsOf, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
 import type { Press } from "./DeployPress";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { ageShort } from "../../lib/lineFlow";
@@ -48,12 +48,14 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy }: { ini
   const teamId = teamPick ?? where?.team_id ?? activeTeam;
   const { targets, deploys, ready } = useDeployTargets(teamId);
   const now = useCoarseNow(30_000);
-  const ordered = useMemo(() => orderTargets(targets, deploys), [targets, deploys]);
+  // Declared targets, then any target the team's deploy records name that no checkout declared yet.
+  const allTargets = useMemo(() => (teamId ? [...targets, ...recordTargets(targets, deploys, teamId)] : targets), [targets, deploys, teamId]);
+  const ordered = useMemo(() => orderTargets(allTargets, deploys), [allTargets, deploys]);
   const [pickedId, setPicked] = useState<string | null>(initialTarget ?? null);
   const want = pickedId ?? (where ? (where.repository ? `${where.repository}#${where.target}` : where.target) : null);
   const picked = ordered.find((t) => t._id === want || t.name === want) ?? ordered[0] ?? null;
   const press = useDeployPress(teamId, deploys);
-  const repos = new Set(targets.map((t) => t.repository));
+  const repos = new Set(allTargets.map((t) => t.repository).filter(Boolean));
 
   if (!teamId) return <div className="dpp-empty">Deploys belong to a team.</div>;
   const teamPicker = teams.length > 1 ? (
@@ -61,8 +63,8 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy }: { ini
       {teams.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}
     </select>
   ) : null;
-  if (!ready && targets.length === 0) return <div className="dpp" aria-busy><nav className="dpp-rail"><div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div></nav><div className="dpp-main dpp-cold" /></div>;
-  if (targets.length === 0) return <div className="dpp" data-deploys-none><nav className="dpp-rail"><div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div></nav><div className="dpp-empty">No deploy targets</div></div>;
+  if (!ready && allTargets.length === 0) return <div className="dpp" aria-busy><nav className="dpp-rail"><div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div></nav><div className="dpp-main dpp-cold" /></div>;
+  if (allTargets.length === 0) return <div className="dpp" data-deploys-none><nav className="dpp-rail"><div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div></nav><div className="dpp-empty">No deploys yet</div></div>;
 
   return (
     <div className="dpp" data-deploys-page>
@@ -114,7 +116,7 @@ function WaitingSessions({ t, onOpen }: { t: DeployTargetRow; onOpen: (key: stri
 function targetWords(t: DeployTargetRow, n: ReturnType<typeof targetNow>, tone: TargetTone): string {
   if (tone === "going") return n.open?.status === "running" ? "going out" : "asked for";
   if (tone === "failed") return "last deploy failed";
-  if (tone === "unknown") return "not tracked yet";
+  if (tone === "unknown") return n.live ? "live" : "not tracked yet";
   if (tone === "current") return "up to date";
   return `${t.queue.commits} waiting`;
 }
@@ -153,7 +155,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
       <header className="dpp-head">
         <div className="dpp-head-name">
           <h2>{t.name}</h2>
-          <span className="dpp-policy" data-policy={t.policy}>{t.runs === "push" ? "on every push" : t.policy === "auto" ? "on green CI" : "on a press"}</span>
+          <span className="dpp-policy" data-policy={t.policy}>{t.record_only ? "from its deploy records" : t.runs === "push" ? "on every push" : t.policy === "auto" ? "on green CI" : "on a press"}</span>
         </div>
         <div className="dpp-live">
           <span className="dpp-head-sub">{t.repository}</span>
@@ -163,7 +165,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
           ) : <span className="dpp-v dpp-dim">no live version known</span>}
         </div>
         <div className="dpp-actions">
-          {t.runs === "push"
+          {t.record_only ? null : t.runs === "push"
             ? <span className="dpp-auto">goes out when main moves</span>
             : waiting === 0 && !n.open
               ? <span className="dpp-current" data-deploy-current={t.name}><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />Up to date</span>
@@ -245,7 +247,7 @@ function DeployCarried({ d }: { d: TeamDeployRow }) {
   const back = d.action === "rollback" || d.action === "redeploy";
   const after = d.after;
   const failed = d.status === "failed";
-  const empty = !failed && !back && !d.commits && !sessionsOf(d).length && !tasks.length && !after;
+  const empty = !failed && !back && d.status !== "live" && !d.commits && !sessionsOf(d).length && !tasks.length && !after?.open;
   if (empty) return null;
   return (
     <div className="dpp-carried">
@@ -254,16 +256,18 @@ function DeployCarried({ d }: { d: TeamDeployRow }) {
       <DeploySessions d={d} />
       {tasks.slice(0, 3).map((x) => <Link key={x.short_id!} className="dpp-task" href={`/tasks/${x.short_id}`} title={x.title ?? undefined}>{x.short_id}</Link>)}
       {d.commits && !sessionsOf(d).length ? <span className="dpp-dim">{d.commits} {d.commits === 1 ? "commit" : "commits"}</span> : null}
-      {after && !failed ? <AfterMark after={after} /> : null}
+      {d.status === "live" && !back && !d.commits && !tasks.length ? <span className="dpp-dim">rebuilt, nothing new</span> : null}
+      {/* A target deploy's window counts every error in the workspace, so only the window still running says it. */}
+      {after?.open && !failed ? <AfterMark after={after} /> : null}
     </div>
   );
 }
 
 /** What happened after a deploy went live: quiet, or the errors that started or came back in its window. */
 function AfterMark({ after }: { after: NonNullable<TeamDeployRow["after"]> }) {
-  if (after.quiet) return <span className="dpp-after" data-tone="ok">{after.open ? "quiet so far" : "quiet"}</span>;
+  if (after.quiet) return <span className="dpp-after" data-tone="ok">quiet since</span>;
   const parts = [after.new_errors ? `${after.new_errors} new ${after.new_errors === 1 ? "error" : "errors"}` : null, after.regressions ? `${after.regressions} came back` : null].filter(Boolean);
-  return parts.length ? <span className="dpp-after" data-tone="bad">{parts.join(" · ")}</span> : null;
+  return parts.length ? <span className="dpp-after" data-tone="bad" title="Errors that started or came back anywhere in the workspace since this went live">since: {parts.join(" · ")}</span> : null;
 }
 
 /** The sessions a deploy carried, each a step from its thread. */

@@ -8,6 +8,7 @@ import { query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canReadRun, enrichRun, withAgentSessions } from "./workflow_runs";
 import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
+import { workspaceGrantsAccess } from "./lib/access";
 
 /** A run of a flow a session's change goes through (its graph takes a branch: the session's edits frozen onto one), not a deploy or a line run it also started. */
 async function takesSessionChange(ctx: any, run: any, cache: Map<string, boolean>): Promise<boolean> {
@@ -45,5 +46,45 @@ export const forConversation = query({
     const budget = { reads: 120 };
     const out = await Promise.all(readable.map(async (r) => enrichRun(ctx, await withAgentSessions(ctx, r, budget))));
     return out.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+  },
+});
+
+const RECENT_RUNS = 120;
+
+/**
+ * A team's sessions' newest change runs, one per session (the newest it started), slim: what an inbox card needs to
+ * say where the session's change is. Runs of other flows a session started (a deploy, a line run) are left out.
+ */
+export const forTeam = query({
+  args: { team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const workspace = `team:${args.team_id}`;
+    if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return [];
+    const runs = await ctx.db.query("workflow_runs").withIndex("by_workspace_updated", (q) => q.eq("workspace", workspace)).order("desc").take(RECENT_RUNS);
+    const kinds = new Map<string, boolean>();
+    const seen = new Set<string>();
+    const out = [];
+    for (const r of runs) {
+      if (!r.spawner_conversation_id || r.run_kind === "workflow" || seen.has(String(r.spawner_conversation_id))) continue;
+      if (!(await takesSessionChange(ctx, r, kinds))) continue;
+      seen.add(String(r.spawner_conversation_id));
+      const wait = r.node_statuses.find((n) => n.node_id.startsWith("deploy") && n.result_preview && !/^\s*[{[]/.test(n.result_preview));
+      out.push({
+        _id: String(r._id),
+        workspace,
+        spawner_conversation_id: String(r.spawner_conversation_id),
+        workflow_id: r.workflow_id ? String(r.workflow_id) : undefined,
+        status: r.status,
+        current_node_id: r.current_node_id,
+        ...(r.waiting_on_session ? { waiting_on_session: r.waiting_on_session } : {}),
+        ...(r.fail_reason ? { fail_reason: r.fail_reason } : {}),
+        ...(wait ? { deploy_line: wait.result_preview } : {}),
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+      });
+    }
+    return out;
   },
 });

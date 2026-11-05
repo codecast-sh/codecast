@@ -221,13 +221,13 @@ describe("shared-object detection", () => {
     expect(html).toContain('data-replay-moment="rp-7@1:23"');
     // The pill names the page and the second, and both open the replay there.
     expect(html).toMatch(/<p>Paying failed at .*shop\.example\.com\/checkout @1:23.* for the second time\.<\/p>/s);
-    expect(html.match(/href="\/ops\/replays\/rp-7\?t=83000"/g)?.length).toBe(2);
+    expect(html.match(/href="\/ops\/replays\/rp-7\?t=83"/g)?.length).toBe(2);
   });
 
   test("a stretch of a replay on its own line opens the player at its start", () => {
     const html = render("rp-7@1:00-2:30");
     expect(html).toContain('data-replay-moment="rp-7@1:00-2:30"');
-    expect(html).toContain('href="/ops/replays/rp-7?t=60000"');
+    expect(html).toContain('href="/ops/replays/rp-7?t=60"');
   });
 
   test("a whole replay alone on its line is its card", () => {
