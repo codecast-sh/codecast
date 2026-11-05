@@ -26,6 +26,8 @@ export interface PermissionHookInput {
   sessionId: string;
   toolName: string;
   preview: string;
+  /** The whole call as a push shows it (glanceCommand), read before the preview's cut. */
+  glance: string;
   permissionMode?: string;
   suggestions: unknown[];
   /** The launch that raised the prompt, so the status it reports passes the launch fence. */
@@ -58,11 +60,31 @@ export function parsePermissionHookInput(body: string): PermissionHookInput | nu
     sessionId,
     toolName,
     preview: (first ?? "").slice(0, PREVIEW_MAX),
+    glance: glanceCommand(first ?? ""),
     ...(typeof d.permission_mode === "string" && { permissionMode: d.permission_mode }),
     suggestions: Array.isArray(d.permission_suggestions)
       ? d.permission_suggestions.filter((s: unknown) => s && typeof s === "object")
       : [],
   };
+}
+
+/** A command as a person judges it from a push: without the leading
+ *  `cd <dir> &&` (the push already names the session) and with each heredoc
+ *  body folded to "…". A script body fills a short banner and pushes out what
+ *  follows it, which is often the part Claude Code flagged. */
+export function glanceCommand(command: string): string {
+  const lines = command.replace(/^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)\s*&&\s*/, "").split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    out.push(lines[i]);
+    const tag = lines[i].match(/<<-?\s*(['"]?)([A-Za-z_]\w*)\1/)?.[2];
+    if (!tag) continue;
+    let end = i + 1;
+    while (end < lines.length && lines[end].trim() !== tag) end++;
+    out.push("…");
+    i = end;
+  }
+  return out.join("\n");
 }
 
 /** The hook's stdout for an answer. A denial without a reason stops the turn,

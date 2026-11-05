@@ -1,4 +1,5 @@
 import { extractNestedActions, isPlanWriteToolCall, summarizeToolGroup, type ToolCallLike } from '@codecast/shared/render';
+import { isSayToolCall } from '@codecast/web/components/conversation/classify';
 
 /**
  * Runs of tool calls in a transcript, folded to one "N steps" row each, the
@@ -19,14 +20,14 @@ type RunMessage = {
   tool_calls?: (ToolCallLike & { id: string })[] | null;
 };
 
-/** Calls that draw their own card in the transcript; they stay visible and break a run. */
+/** Calls that draw their own card in the transcript; they stay visible and break a run. A `cast say` is the agent's words. */
 const CARD_TOOLS = new Set([
   'Task', 'AskUserQuestion', 'TodoWrite', 'TaskList', 'TaskCreate', 'TaskUpdate', 'TaskGet',
   'SendUserFile', 'SendMessage', 'TeamCreate', 'TeamDelete', 'Skill', 'EnterPlanMode', 'ExitPlanMode',
   'StructuredOutput',
 ]);
 
-export const isFoldableToolCall = (tc: ToolCallLike) => !CARD_TOOLS.has(tc.name) && !isPlanWriteToolCall(tc);
+export const isFoldableToolCall = (tc: ToolCallLike) => !CARD_TOOLS.has(tc.name) && !isPlanWriteToolCall(tc) && !isSayToolCall(tc as any);
 
 export type ToolRun = {
   /** The run's first message; its key is the run's. */
