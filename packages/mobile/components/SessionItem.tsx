@@ -69,7 +69,21 @@ export type SessionData = {
 };
 
 export * from '@/components/sessionFormat';
+import { useSessionShip } from '@codecast/web/hooks/useSessionShipState';
+import type { SessionShip } from '@codecast/web/lib/ship/sessionShip';
 import { formatRelativeTime, isProducingStatus, sessionTitle, projectColor, statusColor, statusLabel, projectName } from '@/components/sessionFormat';
+
+/** Where a session's work is on its way to production, as a small tag in its tone. */
+function ShipTag({ ship }: { ship: SessionShip }) {
+  const Theme = useTheme();
+  const color = { working: Theme.blue, agent: Theme.orange, session: Theme.violet, you: Theme.yellow, wait: Theme.yellow, ok: Theme.green, bad: Theme.red }[ship.tone];
+  return (
+    <RNView style={styles.projectTag}>
+      <RNView style={[styles.projectDot, { backgroundColor: color }]} />
+      <RNText style={[styles.projectText, { color, fontWeight: '600' }]} numberOfLines={1}>{ship.words}</RNText>
+    </RNView>
+  );
+}
 
 /** A project's name on a row: its colour as a small dot, the name in quiet
  *  ink. The inbox row and a search hit draw it the same. */
@@ -160,6 +174,8 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
   // rather than on a ticker: a row re-renders on every list update, and the
   // freshness only drives a colour.
   const stateView = threadStateView(session, session.message_count ?? 0, Date.now());
+  // Where this session's work is on its way to production (web lib/ship/sessionShip): the same words as the web card.
+  const ship = useSessionShip(session._id);
   // Parked on an account banner (signed out, out of usage): the same amber
   // pill and rule as web's card. Opening the session offers the fix.
   const blockedBadge = showsBlockedBadge((session as any).pending_api_error, !!session.has_pending, reviveAt, Date.now())
@@ -288,8 +304,9 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
         </RNText>
       )}
 
-      {(project || showAuthor || blockedBadge) ? (
+      {(project || showAuthor || blockedBadge || ship) ? (
       <RNView style={styles.conversationMeta}>
+        {ship && <ShipTag ship={ship} />}
         {project && <ProjectTag name={project} />}
         {showAuthor && (
           <RNText style={styles.authorText}>{session.author_name}</RNText>

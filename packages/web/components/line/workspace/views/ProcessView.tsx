@@ -17,6 +17,7 @@ import { useStepTable } from "../step/useStepFacts";
 import { STEP_SHOWS, showParam, type StepShow } from "../../../../lib/line/stepWork";
 import { needCount, needsOfLine } from "../../../../lib/line/lineNeeds";
 import { GraphView } from "./GraphView";
+import type { LiveAtStep } from "./graph/GraphCanvas";
 import { FindTable } from "./finder/FindTable";
 import { ProblemPointers, useProblemCounts } from "./ProblemPointers";
 import type { LineViewProps } from "./types";
@@ -33,12 +34,13 @@ function ModeSwitch({ mode, select }: { mode: LineMode; select: LineViewProps["s
   );
 }
 
-/** `expand`: a host's own control beside the mode switch (the Flows stage's Full view). */
-export function ProcessView({ expand, ...props }: LineViewProps & { expand?: ReactNode }) {
+/** `expand`: a host's own control beside the mode switch (the Flows stage's Full view); `live`: the runs standing at
+ *  each step now, which the map draws on its steps. */
+export function ProcessView({ expand, live, ...props }: LineViewProps & { expand?: ReactNode; live?: ReadonlyMap<string, LiveAtStep> }) {
   const { selection, select } = props;
   const mode = selection.mode;
   const toggle = <ModeSwitch mode={mode} select={select} />;
-  if (mode === "map") return <GraphView {...props} lead={toggle} trail={expand} />;
+  if (mode === "map") return <GraphView {...props} lead={toggle} trail={expand} live={live} />;
   return <StepsPage {...props} toggle={<>{toggle}{expand}</>} />;
 }
 
