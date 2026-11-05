@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeProjectPath, pathWithinLocalRoots, pickInheritedGitMeta, projectContainingPath } from "./projectPaths";
+import { conversationProjectRoot, foldCheckoutsByRepository, normalizeProjectPath, pathWithinLocalRoots, pickInheritedGitMeta, projectContainingPath } from "./projectPaths";
 
 describe("normalizeProjectPath", () => {
   // Regression: a session whose cwd fell back to $HOME (e.g. a remote/resume
@@ -36,6 +36,88 @@ describe("normalizeProjectPath", () => {
     expect(normalizeProjectPath("/private/tmp/x")).toBeNull();
     expect(normalizeProjectPath("/var/folders/sr/t5/T/cc-inject-clear-1")).toBeNull();
     expect(normalizeProjectPath("/private/var/folders/sr/t5/T/cc-inject-clear-1")).toBeNull();
+  });
+});
+
+describe("conversationProjectRoot", () => {
+  // Regression: repos moved to ~/code/work.noindex/GitHub/<repo>, and trimming
+  // to one level below "code" turned every one of them into a single chip for
+  // ~/code/work.noindex, which is not a checkout.
+  test("a git_root is the checkout, however deep below a code parent", () => {
+    const root = "/Users/a/code/work.noindex/GitHub/littlebird";
+    expect(conversationProjectRoot({ git_root: root })).toBe(root);
+    expect(conversationProjectRoot({ git_root: root, project_path: `${root}/apps/web` })).toBe(root);
+    expect(conversationProjectRoot({ git_root: `${root}/` })).toBe(root);
+  });
+
+  test("a bare cwd is still trimmed, since it may be anywhere inside a repo", () => {
+    expect(conversationProjectRoot({ project_path: "/Users/a/src/app/packages/web" })).toBe("/Users/a/src/app");
+    expect(conversationProjectRoot({ git_root: "", project_path: "/Users/a/src/app/packages/web" })).toBe("/Users/a/src/app");
+  });
+
+  test("a managed worktree's git_root is its repository's checkout", () => {
+    const root = "/Users/a/code/work/GitHub/app";
+    expect(conversationProjectRoot({ git_root: `${root}/.codecast/worktrees/wt1` })).toBe(root);
+    expect(conversationProjectRoot({ git_root: `${root}/.claude/worktrees/wt1` })).toBe(root);
+    expect(conversationProjectRoot({ git_root: `${root}/.conductor/wt1` })).toBe(root);
+  });
+
+  test("phantoms stay out, and a phantom git_root does not fall back to the cwd", () => {
+    expect(conversationProjectRoot({ git_root: "/Users/a", project_path: "/Users/a/src/app" })).toBeNull();
+    expect(conversationProjectRoot({ git_root: "/private/tmp/x" })).toBeNull();
+    expect(conversationProjectRoot({ git_root: "/Users/a/.claude/worktrees/wt1" })).toBeNull();
+    expect(conversationProjectRoot({})).toBeNull();
+  });
+});
+
+describe("foldCheckoutsByRepository", () => {
+  const tally = (path: string, count: number, repository?: string, lastActive = 100) => ({ path, count, lastActive, repository });
+  const GH = "/Users/a/code/work/GitHub";
+
+  test("worktrees of one repo become one entry with all their sessions", () => {
+    const folded = foldCheckoutsByRepository([
+      tally(`${GH}/lb-feature`, 40, "acme/littlebird", 500),
+      tally(`${GH}/littlebird`, 2, "acme/littlebird", 100),
+      tally("/Users/a/code/work/lb2/wt-1", 8, "acme/littlebird", 300),
+    ]);
+    expect(folded).toEqual([tally(`${GH}/littlebird`, 50, "acme/littlebird", 500)]);
+  });
+
+  test("with no checkout named after the repo, the most used one stands for it", () => {
+    expect(foldCheckoutsByRepository([
+      tally(`${GH}/app-a`, 2, "acme/app"),
+      tally(`${GH}/app-b`, 9, "acme/app"),
+    ])).toEqual([tally(`${GH}/app-b`, 11, "acme/app")]);
+  });
+
+  test("the repo name matches whatever the case", () => {
+    expect(foldCheckoutsByRepository([
+      tally(`${GH}/wt`, 9, "acme/littlebird"),
+      tally(`${GH}/LittleBird`, 1, "acme/littlebird"),
+    ])[0].path).toBe(`${GH}/LittleBird`);
+  });
+
+  test("a worktree under a dot folder never stands for the repo by borrowing its name", () => {
+    expect(foldCheckoutsByRepository([
+      tally("/Users/a/.codex/worktrees/abc/app", 50, "acme/app"),
+      tally(`${GH}/app-main`, 1, "acme/app"),
+    ])[0].path).toBe("/Users/a/.codex/worktrees/abc/app");
+    expect(foldCheckoutsByRepository([
+      tally("/Users/a/.codex/worktrees/abc/app", 50, "acme/app"),
+      tally(`${GH}/app`, 1, "acme/app"),
+    ])[0].path).toBe(`${GH}/app`);
+  });
+
+  test("plain folders and other repositories stay separate", () => {
+    const rows = [tally("/Users/a/notes", 3), tally("/Users/a/draft", 1), tally(`${GH}/one`, 2, "acme/one"), tally(`${GH}/two`, 2, "acme/two")];
+    expect(foldCheckoutsByRepository(rows)).toEqual(rows);
+  });
+
+  test("the same repo in two home directories keeps a path for each machine", () => {
+    expect(foldCheckoutsByRepository([
+      tally("/Users/a/src/app", 3, "acme/app"),
+      tally("/Users/m1/work/app", 2, "acme/app"),
+    ]).map((p) => p.path)).toEqual(["/Users/a/src/app", "/Users/m1/work/app"]);
   });
 });
 

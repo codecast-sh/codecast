@@ -34,7 +34,7 @@ import { canSeeMemberSpend, fetchUserUsageDays } from "./lib/usageDaily";
 import { bucketPunchcardRows } from "./lib/activityPunchcard";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
-import { normalizeProjectPath, pathWithinLocalRoots } from "./projectPaths";
+import { conversationProjectRoot, foldCheckoutsByRepository, pathWithinLocalRoots } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
 import { activeEnrollmentTeam, heartbeatTeamPolicy } from "./lib/teamPolicyGuard";
@@ -3604,9 +3604,7 @@ export async function performGetRecentProjectPaths(
 
     const pathCounts = new Map<string, { count: number; lastActive: number; repository?: string }>();
     for (const conv of conversations) {
-      const raw = conv.git_root || conv.project_path;
-      if (!raw) continue;
-      const path = normalizeProjectPath(raw);
+      const path = conversationProjectRoot(conv);
       if (!path) continue;
       if (localRoots && !pathWithinLocalRoots(path, localRoots)) continue;
       // Bucket to the minute as the value enters the tally, so both the ranking
@@ -3625,8 +3623,8 @@ export async function performGetRecentProjectPaths(
       }
     }
 
-    const entries = Array.from(pathCounts.entries());
-    const maxCount = Math.max(1, ...entries.map(([, s]) => s.count));
+    const entries = foldCheckoutsByRepository(Array.from(pathCounts, ([path, stats]) => ({ path, ...stats })));
+    const maxCount = Math.max(1, ...entries.map((s) => s.count));
     const now = Date.now();
     const ageRange = now - windowStart;
 
@@ -3648,11 +3646,8 @@ export async function performGetRecentProjectPaths(
     };
 
     const ranked = entries
-      .map(([path, stats]) => ({
-        path,
-        count: stats.count,
-        lastActive: stats.lastActive,
-        repository: stats.repository,
+      .map((stats) => ({
+        ...stats,
         score:
           0.65 * (stats.count / maxCount) +
           0.35 * ((stats.lastActive - windowStart) / ageRange),
