@@ -8,7 +8,7 @@
 // Pan, zoom and fit by pointer or key; ? lists every key. Clicking a step
 // opens the shared step drawer through the selection, so the URL holds it.
 import { useCallback, useId, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
-import { Maximize2 } from "lucide-react";
+import { Scan } from "lucide-react";
 import { stepCameBack, type LineRunModel } from "../../../../lib/line/lineModel";
 import { RUN_END_GROUPS, runEndTone, runEndWords } from "../../../../lib/line/replay";
 import { useTabActive } from "../../../../hooks/usePagePresence";
@@ -436,7 +436,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
           <button type="button" className="lwg-btn" data-ghost="" aria-pressed={!!run} aria-expanded={runsOpen} onClick={() => setRunsOpen((o) => !o)} disabled={!model.runs.length} title="Light a run's path (R)" data-lwg-runs-btn>
             <span className="lwg-runs-dot" />Runs <em>{model.runs.length}</em>
           </button>
-          <button type="button" className="lwg-btn" data-ghost="" data-icon="" onClick={() => settle(true, true)} title="Fit (F)" aria-label="Fit the graph"><Maximize2 className="w-3.5 h-3.5" /></button>
+          <button type="button" className="lwg-btn" data-ghost="" data-icon="" onClick={() => settle(true, true)} title="Fit (F)" aria-label="Fit the graph"><Scan className="w-3.5 h-3.5" /></button>
           <button type="button" className="lwg-btn" data-ghost="" data-icon="" onClick={() => setHelp(true)} title="Keys (?)" aria-label="Keys">?</button>
           {trail}
         </div>

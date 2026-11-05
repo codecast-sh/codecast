@@ -21,7 +21,7 @@ import { KeyCap } from "../../../../KeyCap";
 import { ProcessView } from "../ProcessView";
 import { FlowsView, LiveFlowHead, LiveFlowWork } from "./FlowsView";
 import { FlowList } from "./FlowList";
-import { FlowActivity } from "./FlowActivity";
+import { FlowActivity, type ActivityFilter } from "./FlowActivity";
 import { useFlowLibrary, type FlowRun } from "../../../../../hooks/useFlowLibrary";
 import type { LineViewProps } from "../types";
 import "./flowsStage.css";
@@ -31,6 +31,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
   const { live, runsOf } = useFlowLibrary(space);
   const map = useFlowMapRow(space);
   const [full, setFull] = useState(false);
+  const [activity, setActivity] = useState<ActivityFilter>("all");
   // The runs of every flow in the live family, for the activity rail, each named by its flow when the family has more than one.
   const laneLabel = useMemo(() => new Map((map?.lanes ?? []).map((l) => [l.key, l.label])), [map?.lanes]);
   const runs = useMemo(() => {
@@ -92,7 +93,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
     <div className="fs" data-flows-stage={live.flow.slug} data-full={full ? "" : undefined}>
       {full ? null : (
         <section className="fll-live fs-live" data-live-flow={live._id} data-on={live.on ? "" : undefined}>
-          <LiveFlowHead live={live} workspace={workspace} stalled={stalled} flows={map?.lanes.length} onOpenFlow={(slug) => select({ view: "flows", item: slug, run: null })}>
+          <LiveFlowHead live={live} workspace={workspace} stalled={stalled} onStalled={() => setActivity("stalled")} flows={map?.lanes.length} onOpenFlow={(slug) => select({ view: "flows", item: slug, run: null })}>
             <a className="lw-chip fs-lib" href={href(library)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select(library); }} data-flows-library-link><BookOpen className="w-3.5 h-3.5" aria-hidden />Library</a>
           </LiveFlowHead>
         </section>
@@ -100,7 +101,7 @@ export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
       <div className="fs-app">
         {map && !full ? <FlowList map={map} drawn={model.graphKey} select={select} href={href} /> : null}
         <div className="fs-map" data-mode={selection.mode}><ProcessView {...props} expand={expand} live={liveAt} /></div>
-        {full ? null : <FlowActivity runs={runs} flowLabel={flowLabel} now={workspace.now} href={href} />}
+        {full ? null : <FlowActivity runs={runs} flowLabel={flowLabel} now={workspace.now} href={href} filter={activity} onFilter={setActivity} />}
       </div>
       {full ? null : <section className="fll-live fs-work" id="fs-queue"><LiveFlowWork live={live} workspace={workspace} href={href} /></section>}
     </div>

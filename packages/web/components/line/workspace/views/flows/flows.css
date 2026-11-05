@@ -137,3 +137,6 @@ a.flo-count:hover { border-color: var(--lw-ink-3); }
 .fll-start li > :last-child { margin-left: auto; }
 .fll-live-figs [data-tone="bad"], .fll-live-figs [data-tone="bad"] b { color: var(--lw-bad); }
 .fll-live-r { display: inline-flex; align-items: center; gap: 8px; }
+.fll-fig-btn { all: unset; cursor: pointer; }
+.fll-fig-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
+.fll-live-figs .fll-fig-btn[data-tone="bad"], .fll-live-figs .fll-fig-btn[data-tone="bad"] b { color: var(--lw-bad); }

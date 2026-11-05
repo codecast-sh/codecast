@@ -311,8 +311,15 @@
 .lwg-canvas[data-live] .lwg-node:hover .lwg-exits,
 .lwg-canvas[data-live] .lwg-node[data-selected] .lwg-exits,
 .lwg-canvas[data-live] .lwg-node:focus-visible .lwg-exits { opacity: 1; }
-.lwg-canvas[data-live] .lwg-node:not([data-live]):not([data-waiting]) .lwg-s,
-.lwg-canvas[data-live] .lwg-node:not([data-live]):not([data-waiting]) .lwg-ran { opacity: .6; }
+.lwg-canvas[data-live] .lwg-s:not([data-now]),
+.lwg-canvas[data-live] .lwg-ran { opacity: .6; }
+.lwg-now { font-weight: 650; }
+.lwg-now[data-tone="live"] { fill: var(--lw-live); }
+.lwg-now[data-tone="bad"] { fill: var(--lw-bad); }
+.lwg-now[data-tone="you"] { fill: var(--lw-person); }
+.lwg-now[data-tone="wait"] { fill: var(--lw-ink-2); }
+/* A person's step waiting on the viewer is drawn filled: its line keeps the pill's own ink. */
+.lwg-node[data-kind="person"][data-waiting] .lwg-now { fill: inherit; }
 .lwg-canvas[data-live] .lwg-node[data-live="stalled"] .lwg-shape { stroke: color-mix(in srgb, var(--lw-bad) 65%, transparent); }
 .lwg-canvas[data-live] .lwg-lane-sub { display: none; }
 /* Drawn live, a branch's name shows where it matters: on the hovered step's edges (the peek layer), the open step's or
