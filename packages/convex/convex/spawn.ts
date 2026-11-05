@@ -10,8 +10,9 @@ import { admitSubagent, startSpawnedSession, type QueuedStart } from "./subagent
 import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
-import { findConversationByAnyRef } from "./conversationSessionLookup";
+import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { listTeamMachines, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
+import { listSessionOwnerIds } from "./sessionOwners";
 import { roleOfConversation } from "./lib/actor";
 import { canAccessTask } from "./lib/access";
 import { capsFor, countersFor, roleStartsOnItsOwn, roleTokensToday } from "./lib/orgCaps";
@@ -393,7 +394,7 @@ export const createSessionFromCli = mutation({
       ? await resolveSpawnParent(ctx, userId, args.parent_session)
       : null;
     const spawner = args.spawner_session
-      ? await findConversationByAnyRef(ctx, args.spawner_session, userId)
+      ? (await findConversationByAnyRef(ctx, args.spawner_session, userId)) ?? (await runSpawnerOf(ctx, userId, subagentFields?.parent_conversation_id, args.spawner_session))
       : null;
     // A role's standing session, or one of its hands, starting a hand: the
     // trust stage and the daily hand cap gate it (org-roles-standing.md T4).
@@ -454,6 +455,7 @@ export const createSessionFromCli = mutation({
     if (args.cloud_device_id || args.cloud_seed) {
       await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf("conversations", await ctx.db.get(conversationId)), apiToken: args.api_token }, "cloud_hosts_disabled");
     }
+    if (subagentFields) await inheritRunOwners(ctx, subagentFields.parent_conversation_id, conversationId);
     if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
     if (roleGate || args.unattended) await ctx.db.patch(conversationId, { unattended: true });
     if (review) {
@@ -490,6 +492,30 @@ export async function gateHandStart(ctx: { db: any }, spawner: any | null): Prom
 // task's owning session, else of the latest linked session that carries one.
 // A hand that handed this task off and started its next task has moved its
 // binding (lib/taskOwner.ts), yet the work under review is still its role's.
+/**
+ * The spawner a run's station names when the run executes on another account's machine (a role's run on the team's
+ * line pool, orgLine.startRoleRun): the role's standing session, which the machine's account does not run. Accepted
+ * only from the account the run runs as, nested under the run's own session, and only for the spawner that run names.
+ */
+async function runSpawnerOf(ctx: { db: any }, userId: Id<"users">, parentId: Id<"conversations"> | undefined, ref: string): Promise<any | null> {
+  const parent = parentId ? await ctx.db.get(parentId) : null;
+  const run = parent?.is_workflow_primary && parent.workflow_run_id ? await ctx.db.get(parent.workflow_run_id) : null;
+  if (!run?.spawner_conversation_id || String(run.user_id) !== String(userId)) return null;
+  return findConversationByAnyRefWhere(ctx, ref, (c) => String(c._id) === String(run.spawner_conversation_id));
+}
+
+/**
+ * A run's sessions answer to whom the run answers. A session nested under a run's session takes that session's owners
+ * other than its own runner: the seat's person, for a role's run on another account's machine. Their cards reach
+ * that person, and the hand stays filed under the role (lib/orgOwnership reads the owner before the runner).
+ */
+async function inheritRunOwners(ctx: { db: any }, parentId: Id<"conversations">, childId: Id<"conversations">): Promise<void> {
+  const parent = await ctx.db.get(parentId);
+  if (!parent?.workflow_run_id) return;
+  const child = await ctx.db.get(childId);
+  for (const owner of await listSessionOwnerIds(ctx, parentId)) await retainSessionCreator(ctx, childId, owner, child.user_id);
+}
+
 /** The task of the workflow run whose own session `conversationId` is, if any. */
 async function runTaskOf(ctx: { db: any }, conversationId: Id<"conversations"> | undefined): Promise<Id<"tasks"> | null> {
   const conv = conversationId ? await ctx.db.get(conversationId) : null;

@@ -98,6 +98,7 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   file_session: { label: "Sessions filed where they belong", describe: "Moves a session out of your inbox: under the role that owns its area, onto the task it works, or closed as done." },
   role: { label: "New roles", describe: "Adds a role with a name and an area to look after." },
   charter_edit: { label: "Charter edits", describe: "Changes a passage of a role's charter, or adds or removes a line, leaving the rest as it is." },
+  role_edit: { label: "Role settings", describe: "Renames a role, or changes its face, how long it stands, the flow it runs, whether its hires need approval, whether the roles under it stay inside its area, or pauses and resumes it." },
   move: { label: "Reporting changes", describe: "Moves a role under a different person or role, and can change what it looks after." },
   scope: { label: "Area changes", describe: "Adds or removes the projects and plans a role looks after." },
   budget: { label: "Daily limit changes", describe: "Raises or lowers how much a role may do in one day." },
@@ -145,6 +146,7 @@ export { chipLine } from "@codecast/shared/contracts/orgChangeWords";
 export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   projects: "projects",
   charter_edit: "charter",
+  role_edit: "settings",
   file: "filing",
   file_session: "session",
   role: "role",

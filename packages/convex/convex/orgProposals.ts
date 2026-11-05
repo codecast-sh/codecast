@@ -775,6 +775,7 @@ async function routeHire(ctx: Ctx & { runMutation?: (ref: any, args: any) => Pro
   const hire = await hireOf(ctx, proposal, await changesOf(ctx, proposal._id));
   if (!hire) return {};
   if (hire.author.hires_freely) {
+    await ctx.db.patch(proposal._id, { applied_by_author: Date.now() });
     const out = await decideHireAs(ctx, userId, proposal, hire, hire.author, { verdict: "accept" });
     return { applied: true, remaining: out.remaining ?? 0 };
   }
@@ -799,7 +800,8 @@ async function routeFilings(ctx: Ctx & { runMutation?: (ref: any, args: any) => 
   const rows = (await changesOf(ctx, proposal._id)).filter(decidable);
   if (!rows.length || !rows.every((c) => (ORG_SESSION_KINDS as readonly string[]).includes(c.change.kind))) return {};
   const now = Date.now();
-  for (const row of rows) await ctx.db.patch(row._id, { reply: { verdict: "approve", text: `Filed by @${author.handle}, which starts work on its own`, at: now, by: userId } });
+  await ctx.db.patch(proposal._id, { applied_by_author: now });
+  for (const row of rows) await ctx.db.patch(row._id, { reply: { verdict: "approve", at: now, by: userId } });
   const out = await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: rows.map((c) => c.seq), continuation: true, lead: true, log_head: { door: "proposal", gesture: "accept_all", key: `proposal:${proposal._id}:filed:${now}`, proposal: { id: proposal._id, short_id: proposal.short_id, ...(proposal.title ? { title: proposal.title } : {}) } } });
   return { applied: true, remaining: out.remaining ?? 0 };
 }
@@ -862,6 +864,27 @@ export const cleanFailedNotes = internalMutation({
       cleaned++;
     }
     return { cleaned, cursor: page.isDone ? null : page.continueCursor };
+  },
+});
+
+/** One-off: proposals a role filed on its own before `applied_by_author`
+ *  existed carry the act as a fake person's reply ("Filed by @x, which starts
+ *  work on its own"); stamp the proposal and drop the words, a page a call. */
+export const backfillAppliedByAuthor = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("org_proposal_changes").paginate({ cursor: args.cursor ?? null, numItems: 500 });
+    let fixed = 0;
+    for (const row of page.page) {
+      const reply = (row as any).reply;
+      if (!reply?.text || !/^Filed by @\S+, which starts work on its own$/.test(reply.text)) continue;
+      const { text: _drop, ...rest } = reply;
+      await ctx.db.patch(row._id, { reply: rest });
+      const proposal = await ctx.db.get(row.proposal_id);
+      if (proposal && !proposal.applied_by_author) await ctx.db.patch(proposal._id, { applied_by_author: reply.at });
+      fixed++;
+    }
+    return { fixed, cursor: page.isDone ? null : page.continueCursor };
   },
 });
 

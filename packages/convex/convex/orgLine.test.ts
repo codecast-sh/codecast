@@ -621,7 +621,7 @@ describe("orgLine admission (LE6)", () => {
       // The pool frees up: the sweep starts it on the host.
       tables.workflow_runs.find((r) => r._id === "workflow_runs_w0")!.status = "completed";
       const next = await sweepCore(ctx, NOW);
-      expect(next.started).toEqual([expect.objectContaining({ task_id: "tasks_c0", place: { device: "h1", project_path: "/home/ubuntu/h1/growth" } })]);
+      expect(next.started).toEqual([expect.objectContaining({ task_id: "tasks_c0", place: { device: "h1", user: HOST, project_path: "/home/ubuntu/h1/growth" } })]);
     });
 
     test("Start a fix on the web takes the same admission", async () => {
@@ -655,6 +655,117 @@ describe("orgLine admission (LE6)", () => {
       const { ctx, tables } = fixtures({ role: caps({ hands_per_day: 100 }), extra: { initiatives, tasks: causes(3), devices: [laptop, host("h1", 0), host("h2", 0)] } });
       expect((await sweepCore(ctx, NOW)).started).toHaveLength(0);
       expect(tables.workflow_runs).toHaveLength(0);
+    });
+
+    // A role seated on an account with no line machine (Union's @agent-quality on Jason's laptop, sd-2541): its runs
+    // take the team's pool and run as the host's account, while the seat's person keeps their cards.
+    describe("a seat whose account offers no machine for the checkout", () => {
+      const seatLaptop = { ...laptop, _id: "devices_mate_laptop", user_id: MATE, device_id: "dev-mate" };
+      const seated = (devices: any[]) => {
+        const f = fixtures({ role: { ...caps({ hands_per_day: 100 }), reports_to: { kind: "user", user_id: MATE } }, extra: { initiatives, tasks: causes(3), devices, session_owners: [] } });
+        f.tables.conversations.find((c) => c._id === STANDING)!.user_id = MATE;
+        return f;
+      };
+      const ownersOf = (tables: Record<string, any[]>, conv: string) => tables.session_owners.filter((o) => o.conversation_id === conv).map((o) => o.user_id);
+      const scheduler = { runAfter: async () => null, runAt: async () => null };
+      const as = (db: any, user: string) => ({ db, scheduler, auth: { getUserIdentity: async () => ({ subject: `${user}|session` }) } }) as any;
+
+      test("takes free slots in the team's pool, runs as the host's account, and the seat's person owns the run", async () => {
+        const { ctx, tables } = seated([seatLaptop, host("h1", 2)]);
+        const res = await sweepCore(ctx, NOW);
+        expect(res.started.map((s) => s.place)).toEqual([
+          { device: "h1", user: HOST, project_path: "/home/ubuntu/h1/growth" },
+          { device: "h1", user: HOST, project_path: "/home/ubuntu/h1/growth" },
+        ]);
+        expect(res.skipped_busy).toEqual([ROLE]);
+        for (const run of tables.workflow_runs) {
+          expect(run).toMatchObject({ user_id: HOST, runner_device: "h1", org_role_id: ROLE, spawner_conversation_id: STANDING });
+          expect(ownersOf(tables, run.primary_conversation_id)).toEqual([MATE]);
+        }
+        // The host's daemon takes the commands: they are queued for its account and machine.
+        expect(tables.daemon_commands.map((c) => [c.user_id, c.target_device_id])).toEqual([[HOST, "h1"], [HOST, "h1"]]);
+        expect(await lineQueueFor(ctx, tables.org_roles[0], NOW)).toMatchObject({ working: 2, runs_cap: 2, waiting: "2 runs working on its machines" });
+        // The pool's runs hold nothing on the seat's own machine.
+        const { runnerLoad } = await import("./orgLine");
+        expect((await runnerLoad(ctx, MATE)).working).toBe(0);
+      });
+
+      test("keeps its own pool when its account offers one, and waits there rather than spilling onto the team's", async () => {
+        const { ctx, tables } = seated([seatLaptop, host("m1", 1, { user_id: MATE }), host("h1", 4)]);
+        const res = await sweepCore(ctx, NOW);
+        expect(res.started.map((s) => s.place)).toEqual([{ device: "m1", user: MATE, project_path: "/home/ubuntu/m1/growth" }]);
+        expect(tables.workflow_runs[0]).toMatchObject({ user_id: MATE, runner_device: "m1" });
+        expect(ownersOf(tables, tables.workflow_runs[0].primary_conversation_id)).toEqual([]);
+        expect(tables.daemon_commands.map((c) => [c.user_id, c.target_device_id])).toEqual([[MATE, "m1"]]);
+      });
+
+      test("runs on the seat's own machine when the team has no pool for the checkout", async () => {
+        const otherRepo = host("h1", 4, { line_slots: [{ root: "/home/ubuntu/h1", origin: normalizeGitOrigin("git@github.com:Acme/Other.git"), runs: 4 }] });
+        for (const devices of [[seatLaptop], [seatLaptop, otherRepo], [seatLaptop, host("h2", 4, { last_seen: NOW - 3_600_000 })]]) {
+          const { ctx, tables } = seated(devices);
+          expect((await sweepCore(ctx, NOW)).started).toHaveLength(3);
+          expect(tables.workflow_runs.every((r) => r.user_id === MATE && !r.runner_device && r.project_path === "/srv/growth")).toBe(true);
+          expect(tables.session_owners).toEqual([]);
+        }
+      });
+
+      test("the run's cards reach the same people as on the seat's own machine, never the host's account", async () => {
+        const { createSessionFromCli } = await import("./spawn");
+        const { askCore, routeFor } = await import("./sessionDecisions");
+        // The host's runner spawns a station (runner.ts spawnHand): nested under the run's session, naming the role's
+        // standing session, on its own machine. Then the decisions a run asks: the station's, and the run's own
+        // failure decision through the standing session (runner.ts queueTaskDecision).
+        const cardsOf = async (devices: any[], runner: string, device: string | undefined) => {
+          const { db, tables } = seated(devices);
+          await sweepCore({ db } as any, NOW);
+          const run = tables.workflow_runs[0];
+          expect(run.user_id).toBe(runner);
+          const spawned = await (createSessionFromCli as any)._handler(as(db, runner), { agent_type: "claude_code", parent_session: run.primary_conversation_id, spawner_session: STANDING, prompt: "build", ...(device ? { device } : {}) });
+          const station = await db.get(spawned.conversation_id);
+          expect(station).toMatchObject({ user_id: runner, org_role_id: ROLE });
+          const routed = await routeFor({ db } as any, station, NOW);
+          const options = [{ label: "Reopen" }, { label: "Drop" }];
+          const fromStation = await askCore({ db, scheduler } as any, { userId: runner as any }, { session_id: station.session_id, question: "Ship it?", options, blocking: true, workflow_run_id: run._id });
+          const fromRun = await askCore({ db, scheduler } as any, { userId: runner as any }, { session_id: "standing", question: "Reopen it?", options, blocking: true, workflow_run_id: run._id });
+          const asked = (id: string) => tables.session_decisions.find((d) => d._id === id)!.asked_user_ids.map(String).sort();
+          return { people: routed.people.map(String).sort(), ladder: routed.ladder.hops.map((h) => String(h.role_id)), station: asked(fromStation.id), run: asked(fromRun.id) };
+        };
+        const own = await cardsOf([seatLaptop], MATE, undefined);
+        const pooled = await cardsOf([seatLaptop, host("h1", 2)], HOST, "h1");
+        expect(own).toEqual({ people: [MATE], ladder: [ROLE], station: [MATE], run: [MATE] });
+        expect(pooled).toEqual(own);
+      });
+
+      test("only the host account driving that run may ask through the role's standing session", async () => {
+        const { askCore } = await import("./sessionDecisions");
+        const { db, tables } = seated([seatLaptop, host("h1", 2)]);
+        await sweepCore({ db } as any, NOW);
+        const ask = (userId: string, workflow_run_id?: string) => askCore({ db, scheduler } as any, { userId: userId as any }, { session_id: "standing", question: "Q?", options: [{ label: "A" }, { label: "B" }], ...(workflow_run_id ? { workflow_run_id: workflow_run_id as any } : {}) });
+        expect(await ask(HOST)).toEqual({ error: "Unauthorized: not your session" });
+        tables.workflow_runs.push({ _id: "workflow_runs_other", user_id: HOST, status: "running", spawner_conversation_id: "conversations_other", node_statuses: [] });
+        expect(await ask(HOST, "workflow_runs_other")).toEqual({ error: "Unauthorized: not your session" });
+        expect(await ask("users_stranger", tables.workflow_runs[0]._id)).toEqual({ error: "Unauthorized: not your session" });
+        expect((await ask(HOST, tables.workflow_runs[0]._id)).id).toBeTruthy();
+      });
+
+      test("the seat's person and the host account both answer for the run: cancel, resume, ask again", async () => {
+        const { ownsRun } = await import("./workflow_runs");
+        const { ctx, tables } = seated([seatLaptop, host("h1", 2)]);
+        await sweepCore(ctx, NOW);
+        const run = tables.workflow_runs[0];
+        expect([await ownsRun(ctx, HOST as any, run), await ownsRun(ctx, MATE as any, run), await ownsRun(ctx, "users_stranger" as any, run)]).toEqual([true, true, false]);
+      });
+
+      test("a resume the seat's person asks for is queued for the host's daemon, on the run's machine", async () => {
+        const { resumeRunAt } = await import("./workflow_runs");
+        const { ctx, tables } = seated([seatLaptop, host("h1", 2)]);
+        await sweepCore(ctx, NOW);
+        const run = tables.workflow_runs[0];
+        run.status = "failed";
+        tables.daemon_commands.length = 0;
+        await resumeRunAt(ctx, MATE as any, run, "build", NOW);
+        expect(tables.daemon_commands.map((c) => [c.user_id, c.target_device_id])).toEqual([[HOST, "h1"]]);
+      });
     });
 
     test("with no online host offering the checkout, the run stays on the runner's own machine and cap", async () => {

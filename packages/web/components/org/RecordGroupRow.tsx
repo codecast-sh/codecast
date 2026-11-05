@@ -107,7 +107,7 @@ export function RecordGroupRow({ card, answer, onAnswer, open, onOpen, lone, foc
       data-revised-new={revisedNew || undefined}
       data-layout={mode}
     >
-      <div className={cn("grid items-baseline pt-[13px] pb-[14px]", GRID[mode])} style={{ "--verdict-gap": card.waiting > 0 ? "12px" : "4px" } as React.CSSProperties}>
+      <div className={cn("grid items-baseline pt-[9px] pb-[10px]", GRID[mode])} style={{ "--verdict-gap": card.waiting > 0 ? "12px" : "4px" } as React.CSSProperties}>
         <button
           type="button"
           className="col-span-2 col-start-1 -ml-1 flex min-w-0 items-baseline gap-1 rounded-sm pl-1 text-left hover:bg-[color-mix(in_srgb,var(--sol-border)_12%,transparent)]"
