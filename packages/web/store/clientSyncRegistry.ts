@@ -907,8 +907,8 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     workspaceScoped: true,
     indexes: "_id, workspace",
-    sync: { isDelta: true, altKey: "client_key", deepFields: ["sessions", "steps"] },
-    feeds: ["deployTargets.view"],
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["sessions", "steps", "tasks"] },
+    feeds: ["deployTargets.view", "deployRefs.recentForTeam"],
   },
   // The flows view's collections (live flows, session flows) live beside this file.
   ...FLOW_SYNC_COLLECTIONS,
