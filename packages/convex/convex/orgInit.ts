@@ -58,11 +58,11 @@ import {
   type OrgScopeChange,
   type OrgTaskStatusChange,
   type OrgTrustChange, authorityWords, type OrgAuthorityChange, type OrgHireChange, type OrgUpgradeChange,
-  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, type OrgEvidenceLink, metricsWords, ORG_GOAL_KINDS, type OrgCharterEditChange, applyCharterEdits } from "@codecast/shared/contracts/orgProposal";
+  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, type OrgEvidenceLink, metricsWords, ORG_GOAL_KINDS, type OrgCharterEditChange, type OrgRoleEditChange, describeOrgChange, applyCharterEdits } from "@codecast/shared/contracts/orgProposal";
 import { INITIATIVE_RECORD_MAX, INITIATIVE_RECORD_NOUN, mergeIntentSources, parseIntentSource, type IntentSource } from "@codecast/shared/contracts/initiative";
 import { performAddProjects, performCreateInitiative, performUpdateInitiative } from "./initiatives";
 import { findInitiative } from "./lib/initiativeRef";
-import { applyRoutineTune, performSetTrust, performUpdateRole, roleCheckOf, standingConversationOf } from "./orgRoles";
+import { applyRoutineTune, performPauseRole, performResumeRole, performSetHiresFreely, performSetKeepsReportsInside, performSetLine, performSetTrust, performUpdateRole, roleCheckOf, standingConversationOf } from "./orgRoles";
 import { roleWakeOf } from "@codecast/shared/contracts/rolePlaybook";
 import { roleRoutineFor } from "./lib/orgRoutine";
 import { insertTask } from "./agentTasks";
@@ -1099,11 +1099,19 @@ export type ApplyResult =
   | { status: "unanswered" }
   | { status: "error"; error: string };
 
+/** The role a change names: by handle, short id or id; else by a handle it
+ *  had before a rename, so a change written before the rename still lands.
+ *  A role that holds the handle now always wins over one that held it. */
+export function roleByRef(roles: readonly any[], ref: string): any | undefined {
+  const trimmed = ref.trim(), handle = trimmed.replace(/^@/, "").toLowerCase();
+  return roles.find((r) => r.handle === handle || r.short_id === trimmed || String(r._id) === trimmed)
+    ?? roles.find((r) => (r.previous_handles ?? []).includes(handle));
+}
+
 async function resolveReportsTo(ctx: Ctx, userId: Id<"users">, boundary: Boundary, ref: string | undefined) {
   const trimmed = (ref ?? "").trim();
   if (!trimmed || trimmed.toLowerCase() === "me") return { kind: "user" as const, user_id: userId };
-  const handle = trimmed.replace(/^@/, "").toLowerCase();
-  const role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === trimmed || String(r._id) === trimmed);
+  const role = roleByRef(await rolesInBoundary(ctx, boundary), trimmed);
   if (role) return { kind: "role" as const, role_id: role._id as Id<"org_roles"> };
   // A person: a member by name or email inside the boundary.
   const candidates: any[] = boundary.team_id
@@ -1198,7 +1206,7 @@ const toRef = (s: string) => (/^(project|plan):/.test(s) ? s : /^pl-\d+$/.test(s
 // default). Always dry.
 export async function previewTakeover(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle?: string; add?: string[]; seat?: string }, shared: { scan?: OrgScanResult; roles?: any[] } = {}): Promise<RehomeResult | null> {
   const handle = (p.handle ?? "").replace(/^@/, "").toLowerCase();
-  const live = handle ? (shared.roles ?? await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === p.handle) : undefined;
+  const live = handle ? roleByRef(shared.roles ?? await rolesInBoundary(ctx, boundary), p.handle!) : undefined;
   const scope = { project_ids: [...(live?.scope?.project_ids ?? [])], plan_ids: [...(live?.scope?.plan_ids ?? [])] };
   for (const raw of p.add ?? []) {
     const ref = await resolveScopeRef(ctx, boundary, toRef(raw)).catch(() => null);
@@ -1360,7 +1368,7 @@ export async function applyProjects(ctx: Ctx, userId: Id<"users">, boundary: Bou
 
 export async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: { handle: string; reports_to?: string; scope_add?: string[]; scope_remove?: string[]; leave_sessions?: boolean }, humanDecision: string): Promise<ApplyResult> {
   const handle = p.handle.replace(/^@/, "").toLowerCase();
-  const role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === p.handle);
+  const role = roleByRef(await rolesInBoundary(ctx, boundary), p.handle);
   if (!role) throw new Error(`No live role @${handle} in this workspace`);
   const did: string[] = [];
   if (p.scope_add?.length || p.scope_remove?.length) {
@@ -1379,7 +1387,7 @@ export async function applyMove(ctx: Ctx, userId: Id<"users">, boundary: Boundar
 
 export async function applyRetire(ctx: Ctx, userId: Id<"users">, boundary: Boundary, handleRef: string): Promise<ApplyResult> {
   const handle = handleRef.replace(/^@/, "").toLowerCase();
-  const role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === handleRef);
+  const role = roleByRef(await rolesInBoundary(ctx, boundary), handleRef);
   // No live role by that handle: a mistyped handle must not read as a green
   // applied row while the role it meant stays. Failed stays decidable.
   if (!role) return { status: "error", error: `No live role @${handle} in this workspace: it is already retired, or the handle is wrong; edit the handle or skip` };
@@ -1408,7 +1416,7 @@ export type ApplyOpts = {
 
 async function liveRole(ctx: Ctx, boundary: Boundary, handleRef: string) {
   const handle = handleRef.replace(/^@/, "").toLowerCase();
-  const role = (await rolesInBoundary(ctx, boundary)).find((r) => r.handle === handle || r.short_id === handleRef);
+  const role = roleByRef(await rolesInBoundary(ctx, boundary), handleRef);
   if (!role) throw new Error(`No live role @${handle} in this workspace`);
   return role;
 }
@@ -1432,6 +1440,23 @@ export async function applyCharterEdit(ctx: Ctx, userId: Id<"users">, boundary: 
   await performUpdateRole(ctx, userId, { role_id: String(role._id), charter, human_decision: opts.human_decision });
   const did = p.edits.map((e) => (e.op === "replace" ? "a passage rewritten" : e.op === "add" ? "a line added" : "a passage cut"));
   return { status: "applied", note: `@${role.handle}: charter ${did.join(", ")} (${charter.length} characters)`, role: roleRef(role) };
+}
+
+// A role's own settings (role_edit), each through the setter its own
+// command uses, so a rename, the switches, the line and a pause keep their
+// history and their side effects whichever door made them.
+export async function applyRoleEdit(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgRoleEditChange, opts: ApplyOpts): Promise<ApplyResult> {
+  const role = await liveRole(ctx, boundary, p.handle);
+  const role_id = String(role._id), human_decision = opts.human_decision;
+  if ([p.name, p.new_handle, p.given_name, p.avatar, p.tenure].some((x) => x !== undefined)) {
+    await performUpdateRole(ctx, userId, { role_id, name: p.name, handle: p.new_handle?.replace(/^@/, "").toLowerCase(), given_name: p.given_name, avatar: p.avatar, tenure: p.tenure as any, human_decision });
+  }
+  if (p.line !== undefined) await performSetLine(ctx, userId, { role_id, slug: p.line, human_decision });
+  if (p.hires_freely !== undefined) await performSetHiresFreely(ctx, userId, { role_id, on: p.hires_freely, human_decision });
+  if (p.keeps_reports_inside !== undefined) await performSetKeepsReportsInside(ctx, userId, { role_id, on: p.keeps_reports_inside, human_decision });
+  if (p.paused !== undefined) await (p.paused ? performPauseRole : performResumeRole)(ctx, userId, { role_id });
+  const now = await ctx.db.get(role._id);
+  return { status: "applied", note: `@${role.handle}: ${describeOrgChange(p).replace(/^edit @\S+: /, "")}`, role: roleRef(now ?? role) };
 }
 
 export async function applyBudget(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgBudgetChange, opts: ApplyOpts): Promise<ApplyResult> {
@@ -1900,6 +1925,7 @@ async function applyOrgChangeCore(ctx: Ctx, userId: Id<"users">, boundary: Bound
     case "routine": return applyRoutine(ctx, userId, boundary, change, opts);
     case "project_meta": return applyProjectMeta(ctx, userId, boundary, change, opts);
     case "charter_edit": return applyCharterEdit(ctx, userId, boundary, change, opts);
+    case "role_edit": return applyRoleEdit(ctx, userId, boundary, change, opts);
     case "adopt": return applyAdopt(ctx, userId, boundary, change, opts);
     case "file": return applyFile(ctx, userId, boundary, change, opts);
     case "file_session": return applyFileSession(ctx, userId, boundary, change, opts);

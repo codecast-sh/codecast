@@ -139,7 +139,7 @@ export const fieldText = (v: FieldText | null): string | undefined => (v ? v.tex
 
 // ---------------------------------------------------------------- keys and status
 
-const HANDLE_KINDS = new Set(["role", "move", "retire", "scope", "budget", "trust", "routine", "adopt", "authority", "hire", "charter_edit"]);
+const HANDLE_KINDS = new Set(["role", "move", "retire", "scope", "budget", "trust", "routine", "adopt", "authority", "hire", "charter_edit", "role_edit"]);
 const KIND_ORDER: SubjectKind[] = ["goal", "project", "role", "plan", "task", "projects", "instance", "session"];
 type NamedRow = { id: string; title: string; short_id?: string };
 
@@ -434,7 +434,7 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
       case "project_meta": case "project_status": { const p = liveProject(ch.project); return p && projectBefore(p); }
       case "plan_status": case "file": { const p = livePlan(ch.plan); return p && planBefore(p); }
       case "task_status": { const t = liveTask(ch.task); return t && { status: t.status }; }
-      case "move": case "scope": case "trust": case "adopt": case "authority": case "charter_edit": { const r = liveRole(ch.handle); return r && roleBefore(r); }
+      case "move": case "scope": case "trust": case "adopt": case "authority": case "charter_edit": case "role_edit": { const r = liveRole(ch.handle); return r && roleBefore(r); }
       case "initiative_shape": case "initiative_projects": case "initiative_owner": { const row = rowOf.get(c._id); const g = row ? liveGoal(row.node.id) : undefined; return g && goalBefore(g); }
       default: return undefined;
     }

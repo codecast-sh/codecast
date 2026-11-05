@@ -4645,7 +4645,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             />
           </RNView>
         ) : null}
-        {holdReason ? <HeldSendRow reason={holdReason} working={agentWorking} restarting={isRestarting} onRestart={restartSession} /> : null}
+        {holdReason ? <HeldSendRow reason={holdReason} /> : null}
         {isQueued && !holdReason && (
           <RNView style={styles.pendingStatusRow}>
             <RNText style={styles.pendingStatusText}>{hosted && linkDown ? hostedConnectionWords(linkDown, true) : 'Queued'}</RNText>

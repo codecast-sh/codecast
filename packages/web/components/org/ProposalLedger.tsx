@@ -45,9 +45,10 @@ export function useProposalBatch(_proposal: Proposal): ProposalBatch {
   return { key, comments, send };
 }
 
-/** The changes have not landed yet. */
-export const ProposalLoading = () => (
-  <div className="space-y-1.5" aria-hidden data-proposal-loading>
+/** The changes have not landed yet. With `rows`, it holds about the height
+ *  the entries will take, so the transcript does not jump when they land. */
+export const ProposalLoading = ({ rows = 0 }: { rows?: number }) => (
+  <div className="space-y-1.5" style={rows ? { minHeight: 56 + Math.min(rows, 12) * 40 } : undefined} aria-hidden data-proposal-loading>
     <div className="h-2 w-2/3 animate-pulse rounded bg-[color-mix(in_srgb,var(--sol-border)_55%,transparent)]" />
     <div className="h-2 w-1/3 animate-pulse rounded bg-[color-mix(in_srgb,var(--sol-border)_55%,transparent)]" />
   </div>
@@ -75,7 +76,7 @@ export function AnsweredCard({ proposal, batch, card, number, focusId, ...rest }
   const answerOrReview = onAnswer && roles.length ? (a: SubjectAnswer | null) => (a?.verdict === "approve" && answer?.verdict !== "approve" ? hireReview.open(roles, () => onAnswer(a)) : onAnswer(a)) : onAnswer;
   return (
     <>
-      <ProposalSubjectCard card={card} answer={answer} onAnswer={proposal.status === "open" ? answerOrReview : undefined} focused={focused} revisedNew={revised || undefined} author={proposal.author?.name} {...rest} />
+      <ProposalSubjectCard card={card} answer={answer} onAnswer={proposal.status === "open" ? answerOrReview : undefined} focused={focused} revisedNew={revised || undefined} author={proposal.author?.name} authorApplied={!!proposal.applied_by_author} {...rest} />
       {hireReview.element}
     </>
   );
@@ -153,6 +154,12 @@ export function ProposalEntries({ proposal, changes, entries, batch, limit = 12,
   );
 }
 
+/** A proposal its author applied as it posted it reads as the author's act
+ *  ("10 filed"), never as a person's acceptance. */
+export function authorAppliedWords(proposal: Pick<Proposal, "applied_by_author">, work: ProposalEntryModel["work"], words: string): string {
+  return proposal.applied_by_author ? words.replace(/\b(accepted|applied)\b/, work === "sessions" ? "filed" : "applied") : words;
+}
+
 // ---------------------------------------------------------------- the foot
 
 /** "Accept all" with the web's hire review: the model's press, and the dialog it opens. */
@@ -192,7 +199,7 @@ export function ProposalFoot({ proposal, entries, batch, onMap, takeover, classN
   const restLabel = answers.length === 0 && !decided ? `${ORG_REPLY_WORDS.approve.act} all ${rest.length}` : `${ORG_REPLY_WORDS.approve.act} the rest`;
   const answerable = !!batch.key && !withdrawn && proposal.status === "open" && open > 0;
   const records = entries.records ? entries.groups.flatMap((g) => g.rows.map((r) => r.change)) : undefined;
-  const outcome = withdrawn ? "Withdrawn" : open === 0 ? proposalProgressWords(entries.cards, records) || "Nothing to decide" : undefined;
+  const outcome = withdrawn ? "Withdrawn" : open === 0 ? authorAppliedWords(proposal, entries.work, proposalProgressWords(entries.cards, records)) || "Nothing to decide" : undefined;
   const who = proposal.author?.name ? `${proposal.author.name}'s` : "the author's";
   const above = takeover && answerable && (rest.length > 0 || pressed) && list.length > 1 ? <TakeoverEdit phrase={takeover.phrase} leave={leave} onLeave={onLeave} /> : undefined;
   const left = onMap ? <LedgerWord onClick={onMap} aria-label="Show this proposal on the map" title="Open the org map beside this conversation" data-open-map={proposal.short_id}>Map</LedgerWord> : undefined;

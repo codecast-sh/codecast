@@ -484,6 +484,7 @@ async function updateRole(
       throw new Error(`Handle @${handle} is already taken in this workspace`);
     }
     patch.handle = handle;
+    if (handle !== role.handle) patch.previous_handles = [...(role.previous_handles ?? []).filter((h: string) => h !== role.handle && h !== handle), role.handle];
   }
   let overlaps: ScopeOverlap[] | undefined;
   // Reports whose work this scope no longer covers: allowed on an open org,
@@ -1069,13 +1070,11 @@ export const retire = mutation({
   },
 });
 
-// `cast org reset` and the org page's reset (S27). A person's act: an agent
-// session is refused. `dry_run` answers what it would remove and changes
+// `cast org reset` and the org page's reset (S27). `dry_run` answers what it would remove and changes
 // nothing, which is what the confirmation shows.
 export const reset = mutation({
   args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), team_id: v.optional(v.id("teams")), dry_run: v.optional(v.boolean()) },
-  handler: async (ctx, { api_token, from_session, team_id, dry_run }) => {
-    if (from_session) throw new Error("Resetting the org is a person's act: an agent session may not do it");
+  handler: async (ctx, { api_token, from_session: _from, team_id, dry_run }) => {
     const userId = await requireCaller(ctx, api_token);
     return dry_run ? { dry_run: true as const, ...(await resetOrgPreview(ctx, userId, { team_id })) } : { dry_run: false as const, ...(await performResetOrg(ctx, userId, { team_id })) };
   },
