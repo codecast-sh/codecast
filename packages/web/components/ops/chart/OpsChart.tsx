@@ -2,7 +2,9 @@
 // option it wants drawn; this owns the instance's life: created on mount,
 // resized with its box, redrawn when the option or the app's theme changes,
 // disposed on unmount. Charts that share `group` move one crosshair.
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useRef, type CSSProperties } from "react";
+import { useMountEffect } from "../../../hooks/useMountEffect";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { echarts, type ECharts, type EChartsOption } from "./echarts";
 import { useChartTheme, type ChartTheme } from "./chartTheme";
 
@@ -35,7 +37,7 @@ export function OpsChart({ option, deps, height = 200, className, style, group, 
   const readyRef = useRef(onReady);
   readyRef.current = onReady;
 
-  useEffect(() => {
+  useMountEffect(() => {
     if (!el.current) return;
     const c = echarts.init(el.current, undefined, { renderer: "canvas" });
     chart.current = c;
@@ -43,10 +45,9 @@ export function OpsChart({ option, deps, height = 200, className, style, group, 
     const ro = new ResizeObserver(() => { c.resize(); drawRef.current?.(c, themeRef.current); });
     ro.observe(el.current);
     return () => { ro.disconnect(); c.dispose(); chart.current = null; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const c = chart.current;
     if (!c) return;
     const first = !c.getOption();
@@ -54,7 +55,6 @@ export function OpsChart({ option, deps, height = 200, className, style, group, 
     // Handlers and global cursors (a brush) bind once the first option has made their components.
     if (first) readyRef.current?.(c);
     drawRef.current?.(c, theme);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theme, ...deps]);
 
   return <div ref={el} className={className} style={{ height, width: "100%", ...style }} role="img" aria-label={ariaLabel} />;

@@ -4,7 +4,8 @@
 // work. A pushed flow carries its stations' words in its own row (pushedFlow
 // keeps them on the AppFlow); a shipped flow's live in a snapshot the CLI
 // generates, loaded the first time anyone opens a station.
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export type StationDetail = {
   prompt?: string;
@@ -64,7 +65,7 @@ type FlowLike = { slug: string; where: "shipped" | "pushed" | "team"; stationDet
 export function useFlowStations(flow: FlowLike | null, enabled = true): FlowStations | undefined {
   const isShipped = flow?.where === "shipped";
   const [, rerender] = useState(0);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!enabled || !isShipped || shipped) return;
     let live = true;
     void loadShipped().then(() => live && rerender((n) => n + 1));
