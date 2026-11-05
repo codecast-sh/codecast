@@ -50,7 +50,8 @@ import { useReadNow } from "./useReadNow";
 import { triage } from "./issueUndo";
 import type { OpsGroup, OpsSource, OpsWatch } from "./opsTypes";
 import "./metrics.css";
-import { notifySummary, notifyTargets, useChannelOptions } from "./alertRouting";
+import { useChannelOptions } from "./alertRouting";
+import { notifySummary, notifyTargets } from "./alertRoutingModel";
 import { useOwnerOptions } from "./issueAssign";
 
 /** A watch's page opened on the overview's range, so the change it reads is the one the card showed. */

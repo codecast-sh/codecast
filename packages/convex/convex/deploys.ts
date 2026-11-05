@@ -672,13 +672,32 @@ export const report = mutation({
  * watch) is watched until `until`, never shortened, and only evidence from
  * after `live` reopens it (signals.ts watchReopens).
  */
-async function watchFromLive(ctx: any, d: Doc<"deploys">, live: number, until: number): Promise<void> {
+async function watchFromLive(ctx: any, d: Doc<"deploys">, live: number, until: number, only?: ReadonlySet<string>, dry = false): Promise<Array<{ task: string; watch_from: number | null; watch_until: number | null }>> {
+  const moved: Array<{ task: string; watch_from: number | null; watch_until: number | null }> = [];
   for (const c of d.carries) {
     const task = await ctx.db.get(c.task_id);
-    if (!task || task.status !== "done") continue;
-    if ((task.watch_until ?? 0) < until) await ctx.db.patch(task._id, { watch_from: live, watch_until: until });
+    if (!task || task.status !== "done" || (only && !only.has(task.short_id))) continue;
+    if ((task.watch_until ?? 0) >= until) continue;
+    moved.push({ task: task.short_id, watch_from: task.watch_from ?? null, watch_until: task.watch_until ?? null });
+    if (!dry) await ctx.db.patch(task._id, { watch_from: live, watch_until: until });
   }
+  return moved;
 }
+
+/**
+ * Repair (ct-86011): a fix whose line closed it Done at the merge started its watch then, before any deploy took it
+ * live. Its watch runs from the live deploy that carried it instead (watchFromLive), for the problems named, and
+ * `dry` lists what would move without writing. Run with packages/convex/run.sh.
+ */
+export const rewatchFromLive = internalMutation({
+  args: { deploy: v.string(), tasks: v.array(v.string()), watch_days: v.number(), dry: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const d = await deployByRef(ctx, args.deploy);
+    if (!d || d.status !== "live" || !d.live_at) throw new Error(`${args.deploy} is not a live deploy`);
+    const moved = await watchFromLive(ctx, d, d.live_at, d.live_at + args.watch_days * DAY, new Set(args.tasks), !!args.dry);
+    return { deploy: d.short_id, live_at: d.live_at, dry: !!args.dry, moved };
+  },
+});
 
 async function deployByRef(ctx: any, ref: string): Promise<Doc<"deploys"> | null> {
   if (DEPLOY_SHORT_ID_RE.test(ref)) return await ctx.db.query("deploys").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.toLowerCase())).first();

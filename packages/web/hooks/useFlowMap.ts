@@ -8,6 +8,7 @@ import { useMemo } from "react";
 import { makeFunctionReference } from "convex/server";
 import type { FlowMap } from "@codecast/shared/contracts/flowMap";
 import { useInboxStore } from "../store/inboxStore";
+import { useCoarseNow } from "./useCoarseNow";
 import { useSyncCollection } from "./useSyncCollection";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 
@@ -16,6 +17,7 @@ const RUNS_BY_IDS = makeFunctionReference<"query">("workflow_runs:byIds");
 /** workflow_runs.byIds answers at most this many (RUNS_BY_IDS_MAX). */
 const HEAL_MAX = 200;
 const LIVE = new Set(["pending", "running", "paused"]);
+const HEAL_EVERY_MS = 30_000;
 
 /** A short digest of the map's live run ids, so its wake signature never spells them out. */
 const idsDigest = (ids: ReadonlyArray<string> | undefined) => {
@@ -50,9 +52,7 @@ export function useFlowMapRow(space: string | null | undefined): FlowMap | null 
 /** Feeder and reader: the workspace's flow map, or null before it answers (or where nobody has rolled one up). */
 export function useFlowMap(space: string | null | undefined): FlowMap | null {
   useSyncCollection("flowMaps", FOR_TEAM, space ? { workspace: space } : "skip", { select: asRows });
-  const map = useFlowMapRow(space);
-  useHealLiveRuns(space, map?.liveRunIds);
-  return map;
+  return useFlowMapRow(space);
 }
 
 /**
@@ -62,8 +62,12 @@ export function useFlowMap(space: string | null | undefined): FlowMap | null {
  * the same workspace that the map does not name is asked for again by id, and its row heals in place. Read once per
  * map, never as a store subscription: the walk is over every run.
  */
-function useHealLiveRuns(space: string | null | undefined, live: ReadonlyArray<string> | undefined) {
+export function HealLiveRuns({ space }: { space: string | null }): null {
+  const live = useFlowMapRow(space)?.liveRunIds;
   const key = idsDigest(live);
+  // The runs reach the store after the map at boot (deferred hydration) and keep arriving: look again every so often,
+  // in this leaf, so the tick re-renders nothing else.
+  const tick = useCoarseNow(HEAL_EVERY_MS);
   const stale = useMemo(() => {
     if (!space || !live) return [];
     const named = new Set(live);
@@ -71,7 +75,11 @@ function useHealLiveRuns(space: string | null | undefined, live: ReadonlyArray<s
     const out: string[] = [];
     for (const r of Object.values(runs)) if (r.workspace === space && LIVE.has(r.status ?? "") && !named.has(r._id)) out.push(r._id);
     return out.sort().slice(0, HEAL_MAX);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the digest carries every id the walk reads
-  }, [space, key]);
-  useSyncCollection("workflowRuns", RUNS_BY_IDS, stale.length ? { ids: stale } : "skip");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the digest carries every id the walk reads; the tick re-walks the store
+  }, [space, key, tick]);
+  const ids = stale.join(",");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the ids themselves, so a re-walk that finds the same rows keeps the subscription
+  const args = useMemo(() => (stale.length ? { ids: stale } : "skip"), [ids]);
+  useSyncCollection("workflowRuns", RUNS_BY_IDS, args as { ids: string[] } | "skip");
+  return null;
 }

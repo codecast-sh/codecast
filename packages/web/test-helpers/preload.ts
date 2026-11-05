@@ -37,3 +37,18 @@ mock.module("../components/diff/pierre", () => ({
   ...diffSetup,
   useDiffRenderer: (name: string, language?: string) => ({ PierreDiff, lang: diffLanguage(name, language) }),
 }));
+
+// Radix picks its layout effect once, when the shim first evaluates:
+// React's useLayoutEffect if a `document` exists then, else a no-op. Files run
+// in one process, so a DOM-less model test that happens to load Radix first
+// (through the store) leaves the no-op for every later mount test, and a
+// Portal, which mounts from a layout effect, never draws: a dialog opened in
+// a mount test is missing only in the full run. Every installed copy of the
+// shim resolves to React's own here, whatever loads it first.
+{
+  const React = await import("react");
+  const store = join(import.meta.dir, "..", "..", "..", "node_modules", ".bun");
+  for (const pkg of new Bun.Glob("@radix-ui+react-use-layout-effect*/node_modules/@radix-ui/react-use-layout-effect/dist/index.{mjs,js}").scanSync({ cwd: store, absolute: true })) {
+    mock.module(pkg, () => ({ useLayoutEffect: React.useLayoutEffect }));
+  }
+}
