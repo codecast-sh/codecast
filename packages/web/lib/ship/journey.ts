@@ -218,6 +218,9 @@ export function targetsFromLine(line: string | null | undefined): TargetState[] 
   return out;
 }
 
+/** What a stage said when it sent the work back to the session, by the stage's name. */
+export const SENT_BACK: Record<string, string> = { Check: "Check failed", Review: "Changes asked", Decide: "Revise asked", Land: "Conflict" };
+
 /** Where a session's change is, in the words and tone its Ship control and a run's row both show. */
 export function journeyWords(j: Journey | null): { words: string; tone: "idle" | "working" | "agent" | "session" | "you" | "ok" | "bad" } {
   if (!j) return { words: "Ship", tone: "idle" };
@@ -225,7 +228,7 @@ export function journeyWords(j: Journey | null): { words: string; tone: "idle" |
   switch (n.kind) {
     case "working": return { words: n.stage, tone: n.who === "agent" ? "agent" : "working" };
     case "starting": return { words: "Starting", tone: "working" };
-    case "session": return { words: `Fixing · ${n.stage}`, tone: "session" };
+    case "session": return { words: `${SENT_BACK[n.stage] ?? "Sent back"} · fixing`, tone: "session" };
     case "you": return { words: "Your call", tone: "you" };
     case "landed": return { words: "Waiting to deploy", tone: "you" };
     case "deploying": return { words: "Deploying", tone: "working" };

@@ -122,7 +122,7 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
         return;
       }
       const { lineProjectFor, scopeFor } = await import("./lineScope.js");
-      const { loadLineProfile } = await import("./lineProfile.js");
+      const { loadLineDeployProfile } = await import("./lineDeploy.js");
       const root = process.env.CODECAST_CWD || process.cwd();
       const project = lineProjectFor(undefined, options.project);
       if (!project) { console.error("No project: pass --project, or set [line] project in .codecast/line.toml"); process.exit(1); }
@@ -134,7 +134,7 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
         return;
       }
       // The command that runs is this checkout's: the file is the authority, the published copy only a mirror of it.
-      const { profile, root: profileRoot } = loadLineProfile(root);
+      const { profile, root: profileRoot } = await loadLineDeployProfile(root);
       const command = profile.deploy?.command;
       if (!command) { console.error("No [line.deploy] command in this checkout's .codecast/line.toml"); process.exit(1); }
       const asked = await apiPost(deps, "/cli/line/deploy/request", { ...ref, here: true });
