@@ -36,7 +36,8 @@ import { relTimeShort } from "../../lib/utils";
 import { MONITOR_LIMITS } from "@codecast/shared/contracts/metricMonitor";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { HealthPill, MetricChart } from "./MetricChart";
-import { HEALTH_LOOK, KIND_LABEL, METRIC_RANGES, crossings, durationShort, formatMeasure, formatPct, formatValue, inWindow, measuresCount, isMetricRange, isMutedAt, rangeWindow, spanLabel, stampLabel, stats, watchHealth, windowName, type MetricRange, type Pt, type Win } from "./metricModel";
+import { HEALTH_LOOK, KIND_LABEL, METRIC_RANGES, crossings, durationShort, formatMeasure, formatPct, formatValue, inWindow, measuresCount, isMetricRange, isMutedAt, rangeWindow, spanLabel, stampLabel, watchHealth, windowName, type MetricRange, type Pt, type Win } from "./metricModel";
+import { stats, weekHourCells } from "./metricStats";
 import { CARD_BUCKETS, DETAIL_BUCKETS, changeRange, changeSpan, changeState, changeTone, chartPoints, fullestHeld, periodChange, rangeChange, shiftPoints, stripMean, withAnnouncedReads, type SeriesSpec } from "./metricSeries";
 import { currentEpisodeSince, episodeSummary, runningCrossing, relatedShips, shipMarks, SHIPS_SHOWN_MAX, transitionRows, transitionsIn, watchErrorText, watchMarks, windowAround, type ChartMark, type ShipTask, type TransitionRow } from "./metricEvents";
 import { allWindow, intervalLabel } from "./metricEditing";
@@ -55,7 +56,7 @@ import type { OpsEvent, OpsGroup, OpsSource, OpsWatch } from "./opsTypes";
 import "./metrics.css";
 import "./metricPage.css";
 import { OpsSection, StatLine, type StatItem } from "./opsLayout";
-import { WeekHourHeatmap, weekHourCells } from "./chart/OpsCharts";
+import { WeekHourHeatmap } from "./chart/OpsCharts";
 import { FixAction, FixPanel } from "./MetricFixPanel";
 
 /** Watch and range pairs whose older values this tab already asked for (WatchView). */

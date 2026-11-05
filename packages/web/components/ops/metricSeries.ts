@@ -1,6 +1,7 @@
 // Metrics series as the server answers them (metrics.series, metricsSeriesMany),
 // and the period change every Metrics surface shows. Pure: no React, no store.
-import { continuousTail, DAY, formatValue, METRIC_RANGES, MIN, weightedMean, type MetricRange, type Pt, type Win } from "./metricModel";
+import { continuousTail, DAY, formatValue, METRIC_RANGES, MIN, type MetricRange, type Pt, type Win } from "./metricModel";
+import { weightedMean } from "./metricStats";
 import type { OpsWatch } from "./opsTypes";
 
 // ── Series from the server (metrics.series, metrics.seriesMany) ──

@@ -1,7 +1,8 @@
 // What happened on a metric's chart: marks, ships, alert episodes, the value
 // distribution and line suggestions, and read errors. Pure: no React, no store.
 import { capForeignText, escapeForeignControlChars, fenceForeignText, FOREIGN_TEXT_CAPS } from "@codecast/shared/contracts";
-import { alertSince, crosses, crossings, formatValue, HOUR, KIND_LABEL, timeWeights, weightedQuantile, type Crossing, type Direction, type Pt, type Win } from "./metricModel";
+import { alertSince, crosses, crossings, formatValue, HOUR, KIND_LABEL, type Crossing, type Direction, type Pt, type Win } from "./metricModel";
+import { timeWeights, weightedQuantile } from "./metricStats";
 import { roundToScale } from "./metricEditing";
 import type { OpsWatch } from "./opsTypes";
 

@@ -9,7 +9,7 @@ import { Users } from "lucide-react";
 import { useActiveWorkspaceKey } from "../../hooks/useWorkspaceCollection";
 import { useSeatState, type EnforcedSeatState } from "../../hooks/useSeatState";
 import { Button } from "../ui/button";
-import { useSeatUpgrade } from "./SeatPlan";
+import { useSeatUpgrade } from "../../hooks/useSeatUpgrade";
 
 export function SeatBanner() {
   const key = useActiveWorkspaceKey();

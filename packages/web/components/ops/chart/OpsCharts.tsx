@@ -12,19 +12,6 @@ import { formatValue } from "../metricModel";
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hourLabel = (h: number) => (h === 0 ? "12a" : h === 12 ? "12p" : h < 12 ? `${h}a` : `${h - 12}p`);
 
-/** Mean value per weekday and hour, local time. */
-export function weekHourCells(points: readonly { at: number; value: number }[]): [number, number, number][] {
-  const acc = new Map<number, [number, number]>();
-  for (const p of points) {
-    const d = new Date(p.at);
-    const k = d.getDay() * 24 + d.getHours();
-    const a = acc.get(k) ?? [0, 0];
-    a[0] += p.value; a[1] += 1;
-    acc.set(k, a);
-  }
-  return [...acc].map(([k, [s, n]]) => [k % 24, Math.floor(k / 24), Math.round((s / n) * 10) / 10]);
-}
-
 export function WeekHourHeatmap({ cells, ink = "blue", noun, height = 196, unit }: {
   cells: readonly [number, number, number][];
   ink?: keyof Pick<ChartTheme, "blue" | "cyan" | "magenta" | "violet" | "orange" | "red" | "green">;

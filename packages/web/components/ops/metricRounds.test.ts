@@ -2,7 +2,8 @@
 // duplicates, HogQL picks, cadence, suggested lines, card joins, loading and
 // missing data.
 import { describe, expect, test } from "bun:test";
-import { windowName, crossings, sortWatches, lineRuns, formatMeasure, isIntegral, stats, timeWeights, clipRunToWindow, durationShort, ticksOf, dataHoles, cutHoles, measuresCount } from "./metricModel";
+import { windowName, crossings, sortWatches, lineRuns, formatMeasure, isIntegral, clipRunToWindow, durationShort, ticksOf, dataHoles, cutHoles, measuresCount } from "./metricModel";
+import { stats, timeWeights } from "./metricStats";
 import { seriesKey, periodChange, changeRange, changeSpan, changeState, fullestHeld, rangeChange, changeAmount, tinyBaseline, windowDelta } from "./metricSeries";
 import { transitionRows, wouldCross, clusterShips, distribution, lineSuggestions, suggestDirection, relatedShips, bandsFromTransitions, runningCrossing, sharePast, shipMarks, transitionsIn } from "./metricEvents";
 import { isTestEventName, openHistory, roundToScale, volumeOptions, duplicateWatch, volumeOptions, volumePreview, eventRows, hogqlOfPick, nameOfPick, queryIdentity } from "./metricEditing";
