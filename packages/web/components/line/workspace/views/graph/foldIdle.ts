@@ -1,8 +1,9 @@
 // The live graph's folds (the Flows stage): a long flow drawn whole sprawls
 // past any screen, while the part a person reads is where runs stand. Each
-// straight stretch of idle steps (one way in, one way out, nothing standing
-// there) folds into one step that says how many it holds, so the busy part of
-// the flow sits close together. Pressing a fold opens it. Pure.
+// quiet region (nothing standing there, one way in and one way out: a branch
+// that fans out and joins again, or a straight stretch) folds into one step
+// that says how many it holds, so the busy part of the flow sits close
+// together. Pressing a fold opens it. Pure.
 import type { LineGraphModel, ModelEdge, ModelNode } from "../../../../../lib/line/lineModel";
 
 export const FOLD_PREFIX = "fold:";
@@ -33,6 +34,42 @@ export function foldIdle(g: LineGraphModel, busy: (id: string) => boolean, open:
 
   const foldOf = new Map<string, string>();
   const folds: Array<{ id: string; nodes: ModelNode[] }> = [];
+  const fold = (members: ModelNode[]) => {
+    const id = `${FOLD_PREFIX}${members[0].id}`;
+    if (members.length < MIN_FOLD || open.has(id)) return;
+    folds.push({ id, nodes: members });
+    for (const c of members) foldOf.set(c.id, id);
+  };
+
+  // Regions first: each connected stretch of quiet steps (no runs, not an end) inside one half that work enters from at
+  // most one step and leaves to at most one (a branch that fans out and joins again, a straight run) is one fold. A way
+  // back (a loop edge) does not count as a way in or out: the fold keeps it.
+  const quiet = (n: ModelNode | undefined): n is ModelNode => !!n && n.kind !== "end" && !busy(n.id);
+  const region = new Map<string, string>();
+  const order = new Map(g.nodes.map((n, i) => [n.id, i]));
+  const rootOf = (id: string): string => { let r = id; while (region.get(r) !== r) r = region.get(r)!; return r; };
+  for (const n of g.nodes) if (quiet(n)) region.set(n.id, n.id);
+  for (const e of g.edges) {
+    const a = byId.get(e.from), b = byId.get(e.to);
+    if (e.from === e.to || !quiet(a) || !quiet(b) || a.half !== b.half) continue;
+    const ra = rootOf(a.id), rb = rootOf(b.id);
+    if (ra !== rb) region.set(order.get(ra)! < order.get(rb)! ? rb : ra, order.get(ra)! < order.get(rb)! ? ra : rb);
+  }
+  const regions = new Map<string, ModelNode[]>();
+  for (const n of g.nodes) if (region.has(n.id)) (regions.get(rootOf(n.id)) ?? regions.set(rootOf(n.id), []).get(rootOf(n.id))!).push(n);
+  for (const members of regions.values()) {
+    if (members.length < MIN_FOLD) continue;
+    const inside = new Set(members.map((m) => m.id));
+    const from = new Set<string>(), to = new Set<string>();
+    for (const e of g.edges) {
+      if (e.kind === "loop") continue;
+      if (inside.has(e.to) && !inside.has(e.from)) from.add(e.from);
+      if (inside.has(e.from) && !inside.has(e.to)) to.add(e.to);
+    }
+    if (from.size <= 1 && to.size <= 1) fold(members);
+  }
+
+  // Then the straight stretches inside what no region took.
   for (const n of g.nodes) {
     if (foldOf.has(n.id) || !idle(n)) continue;
     // From the stretch's first step, forward while the next is idle, in the same half, and not seen.
@@ -45,10 +82,7 @@ export function foldIdle(g: LineGraphModel, busy: (id: string) => boolean, open:
       chain.push(c);
       seen.add(c.id);
     }
-    const id = `${FOLD_PREFIX}${first.id}`;
-    if (chain.length < MIN_FOLD || open.has(id)) continue;
-    folds.push({ id, nodes: chain });
-    for (const c of chain) foldOf.set(c.id, id);
+    fold(chain);
   }
   if (!folds.length) return g;
 
