@@ -8,6 +8,7 @@
 // two per view queries: the board counts and the brief. Every edit is a store
 // action that moves the page in the same tick and rides dispatch to orgRoles.*.
 import { useCallback, useMemo, useRef, useState } from "react";
+import { threadStateCardLine } from "@codecast/shared/contracts";
 import { useTourAutoStart } from "../../../tours/useTourAutoStart";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -185,7 +186,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   const stateMeta = roleStanding(standingState);
   const counters = role?.counters && role.counters.day === todayUtc() ? role.counters : null;
   const boardLine = briefFirstLine(brief?.narrative);
-  const standingStateLine = (standing as any)?.thread_state ? String((standing as any).thread_state).split("\n")[0] : null;
+  const standingStateLine = (standing as any)?.thread_state ? threadStateCardLine(String((standing as any).thread_state)) || null : null;
   // The tree's own pinned line stands in when the store has no row for the
   // seat yet (the same line the org card paints).
   const treeStateLine = (role ? role.standing?.state_line : anchor?.state_line)?.trim() || null;
@@ -313,6 +314,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           ) : (
             <p className={cn("min-w-0 flex-1 truncate italic", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not started yet." : "") : "Everything in the workspace."}</p>
           )}
+          {role && !phone && <RoleHeadFacts role={role} tree={tree} onOpen={panelOpen ? undefined : () => openPanelOn(scopeDefaultTab(true))} />}
           {role && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -342,7 +344,11 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
         </div>
       </header>
 
-      {role && <RoleHeadStrip role={role} tree={tree} phone={phone} onOpen={panelOpen ? undefined : () => openPanelOn(scopeDefaultTab(true))} />}
+      {role && phone && (
+        <div className="shrink-0 border-b px-2.5 py-1 flex min-w-0" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>
+          <RoleHeadFacts role={role} tree={tree} onOpen={panelOpen ? undefined : () => openPanelOn(scopeDefaultTab(true))} />
+        </div>
+      )}
 
       {role && (
         <Dialog open={retireOpen} onOpenChange={setRetireOpen}>
@@ -399,38 +405,42 @@ function retireSentence(role: OrgRole, parent: string): string {
   return `${sessions}Roles under it report to ${parent}. Its triggers are cancelled and its thread is kept.`;
 }
 
-/** The role's head under its name (cohesive build spec §5.4): the facts its
- *  sheet, its line and its hover card say, in the same order (whom it
+/** The role's facts on its header row (cohesive build spec §5.4): the facts
+ *  its sheet, its line and its hover card say, in the same order (whom it
  *  reports to, its state, what it carries, since when), and the goals it
- *  serves. Whom it reports to opens their sheet. While the panel is shut the
- *  strip opens it on the overview. */
-function RoleHeadStrip({ role, tree, phone, onOpen }: { role: OrgRole; tree: OrgTree; phone: boolean; onOpen?: () => void }) {
+ *  serves, kept to one line that gives way to the state line before it. Whom
+ *  it reports to opens their sheet; while the panel is shut the facts open it
+ *  on the overview. On a phone the row sits under the header. */
+function RoleHeadFacts({ role, tree, onOpen }: { role: OrgRole; tree: OrgTree; onOpen?: () => void }) {
   const head = useRoleHead(role);
   const members = useTeamRosterIdentity() as Parameters<typeof reportsToNamed>[1];
   const reportsTo = reportsToNamed(tree, members, role);
   const keep = (e: React.MouseEvent) => e.stopPropagation();
   const cells = [
     reportsTo ? <span key="to" className="inline-flex min-w-0 items-center gap-1" onClick={keep} data-scope-reports-to><span aria-hidden style={{ color: "var(--sol-text-dim)" }}>↳</span><ObjectLink n={reportsTo} /></span> : null,
-    head.facts.state, head.lineFacts.measure, head.facts.date,
+    head.facts.state,
+    head.lineFacts.measure ? <span key="measure" className="inline-flex min-w-0 max-w-[260px]">{head.lineFacts.measure}</span> : null,
+    head.facts.date,
   ].filter((c) => c != null && c !== false);
   return (
     <div
-      className={cn("shrink-0 border-b flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]", phone ? "px-2.5 py-1" : "px-4 py-1.5", onOpen && "cursor-pointer transition-colors hover:bg-sol-bg-highlight/30")}
-      style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", color: "var(--sol-text-muted)" }}
+      className={cn("min-w-0 shrink flex items-center gap-x-2 whitespace-nowrap overflow-hidden text-[11.5px] rounded-md px-1.5 h-6", onOpen && "cursor-pointer transition-colors hover:bg-sol-bg-highlight/40")}
+      style={{ color: "var(--sol-text-muted)" }}
       onClick={onOpen}
       title={onOpen ? "Open the overview" : undefined}
       data-scope-head-facts
     >
       {cells.map((c, i) => (
-        <span key={i} className="inline-flex min-w-0 items-center gap-2">
-          {i > 0 && <span aria-hidden className="h-[3px] w-[3px] rounded-full" style={{ background: "var(--sol-text-dim)" }} />}
+        <span key={i} className={cn("inline-flex items-center gap-2", (c as React.ReactElement).key === "measure" ? "min-w-0" : "shrink-0")}>
+          {i > 0 && <span aria-hidden className="h-[3px] w-[3px] rounded-full shrink-0" style={{ background: "var(--sol-text-dim)" }} />}
           <span className="inline-flex min-w-0 items-center">{c}</span>
         </span>
       ))}
       {head.serves.length > 0 && (
-        <span className="ml-auto inline-flex min-w-0 items-baseline gap-2" onClick={keep} data-scope-serves>
+        <span className="inline-flex min-w-0 items-baseline gap-1.5" onClick={keep} data-scope-serves>
+          <span aria-hidden className="h-[3px] w-[3px] rounded-full shrink-0 self-center" style={{ background: "var(--sol-text-dim)" }} />
           <span style={{ color: "var(--sol-text-dim)" }}>Serves</span>
-          {head.serves.map((n) => <ObjectLink key={n.ref} n={n} className="max-w-[220px]" />)}
+          {head.serves.map((n) => <ObjectLink key={n.ref} n={n} className="max-w-[180px]" />)}
         </span>
       )}
     </div>

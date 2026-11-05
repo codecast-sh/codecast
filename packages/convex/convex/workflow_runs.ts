@@ -1060,8 +1060,10 @@ export const updateProgress = mutation({
     api_token: v.string(),
     run_id: v.id("workflow_runs"),
     current_node_id: v.string(),
-    node_id: v.string(),
-    node_status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
+    // A report about the runner alone (its machine, its graph) names no node: a resumed run waiting for a place at a
+    // capped station is not in it yet, and its station starts only once the place is its own.
+    node_id: v.optional(v.string()),
+    node_status: v.optional(v.union(v.literal("running"), v.literal("completed"), v.literal("failed"))),
     outcome: v.optional(v.string()),
     session_id: v.optional(v.string()),
     run_status: v.optional(v.union(v.literal("running"), v.literal("completed"), v.literal("failed"))),
@@ -1092,9 +1094,9 @@ export const updateProgress = mutation({
     const now = Date.now();
     if (args.graph_hash) await recordRoutineRunGraph(ctx, run, args.graph_hash, now);
     const nodeStatuses = [...run.node_statuses];
-    const existing = nodeStatuses.findIndex((n) => n.node_id === args.node_id);
+    const existing = args.node_id && args.node_status ? nodeStatuses.findIndex((n) => n.node_id === args.node_id) : -1;
     const prev = existing >= 0 ? nodeStatuses[existing] : undefined;
-    const nodeEntry = {
+    const nodeEntry = !args.node_id || !args.node_status ? null : {
       node_id: args.node_id,
       status: args.node_status,
       outcome: args.outcome,
@@ -1106,9 +1108,9 @@ export const updateProgress = mutation({
       completed_at: args.node_status !== "running" ? now : undefined,
     };
 
-    if (existing >= 0) {
+    if (nodeEntry && existing >= 0) {
       nodeStatuses[existing] = nodeEntry;
-    } else {
+    } else if (nodeEntry) {
       nodeStatuses.push(nodeEntry);
     }
 
@@ -1157,8 +1159,8 @@ export const updateProgress = mutation({
     // so the withdraw keeps this report's fail_reason.
     if (args.run_status === "completed" || args.run_status === "failed") await withdrawOpenGate(ctx, { ...run, node_statuses: nodeStatuses, status: args.run_status, fail_reason: args.fail_reason ?? run.fail_reason }, now);
     const runOver = args.run_status === "completed" || args.run_status === "failed";
-    if (runOver || args.node_status !== "running") {
-      await stopStationHands(ctx, { ...run, node_statuses: nodeStatuses }, runOver ? undefined : [args.node_id]);
+    if (runOver || (nodeEntry && args.node_status !== "running")) {
+      await stopStationHands(ctx, { ...run, node_statuses: nodeStatuses }, runOver ? undefined : [args.node_id!]);
     }
 
     // Sync status to bound task/plan
@@ -1180,7 +1182,7 @@ export const updateProgress = mutation({
     }
 
     // Post progress message to primary conversation
-    if (run.primary_conversation_id && args.node_id !== "start") {
+    if (nodeEntry && run.primary_conversation_id && args.node_id !== "start") {
       const primaryConv = await ctx.db.get(run.primary_conversation_id);
       if (primaryConv) {
         const workflow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;

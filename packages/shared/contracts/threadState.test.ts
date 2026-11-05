@@ -52,6 +52,11 @@ describe("threadStateHeadline", () => {
     expect(threadStateHeadline("\n\nWaiting on CI\nNext: merge")).toBe("Waiting on CI");
   });
 
+  test("skips a markdown heading for the line under it", () => {
+    expect(threadStateHeadline("## Where it stands\nWatching 3 open PRs")).toBe("Watching 3 open PRs");
+    expect(threadStateHeadline("## Where it stands")).toBe("Where it stands");
+  });
+
   test("drops a leading bullet", () => {
     expect(threadStateHeadline("- Waiting on CI")).toBe("Waiting on CI");
   });
