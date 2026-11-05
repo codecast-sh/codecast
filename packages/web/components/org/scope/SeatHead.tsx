@@ -42,7 +42,7 @@ export function SeatHeadControls({ open, onToggle, onSessionView }: { open: bool
     <div className="flex items-center gap-0.5 pr-1" data-seat-controls>
       <ShortcutTooltip label="Open the plain conversation, for this visit" side="bottom">
         <button type="button" onClick={onSessionView} className={TEXT_BUTTON} data-seat-session-view>
-          <MessagesSquare className="w-3 h-3" /> Session view
+          <MessagesSquare className="w-3 h-3" /><span className="scope-head-mid">Session view</span>
         </button>
       </ShortcutTooltip>
       <ShortcutTooltip label={open ? "Fold the session's controls" : "Owners, device, share, diff and the rest"} side="bottom">

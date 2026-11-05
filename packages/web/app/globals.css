@@ -3520,6 +3520,11 @@ diffs-container {
 @container (max-width: 560px) {
   .scope-head-cq .scope-head-wide { display: none; }
 }
+/* A role's header in a narrow pane keeps the face, the name and the state:
+   since when and the Session view label give way first. */
+@container (max-width: 760px) {
+  .scope-head-cq .scope-head-mid { display: none; }
+}
 /* Decision sheet header: in a narrow pane "decision 3 of 12" shortens to
    "3/12" and the Read the thread pill keeps only its chevron, so who is
    asking keeps its width. */
