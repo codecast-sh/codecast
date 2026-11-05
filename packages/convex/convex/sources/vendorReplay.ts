@@ -2,7 +2,7 @@
 // the steps PostHog and Sentry share. A mirrored recording is a replay row
 // with no chunks until it is first read; then the adapter reads its rrweb
 // events from the vendor, fromRrweb turns them into the semantic stream, and
-// replays.importExternal stores them like our own recordings. After that the
+// lib/replayImport.ts importExternalCore stores them like our own recordings, in the adapter's own action. After that the
 // recording is served from our copy and the vendor is not asked again.
 //
 // The rrweb capture itself is kept too, masked (prepareDomCapture: no typed
@@ -28,7 +28,8 @@ import { gzipSync, strFromU8, strToU8 } from "fflate";
 import { REPLAYS_ROOT, r2Presign, replaysBucketFromEnv, safeReplayPathSegment, type R2Bucket } from "../lib/r2";
 import { sha256Hex } from "../lib/hash";
 import { readBodyCapped } from "../lib/tokenHttp";
-import { gunzipCapped, putChunk, storeReplayDom } from "../replays";
+import { gunzipCapped, putChunk, storeReplayDom } from "../lib/replayChunks";
+import { importExternalCore } from "../lib/replayImport";
 import { REPLAY_LIMITS } from "@codecast/shared/contracts/replay";
 import { REPLAY_DOM_LIMITS } from "@codecast/shared/contracts/replayPlayer";
 import { REPLAY_REST, VENDOR_REFRESH_RETRY, needsRest, needsVendorImport, type VendorRefreshWhy } from "@codecast/shared/contracts/replay";
@@ -83,7 +84,7 @@ export class VendorCallError extends Error {
   }
 }
 
-type ImportCtx = { runQuery: (ref: any, args: any) => Promise<any>; runAction: (ref: any, args: any) => Promise<any>; runMutation?: (ref: any, args: any) => Promise<any> };
+type ImportCtx = { runQuery: (ref: any, args: any) => Promise<any>; runAction: (ref: any, args: any) => Promise<any>; runMutation: (ref: any, args: any) => Promise<any> };
 
 /**
  * Import one vendor recording the first time, or answer the copy already
@@ -115,7 +116,8 @@ export async function importVendorRecording(
   const dom = capture.dom ? await storeDomCapture(input, capture.dom) : null;
   // The converter's state where the read stopped, kept so the next part (now, or once the vendor has written more) reads on from there.
   const carry_key = rec.read_to && capture.carry && dom ? await storeCarryQuietly(input, capture.carry) : null;
-  const imported = await ctx.runAction(internal.replays.importExternal, {
+  // In this action, never through runAction: a long first part's events would be copied into the call's arguments (Convex caps an argument array at 8192 items), and that copy beside the read is what ran an import out of its 64 MB.
+  const imported = await importExternalCore(ctx, {
     source_id: input.source_id,
     provider: input.provider,
     external_id: input.external_id,
@@ -131,8 +133,8 @@ export async function importVendorRecording(
   });
   // The copy already held more than this read (replays.importShrinks): it stays as it was.
   if (!imported.saved) return { replay_id: imported.replay_id, short_id: imported.short_id, imported: false, truncated: false };
-  if (opts.rest && (rec.truncated || rec.realtime) && ctx.runMutation) {
-    if (rec.rest && capture.carry && dom) await beginImportRest(ctx as Required<ImportCtx>, { replay_id: imported.replay_id, source_id: input.source_id, external_id: input.external_id, carry: capture.carry, rest: rec.rest });
+  if (opts.rest && (rec.truncated || rec.realtime)) {
+    if (rec.rest && capture.carry && dom) await beginImportRest(ctx, { replay_id: imported.replay_id, source_id: input.source_id, external_id: input.external_id, carry: capture.carry, rest: rec.rest });
     // A start whose rest cannot be read part by part: a recording PostHog is still writing (its parts exist in minutes), or a mobile capture. Opening it again must not read the start again before then.
     else if (rec.realtime) await ctx.runMutation(internal.replays.deferVendorRefresh, { replay_id: imported.replay_id, retry_at: Date.now() + VENDOR_REFRESH_RETRY.realtime_ms, why: "realtime" });
     else await ctx.runMutation(internal.replays.deferVendorRefresh, { replay_id: imported.replay_id, retry_at: Date.now() + VENDOR_REFRESH_RETRY.failed_ms, why: "unsplittable" });

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { getLiveRooms, roomSeatClass } from "./calls";
+import { getLiveRooms } from "./calls";
+import { roomSeatClass } from "./lib/callSeats";
 import { getTeamMembers } from "./teams";
 import { PRESENCE_BUCKET_MS } from "./presenceState";
 

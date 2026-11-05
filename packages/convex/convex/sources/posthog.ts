@@ -22,12 +22,13 @@ import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { invalidScope } from "../lib/auth";
 import { scopeArgs, scopeOf, sourceByRef, type ScopeArgs } from "../ingest";
-import { gunzipCapped, REPLAY_CHUNK_MAX_INFLATED_BYTES } from "../replays";
+import { gunzipCapped, REPLAY_CHUNK_MAX_INFLATED_BYTES } from "../lib/replayChunks";
+import { bindHogqlNow } from "../lib/hogqlNow";
 import { importVendorRecording, VendorCallError, type ImportOutcome, type VendorRecording } from "./vendorReplay";
 import { connectionIdForSource, tokenFor, type FetchLike } from "../tokenConnectors";
 import { isTokenRefusal } from "../lib/sourceHealth";
 import { tokenHttp } from "../lib/tokenHttp";
-import { historyInstants, type HistorySpan } from "../lib/ingestGroups";
+import { historyInstants, type HistorySpan } from "../lib/watchSeries";
 import { METRIC_NO_HISTORY, PASSTHROUGH_MAX_BYTES, POSTHOG_PROJECT_ID, validWatchQuery } from "@codecast/shared/contracts/ingest";
 import type { RrwebEvent } from "@codecast/shared/replay";
 import { cleanUrl } from "@codecast/shared/contracts/replay";
@@ -40,6 +41,14 @@ const VALUE_READ_MAX_BYTES = 1024 * 1024;
 const LIST_READ_MAX_BYTES = 2 * 1024 * 1024;
 /** Every snapshot blob of one recording together, compressed text as received. */
 const SNAPSHOT_MAX_BYTES = 24 * 1024 * 1024;
+/**
+ * The first part of a recording, read by the import a person or the bulk
+ * import waits on. Smaller than a later part's budget: that action also holds
+ * the rrweb events, the converted stream and the masked capture at once, and
+ * past about this much compressed text a dense recording ran it out of its
+ * 64 MB. Whatever is past it is read by the rest chain (sources/replayRest.ts).
+ */
+export const SNAPSHOT_FIRST_PART_BYTES = 8 * 1024 * 1024;
 const SNAPSHOT_MAX_BLOBS = 60;
 /**
  * blob_v2 keys read in one call. PostHog refuses a wider range from a personal
@@ -233,117 +242,6 @@ async function readInsight(conn: PostHogConn, ref: string, fetchImpl: FetchLike)
   if (!parsed.ok) return parsed;
   const insight = /^\d+$/.test(ref.trim()) ? parsed.body : parsed.body?.results?.[0];
   return insight ? { ok: true, insight } : { ok: false, error: `PostHog has no insight ${ref}` };
-}
-
-// ── Binding now() (metric history) ──
-
-/** Clock reads other than now(): a query using one cannot be moved to a past instant. */
-const OTHER_CLOCKS = /\b(today|yesterday|now64|nowInBlock|current_timestamp|current_date|currentDate|currentTimestamp|localtimestamp|utc_timestamp|unix_timestamp)\b/i;
-const UNIT_MS: Record<string, number> = { second: 1e3, minute: 6e4, hour: 36e5, day: 864e5, week: 7 * 864e5, month: 30 * 864e5, quarter: 91 * 864e5, year: 365 * 864e5 };
-const UNITS = "second|minute|hour|day|week|month|quarter|year";
-/** `<column> <op> ` right before a now(). */
-const BEFORE_NOW = /([A-Za-z_][\w.]*)\s*(>=|<=|>|<)\s*$/;
-/** What may come before a column compared against now(): the start, a paren, a comma, or a clause or boolean word. */
-const COMPARISON_OPENS = /(^|[(,]|\b(?:and|or|not|where|prewhere|having|on|when|then|else))\s*$/i;
-/** An optional ` - interval N unit` (or toIntervalUnit(N)) right after a now(). */
-const AFTER_NOW = new RegExp(`^\\s*-\\s*(?:interval\\s+(\\d+)\\s+(${UNITS})s?\\b|toInterval(${UNITS})\\s*\\(\\s*(\\d+)\\s*\\))`, "i");
-
-/**
- * The query with string literals, quoted names and comments blanked to
- * spaces at the same offsets, so a search sees only code. Null when a quote
- * or comment never closes.
- */
-export function hogqlCodeOnly(q: string): string | null {
-  let out = "";
-  let i = 0;
-  while (i < q.length) {
-    const c = q[i];
-    if (c === "'" || c === '"' || c === "`") {
-      let j = i + 1;
-      for (; j < q.length; j++) {
-        if (q[j] === "\\") j++;
-        else if (q[j] === c) {
-          if (q[j + 1] === c) j++;
-          else break;
-        }
-      }
-      if (j >= q.length) return null;
-      out += " ".repeat(j + 1 - i);
-      i = j + 1;
-    } else if (c === "-" && q[i + 1] === "-") {
-      const end = q.indexOf("\n", i);
-      const j = end === -1 ? q.length : end;
-      out += " ".repeat(j - i);
-      i = j;
-    } else if (c === "/" && q[i + 1] === "*") {
-      const end = q.indexOf("*/", i + 2);
-      if (end === -1) return null;
-      out += " ".repeat(end + 2 - i);
-      i = end + 2;
-    } else {
-      out += c;
-      i++;
-    }
-  }
-  return out;
-}
-
-/** A past instant as HogQL reads it: second precision, UTC. */
-export function hogqlInstant(at: number): string {
-  return `toDateTime('${new Date(Math.floor(at / 1000) * 1000).toISOString().replace(".000Z", "Z")}')`;
-}
-
-export type BoundQuery = { ok: true; query: string; window_ms: number | null } | { ok: false; error: string };
-
-/**
- * A HogQL watch query as it would have read at `at`: every now() becomes a
- * fixed instant. Only a now() compared straight against a column
- * (`timestamp > now() - interval 1 day`, `timestamp < now()`) is bound; a
- * lower bound also gains `<column> <= <instant>`, because the window the
- * query names must end at the instant, not at the present. Anything else
- * that reads the clock is refused, since binding it would quietly answer a
- * different question. `window_ms` is the longest lower-bound window, so the
- * caller can space points by it.
- */
-export function bindHogqlNow(query: string, at: number): BoundQuery {
-  const code = hogqlCodeOnly(query);
-  if (code === null) return { ok: false, error: "The query has an unclosed quote or comment" };
-  const clock = OTHER_CLOCKS.exec(code);
-  if (clock) return { ok: false, error: `The query reads the clock through ${clock[1]}(), which cannot be moved to a past instant; use now()` };
-  const instant = hogqlInstant(at);
-  const edits: { start: number; end: number; text: string }[] = [];
-  let window: number | null = null;
-  const calls = /\bnow\s*\(/gi;
-  for (let m = calls.exec(code); m; m = calls.exec(code)) {
-    // The original text, not the blanked one: now('UTC') blanks to now(     ).
-    const close = /^\s*\)/.exec(query.slice(m.index + m[0].length));
-    if (!close) return { ok: false, error: "now() with an argument cannot be bound to a past instant" };
-    const nowEnd = m.index + m[0].length + close[0].length;
-    const before = BEFORE_NOW.exec(code.slice(0, m.index));
-    const after = AFTER_NOW.exec(code.slice(nowEnd));
-    const end = nowEnd + (after ? after[0].length : 0);
-    const start = m.index - (before?.[0].length ?? 0);
-    // The comparison must stand alone: anything but a clause or a boolean
-    // before the column, or arithmetic after the bound, makes it another one.
-    const next = code.slice(end).trimStart()[0];
-    if (!before || !COMPARISON_OPENS.test(code.slice(0, start)) || (next && "+-*/%(".includes(next))) {
-      return { ok: false, error: "Only a now() compared straight against a column (timestamp > now() - interval 1 day) can be bound to a past instant" };
-    }
-    const [, column, op] = before;
-    const shift = query.slice(nowEnd, end);
-    if (op.startsWith(">")) {
-      const n = after ? Number(after[1] ?? after[4]) : 0;
-      const unit = (after?.[2] ?? after?.[3] ?? "").toLowerCase();
-      if (after) window = Math.max(window ?? 0, n * UNIT_MS[unit]);
-      edits.push({ start, end, text: `(${column} ${op} ${instant}${shift} AND ${column} <= ${instant})` });
-    } else {
-      edits.push({ start: m.index, end: nowEnd, text: instant });
-    }
-  }
-  if (!edits.length) return { ok: false, error: "The query has no now() to bind, so every past instant would read the same" };
-  let out = query;
-  for (const e of edits.sort((a, b) => b.start - a.start)) out = out.slice(0, e.start) + e.text + out.slice(e.end);
-  return { ok: true, query: out, window_ms: window };
 }
 
 /** How many times one past instant is asked again after PostHog says to slow down or that it is busy. */
@@ -542,12 +440,14 @@ export function snapshotReads(sources: { source: string; blob_key?: string }[]):
   return reads;
 }
 
-/** A range read as the single blobs it covers. */
-function splitRead(read: SnapshotRead): SnapshotRead[] {
-  if (read.end_blob_key === undefined || read.blob_key === undefined) return [read];
-  const out: SnapshotRead[] = [];
-  for (let k = Number(read.blob_key); k <= Number(read.end_blob_key); k++) out.push({ source: read.source, blob_key: String(k) });
-  return out;
+/** A range as its two halves: an over-budget range costs a few calls, not one per blob. */
+export function halveRead(read: SnapshotRead): SnapshotRead[] {
+  if (read.end_blob_key === undefined || read.blob_key === undefined || read.end_blob_key === read.blob_key) return [read];
+  const lo = Number(read.blob_key);
+  const hi = Number(read.end_blob_key);
+  const mid = lo + Math.floor((hi - lo) / 2);
+  const part = (a: number, b: number): SnapshotRead => (a === b ? { source: read.source, blob_key: String(a) } : { source: read.source, blob_key: String(a), end_blob_key: String(b) });
+  return [part(lo, mid), part(mid + 1, hi)];
 }
 
 /**
@@ -654,6 +554,7 @@ export async function fetchRecordingEvents(
   recordingId: string,
   fetchImpl: FetchLike = fetch,
   from = 0,
+  maxBytes = SNAPSHOT_MAX_BYTES,
 ): Promise<{ ok: true; events: RrwebEvent[]; truncated: boolean; next_blob: number; blobs: number; realtime: boolean } | PostHogFailure> {
   const listed = parseJson(await posthogRequest(conn, `/session_recordings/${recordingId}/snapshots`, { maxBytes: LIST_READ_MAX_BYTES }, fetchImpl));
   if (!listed.ok) return listed;
@@ -661,7 +562,7 @@ export async function fetchRecordingEvents(
   if (!sources.length) return { ok: false, error: `PostHog has no snapshots for recording ${recordingId}` };
   const realtime = sources.some((src) => src.source === "realtime");
   const events: RrwebEvent[] = [];
-  let budget = SNAPSHOT_MAX_BYTES;
+  let budget = maxBytes;
   let truncated = sources.length > from + SNAPSHOT_MAX_BLOBS;
   let read_blobs = 0;
   const queue = snapshotReads(sources.slice(from, from + SNAPSHOT_MAX_BLOBS));
@@ -674,11 +575,17 @@ export async function fetchRecordingEvents(
     const answer = await posthogRequest(conn, snapshotPath(recordingId, read), { maxBytes: budget }, fetchImpl);
     if (!answer.ok) {
       const overBudget = answer.status !== undefined && answer.status < 300;
-      // A range over the budget is read again blob by blob, so the blobs that fit still land.
+      // A range over the budget ends this part once something is read (the next part starts at it); a part's first range is read again in halves, so the blobs that fit still land.
       if (overBudget && read.end_blob_key !== undefined && read.end_blob_key !== read.blob_key) {
-        queue.unshift(...splitRead(read));
+        if (read_blobs > 0) {
+          truncated = true;
+          break;
+        }
+        queue.unshift(...halveRead(read));
         continue;
       }
+      // One blob over the whole part's budget, with nothing read: no part of a budget this size can hold it.
+      if (overBudget && read_blobs === 0) return { ok: false, error: `one part of this recording is over ${Math.round(maxBytes / 1024 / 1024)} MB, too large to read` };
       // Over the budget: keep what was read. Any other failure fails the import.
       if (overBudget) {
         truncated = true;
@@ -805,7 +712,7 @@ export async function readPostHogRecording(conn: PostHogConn, recordingId: strin
   const meta = parseJson(await posthogRequest(conn, `/session_recordings/${recordingId}/`, { maxBytes: LIST_READ_MAX_BYTES }, fetchImpl));
   if (!meta.ok) throw new VendorCallError(meta);
   const row = recordingRow(meta.body);
-  const read = await fetchRecordingEvents(conn, recordingId, fetchImpl);
+  const read = await fetchRecordingEvents(conn, recordingId, fetchImpl, 0, SNAPSHOT_FIRST_PART_BYTES);
   if (!read.ok) throw new VendorCallError(read);
   return {
     events: read.events,

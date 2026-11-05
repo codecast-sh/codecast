@@ -4995,6 +4995,7 @@ const ConversationViewInner = (
               conversation={conversation}
               onForkReply={handleForkReply}
               autoFocusInput={autoFocusInput}
+              onPopulateInput={populateInputRef}
             />
           ) : (
             <>

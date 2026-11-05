@@ -1,8 +1,9 @@
 // The review before a team admin leaves for Stripe to start (or renew) Pro,
-// billed per seat (convex/teamBilling.ts). The price comes from Stripe through
-// `seatOffer`, so the figures say what Stripe will charge; until it arrives,
-// or when it cannot be read, the confirm is held.
-import type { SeatOffer } from "@codecast/convex/convex/teamBilling";
+// billed per seat, monthly or yearly (convex/teamBilling.ts). The prices come
+// from Stripe through `seatOffer`, so the figures say what Stripe will charge;
+// until they arrive, or when they cannot be read, the confirm is held. The
+// Billed pick shows only where a yearly price is on sale.
+import type { SeatOffer, SeatPrice } from "@codecast/convex/convex/teamBilling";
 import type { SwitchLedger } from "./ConsequentialSwitch";
 
 function money(cents: number, currency: string): string {
@@ -13,12 +14,16 @@ function money(cents: number, currency: string): string {
   }).format(cents / 100);
 }
 
-function per(offer: Extract<SeatOffer, { ok: true }>): string {
-  return offer.interval_count === 1 ? `a ${offer.interval}` : `every ${offer.interval_count} ${offer.interval}s`;
+function per(price: SeatPrice): string {
+  return price.interval_count === 1 ? `a ${price.interval}` : `every ${price.interval_count} ${price.interval}s`;
 }
 
-export function seatUpgradeLedger(r: { team: string; seats: number; renew: boolean; offer: SeatOffer | undefined }): SwitchLedger {
+export type SeatBillingChoice = "monthly" | "annual";
+export const BILLED_OPTIONS = { Monthly: "monthly", Yearly: "annual" } as const satisfies Record<string, SeatBillingChoice>;
+
+export function seatUpgradeLedger(r: { team: string; seats: number; renew: boolean; offer: SeatOffer | undefined; billing: SeatBillingChoice }): SwitchLedger {
   const offer = r.offer?.ok ? r.offer : null;
+  const price = offer ? (r.billing === "annual" && offer.annual) || offer.monthly : null;
   const seats = offer?.seats ?? Math.max(1, r.seats);
   const trial = offer?.trial_days ?? 0;
   return {
@@ -26,9 +31,9 @@ export function seatUpgradeLedger(r: { team: string; seats: number; renew: boole
     subject: r.team,
     shift: ["Starter", "Pro"],
     figures: [
-      { value: offer ? money(offer.unit_amount, offer.currency) : "…", label: "per seat" },
+      { value: price ? money(price.unit_amount, price.currency) : "…", label: "per seat" },
       { value: String(seats), label: seats === 1 ? "seat now" : "seats now" },
-      { value: offer ? money(offer.unit_amount * seats, offer.currency) : "…", label: offer ? per(offer) : "total", tone: "warn" },
+      { value: price ? money(price.unit_amount * seats, price.currency) : "…", label: price ? per(price) : "total", tone: "warn" },
       ...(trial > 0 ? [{ value: String(trial), label: "days free" }] : []),
     ],
     rows: [
@@ -41,6 +46,7 @@ export function seatUpgradeLedger(r: { team: string; seats: number; renew: boole
     stop: "Cancel in Billing",
     confirm: "Continue to Stripe",
     keep: "Not now",
+    ...(offer?.annual ? { pick: { k: "Billed", options: Object.keys(BILLED_OPTIONS), value: r.billing === "annual" ? "Yearly" : "Monthly" } } : {}),
     ...(r.offer === undefined ? { blocked: "Loading price" } : !r.offer.ok ? { blocked: "Price unavailable" } : {}),
   };
 }

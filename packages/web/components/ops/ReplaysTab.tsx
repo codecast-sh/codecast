@@ -39,9 +39,8 @@ import {
   figuresWidthPx,
   importedUntil,
   isReplayFiltered,
-  issueTitleParts,
-  pagePathParts,
   osName,
+  shortBrowser,
   parseReplayQuery,
   pathOf,
   peopleSortFor,
@@ -57,6 +56,10 @@ import {
   totalText,
   type ReplayListQuery,
 } from "./replayModel";
+import {
+  issueTitleParts,
+  pagePathParts,
+} from "./replayRail";
 import { laneOf } from "./issuesModel";
 import "./replays.css";
 
@@ -244,7 +247,7 @@ export function ReplaysTab({ source }: { source: string | null }) {
   return (
     <div className="ops-pad rp-list" data-ops-replays>
       {visibleImports.length > 0 && (
-        <div className="rp-imports" data-ops-replay-imports>
+        <div className="rp-imports" data-ops-replay-imports data-count={visibleImports.length}>
           {visibleImports.map((s) => <ReplayImportLine key={s._id} source={s} showName dismissible />)}
         </div>
       )}
@@ -499,7 +502,7 @@ function ReplayRow({ replay: r, now, floor, floorText, focused, scoped, groupByI
 /** A cut copy's reach and where reading the rest stands, in the replay page's words (restLine). */
 function CutFact({ replay: r, cut, now }: { replay: OpsReplay; cut: number; now: number }) {
   const source = useOpsSources().find((s) => s._id === r.source_id);
-  const line = restLine(restState(r, now), restHold(r, now), false, r.provider === "posthog" ? "PostHog" : r.provider === "sentry" ? "Sentry" : (r.source_name ?? r.provider), now, restQueued(r, source, now));
+  const line = restLine(restState(r, now, source?.replay_rest?.reading), restHold(r, now), false, r.provider === "posthog" ? "PostHog" : r.provider === "sentry" ? "Sentry" : (r.source_name ?? r.provider), now, restQueued(r, source, now));
   return (
     <span className="rp-active rp-cut-fact" data-state={line.tone} title={`Imported 0:00 to ${formatReplayTime(cut)} of ${formatReplayTime(r.duration_ms ?? 0)} · ${line.text}${line.title ? ` (${line.title})` : ""}`}>
       {wholeSeconds(formatReplayTime(cut))} of {wholeSeconds(formatReplayTime(r.duration_ms ?? 0))}{line.tone === "stopped" ? " · stopped" : ""}
@@ -597,27 +600,29 @@ function PeopleList({ people, total, anonymous, ready, focus, onPick, now, sort,
             ))}
           </div>
           {shown.map((p, i) => {
-            const place = pathOf(p.url);
+            // Named the way the list's rows name the same recordings: the route with its ids folded, the browser and OS by their short names.
+            const place = p.url ? routeOf(pathOf(p.url) || p.url) : "";
+            const where = p.where ? [p.where.browser && shortBrowser(p.where.browser), p.where.os && osName(p.where.os), p.where.country].filter(Boolean).join(" · ") : p.env;
+            const name = p.anonymous ? anonHandle(p.key) : p.label;
             return (
-              <div key={p.key} className="rp-prow" data-row data-focused={i === focus ? "true" : undefined} aria-label={`${p.anonymous ? `${anonHandle(p.key)}, anonymous` : p.label}, ${plural(p.sessions, "recording")}`} {...pressable(() => onPick(p.key), "button")}>
-                <span role="cell"><PersonMark label={p.anonymous ? anonHandle(p.key) : p.label} personKey={p.key} anonymous={p.anonymous} /></span>
+              <div key={p.key} className="rp-prow" data-row data-focused={i === focus ? "true" : undefined} title={p.anonymous ? `${name} · id ${p.key}` : undefined} aria-label={`${p.anonymous ? `${name}, anonymous` : p.label}, ${plural(p.sessions, "recording")}`} {...pressable(() => onPick(p.key), "button")}>
+                <span role="cell"><PersonMark label={name} personKey={p.key} anonymous={p.anonymous} /></span>
                 <span role="cell" className="rp-pname">
                   {p.anonymous ? (
                     <>
-                      <span className="truncate" data-anon="true">{anonHandle(p.key)}</span>
-                      {p.env && <span className="rp-penv ops-quiet truncate">{p.env.replace("Mac OS X", "macOS")}</span>}
+                      <span className="truncate" data-anon="true">{name}</span>
+                      {where && <span className="rp-penv ops-quiet truncate">{where}</span>}
                       {place && <span className="rp-pplace truncate ops-dim" title={p.url ?? undefined}>{place}</span>}
-                      <button type="button" className="ops-mono ops-dim rp-pid" title={`Copy the id ${p.key}`} aria-label={`Copy the id ${p.key}`} onClick={(e) => { e.stopPropagation(); void copyText(p.key, "Id copied"); }}>
-                        {p.key.length > 12 ? `${p.key.slice(0, 8)}…` : p.key}
-                        <Copy className="w-2.5 h-2.5" aria-hidden />
-                      </button>
                     </>
                   ) : (
                     <span className="truncate">{p.label}</span>
                   )}
                 </span>
-                <span role="cell" className="ops-num">{p.sessions.toLocaleString()}</span>
-                <span role="cell" className="ops-num ops-quiet" title={p.ms ? formatReplayTime(p.ms).replace(/\.\d$/, "") : undefined}>{p.ms ? spanText(p.ms) : <span className="ops-dim">none</span>}</span>
+                <span role="cell" className="ops-num">
+                  {p.sessions.toLocaleString()}
+                  {(p.short ?? 0) > 0 && <span className="rp-pshort ops-dim" title={`${plural(p.short!, "recording")} under the active filter, shown on their list`}> +{p.short!.toLocaleString()}</span>}
+                </span>
+                <span role="cell" className="ops-num ops-quiet" title={p.ms ? spanText(p.ms) : undefined}>{p.ms ? wholeSeconds(formatReplayTime(p.ms)) : <span className="ops-dim">none</span>}</span>
                 <span role="cell" className="ops-num">
                   {p.errors > 0 && <span style={{ color: "var(--sol-red)" }}>{plural(p.errors, "error")}</span>}
                   {p.errors > 0 && p.failed > 0 && <span className="ops-dim"> · </span>}

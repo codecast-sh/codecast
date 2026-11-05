@@ -32,7 +32,7 @@ import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { roleOfConversation } from "./lib/actor";
 import { headOfPeopleIn, projectLeadRole, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { findDecision, userMayRead } from "./lib/decisionAccess";
-import { gateResponseOf } from "./lib/gateChoices";
+import { gateMirror, gateResponseOf, optionMoves } from "./lib/gateChoices";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
 import { syncDecisionInbox } from "./lib/decisionInbox";
 import { noticeAreaOwner, routeByArea } from "./decisionRouting";
@@ -185,6 +185,26 @@ export async function joinStack(
 export { roleOfConversation } from "./lib/actor";
 
 type Hop = { role_id: Id<"org_roles">; recommendation?: number; note?: string; at: number; passed_at?: number };
+
+// A decision's options rewritten (a re-ask, cast decide edit): what names an
+// option by position follows it by its words. A role's recommendation moves to
+// the option it recommended, or is dropped (its note kept) when no new option
+// says it; the run's gate mirror is rebuilt so an answer routes to the edge
+// its option names. sd-2373 was re-asked with Ship moved from 1 to 2, the run
+// read the answer 1 by position as Ship, and the ladder still said
+// "recommends 1" beside a Ship note.
+async function followOptions(ctx: Ctx, row: DecisionRow, options: DecisionRow["options"], now: number): Promise<{ hops?: Hop[] }> {
+  if (JSON.stringify(row.options.map((o) => o.label)) === JSON.stringify(options.map((o) => o.label))) return {};
+  if (row.workflow_run_id) {
+    const run = await ctx.db.get(row.workflow_run_id);
+    if (run?.gate_choices && String(run.gate_decision_id ?? "") === String(row._id)) {
+      await ctx.db.patch(run._id, { gate_choices: gateMirror(options, run.gate_choices), updated_at: now });
+    }
+  }
+  if (!row.hops?.some((h: Hop) => h.recommendation !== undefined)) return {};
+  const moves = optionMoves(row.options, options);
+  return { hops: row.hops.map((h: Hop) => (h.recommendation === undefined ? h : { ...h, recommendation: moves[h.recommendation] })) };
+}
 
 // The ladder (D2): the roles from the asker up to the first person. A paused
 // or retired role is recorded as a skipped hop so the card can show the gap;
@@ -1172,7 +1192,9 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     // a --stack appends it (once), and the holder is recomputed because the
     // category or the stack's delegate may have changed who may answer.
     const joined = stack ? await joinStack(ctx, stack, existing as any, now) : {};
+    const followed = await followOptions(ctx, existing as DecisionRow, args.options, now);
     await ctx.db.patch(existing._id, {
+      ...followed,
       options: args.options,
       context_md: args.context_md,
       report_slug: args.report_slug,
@@ -1424,7 +1446,9 @@ export const edit = mutation({
     const joinsStack = "stack_id" in joined;
     const trialProject = row.trial ? await trialProjectOf(ctx, task ?? (row.task_id ? await ctx.db.get(row.task_id) : null)) : null;
     if (trialProject) await gateTrialPages(ctx, trialProject, [args.report_slug ?? row.report_slug, ...options.map((o) => o.page_slug)], now);
+    const followed = await followOptions(ctx, row, options, now);
     await ctx.db.patch(row._id, {
+      ...followed,
       question,
       options,
       context_md: args.context_md ?? row.context_md,

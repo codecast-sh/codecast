@@ -1,18 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { commitCiState, commitTouchesTarget, DeployTargetError, groupQueueBySession, parseLiveReader, readJsonLive, targetFromLineDeploy, targetFromShipEntry, type QueueCommit } from "./deployTargets";
+import { commitCiState, commitTouchesTarget, DeployTargetError, groupQueueBySession, parseLiveReader, readJsonLive, parseDeployTargetEntries, parseDeployTargets, targetFromLineDeploy, type QueueCommit } from "./deployTargets";
 
 describe("deploy targets from config (deploys.md DP10)", () => {
-  test("a [[ship.deploy]] entry that names a target is one; a gate is not", () => {
-    expect(targetFromShipEntry({ name: "typing-guard", when: ["web/**"], run: "guard.sh", stage: "before_push" })).toBeNull();
-    expect(targetFromShipEntry({ name: "convex", target: "backend", when: ["api/**"], run: "deploy.sh", stage: "before_push" })).toEqual({
-      name: "backend", command: "deploy.sh", runs: "here", live: { kind: "marker" }, policy: "press", paths: ["api/**"], ship_stage: "before_push",
-    });
-    expect(targetFromShipEntry({ name: "web", target: "web", when: [], run: "", stage: "press", runs: "push", live: "github-status:acme - web" })).toMatchObject({ runs: "push", live: { kind: "github-status", context: "acme - web" } });
+  const SHIP = [{ name: "convex", when: ["api/**"], run: "deploy.sh", stage: "before_push" as const }];
+
+  test("a [[target]] that names a ship step takes its command, paths and stage", () => {
+    const raw = { target: [{ name: "backend", ship: "convex" }, { name: "web", runs: "push", when: "web/**", live: "github-status:acme - web" }] };
+    expect(parseDeployTargets(raw, SHIP)).toEqual([
+      { name: "backend", command: "deploy.sh", runs: "here", live: { kind: "marker" }, policy: "press", paths: ["api/**"], ship_stage: "before_push" },
+      { name: "web", runs: "push", live: { kind: "github-status", context: "acme - web" }, policy: "press", paths: ["web/**"], ship_stage: "press" },
+    ]);
+    expect(parseDeployTargetEntries(raw, SHIP).map((e) => e.ship_step)).toEqual(["convex", undefined]);
+    expect(parseDeployTargets(undefined, SHIP)).toEqual([]);
   });
 
-  test("a bad target is refused with its reason", () => {
-    expect(() => targetFromShipEntry({ name: "x", target: "x", when: [], run: "", stage: "press" })).toThrow(DeployTargetError);
-    expect(() => targetFromShipEntry({ name: "x", target: "x", when: [], run: "a", stage: "press", policy: "sometimes" })).toThrow(/policy/);
+  test("a bad target is refused with its table and reason", () => {
+    expect(() => parseDeployTargets({ target: [{ name: "x" }] }, SHIP)).toThrow(/target\[0\]: target x: runs = "here" needs run/);
+    expect(() => parseDeployTargets({ target: [{ name: "x", run: "a", policy: "sometimes" }] }, SHIP)).toThrow(/policy/);
+    expect(() => parseDeployTargets({ target: [{ name: "x", ship: "nope" }] }, SHIP)).toThrow(/names no \[\[ship.deploy\]\] step/);
+    expect(() => parseDeployTargets({ target: [{ name: "x", run: "a", colour: "red" }] }, SHIP)).toThrow(/unknown key 'colour'/);
+    expect(() => parseDeployTargets({ target: [{ name: "x", run: "a" }, { name: "x", run: "b" }] }, SHIP)).toThrow(/declared twice/);
+    expect(() => parseDeployTargets({ targets: [] }, SHIP)).toThrow(DeployTargetError);
     expect(() => parseLiveReader("json:http://plain")).toThrow(/https/);
     expect(() => parseLiveReader("ping")).toThrow(/not marker/);
   });

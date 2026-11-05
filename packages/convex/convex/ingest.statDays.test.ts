@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SOURCE_STAT_DAYS, withDayCounters } from "./ingest";
+import { SOURCE_STAT_DAYS, withDayCounters } from "./lib/sourceStats";
 import { dueWatches, nextWatchAt } from "./sources/app";
 
 const DAY = 86_400_000;

@@ -11,7 +11,6 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { PERSON_ONLY, useAgentDrivenTab } from "../../lib/agentTabGuard";
 import { addPasskey } from "../../lib/passkeyPresence";
-import { VAULT_PRIMARY } from "../../lib/secretLook";
 import { useRemovePasskey } from "../../hooks/useRemovePasskey";
 import { Button } from "../ui/button";
 import { SettingsSection } from "./ui";
@@ -112,14 +111,10 @@ export function PasskeysSection() {
             <Fingerprint className="h-4 w-4 shrink-0 text-sol-text-dim" />
             <span className="text-sm text-sol-text-muted">Not set up</span>
           </div>
-          <button
-            type="button"
-            {...addProps}
-            className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] ${VAULT_PRIMARY}`}
-          >
+          <Button type="button" variant="yellow" size="xs" {...addProps} className="shrink-0">
             {addIcon}
             Add Touch ID
-          </button>
+          </Button>
         </div>
       ) : (
         passkeys.map((p) => <PasskeyRow key={p._id} passkey={p} />)

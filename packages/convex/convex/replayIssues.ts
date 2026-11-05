@@ -12,10 +12,12 @@
 // writing, so a person can judge the rules on real recordings first.
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
-import { patchSourceStats } from "./ingest";
+import { patchSourceStats } from "./lib/sourceStats";
+import { patchReplay } from "./lib/replayIndex";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { applyIssues, readReplayChunks } from "./replays";
+import { readReplayChunks } from "./lib/replayChunks";
+import { applyIssues } from "./lib/replayImport";
 import { replaysBucketFromEnv } from "./lib/r2";
 import { isFailedRequest, replayIssues, type ReplayIssue } from "@codecast/shared/replay";
 import type { ReplayProvider } from "@codecast/shared/contracts/replay";
@@ -173,7 +175,7 @@ export const clearGroups = internalMutation({
     }
     for (const r of await ctx.db.query("replays").withIndex("by_source_started", (q) => q.eq("source_id", args.source_id)).collect()) {
       const left = r.group_ids.filter((id) => !ids.has(String(id)));
-      if (left.length !== r.group_ids.length) await ctx.db.patch(r._id, { group_ids: left });
+      if (left.length !== r.group_ids.length) await patchReplay(ctx, r, { group_ids: left });
     }
     const open = clear.filter((g) => g.status === "open").length;
     if (open) await patchSourceStats(ctx, source, (s) => ({ groups_open: Math.max(0, (s.groups_open ?? 0) - open) }));

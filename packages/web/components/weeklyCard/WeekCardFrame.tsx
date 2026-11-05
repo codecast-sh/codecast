@@ -5,7 +5,8 @@
 import { useRef, useState } from "react";
 import type { WeekCardStats } from "@codecast/shared/contracts/weeklyCard";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { WEEK_CARD_H, WEEK_CARD_W, WeekCardView } from "./WeekCardView";
+import { WeekCardView } from "./WeekCardView";
+import { WEEK_CARD_H, WEEK_CARD_W } from "@codecast/shared/contracts/weeklyCard";
 
 export function WeekCardFrame({ stats, name, className }: { stats: WeekCardStats; name: string | null; className?: string }) {
   const box = useRef<HTMLDivElement>(null);

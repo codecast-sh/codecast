@@ -46,8 +46,7 @@ const NOT_YET_COVERED = new Set([
   "agentDefinitions.listChains", "issueSync.listSources", "workflows.webList", "workflows.webGet",
   "workflows.webGetBySlug", "workflows.webPool", "workflow_runs.graphOfRun", "signals.webList",
   "signals.forTask", "lineWorkspace.labels", "lineWorkspace.deploys", "lineTimeline.page",
-  "ingest.listSources", "ingest.listGroups", "ingest.getGroup", "ingest.listEvents",
-  "replays.list", "replays.get", "metrics.listWatches", "orgChanges.list",
+  "ingest.listSources", "replays.get", "metrics.listWatches", "orgChanges.list",
 ]);
 
 type Ids = Awaited<ReturnType<typeof seed>>;
@@ -83,6 +82,16 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "flowMap.forTeam": (ids) => [...new Set([...Object.values(ids.rows.flowMaps), ...WHO.map((w) => `user:${ids[w]}`)])].map((workspace) => ({ workspace })),
   // Every workspace the viewer holds a key for, in one answer.
   "teamKit.webListTeamKitItems": () => [{}],
+  // One team's deploy targets; a target is always a team's, so only the team placements exist.
+  "deployTargets.view": (ids) => [{ team_id: ids.T }, { team_id: ids.O }],
+  "ingest.searchGroups": (ids) => listArgs(ids).map((a) => ({ ...a, q: "boom" })),
+  // One group's transitions, asked of every group in the world.
+  "ingest.groupTransitions": (ids) => Object.values(ids.groupRefs).map((group) => ({ group })),
+  "replays.browse": listArgs,
+  "ingest.listGroups": listArgs,
+  "ingest.getGroup": (ids) => Object.values(ids.groupRefs).map((group) => ({ group })),
+  "ingest.listEvents": listArgs,
+  "replays.list": listArgs,
 };
 
 // A feed whose answer is not a list of rows: what the web feeder hands the
@@ -92,6 +101,10 @@ const SELECT: Record<string, (res: any) => unknown> = {
   "flowMap.forTeam": (m) => (m ? [{ _id: m.workspace }] : []),
   // useSyncTeamKit: the answer's items.
   "teamKit.webListTeamKitItems": (r) => r?.items ?? [],
+  // useSyncDeployTargets: every deploy a target names goes to teamDeploys.
+  // useSyncOps: the opened group lands in opsGroups.
+  "ingest.getGroup": (r) => (r?.group ? [r.group] : []),
+  "deployTargets.view": (r) => (r?.targets ?? []).flatMap((t: any) => [t.live, t.open, ...(t.history ?? [])]).filter((d: any) => d?._id),
 };
 
 function registeredFeeds(): Map<string, string> {
@@ -131,7 +144,8 @@ async function seed(t: ReturnType<typeof convexTest>) {
     };
     let n = 0;
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
-    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {} };
+    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {} };
+    const groupRefs: Record<string, string> = {};
     for (const [place, p] of Object.entries(placements)) {
       rows.tasks[place] = await db.insert("tasks", { ...p, ...base(place), short_id: `ct-${++n}`, task_type: "task", priority: "medium", source: "human", status: "open" });
       rows.docs[place] = await db.insert("docs", { ...p, ...base(place), content: "body", doc_type: "note", source: "human" });
@@ -146,7 +160,22 @@ async function seed(t: ReturnType<typeof convexTest>) {
       if (place !== "private") rows.flowMaps[place] = p.workspace;
       rows.teamKitItems[place] = await db.insert("team_kit_items", { slug: `authored/${p.user_id}/skill/${place}-kit`, ...(p.team_id ? { team_id: p.team_id } : {}), workspace: p.workspace, kind: "skill", name: `${place}-kit`, author_user_id: p.user_id, current_version: 1, current_hash: `h-${place}`, surfaces: [], created_at: now, updated_at: now } as any);
     }
-    return { owner, teammate, stranger, removed, outsider, T, O, rows };
+    // Ops rows carry only a workspace key, so the private placement is a second personal row.
+    for (const [place, p] of Object.entries(placements)) {
+      const ws = { workspace: p.workspace };
+      const source_id = await db.insert("event_sources", { ...ws, owner_user_id: p.user_id, short_id: `src-${++n}`, provider: "sdk", name: `${place}-src`, promote: [], status: "active", created_at: now, updated_at: now } as any);
+      const short_id = `eg-${++n}`;
+      const group = await db.insert("event_groups", { ...ws, source_id, short_id, kind: "error", fingerprint: `fp-${place}`, title: `boom ${place}`, status: "open", first_seen: now - 60_000, last_seen: now, count: 1, buckets: [], updated_at: now } as any);
+      rows.opsGroups[place] = group;
+      groupRefs[place] = short_id;
+      rows.opsEvents[place] = await db.insert("external_events", { ...ws, ...(p.team_id ? { team_id: p.team_id } : {}), source: "codecast", kind: "new", title: `boom ${place}`, source_id, group_id: group, dedupe_key: `ev-${place}`, created_at: now - 1_000 } as any);
+      rows.opsReplays[place] = await db.insert("replays", { ...ws, source_id, short_id: `rp-${++n}`, provider: "sdk", external_id: `ext-${place}`, started_at: now - 5_000, counts: { clicks: 0, errors: 0, failed_requests: 0 }, group_ids: [], chunk_keys: [], created_at: now, updated_at: now } as any);
+      if (place === "team" || place === "other") {
+        await db.insert("deploy_targets", { workspace: p.workspace, repository: "acme/app", name: "web", runs: "push", live: { kind: "marker" }, policy: "press", paths: [], publisher_user_id: p.user_id, published_at: now, updated_at: now } as any);
+        rows.teamDeploys[place] = await db.insert("deploys", { short_id: `dp-${++n}`, workspace: p.workspace, target: "web", repository: "acme/app", status: "live", trigger: "person", source: "test", event_ids: [], carries: [], created_at: now, updated_at: now } as any);
+      }
+    }
+    return { owner, teammate, stranger, removed, outsider, T, O, rows, groupRefs };
   });
 }
 
@@ -163,6 +192,7 @@ const EXPECTED: Record<Who, string[]> = {
 const EXPECTED_FOR: Record<string, Record<Who, string[]>> = {
   liveFlows: { ...EXPECTED, owner: ["team"] },
   flowMaps: { ...EXPECTED, owner: ["personal", "team"] },
+  teamDeploys: { ...EXPECTED, owner: ["team"] },
 };
 
 function rowIdsOf(result: unknown): string[] {

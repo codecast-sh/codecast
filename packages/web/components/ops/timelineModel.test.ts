@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { admits, admitsSample, clusterByPixels, fillEstimates, clusterSpan, counterBins, dayRange, facetCounts, fitPreset, formatRange, histogram, markUnloaded, niceMax, occurrencePoints, parseRange, parseTimelineQuery, sampleFacetCounts, sampleFacets, seriesLabel, splitLevel, stackKeys, toggleFacet, unknownUntil, overlayBins, UNMATCHED, vendorStreamUrl, nearestReplay, rangeTicks, tickBudget, streamAxis, foldRepeats, foldedIds } from "./timelineModel";
+import { admits, admitsSample, clusterByPixels, fillEstimates, clusterSpan, counterBins, dayRange, facetCounts, fitPreset, formatRange, histogram, markUnloaded, niceMax, occurrencePoints, parseRange, parseTimelineQuery, sampleFacetCounts, sampleFacets, seriesLabel, splitLevel, stackKeys, toggleFacet, unknownUntil, overlayBins, UNMATCHED, vendorStreamUrl, nearestReplay, rangeTicks, tickBudget, streamAxis, foldRepeats, foldedIds, laneClusters, lanePillPx, windowDated, fmtWindow } from "./timelineModel";
 import { requestLine } from "./sourceViewModel";
 import type { OpsEvent } from "./opsTypes";
 
@@ -290,5 +290,35 @@ describe("folding repeats", () => {
     const items = foldRepeats([s("a", "g1", 3), s("b", "g1", 2), s("c", "g1", 1), s("d", "g2", 0)]);
     expect(foldedIds(items, new Set())).toEqual(["a", "d"]);
     expect(foldedIds(items, new Set(["run:a"]))).toEqual(["a", "b", "c", "d"]);
+  });
+});
+
+describe("lane bubbles and dated windows", () => {
+  test("bubbles never overlap at their real widths and stay inside the track", () => {
+    const marks = [0, 0.01, 0.02, 0.05, 0.06, 0.5, 0.51, 0.99, 1].map((x, i) => ({ x, id: i }));
+    for (const w of [120, 300, 900]) {
+      const cs = laneClusters(marks, w);
+      expect(cs.reduce((n, c) => n + c.marks.length, 0)).toBe(marks.length);
+      for (const c of cs) {
+        const half = lanePillPx(c.marks.length) / 2;
+        expect(c.px - half).toBeGreaterThanOrEqual(0);
+        expect(c.px + half).toBeLessThanOrEqual(w);
+      }
+      for (let i = 1; i < cs.length; i++) expect(cs[i].px - cs[i - 1].px).toBeGreaterThanOrEqual((lanePillPx(cs[i].marks.length) + lanePillPx(cs[i - 1].marks.length)) / 2);
+    }
+    expect(laneClusters(marks, 120).length).toBeLessThan(laneClusters(marks, 900).length);
+  });
+
+  test("a window that is not today or crosses midnight carries its date", () => {
+    const day = (d: number, h: number, m = 0) => new Date(2026, 9, d, h, m).getTime();
+    const now = day(25, 12);
+    expect(windowDated({ from: day(25, 9), to: day(25, 11) }, now)).toBe(false);
+    expect(windowDated({ from: day(20, 17, 47), to: day(21, 16, 35) }, now)).toBe(true);
+    expect(windowDated({ from: day(20, 9), to: day(20, 11) }, now)).toBe(true);
+    const crossing = fmtWindow({ from: day(20, 17, 47), to: day(21, 16, 35) }, now);
+    expect(crossing).toMatch(/Oct 20.*5:47.*to Oct 21.*4:35/);
+    // One day, not today: the date once, on the start.
+    expect(fmtWindow({ from: day(20, 9), to: day(20, 11) }, now)).toMatch(/^Oct 20 9:00.* to 11:00/);
+    expect(fmtWindow({ from: day(25, 9), to: day(25, 11) }, now)).not.toMatch(/Oct/);
   });
 });

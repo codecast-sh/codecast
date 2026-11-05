@@ -31,8 +31,9 @@ describe("a spike", () => {
     expect([e.spiked, e.settled, e.peak]).toEqual([true, true, 300]);
     expect(e.peakAt).toBe(THIS_HOUR - 20 * HOUR);
     expect(isEscalating(calmed, NOW)).toBe(false);
-    // Still 120 a day after the spike: not escalating, but loud enough to read as firing.
-    expect(issueLane(calmed, NOW)).toBe("firing");
+    // Back near its usual rate after the spike: the page says the spike passed, so no lane calls it firing.
+    expect(escalation(calmed, NOW).back).toBe(true);
+    expect(issueLane(calmed, NOW)).toBe("ongoing");
   });
   test("the server's spike rule counts only while the rate holds", () => {
     const flagged = { last_transition: "spike", last_transition_at: NOW - 20 * HOUR } as Partial<OpsGroup>;

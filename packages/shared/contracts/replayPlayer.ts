@@ -52,6 +52,10 @@ export const REPLAY_DOM_LIMITS = {
   /** What one DOM chunk may inflate to when read back. */
   chunk_max_inflated_bytes: 48 * 1024 * 1024,
   max_chunks_per_replay: 60,
+} as const;
+
+/** How the player reads a long DOM capture a window at a time. Read-side only: the recorder never sees these. */
+export const REPLAY_DOM_WINDOW = {
   /**
    * What one player load reads of a capture whose chunks carry their spans
    * (ReplayDomChunkMeta): a window around the asked time, starting at a full
@@ -91,7 +95,7 @@ export function replayDomWindow(
   meta: readonly ReplayDomChunkMeta[] | null | undefined,
   t0: number,
   t_ms: number,
-  budget: number = REPLAY_DOM_LIMITS.window_raw_bytes,
+  budget: number = REPLAY_DOM_WINDOW.window_raw_bytes,
 ): ReplayDomWindow | null {
   if (!meta?.length) return null;
   let total = 0;

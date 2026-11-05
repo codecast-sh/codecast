@@ -563,7 +563,7 @@ export function renderGalleryMessages(now: number): Row[] {
   sh(`cast flow validate - <<'EOF'\n${FLOW_SOURCE}\nEOF`, `✓ Spine, flaky test (line, draft of jx7bm3n): Investigate → Implement → Review\n\nslots\n  implement        filled here    Make the change the investigation calls for\nkept at .codecast/session-flows/${GALLERY_FLOW.slug}/${GALLERY_FLOW.slug}.cast`);
   sh(`cast flow run - <<'EOF'\n${FLOW_SOURCE}\nEOF`, `Spine, flaky test started on ct-4102: Investigate → Implement → Review\n  3 files from session jx7bm3n on codecast/${GALLERY_FLOW.slug}-ct-4102\n  run ${GALLERY_FLOW.liveRun} · cast workflow runs --task ct-4102`);
   asst(`A session's change, sent back to it by Review:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipBack}"}\n\`\`\``);
-  asst(`The same flow waiting on your call at Decide:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipDecide}"}\n\`\`\``);
+  asst(`The same flow, its Decide step waiting on your call:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipDecide}"}\n\`\`\``);
   asst(`Landed, waiting on a deploy:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipDeploy}"}\n\`\`\``);
   asst(`Live everywhere it ships:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipLive}"}\n\`\`\``);
   asst(`A finished run of a library flow:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.libraryRun}"}\n\`\`\``);

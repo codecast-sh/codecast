@@ -7,7 +7,8 @@ import { parseReaderQuery, readMetricAnswer } from "@codecast/shared/contracts/i
 import { buildAppRequest, formatActorHeader, validateJson } from "@codecast/shared/contracts/appConnector";
 import { isTokenRefusal } from "../lib/sourceHealth";
 import type { FetchLike } from "../tokenConnectors";
-import { appCredential, appHttp, auditOutsideCall, freshManifest, signerOf, type RunCtx } from "./app";
+import { appCredential, auditOutsideCall, freshManifest, type RunCtx } from "./app";
+import { appHttp, signerOf } from "../lib/appHttp";
 
 /**
  * One metric reader's answer for a watch (contracts/ingest readMetricAnswer):

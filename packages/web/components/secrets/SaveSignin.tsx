@@ -27,6 +27,8 @@ import { KeyCap } from "../KeyCap";
 import { ScopePicker, type VaultScope } from "./AddSecretDialog";
 import { CommandDisclosure, KindGlyph, Row } from "./parts";
 import { FIELD_MONO, VAULT_DIALOG } from "../../lib/secretLook";
+import { cn } from "../../lib/utils";
+import { buttonVariants } from "../ui/button";
 import { shareSigninLedger } from "../../lib/secretLedgers";
 import { vaultFailure } from "./vaultModel";
 import { useSampleVault, type SampleVault } from "./sampleVault";
@@ -203,7 +205,7 @@ export function ChromeButton({ ways: w }: { ways: SigninWaysState }) {
           Open {w.host} <ExternalLink size={12} className="text-sol-text-dim" />
         </a>
       )}
-      <div className={`inline-flex h-8 min-w-0 items-stretch overflow-hidden rounded-md ${signedOut ? "border border-sol-border text-sol-text" : "bg-sol-yellow text-sol-bg"}`} data-vault-signin-button={w.state}>
+      <div className={cn(buttonVariants({ variant: signedOut ? "outline" : "yellow", size: "sm" }), "min-w-0 items-stretch gap-0 overflow-hidden p-0")} data-vault-signin-button={w.state}>
         <button
           type="button"
           disabled={!!w.blocked || busy}

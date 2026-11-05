@@ -246,18 +246,19 @@ of its own, each a place its code goes live on its own clock. Codecast's are
 the backend (Convex), web (Railway), the CLI release, the mobile OTA and the
 desktop app. They are declared once, in the checkout:
 
-- A `[[ship.deploy]]` entry of `.codecast/workspace.toml` that names a
-  `target` is one. `run` is the command that sends it (from the checkout's
-  root; `$sha`, `$deploy`, `$actor` expand), `when` the paths whose change it
-  ships, `runs` where that happens (`here`, the publishing checkout, the
-  default; `push`, the target deploys itself when main moves and has no
-  command), `live` how codecast reads what runs there (below), `rollback` the
-  command that puts the previous version back, and `policy` who starts it
-  (`press`, a person's Deploy, the default; `auto`, it goes out by itself when
-  CI on main's head is green). `stage` keeps its meaning for `cast ship
-  checkout` (`before_push`, `after_push`), and `press` means a ship never runs
-  it: only a deploy from codecast or a release script sends it. An entry with
-  no `target` stays a gate (the typing guard).
+- A `[[target]]` table of `.codecast/deploy.toml` is one. `name` names it,
+  `run` is the command that sends it (from the checkout's root; `$sha`,
+  `$deploy`, `$actor` expand), `when` the paths whose change it ships, `runs`
+  where that happens (`here`, the publishing checkout, the default; `push`,
+  the target deploys itself when main moves and has no command), `live` how
+  codecast reads what runs there (below), `rollback` the command that puts
+  the previous version back, and `policy` who starts it (`press`, a person's
+  Deploy, the default; `auto`, it goes out by itself when CI on main's head
+  is green). `ship = "<step>"` ties it to the `[[ship.deploy]]` step of
+  workspace.toml that sends it at a ship: the target takes that step's `run`
+  and `when` (unless it gives its own), and the ship records a deploy of it.
+  A target with no `ship` step is never sent by a ship: only a deploy from
+  codecast or a release script sends it.
 - A line profile's `[line.deploy]` (Union) is one more target, read the same
   way (`contracts/deployTargets targetFromLineDeploy`).
 
@@ -275,16 +276,19 @@ them: where a deploy of a `here` target runs. A target the checkout stops
 declaring is retired, not deleted. Every reader (the CLI, the server, the
 Deploys page) parses through `contracts/deployTargets`.
 
-A CLI older than the one that reads these keys refuses the manifest
-(`unknown key in [[ship.deploy]]`), so a repository's targets land only once
-its machines run a CLI that knows them.
+The targets have their own file because every released CLI validates
+workspace.toml strictly (an unknown key in `[[ship.deploy]]`, `[ship]` or at
+the top level refuses the whole manifest, and with it `cast ship` and
+workspace acquire). An older CLI never opens deploy.toml, so declaring a
+target is safe whatever CLI a machine runs. Keep workspace.toml to the keys
+the oldest CLI in use reads.
 
 ## DP11. Every way a target goes live leaves a dp-N
 
 - **A ship.** `cast ship checkout` posts its pass to `ship_passes`
   (`deployTargets.recordShipPass`): the commits with the session behind each,
-  the groups held back, each deploy step's result. Every step that names a
-  target records its deploy after the push with the sha the ship pushed (the
+  the groups held back, each deploy step's result. Every step a target names
+  (`ship = "<step>"`) records a deploy of that target after the push with the sha the ship pushed (the
   tip it built, with a note, when nothing was pushed), and a failed step
   records a failed deploy. Uncommitted files under the step's paths when it
   ran are counted on the deploy (`dirty`), since they went out too.

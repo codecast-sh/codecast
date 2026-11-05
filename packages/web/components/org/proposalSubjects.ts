@@ -13,7 +13,7 @@ import {
   andList, editedOrgChange, isOrgChangeDecidable, isOrgQuietChange, orgRecordGroups, quietChangeSentence, recordAct,
   type OrgAskNames, type OrgChange, type OrgChangeAnswer, type OrgChangeReply, type OrgChangeStatus, type OrgEvidenceLink, type OrgPriority, type OrgRecordGroup,
 } from "@codecast/shared/contracts/orgProposal";
-import { refMatches, refResolves, type OrgGhostOptions } from "./orgLayout";
+import { refMatches, refResolves, type OrgGhostOptions } from "./orgGhostsFor";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import type { OrgParentRef, OrgRole, OrgTree } from "./orgTypes";
 import { partyFace, proposalChangeRows, treeOrder, type ProposalTreeFace, type ProposalTreeRow } from "./proposalTree";

@@ -36,7 +36,7 @@ const parsedRepo = (root: string) => parseWorkflowSource(fs.readFileSync(repoLin
 describe("materialize", () => {
   test("the shipped line as repo files: refs made local, one file per shipped prompt and script", () => {
     const files = shippedRepoLineFiles();
-    expect(Object.keys(files).sort()).toEqual(["line.cast", ...Object.keys(LINE_TEMPLATE_FILES).map((f) => f.slice("line/".length))].sort());
+    expect(Object.keys(files).sort()).toEqual(["line.cast", ...Object.keys(LINE_TEMPLATE_FILES).filter((f) => f.startsWith("line/")).map((f) => f.slice("line/".length))].sort());
     expect(files["line.cast"]).not.toContain('"@line/');
     expect(files["line.cast"]).toContain('prompt="@ground.md"');
   });
