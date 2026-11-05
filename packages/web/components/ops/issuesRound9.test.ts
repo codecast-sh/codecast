@@ -7,7 +7,8 @@ import { countWords, dailySeries, issueLane, lastFailedAt, layoutChart, readingT
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
-const priorTz = process.env.TZ;
+// The zone in force, not the variable: bun runs tests in UTC with TZ unset, and unsetting it later falls back to the machine's zone.
+const priorTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 process.env.TZ = "America/New_York";
 afterAll(() => {
   process.env.TZ = priorTz;

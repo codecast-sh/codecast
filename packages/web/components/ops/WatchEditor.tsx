@@ -1,7 +1,6 @@
-// Editing a watch from the app: its settings card on the watch page (line,
-// side, warning level with how often each would have alerted over the
-// chart's values before it is saved, reads in a row, missing data, unit,
-// interval, name, pause, delete), the query editor (HogQL or a reader picked
+// Editing a watch from the app: its settings card on the watch page
+// (missing data, unit, interval, name, who hears, pause, delete; the alert
+// rule itself is AlertRule, under the chart), the query editor (HogQL or a reader picked
 // from the app's manifest, run before it is saved) and the sheet that makes a new one on a source that
 // can host watches: a reader picked from the app's manifest with typed
 // arguments, an insight picked from the PostHog project, or HogQL, with the
@@ -21,7 +20,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { MetricChart } from "./MetricChart";
 import { AlertRouting, NotifyRows, OnAlertRow } from "./WatchRouting";
-import { lastUsedRoutes } from "./alertRouting";
+import { lastUsedRoutes } from "./alertRoutingModel";
 import { KIND_LABEL, crosses, formatValue, spanLabel, type Pt } from "./metricModel";
 import { lineSuggestions, suggestDirection, wouldCross } from "./metricEvents";
 import { EVAL_READS, INTERVALS, NO_DATA_AFTER, duplicateWatch, intervalLabel, parseThreshold } from "./metricEditing";
@@ -35,46 +34,15 @@ const api = _api as any;
 
 // ── The watch's settings ──
 
-/**
- * `history` is what the chart shows and `within` names its window: a line or warning
- * level being typed says how often it would have crossed over them, and is
- * handed to `onDraft` so the chart draws it before it is saved.
- */
-export function WatchSettings({ watch, source, removeLedger, history, within, onDraft }: { watch: OpsWatch; source?: OpsSource; removeLedger: SwitchLedger; history: readonly Pt[]; /** The chart's window as a sentence names it: "in 30d", "since Oct 5". */ within: string; onDraft?: (line: number | undefined) => void }) {
+/** Everything about a watch but its alert rule, which sits under the chart (AlertRule). */
+export function WatchSettings({ watch, source, removeLedger }: { watch: OpsWatch; source?: OpsSource; removeLedger: SwitchLedger }) {
   const router = useRouter();
   const update = useInboxStore((s) => s.updateOpsWatch);
-  const [line, setLine_] = useState<string | null>(null);
   const [name, setName] = useState<string | null>(null);
   const [unit, setUnit] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
-  const lineText = line ?? (watch.threshold === undefined ? "" : String(watch.threshold));
-  const parsed = parseThreshold(lineText);
   const paused = watch.status === "paused";
-  const setLine = (text: string | null) => {
-    setLine_(text);
-    const v = text === null ? undefined : parseThreshold(text);
-    onDraft?.(v === null ? undefined : v);
-  };
-  const [warnText, setWarnText] = useState<string | null>(null);
-  const warnShown = warnText ?? (watch.warn === undefined ? "" : String(watch.warn));
-  const warnParsed = parseThreshold(warnShown);
-  const warnProblem = warnText === null ? null : warnParsed === null ? "Not a number" : monitorProblem({ threshold: watch.threshold, direction: watch.direction, warn: warnParsed });
-  const commitWarn = () => {
-    if (warnText === null || warnProblem) return;
-    const next = warnParsed ?? null;
-    if (next !== (watch.warn ?? null)) update(watch._id, { warn: next });
-    setWarnText(null);
-  };
   const hasLine = watch.threshold !== undefined;
-  const lineDirty = line !== null && parsed !== null && (parsed ?? null) !== (watch.threshold ?? null);
-  const warnDirty = warnText !== null && !warnProblem && (warnParsed ?? null) !== (watch.warn ?? null);
-
-  const commitLine = () => {
-    if (line === null || parsed === null) return;
-    const next = parsed === undefined ? null : parsed;
-    if (next !== (watch.threshold ?? null)) update(watch._id, { threshold: next });
-    setLine(null);
-  };
   const commitName = () => {
     if (name !== null && name.trim() && name.trim() !== watch.name) update(watch._id, { name: name.trim() });
     setName(null);
@@ -102,40 +70,6 @@ export function WatchSettings({ watch, source, removeLedger, history, within, on
           <label htmlFor="mx-name">Name</label>
           <input id="mx-name" className="mx-input" value={name ?? watch.name} onChange={(e) => setName(e.target.value)} onBlur={commitName} onKeyDown={enter(commitName, () => setName(null))} />
 
-          <AlertWhenRows
-            ids="mx"
-            direction={watch.direction}
-            onDirection={(d) => watch.direction !== d && update(watch._id, { direction: d })}
-            hasLine={hasLine}
-            lineText={lineText}
-            onLineText={setLine}
-            lineInvalid={parsed === null}
-            lineKeys={enter(commitLine, () => setLine(null))}
-            afterLine={lineDirty && (
-              <DraftRow
-                label={parsed === undefined ? "No line: the watch becomes a series" : <CrossCount history={history} within={within} now={watch.threshold} next={parsed!} direction={watch.direction} />}
-                onSave={commitLine}
-                onDiscard={() => setLine(null)}
-              />
-            )}
-            warnText={warnShown}
-            onWarnText={setWarnText}
-            warnProblem={warnProblem}
-            warnKeys={enter(commitWarn, () => setWarnText(null))}
-            afterWarn={warnDirty && (
-              <DraftRow
-                label={warnParsed === undefined ? "No warning level" : <CrossCount history={history} within={within} now={watch.warn} next={warnParsed!} direction={watch.direction} />}
-                onSave={commitWarn}
-                onDiscard={() => setWarnText(null)}
-              />
-            )}
-            evalReads={watch.eval_reads ?? 1}
-            onEvalReads={(n) => update(watch._id, { eval_reads: n })}
-            interval_ms={watch.interval_ms}
-            noData={watch.no_data_after ?? 0}
-            onNoData={(n) => update(watch._id, { no_data_after: n || null })}
-          />
-
           <label htmlFor="mx-unit">Unit</label>
           <input id="mx-unit" className="mx-input" maxLength={12} placeholder="none" value={unit ?? watch.unit ?? ""} onChange={(e) => setUnit(e.target.value)} onBlur={commitUnit} onKeyDown={enter(commitUnit, () => setUnit(null))} />
 
@@ -147,6 +81,8 @@ export function WatchSettings({ watch, source, removeLedger, history, within, on
 
           {hasLine && (
             <>
+              <label htmlFor="mx-nodata">No data</label>
+              <NoDataSelect id="mx-nodata" value={watch.no_data_after ?? 0} onChange={(n) => update(watch._id, { no_data_after: n || null })} />
               <div className="mx-form-sub" data-watch-section="notify">Notify</div>
               <OnAlertRow value={watch.on_alert} source={source} onChange={(r) => update(watch._id, { on_alert: r })} />
               <AlertRouting watch={watch} source={source} />
@@ -172,6 +108,16 @@ export function WatchSettings({ watch, source, removeLedger, history, within, on
         />
       )}
     </div>
+  );
+}
+
+/** What missing reads do once a watch has a line. */
+function NoDataSelect({ id, value, onChange }: { id: string; value: number; onChange: (n: number) => void }) {
+  return (
+    <select id={id} className="mx-select" value={value} onChange={(e) => onChange(Number(e.target.value))} data-watch-nodata>
+      <option value={0}>Ignore</option>
+      {NO_DATA_AFTER.map((n) => <option key={n} value={n}>Alert after {n} missed</option>)}
+    </select>
   );
 }
 
@@ -241,36 +187,10 @@ function AlertWhenRows({ ids, direction, onDirection, hasLine, lineText, onLineT
           </div>
 
           <label htmlFor={`${ids}-nodata`}>No data</label>
-          <select id={`${ids}-nodata`} className="mx-select" value={noData} onChange={(e) => onNoData(Number(e.target.value))} data-watch-nodata>
-            <option value={0}>Ignore</option>
-            {NO_DATA_AFTER.map((n) => <option key={n} value={n}>Alert after {n} missed</option>)}
-          </select>
+          <NoDataSelect id={`${ids}-nodata`} value={noData} onChange={onNoData} />
         </>
       )}
     </>
-  );
-}
-
-/** A typed level not saved yet: what it would have done, Save and Discard. */
-function DraftRow({ label, onSave, onDiscard }: { label: React.ReactNode; onSave: () => void; onDiscard: () => void }) {
-  return (
-    <div className="mx-draft" data-watch-draft>
-      <span className="flex-1 min-w-0">{label}</span>
-      <button type="button" className="ops-btn" onClick={onDiscard}>Discard</button>
-      <button type="button" className="ops-btn" data-tone="primary" onClick={onSave} data-watch-draft-save>Save</button>
-    </div>
-  );
-}
-
-/** How often a level would have been crossed over the chart's values, beside how often the saved one was: "3x → 9x in 30d". */
-function CrossCount({ history, within, now, next, direction }: { history: readonly Pt[]; within: string; now: number | undefined; next: number; direction: "above" | "below" }) {
-  const after = wouldCross(history, next, direction);
-  const before = now === undefined ? null : wouldCross(history, now, direction);
-  return (
-    <span className="ops-num" data-would-cross={after}>
-      {before !== null && before !== after && <><s className="ops-dim">{before}×</s> → </>}
-      <b>{after}×</b> {within}
-    </span>
   );
 }
 

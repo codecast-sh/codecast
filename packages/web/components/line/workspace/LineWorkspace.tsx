@@ -34,7 +34,7 @@ import { useSyncTrial, useTrialCards } from "../../../hooks/useSyncTrial";
 import { useSyncWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { lineSelectionSearch, lineViewHome, readLineSelection, type LineSelection, type LineSelectionPatch } from "../../../lib/line/lineWorkspaceUrl";
 import { pipelineFigures, pipelineHome, pipelineStageForGoKey, pipelineStageOf, type PipelineStage } from "../../../lib/line/pipeline";
-import { useFlowMap } from "../../../hooks/useFlowMap";
+import { HealLiveRuns, useFlowMap } from "../../../hooks/useFlowMap";
 import { useLiveFlow } from "../../../hooks/useLiveFlow";
 import { PipelineNav } from "./PipelineNav";
 import { NO_PROJECT, type RollupRow } from "../../../lib/lineFlow";
@@ -43,7 +43,7 @@ import { useLineSpaceKeys, type LineSpaceState } from "../../../hooks/useLineSpa
 import { TaskHrefProvider } from "../../../lib/taskHrefContext";
 import { LineNavProvider, type LineNav } from "../widgets";
 import { StepPage } from "./step/StepPage";
-import { LineDrawer, StageDrawer } from "./stages/LineDrawer";
+import { StageDrawer, StationDrawer } from "./stages/LineDrawer";
 import type { LineViewProps } from "./views/types";
 import { ForYouView } from "./views/ForYouView";
 import { FinderPage } from "./views/finder/FinderPage";
@@ -301,6 +301,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
     <TaskHrefProvider place={problemPlace}>
       {!unresolved && ws.historyFeeds.map((f) => <HistoryFeed key={f.projectId} projectId={f.projectId} repositories={f.repositories} />)}
       {trialSpaces.map((key) => <TrialFeed key={key} workspace={key} />)}
+      <HealLiveRuns space={space?.key ?? null} />
       {ws.decisionRuns.map((id) => <RunFeed key={id} id={id} />)}
       <div className="lw lw-app" data-line-workspace={projectId ?? "all"} data-line-app data-view={selection.view}>
         <header className="lw-head">
@@ -339,9 +340,9 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
               )}
             </main>
             {!settings && model && !unresolved && stepSlides && (
-              <LineDrawer key={`step:${selection.step}`} label={model.steps[selection.step!]?.label ?? "Step"} onClose={() => select({ step: null })} nav={<StationWalk order={model.order} at={selection.step!} labelOf={(id) => model.steps[id]?.label ?? id} go={(id) => select({ step: id }, undefined, { replace: true })} />}>
+              <StationDrawer key={`step:${selection.step}`} model={model} at={selection.step!} select={select}>
                 <StepPage model={model} workspace={ws} selection={drawerSelection} select={select} href={href} pinned={!!pinned} />
-              </LineDrawer>
+              </StationDrawer>
             )}
             {!settings && model && !unresolved && stageOpen && !stepSlides && (
               <StageDrawer key={`stage:${selection.stage}`} stage={selection.stage!} projectId={ws.project?._id ?? ws.home?._id ?? null} model={model} workspace={ws} selection={selection} select={select} href={href} pinned={!!pinned} />
@@ -355,20 +356,6 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   return Frame ? <Frame app={app} ws={ws} /> : app;
 }
 
-/** A station's drawer head: where it sits in the line, and the stations either side (← → walk them too). */
-function StationWalk({ order, at, labelOf, go }: { order: readonly string[]; at: string; labelOf: (id: string) => string; go: (id: string) => void }) {
-  const i = order.indexOf(at);
-  const prev = i > 0 ? order[i - 1] : null;
-  const next = i >= 0 && i < order.length - 1 ? order[i + 1] : null;
-  return (
-    <nav className="sd-flow sd-walk" aria-label="Stations">
-      <button type="button" className="lw-iconbtn" disabled={!prev} onClick={() => prev && go(prev)} title={prev ? `${labelOf(prev)} (←)` : undefined} aria-label="Previous station">‹</button>
-      <span className="sd-walk-at"><span className="lw-num">{i + 1}</span> of <span className="lw-num">{order.length}</span> stations</span>
-      <button type="button" className="lw-iconbtn" disabled={!next} onClick={() => next && go(next)} title={next ? `${labelOf(next)} (→)` : undefined} aria-label="Next station">›</button>
-      {next && <span className="sd-dim sd-walk-next">next: {labelOf(next)}</span>}
-    </nav>
-  );
-}
 
 /** The workspace /line reads, by name; a menu of the others that hold problems, each with its open problems. One
  *  workspace with problems: its name, no menu. */

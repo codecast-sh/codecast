@@ -467,7 +467,11 @@ describe("command groups stay off the boot graph", () => {
     // daemon.ts for its max-lines pin.
     // 537 on 2026-11-05: handHostGrace.ts, whether a message to a session the
     // boot took waits for the terminal that last ran it (a pure leaf).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(537);
+    // 540 the same day: ghostty.ts (delivery into Ghostty through its
+    // AppleScript dictionary), terminalHold.ts and contracts/deliveryHold.ts
+    // (the held-send reason the daemon writes). All three are leaves the
+    // delivery path calls directly; none is a command group.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(540);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
