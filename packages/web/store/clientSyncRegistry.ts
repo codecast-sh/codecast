@@ -816,7 +816,7 @@ export const CLIENT_SYNC_REGISTRY = {
     // A node's session is a join that moves no scalar on the row (a feed with
     // budget attaches it where another had none), so the nodes compare by content.
     sync: { isDelta: true, deepFields: ["node_statuses", "superseded"] },
-    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.listRuns", "sessionFlowRuns.forConversation"],
+    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.listRuns", "sessionFlowRuns.forConversation", "sessionFlowRuns.forTeam"],
   },
   // Signals (the-line-end-to-end.md LE3, LE13): the active workspace's last
   // two weeks, bodies left out, and every finding of a problem opened in the
@@ -907,8 +907,8 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     workspaceScoped: true,
     indexes: "_id, workspace",
-    sync: { isDelta: true, altKey: "client_key", deepFields: ["sessions", "steps"] },
-    feeds: ["deployTargets.view"],
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["sessions", "steps", "tasks"] },
+    feeds: ["deployTargets.view", "deployRefs.recentForTeam"],
   },
   // The flows view's collections (live flows, session flows) live beside this file.
   ...FLOW_SYNC_COLLECTIONS,

@@ -158,8 +158,11 @@ describe("sdkErrorFingerprint on errors a Convex function relayed to the client"
       "Function execution timed out (maximum duration: 3s)",
       "JavaScript execution ran out of memory (maximum memory usage: 64 MB): request stream size was 0 bytes",
       "JavaScript execution ran out of memory (maximum memory usage: 64 MB)",
+      "Your request timed out performing too many system operations.",
     ].map((t) => fp(v8(limit("Q(repos:listRepositories)", t), V8_QUERY)));
     expect(new Set(repos).size).toBe(1);
+    // A return value or a document too large is another fix (eg-1715, eg-2236).
+    expect(fp(v8(limit("Q(repos:listRepositories)", "Function repos.js:listRepositories return value is too large (actual: 21.84 MiB, limit: 16 MiB)"), V8_QUERY))).not.toBe(repos[0]);
     const org = [
       "Uncaught Error: Function execution timed out (maximum duration: 3s)",
       "Uncaught Error: JavaScript execution ran out of memory (maximum memory usage: 64 MB): request stream size was 0 bytes",
