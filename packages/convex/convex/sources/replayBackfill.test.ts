@@ -150,10 +150,13 @@ describe("listPostHogPage", () => {
     const urls: string[] = [];
     const fetchImpl = (async (url: string) => {
       urls.push(url);
-      return new Response(JSON.stringify({ results: [{ id: "r1" }, { id: "r2" }, { id: "../bad" }], has_next: true }), { status: 200 });
+      return new Response(JSON.stringify({ results: [{ id: "r1", start_time: "2026-09-02T10:00:00Z", recording_duration: 90, distinct_id: "d1", start_url: "https://app.test/book/1?x=2" }, { id: "r2" }, { id: "../bad" }], has_next: true }), { status: 200 });
     }) as any;
     const page = await listPostHogPage(conn, { since: Date.UTC(2026, 8, 1), until: Date.UTC(2026, 9, 1) }, "20", fetchImpl);
-    expect(page).toEqual({ ids: ["r1", "r2"], next: "23" });
+    expect(page).toMatchObject({ ids: ["r1", "r2"], next: "23" });
+    // What the list says of each, kept beside a failure so the popover can name the recording.
+    expect(page.about?.r1).toMatchObject({ at: Date.parse("2026-09-02T10:00:00Z"), length_ms: 90_000, person: "d1" });
+    expect(page.about?.r2).toEqual({});
     const q = new URL(urls[0]).searchParams;
     expect(new URL(urls[0]).pathname).toBe("/api/projects/42/session_recordings/");
     expect(q.get("offset")).toBe("20");
@@ -287,7 +290,7 @@ describe("tend", () => {
     expect(out).toEqual({ tended: 1 });
     const row = (await db.get("s1" as any))!;
     expect(row.replay_backfill.status).toBe("running");
-    // The active PostHog source also gets its facts pass (sources/replayFacts.ts), its rest sweep and its hourly tally of cut copies (sources/replayRest.ts), then its tended import.
-    expect(scheduled).toEqual([{ source_id: "s1" }, { source_id: "s1" }, { source_id: "s1" }, { source_id: "s1", run: row.replay_backfill.started_at }]);
+    // The active PostHog source also gets its facts pass (sources/replayFacts.ts), its rest sweep and its hourly tally of cut copies (sources/replayRest.ts), its daily recount of each person's recordings (replayTallies.ts), then its tended import.
+    expect(scheduled).toEqual([{ source_id: "s1" }, { source_id: "s1" }, { source_id: "s1" }, { source_id: "s1" }, { source_id: "s1", run: row.replay_backfill.started_at }]);
   });
 });

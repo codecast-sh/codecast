@@ -70,8 +70,8 @@ export const SOURCE_STATE: Record<SourceStatus, { label: string; ink: string }> 
 export function sourceFacts(source: Pick<OpsSource, "last_event_at" | "events_today" | "groups_open">): string[] {
   return [
     source.last_event_at ? `last event ${formatRelative(source.last_event_at)}` : "no events yet",
-    source.events_today ? `${source.events_today} today` : null,
-    source.groups_open ? `${source.groups_open} open ${source.groups_open === 1 ? "issue" : "issues"}` : null,
+    source.events_today ? `${source.events_today.toLocaleString()} today` : null,
+    source.groups_open ? `${source.groups_open.toLocaleString()} open ${source.groups_open === 1 ? "issue" : "issues"}` : null,
   ].filter((f): f is string => !!f);
 }
 

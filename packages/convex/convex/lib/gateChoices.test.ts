@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { alignGateChoices } from "./gateChoices";
+import { alignGateChoices, optionMoves } from "./gateChoices";
 
 const gate = [{ key: "S", label: "[S] Ship", target: "trial_ship" }, { key: "R", label: "[R] Revise", target: "revise_build" }, { key: "D", label: "[D] Drop", target: "trial_drop" }];
 
@@ -16,5 +16,13 @@ describe("alignGateChoices", () => {
   });
   test("an option that names no edge carries no key", () => {
     expect(alignGateChoices([{ label: "Ask Jason first" }], gate)).toEqual([null]);
+  });
+});
+
+describe("optionMoves", () => {
+  test("each old option follows its words to its new place; one no new option says is gone", () => {
+    const before = [{ label: "Ship the separate read" }, { label: "Let the agent handle it" }, { label: "Drop it" }];
+    expect(optionMoves(before, [before[1], before[0], before[2]])).toEqual([1, 0, 2]);
+    expect(optionMoves(before, [{ label: "Let the agent handle it" }, { label: "Drop it" }])).toEqual([undefined, 0, 1]);
   });
 });

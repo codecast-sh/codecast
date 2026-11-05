@@ -23,9 +23,10 @@ const ENV = {
   STRIPE_SECRET_KEY: "sk_test_fake",
   STRIPE_WEBHOOK_SECRET: SECRET,
   STRIPE_PRICE_TEAM_SEAT: "price_seat",
+  STRIPE_PRICE_TEAM_SEAT_ANNUAL: "price_seat_year",
   TEAM_SEAT_TRIAL_DAYS: "14",
 };
-const ENV_NAMES = Object.keys(ENV) as (keyof typeof ENV)[];
+const ENV_NAMES = [...Object.keys(ENV), "TEAM_SEAT_GRANDFATHER_UNTIL"];
 
 let savedEnv: Record<string, string | undefined> = {};
 let savedFetch: typeof fetch;
@@ -90,6 +91,13 @@ describe("decideSeat", () => {
   test("a team over the free capacity that never subscribed is grandfathered; one that lapsed is not", () => {
     expect(decide({ counts: { members: 5, pending: 0 } })).toMatchObject({ kind: "allowed", why: "grandfathered" });
     expect(decide({ counts: { members: 2, pending: 0 }, row: { grandfathered_at: 1 } as any, adding: 4 })).toMatchObject({ kind: "allowed", why: "grandfathered" });
+  });
+
+  test("grandfathering ends at its date for every team, stamped or not", () => {
+    const until = base.now + 1;
+    expect(decide({ counts: { members: 5, pending: 0 }, grandfatherUntil: until })).toMatchObject({ kind: "allowed", why: "grandfathered" });
+    expect(decide({ counts: { members: 5, pending: 0 }, grandfatherUntil: base.now })).toMatchObject({ kind: "blocked", limit: { code: "upgrade_required" } });
+    expect(decide({ counts: { members: 5, pending: 0 }, row: { grandfathered_at: 1 } as any, grandfatherUntil: base.now })).toMatchObject({ kind: "blocked" });
     expect(decide({ counts: { members: 5, pending: 0 }, row: { stripe_customer_id: "cus_1", subscription_status: "canceled" } as any }).kind).toBe("blocked");
   });
 });
@@ -120,6 +128,7 @@ function fakeStripe() {
     if (state.unreachable) throw new TypeError("fetch failed");
     const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
     if (path === "prices/price_seat") return reply(200, { id: "price_seat", active: true, unit_amount: 1200, currency: "usd", recurring: { interval: "month", interval_count: 1 } });
+    if (path === "prices/price_seat_year") return reply(200, { id: "price_seat_year", active: true, unit_amount: 11520, currency: "usd", recurring: { interval: "year", interval_count: 1 } });
     if (path === "checkout/sessions") return reply(200, { id: "cs_team", url: "https://checkout.stripe.test/team" });
     if (path === "billing_portal/sessions") return reply(200, { id: "bps_team", url: "https://billing.stripe.test/team" });
     if (path === "subscriptions") return reply(200, { data: [...state.subscriptions.values()].filter((s) => s.customer === parsed.searchParams.get("customer")) });
@@ -236,7 +245,17 @@ describe("Starter limits", () => {
     const { admin, team, row } = await setup(4);
     expect(await admin.mutation(api.teams.sendInviteEmail, { team_id: team, email: "new@acme.test" })).toEqual({ sent: true });
     expect((await row())?.grandfathered_at).toBeNumber();
-    expect(await admin.query(api.teamBilling.getSeatState, { team_id: team })).toMatchObject({ grandfathered: true, full: false });
+    expect(await admin.query(api.teamBilling.getSeatState, { team_id: team })).toMatchObject({ grandfathered: true, grandfathered_until: null, full: false });
+  });
+
+  test("after TEAM_SEAT_GRANDFATHER_UNTIL a grandfathered team needs Pro to add a seat, and keeps its members", async () => {
+    process.env.TEAM_SEAT_GRANDFATHER_UNTIL = "2030-01-01";
+    const { admin, team } = await setup(4);
+    expect(await admin.mutation(api.teams.sendInviteEmail, { team_id: team, email: "new@acme.test" })).toEqual({ sent: true });
+    expect(await admin.query(api.teamBilling.getSeatState, { team_id: team })).toMatchObject({ grandfathered: true, grandfathered_until: Date.parse("2030-01-01"), needs_pro: false });
+    setSystemTime(new Date("2030-01-02"));
+    expect(await admin.query(api.teamBilling.getSeatState, { team_id: team })).toMatchObject({ grandfathered: false, full: true, needs_pro: true, members: 4 });
+    await expect(admin.mutation(api.teams.sendInviteEmail, { team_id: team, email: "later@acme.test" })).rejects.toThrow();
   });
 
   test("with no seat price, nothing is limited and the state says billing is off", async () => {
@@ -259,7 +278,22 @@ describe("upgrade", () => {
   test("the offer reads the seat price from Stripe, with the trial for a first subscription", async () => {
     const { admin, team } = await setup(3);
     fakeStripe();
-    expect(await admin.action(api.teamBilling.seatOffer, { team_id: team })).toEqual({ ok: true, unit_amount: 1200, currency: "usd", interval: "month", interval_count: 1, trial_days: 14, seats: 3 });
+    expect(await admin.action(api.teamBilling.seatOffer, { team_id: team })).toEqual({
+      ok: true,
+      monthly: { unit_amount: 1200, currency: "usd", interval: "month", interval_count: 1 },
+      annual: { unit_amount: 11520, currency: "usd", interval: "year", interval_count: 1 },
+      trial_days: 14,
+      seats: 3,
+    });
+    delete process.env.STRIPE_PRICE_TEAM_SEAT_ANNUAL;
+    expect(await admin.action(api.teamBilling.seatOffer, { team_id: team })).toMatchObject({ ok: true, annual: null });
+  });
+
+  test("yearly checkout sells the annual price", async () => {
+    const { admin, team } = await setup(3);
+    const stripe = fakeStripe();
+    expect(await admin.action(api.teamBilling.startSeatCheckout, { team_id: team, billing: "annual" })).toMatchObject({ ok: true, via: "checkout" });
+    expect(stripe.posts("checkout/sessions")[0].form).toMatchObject({ "line_items[0][price]": "price_seat_year", "line_items[0][quantity]": "3" });
   });
 
   test("checkout sells one seat per member on the seat price, with the trial and the team in metadata; members cannot start it", async () => {

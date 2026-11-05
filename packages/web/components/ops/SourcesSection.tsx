@@ -40,6 +40,7 @@ import { appSourceSnippets, sourceSnippets, type ConfigSource } from "./opsModel
 import { opsHref } from "./opsPaths";
 import { ProviderIcon, SOURCE_PROVIDER_LABEL } from "./parts";
 import { ReplayImportLine, hasVendorRecordings } from "./ReplayImport";
+import { projectSourceName } from "./useVendorProjects";
 import { useSourceHealthMap } from "./useSourceHealth";
 import { HealthBadge, HealthFixButton } from "./SourceHealthParts";
 import { RotateKeyButton } from "./RotateKey";
@@ -183,6 +184,8 @@ export function AddSourceForm({ initial, vendors, onCancel, onCreated, kindPicke
   const keyed = KEYED_SOURCE_PROVIDERS.includes(provider);
   // A vendor source is usually named for the vendor; a keyed one names the product.
   const [name, setName] = useState(keyed ? "" : provider);
+  // The name the form last derived (the vendor's, then the picked project's): a name the person typed is never replaced.
+  const [autoName, setAutoName] = useState(keyed ? "" : provider);
   const [projects, setProjects] = useState("");
   const [projectId, setProjectId] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -199,8 +202,8 @@ export function AddSourceForm({ initial, vendors, onCancel, onCreated, kindPicke
   const projectList = projects.split(",").map((p) => p.trim()).filter(Boolean);
   const posthogProject = provider === "posthog" ? projectId.trim() : "";
   const config = provider === "sentry" && projectList.length ? { projects: projectList } : posthogProject ? { project_id: posthogProject } : undefined;
-  // A second PostHog source on the same connection reads the same project unless it names another.
-  const projectNeeded = provider === "posthog" && !!takenProjects && (!posthogProject || takenProjects.includes(posthogProject));
+  // A PostHog source reads the project a person picks from the list; without the list, a second source on the same connection must name another.
+  const projectNeeded = provider === "posthog" && (!listError || !!takenProjects) && (!posthogProject || !!takenProjects?.includes(posthogProject));
   const problem = sourceConfigProblem(provider, config) ?? (projectNeeded && posthogProject ? `Project ${posthogProject} already has a source` : null);
   const submit = async () => {
     if (!name.trim() || scope === "skip" || problem || needsUrl || projectNeeded) return;
@@ -295,7 +298,16 @@ export function AddSourceForm({ initial, vendors, onCancel, onCreated, kindPicke
           key={provider}
           provider={provider}
           picked={provider === "sentry" ? projectList : posthogProject ? [posthogProject] : []}
-          onPick={(next) => (provider === "sentry" ? setProjects(next.join(", ")) : setProjectId(next[0] ?? ""))}
+          onPick={(next, picked) => {
+            if (provider === "sentry") setProjects(next.join(", "));
+            else setProjectId(next[0] ?? "");
+            // One PostHog project names the source after it, until the person types a name of their own.
+            const derived = provider === "posthog" && picked[0] ? projectSourceName(picked[0].name) : null;
+            if (derived && (!name.trim() || name === autoName)) {
+              setName(derived);
+              setAutoName(derived);
+            }
+          }}
           onUnavailable={setListError}
         />
       )}

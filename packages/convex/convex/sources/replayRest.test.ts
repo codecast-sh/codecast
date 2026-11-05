@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { SWEEP_MAX_AGE_MS, chainLive, sweepPage, sweepQueue, sweepWants, tallyPage } from "./replayRest";
+import { REST_SETTLED_MS, SWEEP_ENDED_MS, SWEEP_MAX_AGE_MS, chainLive, restSettled, settleWhole, sweepLane, sweepPage, sweepQueue, sweepWants, tallyPage } from "./replayRest";
+import { REPLAY_REST_NO_MORE } from "@codecast/shared/contracts/replay";
 import schema from "../schema";
 import { makeFakeDb, schemaIndexes } from "../testDb";
 
@@ -65,8 +66,8 @@ describe("which recording the sweep reads next", () => {
     expect(page).toMatchObject({ cut: 2, unknown: 0, reading: { short_id: "rp-a" } });
   });
 
-  test("the queue is the sweep's order: linked first, then newest; past retention the sweep stops", async () => {
-    expect(sweepQueue([{ short_id: "a", started_at: 3, linked: false }, { short_id: "b", started_at: 1, linked: true }, { short_id: "c", started_at: 2, linked: false }])).toEqual(["b", "a", "c"]);
+  test("the queue is the sweep's order: by lane, then newest; past retention the sweep stops", async () => {
+    expect(sweepQueue([{ short_id: "a", started_at: 3, lane: 2 }, { short_id: "b", started_at: 1, lane: 1 }, { short_id: "c", started_at: 2, lane: 2 }, { short_id: "d", started_at: 0, lane: 0 }])).toEqual(["d", "b", "a", "c"]);
     const d = makeFakeDb({
       event_sources: [{ _id: "s1", workspace: "team:t", owner_user_id: "u1", short_id: "src-1", provider: "posthog", name: "ph", promote: [], status: "active", created_at: 1, updated_at: 1 }],
       replays: [row("rp-old", now - SWEEP_MAX_AGE_MS - 1)],
@@ -84,5 +85,39 @@ describe("which recording the sweep reads next", () => {
     }, { indexes: schemaIndexes(schema as any) });
     const page = await h(sweepPage)({ db: d }, { source_id: "s1", before: null, cursor: null, now });
     expect(page.next).toMatchObject({ external_id: "rp-q", stalled: true });
+  });
+
+  test("a short recording that ended today reads before the issue backlog; one still recording, or that PostHog has no more of, does not", async () => {
+    const five = 5 * 60_000;
+    const ended = now - five - SWEEP_ENDED_MS - 60_000;
+    expect(sweepLane({ started_at: ended, duration_ms: five }, now)).toBe(0);
+    expect(sweepLane({ started_at: now - five - 60_000, duration_ms: five }, now)).toBe(2);
+    expect(sweepLane({ started_at: ended, duration_ms: 2 * 3_600_000 - five }, now)).toBe(2);
+    expect(sweepLane({ started_at: ended, duration_ms: five, import_rest: { error: REPLAY_REST_NO_MORE } }, now)).toBe(2);
+    expect(sweepLane({ started_at: now - 3 * 86_400_000, duration_ms: five, counts: { errors: 2 } }, now)).toBe(1);
+    const d = makeFakeDb({
+      event_sources: [{ _id: "s1", workspace: "team:t", owner_user_id: "u1", short_id: "src-1", provider: "posthog", name: "ph", promote: [], status: "active", created_at: 1, updated_at: 1 }],
+      replays: [row("rp-today", ended, { captured_ms: 90_000, duration_ms: five }), row("rp-linked", 2, { group_ids: ["g1"] }), row("rp-old", 1)],
+    }, { indexes: schemaIndexes(schema as any) });
+    const recent = await h(sweepPage)({ db: d }, { source_id: "s1", before: null, cursor: null, now, lane: "recent" });
+    expect(recent.next?.external_id).toBe("rp-today");
+    const linked = await h(sweepPage)({ db: d }, { source_id: "s1", before: null, cursor: null, now, lane: "linked" });
+    expect(linked.next?.external_id).toBe("rp-today");
+  });
+
+  test("a chain that finds no more of an ended recording settles it whole and leaves the backlog", async () => {
+    expect(restSettled({ started_at: now - REST_SETTLED_MS - 600_000, duration_ms: 300_000 }, now)).toBe(true);
+    expect(restSettled({ started_at: now - 600_000, duration_ms: 300_000 }, now)).toBe(false);
+    const d = makeFakeDb({
+      event_sources: [{ _id: "s1", workspace: "team:t", owner_user_id: "u1", short_id: "src-1", provider: "posthog", name: "ph", promote: [], status: "active", created_at: 1, updated_at: 1, replay_rest: { cut: 1, unknown: 0, at: 1, reading: "rp-s" } }],
+      replays: [row("rp-s", 5, { captured_ms: 93_000, duration_ms: 303_000, import_rest: { gen: 7, next_blob: 3, blobs: 3, carry_key: "c", updated_at: 1 } })],
+    }, { indexes: schemaIndexes(schema as any) });
+    const scheduled: unknown[] = [];
+    await h(settleWhole)({ db: d, scheduler: { runAfter: async (...a: unknown[]) => void scheduled.push(a) } }, { replay_id: "rp-s", gen: 7 });
+    const r: any = await d.get("rp-s");
+    expect([r.captured_ms, r.import_rest, r.read_to?.next_blob]).toEqual([303_000, undefined, 3]);
+    const src: any = await d.get("s1");
+    expect([src.replay_rest.reading, src.replay_rest.cut]).toEqual([undefined, 0]);
+    expect(scheduled.length).toBe(1);
   });
 });

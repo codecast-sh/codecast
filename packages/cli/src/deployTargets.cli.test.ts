@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { parseManifest, parseManifestText } from "./workspace/manifest.js";
-import { deploysFor } from "./land/shipCheckout.js";
+import { parseDeployTargetsText, readDeployTargets } from "./workspace/deployTargetsFile.js";
+import { deploysFor, shipSpec } from "./land/shipCheckout.js";
 import { awaitLive, targetDeployProfile, targetsOf } from "./lineDeploy.js";
 import { shipPassBody } from "./land/shipCheckoutCli.js";
 
@@ -19,60 +22,79 @@ stage = "before_push"
 
 [[ship.deploy]]
 name = "convex"
-target = "backend"
 when = ["api/**"]
 run = "deploy.sh"
 stage = "before_push"
+`;
 
-[[ship.deploy]]
-target = "web"
+const TARGETS = `
+[[target]]
+name = "backend"
+ship = "convex"
+
+[[target]]
+name = "web"
 runs = "push"
 when = ["web/**"]
 live = "github-status:acme - web"
 
-[[ship.deploy]]
-target = "cli"
+[[target]]
+name = "cli"
 when = ["cli/**"]
 run = "gh workflow run release.yml"
-stage = "press"
 live = "json:https://dl.acme.dev/latest.json#sourceCommit,version"
 rollback = "release.sh --back $sha"
 `;
 
-describe("targets in [[ship.deploy]]", () => {
-  test("entries that name a target are the repository's targets; a gate is not", () => {
-    const ship = parseManifestText(MANIFEST)!.ship!;
-    const targets = targetsOf("/repo", { ship: () => ship.deploy, line: () => null });
-    expect(targets.map((t) => [t.name, t.runs, t.live.kind, t.ship_stage])).toEqual([
-      ["backend", "here", "marker", "before_push"],
-      ["web", "push", "github-status", "press"],
-      ["cli", "here", "json", "press"],
+const REPO = path.resolve(import.meta.dir, "../../..");
+
+function declared() {
+  const ship = parseManifestText(MANIFEST)!.ship!;
+  return parseDeployTargetsText(TARGETS, ship.deploy).map((e) => e.target);
+}
+
+describe("targets in .codecast/deploy.toml", () => {
+  test("each [[target]] is one, a ship step's target takes the step's command and paths", () => {
+    expect(targetsOf({ declared, line: () => null }).map((t) => [t.name, t.runs, t.live.kind, t.ship_stage, t.command ?? null])).toEqual([
+      ["backend", "here", "marker", "before_push", "deploy.sh"],
+      ["web", "push", "github-status", "press", null],
+      ["cli", "here", "json", "press", "gh workflow run release.yml"],
     ]);
   });
 
-  test("a ship runs the gate and the backend, never a press target or one that deploys on push", () => {
-    const ship = parseManifestText(MANIFEST)!.ship!;
-    expect(deploysFor(ship.deploy, ["api/x.ts", "cli/y.ts", "web/z.tsx"]).map((s) => s.name)).toEqual(["typing-guard", "convex"]);
+  test("a ship runs its steps, and the step a target names carries that target", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-targets-"));
+    fs.mkdirSync(path.join(root, ".codecast"));
+    fs.writeFileSync(path.join(root, ".codecast/workspace.toml"), MANIFEST);
+    fs.writeFileSync(path.join(root, ".codecast/deploy.toml"), TARGETS);
+    const spec = shipSpec(root);
+    expect(deploysFor(spec.deploy, ["api/x.ts", "cli/y.ts", "web/z.tsx"]).map((s) => [s.name, s.target ?? null])).toEqual([["typing-guard", null], ["convex", "backend"]]);
+    fs.writeFileSync(path.join(root, ".codecast/deploy.toml"), "[[target]]\nname = 1\n");
+    expect(shipSpec(root).deploy.map((s) => s.target ?? null)).toEqual([null, null]);
+    fs.rmSync(root, { recursive: true });
   });
 
-  test("a bad target is refused by its entry", () => {
-    expect(() => parseManifestText(`[ship]\n[[ship.deploy]]\ntarget = "x"\nrun = "a"\nlive = "ping"\n`)).toThrow(/ship.deploy\[0\]: live "ping"/);
-    expect(() => parseManifestText(`[ship]\n[[ship.deploy]]\ntarget = "x"\n`)).toThrow(/run/);
-    expect(() => parseManifestText(`[ship]\n[[ship.deploy]]\nrun = "a"\ncolour = "red"\n`)).toThrow(/unknown key/);
+  test("a bad target is refused naming the file and its table", () => {
+    expect(() => parseDeployTargetsText(`[[target]]\nname = "x"\nrun = "a"\nlive = "ping"\n`, [])).toThrow(/deploy.toml: target\[0\]: live "ping"/);
+    expect(() => parseDeployTargetsText(`[[target]]\nname = "x"\n`, [])).toThrow(/needs run/);
   });
 
-  test("codecast's own manifest declares its five targets", () => {
-    const m = parseManifest(path.resolve(import.meta.dir, "../../../.codecast/workspace.toml"))!;
-    const targets = targetsOf("/repo", { ship: () => m.ship!.deploy, line: () => null });
+  test("workspace.toml keeps the [[ship.deploy]] schema every released CLI reads", () => {
+    expect(() => parseManifestText(`[ship]\n[[ship.deploy]]\nrun = "a"\ntarget = "x"\n`)).toThrow(/unknown key in \[\[ship.deploy\]\]: 'target'/);
+    expect(() => parseManifestText(`[ship]\n[[ship.deploy]]\nrun = "a"\nstage = "press"\n`)).toThrow(/stage/);
+  });
+
+  test("codecast's own files declare its five targets, and a ship sends only the backend", () => {
+    const m = parseManifest(path.join(REPO, ".codecast/workspace.toml"))!;
+    const targets = readDeployTargets(REPO, m.ship!.deploy);
     expect(targets.map((t) => t.name)).toEqual(["backend", "web", "cli", "mobile", "desktop"]);
-    expect(deploysFor(m.ship!.deploy, ["packages/cli/src/index.ts", "packages/mobile/app.tsx"]).map((s) => s.name)).toEqual([]);
+    expect(deploysFor(shipSpec(REPO).deploy, ["packages/cli/src/index.ts", "packages/mobile/app.tsx", "packages/convex/convex/x.ts"]).map((s) => [s.name, s.target ?? null])).toEqual([["convex", "backend"]]);
   });
 });
 
 describe("running a target's deploy", () => {
   test("the send is the target's command, or its rollback; a target read from elsewhere waits for its reader", () => {
-    const ship = parseManifestText(MANIFEST)!.ship!;
-    const [backend, , cli] = targetsOf("/repo", { ship: () => ship.deploy, line: () => null });
+    const [backend, , cli] = targetsOf({ declared, line: () => null });
     expect(targetDeployProfile(backend, "deploy")).toEqual({ command: "deploy.sh", target: "backend", trigger: "person" });
     expect(targetDeployProfile(cli, "rollback")).toMatchObject({ command: "release.sh --back $sha", live: "cast line deploy await-live $deploy" });
   });

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { useResetRequest } from "../../hooks/useEmailAuth";
+import { Button } from "../../components/ui/button";
 
 export default function ForgotPasswordPage() {
   const { email, setEmail, error, loading, sent: success, submit: handleSubmit, again } = useResetRequest();
@@ -21,12 +22,9 @@ export default function ForgotPasswordPage() {
             <p className="text-sol-text-muted mb-6">
               Enter the code from your email to reset your password.
             </p>
-            <Link
-              href={`/reset-password?email=${encodeURIComponent(email)}`}
-              className="inline-block w-full py-3 px-4 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg"
-            >
-              Enter Reset Code
-            </Link>
+            <Button asChild variant="amber" size="lg" className="w-full">
+              <Link href={`/reset-password?email=${encodeURIComponent(email)}`}>Enter Reset Code</Link>
+            </Button>
             <p className="mt-6 text-sm text-sol-text-muted">
               Didn&apos;t receive the email?{" "}
               <button
@@ -82,13 +80,15 @@ export default function ForgotPasswordPage() {
             <p className="mt-4 text-sm text-red-400 text-center">{error}</p>
           )}
 
-          <button
+          <Button
+            variant="amber"
+            size="lg"
             type="submit"
             disabled={loading}
-            className="w-full mt-6 py-3 px-4 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg"
+            className="mt-6 w-full"
           >
             {loading ? "Sending..." : "Send Reset Code"}
-          </button>
+          </Button>
 
           <p className="mt-6 text-center text-sm text-sol-text-muted">
             Remember your password?{" "}

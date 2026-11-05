@@ -4,7 +4,7 @@
 import { toast } from "sonner";
 import { formatCallTime } from "@codecast/shared/entities";
 import { useInboxStore } from "../../store/inboxStore";
-import { relTimeShort } from "../../lib/utils";
+import { formatRelative, relTimeShort } from "../../lib/utils";
 import { opsHref } from "./opsPaths";
 import { countWords, escalationWords, knownRelease, usersOf, usersText } from "./issuesModel";
 import { foldedTitle, issueAttention, replayName, replayWho, type AttentionItem } from "./opsHomeModel";
@@ -42,9 +42,10 @@ export function itemRef(it: AttentionItem): string {
 }
 
 export function itemTitle(it: AttentionItem): string {
-  if (it.kind === "issue") return it.variants?.length ? foldedTitle(it.variants.map((g) => g.title)) : it.group.title;
+  // foldedTitle drops request ids (one per call, they name no cause), so a single issue's title reads the same way.
+  if (it.kind === "issue") return foldedTitle(it.variants?.length ? it.variants.map((g) => g.title) : [it.group.title]);
   if (it.kind === "watch") return it.watch.name;
-  if (it.kind === "replay") return it.group?.title ?? replayName(it.replay);
+  if (it.kind === "replay") return it.group ? foldedTitle([it.group.title]) : replayName(it.replay);
   const n = it.health.problems?.length ?? 0;
   // Two or more failing pieces of one app are one row in the source's own headline (the overview's header and the Apps head say the same), never the first alone.
   if (n > 1) return `${it.source.name}: ${it.health.label}`;
@@ -92,7 +93,7 @@ export function itemFacts(it: AttentionItem, now: number, groupById?: ReadonlyMa
       out.push(
         { text: (w.last_error ?? "no answer").slice(0, 120), rank: 1, mono: true },
         w.missed ? { text: `${plural(w.missed, "failed read")} in a row`, rank: 2 } : null,
-        w.last_at ? { text: `last value ${relTimeShort(w.last_at, now)} ago`, rank: 3 } : null,
+        w.last_at ? { text: `last value ${formatRelative(w.last_at, now)}`, rank: 3 } : null,
       );
     } else {
       out.push({ text: `${fmt(w.last_value, w.unit)} ${w.direction === "above" ? "above" : "below"} ${fmt(w.threshold, w.unit)}`, rank: 1 });

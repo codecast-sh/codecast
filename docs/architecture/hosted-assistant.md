@@ -290,8 +290,8 @@ routes) are edited only by the stage named here.
 | Billing | `~/src/platform/packages/billing/**`, `convex/billing.ts`, its route in `convex/http.ts` | Stripe over fetch (no SDK), checkout, portal, signed webhook. Prices and limits come from the `PLANS` catalog (see Plans); `@platform/billing` takes them as input and holds none of its own. Env-gated: no keys means plans are granted by hand and the upgrade button says so. |
 | Google identity and connectors | `convex/auth.ts`, `platform/packages/auth` web provider list, `components/AuthProviderButtons.tsx`, `convex/googleOAuth.ts` | Google sign-in (env-gated on `AUTH_GOOGLE_ID`), Calendar scope, an internal token getter the tools call. |
 | pi cost | `packages/cli/src/parser.ts` | Read pi's per-message `usage.cost` into `usage_totals`. |
-| Hosted mode (web) | `packages/web/lib/surfaceRules.ts` and `lib/surfaces.ts` (the registry and `MODE_WORDS`), `packages/web/components/simple/**` (hosted wording, plan rules, connect, billing), `app/settings/plan/page.tsx` | Inside the main app's DashboardLayout; gated through the registry, never a separate shell. |
-| Onboarding | `packages/web/app/welcome/**` | Two steps, sign in and start, with connect as a side screen (`?step=connect`). |
+| Hosted mode (web) | Removed in 675dda920. What remains is `packages/web/components/simple/**` (the assistant mark, privacy note, connect toast and the shared wording such as `askFirst.ts`) and `app/settings/plan/page.tsx` | The web app has one mode; the assistant is reached from the main app's DashboardLayout. |
+| Onboarding | `packages/web/app/login/page.tsx`, `packages/web/app/signup/page.tsx` | The separate `/welcome` onboarding was removed with hosted mode in 675dda920; sign in and sign up are the app's own pages. |
 | Hosted mode (mobile) | `packages/mobile/components/hosted/**`, the tabs, `app/session/[id].tsx` | The same mode in the phone's tabs. |
 
 ## Data model
@@ -906,7 +906,7 @@ How hosted mode is wired on the phone (`packages/mobile`, built 2026-10-06):
   page names (`/approvals`, `/plan`, `/mail`, `/integrations`, `/routines`)
   resolve through the same alias table (`pageAliasTarget`).
 
-How onboarding is wired (`packages/web/app/welcome/`):
+How onboarding was wired at `/welcome`, kept as the design record. The page, its `onboarding.ts` and `EmailStep.tsx` were removed with web hosted mode in 675dda920; sign in now runs through `packages/web/app/login/page.tsx` and `packages/web/app/signup/page.tsx`:
 
 - **Screens.** `onboarding.ts welcomeStep` picks the screen: signed out is
   sign in; signed in is connect unless mail is already connected, the
@@ -1185,9 +1185,9 @@ How onboarding is wired (`packages/web/app/welcome/`):
   group labels are tracked mono, and send is one ink disc in the app and on
   /welcome.
 
-- **One route guard.** A page the mode hides redirects from the shell
-  (`DashboardLayout`, `surfaceRules.ts hiddenPageRedirect`, read through the
-  same `showsPage` as the rail and palette): `/routines` and `/workflows` go
+- **One route guard** (removed with web hosted mode in 675dda920). A page the
+  mode hid redirected from the shell (`DashboardLayout`, through the same
+  `showsPage` rule as the rail and palette): `/routines` and `/workflows` go
   to Routines, `/plans` and goals to To-dos, a Machines settings page to
   Settings, anything else to the inbox.
 - **The assistant's door is a page of its own.** `/?for=assistant` ends after

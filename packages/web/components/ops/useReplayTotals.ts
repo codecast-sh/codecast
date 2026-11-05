@@ -8,13 +8,13 @@
 import { useMemo } from "react";
 import { REPLAY_DEFAULT_MATCH, replayMatches, resolveReplayFilter } from "@codecast/shared/replay";
 import { useOpsReplays, useOpsReplayTally, useSyncOpsReplayBrowse } from "../../hooks/useSyncOps";
-import { REPLAY_PAGE } from "./replayModel";
+import { REPLAY_PAGE, floorShown } from "./replayModel";
 
 /** provisional: the server has not counted yet, so this is the cached rows that match, a floor every surface marks the same way. */
 export type ReplayTotal = { total: number; capped: boolean; provisional?: boolean };
 
 /** The number a count shows: a floor of 100 or more rounds down to the hundred, as the Replays tab badge does, so it stops flipping between 1,501+ and 1,500+ and every surface shows the same floor. */
-export const replayCountShown = (t: ReplayTotal) => (t.capped && t.total >= 100 ? Math.floor(t.total / 100) * 100 : t.total);
+export const replayCountShown = (t: ReplayTotal) => (t.capped ? floorShown(t.total) : t.total);
 
 /** A count as every surface writes it: "1,400+" when it is a floor. */
 export const replayTotalText = (t: ReplayTotal) => `${replayCountShown(t).toLocaleString()}${t.capped && t.total > 0 ? "+" : ""}`;

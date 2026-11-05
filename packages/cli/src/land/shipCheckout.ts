@@ -25,6 +25,7 @@ import { readSessionLinkCache } from "../localConversationMap.js";
 import { git, gitTry } from "../wipSnapshot.js";
 import { MANIFEST_REL_PATH, parseManifest } from "../workspace/manifest.js";
 import type { ShipDeployStep, ShipSpec } from "../workspace/types.js";
+import { readDeployTargetEntries } from "../workspace/deployTargetsFile.js";
 import { attributeEdits, isMidTurn, type Attribution, type SessionEdits } from "./attribute.js";
 import { buildCommits, freezeWorktree, type Frozen } from "./commitGroups.js";
 import { levelCheckout, treeDiff, type LevelResult } from "./level.js";
@@ -101,11 +102,22 @@ export async function upstreamRef(root: string): Promise<string> {
   throw new Error("No upstream: this checkout has no origin/main (or origin/HEAD)");
 }
 
-/** The checkout's [ship] table. Read from the file alone: detection has nothing to say about shipping. */
+/**
+ * The checkout's [ship] table. Read from the file alone: detection has nothing to say about shipping. Each step a
+ * target of .codecast/deploy.toml names carries that target, so the ship records a deploy of it (deploys.md DP11);
+ * a deploy.toml that cannot be read tags nothing and never stops a ship (`cast line deploy targets` reports it).
+ */
 export function shipSpec(root: string): ShipSpec {
   const file = path.join(root, MANIFEST_REL_PATH);
   if (!fs.existsSync(file)) return DEFAULT_SHIP;
-  return parseManifest(file)?.ship ?? DEFAULT_SHIP;
+  const spec = parseManifest(file)?.ship ?? DEFAULT_SHIP;
+  let targets: Map<string, string>;
+  try {
+    targets = new Map(readDeployTargetEntries(root, spec.deploy).flatMap((e) => (e.ship_step ? [[e.ship_step, e.target.name] as const] : [])));
+  } catch {
+    return spec;
+  }
+  return { ...spec, deploy: spec.deploy.map((s) => (targets.has(s.name) ? { ...s, target: targets.get(s.name)! } : s)) };
 }
 
 function credentialReason(rel: string, text: string | null): string | null {
@@ -380,9 +392,9 @@ function globMatch(pattern: string, file: string): boolean {
   return re.test(file);
 }
 
-/** The steps a ship runs: those with a command, at a ship's stage, whose paths the shipped commits touch. */
+/** The steps a ship runs: those whose paths the shipped commits touch. */
 export function deploysFor(steps: ShipDeployStep[], shipped: string[]): ShipDeployStep[] {
-  return steps.filter((s) => s.stage !== "press" && s.run.trim() && (!s.when.length || shipped.some((p) => s.when.some((g) => globMatch(g, p)))));
+  return steps.filter((s) => !s.when.length || shipped.some((p) => s.when.some((g) => globMatch(g, p))));
 }
 
 /** Files left uncommitted in the checkout under a step's paths: they went out with the deploy too. */

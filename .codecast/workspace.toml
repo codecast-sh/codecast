@@ -63,43 +63,9 @@ when = ["packages/web/**", "packages/shared/**", "platform/**"]
 run = "packages/web/scripts/typing-guard.sh"
 stage = "before_push"
 
-# A step that names a `target` is one of this repository's deploy targets
-# (docs/architecture/deploys.md DP10): the Deploys page shows what runs on it
-# and the commits on main waiting for it (those touching its `when` paths),
-# and Deploy sends it from this checkout. `live` is how codecast reads what
-# runs there; `policy` is who starts it (press: a person's Deploy; auto: CI on
-# main going green). A `press` stage never runs at a ship.
+# Convex: its deploy target, the backend, is declared in .codecast/deploy.toml.
 [[ship.deploy]]
 name = "convex"
-target = "backend"
 when = ["packages/convex/**", "packages/shared/**", "platform/**"]
 run = "packages/convex/deploy.sh --typecheck=disable"
 stage = "before_push"
-live = "marker"                       # deploy.sh and the ship record each deploy
-
-# Railway builds every push to main and posts a commit status per deploy.
-[[ship.deploy]]
-target = "web"
-runs = "push"
-when = ["packages/web/**", "packages/shared/**", "platform/**"]
-live = "github-status:codecast - web"
-
-# Cut in CI; live once dl.codecast.sh/latest.json names the commit (CLAUDE.md, CLI releases).
-[[ship.deploy]]
-target = "cli"
-when = ["packages/cli/**", "packages/shared/**", "platform/**"]
-run = "gh workflow run cut-cli-release.yml -R codecast-sh/codecast"
-stage = "press"
-live = "json:https://dl.codecast.sh/latest.json#sourceCommit,version"
-
-[[ship.deploy]]
-target = "mobile"
-when = ["packages/mobile/**", "packages/shared/**"]
-run = "cd packages/mobile && eas update --branch production --message \"$(git log -1 --format=%s -- .)\" --non-interactive"
-stage = "press"
-
-[[ship.deploy]]
-target = "desktop"
-when = ["packages/electron/**"]
-run = "packages/electron/scripts/release.sh patch --no-floor"
-stage = "press"

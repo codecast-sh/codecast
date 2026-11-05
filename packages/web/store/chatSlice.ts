@@ -642,6 +642,7 @@ type ChatSliceImpl = ChatSliceData &
 type ChatDraft = ChatSliceData & {
   currentUser: { _id?: string } | null;
   pending: Record<string, PendingEntry>;
+  clientState?: { ui?: { active_team_id?: string | null } };
 };
 
 function viewerId(draft: ChatDraft): string {
@@ -1089,18 +1090,26 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     // widen a sweep an old bundle asked for.
     markAllThreadsRead: action(function (this: ChatDraft, teamId?: string | null, kind?: ThreadKind | "all") {
       const scope: ThreadKind | undefined = kind === "all" ? undefined : (kind ?? "chat");
+      // threadUnread counts the workspace on screen; a sweep of another one
+      // (the switcher's badge) must not move it.
+      const onScreen = String(this.clientState?.ui?.active_team_id ?? "") === String(teamId ?? "");
       for (const id in this.threadInbox) {
         const row = this.threadInbox[id];
         // Page rows follow the owner into every workspace (threadRowInWorkspace).
         if (row.kind !== "page" && String(row.team_id ?? "") !== String(teamId ?? "")) continue;
         if (scope && row.kind !== scope) continue;
-        if (row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+        if (onScreen && row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
         row.last_read_at = Math.max(row.last_read_at, row.last_activity_at);
         row.unread = 0;
         row.unread_capped = false;
         row.updated_at = Date.now();
       }
-      if (!scope) this.threadUnread = 0;
+      if (!scope) {
+        if (onScreen) this.threadUnread = 0;
+        // The same sweep clears that workspace's badge in the switcher.
+        this.threadUnreadByWorkspace = (this.threadUnreadByWorkspace ?? [])
+          .filter((w) => String(w.team_id ?? "") !== String(teamId ?? ""));
+      }
     }),
 
     // Reconciles the local rows with a fresh first page: a row the server no

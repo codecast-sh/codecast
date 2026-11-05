@@ -84,6 +84,21 @@ function diagramOf(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<FlowEd
     return dedupe(side);
   };
 
+  // A segment's stop the flow sends back to the session the change came from (its subject station) is no stop:
+  // the work goes back, the session fixes it, and the stage runs again. The route to the subject station itself
+  // is said once, on that exit, never as a separate way on.
+  const subjectIds = new Set(nodes.filter((n) => n.backend === "subject").map((n) => n.id));
+  const backExits = new Set(edges.filter((e) => subjectIds.has(e.to) && takesOwnExit(e)).map((e) => prefix + e.from));
+  const toSession = (r: SideRoute): SideRoute | null =>
+    subjectIds.has(r.toId.slice(prefix.length)) ? null : backExits.has(r.toId) ? { ...r, tone: "back", leadsTo: SESSION_WORDS } : r;
+  const reroute = (step: DiagramStep): DiagramStep => {
+    const inner = step.inner.map(reroute);
+    // A segment's frame repeats what one of its steps already says when the parent's end has the same name.
+    const said = new Set(inner.flatMap((i) => i.side.map((r) => `${r.tone}|${r.outcome}`)));
+    const side = step.side.map(toSession).filter((r): r is SideRoute => !!r && !said.has(`${r.tone}|${r.outcome}`));
+    return { ...step, side, inner };
+  };
+
   const steps: DiagramStep[] = main.map((s, i) => {
     const next = main[i + 1]?.id;
     const last = i === main.length - 1;
@@ -109,14 +124,25 @@ function diagramOf(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<FlowEd
       ...(s.slot ? { slot: s.slot } : {}),
     };
   });
+  const drawn = subjectIds.size ? steps.map(reroute) : steps;
   const lastStep = main[main.length - 1];
   const leaveFrom = lastStep ? joinOf.get(lastStep.id) ?? lastStep.id : null;
   const endEdge = leaveFrom ? edges.find((e) => segmentTopOf(e.from) === leaveFrom && byId.get(segmentTopOf(e.to))?.type === "exit" && !isStop(byId.get(segmentTopOf(e.to))!)) : undefined;
   const endId = endEdge ? segmentTopOf(endEdge.to) : null;
-  return { steps, end: endId ? byId.get(endId)?.label ?? null : null, endId: endId ? prefix + endId : null };
+  return { steps: drawn, end: endId ? byId.get(endId)?.label ?? null : null, endId: endId ? prefix + endId : null };
 }
 
 const isStop = (n: FlowNodeIn) => n.segment_exit === "stop" || (n.type === "exit" && !!n.stop);
+
+/** Where a stage's findings go when the flow sends them back: the session the change came from. */
+export const SESSION_WORDS = "this session";
+
+/** Whether an edge out of a segment's exit is taken on that exit: its condition names no exit, or names this one
+ *  (`review__changes.json.exit = changes`). The parser writes the same route from every stop of the segment. */
+function takesOwnExit(e: FlowEdgeIn): boolean {
+  const named = e.condition?.match(/\.exit\s*=\s*([\w-]+)/)?.[1];
+  return !named || e.from.endsWith(`${SEGMENT_SEP}${named}`) || e.from === named;
+}
 
 /** A segment's own steps: its nodes with the segment's name taken off, its entry as their start, its exits as ends. */
 function innerSteps(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<FlowEdgeIn>, seg: string, prefix: string): DiagramStep[] {

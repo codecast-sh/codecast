@@ -12,8 +12,7 @@
 import { spawn, spawnSync } from "./proc.js";
 import { deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
 import { resolveCastInvocation } from "./castInvocation.js";
-import { targetFromLineDeploy, targetFromShipEntry, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
-import type { ShipDeployStep } from "./workspace/types.js";
+import { targetFromLineDeploy, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
 
 export type DeployStageReply = {
   project: { _id: string; short_id: string | null; title: string | null };
@@ -359,13 +358,9 @@ function ghCli(args: string[]): { code: number; out: string } {
 
 // ── any deploy target (deploys.md DP10 to DP13) ──────────────────────────────
 
-/** This checkout's deploy targets: each [[ship.deploy]] entry that names one, then the line profile's [line.deploy]. */
-export function targetsOf(root: string, read: { ship: () => ShipDeployStep[]; line: () => { command?: string | null; target?: string | null } | null | undefined }): DeployTarget[] {
-  const out: DeployTarget[] = [];
-  for (const step of read.ship()) {
-    const t = targetFromShipEntry(step);
-    if (t) out.push(t);
-  }
+/** This checkout's deploy targets: the [[target]] tables of .codecast/deploy.toml, then the line profile's [line.deploy]. */
+export function targetsOf(read: { declared: () => DeployTarget[]; line: () => { command?: string | null; target?: string | null } | null | undefined }): DeployTarget[] {
+  const out = [...read.declared()];
   const line = targetFromLineDeploy(read.line());
   if (line && !out.some((t) => t.name === line.name)) out.push(line);
   return out;
@@ -375,7 +370,8 @@ export function targetsOf(root: string, read: { ship: () => ShipDeployStep[]; li
 export async function checkoutTargets(root: string): Promise<DeployTarget[]> {
   const { shipSpec } = await import("./land/shipCheckout.js");
   const { loadLineProfile } = await import("./lineProfile.js");
-  return targetsOf(root, { ship: () => shipSpec(root).deploy, line: () => { try { return loadLineProfile(root).profile.deploy; } catch { return null; } } });
+  const { readDeployTargets } = await import("./workspace/deployTargetsFile.js");
+  return targetsOf({ declared: () => readDeployTargets(root, shipSpec(root).deploy), line: () => { try { return loadLineProfile(root).profile.deploy; } catch { return null; } } });
 }
 
 /**
@@ -395,7 +391,7 @@ export function targetDeployProfile(t: DeployTarget, action: "deploy" | "redeplo
 export async function deployProfileFor(d: { target: string; action?: string | null }, root: string): Promise<{ profile: Partial<LineDeployProfile> | null; root: string; why?: string }> {
   if (d.action) {
     const t = (await checkoutTargets(root)).find((x) => x.name === d.target);
-    if (!t) return { profile: null, root, why: `No target ${d.target} in this checkout's .codecast/workspace.toml` };
+    if (!t) return { profile: null, root, why: `No target ${d.target} in this checkout's .codecast/deploy.toml` };
     return { profile: targetDeployProfile(t, d.action as "deploy" | "redeploy" | "rollback"), root };
   }
   const { loadLineProfile } = await import("./lineProfile.js");
@@ -419,7 +415,7 @@ export async function awaitLive(opts: { deploy: string; read: DeployRead; sleep?
 
 /** The targets view in words, for `cast line deploy targets`. */
 export function formatTargets(view: { targets: any[] }): string {
-  if (!view.targets.length) return "No deploy targets published. Name a target on a [[ship.deploy]] entry in .codecast/workspace.toml, then: cast line deploy targets --publish";
+  if (!view.targets.length) return "No deploy targets published. Declare one as a [[target]] in .codecast/deploy.toml, then: cast line deploy targets --publish";
   const out: string[] = [];
   const short = (s: string | null | undefined) => (s ? s.slice(0, 9) : "-");
   for (const t of view.targets) {

@@ -25,7 +25,7 @@ import { cn } from "../../../lib/utils";
 import { DocumentDetailLayout } from "../../DocumentDetailLayout";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { DocRow, InlineEdit } from "./ScopeEditors";
-import { StateBar, StateTally } from "../OrgNodeCards";
+import { StateBar, StateTally } from "../StateBar";
 import { SessionIdentityLine, SessionMark } from "../../identity";
 import { ORG_STATE_META } from "../orgMeta";
 import { ORG_TOP_N, sortOrgSessions, type OrgRole, type OrgSession, type OrgTree } from "../orgTypes";
