@@ -112,16 +112,7 @@ export function PermissionRow({
           On
         </span>
       ) : action && !awaitingPrompt ? (
-        <Button
-          size="sm"
-          variant={leavesApp ? "outline" : "default"}
-          onClick={handle}
-          className={
-            leavesApp
-              ? "h-7 border-sol-border bg-transparent px-2.5 text-xs text-sol-text shadow-none hover:bg-sol-bg-highlight/60 [&_svg]:size-3"
-              : "h-7 bg-sol-blue px-3 text-xs text-sol-bg"
-          }
-        >
+        <Button size="xs" variant={leavesApp ? "outline" : "blue"} onClick={handle}>
           {action}
           {leavesApp && <ExternalLink aria-hidden />}
         </Button>

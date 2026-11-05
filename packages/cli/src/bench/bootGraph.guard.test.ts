@@ -251,7 +251,18 @@ describe("command groups stay off the boot graph", () => {
     // -> tmux, so loading resourceMonitor first threw a TDZ ReferenceError.
     // 330 on 2026-10-29: contracts/inboxFields.ts, the inbox field ownership
     // lists split out of contracts/inboxProjection.ts for its max-lines pin.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(330);
+    // 335 on 2026-11-04, five leaves that modules already here call at load or
+    // on their main path (none brings another file): claudeConfigDirs.ts (the
+    // CLAUDE_CONFIG_DIR projects dirs reconciliation.ts walks), shared/async
+    // (the mapLimit knownValueRedaction.ts reads with instead of readdirSync),
+    // contracts/deployTargets.ts (workspace/manifest.ts's deploy targets), and
+    // the barrels' contracts/slashCommand.ts and render/structuredMessage.ts.
+    // 338 the same day, three leaves: contracts/vaultMessages.ts (the vault's
+    // message tags, split out of the barrel's secrets contract), and
+    // replay/events.ts with the contracts/replay.ts it reads, which
+    // entities/index.ts now loads for the replay link's ?t (parseReplayT,
+    // replayTParam). None imports a command group.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(338);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -305,7 +316,15 @@ describe("command groups stay off the boot graph", () => {
     // analytics/events.ts and contracts/transcriptChunk.ts (+0.4 each).
     // +1 on 2026-11-01: the `herd take` subcommand registration in index.ts
     // (its module, herdCommand.ts, loads lazily).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4406);
+    // 4465 on 2026-11-04, never re-pinned while the file count failed first:
+    // the five leaves of 335 (contracts/deployTargets.ts +11.4,
+    // claudeConfigDirs.ts +3.2, slashCommand.ts +1.7, shared/async +0.9,
+    // structuredMessage.ts +0.5), replayPlayer.ts (+3.3), formatter.ts and
+    // knownValueRedaction.ts (+2 each), then the three leaves of 338:
+    // contracts/replay.ts (+15.7) and replay/events.ts (+10.2), carried for
+    // the two ?t helpers entities/index.ts reads, and vaultMessages.ts (+2.1,
+    // moved out of machineMessages.ts, which fell by as much).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4465);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -438,7 +457,15 @@ describe("command groups stay off the boot graph", () => {
     // orchestration and client (the CLI loads the same file lazily).
     // 525 on 2026-10-31: transcriptTurn.ts, the unanswered-turn reading the
     // take's busy check makes of a transcript tail.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(525);
+    // 532 on 2026-11-04: index.ts's four leaves other than shared/async (above),
+    // commandPanel.ts (which permission prompt is the session's own command
+    // panel, read on every prompt), land/hold.ts (the hold verdict
+    // land/scan.ts reads) and bridge/chromeProfiles.ts (realChrome.ts's profile
+    // pick). Each is a leaf its caller uses directly; none is a command group.
+    // 536 the same day: index.ts's three leaves (above) and
+    // backgroundTaskScan.ts, the open background task scanner split out of
+    // daemon.ts for its max-lines pin.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(536);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

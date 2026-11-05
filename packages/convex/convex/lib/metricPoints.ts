@@ -27,8 +27,8 @@ export const METRIC_SERIES = {
 } as const;
 
 export type MetricPt = { at: number; value: number };
-/** One drawn point: the bucket's average at its mean time, with the bucket's extremes. */
-export type SeriesPoint = { at: number; value: number; min: number; max: number };
+/** One drawn point: the bucket's average at its mean time, with the bucket's extremes and how many values it holds. */
+export type SeriesPoint = { at: number; value: number; min: number; max: number; n: number };
 type Entry = { at: number; n: number; sum: number; min: number; max: number };
 
 export const hourOf = (at: number) => Math.floor(at / HOUR) * HOUR;
@@ -49,22 +49,26 @@ export function rollupOf(points: readonly MetricPt[]): { n: number; sum: number;
 /**
  * Entries inside [from, to] as at most `buckets` drawn points. Fewer entries
  * than buckets come back one each; more are folded into equal time buckets,
- * each the count-weighted average with its min and max. `step_ms` is the
- * bucket width, 0 when nothing was folded.
+ * each the count-weighted average with its min and max. The buckets sit on
+ * a grid fixed to the epoch (multiples of the width), never to the window's
+ * start, so two reads of the same range a minute apart, or the overview's and
+ * the watch page's, fold the same values together and say the same means.
+ * Each point carries `n`, the values it holds. `step_ms` is the bucket
+ * width, 0 when nothing was folded.
  */
 export function bucketize(entries: readonly Entry[], from: number, to: number, buckets: number): { points: SeriesPoint[]; step_ms: number } {
   const inside = entries.filter((e) => e.at >= from && e.at <= to && e.n > 0).sort((a, b) => a.at - b.at);
   const n = Math.max(1, Math.floor(buckets));
-  if (inside.length <= n) return { points: inside.map((e) => ({ at: e.at, value: e.sum / e.n, min: e.min, max: e.max })), step_ms: 0 };
+  if (inside.length <= n) return { points: inside.map((e) => ({ at: e.at, value: e.sum / e.n, min: e.min, max: e.max, n: e.n })), step_ms: 0 };
   const step = Math.ceil((to - from) / n) || 1;
   const out: SeriesPoint[] = [];
   let key = -1;
   let acc = { atSum: 0, k: 0, n: 0, sum: 0, min: Infinity, max: -Infinity };
   const flush = () => {
-    if (acc.n) out.push({ at: Math.round(acc.atSum / acc.k), value: acc.sum / acc.n, min: acc.min, max: acc.max });
+    if (acc.n) out.push({ at: Math.round(acc.atSum / acc.k), value: acc.sum / acc.n, min: acc.min, max: acc.max, n: acc.n });
   };
   for (const e of inside) {
-    const b = Math.floor((e.at - from) / step);
+    const b = Math.floor(e.at / step);
     if (b !== key) {
       flush();
       key = b;

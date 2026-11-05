@@ -131,3 +131,11 @@ export function orderTargets(targets: ReadonlyArray<DeployTargetRow>, deploys: R
     return rank[ta] - rank[tb] || b.queue.commits - a.queue.commits || a.name.localeCompare(b.name);
   });
 }
+
+/** The Deploys page for the run's team, at one target when the words name one ("web dp-12"). */
+export function deploysHref(run: any, words?: string | null): string {
+  const team = typeof run?.workspace === "string" && run.workspace.startsWith("team:") ? run.workspace.slice(5) : null;
+  const target = words?.match(/\b([a-z][a-z0-9-]{0,31}) dp-\d+/)?.[1] ?? null;
+  const q = [team ? `team=${team}` : null, target ? `target=${encodeURIComponent(target)}` : null].filter(Boolean).join("&");
+  return `/deploys${q ? `?${q}` : ""}`;
+}

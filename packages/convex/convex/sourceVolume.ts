@@ -11,7 +11,7 @@ import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { patchSourceStats, SOURCE_STAT_DAYS, SOURCE_STAT_HOURS, type SourceStats } from "./ingest";
+import { patchSourceStats, SOURCE_STAT_DAYS, SOURCE_STAT_HOURS, type SourceStats } from "./lib/sourceStats";
 import { utcDay } from "./lib/ingestGroups";
 
 const DAY_MS = 86_400_000;

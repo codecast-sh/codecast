@@ -9,39 +9,26 @@
 // Access is the stored workspace key (CLAUDE.md, Workspace access vs
 // routing): a reader sees a replay when they hold its `workspace`. Chunk keys
 // never leave the server except as URLs signed after that check.
-import { v, type ObjectType } from "convex/values";
+import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { Gunzip, gzipSync, strToU8, strFromU8 } from "fflate";
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { notFound, requireUserOrToken } from "./lib/auth";
-import { readableRowByRef } from "./lib/rowByRef";
 import { scopeArgs } from "./lib/ingestScopeArgs";
-import { scopeOf, sourceByRef } from "./lib/ingestScope";
+import { scopeOf } from "./lib/ingestScope";
 import { takeFromWindow } from "./ipRateLimit";
 import { nextShortId } from "./counters";
-import { countLanded, patchSourceStats } from "./ingest";
-import { sha256Hex } from "./lib/hash";
-import { readBodyCapped } from "./lib/tokenHttp";
+import { countLanded, patchSourceStats } from "./lib/sourceStats";
 import { ingestUserValidator, replayDomChunkMetaValidator, replayImportRestValidator, replayReadToValidator, replayProviderValidator, replayShapeValidator } from "./ingestSchema";
-import {
-  parseReplayChunkKey,
-  parseReplayDomChunkKey,
-  r2FreshGetUrl,
-  r2Presign,
-  replayChunkKey,
-  replayDomChunkKey,
-  replaysBucketFromEnv,
-  safeReplayPathSegment,
-  type R2Bucket,
-} from "./lib/r2";
-import { REPLAY_LIMITS, VENDOR_CONVERTER_VERSION, VENDOR_REFRESH_WHYS, needsVendorImport, type ReplayEvent, type ReplayProvider } from "@codecast/shared/contracts/replay";
+import { parseReplayChunkKey, parseReplayDomChunkKey, replaysBucketFromEnv, type R2Bucket } from "./lib/r2";
+import { REPLAY_LIMITS, VENDOR_CONVERTER_VERSION, VENDOR_REFRESH_WHYS, needsVendorImport, type ReplayProvider } from "@codecast/shared/contracts/replay";
 import { INGEST_SHORT_ID_PREFIX, type IngestItem, type SourceProvider } from "@codecast/shared/contracts/ingest";
-import { compareReplays, currentTimelineText, exactReplayId, foldRepeatNavs, parseReplayEvents, rageClicksOf, renderTimeline, replayCounts, replayFacets, replayIssues, replayMatches, replayPeople, replayShape, sortPeople, sortReplayEvents, REPLAY_BROWSE_SCAN, REPLAY_ENV_KEYS, REPLAY_HAS, REPLAY_PEOPLE_SORTS, REPLAY_SORTS, SHAPE_VERSION, type ReplayMatch, type ReplayPeopleSort, type RrwebEvent } from "@codecast/shared/replay";
+import { replayShape, SHAPE_VERSION, type ReplayMatch } from "@codecast/shared/replay";
 import {
   REPLAY_DOM_LIMITS,
+  REPLAY_DOM_WINDOW,
   REPLAY_FRAME_PATH,
   REPLAY_PLAYER_ORIGIN,
   REPLAY_PLAYER_MODES,
@@ -50,10 +37,13 @@ import {
   type ReplayChunkKind,
   type ReplayDomChunkMeta,
   type ReplayPlayerLink,
-  type ReplayPlayerManifest,
 } from "@codecast/shared/contracts/replayPlayer";
 import { mintReplayCap, replayCapKey } from "./lib/replayCap";
 import { patchReplay, replayIndexFields, replayIndexStale } from "./lib/replayIndex";
+import { moveTally } from "./lib/replayTallies";
+import { domChunkMeta, lastCaptureTimestamp, readDomChunkSpan, readReplayChunks } from "./lib/replayChunks";
+import { applyIssues, domArgs, importExternalArgs, importExternalCore, importShrinks, summarize } from "./lib/replayImport";
+import { browseCore, detailCore, LIST_MAX, listCore, readableReplay, replayView, writeReplayTimeline } from "./lib/replayReads";
 
 type ReplayItem = Extract<IngestItem, { type: "replay" }>;
 type Db = { db: any };
@@ -72,35 +62,12 @@ const ASSEMBLE_STALE_MS = 10 * 60_000;
  */
 export const CHUNK_LANDING_MS = 10 * 60_000;
 /**
- * The most a chunk may expand to when gunzipped. A real chunk is at most
- * chunk_max_events events, about 1 MB of JSON; the cap leaves room for that
- * while keeping the decoded string well inside an action's memory.
- */
-export const REPLAY_CHUNK_MAX_INFLATED_BYTES = 8 * 1024 * 1024;
-
-/**
  * New recordings one source may open per hour. Anything holding the public
  * ingest key can name a fresh replay id on every sign, error item or
  * manifest, and each opens a row and a short id; past this they are refused
  * (a chunk sign answers 400, an error keeps no recording link).
  */
 export const REPLAYS_NEW_PER_HOUR = 300;
-
-/** What an import carries about the DOM capture it stored (storeReplayDom). */
-const domArgs = {
-  dom_chunk_keys: v.optional(v.array(v.string())),
-  dom_bytes: v.optional(v.number()),
-  /** The capture's first rrweb timestamp: the epoch the stream's t counts from. */
-  dom_t0: v.optional(v.number()),
-  /** Each chunk's span and size, parallel to dom_chunk_keys (storeReplayDom). */
-  dom_chunk_meta: v.optional(v.array(replayDomChunkMetaValidator)),
-};
-
-/** The chunk spans a row keeps, when they still match its keys one for one; else null (the player then reads the capture whole). */
-export function domChunkMeta(row: { dom_chunk_keys?: string[]; dom_chunk_meta?: ReplayDomChunkMeta[] }): ReplayDomChunkMeta[] | null {
-  const keys = row.dom_chunk_keys ?? [];
-  return keys.length > 0 && row.dom_chunk_meta?.length === keys.length ? row.dom_chunk_meta : null;
-}
 
 /** The provider a recording from this source is: our recorder, unless the source mirrors a vendor. */
 export function replayProviderFor(source: SourceProvider): ReplayProvider {
@@ -141,7 +108,12 @@ export async function ensureReplay(ctx: Db, source: Doc<"event_sources">, extern
     created_at: now,
     updated_at: now,
   };
+  // A source's first recording starts its tallies at zero, so they are whole from here on (lib/replayTallies.ts).
+  if (source.replay_tally_at === undefined && !(await ctx.db.query("replays").withIndex("by_source_started", (q: any) => q.eq("source_id", source._id)).first())) {
+    await ctx.db.patch(source._id, { replay_tally_at: now });
+  }
   const id = await ctx.db.insert("replays", row);
+  await moveTally(ctx, { workspace: row.workspace, source_id: row.source_id }, null, row, now);
   return { ...row, _id: id, _creationTime: now } as Doc<"replays">;
 }
 
@@ -197,7 +169,7 @@ export async function linkReplayToGroup(ctx: Db, source: Doc<"event_sources">, e
   const row = await ensureReplay(ctx, source, externalId, now);
   if (!row) return null;
   if (!row.group_ids.some((g) => g === groupId) && row.group_ids.length < REPLAY_GROUP_LINKS_MAX) {
-    await ctx.db.patch(row._id, { group_ids: [...row.group_ids, groupId], updated_at: now });
+    await patchReplay(ctx, row, { group_ids: [...row.group_ids, groupId], updated_at: now });
   }
   return row._id;
 }
@@ -275,142 +247,9 @@ export const recordChunk = internalMutation({
   handler: async (ctx, args) => recordReplayChunk(ctx, await sourceOrThrow(ctx, args.source_id), args.replay_external_id, args.seq, args.key, Date.now(), args.kind ?? "events"),
 });
 
-// ── Reading chunks (actions) ──
+// ── Assembling a recording's timeline ──
 
-const isGzip = (b: Uint8Array) => b.length > 2 && b[0] === 0x1f && b[1] === 0x8b;
-
-function concatBytes(parts: Uint8Array[], total: number): Uint8Array {
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
-}
-
-// The ingest key is public and the presigned PUT does not sign a length, so a
-// chunk object can be any size: it is read through the shared capped reader.
-export { readBodyCapped };
-
-/** Input fed to the inflater per step. Deflate expands at most ~1032x, so one step yields about 1 MB at worst. */
-const GUNZIP_STEP_BYTES = 1024;
-
-/**
- * Gunzip that gives up past `max` output bytes (null), so a small gzip bomb
- * cannot exhaust the action's memory. The ISIZE trailer is not trusted: it
- * is written by the uploader and wraps at 4 GB.
- */
-export function gunzipCapped(bytes: Uint8Array, max: number): Uint8Array | null {
-  const parts: Uint8Array[] = [];
-  let total = 0;
-  let over = false;
-  const inflater = new Gunzip((chunk) => {
-    if (over) return;
-    total += chunk.length;
-    if (total > max) {
-      over = true;
-      return;
-    }
-    parts.push(chunk);
-  });
-  try {
-    for (let i = 0; i < bytes.length && !over; i += GUNZIP_STEP_BYTES) {
-      inflater.push(bytes.subarray(i, i + GUNZIP_STEP_BYTES), i + GUNZIP_STEP_BYTES >= bytes.length);
-    }
-  } catch {
-    return null;
-  }
-  return over ? null : concatBytes(parts, total);
-}
-
-/**
- * Every event in a recording's chunks, in time order. A chunk that is
- * missing (an upload that never finished), oversized, inflates past the cap,
- * or does not hash to the sha its key names is skipped and counted: the
- * presigned PUT cannot enforce any of that, so this is where the limits and
- * content addressing are held to.
- *
- * `serverWritten` is for a recording this backend stored itself (a vendor
- * import): chunks put before putChunk stopped marking them gzip come back
- * inflated by fetch, so their bytes cannot hash to the key, and plain JSON is
- * taken as is. An uploader's chunk is always held to its hash.
- */
-export async function readReplayChunks(bucket: R2Bucket, keys: readonly string[], opts: { serverWritten?: boolean } = {}): Promise<{ events: ReplayEvent[]; skipped: number }> {
-  const events: ReplayEvent[] = [];
-  let skipped = 0;
-  for (const key of keys) {
-    const res = await fetch(await r2Presign(bucket, "GET", key, REPLAY_LIMITS.signed_url_ttl_s));
-    const bytes = res.ok ? await readBodyCapped(res, REPLAY_LIMITS.chunk_max_bytes) : null;
-    if (!res.ok) await res.body?.cancel().catch(() => {});
-    const want = parseReplayChunkKey(key)?.sha256;
-    const inflatedByFetch = !!bytes && opts.serverWritten === true && !isGzip(bytes);
-    if (!bytes || (want && !inflatedByFetch && (await sha256Hex(bytes)) !== want)) {
-      skipped++;
-      continue;
-    }
-    const json = isGzip(bytes) ? gunzipCapped(bytes, REPLAY_CHUNK_MAX_INFLATED_BYTES) : bytes;
-    if (!json) {
-      skipped++;
-      continue;
-    }
-    try {
-      events.push(...parseReplayEvents(JSON.parse(strFromU8(json))));
-    } catch {
-      skipped++;
-    }
-  }
-  return { events: foldRepeatNavs(sortReplayEvents(events)), skipped };
-}
-
-/**
- * The summary's length run to where the capture ends, when it ends after the
- * last event. Both count from the stream's first event, the replay clock's
- * zero (dom_t0), so the row, the list and the player agree on one length.
- */
-export function withCaptureLength<S extends { duration_ms: number; first_t: number }>(summary: S, captureEndT: number | undefined): S {
-  if (captureEndT === undefined) return summary;
-  return { ...summary, duration_ms: Math.max(summary.duration_ms, Math.round(captureEndT - summary.first_t)) };
-}
-
-/** What a stream says about its recording: the cached timeline and the recounted manifest fields. */
-function summarize(events: ReplayEvent[], shortId: string) {
-  const first = events[0]?.t ?? 0;
-  const last = events[events.length - 1]?.t ?? 0;
-  return {
-    timeline_md: renderTimeline(events, { title: shortId }),
-    counts: replayCounts(events),
-    shape: replayShape(events),
-    duration_ms: Math.max(0, last - first),
-    url: events.find((e) => e.type === "nav")?.url,
-    first_t: first,
-  };
-}
-
-/**
- * The walls a stream shows (shared/replay/issues.ts) folded into the source's
- * replay_issue groups (ingest.recordReplayIssues). Run after the stream is
- * saved, by every action that reads one: assembly, a vendor import, a regroup.
- */
-export async function applyIssues(ctx: { runMutation: any }, replayId: Id<"replays">, provider: ReplayProvider, events: ReplayEvent[], startUrl: string | undefined) {
-  // Our recorder's t counts from started_at; a vendor stream's from its first event (as dom_t0 reads it).
-  const issues = replayIssues(events, startUrl, provider === "sdk" ? 0 : events[0]?.t ?? 0);
-  if (!issues.length) return { groups: 0, transitions: 0 };
-  return await ctx.runMutation(internal.ingest.applyReplayIssues, { replay_id: replayId, issues_json: JSON.stringify(issues) });
-}
-
-/** The one write of a replay's cached timeline, in its own table so list reads never carry it. */
-export async function writeReplayTimeline(ctx: Db, replayId: Id<"replays">, timelineMd: string, now: number): Promise<void> {
-  const existing = await ctx.db.query("replay_timelines").withIndex("by_replay", (q: any) => q.eq("replay_id", replayId)).first();
-  if (existing) await ctx.db.patch(existing._id, { timeline_md: timelineMd, updated_at: now });
-  else await ctx.db.insert("replay_timelines", { replay_id: replayId, timeline_md: timelineMd, updated_at: now });
-}
-
-async function readReplayTimeline(ctx: Db, replayId: Id<"replays">): Promise<string | null> {
-  const row = await ctx.db.query("replay_timelines").withIndex("by_replay", (q: any) => q.eq("replay_id", replayId)).first();
-  return row ? currentTimelineText(row.timeline_md) : null;
-}
-
+// replayIssues.ts reads the stream and folds its walls through these.
 export const assemblyInputs = internalQuery({
   args: { replay_id: v.id("replays") },
   handler: async (ctx, args) => {
@@ -504,7 +343,7 @@ export const saveShape = internalMutation({
   handler: async (ctx, args) => {
     const row = await ctx.db.get(args.replay_id);
     if (!row || (row.shape && row.shape.v >= args.shape.v) || row.chunk_keys.join("\n") !== args.chunk_keys.join("\n")) return;
-    await ctx.db.patch(row._id, { shape: args.shape, updated_at: Date.now() });
+    await patchReplay(ctx, row, { shape: args.shape, updated_at: Date.now() });
   },
 });
 
@@ -583,43 +422,13 @@ export const saveCaptureLength = internalMutation({
   },
 });
 
-/** The newest rrweb timestamp in one stored DOM chunk, or null when it cannot be read. */
-export async function lastCaptureTimestamp(bucket: R2Bucket, key: string): Promise<number | null> {
-  const span = await readDomChunkSpan(bucket, key);
-  return span && span.last > 0 ? span.last : null;
-}
-
-/** One stored DOM chunk's rrweb events and JSON size, read back from R2; null when it cannot be read. */
-export async function readDomChunkEvents(bucket: R2Bucket, key: string): Promise<{ events: any[]; raw: number } | null> {
-  const res = await fetch(await r2Presign(bucket, "GET", key, REPLAY_LIMITS.signed_url_ttl_s));
-  const bytes = res.ok ? await readBodyCapped(res, REPLAY_DOM_LIMITS.chunk_max_bytes) : null;
-  if (!res.ok) await res.body?.cancel().catch(() => {});
-  if (!bytes) return null;
-  const json = isGzip(bytes) ? gunzipCapped(bytes, REPLAY_DOM_LIMITS.chunk_max_inflated_bytes) : bytes;
-  if (!json) return null;
-  try {
-    const events = JSON.parse(strFromU8(json));
-    return { events: Array.isArray(events) ? events : [], raw: json.length };
-  } catch {
-    return null;
-  }
-}
-
-/** One stored DOM chunk's span (spanOf), read back from R2; null when it cannot be read. */
-export async function readDomChunkSpan(bucket: R2Bucket, key: string): Promise<ReplayDomChunkMeta | null> {
-  const chunk = await readDomChunkEvents(bucket, key);
-  if (!chunk) return null;
-  const marks = chunk.events.map((e: any) => ({ t: typeof e?.timestamp === "number" ? e.timestamp : NaN, full: e?.type === 2 }));
-  return spanOf(marks, chunk.raw);
-}
-
 // ── Chunk spans for long captures (the player's window, replayDomWindow) ──
 
 /** What reading a row's chunk spans needs, or null when it needs none (short, or spans already kept). */
 function spanInput(r: Doc<"replays">) {
   const keys = r.dom_chunk_keys ?? [];
   const known = r.dom_chunk_meta ?? [];
-  if (keys.length < REPLAY_DOM_LIMITS.window_min_chunks || known.length >= keys.length) return null;
+  if (keys.length < REPLAY_DOM_WINDOW.window_min_chunks || known.length >= keys.length) return null;
   return { replay_id: r._id, keys, known };
 }
 
@@ -756,142 +565,6 @@ export const checkCaptureLength = mutation({
 
 // ── Importing a vendor recording (X7) ──
 
-/** Split a stream into chunks of at most chunk_max_events events and chunk_max_bytes gzipped. */
-export function chunkReplayEvents(events: readonly ReplayEvent[]): Uint8Array[] {
-  const out: Uint8Array[] = [];
-  const pack = (slice: readonly ReplayEvent[]) => {
-    const gz = gzipSync(strToU8(JSON.stringify(slice)));
-    if (gz.length <= REPLAY_LIMITS.chunk_max_bytes || slice.length <= 1) {
-      if (gz.length <= REPLAY_LIMITS.chunk_max_bytes) out.push(gz);
-      return;
-    }
-    const half = Math.ceil(slice.length / 2);
-    pack(slice.slice(0, half));
-    pack(slice.slice(half));
-  };
-  for (let i = 0; i < events.length; i += REPLAY_LIMITS.chunk_max_events) pack(events.slice(i, i + REPLAY_LIMITS.chunk_max_events));
-  return out.slice(0, REPLAY_LIMITS.max_chunks_per_replay);
-}
-
-/** PUT one chunk unless an object with its key (and so its content) is already there. Moment bodies use it too (moments.ts). */
-export async function putChunk(bucket: R2Bucket, key: string, body: Uint8Array): Promise<void> {
-  const head = await fetch(await r2Presign(bucket, "HEAD", key, REPLAY_LIMITS.signed_url_ttl_s), { method: "HEAD" });
-  if (head.ok) return;
-  const res = await fetch(await r2Presign(bucket, "PUT", key, REPLAY_LIMITS.signed_url_ttl_s), {
-    method: "PUT",
-    body: body as unknown as BodyInit,
-    // No Content-Encoding, as the SDK uploads (platform analytics replay.ts):
-    // the object is these exact bytes and its key names their sha256. Marked
-    // gzip, every fetch hands it back inflated and the hash no longer matches.
-    // Every reader unzips gzip bytes itself.
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!res.ok) throw new Error(`R2 put of ${key} answered ${res.status}`);
-}
-
-/**
- * A DOM capture as gzipped chunks, produced one at a time: events packed
- * until their JSON passes chunk_target_raw_bytes, each event serialized once.
- * A chunk that gzips past chunk_max_bytes is halved; a single event past it
- * (a page too heavy to keep) comes out as "dropped". The import runs in the
- * default runtime's 64 MiB beside the parsed recording, so a caller that
- * uploads each chunk as it comes holds one chunk's text and bytes at a time.
- */
-export function* domChunkStream(events: readonly RrwebEvent[]): Generator<{ gz: Uint8Array; meta: ReplayDomChunkMeta } | "dropped"> {
-  type Part = { json: string; t: number; full: boolean };
-  function* pack(parts: Part[]): Generator<{ gz: Uint8Array; meta: ReplayDomChunkMeta } | "dropped"> {
-    if (!parts.length) return;
-    const text = `[${parts.map((p) => p.json).join(",")}]`;
-    const gz = gzipSync(strToU8(text));
-    if (gz.length <= REPLAY_DOM_LIMITS.chunk_max_bytes) {
-      yield { gz, meta: spanOf(parts, text.length) };
-      return;
-    }
-    if (parts.length === 1) {
-      yield "dropped";
-      return;
-    }
-    const half = Math.ceil(parts.length / 2);
-    yield* pack(parts.slice(0, half));
-    yield* pack(parts.slice(half));
-  }
-  let parts: Part[] = [];
-  let raw = 0;
-  for (const event of events) {
-    const json = JSON.stringify(event);
-    parts.push({ json, t: typeof event.timestamp === "number" ? event.timestamp : 0, full: event.type === 2 });
-    raw += json.length + 1;
-    if (raw >= REPLAY_DOM_LIMITS.chunk_target_raw_bytes) {
-      yield* pack(parts);
-      parts = [];
-      raw = 0;
-    }
-  }
-  yield* pack(parts);
-}
-
-/** One chunk's span: its first and last timestamps, its first full snapshot's, and its JSON size. */
-export function spanOf(events: readonly { t: number; full: boolean }[], raw: number): ReplayDomChunkMeta {
-  let first = Infinity;
-  let last = -Infinity;
-  let full: number | undefined;
-  for (const e of events) {
-    if (!Number.isFinite(e.t) || e.t <= 0) continue;
-    if (e.t < first) first = e.t;
-    if (e.t > last) last = e.t;
-    if (e.full && (full === undefined || e.t < full)) full = e.t;
-  }
-  if (first === Infinity) first = last = 0;
-  return { first, last, ...(full !== undefined ? { full } : {}), raw };
-}
-
-/** Every chunk of a capture at once (domChunkStream), held to max_chunks_per_replay; chunks past it count as dropped. */
-export function chunkDomEvents(events: readonly RrwebEvent[]): { chunks: Uint8Array[]; dropped: number } {
-  const chunks: Uint8Array[] = [];
-  let dropped = 0;
-  for (const c of domChunkStream(events)) {
-    if (c === "dropped" || chunks.length >= REPLAY_DOM_LIMITS.max_chunks_per_replay) dropped++;
-    else chunks.push(c.gz);
-  }
-  return { chunks, dropped };
-}
-
-/**
- * Store a recording's DOM capture (already masked, prepareDomCapture) beside
- * its stream: content addressed under the recording's `dom/` prefix, so a
- * re-import uploads only what changed. Each chunk is uploaded as it is
- * packed, and packing stops at max_chunks_per_replay (the rest of a capture
- * that long is not kept). Answers what saveImported records.
- */
-export async function storeReplayDom(
-  bucket: R2Bucket,
-  /** first_seq: where a later part of a long recording continues the numbering (sources/replayRest.ts). */
-  input: { source_id: string; external_id: string; events: readonly RrwebEvent[]; first_seq?: number },
-): Promise<{ dom_chunk_keys: string[]; dom_chunk_meta: ReplayDomChunkMeta[]; dom_bytes: number; dom_t0: number; dropped: number }> {
-  const replay = safeReplayPathSegment(input.external_id);
-  const first = input.first_seq ?? 0;
-  const keys: string[] = [];
-  const meta: ReplayDomChunkMeta[] = [];
-  let bytes = 0;
-  let dropped = 0;
-  for (const chunk of domChunkStream(input.events)) {
-    if (chunk === "dropped") {
-      dropped++;
-      continue;
-    }
-    if (first + keys.length >= REPLAY_DOM_LIMITS.max_chunks_per_replay) {
-      dropped++;
-      break;
-    }
-    const key = replayDomChunkKey({ sourceId: input.source_id, replay, seq: first + keys.length, sha256: await sha256Hex(chunk.gz) });
-    await putChunk(bucket, key, chunk.gz);
-    keys.push(key);
-    meta.push(chunk.meta);
-    bytes += chunk.gz.length;
-  }
-  return { dom_chunk_keys: keys, dom_chunk_meta: meta, dom_bytes: bytes, dom_t0: input.events[0]?.timestamp ?? 0, dropped };
-}
-
 /** Open (or find) the row an import fills, so its short id can head the timeline. */
 export const openImport = internalMutation({
   args: { source_id: v.id("event_sources"), external_id: v.string(), started_at: v.optional(v.number()) },
@@ -904,24 +577,6 @@ export const openImport = internalMutation({
     return { replay_id: row._id, short_id: row.short_id };
   },
 });
-
-/**
- * A fresh read (not a later part of the row's own chain) that would replace a
- * current copy with less of the recording: what a recording PostHog keeps
- * writing hands a read from its start, while the copy already holds an hour
- * of it. The copy stays; the rest is read on from where it stopped
- * (sources/replayRest.ts resume). A copy by an older converter is replaced,
- * since that is what the refresh is for.
- */
-export function importShrinks(
-  row: { imported_at?: number; converter_version?: number; captured_ms?: number; dom_chunk_keys?: string[] },
-  incoming: { duration_ms: number; dom_chunk_keys?: string[] },
-): boolean {
-  if (!row.imported_at || (row.converter_version ?? 1) !== VENDOR_CONVERTER_VERSION) return false;
-  const lessTime = (row.captured_ms ?? 0) > incoming.duration_ms + 1000;
-  const lessCapture = (row.dom_chunk_keys?.length ?? 0) > (incoming.dom_chunk_keys?.length ?? 0);
-  return lessTime && lessCapture;
-}
 
 export const saveImported = internalMutation({
   args: {
@@ -987,71 +642,6 @@ export const saveImported = internalMutation({
   },
 });
 
-/**
- * A vendor recording, already converted (fromRrweb), stored the way our own
- * recordings are: chunks in R2 under the source, a manifest row, and the
- * timeline cached. Idempotent: the chunks are content addressed and the row
- * is keyed by the source's external id, so a second import uploads nothing
- * that is already there.
- */
-const importExternalArgs = {
-    source_id: v.id("event_sources"),
-    provider: replayProviderValidator,
-    external_id: v.string(),
-    events: v.any(),
-    started_at: v.optional(v.number()),
-    user: v.optional(ingestUserValidator),
-    ...domArgs,
-    /** Where the capture ends on the events' base (VendorCapture.end_t): a page left open runs past the last event. */
-    capture_end_t: v.optional(v.number()),
-    /** The vendor's own length for the recording, kept as a floor (saveImported). */
-    vendor_length_ms: v.optional(v.number()),
-    /** A later part of a long recording (sources/replayRest.ts): the chain's state, saved only while `expect_gen` is the row's chain. */
-    import_rest: v.optional(replayImportRestValidator),
-    expect_gen: v.optional(v.number()),
-    /** Nothing of the vendor's recording was left unread (saveImported). */
-    whole: v.optional(v.boolean()),
-    /** Where this read stopped (saveImported). */
-    read_to: v.optional(replayReadToValidator),
-};
-
-/**
- * The import itself, for an action that already holds the events: the chain
- * reading a long recording's rest calls this in place, because passing a
- * long stream through runAction meets Convex's 8192 element cap on an
- * argument array (an eight hour recording has more events than that).
- */
-export async function importExternalCore(ctx: { runMutation: any }, args: ObjectType<typeof importExternalArgs>): Promise<{ replay_id: Id<"replays">; short_id: string; chunks: number; saved: boolean }> {
-    const bucket = replaysBucketFromEnv();
-    if (!bucket) throw new Error("Replays storage is not configured (REPLAYS_R2_*)");
-    const opened = await ctx.runMutation(internal.replays.openImport, { source_id: args.source_id, external_id: args.external_id, started_at: args.started_at });
-    const events = sortReplayEvents(parseReplayEvents(args.events));
-    const chunks = chunkReplayEvents(events);
-    const replay = safeReplayPathSegment(args.external_id);
-    const keys: string[] = [];
-    for (let seq = 0; seq < chunks.length; seq++) {
-      const key = replayChunkKey({ sourceId: String(args.source_id), replay, seq, sha256: await sha256Hex(chunks[seq]) });
-      await putChunk(bucket, key, chunks[seq]);
-      keys.push(key);
-    }
-    const { saved } = await ctx.runMutation(internal.replays.saveImported, {
-      replay_id: opened.replay_id,
-      provider: args.provider,
-      chunk_keys: keys,
-      started_at: args.started_at,
-      user: args.user,
-      ...(args.dom_chunk_keys ? { dom_chunk_keys: args.dom_chunk_keys, dom_bytes: args.dom_bytes, dom_t0: args.dom_t0, ...(args.dom_chunk_meta ? { dom_chunk_meta: args.dom_chunk_meta } : {}) } : {}),
-      ...(args.vendor_length_ms ? { vendor_length_ms: args.vendor_length_ms } : {}),
-      ...(args.import_rest ? { import_rest: args.import_rest } : {}),
-      ...(args.expect_gen !== undefined ? { expect_gen: args.expect_gen } : {}),
-      ...(args.whole ? { whole: true } : {}),
-      ...(args.read_to ? { read_to: args.read_to } : {}),
-      ...withCaptureLength(summarize(events, opened.short_id), args.capture_end_t),
-    });
-    if (saved) await applyIssues(ctx, opened.replay_id, args.provider, events, events.find((e) => e.type === "nav")?.url);
-    return { ...opened, chunks: keys.length, saved };
-}
-
 export const importExternal = internalAction({
   args: importExternalArgs,
   handler: async (ctx, args) => await importExternalCore(ctx, args),
@@ -1095,93 +685,6 @@ export const deferVendorRefresh = internalMutation({
 
 // ── Reads (web and CLI) ──
 
-/** A list row: never the timeline or the chunk keys. */
-function replayView(row: Doc<"replays">, sourceName: string | null) {
-  return {
-    _id: row._id,
-    short_id: row.short_id,
-    // The access key, so a client cache enumerates replays through the same
-    // workspace boundary as every other row it holds.
-    workspace: row.workspace,
-    source_id: row.source_id,
-    source_name: sourceName,
-    provider: row.provider,
-    external_id: row.external_id,
-    url: row.url ?? null,
-    user: row.user ?? null,
-    started_at: row.started_at,
-    duration_ms: row.duration_ms ?? null,
-    counts: row.counts,
-    /** Activity, failures, rage clicks and active time (shared/replay/list.ts); null until the stream is read. */
-    shape: row.shape ?? null,
-    /** What the vendor says of it: length, activity, browser, OS, device, country, referrer (shared/replay/list.ts ReplayFacts). */
-    facts: row.facts ?? null,
-    group_ids: row.group_ids,
-    chunks: row.chunk_keys.length,
-    /** DOM chunks: the capture the player plays. 0 means the replay reads as text only. */
-    dom_chunks: row.dom_chunk_keys?.length ?? 0,
-    dom_bytes: row.dom_bytes ?? null,
-    /** How far an imported copy reaches; below duration_ms when the import stopped short of the vendor's recording. Null when unknown. */
-    captured_ms: row.captured_ms ?? null,
-    /** A long recording's later parts being read (sources/replayRest.ts): how far, and whether it waits or failed. Null when none runs. */
-    import_rest: row.import_rest ? { next_blob: row.import_rest.next_blob, blobs: row.import_rest.blobs, retry_at: row.import_rest.retry_at ?? null, error: row.import_rest.error ?? null, updated_at: row.import_rest.updated_at } : null,
-    has_timeline: row.timeline_at !== undefined,
-    imported_at: row.imported_at ?? null,
-    converter_version: row.converter_version ?? null,
-    vendor_refresh_after: row.vendor_refresh_after ?? null,
-    /** Why the vendor is waited out until then (shared VENDOR_REFRESH_WHYS). */
-    vendor_refresh_why: row.vendor_refresh_why ?? null,
-    updated_at: row.updated_at,
-  };
-}
-
-/** The replay if `userId` holds its workspace, else null: a refusal reads like a missing replay. */
-export async function readableReplay(ctx: Db, userId: Id<"users">, ref: string): Promise<Doc<"replays"> | null> {
-  return await readableRowByRef(ctx, "replays", userId, ref);
-}
-
-const LIST_MAX = 200;
-/**
- * How many of a workspace's newest replays a group filter looks through.
- * Rows carry no timeline (replay_timelines) but up to 60 chunk keys and 50
- * group ids, a few KB at worst, so this stays far under a query's read cap.
- * A group's recordings older than this window are not listed.
- */
-export const REPLAY_GROUP_SCAN_MAX = 300;
-
-async function listCore(ctx: Db, userId: Id<"users">, workspaceKey: string, opts: { source?: string; limit?: number; group_id?: Id<"event_groups"> }) {
-  const limit = Math.min(Math.max(opts.limit ?? 50, 1), LIST_MAX);
-  // The ref every other verb takes (name, src-N or id), refused the same way when unknown.
-  const sourceId: Id<"event_sources"> | null = opts.source ? (await sourceByRef(ctx, userId, workspaceKey, opts.source))._id : null;
-  // A source is in one workspace, so its own index is exact; the workspace
-  // check below still holds every row to the reader's key.
-  const indexed = sourceId
-    ? ctx.db.query("replays").withIndex("by_source_started", (q: any) => q.eq("source_id", sourceId))
-    : ctx.db.query("replays").withIndex("by_workspace_started", (q: any) => q.eq("workspace", workspaceKey));
-  const rows: Doc<"replays">[] = await indexed.order("desc").take(opts.group_id ? REPLAY_GROUP_SCAN_MAX : limit);
-  const names = new Map<string, string | null>();
-  const out = [];
-  for (const row of rows) {
-    if (row.workspace !== workspaceKey) continue;
-    if (opts.group_id && !row.group_ids.includes(opts.group_id)) continue;
-    const key = String(row.source_id);
-    if (!names.has(key)) names.set(key, (await ctx.db.get(row.source_id))?.name ?? null);
-    out.push(replayView(row, names.get(key) ?? null));
-    if (out.length >= limit) break;
-  }
-  return out;
-}
-
-async function detailCore(ctx: Db, row: Doc<"replays">) {
-  const source = await ctx.db.get(row.source_id);
-  const groups = [];
-  for (const id of row.group_ids) {
-    const g = await ctx.db.get(id);
-    if (g) groups.push({ _id: g._id, short_id: g.short_id, kind: g.kind, title: g.title, status: g.status });
-  }
-  return { ...replayView(row, source?.name ?? null), groups, timeline_md: await readReplayTimeline(ctx, row._id), timeline_at: row.timeline_at ?? null };
-}
-
 /** The workspace's newest recordings: the Ops page's replay list and `cast replay ls` (/cli/replays/list). */
 export const list = query({
   args: {
@@ -1195,112 +698,6 @@ export const list = query({
     return await listCore(ctx, userId, workspaceKey, args);
   },
 });
-
-/**
- * How many of a workspace's (or a source's) newest recordings a browse reads.
- * A row is a few KB at worst (chunk keys, group ids, the shape), so this stays
- * well inside a query's read cap; past it the total says "at least".
- */
-export const REPLAY_BROWSE_SCAN_MAX = REPLAY_BROWSE_SCAN;
-const BROWSE_PAGE_MAX = 500;
-/** People a grouped browse answers by default, and the most a page of them may ask for. */
-const BROWSE_PEOPLE_MAX = 200;
-const BROWSE_PEOPLE_LIMIT_MAX = 2000;
-
-/**
- * The replay list as a person browses it: the recordings that match a filter
- * (shared/replay/list.ts replayMatches), in the sort they asked for, the first
- * `limit` of them, and how many match in all. The filter runs over the
- * newest REPLAY_BROWSE_SCAN_MAX recordings of the scope (a date filter
- * narrows the scan by the index first), so search, toggles and sorts reach
- * past any one page. `people` also folds the matches by person.
- */
-export async function browseCore(
-  ctx: Db,
-  userId: Id<"users">,
-  workspaceKey: string,
-  opts: ReplayMatch & { source?: string; sort?: string; limit?: number; people?: boolean; people_sort?: string; people_limit?: number; identified?: boolean },
-) {
-  const limit = Math.min(Math.max(opts.limit ?? 50, 1), BROWSE_PAGE_MAX);
-  const sourceId: Id<"event_sources"> | null = opts.source ? (await sourceByRef(ctx, userId, workspaceKey, opts.source))._id : null;
-  const since = opts.since;
-  const indexed = sourceId
-    ? ctx.db.query("replays").withIndex("by_source_started", (q: any) => (since !== undefined ? q.eq("source_id", sourceId).gte("started_at", since) : q.eq("source_id", sourceId)))
-    : ctx.db.query("replays").withIndex("by_workspace_started", (q: any) => (since !== undefined ? q.eq("workspace", workspaceKey).gte("started_at", since) : q.eq("workspace", workspaceKey)));
-  // A search for one recording's id reads that recording by its index, however old: the scan would miss one past the newest REPLAY_BROWSE_SCAN_MAX.
-  const exact = exactReplayId(opts.q);
-  const named = exact ? await ctx.db.query("replays").withIndex("by_short_id", (q: any) => q.eq("short_id", exact)).first() : null;
-  // One person's recordings, or the partly imported ones, are read by their own index (lib/replayIndex.ts), so the count the person card and the import line print is the list's exact count, however old the rows.
-  const range = (q: any) => (since !== undefined ? q.gte("started_at", since) : q);
-  const byPerson = !exact && opts.person
-    ? sourceId
-      ? ctx.db.query("replays").withIndex("by_source_person", (q: any) => range(q.eq("source_id", sourceId).eq("person_key", opts.person)))
-      : ctx.db.query("replays").withIndex("by_workspace_person", (q: any) => range(q.eq("workspace", workspaceKey).eq("person_key", opts.person)))
-    : null;
-  const byCut = !exact && !byPerson && opts.has?.includes("partial")
-    ? sourceId
-      ? ctx.db.query("replays").withIndex("by_source_cut", (q: any) => range(q.eq("source_id", sourceId).eq("rest_cut", true)))
-      : ctx.db.query("replays").withIndex("by_workspace_cut", (q: any) => range(q.eq("workspace", workspaceKey).eq("rest_cut", true)))
-    : null;
-  const rows: Doc<"replays">[] = exact
-    ? named && named.workspace === workspaceKey && (!sourceId || named.source_id === sourceId) ? [named] : []
-    : await (byPerson ?? byCut ?? indexed).order("desc").take(REPLAY_BROWSE_SCAN_MAX);
-  const match: ReplayMatch = {
-    ...(opts.q?.trim() ? { q: opts.q.trim().toLowerCase() } : {}),
-    ...(opts.person ? { person: opts.person } : {}),
-    ...(opts.has?.length ? { has: opts.has.filter((h) => (REPLAY_HAS as readonly string[]).includes(h)) } : {}),
-    ...(opts.min_ms !== undefined ? { min_ms: opts.min_ms } : {}),
-    ...(opts.max_ms !== undefined ? { max_ms: opts.max_ms } : {}),
-    ...(opts.active_min_ms ? { active_min_ms: opts.active_min_ms } : {}),
-    ...(opts.group ? { group: opts.group } : {}),
-    ...(since !== undefined ? { since } : {}),
-    ...Object.fromEntries(REPLAY_ENV_KEYS.filter((k) => opts[k]).map((k) => [k, opts[k]!.slice(0, 100)])),
-  };
-  const matched = rows.filter((row) => row.workspace === workspaceKey && replayMatches(row, match));
-  // Each environment filter's options, counted over the rows every other filter keeps, so a picker never offers a dead end.
-  const facets = Object.fromEntries(
-    REPLAY_ENV_KEYS.map((k) => {
-      const rest = { ...match, [k]: undefined };
-      return [k, replayFacets(rows.filter((row) => row.workspace === workspaceKey && replayMatches(row, rest)))[k]];
-    }),
-  );
-  const sort = (REPLAY_SORTS as readonly string[]).includes(opts.sort ?? "") ? (opts.sort as (typeof REPLAY_SORTS)[number]) : "newest";
-  if (sort !== "newest") matched.sort(compareReplays(sort));
-  const names = new Map<string, string | null>();
-  const out = [];
-  for (const row of matched.slice(0, limit)) {
-    const key = String(row.source_id);
-    if (!names.has(key)) names.set(key, (await ctx.db.get(row.source_id))?.name ?? null);
-    out.push(replayView(row, names.get(key) ?? null));
-  }
-  const folded = replayPeople(matched);
-  const people = sortPeople(opts.identified ? folded.filter((p) => !p.anonymous) : folded, (REPLAY_PEOPLE_SORTS as readonly string[]).includes(opts.people_sort ?? "") ? (opts.people_sort as ReplayPeopleSort) : "recent");
-  const peopleLimit = Math.min(Math.max(opts.people_limit ?? BROWSE_PEOPLE_MAX, 1), BROWSE_PEOPLE_LIMIT_MAX);
-  // A rage filter can only test recordings whose shape was read: say how many it could not, so an empty answer is not taken for "none".
-  const rageUnchecked = match.has?.includes("rage")
-    ? rows.filter((row) => row.workspace === workspaceKey && rageClicksOf(row) === undefined && replayMatches(row, { ...match, has: match.has!.filter((h) => h !== "rage") })).length
-    : 0;
-  // The active-time floor hides short recordings: say how many, so the list can offer them rather than hold them back in silence.
-  const belowActive = match.active_min_ms ? rows.filter((row) => row.workspace === workspaceKey && replayMatches(row, { ...match, active_min_ms: undefined })).length - matched.length : 0;
-  return {
-    workspace: workspaceKey,
-    rows: out,
-    total: matched.length,
-    /** When the oldest match started: what "since" means beside the total. Null when nothing matched. */
-    oldest_at: matched.length ? matched.reduce((m, r) => Math.min(m, r.started_at), Infinity) : null,
-    /** Recordings every other filter keeps that the active-time floor leaves out. */
-    below_active: Math.max(0, belowActive),
-    /** The scan stopped at REPLAY_BROWSE_SCAN_MAX: older recordings were not looked at, so `total` is a floor. */
-    capped: rows.length >= REPLAY_BROWSE_SCAN_MAX,
-    people_total: people.length,
-    people: opts.people ? people.slice(0, peopleLimit) : null,
-    /** People who are known only by an id, among all of them (before `identified`). */
-    people_anonymous: folded.filter((p) => p.anonymous).length,
-    rage_unchecked: rageUnchecked,
-    /** Browser, OS, device and country values with their counts (replayFacets), for the list's pickers. */
-    facets,
-  };
-}
 
 /**
  * Stamp every replay row's index fields (lib/replayIndex.ts), a page at a
@@ -1398,15 +795,6 @@ export const cliGet = internalQuery({
   },
 });
 
-/** The route's answer: chunk URLs signed now and short, keys removed. */
-export async function signReplayChunks<T extends { chunk_keys: string[] }>(res: T, now: number = Date.now()) {
-  const bucket = replaysBucketFromEnv();
-  const { chunk_keys, ...rest } = res;
-  const chunk_urls: string[] = [];
-  if (bucket) for (const key of chunk_keys) chunk_urls.push((await r2FreshGetUrl(bucket, key, now)).url);
-  return { ...rest, chunk_urls, server_now: now };
-}
-
 /** The object behind one chunk of a replay the user may read, for the redirect route; null otherwise. */
 export const chunkObject = internalQuery({
   args: { user_id: v.optional(v.id("users")), api_token: v.optional(v.string()), replay: v.string(), seq: v.number(), kind: v.optional(v.union(v.literal("events"), v.literal("dom"))) },
@@ -1439,7 +827,7 @@ export const playerTarget = internalQuery({
       dom_chunk_meta: meta,
       t0: row!.dom_t0 ?? row!.started_at,
       // A long capture whose spans were never read (imported before they were kept): read them, so the next open plays it a stretch at a time.
-      needs_meta: !meta && chunks >= REPLAY_DOM_LIMITS.window_min_chunks,
+      needs_meta: !meta && chunks >= REPLAY_DOM_WINDOW.window_min_chunks,
     };
   },
 });
@@ -1502,18 +890,6 @@ export const playerManifestRow = internalQuery({
     };
   },
 });
-
-/** The manifest the player reads, with the DOM keys swapped for URLs signed now. */
-export async function signPlayerManifest(
-  row: { dom_chunk_keys: string[]; replay: ReplayPlayerManifest["replay"]; t0: number },
-  expiresAt: number,
-  bucket: R2Bucket,
-  now: number = Date.now(),
-): Promise<ReplayPlayerManifest> {
-  const dom_urls: string[] = [];
-  for (const key of row.dom_chunk_keys) dom_urls.push((await r2FreshGetUrl(bucket, key, now)).url);
-  return { replay: row.replay, t0: row.t0, dom_urls, expires_at: expiresAt };
-}
 
 /** What a player opened at t on this replay would read: `packages/convex/run.sh replays:windowFor '{"short_id":"rp-1","t_ms":0}'`. */
 export const windowFor = internalQuery({

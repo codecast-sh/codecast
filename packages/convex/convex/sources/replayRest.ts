@@ -34,9 +34,11 @@ import { internalAction, internalMutation, internalQuery } from "../functions";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { carryFromCapture, readVendorCapturePart, type CaptureCarry } from "@codecast/shared/replay";
-import { VENDOR_REFRESH_RETRY, replayCutAt } from "@codecast/shared/contracts/replay";
+import { REPLAY_REST_NO_MORE, VENDOR_REFRESH_RETRY, replayCutAt } from "@codecast/shared/contracts/replay";
 import { replaysBucketFromEnv } from "../lib/r2";
-import { importExternalCore, readDomChunkEvents, readReplayChunks, storeReplayDom } from "../replays";
+import { importExternalCore } from "../lib/replayImport";
+import { patchReplay } from "../lib/replayIndex";
+import { readDomChunkEvents, readReplayChunks, storeReplayDom } from "../lib/replayChunks";
 import { connFor, fetchRecordingEvents, locateBlobAfter } from "./posthog";
 import type { R2Bucket } from "../lib/r2";
 import { REACH_UNKNOWN_MS as REPLAY_REST_UNKNOWN_MS, REST_STALL_MS, needsRest, readCarry, storeCarry, vendorRefreshHold } from "./vendorReplay";
@@ -133,6 +135,7 @@ export const stepRow = internalQuery({
       dom_chunk_meta: row.dom_chunk_meta ?? [],
       dom_bytes: row.dom_bytes ?? 0,
       vendor_length_ms: row.facts?.length_ms ?? row.duration_ms ?? null,
+      duration_ms: row.duration_ms ?? null,
       dom_t0: row.dom_t0 ?? null,
     };
   },
@@ -259,6 +262,38 @@ export const resume = internalAction({
   },
 });
 
+/** Past this since its last moment, a recording PostHog lists no more parts of has ended and been written out: what is imported is all there is. */
+export const REST_SETTLED_MS = 60 * 60_000;
+
+/** Whether a chain that found no more parts may call its copy whole: the recording's last moment (start plus length) is REST_SETTLED_MS gone. */
+export function restSettled(r: { started_at: number; duration_ms?: number | null }, now: number): boolean {
+  return now - (r.started_at + (r.duration_ms ?? 0)) > REST_SETTLED_MS;
+}
+
+/**
+ * A chain read every part PostHog holds of an ended recording: the copy
+ * reaches the recording's end (the rest is time with nothing recorded, which
+ * PostHog's player skips too), so it leaves the backlog instead of being
+ * asked again every hour. Where the read stopped stays, for a later resume.
+ */
+export const settleWhole = internalMutation({
+  args: { replay_id: v.id("replays"), gen: v.number() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.replay_id);
+    if (!row?.import_rest || row.import_rest.gen !== args.gen) return;
+    const now = Date.now();
+    const c = row.import_rest;
+    await patchReplay(ctx, row, {
+      captured_ms: Math.max(row.duration_ms ?? 0, row.facts?.length_ms ?? 0, row.captured_ms ?? 0),
+      import_rest: undefined,
+      read_to: { next_blob: c.next_blob, blobs: c.blobs, carry_key: c.carry_key, at: now },
+      updated_at: now,
+    });
+    await setReading(ctx, row.source_id, { ended: row.short_id });
+    await ctx.scheduler.runAfter(REST_STEP_MS, internal.sources.replayRest.sweep, { source_id: row.source_id, before: row.started_at });
+  },
+});
+
 /** A step that could not read its part: wait (a rate limit) and try again, or stop the chain and say why. */
 export const holdStep = internalMutation({
   args: { replay_id: v.id("replays"), gen: v.number(), retry_at: v.optional(v.number()), error: v.optional(v.string()) },
@@ -285,6 +320,9 @@ export const nextStep = internalMutation({
   handler: async (ctx, args) => {
     const row = await ctx.db.get(args.replay_id);
     if (!row?.import_rest || row.import_rest.gen !== args.gen) return;
+    // A chain that lost the import line's name to one that has since ended takes it back, so the line names what is read now.
+    const tally = (await ctx.db.get(row.source_id))?.replay_rest;
+    if (tally && !tally.reading) await setReading(ctx, row.source_id, { short_id: row.short_id });
     await ctx.scheduler.runAfter(REST_STEP_MS, internal.sources.replayRest.step, args);
   },
 });
@@ -325,7 +363,11 @@ async function stepPart(ctx: any, args: { replay_id: Id<"replays">; gen: number 
       if (read.status === 429) return void (await hold({ retry_at: Date.now() + Math.max(read.retry_after_ms ?? 0, REST_RATE_LIMIT_MS) }));
       return void (await hold({ error: read.error }));
     }
-    if (read.next_blob <= row.import_rest.next_blob) return void (await hold({ error: "PostHog answered no more of the recording" }));
+    if (read.next_blob <= row.import_rest.next_blob) {
+      // An ended recording PostHog holds nothing more of: every part it has is imported, so the copy is whole, and the sweep goes on.
+      if (!read.realtime && restSettled(row, Date.now())) return void (await ctx.runMutation(internal.sources.replayRest.settleWhole, { replay_id: args.replay_id, gen: args.gen }));
+      return void (await hold({ error: REPLAY_REST_NO_MORE }));
+    }
 
     const after = row.import_rest.after_t;
     const part = readVendorCapturePart(after !== undefined ? read.events.filter((e) => typeof e?.timestamp === "number" && e.timestamp > after) : read.events, carry);
@@ -372,6 +414,31 @@ export const SWEEP_AFTER_FAIL_MS = 60_000;
 /** The sweep reads recordings this recent: PostHog keeps a recording 30 days, so an older one answers "not found". Opening one still asks. */
 export const SWEEP_MAX_AGE_MS = 30 * 86_400_000;
 
+/** The sweep's first lane: short recordings that ended inside this window, so one opened the same day plays whole. */
+export const SWEEP_RECENT_MS = 24 * 3_600_000;
+/** How long a recording may be and still go in the first lane: under this, its rest is a part or two. */
+export const SWEEP_SHORT_MS = 30 * 60_000;
+/** A recording ended this long ago is written out at PostHog (it flushes a live recording to blobs within minutes). */
+export const SWEEP_ENDED_MS = VENDOR_REFRESH_RETRY.realtime_ms;
+
+/**
+ * Which lane of the sweep a cut recording reads in, first to last: 0, a short
+ * recording that ended in the last day (the one a person opens from the list
+ * today); 1, one an issue caught or with errors in it (what an agent or a
+ * person opens to see a failure); 2, every other. A copy PostHog answered no
+ * more for leaves the first lane, so it does not take the front every hour.
+ */
+export function sweepLane(r: { started_at: number; duration_ms?: number | null; group_ids?: readonly unknown[]; counts?: { errors?: number } | null; import_rest?: { error?: string } | null }, now: number): 0 | 1 | 2 {
+  const end = r.started_at + (r.duration_ms ?? 0);
+  if (r.started_at >= now - SWEEP_RECENT_MS && (r.duration_ms ?? 0) <= SWEEP_SHORT_MS && now - end > SWEEP_ENDED_MS && r.import_rest?.error !== REPLAY_REST_NO_MORE) return 0;
+  if ((r.group_ids?.length ?? 0) > 0 || (r.counts?.errors ?? 0) > 0) return 1;
+  return 2;
+}
+
+/** The lanes in the order the sweep walks them; a lane takes rows of its own lane and any before it. */
+const SWEEP_LANES = ["recent", "linked", "all"] as const;
+type SweepLaneName = (typeof SWEEP_LANES)[number];
+
 type SweepRow = {
   provider: string;
   imported_at?: number | null;
@@ -396,19 +463,27 @@ export function sweepWants(r: SweepRow, now: number): boolean {
 
 /** One page of the walk: stop at a live chain (busy) or at the first row to read, else the cursor on. */
 export const sweepPage = internalQuery({
-  args: { source_id: v.id("event_sources"), before: v.union(v.number(), v.null()), cursor: v.union(v.string(), v.null()), now: v.number(), linked_only: v.optional(v.boolean()) },
+  args: { source_id: v.id("event_sources"), before: v.union(v.number(), v.null()), cursor: v.union(v.string(), v.null()), now: v.number(), lane: v.optional(v.union(...SWEEP_LANES.map((l) => v.literal(l)))), linked_only: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const source = await ctx.db.get(args.source_id);
     if (!source || source.provider !== "posthog" || source.status !== "active" || source.replay_backfill?.status === "running") return { busy: true as const };
+    const lane: SweepLaneName = args.lane ?? (args.linked_only ? "linked" : "all");
+    const most = SWEEP_LANES.indexOf(lane);
+    // The first lane reads only the last day, so its walk is short however long the backlog.
+    const from = lane === "recent" ? args.now - SWEEP_RECENT_MS : null;
     const page = await ctx.db
       .query("replays")
-      .withIndex("by_source_started", (q) => (args.before === null ? q.eq("source_id", args.source_id) : q.eq("source_id", args.source_id).lt("started_at", args.before)))
+      .withIndex("by_source_started", (q) => {
+        const src = q.eq("source_id", args.source_id);
+        if (args.before !== null) return from !== null ? src.gte("started_at", from).lt("started_at", args.before) : src.lt("started_at", args.before);
+        return from !== null ? src.gte("started_at", from) : src;
+      })
       .order("desc")
       .paginate({ cursor: args.cursor, numItems: SWEEP_PAGE });
     for (const r of page.page) {
       if (chainLive(r, args.now)) return { busy: true as const };
       if (r.started_at < args.now - SWEEP_MAX_AGE_MS) return { busy: false as const, next: null, cursor: null, done: true };
-      if (sweepWants(r, args.now) && (!args.linked_only || r.group_ids.length > 0)) return { busy: false as const, next: { replay_id: r._id, external_id: r.external_id, started_at: r.started_at, stalled: !!r.import_rest && !r.import_rest.error }, cursor: null, done: true };
+      if (sweepWants(r, args.now) && sweepLane(r, args.now) <= most) return { busy: false as const, next: { replay_id: r._id, external_id: r.external_id, started_at: r.started_at, stalled: !!r.import_rest && !r.import_rest.error }, cursor: null, done: true };
     }
     return { busy: false as const, next: null, cursor: page.continueCursor, done: page.isDone };
   },
@@ -425,11 +500,11 @@ export const sweep = internalAction({
   handler: async (ctx, args): Promise<{ started: string | null }> => {
     const now = Date.now();
     let next: { replay_id: Id<"replays">; external_id: string; started_at: number; stalled?: boolean } | null = null;
-    // Recordings linked to an issue come first, from the newest: they are the ones an agent or a person opens to see a failure. Then every other cut copy.
-    for (const linked_only of [true, false]) {
+    // Lanes in order (sweepLane): short recordings that ended today, then those an issue caught or with errors, each from the newest; then every other cut copy, older than the last one read.
+    for (const lane of SWEEP_LANES) {
       let cursor: string | null = null;
       for (let i = 0; i < SWEEP_MAX_PAGES && !next; i++) {
-        const page: any = await ctx.runQuery(internal.sources.replayRest.sweepPage, { source_id: args.source_id, before: linked_only ? null : (args.before ?? null), cursor, now, linked_only });
+        const page: any = await ctx.runQuery(internal.sources.replayRest.sweepPage, { source_id: args.source_id, before: lane === "all" ? (args.before ?? null) : null, cursor, now, lane });
         if (page.busy) return { started: null };
         next = page.next;
         if (page.done) break;
@@ -520,21 +595,21 @@ export const tallyPage = internalQuery({
     let cut = 0;
     let unknown = 0;
     let reading: { short_id: string; waiting_until?: number } | null = null;
-    const wanted: { short_id: string; started_at: number; linked: boolean }[] = [];
+    const wanted: { short_id: string; started_at: number; lane: number }[] = [];
     for (const r of page.page) {
       if (replayCutAt(r.captured_ms, r.duration_ms) !== null) cut++;
       if (!r.imported_at || r.provider !== "posthog") continue;
       if (r.captured_ms === undefined && (r.duration_ms ?? 0) >= REPLAY_REST_UNKNOWN_MS) unknown++;
       if (!reading && r.import_rest && chainLive(r, args.now)) reading = { short_id: r.short_id, ...(r.import_rest.retry_at && r.import_rest.retry_at > args.now ? { waiting_until: r.import_rest.retry_at } : {}) };
-      if (r.started_at >= args.now - SWEEP_MAX_AGE_MS && sweepWants(r, args.now)) wanted.push({ short_id: r.short_id, started_at: r.started_at, linked: r.group_ids.length > 0 });
+      if (r.started_at >= args.now - SWEEP_MAX_AGE_MS && sweepWants(r, args.now)) wanted.push({ short_id: r.short_id, started_at: r.started_at, lane: sweepLane(r, args.now) });
     }
     return { cut, unknown, reading, wanted, cursor: page.continueCursor, done: page.isDone };
   },
 });
 
-/** The sweep's order: recordings linked to an issue first, then the rest, each newest first. */
-export function sweepQueue(rows: readonly { short_id: string; started_at: number; linked: boolean }[], max = TALLY_QUEUE_MAX): string[] {
-  return [...rows].sort((a, b) => Number(b.linked) - Number(a.linked) || b.started_at - a.started_at).slice(0, max).map((r) => r.short_id);
+/** The sweep's order: by lane (sweepLane), each newest first. */
+export function sweepQueue(rows: readonly { short_id: string; started_at: number; lane: number }[], max = TALLY_QUEUE_MAX): string[] {
+  return [...rows].sort((a, b) => a.lane - b.lane || b.started_at - a.started_at).slice(0, max).map((r) => r.short_id);
 }
 
 export const saveTally = internalMutation({
@@ -557,7 +632,7 @@ export const tally = internalAction({
     let cut = 0;
     let unknown = 0;
     let reading: { short_id: string; waiting_until?: number } | null = null;
-    const wanted: { short_id: string; started_at: number; linked: boolean }[] = [];
+    const wanted: { short_id: string; started_at: number; lane: number }[] = [];
     for (let i = 0; i < 200; i++) {
       const page: any = await ctx.runQuery(internal.sources.replayRest.tallyPage, { source_id: args.source_id, cursor, now });
       cut += page.cut;

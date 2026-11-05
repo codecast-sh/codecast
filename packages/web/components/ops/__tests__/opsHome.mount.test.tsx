@@ -83,10 +83,9 @@ test("what is wrong leads, worst first, and each count is a filter", async () =>
   const count = (k: string) => container.querySelector(`[data-ops-count="${k}"]`)!;
   expect(count("alerting").textContent).toBe("1Alerting");
   expect(count("alerting").getAttribute("href")).toBe("/ops?show=alerting");
-  // A paging tile that holds nothing is not drawn; a calmer one that holds nothing is a count, never a link to an empty list.
+  // A tile that holds nothing is not drawn, paging or not, at every width: the strip is only what holds something.
   expect(container.querySelector('[data-ops-count="regressed"]')).toBeNull();
-  expect(count("firing").getAttribute("data-tone")).toBe("zero");
-  expect(count("firing").getAttribute("href")).toBeNull();
+  expect(container.querySelector('[data-ops-count="firing"]')).toBeNull();
   done();
 });
 
@@ -146,7 +145,7 @@ test("a snoozed item leaves the list and its counts, and the Snoozed filter list
   const snoozes = { "issue:g1": { until: NOW + H, state: "new", volume: 3, at: NOW } };
   const live = await mount(data, null, snoozes);
   expect(live.container.querySelector('[data-ops-item="eg-1"]')).toBeNull();
-  expect(live.container.querySelector('[data-ops-count="new"] b')!.textContent).toBe("0");
+  expect(live.container.querySelector('[data-ops-count="new"]')).toBeNull();
   expect(live.container.querySelector('[data-ops-count="snoozed"] b')!.textContent).toBe("1");
   live.done();
   const list = await mount(data, "snoozed", snoozes);
@@ -216,18 +215,19 @@ test("a watch that cannot read is a watch error row with Retry, its source stays
   done();
 });
 
-test("replays hitting one issue are one row that names its source, its replays and its people, and opens on the issue", async () => {
+test("replays hitting one issue the store does not hold are one row that names its source, its replays and its people; a held issue's replays stay on its page", async () => {
   const old = group({ _id: "g9", short_id: "eg-9", title: "GET /api/users/:id answers 403", first_seen: NOW - 9 * 24 * H });
   const rp = (id: string, user: string) => ({ _id: id, short_id: `rp-${id}`, workspace: "team:t", source_id: "s1", source_name: "web", provider: "posthog", external_id: id, url: null, user: { id: user }, started_at: NOW - H, duration_ms: 1000, counts: { clicks: 1, errors: 2, failed_requests: 0 }, group_ids: ["g9"], chunks: 1, has_timeline: false, imported_at: NOW, updated_at: NOW }) as any;
-  const { container, done } = await mount({ ...empty, sources: [source()], groups: [old], replays: [rp("1", "ada"), rp("2", "bo"), rp("3", "ada")] });
-  const rows = container.querySelectorAll('[data-state="errors"].ops-home-row');
+  const replays = [rp("1", "ada"), rp("2", "bo"), rp("3", "ada")];
+  const unheld = await mount({ ...empty, sources: [source()], groups: [], replays });
+  const rows = unheld.container.querySelectorAll('[data-state="errors"].ops-home-row');
   expect(rows.length).toBe(1);
-  const row = rows[0];
-  expect(row.getAttribute("data-ops-item")).toBe("eg-9");
-  expect(row.textContent).toContain("3 replays in 24h, 2 people");
-  expect(row.querySelector('[data-ops-src="web"]')).not.toBeNull();
-  expect(row.querySelector(".ops-home-title")!.getAttribute("href")).toBe("/ops/issues/eg-9");
-  done();
+  expect(rows[0].textContent).toContain("3 replays in 24h, 2 people");
+  expect(rows[0].querySelector('[data-ops-src="web"]')).not.toBeNull();
+  unheld.done();
+  const held = await mount({ ...empty, sources: [source()], groups: [old], replays });
+  expect(held.container.querySelectorAll('[data-state="errors"].ops-home-row').length).toBe(0);
+  held.done();
 });
 
 test("rows that went wrong after the last visit are marked, and the head counts them", async () => {
@@ -320,8 +320,8 @@ test("one failing reader is one row naming its blind watches, its fix once, and 
   expect([...row.querySelectorAll("[data-ops-blind-watch]")].map((a) => a.getAttribute("href"))).toEqual(["/ops/metrics/mw-1", "/ops/metrics/mw-2", "/ops/metrics/mw-3", "/ops/metrics/mw-4"]);
   // The band draws none of them again: they are on the list. Its summary counts them as Blind, opening the reader's row, never as Erroring.
   expect(container.querySelector("[data-ops-band-watch]")).toBeNull();
-  expect(container.querySelector('[data-ops-band-count="reader"]')!.textContent).toBe("4Blind");
-  expect(container.querySelector('[data-ops-band-count="reader"]')!.getAttribute("href")).toBe("/ops?show=reader");
+  expect(container.querySelector('[data-ops-band-count="blind"]')!.textContent).toBe("4Blind");
+  expect(container.querySelector('[data-ops-band-count="blind"]')!.getAttribute("href")).toBe("/ops?show=reader");
   expect(container.querySelector('[data-ops-band-count="error"]')).toBeNull();
   await act(async () => root.unmount());
   container.remove();
@@ -348,13 +348,13 @@ test("a band with every watch fine is its count line alone", async () => {
 });
 
 test("the Events column counts events on every row and Users draws a dash when nobody is known", async () => {
-  const old = group({ _id: "g9", short_id: "eg-9", first_seen: NOW - 9 * 24 * H, count: 40 });
-  const rp = { _id: "r1", short_id: "rp-1", workspace: "team:t", source_id: "s1", source_name: "web", provider: "posthog", external_id: "r1", url: null, user: { id: "ada" }, started_at: NOW - H, duration_ms: 1000, counts: { clicks: 1, errors: 15, failed_requests: 0 }, group_ids: ["g9"], chunks: 1, has_timeline: false, imported_at: NOW, updated_at: NOW } as any;
-  const { container, done } = await mount({ ...empty, sources: [source()], groups: [old, group()], replays: [rp] });
+  const { container, done } = await mount({ ...empty, sources: [source()], groups: [group({ count: 40 }), group({ _id: "g2", short_id: "eg-2", fingerprint: "f2", title: "RangeError" })], replays: [] });
   const cell = (ref: string, col: string) => container.querySelector(`[data-ops-item="${ref}"] [data-col="${col}"]`)!.textContent;
-  expect(cell("eg-9", "events")).toBe("40");
-  expect(cell("eg-1", "events")).toBe("3");
-  expect(cell("eg-1", "users")).toBe("–");
+  expect(cell("eg-1", "events")).toBe("40");
+  expect(cell("eg-2", "events")).toBe("3");
+  expect(cell("eg-2", "users")).toBe("–");
+  // No row has people to count: the Users column folds away and the titles take its room.
+  expect(container.querySelector(".ops-home-table")!.getAttribute("data-users")).toBe("none");
   done();
 });
 

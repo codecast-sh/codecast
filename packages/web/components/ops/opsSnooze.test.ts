@@ -38,16 +38,22 @@ test("writing a snooze drops the ones that ran out, and waking removes it", () =
   expect([live.map((i) => i.key), snoozed.map((i) => i.key)]).toEqual([["issue:g2"], ["issue:g1"]]);
 });
 
-test("freshness is one state: offline, a failed feed, the source furthest behind by name, else Live; nothing with no source", () => {
+test("freshness is one state: offline, a failed feed, the source furthest behind by name, else up to date with its last poll; nothing with no source", () => {
   const polled = [{ name: "web-posthog", provider: "posthog" as const, status: "active" as const, last_poll_at: NOW - 2 * 60_000 }];
-  expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: polled, now: NOW })).toMatchObject({ stale: false, label: "Live", source: null });
+  expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: polled, now: NOW })).toMatchObject({ stale: false, label: "Polled 2m ago", source: null });
   expect(freshness({ connected: false, offlineSince: NOW - 3 * 60_000, feedError: false, sources: polled, now: NOW })).toMatchObject({ stale: true, label: "Offline for 3m" });
   expect(freshness({ connected: true, offlineSince: null, feedError: true, sources: polled, now: NOW })!.stale).toBe(true);
   const behind = [...polled, { name: "old-sentry", provider: "sentry" as const, status: "active" as const, last_poll_at: NOW - 45 * 60_000 }];
   expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: behind, now: NOW })).toMatchObject({ stale: true, label: "Stale: old-sentry 45m", source: "old-sentry" });
-  expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: [{ name: "web", provider: "sdk", status: "active" }], now: NOW })!.label).toBe("Live");
+  expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: [{ name: "web", provider: "sdk", status: "active" }], now: NOW })!.label).toBe("Up to date");
   expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: [], now: NOW })).toBeNull();
   // Scoped to one source, the chip speaks for that source alone: another source's late poll is not this view's.
-  expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: behind, now: NOW, scope: "web-posthog" })).toMatchObject({ stale: false, label: "Live" });
+  expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: behind, now: NOW, scope: "web-posthog" })).toMatchObject({ stale: false, label: "Polled 2m ago" });
   expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: behind, now: NOW, scope: "old-sentry" })).toMatchObject({ stale: true, label: "Polled 45m ago", source: null });
+});
+
+test("a poll under a minute old reads Polled just now, never Polled now ago", () => {
+  const fresh = [{ name: "union", provider: "app" as const, status: "active" as const, last_poll_at: NOW - 20_000 }];
+  expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: fresh, now: NOW })!.label).toBe("Polled just now");
+  expect(freshness({ connected: true, offlineSince: null, feedError: false, sources: fresh, now: NOW, scope: "union" })!.label).toBe("Polled just now");
 });

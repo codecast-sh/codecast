@@ -13,7 +13,7 @@ import Link from "next/link";
 import { ChevronsDown, ChevronsUp, Flag, FolderGit2, FolderKanban, Globe, KeyRound, Network, Radar, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper, Rocket } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, TasksNavIcon } from "./navIcons";
-import { TeamIcon, TEAM_COLORS } from "../TeamIcon";
+import { TeamIcon } from "../TeamIcon";
 import { paneDragProps, railRowClass } from "../../lib/railRow";
 import { focusHidesPage } from "../../lib/railFocus";
 
@@ -231,7 +231,6 @@ export function SidebarNavView({
   flowsOn = true,
   railMore,
   workspaceHeader,
-  workspaceColor,
 }: {
   isNarrow: boolean;
   scope?: "work";
@@ -264,8 +263,6 @@ export function SidebarNavView({
   /** The workspace switcher, drawn as the header of the block of rows whose
    *  content follows it. Absent (the marketing hero), the rows render unboxed. */
   workspaceHeader?: ReactNode;
-  /** The active team's color name (TEAM_COLORS), tinting that block. */
-  workspaceColor?: string | null;
 }) {
   // A solo account's focused rail leaves the team and fleet rows to More (lib/railFocus.ts).
   const focused = !!railMore?.focused;
@@ -280,7 +277,7 @@ export function SidebarNavView({
       )}
       {/* Everything inside this block shows the active workspace only: its
           header is the switcher, so the layout says what a switch changes. */}
-      <WorkspaceBlock header={workspaceHeader} color={workspaceColor} isNarrow={isNarrow}>
+      <WorkspaceBlock header={workspaceHeader} isNarrow={isNarrow}>
       {scope === "work" ? null : (<>
       <div className="text-sm">
         {shown("/threads") && threads}
@@ -493,20 +490,12 @@ function NewMark() {
 }
 
 /** The block of rail rows that follow the active workspace, under the
- *  switcher as its header and tinted with the team's color. */
-function WorkspaceBlock({ header, color, isNarrow, children }: { header?: ReactNode; color?: string | null; isNarrow: boolean; children: ReactNode }) {
+ *  switcher as its header. A hairline frame: the crest carries the color. */
+function WorkspaceBlock({ header, isNarrow, children }: { header?: ReactNode; isNarrow: boolean; children: ReactNode }) {
   if (!header) return <>{children}</>;
-  const tint = color && (TEAM_COLORS as readonly string[]).includes(color) ? `var(--sol-${color})` : "var(--sol-base01)";
   return (
-    <div
-      data-rail-workspace
-      className={`${isNarrow ? "mx-1" : "mx-2"} mt-3 mb-1 overflow-hidden rounded-lg border pb-1`}
-      style={{
-        borderColor: `color-mix(in srgb, ${tint} 28%, transparent)`,
-        background: `color-mix(in srgb, ${tint} 5%, transparent)`,
-      }}
-    >
-      <div className="border-b" style={{ borderColor: `color-mix(in srgb, ${tint} 18%, transparent)` }}>{header}</div>
+    <div data-rail-workspace className={`${isNarrow ? "mx-1" : "mx-2"} mt-3 mb-1 overflow-hidden rounded-lg border border-sol-border/50 pb-1`}>
+      <div className="border-b border-sol-border/40">{header}</div>
       {children}
     </div>
   );

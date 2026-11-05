@@ -8,7 +8,7 @@ import "./button.css"
 // THE button. Every action on the site is one of these: a filled face for
 // the one thing a surface is for (default, cyan, or an accent tone when the
 // action has a colour of its own: violet for calls, red for stop and delete,
-// green for approve, amber for triggers, yellow for guests), outline or secondary beside it,
+// green for approve, amber for triggers, orange for turning on something consequential, yellow for guests), outline or secondary beside it,
 // ghost for the quiet rest. The faces are drawn in button.css; a call site
 // picks a variant and a size and never a fill, a text colour or a shadow.
 const tone = (name: string) => `cc-btn-fill cc-btn-tone cc-btn-${name}`
@@ -36,6 +36,7 @@ const buttonVariants = cva(
         green: tone("green"),
         blue: tone("blue"),
         amber: tone("amber"),
+        orange: tone("orange"),
         yellow: tone("yellow"),
       },
       size: {

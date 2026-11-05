@@ -36,6 +36,17 @@
   background: color-mix(in srgb, var(--sol-blue) 8%, var(--sol-bg));
 }
 .iss-bulk .ops-btn { height: 26px; }
+/* Over the table head (left of it, the select-all box stays): the rows under the cursor never move as boxes are ticked. */
+.iss-head > .iss-bulk {
+  position: absolute; top: 1px; bottom: 1px; left: 32px; right: 0; margin: 0; padding: 0 8px; border-radius: 6px; flex-wrap: nowrap; gap: 6px;
+  font-size: 12px; font-weight: 400; letter-spacing: normal; text-transform: none; color: var(--sol-text); white-space: nowrap;
+}
+.iss-head > .iss-bulk .ops-btn { height: 24px; }
+/* A phone has no keys to hint, and the buttons wrap over the first rows rather than push them. */
+@container isslist (max-width: 640px) {
+  .iss-head > .iss-bulk { bottom: auto; flex-wrap: wrap; padding: 6px 8px; box-shadow: 0 6px 16px color-mix(in srgb, var(--sol-bg) 70%, transparent); }
+  .iss-head > .iss-bulk kbd { display: none; }
+}
 
 .iss-row {
   display: grid; align-items: center; column-gap: 10px;
@@ -101,7 +112,7 @@
 }
 .iss-provider:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 60%, var(--sol-border)); }
 .iss-quiet-sources { display: flex; flex-direction: column; gap: 6px; width: 100%; }
-.iss-quiet-source { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; text-align: left; }
+.iss-quiet-source { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; text-align: left; }
 
 /* ── The page ── */
 .iss-page { container-type: inline-size; }
@@ -209,7 +220,11 @@
 .iss-chain dd { min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 /* The issue's life under the hourly chart: first seen to now, its flips and the source's deploys. */
-.iss-life { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; margin: 6px 0 2px 34px; font-size: 10px; }
+.iss-life {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 10px;
+  margin: 12px 0 2px; padding-top: 8px; border-top: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent);
+}
+.iss-life-h { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); }
 .iss-life-axis { position: relative; height: 18px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); margin-top: 9px; }
 .iss-life-deploy { position: absolute; top: -4px; width: 1px; height: 7px; background: color-mix(in srgb, var(--sol-green) 70%, transparent); }
 .iss-life-mark { position: absolute; top: -4px; width: 7px; height: 7px; margin-left: -3px; border-radius: 50%; background: var(--ink); }
@@ -217,7 +232,7 @@
   position: absolute; top: 6px; left: 0; font-size: 9.5px; padding: 0 4px; border-radius: 3px; white-space: nowrap;
   color: var(--ink); background: color-mix(in srgb, var(--ink) 14%, var(--sol-bg-alt));
 }
-.iss-life-k { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.iss-life-k { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--sol-text-muted); }
 
 /* A check or metric over time: failing and passing spans on one strip. */
 .iss-health { position: relative; height: 22px; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--sol-text-muted) 10%, transparent); }
@@ -616,7 +631,8 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
 .iss-na { font-size: 10.5px; }
 .iss-c-events { white-space: nowrap; }
 /* A count column too narrow for its unit keeps the number; the unit is in its hover. */
-@container isslist (max-width: 1100px) { .iss-c-events .iss-unit { display: none; } }
+.iss-unit-tiny { display: none; }
+@container isslist (max-width: 1100px) { .iss-c-events .iss-unit-full { display: none; } .iss-c-events .iss-unit-tiny { display: inline; } }
 .iss-lane-tabs button[data-apart="true"] { margin-left: 10px; position: relative; }
 .iss-lane-tabs button[data-apart="true"]::before { content: ""; position: absolute; left: -7px; top: 25%; bottom: 25%; border-left: 1px solid var(--sol-border); }
 .iss-escalation { display: inline-flex; align-items: center; gap: 6px; }
@@ -711,3 +727,10 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
 @container isslist (max-width: 480px) {
   .iss-table:not([data-selecting="true"]) .iss-row { grid-template-columns: 24px minmax(0, 1fr) auto; }
 }
+/* Nobody on it, in the wide Fix cell: the ring, with words where no stage word sits beside it; its meaning is in the column head. */
+.iss-nobody-mark { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.iss-nobody-word { font-size: 11.5px; color: var(--sol-orange); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iss-fix-legend { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--sol-orange); }
+.iss-fix-legend .iss-nobody-ring { width: 10px; height: 10px; }
+/* The State strip's dates thin to every other one where seven no longer fit side by side. */
+@media (max-width: 560px) { .iss-chart-x > span[data-alt="true"] { display: none; } }

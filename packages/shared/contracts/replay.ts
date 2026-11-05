@@ -115,6 +115,9 @@ export const REPLAY_REST = {
   reach_unknown_ms: 10 * 60_000,
 } as const;
 
+/** What a rest chain says on its row when the vendor answered nothing past what is imported (sources/replayRest.ts); the page reads it as the vendor's copy ending there. */
+export const REPLAY_REST_NO_MORE = "PostHog answered no more of the recording";
+
 /**
  * Where an imported copy stops when the recording runs well past it (from
  * there on nothing was imported), or null when it covers the recording or
@@ -229,6 +232,19 @@ export type ReplayBackfillStatus = (typeof REPLAY_BACKFILL_STATUSES)[number];
  * new recordings do not shift; those come over in the run that follows a
  * finished one (convex sources/replayBackfill.ts tendImport).
  */
+/** One recording an import could not read: the vendor's id, its words, and what the vendor's list said of it, so a person knows which one it is. */
+export interface ReplayImportFailure {
+  id: string;
+  error: string;
+  /** When it was recorded, epoch ms. */
+  at?: number;
+  length_ms?: number;
+  /** Their email, else the vendor's id for them. */
+  person?: string;
+  /** The page it started on. */
+  url?: string;
+}
+
 export interface ReplayBackfill {
   status: ReplayBackfillStatus;
   window: ReplayBackfillWindow;
@@ -250,7 +266,7 @@ export interface ReplayBackfill {
   rate_limited_since?: number;
   last_error?: string;
   /** The run's failed recordings, newest last, at most REPLAY_BACKFILL_FAILURES_KEPT: the vendor's id and why. A new run tries them again. */
-  failures?: { id: string; error: string }[];
+  failures?: ReplayImportFailure[];
   started_at: number;
   updated_at: number;
   finished_at?: number;

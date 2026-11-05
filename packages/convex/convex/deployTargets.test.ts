@@ -1,20 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
-import {
-  checkSuiteCi,
-  publish,
-  recordCommitCi,
-  recordGithubDeployStatus,
-  recordLiveRead,
-  recordShipPass,
-  reportMainCommits,
-  request,
-  stampMainOrder,
-  statusEventOf,
-  view,
-  workflowRunCi,
-} from "./deployTargets";
+import { publish, recordLiveRead, recordShipPass, reportMainCommits, request, view } from "./deployTargets";
+import { checkSuiteCi, recordCommitCi, recordGithubDeployStatus, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
 import { recordDeployMarker } from "./deploys";
 
 // A repository's deploy targets (docs/architecture/deploys.md DP10 to DP14):

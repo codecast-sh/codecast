@@ -18,9 +18,12 @@ import { AlertTriangle, BellOff } from "lucide-react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import type { OpsWatch } from "./opsTypes";
 import {
-  COARSE_STEP, HEALTH_LOOK, alertBands, cutHoles, dataHoles, splitAtHoles, clipRunToWindow, bandsFromTransitions, clusterShips, alertSince, bandAt, crosses, durationShort, formatValue, isMutedAt, watchHealth, inWindow, lineRuns, niceTicks, roundToScale, spanLabel, stampLabel, tickLabels, ticksOf, timeTicks, valueNear, yDomain,
-  type ChartMark, type DataHole, type Direction, type Pt, type SeriesPt, type ShipCluster, type Win,
+  COARSE_STEP, HEALTH_LOOK, alertBands, cutHoles, dataHoles, splitAtHoles, clipRunToWindow, alertSince, crosses, durationShort, formatValue, isMutedAt, watchHealth, inWindow, lineRuns, niceTicks,
+  spanLabel, stampLabel, tickLabels, ticksOf, timeTicks, valueNear, yDomain, type DataHole, type Direction, type Pt, type Win,
 } from "./metricModel";
+import { type SeriesPt } from "./metricSeries";
+import { bandsFromTransitions, clusterShips, type ChartMark, type ShipCluster } from "./metricEvents";
+import { bandAt, roundToScale } from "./metricEditing";
 
 const W = 1000;
 
@@ -105,23 +108,27 @@ export function MetricChart({
     [full, loading, transitions, win],
   );
   const line = drag ?? threshold;
-  const extremes = useMemo(() => visible.flatMap((p) => (p.min !== undefined && p.max !== undefined ? [{ at: p.at, value: p.min }, { at: p.at, value: p.max }] : [])), [visible]);
   const shownLive = live && !loading && live.at >= win.from && live.at <= win.to ? live : null;
-  const [lo, hi] = frozen.current ?? yDomain([visible, prev, extremes, shownPreview, turns, shownLive ? [shownLive] : [], warn === undefined ? [] : [{ at: win.to, value: warn }], ghostLine === undefined ? [] : [{ at: win.to, value: ghostLine }]], threshold);
   const pad = full ? 10 : 5;
   const span = win.to - win.from || 1;
   const X = (at: number) => ((at - win.from) / span) * W;
-  const Y = (v: number) => pad + (1 - (v - lo) / (hi - lo || 1)) * (height - pad * 2);
-  const valueAtY = (y: number) => lo + (1 - (y - pad) / (height - pad * 2)) * (hi - lo);
 
   // At card size a short hole reads as noise: a card breaks its line only where a gap is far past the spacing around it.
   const joinAt = full ? undefined : CARD_JOIN;
   const runs = useMemo(() => lineRuns(visible, interval_ms, joinAt), [visible, interval_ms, joinAt]);
   // The runs keep the neighbours just outside the window (so a hole is judged against them), and each is drawn cut at the window's edges: nothing paints past the plot.
   // Stretches the source sent nothing for, several times its own spacing: hatched, named on hover, and never shaded as alerting.
-  const holes = useMemo(() => (full && !loading ? dataHoles(visible, interval_ms, poll_ms ?? interval_ms).filter((h) => h.to > win.from && h.from < win.to) : []), [full, loading, visible, interval_ms, poll_ms, win.from, win.to]);
+  // Judged on the whole series, never the window's slice: a range, a zoom and the overview's card mark the same stretches.
+  const holes = useMemo(() => (full && !loading ? dataHoles(points, interval_ms, poll_ms ?? interval_ms).filter((h) => h.to > win.from && h.from < win.to) : []), [full, loading, points, interval_ms, poll_ms, win.from, win.to]);
   const segs = useMemo(() => runs.filter((r) => !r.sparse).flatMap((r) => splitAtHoles(r.points, holes)).map((pts) => clipRunToWindow(pts, win)).filter((s) => s.length > 0), [runs, holes, win]);
   const sparse = useMemo(() => runs.filter((r) => r.sparse), [runs]);
+  // The y axis fits what the window draws: the values inside it, the line as cut at its edges, and each folded bucket's extremes inside it.
+  // The neighbours kept just outside it (a lone value weeks before the rest) never stretch it.
+  const extremes = useMemo(() => visible.flatMap((p) => (p.at >= win.from && p.at <= win.to && p.min !== undefined && p.max !== undefined ? [{ at: p.at, value: p.min }, { at: p.at, value: p.max }] : [])), [visible, win.from, win.to]);
+  const drawnVals = useMemo(() => [...visible.filter((p) => p.at >= win.from && p.at <= win.to), ...segs.flat()], [visible, segs, win.from, win.to]);
+  const [lo, hi] = frozen.current ?? yDomain([drawnVals, prev, extremes, shownPreview, turns, shownLive ? [shownLive] : [], warn === undefined ? [] : [{ at: win.to, value: warn }], ghostLine === undefined ? [] : [{ at: win.to, value: ghostLine }]], threshold, unit);
+  const Y = (v: number) => pad + (1 - (v - lo) / (hi - lo || 1)) * (height - pad * 2);
+  const valueAtY = (y: number) => lo + (1 - (y - pad) / (height - pad * 2)) * (hi - lo);
   const within = (p: Pt) => p.at >= win.from && p.at <= win.to;
   // A run read far apart on screen (a daily or weekly series) marks each value on its line, as a trend chart does.
   const marked = useMemo(() => runs.filter((r) => !r.sparse && (r.step / (win.to - win.from || 1)) * W >= 9).flatMap((r) => r.points).filter((p) => p.at >= win.from && p.at <= win.to), [runs, win.from, win.to]);
@@ -143,17 +150,20 @@ export function MetricChart({
   const previewSegs = useMemo(() => previewRuns.filter((r) => !r.sparse).map((r) => clipRunToWindow(r.points, win)).filter((s) => s.length > 0), [previewRuns, win]);
   const previewTicks = useMemo(() => ticksOf(previewRuns.filter((r) => r.sparse).flatMap((r) => r.points).filter((p) => p.at >= win.from && p.at <= win.to), minHalf, shownPreview), [previewRuns, minHalf, shownPreview, win.from, win.to]);
   // With the page's transitions, the bands run from a crossing to the recovery the list names, so the shading and the list agree on when an episode ended; a window that opens past the line with nothing listed before it still shades that stretch.
+  // A value read just now past the line is banded like any other: a preview that would alert on its first poll says so in red.
+  const banded = useMemo(() => (shownLive && (!visible.length || shownLive.at > visible[visible.length - 1].at) ? [...visible, shownLive] : visible), [visible, shownLive]);
   const valueBands = useMemo(() => {
-    const own = alertBands(visible, threshold, direction, win.to);
+    const own = alertBands(banded, threshold, direction, win.to);
     if (!transitions) return cutHoles(own, holes);
     const listed = bandsFromTransitions(transitions, win.to).filter((b) => b.to >= win.from && b.from <= win.to);
-    const head = own[0] && visible[0] && own[0].from === visible[0].at && !listed.some((b) => b.from <= own[0].from && b.to >= own[0].from) ? [own[0]] : [];
+    const head = own[0] && banded[0] && own[0].from === banded[0].at && !listed.some((b) => b.from <= own[0].from && b.to >= own[0].from) ? [own[0]] : [];
     return cutHoles([...head, ...listed], holes);
-  }, [visible, threshold, direction, win.from, win.to, transitions, holes]);
+  }, [banded, threshold, direction, win.from, win.to, transitions, holes]);
   // Where no values are held, the announced episodes stand in for the values' own bands.
   const gapBands = useMemo(() => (gap && episodes ? episodes.filter((e) => e.from < gap.to).map((e) => ({ from: e.from, to: Math.min(e.to, gap.to) })) : []), [gap, episodes]);
   const bands = useMemo(() => [...gapBands, ...valueBands], [gapBands, valueBands]);
-  const strip = episodes ?? valueBands;
+  // The strip under the plot says "past the line" only where values were held: the announced episodes are cut at each hole too.
+  const strip = useMemo(() => (episodes ? cutHoles(episodes, holes) : valueBands), [episodes, holes, valueBands]);
   const path = (pts: Pt[]) => pts.map((p, i) => `${i ? "L" : "M"}${X(p.at).toFixed(1)},${Y(p.value).toFixed(1)}${pts.length === 1 ? "h0.01" : ""}`).join("");
   // A folded bucket's min to max, as a faint band behind the line.
   const range = (pts: SeriesPt[]) => {
@@ -296,11 +306,11 @@ export function MetricChart({
               )}
               {segs.map((s, i) => <path key={i} d={path(s)} className="mx-line" style={{ stroke: past ? "var(--sol-red)" : stroke }} strokeWidth={s.length === 1 ? 4 : full ? 1.75 : 1.5} vectorEffect="non-scaling-stroke" />)}
               {marked.length > 0 && <path d={dotsPath(marked)} className="mx-line" data-point-marker="" style={{ stroke: past ? "var(--sol-red)" : stroke }} strokeWidth={full ? 5 : 3.5} vectorEffect="non-scaling-stroke" />}
+              {shownLive && last && shownLive.at > last.at && <path d={path([last, shownLive])} className="mx-line mx-live-join" style={{ stroke: past ? "var(--sol-red)" : stroke }} strokeWidth={1.5} vectorEffect="non-scaling-stroke" data-live-join={past ? "past" : ""} />}
             </g>
           )))}
           {previewSegs.map((s, i) => <path key={`v${i}`} d={path(s)} className="mx-line mx-preview-line" strokeWidth={s.length === 1 ? 5 : 1.5} vectorEffect="non-scaling-stroke" />)}
           {previewTicks.length > 0 && <path d={`${ticksPath(previewTicks)}${dotsPath(previewTicks.map((t) => t.pt))}`} className="mx-line mx-preview-line" data-preview-tick="" strokeWidth={3} vectorEffect="non-scaling-stroke" />}
-          {shownLive && last && shownLive.at > last.at && <path d={path([last, shownLive])} className="mx-line mx-live-join" style={{ stroke }} strokeWidth={1.5} vectorEffect="non-scaling-stroke" data-live-join />}
           {gy !== null && <line x1={0} x2={W} y1={gy} y2={gy} className="mx-ghost" vectorEffect="non-scaling-stroke" data-ghost-line />}
           {wy !== null && <line x1={0} x2={W} y1={wy} y2={wy} className="mx-warn" vectorEffect="non-scaling-stroke" />}
           {ty !== null && <line x1={0} x2={W} y1={ty} y2={ty} className="mx-threshold" vectorEffect="non-scaling-stroke" />}
@@ -462,7 +472,7 @@ export function HealthPill({ watch, now, since: episodeSince }: { watch: OpsWatc
   const look = HEALTH_LOOK[h];
   const since = h === "alert" ? (episodeSince ?? alertSince(watch)) : null;
   return (
-    <span className="mx-health" style={{ ["--ink" as string]: look.ink }} title={h === "error" ? watch.last_error : muted ? `Muted until ${stampLabel(watch.muted_until!)}` : undefined} data-health={h} data-muted={muted ? "" : undefined}>
+    <span className="mx-health" style={{ ["--ink" as string]: look.ink }} title={h === "error" || h === "retrying" ? watch.last_error : muted ? `Muted until ${stampLabel(watch.muted_until!)}` : undefined} data-health={h} data-muted={muted ? "" : undefined}>
       {h === "error" && <AlertTriangle aria-hidden />}
       {muted && <BellOff aria-label="muted" />}
       {h === "series" ? "Muted" : look.label}{since ? ` ${durationShort(now - since)}` : ""}
