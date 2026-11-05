@@ -64,6 +64,13 @@ deploy path, as one deploy.
   stops at Ship. The role and step keys ride the published profile only when
   set, so a profile that names none publishes the shape an older backend
   accepts.
+- When `target` names a target `.codecast/deploy.toml` declares (DP10), that
+  file is the command's one home: the line sends the target's `run`
+  (`lineDeploy.ts withDeclaredTarget`, read by publish, `cast line profile`,
+  `cast line deploy --go` and every deploy's steps). A `command` beside it is a
+  copy for CLIs that read only line.toml (1.1.211 and older), and a copy that
+  drifted from the target warns. The daemon reads profiles without it, so the
+  deploy files stay off its static graph.
 - `deploys.stage` reads the waiting fixes and the deploy already going out.
   `deploys.request` (and `requestDeployCore`, which the web's `deployLine`
   dispatch rides) writes one `requested` deploy whose `carries` are the

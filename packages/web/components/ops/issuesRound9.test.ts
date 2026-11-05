@@ -10,7 +10,9 @@ const DAY = 24 * HOUR;
 const priorTz = process.env.TZ;
 process.env.TZ = "America/New_York";
 afterAll(() => {
-  process.env.TZ = priorTz;
+  // Assigning undefined would store the string "undefined", an unknown zone, and every later file would read local time.
+  if (priorTz === undefined) delete process.env.TZ;
+  else process.env.TZ = priorTz;
 });
 
 // 9:30 PM Eastern on Nov 4 is 02:30 UTC on Nov 5.
