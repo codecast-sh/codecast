@@ -1,3 +1,4 @@
+import { loadLineDeployProfile } from "./lineDeploy";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -200,19 +201,21 @@ describe("line profile (LP2)", () => {
     expect(loadLineProfile(bare).profile.commands.check).toBe("cast ws check");
   });
 
-  test("[line.deploy] target names a deploy.toml target: the line sends that target's command, and a drifted copy warns", () => {
+  test("[line.deploy] target names a deploy.toml target: the line sends that target's command, and a drifted copy warns", async () => {
     const targets = `[[target]]\nname = "production"\nrun = "./deploy.sh --sha $sha"\n`;
     const only = tmpRepo({ ".codecast/line.toml": `[line.deploy]\ntarget = "production"\n`, ".codecast/deploy.toml": targets });
-    expect(loadLineProfile(only).profile.deploy?.command).toBe("./deploy.sh --sha $sha");
+    expect((await loadLineDeployProfile(only)).profile.deploy?.command).toBe("./deploy.sh --sha $sha");
+    // The profile alone is line.toml's: the daemon reads it without the deploy files.
+    expect(loadLineProfile(only).profile.deploy?.command).toBeNull();
     const copy = tmpRepo({ ".codecast/line.toml": `[line.deploy]\ntarget = "production"\ncommand = "./deploy.sh --sha $sha"\n`, ".codecast/deploy.toml": targets });
-    expect(loadLineProfile(copy).warnings).toEqual([]);
+    expect((await loadLineDeployProfile(copy)).warnings).toEqual([]);
     const drifted = tmpRepo({ ".codecast/line.toml": `[line.deploy]\ntarget = "production"\ncommand = "./old.sh"\n`, ".codecast/deploy.toml": targets });
-    const r = loadLineProfile(drifted);
+    const r = await loadLineDeployProfile(drifted);
     expect(r.profile.deploy?.command).toBe("./deploy.sh --sha $sha");
     expect(r.warnings.join("\n")).toContain('differs from target "production"');
     // A target the file does not declare leaves line.toml's own command.
     const other = tmpRepo({ ".codecast/line.toml": `[line.deploy]\ntarget = "web"\ncommand = "./web.sh"\n`, ".codecast/deploy.toml": targets });
-    expect(loadLineProfile(other).profile.deploy?.command).toBe("./web.sh");
+    expect((await loadLineDeployProfile(other)).profile.deploy?.command).toBe("./web.sh");
   });
 
   test("a .git directory that is no repository (a leftover of hooks) does not stop the walk", () => {
