@@ -37,11 +37,14 @@ export function useSyncDeployTargets(teamId: string | null | undefined) {
       syncTable("teamDeploys", [...deploys.values()], { isDelta: true });
     }, [syncTable, teamId]),
   );
-  return { ready: data !== undefined };
+  // A team's deploys by their records, every target, declared or not: a team with deploys never reads as empty.
+  const { data: records } = useQueryNoThrow(api.deployRefs.recentForTeam, teamId ? { team_id: teamId } : "skip");
+  useConvexSync(records, useCallback((rows: TeamDeployRow[]) => { syncTable("teamDeploys", rows, { isDelta: true }); }, [syncTable]));
+  return { ready: data !== undefined || records !== undefined };
 }
 
 const targetSig = (t: DeployTargetRow) => `${t.name}|${t.policy}|${t.can_deploy ? 1 : 0}|${t.queue?.head_sha ?? ""}|${t.queue?.commits ?? 0}|${t.queue?.head_ci ?? ""}|${t.queue?.groups?.length ?? 0}|${t.queue?.groups?.map((g) => `${g.key}:${g.commits.length}:${g.ci}`).join(",") ?? ""}`;
-const deploySig = (d: TeamDeployRow) => `${d.status}|${d.sha ?? ""}|${d.live_at ?? 0}|${d.finished_at ?? 0}|${d.steps?.map((s) => `${s.id}:${s.status}`).join(",") ?? ""}|${d.note ?? ""}|${d.short_id}|${d.sessions?.length ?? 0}`;
+const deploySig = (d: TeamDeployRow) => `${d.status}|${d.sha ?? ""}|${d.live_at ?? 0}|${d.finished_at ?? 0}|${d.steps?.map((s) => `${s.id}:${s.status}`).join(",") ?? ""}|${d.note ?? ""}|${d.short_id}|${d.sessions?.length ?? 0}|${d.tasks?.length ?? 0}`;
 
 /** Reader: a team's targets and deploys from the store. */
 export function useDeployTargets(teamId: string | null | undefined): { targets: DeployTargetRow[]; deploys: TeamDeployRow[]; ready: boolean } {

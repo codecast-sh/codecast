@@ -7,7 +7,8 @@
 // its tab in the right gutter, and a tip that reads the value, its distance
 // to the line, the prior period and any stretch the moment falls in. It is
 // MetricChart (MetricChart.tsx names its props); plotModel works out what to draw.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import Link from "next/link";
 import type { ECharts, EChartsOption } from "./echarts";
 import { OpsChart } from "./OpsChart";
@@ -53,7 +54,7 @@ export function MetricPlot(props: MetricChartProps) {
   const left = full ? AXIS_LEFT : 0;
   const right = full ? (handle ? GUTTER : 14) : 0;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = wrap.current;
     if (!el || !full) return;
     const ro = new ResizeObserver(e => {
