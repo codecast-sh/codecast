@@ -612,6 +612,7 @@ import type * as teams from "../teams.js";
 import type * as terminalStream from "../terminalStream.js";
 import type * as testComments from "../testComments.js";
 import type * as testDb from "../testDb.js";
+import type * as testThreads from "../testThreads.js";
 import type * as threadMembershipSweep from "../threadMembershipSweep.js";
 import type * as threadReads from "../threadReads.js";
 import type * as threads from "../threads.js";
@@ -1250,6 +1251,7 @@ declare const fullApi: ApiFromModules<{
   terminalStream: typeof terminalStream;
   testComments: typeof testComments;
   testDb: typeof testDb;
+  testThreads: typeof testThreads;
   threadMembershipSweep: typeof threadMembershipSweep;
   threadReads: typeof threadReads;
   threads: typeof threads;
