@@ -20,6 +20,8 @@ import { redactSecrets } from "./redact";
 import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { SwapHeldError } from "./herdTake";
+import { TerminalHoldError } from "./terminalHold";
+import { unreachableTerminalOf } from "../../shared/contracts/deliveryHold";
 import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
@@ -169,7 +171,7 @@ function fixture(transport = "tmux", cached = true) {
     tmuxExec, execAsync, redactSecrets,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
     // No cloud agent owns this fixture's conversation, so every one goes to the pane.
-    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, pollPendingNow: () => {},
+    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, TerminalHoldError, pollPendingNow: () => {},
     cloudAgents: { deliver: async () => null, forConversation: () => undefined, interrupt: async () => null },
     // A recovery continue restarts a pane that holds its own credential first;
     // this fixture's machine has no fleet store, so no pane is restarted.
@@ -931,6 +933,27 @@ describe("machine prompt delivery safety", () => {
     await expect(f.deliver(session("keep one copy"), "m5")).resolves.toBe(true);
     expect(f.reaped).toEqual([4242]);
     expect(resumes).toHaveLength(1);
+  });
+
+  // jx72xn9 (2026-11-04): a session resumed by hand in a plain Ghostty window
+  // took nothing for nine hours while every send retried as a failure, and the
+  // sender saw only "Connecting...". It is held now, naming the terminal, at a
+  // slow recheck that spends no retries, and the person's process is left alone.
+  test.each(["ghostty", "Alacritty"])("a live agent in %s is held with the terminal named, never retried or replaced", async transport => {
+    const f = fixture(transport);
+    f.hooks.resume = () => { throw new Error("resumed beside the person's own process"); };
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await f.scan([{ _id: "update", content: session("are you there?"), retry_count: 0 } as any]);
+      f.clock.now += 60_000;
+    }
+    // The attempt's own delivery timeout aside, one recheck is armed, at the hold's pace.
+    const rechecks = f.timers.filter((t: { ms: number }) => t.ms < 180_000);
+    expect(rechecks.map((t: { ms: number }) => t.ms)).toEqual([60_000]);
+    await rechecks[0].fn();
+    expect(f.events).toEqual(["hold:update"]);
+    expect(unreachableTerminalOf(f.holds[0]?.holdReason)).toBe(transport === "ghostty" ? "Ghostty" : "Alacritty");
+    expect(f.reaped).toEqual([]);
+    expect(f.bodies).toEqual([]);
   });
 
   test("AppleScript defaults preserve human submit and explicit poll scripts", () => {

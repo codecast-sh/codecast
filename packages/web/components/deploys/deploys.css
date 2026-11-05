@@ -165,3 +165,7 @@ a.dpp-headci:hover span { text-decoration: underline; }
 .dpp-detail-sessions a.dpp-detail-task { background: color-mix(in srgb, var(--sol-blue) 10%, transparent); }
 .dpp-detail-task span { margin-left: 6px; color: var(--sol-text-muted); }
 .dpp-via { flex: none; font-size: 10.5px; color: var(--sol-text-dim); font-style: italic; }
+.dpp-changes { display: flex; flex-direction: column; gap: 8px; }
+.dpp-change-group ul { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.dpp-change-group li { display: grid; grid-template-columns: 60px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
+.dpp-change-group li code { color: var(--sol-text-muted); }

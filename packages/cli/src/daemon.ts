@@ -316,6 +316,7 @@ import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskSchedul
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync, tmuxRunAsync } from "./tmux.js";
 import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
+import { TerminalHoldError } from "./terminalHold.js";
 import { HERD_TAKE_PATH, SwapHeldError, abortableWait, closeHerdrPane, pollUntilUp, serveHerdTake, swapHeld, takeBusy, type HerdTakeDeps } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
@@ -26683,6 +26684,10 @@ async function deliverMessageIntoSession(
       // every wake to one session retried into an empty osascript for hours on
       // 2026-09-07. Fall through to the resume paths instead.
       logDelivery(`Live process pid=${live.proc.pid} has no tty — no terminal to inject into`);
+    } else if (live.proc.termProgram && TMUX_ONLY_TERMINALS.has(live.proc.termProgram)) {
+      // Nothing can type into this window, and the agent is the person's own
+      // process: hold with a reason they can see (terminalHold.ts).
+      throw new TerminalHoldError(termLabel);
     } else {
       logDelivery(`Trying ${termLabel} injection for tty=${live.proc.tty}`);
       try {
@@ -32195,7 +32200,7 @@ async function main(): Promise<void> {
               ? { holdReason: err.holdReason, holdScreen: err.screen }
               : { holdReason: "waiting for a human answer in the terminal" };
             rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
-          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError) {
+          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof TerminalHoldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
             // never spending the retry budget, and tried again at the error's
