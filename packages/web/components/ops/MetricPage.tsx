@@ -45,12 +45,13 @@ import { opsHref } from "./opsPaths";
 import { OpsNotFound } from "./OpsShellParts";
 import { OpsFeedEmpty, ProviderIcon, SOURCE_PROVIDER_LABEL, useOpsFeed } from "./parts";
 import { QueryEditor, WatchSettings } from "./WatchEditor";
+import { AlertRule } from "./AlertRule";
 import { removeWatchLedger } from "./watchQuery";
 import { fixStage } from "./issuesModel";
 import { useWatchEpisodes } from "./useWatchEpisodes";
 import { DistributionCard } from "./MetricDistribution";
 import { useReadNow } from "./useReadNow";
-import { deliveriesByRow, routedSilently, rowKey } from "./alertRouting";
+import { deliveriesByRow, routedSilently, rowKey } from "./alertRoutingModel";
 import type { AlertDelivery } from "@codecast/shared/contracts/metricMonitor";
 import type { OpsEvent, OpsGroup, OpsSource, OpsWatch } from "./opsTypes";
 import "./metrics.css";
@@ -481,6 +482,7 @@ function WatchView({ watch }: { watch: OpsWatch }) {
             )
           ) : null}
         />
+        <AlertRule watch={watch} history={visible} win={win} within={named.within} now={now} onDraft={setGhost} />
       </section>
 
       <div className="mxp-cols">
@@ -498,7 +500,7 @@ function WatchView({ watch }: { watch: OpsWatch }) {
           <QueryEditor watch={watch} source={source} onPreview={setPreview} highlight={highlightSql} />
         </div>
         <aside className="mxp-rail">
-          <WatchSettings watch={watch} source={source} removeLedger={removeWatchLedger(watch, group?.short_id ?? null)} history={visible} within={named.within} onDraft={setGhost} />
+          <WatchSettings watch={watch} source={source} removeLedger={removeWatchLedger(watch, group?.short_id ?? null)} />
           <SourceCard watch={watch} source={source} heldFrom={heldFrom} now={now} />
         </aside>
       </div>

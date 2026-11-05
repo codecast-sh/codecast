@@ -14,6 +14,7 @@ import {
   isAgentChromeCommand,
   shouldRestoreFocus,
   stampAt,
+  inWindowServerSession,
 } from "./focusSentinel.js";
 
 describe("isAgentChromeCommand", () => {
@@ -133,4 +134,12 @@ test("a cloud host never arms the sentinel: its daemon has no window-server sess
   } finally {
     if (prev === undefined) delete process.env.CODECAST_REMOTE_DEVICE; else process.env.CODECAST_REMOTE_DEVICE = prev;
   }
+});
+
+test("only an Aqua session counts as a window-server session; SSH, background and unknown contexts do not", async () => {
+  // launchctl managername as measured on a Mac mini (2026-11-05): a GUI
+  // login's processes say Aqua; an SSH shell says System; a user who never
+  // logged in at the screen says Background. The input probe hung in both.
+  expect(await inWindowServerSession(async () => "Aqua")).toBe(true);
+  for (const name of ["System", "Background", "LoginWindow", ""]) expect(await inWindowServerSession(async () => name)).toBe(false);
 });

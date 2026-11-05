@@ -24,6 +24,8 @@ test("every ledger reads at a glance: no sentence, no long value", () => {
     L.featuresAllLedger({ group: "Browser", machine: "MacBook", names: ["Browser", "Computer"] }),
     L.routineActivateLedger({ title: "Ads daily", every: "1d", applies: true, cost }),
     L.killSessionsLedger({ total: 3, working: ["Busy one"] }),
+    L.restartInTmuxLedger({ terminal: "Ghostty", working: false }),
+    L.restartInTmuxLedger({ terminal: "Alacritty", working: true }),
     roleOnlineLedger({ handle: "growth", name: "Growth lead", host: "Ashot", startsOnItsOwn: true, sessionsPerDay: 6 }),
   ];
   for (const l of all) assertGlance(l);
@@ -77,4 +79,13 @@ test("rotating a key says what the old key carries and when it stops, at a glanc
   assert.deepEqual(ended.pick, { k: "Old key", options: L.OLD_KEY_CHOICES, value: "Ends now" });
   // A source that sent nothing loses nothing: no alarm.
   assert.equal(L.rotateKeyLedger({ source: "quiet", events24h: 0, choice: "Ends now" }).alert, undefined);
+});
+
+test("moving a session to tmux warns about a turn in progress only while one runs", () => {
+  const busy = L.restartInTmuxLedger({ terminal: "Ghostty", working: true });
+  assert.equal(busy.alert, "It is working now");
+  assert.ok(busy.rows.some((r) => r.k === "Lost"));
+  const idle = L.restartInTmuxLedger({ terminal: "Ghostty", working: false });
+  assert.equal(idle.alert, undefined);
+  assert.ok(!idle.rows.some((r) => r.k === "Lost"));
 });

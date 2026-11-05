@@ -13,7 +13,8 @@ import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
 import { AssigneeFace } from "../identity/AssigneeFace";
 import { AssignMenu } from "./issueOwner";
 import { spanLabel } from "./metricModel";
-import { autoFixLedger, notifyInput, useFixFolder, useFolderProjects, useNotifyTargets, type FixSubject, type NotifyTarget } from "./alertRouting";
+import { autoFixLedger, useFixFolder, useFolderProjects, useNotifyTargets, type FixSubject } from "./alertRouting";
+import { notifyInput, type NotifyTarget } from "./alertRoutingModel";
 import type { OpsSource, OpsWatch } from "./opsTypes";
 import "./issues.css";
 

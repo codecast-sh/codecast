@@ -19,12 +19,7 @@
 .ovc { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .ovc-plot { position: relative; user-select: none; touch-action: none; border-bottom: 1px solid var(--osx-line); }
 .ovc-plot[data-brush="true"] { cursor: crosshair; }
-.ovc-bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 1px; }
-.ovc-col { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column-reverse; }
-.ovc-col i { display: block; width: 100%; min-height: 1px; opacity: 0.82; }
-.ovc-col i:last-child { border-radius: 2px 2px 0 0; }
-.ovc-col[data-hover="true"] i { opacity: 1; }
-.ovc-col[data-hover="true"] { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.ovc-canvas { position: absolute !important; inset: 0; }
 .ovc-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--sol-text-dim); }
 .ovc-mark { position: absolute; top: -2px; bottom: 0; border-left: 1px dashed var(--sol-green); pointer-events: none; }
 .ovc-mark-label {
@@ -33,16 +28,6 @@
 }
 a.ovc-mark-label:hover { background: color-mix(in srgb, var(--sol-green) 24%, var(--sol-bg)); }
 .ovc-mark[data-edge="end"] .ovc-mark-label { left: auto; right: 3px; }
-.ovc-brush { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--sol-blue) 16%, transparent); border-left: 1px solid var(--sol-blue); border-right: 1px solid var(--sol-blue); pointer-events: none; }
-.ovc-tip {
-  position: absolute; bottom: calc(100% + 6px); transform: translateX(-50%); z-index: 5; pointer-events: none;
-  display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; min-width: 120px; font-size: 11px;
-  background: var(--sol-bg); border: 1px solid var(--osx-line); border-radius: 6px; box-shadow: 0 4px 14px color-mix(in srgb, black 18%, transparent);
-}
-.ovc-tip[data-edge="end"] { transform: translateX(-90%); }
-.ovc-tip-row { display: flex; align-items: center; gap: 6px; }
-.ovc-tip-row i, .ovc-legend i { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
-.ovc-tip-row b { margin-left: auto; font-weight: 500; }
 .ovc-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--sol-text-muted); }
 .ovc-grid { position: absolute; inset: -8px 0 0 0; pointer-events: none; }
 .ovc-y { position: absolute; left: 0; transform: translateY(-50%); font-size: 9.5px; line-height: 12px; padding-right: 4px; color: var(--sol-text-dim); background: var(--sol-bg); z-index: 2; }
@@ -57,10 +42,8 @@ a.ovc-mark-label:hover { background: color-mix(in srgb, var(--sol-green) 24%, va
   border-right: 1px dashed var(--sol-text-dim);
 }
 .ovc-nodata span { font-size: 10.5px; color: var(--sol-text-dim); background: var(--sol-bg); padding: 1px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.ovc-col[data-unknown="true"] i { display: none; }
 .ovc-mark-label { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
 .ovc-mark-label[data-many="true"] { font-weight: 600; }
-.ovc-tip[data-edge="start"] { transform: translateX(-10%); }
 .ovc-legend span { display: inline-flex; align-items: center; gap: 5px; }
 
 /* ── the stream ── */
@@ -456,7 +439,7 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 }
 
 /* ── volume: a bar the counter has no record of, drawn from kept rows, reads as an estimate (striped, lighter) ── */
-.ovc-legend i[data-estimated="true"], .ovc-col[data-estimated="true"] i { background-image: repeating-linear-gradient(135deg, transparent 0 3px, color-mix(in srgb, var(--sol-bg) 45%, transparent) 3px 5px); }
+.ovc-legend i[data-estimated="true"] { background-image: repeating-linear-gradient(135deg, transparent 0 3px, color-mix(in srgb, var(--sol-bg) 45%, transparent) 3px 5px); }
 
 /* ── occurrences: a failed request reads as its method, path and coloured status ── */
 .otl-req { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; min-width: 0; white-space: nowrap; vertical-align: bottom; }

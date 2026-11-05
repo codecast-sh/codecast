@@ -1,0 +1,40 @@
+/* The alert rule under the watch's chart (AlertRule.tsx): the page's one
+   raised surface below the plot, a sentence with inline fields, and the
+   replayed alerts as red marks on a strip as wide as the chart's window. */
+
+.mxr { margin-top: 22px; padding: 18px 22px 16px; border-radius: 14px; background: var(--sol-card); box-shadow: var(--osx-shadow); }
+.mxr-say { margin: 0; font-size: 15.5px; line-height: 2.1; color: var(--sol-text-muted); }
+
+/* A field reads as part of the sentence: the value in the text's own ink on a soft wash, sized to what it holds. */
+.mxr-f {
+  field-sizing: content; min-width: 3ch; height: 30px; padding: 0 9px; margin: 0 1px;
+  font: inherit; font-weight: 600; color: var(--sol-text); vertical-align: baseline;
+  border: 1px solid transparent; border-radius: 8px; background: var(--osx-sunk);
+  appearance: none; cursor: pointer;
+}
+select.mxr-f { padding-right: 22px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 12px) 13px, calc(100% - 8px) 13px; background-size: 4px 4px; background-repeat: no-repeat; }
+.mxr-f:hover { border-color: var(--osx-line); }
+.mxr-f:focus { outline: none; border-color: var(--sol-blue); background-color: var(--sol-card); cursor: text; }
+.mxr-f[aria-invalid="true"] { border-color: var(--sol-red); }
+.mxr-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: center; }
+.mxr-num::placeholder { font-weight: 400; color: var(--sol-text-dim); }
+.mxr-unit { margin-left: 4px; color: var(--sol-text-dim); }
+.mxr-dim { color: var(--sol-text-dim); font-size: 12.5px; }
+
+.mxr-test { display: flex; align-items: center; gap: 16px; margin-top: 12px; font-size: 12.5px; color: var(--sol-text-muted); }
+.mxr-strip { position: relative; flex: 1; min-width: 120px; height: 18px; border-radius: 5px; background: var(--osx-sunk); overflow: hidden; }
+.mxr-strip i { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 2px; background: var(--sol-red); }
+.mxr-strip i[data-open] { background: repeating-linear-gradient(135deg, var(--sol-red) 0 4px, color-mix(in srgb, var(--sol-red) 60%, transparent) 4px 8px); }
+.mxr-count { white-space: nowrap; }
+.mxr-count b { font-family: var(--font-mono); font-weight: 600; color: var(--sol-text); }
+.mxr-was { margin-left: 12px; color: var(--sol-text-dim); }
+
+.mxr-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--osx-line); font-size: 12.5px; }
+.mxr-problem { color: var(--sol-red); }
+
+@media (max-width: 640px) {
+  .mxr { padding: 14px 16px; }
+  .mxr-say { font-size: 14px; }
+  .mxr-test { flex-wrap: wrap; }
+  .mxr-strip { flex-basis: 100%; }
+}
