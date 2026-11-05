@@ -65,6 +65,7 @@ FB="{\\"status\\":\\"$(json_esc "$STATUS")\\",\\"ts\\":$ts"
 [ -n "\${TRANSCRIPT_PATH:-}" ] && FB="$FB,\\"transcript_path\\":\\"$(json_esc "$TRANSCRIPT_PATH")\\""
 [ -n "\${SESSION_BOUNDARY:-}" ] && FB="$FB,\\"session_boundary\\":\\"$(json_esc "$SESSION_BOUNDARY")\\""
 [ -n "\${TURN_COMPLETED_AT:-}" ] && FB="$FB,\\"turn_completed_at\\":\\"$TURN_COMPLETED_AT\\""
+[ -n "\${DIALOG:-}" ] && FB="$FB,\\"dialog\\":\\"1\\""
 FB="$FB}"
 
 # Try HTTP push first (instant), fall back to file write (polled)
@@ -86,6 +87,7 @@ if [ -f "$HOOK_PORT_FILE" ]; then
     [ -n "\${TRANSCRIPT_PATH:-}" ] && set -- "$@" --data-urlencode "transcript_path=$TRANSCRIPT_PATH"
     [ -n "\${SESSION_BOUNDARY:-}" ] && set -- "$@" --data-urlencode "session_boundary=$SESSION_BOUNDARY"
     [ -n "\${TURN_COMPLETED_AT:-}" ] && set -- "$@" --data-urlencode "turn_completed_at=$TURN_COMPLETED_AT"
+    [ -n "\${DIALOG:-}" ] && set -- "$@" --data-urlencode "dialog=1"
     curl "$@" >/dev/null 2>&1 && return 0
   fi
 fi
@@ -158,6 +160,7 @@ MESSAGE=""
 SESSION_BOUNDARY=""
 TURN_COMPLETED_AT=""
 TRANSCRIPT_PATH=""
+DIALOG=""
 
 if [ "$EVENT" = "UserPromptSubmit" ]; then
   STATUS=thinking
@@ -203,6 +206,9 @@ elif [ "$EVENT" = "PermissionRequest" ]; then
       PREV=$(printf '%s' "$PREV" | cut -c1-300)
     fi
     STATUS=permission_blocked
+    # A dialog is on screen in every permission mode, bypass included (a
+    # hook's "ask" raises one there), so the daemon never reads it as a phantom.
+    DIALOG=1
     if [ "$TOOL" = "AskUserQuestion" ]; then
       MESSAGE=AskUserQuestion
     elif [ -n "$PREV" ]; then
