@@ -363,16 +363,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const teamsQuery = useSyncTeams();
   const teams = useInboxStore((s) => s.teams);
   const activeTeam = (teamsQuery ?? teams)?.find((t: any) => t?._id === activeTeamId);
-  // A badge, not the surface: a server failure (e.g. the backend's syscall
-  // budget under load) must degrade the count, never unmount the Sidebar.
-  // The query feeds the store (below); the badge renders from the store.
-  const { data: teamUnreadCountQuery } = useQueryNoThrow(
-    api.conversations.getTeamUnreadCount,
-    // isConvexId: a just-created team holds an optimistic stub id until the
-    // server echoes, and a stub is not an Id<"teams">.
-    activeTeamId && isConvexId(String(activeTeamId)) ? { teamId: activeTeamId } : "skip"
-  );
-  const teamUnreadCount = useInboxStore((s) => s.teamUnreadCount);
   const createModal = useInboxStore((s) => s.createModal);
   const createModalDefaults = useInboxStore((s) => s.createModalDefaults);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
@@ -566,7 +556,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // Pinned projects read their title from the store (PinnedRail).
   useSyncProjects();
 
-  useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
   useConvexSync(favoritesQuery, useCallback((d: any) => useInboxStore.getState().syncTable("favorites", d), []));
   // Local-first: the workspace/directory rail derives from the viewer's own
   // sessions already in the store (the inbox sync + persisted cache), not a
@@ -697,7 +686,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               onMobileClose={onMobileClose}
             />
           }
-          feed={activeTeam && <FeedNavRowView team={activeTeam} isActive={!!isTeamActivity} isNarrow={isNarrow} unread={teamUnreadCount} />}
+          feed={activeTeam && <FeedNavRowView team={activeTeam} isActive={!!isTeamActivity} isNarrow={isNarrow} />}
           questions={<>
             <QuestionsNavRow
               isActive={pathname === "/decisions" || (pathname?.startsWith("/decisions/") ?? false)}
