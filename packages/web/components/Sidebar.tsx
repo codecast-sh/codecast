@@ -38,7 +38,6 @@ import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, Pin, PinO
 import { NATIVE_APP_COPY, NATIVE_APP_LINKS, nativeAppOffer, trackNativeAppClick } from "../lib/nativeApps";
 import { useSyncTeams } from "../hooks/useSyncTeams";
 import { AppPopOutButton } from "./desktop/AppPopOutButton";
-import { OpsNavBadge } from "./ops/OpsNavBadge";
 import type { DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { RailHeading, SectionRow, NavCount, NeedsInputCount, type SectionRowSpec } from "./sidebar/navPrimitives";
@@ -753,7 +752,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? isTasks, onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) })), onDrill: tasksDrill ? () => drill.open("tasks") : undefined }}
           docs={{ items: docViewItems, expanded: viewSectionOverride.docs ?? (isDocs || isPlans), onToggle: () => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) })) }}
           orgOn={orgOn}
-          opsBadge={<OpsNavBadge />}
           offers={{ org: orgOffer, line: flowsOffer }}
           changesOn={changesOn}
           // A person in no team has one workspace and nothing to switch: no block.

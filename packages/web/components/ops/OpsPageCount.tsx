@@ -1,5 +1,4 @@
-// The count an Ops page wears in the palette, the same number its tab and the
-// sidebar show: the Overview's paging count (opsBadge), Issues' open count
+// The count an Ops page wears in the palette, the same number its tab shows: the Overview's paging count (opsBadge), Issues' open count
 // (issueTotals, summed per source), Replays' browse total (useReplayTotal) and
 // Metrics' alerting or blind watches. Red is only for what pages or is broken;
 // an open total is a neutral count. Pages with no count (Timeline) render
