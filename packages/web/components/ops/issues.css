@@ -9,7 +9,7 @@
 .iss-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .iss-search {
   display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; min-width: 200px; flex: 0 1 280px;
-  border: 1px solid var(--sol-border); border-radius: 6px; background: var(--sol-bg-alt);
+  border: 1px solid var(--osx-line); border-radius: 6px; background: var(--sol-bg);
 }
 .iss-search:focus-within { border-color: color-mix(in srgb, var(--sol-cyan) 60%, var(--sol-border)); }
 .iss-search input { flex: 1; min-width: 0; background: transparent; font-size: 12.5px; color: var(--sol-text); outline: none; }
@@ -21,7 +21,7 @@
 .ops-seg button[data-on="true"] .iss-seg-n { color: var(--sol-text-muted); }
 .iss-facet {
   display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 4px 0 8px; font-size: 11.5px;
-  border: 1px solid var(--sol-border); border-radius: 6px; color: var(--sol-text);
+  border: 1px solid var(--osx-line); border-radius: 6px; color: var(--sol-text);
 }
 .iss-facet[data-on="true"] { border-color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 8%, transparent); }
 .iss-facet select { background: transparent; color: var(--sol-text); font-size: 11.5px; max-width: 160px; outline: none; cursor: pointer; }
@@ -108,7 +108,7 @@
 .iss-providers { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
 .iss-provider {
   display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: 6px; font-size: 12.5px;
-  border: 1px solid var(--sol-border); background: var(--sol-bg-alt); color: var(--sol-text);
+  border: 1px solid var(--osx-line); background: var(--sol-bg); color: var(--sol-text);
 }
 .iss-provider:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 60%, var(--sol-border)); }
 .iss-quiet-sources { display: flex; flex-direction: column; gap: 6px; width: 100%; }
@@ -132,7 +132,7 @@
 .iss-banner {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; padding: 9px 12px; border-radius: 8px; font-size: 12.5px;
   border: 1px solid color-mix(in srgb, var(--sol-orange) 55%, var(--sol-border));
-  background: color-mix(in srgb, var(--sol-orange) 10%, var(--sol-bg-alt));
+  background: color-mix(in srgb, var(--sol-orange) 10%, var(--sol-bg));
 }
 .iss-banner b { color: var(--sol-orange); }
 
@@ -151,7 +151,7 @@
 .iss-chart-mark { position: absolute; top: -4px; bottom: 0; border-left: 1px dashed var(--ink); pointer-events: none; }
 .iss-chart-mark span {
   position: absolute; top: -12px; left: 2px; font-size: 9.5px; padding: 0 4px; border-radius: 3px; white-space: nowrap;
-  color: var(--ink); background: color-mix(in srgb, var(--ink) 14%, var(--sol-bg-alt));
+  color: var(--ink); background: color-mix(in srgb, var(--ink) 14%, var(--sol-bg));
 }
 .iss-chart-mark[data-edge="end"] span { left: auto; right: 2px; }
 .iss-chart-x { position: relative; height: 16px; margin-left: 34px; font-size: 10px; color: var(--sol-text-dim); }
@@ -165,9 +165,9 @@
 
 /* The event the page is on: its header and the way between events. */
 .iss-event { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; font-size: 12px; }
-.iss-event-nav { display: inline-flex; border: 1px solid var(--sol-border); border-radius: 6px; overflow: hidden; }
+.iss-event-nav { display: inline-flex; border: 1px solid var(--osx-line); border-radius: 6px; overflow: hidden; }
 .iss-event-nav button { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; font-size: 11.5px; color: var(--sol-text-muted); }
-.iss-event-nav button + button { border-left: 1px solid var(--sol-border); }
+.iss-event-nav button + button { border-left: 1px solid var(--osx-line); }
 .iss-event-nav button:hover:not(:disabled) { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
 .iss-event-nav button:disabled { opacity: 0.4; cursor: default; }
 .iss-event-nav button { white-space: nowrap; }
@@ -230,7 +230,7 @@
 .iss-life-mark { position: absolute; top: -4px; width: 7px; height: 7px; margin-left: -3px; border-radius: 50%; background: var(--ink); }
 .iss-life-mark span {
   position: absolute; top: 6px; left: 0; font-size: 9.5px; padding: 0 4px; border-radius: 3px; white-space: nowrap;
-  color: var(--ink); background: color-mix(in srgb, var(--ink) 14%, var(--sol-bg-alt));
+  color: var(--ink); background: color-mix(in srgb, var(--ink) 14%, var(--sol-bg));
 }
 .iss-life-k { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--sol-text-muted); }
 
@@ -269,7 +269,7 @@
 .iss-task-form { display: flex; gap: 6px; width: 100%; }
 .iss-task-form input {
   flex: 1; min-width: 0; height: 24px; padding: 0 6px; font-size: 11.5px; border-radius: 5px;
-  border: 1px solid var(--sol-border); background: var(--sol-bg-alt); color: var(--sol-text); outline: none;
+  border: 1px solid var(--osx-line); background: var(--sol-bg); color: var(--sol-text); outline: none;
 }
 .iss-task-form input[data-missing="true"] { border-color: var(--sol-red); }
 .iss-awake { width: 6px; height: 6px; border-radius: 50%; background: var(--sol-green); }
@@ -400,7 +400,7 @@
 @media (hover: none) and (pointer: coarse) {
   .iss-list kbd, .iss-page kbd, .iss-list .iss-keys, .iss-page .iss-event-nav kbd { display: none; }
 }
-.iss-sheet { display: none; flex-direction: column; gap: 6px; margin-bottom: 12px; padding: 10px; border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg-alt); }
+.iss-sheet { display: none; flex-direction: column; gap: 6px; margin-bottom: 12px; padding: 10px; border: 1px solid var(--osx-line); border-radius: 8px; background: var(--sol-bg); }
 
 /* At a phone width the lane select alone carries the lanes (the tab row's own display rule comes later in the file). */
 @container (max-width: 600px) {
@@ -411,7 +411,7 @@
 .iss-row[data-lane="flapping"] { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--sol-yellow) 55%, transparent); }
 
 /* A source with no issues: its health, where its data lands, one press. */
-.iss-src-empty { display: flex; flex-direction: column; gap: 12px; max-width: 560px; margin: 24px auto; padding: 16px; border: 1px solid var(--sol-border); border-radius: 10px; background: var(--sol-card); }
+.iss-src-empty { display: flex; flex-direction: column; gap: 12px; max-width: 560px; margin: 24px auto; padding: 16px; border-radius: 14px; background: var(--sol-card); box-shadow: var(--osx-shadow); }
 .iss-src-empty[data-bad="true"] { border-color: color-mix(in srgb, var(--sol-red) 45%, var(--sol-border)); }
 .iss-src-empty-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .iss-src-empty-head > :last-child { margin-left: auto; }
@@ -420,7 +420,7 @@
 .iss-src-facts dd { margin: 0; color: var(--sol-text); min-width: 0; }
 .iss-src-reason { color: var(--sol-red) !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iss-src-lands { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
-.iss-src-land { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--sol-border); border-radius: 8px; font-size: 12px; }
+.iss-src-land { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--osx-line); border-radius: 8px; font-size: 12px; }
 .iss-src-land:hover { border-color: color-mix(in srgb, var(--sol-blue) 50%, var(--sol-border)); }
 .iss-src-land-k { color: var(--sol-text-muted); font-size: 11px; }
 .iss-src-land b { color: var(--sol-text); font-weight: 600; font-size: 15px; }
@@ -436,7 +436,7 @@
 .iss-task-drop { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; flex-wrap: wrap; }
 .iss-task-drop button { color: var(--sol-text-muted); text-decoration: underline dotted; text-underline-offset: 2px; }
 .iss-task-drop button:hover { color: var(--sol-text); }
-.iss-task-notefull { display: block; margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: var(--sol-bg-alt); font-size: 11.5px; line-height: 1.45; color: var(--sol-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.iss-task-notefull { display: block; margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: var(--sol-bg); font-size: 11.5px; line-height: 1.45; color: var(--sol-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .iss-banner[data-tone="flapping"] { border-color: color-mix(in srgb, var(--sol-yellow) 45%, var(--sol-border)); background: color-mix(in srgb, var(--sol-yellow) 8%, transparent); }
 .iss-banner[data-tone="flapping"] b { color: var(--sol-yellow); }
 
@@ -453,10 +453,10 @@
 .iss-owner, .iss-assign-anchor { position: relative; display: inline-flex; }
 .iss-assign-menu {
   position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; width: 240px; padding: 6px;
-  border: 1px solid var(--sol-border); border-radius: 8px; background: var(--sol-bg); box-shadow: 0 8px 24px color-mix(in srgb, var(--sol-text) 14%, transparent);
+  border: 1px solid var(--osx-line); border-radius: 8px; background: var(--sol-bg); box-shadow: 0 8px 24px color-mix(in srgb, var(--sol-text) 14%, transparent);
 }
 .iss-assign-anchor .iss-assign-menu { left: 0; right: auto; }
-.iss-assign-menu input { width: 100%; height: 26px; padding: 0 8px; margin-bottom: 4px; border: 1px solid var(--sol-border); border-radius: 6px; background: var(--sol-bg-alt); font-size: 12px; color: var(--sol-text); outline: none; }
+.iss-assign-menu input { width: 100%; height: 26px; padding: 0 8px; margin-bottom: 4px; border: 1px solid var(--osx-line); border-radius: 6px; background: var(--sol-bg); font-size: 12px; color: var(--sol-text); outline: none; }
 .iss-assign-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
 .iss-assign-list button { display: flex; align-items: center; gap: 8px; min-width: 0; height: 28px; padding: 0 6px; border-radius: 5px; font-size: 12px; color: var(--sol-text); text-align: left; }
 .iss-assign-list button[data-on="true"] { background: color-mix(in srgb, var(--sol-blue) 12%, transparent); }
@@ -464,14 +464,14 @@
 .iss-assign-none { padding: 8px 6px; font-size: 12px; }
 .iss-assign-float { position: fixed; right: 24px; bottom: 24px; z-index: 30; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; font-size: 11.5px; }
 .iss-assign-float .iss-assign-menu { position: static; }
-.iss-mine { height: 26px; padding: 0 10px; border: 1px solid var(--sol-border); border-radius: 6px; font-size: 11.5px; color: var(--sol-text-muted); }
+.iss-mine { height: 26px; padding: 0 10px; border: 1px solid var(--osx-line); border-radius: 6px; font-size: 11.5px; color: var(--sol-text-muted); }
 .iss-mine:hover { color: var(--sol-text); }
 .iss-mine[data-on="true"] { color: var(--sol-text); border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 10%, transparent); }
 
 /* A settled issue: its banner says how it was settled; its failing value reads as the last failure, muted. */
 .iss-banner[data-tone="resolved"] { border-color: color-mix(in srgb, var(--sol-green) 45%, var(--sol-border)); background: color-mix(in srgb, var(--sol-green) 8%, transparent); }
 .iss-banner[data-tone="resolved"] b { color: var(--sol-green); }
-.iss-banner[data-tone="settled"] { border-color: var(--sol-border); background: var(--sol-bg-alt); }
+.iss-banner[data-tone="settled"] { border-color: var(--sol-border); background: var(--sol-bg); }
 .iss-banner[data-tone="settled"] b { color: var(--sol-text-muted); }
 .iss-banner-acts { margin-left: auto; display: inline-flex; gap: 6px; }
 .iss-banner-acts .ops-btn { height: 24px; }
@@ -583,7 +583,7 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
 /* A dropped fix in a row opens its Fix card: it reads as a control. */
 .iss-fix-open { display: inline-flex; border-radius: 4px; padding: 1px 3px; margin: -1px -3px; }
 .iss-fix-open:hover { background: color-mix(in srgb, var(--sol-orange) 12%, transparent); text-decoration: underline; text-underline-offset: 2px; }
-.iss-fix-close { align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-muted); border: 1px solid var(--sol-border); padding: 1px 6px; margin: -2px 0; }
+.iss-fix-close { align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-muted); border: 1px solid var(--osx-line); padding: 1px 6px; margin: -2px 0; }
 .iss-fix-close .iss-fix-label { font-weight: 500; color: var(--sol-text); }
 .iss-fix-close:hover { background: color-mix(in srgb, var(--sol-green) 12%, transparent); text-decoration: none; }
 
@@ -634,7 +634,7 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
 .iss-unit-tiny { display: none; }
 @container isslist (max-width: 1100px) { .iss-c-events .iss-unit-full { display: none; } .iss-c-events .iss-unit-tiny { display: inline; } }
 .iss-lane-tabs button[data-apart="true"] { margin-left: 10px; position: relative; }
-.iss-lane-tabs button[data-apart="true"]::before { content: ""; position: absolute; left: -7px; top: 25%; bottom: 25%; border-left: 1px solid var(--sol-border); }
+.iss-lane-tabs button[data-apart="true"]::before { content: ""; position: absolute; left: -7px; top: 25%; bottom: 25%; border-left: 1px solid var(--osx-line); }
 .iss-escalation { display: inline-flex; align-items: center; gap: 6px; }
 /* A phone: the status is its colored dot and age, and the select box waits for selection mode, so the title takes the width. */
 @container isslist (max-width: 480px) {

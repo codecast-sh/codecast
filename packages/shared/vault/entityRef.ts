@@ -41,6 +41,7 @@ import {
   PR_REF_SOURCE,
   COMMIT_REF_SOURCE,
   REPLAY_REF_SOURCE,
+  FLOW_REF_SOURCE,
   type EntityType,
 } from "../entities";
 
@@ -115,6 +116,8 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   deploy: /^dp-\d+$/i,
   // `sec` too (sec-4): a Vault secret.
   secret: /^sec-\d+$/i,
+  // A flow of the pool, by its slug (flow:change).
+  flow: new RegExp(`^${FLOW_REF_SOURCE}$`, "i"),
   // Repository objects: `owner/repo#482`, `owner/repo@sha`.
   pr: new RegExp(`^${PR_REF_SOURCE}$`, "i"),
   commit: new RegExp(`^${COMMIT_REF_SOURCE}$`, "i"),
@@ -322,4 +325,5 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   replay: "--sol-magenta",
   deploy: "--sol-green",
   secret: "--sol-yellow",
+  flow: "--sol-cyan",
 };
