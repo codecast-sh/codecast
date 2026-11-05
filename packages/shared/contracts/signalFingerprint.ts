@@ -133,12 +133,13 @@ export function parseStackFrame(raw: string): StackFrame | null {
 const CONVEX_RELAYED = /^\[CONVEX [QMA]\(([^)\s]+)\)\]/;
 
 /**
- * Convex stopping a function that did too much: out of time, out of memory or
- * past a read limit, with whatever detail it appends. One function hits
- * whichever limit the data reaches first, and the one fix (do less work) ends
- * all of them, so they are one error.
+ * Convex stopping a function that did too much: out of time (in either of
+ * Convex's wordings), out of memory or past a read limit, with whatever detail
+ * it appends. One function hits whichever limit the data reaches first, and
+ * the one fix (do less work) ends all of them, so they are one error. A value
+ * or a return value too large is another fix and stays its own error.
  */
-const CONVEX_LIMIT = /^(?:Uncaught Error: )?(?:Function execution timed out|JavaScript execution ran out of memory|Too many (?:reads|bytes read|documents read))\b.*$/gm;
+const CONVEX_LIMIT = /^(?:Uncaught Error: )?(?:Function execution timed out|Your request timed out|JavaScript execution ran out of memory|Too many (?:reads|bytes read|documents read))\b.*$/gm;
 
 /**
  * Where an error was thrown, as `fn@file`. A Convex error reaching the client

@@ -32,6 +32,7 @@ import type { AnchorIdentity } from "../../hooks/useSyncAnchors";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { BranchCodeLink } from "../repo/RepositoryLinks";
 import { PrStatusChip } from "../PrStatusChip";
+import { SessionShipChip } from "../ship/SessionShipChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
@@ -785,6 +786,7 @@ export function SessionCardView({
           )}
           <div data-sv-status className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
             {showBranchPill && <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />}
+            <SessionShipChip conversationId={String(session._id)} />
             <PrStatusChip status={session.pr_status} />
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (

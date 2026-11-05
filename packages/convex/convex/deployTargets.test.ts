@@ -144,6 +144,21 @@ describe("the waiting queue (DP12)", () => {
     expect(backend.queue.commits).toBe(0);
   });
 
+  test("a source's marker (an environment, a short sha, no repository) fills its range from the published target; a commit with no trailer is its task's session", async () => {
+    const { t, ctx } = await published();
+    t.tasks[0].conversation_ids = ["conv_ui_work", "conv_api_work"];
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }], NOW - 10_000);
+    const marker = { workspace: WS, team_id: TEAM, target: "backend", source: "acme-errors", started_by: { kind: "source" as const, name: "acme-errors" } };
+    await recordDeployMarker(ctx, { ...marker, sha: sha(1).slice(0, 9), version: sha(1).slice(0, 9), at: NOW - 9_000 });
+    await pushMain(t, ctx, [{ n: 2, files: ["api/b.ts"], tasks: ["task_a"] }, { n: 3, files: ["api/c.ts"] }], NOW - 5_000);
+    const [backend] = await viewOf(ctx, "backend");
+    expect(backend.queue.groups.map((g: any) => [g.key, g.session?.via ?? null, g.commits.length])).toEqual([["s:conv_api_work", "task", 1], ["none", null, 1]]);
+    await recordDeployMarker(ctx, { ...marker, sha: sha(3).slice(0, 9), version: sha(3).slice(0, 9), at: NOW - 1_000 });
+    const dp2 = t.deploys.find((d) => d.short_id === "dp-2");
+    expect(dp2).toMatchObject({ repository: REPO, previous_sha: sha(1).slice(0, 9) });
+    expect(dp2.commits.map((c: any) => [c.sha, c.conversation_id ?? null])).toEqual([[sha(3), null], [sha(2), "conv_api_work"]]);
+  });
+
   test("a live sha codecast never saw on main leaves the queue unknown, not empty", async () => {
     const { ctx } = await published();
     await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(9), repository: REPO, source: "m", at: NOW });

@@ -13,9 +13,8 @@ export type EntityCardsOptions = {
   /** Promote only a reference standing alone on its line (or a list of
    *  them); one inside a sentence stays the inline pill. A transcript writes
    *  `cl-42@12:34` alone on its line to show the frame and mid-sentence to
-   *  cite it, and a picture splitting the sentence in two would read neither
-   *  way. Team chat leaves it off: there a bare reference is a share, except
-   *  a moment in running text (isMoment). */
+   *  cite it. Team chat leaves it off: there a reference in a sentence also
+   *  stays the pill, and its card unfurls under the paragraph (unfurl). */
   aloneOnly?: boolean;
 };
 
@@ -126,12 +125,11 @@ function toCardRow(links: any[]): any {
 }
 
 /** A moment of a call (`cl-42@12:34`) or of a replay (`rp-12@1:23`). Its
- *  card is a picture (a frame, a player), which in the middle of a sentence
- *  cuts the sentence in two, and prose that quotes moments (how an agent
- *  reports what it saw on a screen or a customer's page) would read as a
- *  stack of pictures with the words stranded between them. So even in team
- *  chat a moment is a card only on a line of its own; in running text it is
- *  the moment pill. */
+ *  card is a picture (a frame, a player) that stands for a point the text is
+ *  making, so a moment in running text stays the moment pill and is never
+ *  unfurled under its paragraph either: prose that quotes moments (how an
+ *  agent reports what it saw on a screen or a customer's page) would read as a
+ *  stack of pictures below the words. Only a moment on its own line is a card. */
 function isMoment(node: any): boolean {
   const text = mdastText(node);
   return parseCallRef(text)?.at_ms != null || replayRefStart(parseReplayRef(text)) != null;
@@ -157,29 +155,14 @@ function onOwnLine(children: any[], i: number, types?: readonly EntityType[]): b
   return side(-1) && side(1);
 }
 
-function splitInline(node: any, types?: readonly EntityType[]): any[] {
-  if (isEntityLink(node, types) || !["strong", "emphasis", "delete"].includes(node.type)) return [node];
-  const parts: any[] = [];
-  let children: any[] = [];
-  const flush = () => {
-    if (children.length) parts.push({ ...node, children });
-    children = [];
-  };
-  // A moment inside emphasis is running text: it stays inside it (isMoment).
-  for (const child of node.children.flatMap((c: any) => splitInline(c, types))) {
-    if (isEntityLink(child, types) && !isMoment(child)) {
-      flush();
-      parts.push(child);
-    } else children.push(child);
-  }
-  flush();
-  return parts;
-}
-
+/** A paragraph with some lines made only of references: those lines become
+ *  card rows in place and the prose lines around them stay paragraphs. A
+ *  reference inside a sentence is left where it is (see unfurl). Null when no
+ *  line is references-only. */
 function paragraphBlocks(node: any, types?: readonly EntityType[]): any[] | null {
   if (node.type !== "paragraph" || !Array.isArray(node.children)) return null;
-  const children = node.children.flatMap((c: any) => splitInline(c, types));
-  const cards = new Set(children.filter((c: any, i: number) => isEntityLink(c, types) && (!isMoment(c) || onOwnLine(children, i, types))));
+  const children: any[] = node.children;
+  const cards = new Set(children.filter((c, i) => isEntityLink(c, types) && onOwnLine(children, i, types)));
   if (cards.size === 0) return null;
   const blocks: any[] = [];
   let prose: any[] = [];
@@ -224,10 +207,60 @@ function walk(node: any, types?: readonly EntityType[], aloneOnly?: boolean) {
   });
 }
 
+/** How many distinct objects a message may name in running text and still
+ *  have their cards unfurled. Past this the message is listing things, and a
+ *  card per item would bury the words; the pills already open each one. */
+const MAX_UNFURLED = 3;
+
+const isCardRow = (node: any) => node?.data?.hProperties?.className === "entity-card-row";
+
+/** The references a block names inside its prose, in reading order. */
+function proseLinks(node: any, types: readonly EntityType[] | undefined, out: any[] = []): any[] {
+  if (isCardRow(node)) return out;
+  if (isEntityLink(node, types)) {
+    if (!isMoment(node)) out.push(node);
+    return out;
+  }
+  if (Array.isArray(node?.children)) for (const c of node.children) proseLinks(c, types, out);
+  return out;
+}
+
+/** A reference inside a sentence stays the inline pill, so the sentence
+ *  reads whole, and its card is unfurled in one row under the block that
+ *  names it (a paragraph, a whole list, a table). A blockquote unfurls inside
+ *  itself. Each object unfurls once per message, and not at all when it
+ *  already has a card of its own line. */
+function unfurl(root: any, types?: readonly EntityType[]) {
+  const shown = new Set<string>();
+  const collectShown = (node: any) => {
+    if (isCardRow(node)) for (const l of node.children) shown.add(l.url);
+    else if (Array.isArray(node?.children)) node.children.forEach(collectShown);
+  };
+  collectShown(root);
+  const pending = new Set(proseLinks(root, types).map((l) => l.url).filter((u) => !shown.has(u)));
+  if (pending.size === 0 || pending.size > MAX_UNFURLED) return;
+  const visit = (container: any) => {
+    container.children = container.children.flatMap((child: any) => {
+      if (child.type === "blockquote") {
+        visit(child);
+        return [child];
+      }
+      const fresh: any[] = [];
+      for (const link of proseLinks(child, types)) {
+        if (!pending.delete(link.url)) continue;
+        fresh.push({ ...link, children: [...link.children], data: link.data && { ...link.data } });
+      }
+      return fresh.length ? [child, toCardRow(fresh)] : [child];
+    });
+  };
+  visit(root);
+}
+
 export function remarkEntityCards(options?: EntityCardsOptions) {
   const types = options?.types;
   return (tree: any) => {
     normalizeEntityLinks(tree);
     walk(tree, types, options?.aloneOnly);
+    if (!options?.aloneOnly) unfurl(tree, types);
   };
 }

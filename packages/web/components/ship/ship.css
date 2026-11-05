@@ -135,3 +135,14 @@
 .shp-asks[data-asks] { color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 12%, transparent); }
 .shp-foot .sj-btn[data-primary] { background: var(--sol-blue); border-color: var(--sol-blue); color: #fff; }
 .shp-foot .sj-btn[data-primary]:hover { filter: brightness(1.08); background: var(--sol-blue); }
+
+/* An inbox card's ship state. */
+.ssc { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; max-width: 150px; padding: 0 6px; border-radius: 999px; font-size: 10px; font-weight: 600; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; --ssc: var(--sol-text-muted); color: var(--ssc); background: color-mix(in srgb, var(--ssc) 12%, transparent); }
+.ssc i { width: 5px; height: 5px; border-radius: 999px; background: currentColor; flex: none; }
+.ssc[data-tone="working"] { --ssc: var(--sol-blue); }
+.ssc[data-tone="agent"] { --ssc: var(--sol-orange); }
+.ssc[data-tone="session"] { --ssc: var(--sol-violet); }
+.ssc[data-tone="you"], .ssc[data-tone="wait"] { --ssc: var(--sol-yellow); }
+.ssc[data-tone="ok"] { --ssc: var(--sol-green); }
+.ssc[data-tone="bad"] { --ssc: var(--sol-red); }
+a.ssc:hover { text-decoration: underline; }
