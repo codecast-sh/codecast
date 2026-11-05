@@ -20,7 +20,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { extractMentionHandles, isSilentAgentRow } from "@codecast/shared/chat";
+import { extractMentionHandles, isLiveVoiceRow, isSilentAgentRow } from "@codecast/shared/chat";
 import { parseCodeThreadRootKey, parseCommentThreadRootKey } from "@codecast/shared/comments";
 import { UNREAD_CAP, plainPreview } from "./chatText";
 import {
@@ -44,6 +44,7 @@ import {
   agentCommentLevelOf,
   dropThreadRead,
   taskCommentAuthorKind,
+  taskCommentIsForYou,
   taskCommentIsNews,
   taskThreadMembership,
   threadKindValidator,
@@ -120,7 +121,38 @@ type ThreadKindResolver = {
    *  the viewer, else the newest at all. */
   preview(ctx: ReadCtx, userId: Id<"users">, row: ThreadRead, cache: PageCache): Promise<ThreadLastReply | null>;
   title?(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<string | undefined>;
+  /** Whether the unread part waits on the viewer (waitsOnViewer's rule).
+   *  Only these threads count on the Threads badge; the rest read as
+   *  activity. A kind without it never counts (a decision's thread is the
+   *  Decisions badge's). */
+  forYou?(ctx: ReadCtx, userId: Id<"users">, row: ThreadRead, cache: PageCache): Promise<boolean>;
 };
+
+/** Does this text @-name the viewer? */
+async function namesViewer(ctx: ReadCtx, cache: PageCache, userId: Id<"users">, text: string | undefined): Promise<boolean> {
+  const handles = extractMentionHandles(text ?? "");
+  if (!handles.length) return false;
+  const viewer = await userFor(ctx, cache, userId);
+  return !!viewer && handles.some((h) => matchHandle([viewer], h));
+}
+
+/** The rule every kind shares for the Threads badge: an unread reply from a
+ *  person waits on the viewer; an agent's only when it names them or answers
+ *  something they asked. An agent's progress in a thread they follow is
+ *  activity: shown, never counted. */
+async function waitsOnViewer<T>(
+  ctx: ReadCtx,
+  cache: PageCache,
+  userId: Id<"users">,
+  unread: T[],
+  rule: { isAgent: (c: T) => boolean; answersViewer: (c: T) => boolean; text: (c: T) => string | undefined },
+): Promise<boolean> {
+  for (const c of unread) {
+    if (!rule.isAgent(c) || rule.answersViewer(c)) return true;
+    if (await namesViewer(ctx, cache, userId, rule.text(c))) return true;
+  }
+  return false;
+}
 
 // ── chat ────────────────────────────────────────────────────────────────────
 
@@ -174,6 +206,28 @@ const chatKind: ThreadKindResolver = {
   async load(ctx, _userId, row, cache, payload) {
     const root = await chatRoot(ctx, row, cache);
     if (root) payload.chat.roots.push(root);
+  },
+  async forYou(ctx, userId, row, cache) {
+    const root = await chatRoot(ctx, row, cache);
+    if (!root) return false;
+    const channelId = row.channel_id ?? root.channel_id;
+    const channel = await memo(cache.channels, String(channelId), () => readChannel(ctx, userId, channelId));
+    const unread = (await ctx.db
+      .query("chat_messages")
+      .withIndex("by_thread_created", (q: any) => q.eq("thread_root_id", root._id).gt("created_at", row.last_read_at))
+      .take(THREAD_UNREAD_SCAN))
+      .filter((r) => !r.deleted_at && !isSilentAgentRow(r) && !isLiveVoiceRow(r) && String(r.user_id) !== String(userId));
+    if (!unread.length) return false;
+    if (channel?.kind === "dm") return true;
+    const bots = new Set<string>();
+    for (const r of unread) if ((await userFor(ctx, cache, r.user_id))?.is_bot) bots.add(String(r.user_id));
+    return waitsOnViewer(ctx, cache, userId, unread, {
+      isAgent: (r) => r.author_kind === "agent" || bots.has(String(r.user_id)),
+      // An agent replying under the viewer's own root answers them.
+      answersViewer: (r) => String(root.user_id) === String(userId)
+        || (r.mentions ?? []).some((m) => String(m) === String(userId)),
+      text: (r) => r.content,
+    });
   },
   async preview(ctx, _userId, row, cache) {
     const newest = await newestChatReply(ctx, chatRootId(row));
@@ -236,6 +290,17 @@ const commentKind: ThreadKindResolver = {
     const counted = rows.filter((c) =>
       c.created_at > row.last_read_at && isLandedComment(c) && isOthersComment(c, userId)).length;
     return capped(counted);
+  },
+  async forYou(ctx, userId, row, cache) {
+    const rows = await commentThread(ctx, row, cache);
+    const unread = rows.filter((c) =>
+      c.created_at > row.last_read_at && isLandedComment(c) && isOthersComment(c, userId));
+    return waitsOnViewer(ctx, cache, userId, unread, {
+      isAgent: (c) => c.author_kind === "agent",
+      // An agent row carries the asker's user_id: it answers them.
+      answersViewer: (c) => String(c.user_id) === String(userId),
+      text: (c) => c.content,
+    });
   },
   async newestAt(ctx, row, cache) {
     const rows = await commentThread(ctx, row, cache);
@@ -314,10 +379,18 @@ async function taskCommentNewsFor(
   userId: Id<"users">,
   c: Doc<"task_comments">,
 ): Promise<boolean> {
-  const viewer = await userFor(ctx, cache, userId);
   const author = taskCommentAuthorKind(c, await userFor(ctx, cache, c.author_user_id), userId);
-  const mentioned = !!viewer && author === "agent" && extractMentionHandles(c.text).some((h) => matchHandle([viewer], h));
-  return taskCommentIsNews(c, author, agentCommentLevelOf(viewer), mentioned);
+  const mentioned = author === "agent" && (await namesViewer(ctx, cache, userId, c.text));
+  return taskCommentIsNews(c, author, agentCommentLevelOf(await userFor(ctx, cache, userId)), mentioned);
+}
+
+/** The task comments past the viewer's mark, oldest first. */
+async function unreadTaskComments(ctx: ReadCtx, row: ThreadRead): Promise<Doc<"task_comments">[]> {
+  return await ctx.db
+    .query("task_comments")
+    .withIndex("by_task_created", (q: any) =>
+      q.eq("task_id", taskId(row)).gt("created_at", row.last_read_at))
+    .take(THREAD_UNREAD_SCAN);
 }
 
 const taskKind: ThreadKindResolver = {
@@ -337,14 +410,17 @@ const taskKind: ThreadKindResolver = {
     return await viewerCommentedOnTask(ctx, userId, task._id);
   },
   async unread(ctx, userId, row, cache) {
-    const rows = await ctx.db
-      .query("task_comments")
-      .withIndex("by_task_created", (q: any) =>
-        q.eq("task_id", taskId(row)).gt("created_at", row.last_read_at))
-      .take(THREAD_UNREAD_SCAN);
     let counted = 0;
-    for (const c of rows) if (await taskCommentNewsFor(ctx, cache, userId, c)) counted++;
+    for (const c of await unreadTaskComments(ctx, row)) if (await taskCommentNewsFor(ctx, cache, userId, c)) counted++;
     return capped(counted);
+  },
+  async forYou(ctx, userId, row, cache) {
+    for (const c of await unreadTaskComments(ctx, row)) {
+      const author = taskCommentAuthorKind(c, await userFor(ctx, cache, c.author_user_id), userId);
+      if (author === "self") continue;
+      if (taskCommentIsForYou(c, author, await namesViewer(ctx, cache, userId, c.text))) return true;
+    }
+    return false;
   },
   async newestAt(ctx, row, cache) {
     return (await taskCommentsFor(ctx, row, cache))[0]?.created_at ?? 0;
@@ -425,6 +501,12 @@ const pageKind: ThreadKindResolver = {
       c.created_at > row.last_read_at && String(c.author_user_id) !== String(userId)).length;
     return capped(counted);
   },
+  async forYou(ctx, userId, row, cache) {
+    // Every page comment is a person's (a signed-in viewer or an anonymous
+    // one), so any unread comment waits on the owner and the commenters.
+    const rows = await pageCommentsFor(ctx, row, cache);
+    return rows.some((c) => c.created_at > row.last_read_at && String(c.author_user_id) !== String(userId));
+  },
   async newestAt(ctx, row, cache) {
     const rows = await pageCommentsFor(ctx, row, cache);
     let newest = 0;
@@ -501,6 +583,17 @@ const codeKind: ThreadKindResolver = {
     const rows = await codeThreadFor(ctx, row, cache);
     const counted = rows.filter((c) => c.created_at > row.last_read_at && isOthersCodeComment(c, userId)).length;
     return capped(counted);
+  },
+  async forYou(ctx, userId, row, cache) {
+    const rows = await codeThreadFor(ctx, row, cache);
+    const unread = rows.filter((c) => c.created_at > row.last_read_at && isOthersCodeComment(c, userId));
+    const viewerWroteBefore = (at: number) =>
+      rows.some((c) => !!c.author_user_id && String(c.author_user_id) === String(userId) && c.created_at < at);
+    return waitsOnViewer(ctx, cache, userId, unread, {
+      isAgent: (c) => c.author_kind === "agent",
+      answersViewer: (c) => viewerWroteBefore(c.created_at),
+      text: (c) => c.content,
+    });
   },
   async newestAt(ctx, row, cache) {
     const rows = await codeThreadFor(ctx, row, cache);
@@ -618,6 +711,7 @@ export const listMine = query({
         updated_at: row.updated_at,
         unread,
         unread_capped,
+        for_you: unread > 0 && !!kind.forYou && (await kind.forYou(ctx, userId, row, cache)),
         last_reply: await kind.preview(ctx, userId, row, cache),
       });
     }
@@ -632,10 +726,11 @@ export const listMine = query({
   },
 });
 
-// The sidebar badge: how many followed threads have unseen activity. A
-// bounded scan of the newest-activity rows — an inbox whose unread tail is
-// deeper than the scan shows a floor, never a lie. Access is re-checked on
-// every unread row because comments and tasks have no leave event.
+// The sidebar badge: how many threads wait on the viewer (forYou). Other
+// unread threads show as activity in the list and are not counted. A bounded
+// scan of the newest-activity rows — an inbox whose unread tail is deeper
+// than the scan shows a floor, never a lie. Access is re-checked on every
+// unread row because comments and tasks have no leave event.
 export const unreadCount = query({
   args: {
     api_token: v.optional(v.string()),
@@ -647,19 +742,21 @@ export const unreadCount = query({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
     if (!userId) return 0;
-    return countUnread(ctx, userId, [
+    return (await countForYou(ctx, userId, [
       ...(await personalPageRows(ctx, userId, args.team_id)),
       ...(await scopeQuery(ctx, userId, args.team_id).take(THREAD_BADGE_SCAN)),
-    ]);
+    ])).count;
   },
 });
 
-/** How many of these thread rows have unseen activity the viewer may see.
- *  Callers pass a bounded scan of the newest-activity rows, so a deep unread
- *  tail shows a floor, never a lie. */
-async function countUnread(ctx: ReadCtx, userId: Id<"users">, rows: ThreadRead[]): Promise<number> {
+/** How many of these thread rows wait on the viewer, and the newest such
+ *  row's activity stamp (the switcher's dot compares it with the viewer's last
+ *  visit). Callers pass a bounded scan of the newest-activity rows, so a deep
+ *  unread tail shows a floor, never a lie. */
+async function countForYou(ctx: ReadCtx, userId: Id<"users">, rows: ThreadRead[]): Promise<{ count: number; newest_at: number }> {
   const cache = newPageCache();
   let count = 0;
+  let newest_at = 0;
   for (const row of rows) {
     // A kind this deployment does not know yet (mid-rollout) is skipped,
     // never a crash that blanks the badge.
@@ -671,13 +768,17 @@ async function countUnread(ctx: ReadCtx, userId: Id<"users">, rows: ThreadRead[]
     // the honest one — a task row moved by an agent's notes under an
     // older rule holds nothing the reader's level counts.
     if ((await kind.unread(ctx, userId, row, cache)).unread === 0) continue;
+    if (!kind.forYou || !(await kind.forYou(ctx, userId, row, cache))) continue;
     count++;
+    newest_at = Math.max(newest_at, row.last_activity_at);
   }
-  return count;
+  return { count, newest_at };
 }
 
-// The workspace switcher's badges: unread threads the viewer cannot see from
-// the workspace on screen, each counted once, under the workspace it lives in.
+// The workspace switcher's badges: threads waiting on the viewer in the
+// workspaces not on screen, each counted once, under the workspace it lives
+// in, with the newest one's stamp so the client can tell what arrived since
+// its last visit (clientState.ui.workspace_seen_at).
 // The active workspace is skipped (its count is unreadCount's), and so are the
 // personal page rows a team view carries: they are already on screen there,
 // and they belong to no team, so no team badge counts them. Only workspaces
@@ -696,15 +797,15 @@ export const unreadByWorkspace = query({
       .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
       .collect();
     const workspaces: Array<Id<"teams"> | undefined> = [undefined, ...memberships.map((m) => m.team_id)];
-    const out: Array<{ team_id: string | null; count: number }> = [];
+    const out: Array<{ team_id: string | null; count: number; newest_at: number }> = [];
     for (const teamId of workspaces) {
       if ((teamId ?? "personal") === args.active) continue;
       let rows = await scopeQuery(ctx, userId, teamId).take(THREAD_BADGE_SCAN);
       if (!teamId && args.active !== undefined && args.active !== "personal") {
         rows = rows.filter((r) => r.kind !== "page");
       }
-      const count = await countUnread(ctx, userId, rows);
-      if (count > 0) out.push({ team_id: teamId ? String(teamId) : null, count });
+      const { count, newest_at } = await countForYou(ctx, userId, rows);
+      if (count > 0) out.push({ team_id: teamId ? String(teamId) : null, count, newest_at });
     }
     return out;
   },

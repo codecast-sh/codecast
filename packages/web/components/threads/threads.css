@@ -162,8 +162,14 @@
   border-radius: 999px;
   font-size: 10px;
   font-weight: 700;
-  background: var(--sol-cyan);
+  background: var(--sol-red);
   color: var(--sol-bg);
+}
+
+/* Unread that does not wait on you: shown, never counted. */
+.th-row-badge-activity {
+  background: var(--sol-bg-alt);
+  color: var(--sol-text-muted);
 }
 
 .th-row-age {

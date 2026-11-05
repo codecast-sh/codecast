@@ -66,6 +66,9 @@ export type ThreadCardModel = {
   /** Server: row.unread. dm: the rail count (0 when muted). session: 1. */
   unread: number;
   unreadCapped?: boolean;
+  /** The unread part waits on the viewer (row.for_you; a DM always does):
+   *  the counted kind. Other unread cards are activity. */
+  forYou?: boolean;
   /** Open-in-place link. */
   href: string;
   /** Kind-specific source: row | rail channel | session row | decision row.
@@ -259,6 +262,7 @@ export function serverCards(
       activityAt: row.last_activity_at,
       unread: answeredByViewer(row, viewerId) ? 0 : row.unread ?? 0,
       unreadCapped: !!row.unread_capped,
+      forYou: !!row.for_you,
       href,
       source: row,
       teamId: row.team_id,
@@ -284,6 +288,7 @@ export function dmCards(rail: ChatRailChannel[]): ThreadCardModel[] {
       activityAt: c.lastInboundAt ?? c.sortAt,
       unread: c.muted || !awaiting ? 0 : (c.unreadCount ?? 0),
       unreadCapped: !!c.unreadCapped,
+      forYou: true,
       href: `/chat/${c.id}`,
       source: c,
       teamId: c.teamId,
