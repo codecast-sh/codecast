@@ -132,30 +132,18 @@ test("size repair reads all row heights before changing geometry", async () => {
   }
 }, 30_000);
 
-test("folding a turn clears the space held by off-screen replies immediately", async () => {
+test("fold mode keeps every reply of a multi-message turn on screen", async () => {
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
-  let data = { ...conversation, _id: "fold-spacing" as any };
+  const data = { ...conversation, _id: "fold-keeps-replies" as any };
   const render = (foldWorkingTurns: boolean) => root.render(
-    <ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><ConversationView conversation={data} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} initialDensity="full" foldWorkingTurns={foldWorkingTurns} openAtTop /></MemoryRouter></ConvexProviderWithAuth>,
+    <ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><ConversationView conversation={data} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} initialDensity="condensed" foldWorkingTurns={foldWorkingTurns} openAtTop /></MemoryRouter></ConvexProviderWithAuth>,
   );
   try {
-    await act(async () => { render(false); });
-    const feed = host.querySelector<HTMLElement>("[data-sv-feed]")!;
-    const firstRow = host.querySelector<HTMLElement>('[data-index="0"]')!;
-    expect(firstRow).not.toBeNull();
-    await act(async () => { feed.scrollTop = feed.scrollHeight; });
-    expect(firstRow.isConnected).toBe(false);
     await act(async () => { render(true); });
     const container = host.querySelector<HTMLElement>("[data-vkey]")!.parentElement!;
-    expect(Number.parseFloat(container.style.height)).toBeLessThan(400);
-    expect(host.textContent).toContain("Message 79");
-    data = { ...data, messages: [...data.messages, { _id: "fold-spacing-next", role: "assistant", timestamp: 2_000_000, content: "The next reply" }] };
-    await act(async () => { render(true); });
-    expect(Number.parseFloat(container.style.height)).toBeLessThan(400);
-    expect(host.textContent).toContain("The next reply");
-    expect(host.textContent).not.toContain("Message 79");
-    await act(async () => { render(false); });
+    expect(host.textContent).toContain("Message 0");
+    expect(host.querySelector("[data-cc-compact-turn]")).toBeNull();
     expect(Number.parseFloat(container.style.height)).toBeGreaterThan(1000);
   } finally { await act(() => root.unmount()); host.remove(); }
 }, 30_000);

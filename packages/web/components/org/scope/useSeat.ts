@@ -1,7 +1,7 @@
 // How a standing conversation reads when it is the left side of a page
 // (docs/architecture/initiatives-projects-role-page.md I3): the agent's
-// opening bubble pinned above it, the condensed density with working turns
-// folded, the composer as Talk, and the Session view control. One definition,
+// opening bubble pinned above it, the condensed density with machine prompts
+// hidden, the composer as Talk, and the Session view control. One definition,
 // so a role's page and an initiative's page show the same conversation.
 import { useMemo, type ReactNode } from "react";
 import { useRouter } from "next/navigation";

@@ -312,8 +312,9 @@ const ConversationViewInner = (
   // virtualizer (and its height cache keys) only ever sees the first three.
   const feedDensity: MessageFeedDensity = density === "condensed" || density === "compact" ? density : "full";
   const condensedFeed = feedDensity !== "full";
-  // Turn level folding: compact's own, or fold mode's on any density.
-  const foldTurns = foldWorkingTurns || feedDensity === "compact";
+  // Turn level folding is compact's own. Fold mode hides machine prompts but
+  // never a reply: every text the agent wrote stays on screen.
+  const foldTurns = feedDensity === "compact";
   // Disclosure state for the condensed/compact feeds. Compact keys by TURN (the
   // first-assistant message id): opening expands the collapsed turn to full.
   // Condensed keys by RECEIPT OWNER (the message whose row carries the chip):
@@ -1171,7 +1172,7 @@ const ConversationViewInner = (
       });
     }
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
-  const { userMsgKindMap, turnAggregates, openAsk, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
+  const { userMsgKindMap, turnAggregates, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
   const { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery } = useSessionMentions({ conversation, managedSession });
   const { serverUserMessages, stickyEligibleServerIds, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds } = useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap });
 
@@ -1485,7 +1486,7 @@ const ConversationViewInner = (
   // mis-lays the list.
   const rowDensityKey = useCallback((index: number): string => {
     const base = foldWorkingTurns ? `${feedDensity}:fold` : feedDensity;
-    if (feedDensity === "full" && !foldWorkingTurns) return base;
+    if (feedDensity === "full") return base;
     const item = timeline[index];
     if (item?.type !== "message") return base;
     const msg = item.data as Message;
@@ -1511,11 +1512,6 @@ const ConversationViewInner = (
       const turnKey = turnAggregates.turnKeyOf.get(msg._id);
       if (turnKey && !expandedGroups.has(turnKey)) {
         const lastText = turnAggregates.lastTextOf.get(turnKey);
-        if (foldWorkingTurns) {
-          if (msg._id === lastText) return 240;
-          if (openAsk(msg, index, turnKey)) return 200;
-          return !lastText && turnAggregates.firstAssistOf.get(turnKey) === msg._id ? 44 : 0;
-        }
         if (lastText) return msg._id === lastText ? COMPACT_TAIL_HEIGHT : 0;
         return turnAggregates.firstAssistOf.get(turnKey) === msg._id ? 64 : 0;
       }
@@ -1574,7 +1570,7 @@ const ConversationViewInner = (
       return 200;
     }
     return 40;
-  }, [timeline, feedDensity, foldTurns, foldWorkingTurns, openAsk, userMsgKindMap, commandExpansionMap, nudgeRuns, turnAggregates, expandedGroups]);
+  }, [timeline, feedDensity, foldTurns, foldWorkingTurns, userMsgKindMap, commandExpansionMap, nudgeRuns, turnAggregates, expandedGroups]);
 
   const estimateSize = useCallback((index: number) => {
     const estimate = estimateUncachedSize(index);
@@ -2248,14 +2244,14 @@ const ConversationViewInner = (
   }, [stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, virtualizer, timeline, fallbackStickyContent, serverUserMessages, stickyEligibleServerIds, loadedMessageIds, headerHeight, stickyDisabled]);
 
   const scrollToMessageById = useCallback((messageId: string) => {
-    // A folded working turn opens first, then the density's own group: walk
-    // the jump until nothing more needs opening, and open it all at once.
+    // Open whatever group hides the message: walk the jump until nothing more
+    // needs opening, and open it all at once.
     const aggregates = { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf };
     const opened = new Set(expandedGroups);
-    let jump = jumpRowForMessage(messageId, feedDensity, aggregates, foldWorkingTurns ? { expanded: opened, lastTextOf: turnAggregates.lastTextOf } : undefined);
+    let jump = jumpRowForMessage(messageId, feedDensity, aggregates);
     while (jump.expandKey && !opened.has(jump.expandKey)) {
       opened.add(jump.expandKey);
-      jump = jumpRowForMessage(messageId, feedDensity, aggregates, foldWorkingTurns ? { expanded: opened, lastTextOf: turnAggregates.lastTextOf } : undefined);
+      jump = jumpRowForMessage(messageId, feedDensity, aggregates);
     }
     if (opened.size !== expandedGroups.size) setExpandedGroups((prev) => new Set([...prev, ...opened]));
     const itemIndex = timeline.findIndex(item =>
@@ -2270,7 +2266,7 @@ const ConversationViewInner = (
     } else if (conversation?._id) {
       useInboxStore.getState().requestNavigate(conversation._id, { scrollToMessageId: messageId });
     }
-  }, [timeline, virtualizer, conversation?._id, feedDensity, turnAggregates, nudgeRuns, expandedGroups, foldWorkingTurns]);
+  }, [timeline, virtualizer, conversation?._id, feedDensity, turnAggregates, nudgeRuns, expandedGroups]);
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: scrollToMessageById,
@@ -2834,7 +2830,7 @@ const ConversationViewInner = (
       const hit = pendingHitRef.current;
       const container = containerRef.current;
       if (!hit || !container) return;
-      const jump = jumpRowForMessage(hit.messageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf }, foldWorkingTurns ? { expanded: expandedGroups, lastTextOf: turnAggregates.lastTextOf } : undefined);
+      const jump = jumpRowForMessage(hit.messageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf });
       const rowIndex = timeline.findIndex((item) => item.type === 'message' && item.data._id === jump.scrollToId);
       // The virtualizer's wrapper, not `#msg-<id>`: command cards, plan and
       // skill blocks and system rows carry no message id, but their marks
@@ -2949,7 +2945,7 @@ const ConversationViewInner = (
       return;
     }
 
-    const jump = jumpRowForMessage(targetMessageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf }, foldWorkingTurns ? { expanded: expandedGroups, lastTextOf: turnAggregates.lastTextOf } : undefined);
+    const jump = jumpRowForMessage(targetMessageId, feedDensity, { ...turnAggregates, nudgeHeadOf: nudgeRuns.headOf });
     // A target folded inside a turn or a receipt group opens its group, and
     // the settle below lands on the row in the same pass: the row exists
     // folded too, the opening only grows what sits under its head, and the
@@ -2999,7 +2995,7 @@ const ConversationViewInner = (
         },
       });
     }
-  }, [targetMessageId, targetNonce, timeline, virtualizer, feedDensity, turnAggregates, expandedGroups, nudgeRuns, foldWorkingTurns]);
+  }, [targetMessageId, targetNonce, timeline, virtualizer, feedDensity, turnAggregates, expandedGroups, nudgeRuns]);
 
   // Land a branch switch scroll-stable: once the target conversation renders,
   // find the fork-point message (same message_uuid — fork copies preserve it)
@@ -3695,44 +3691,27 @@ const ConversationViewInner = (
       // Compact: a collapsed turn shows the bottom ~300px of its final reply with
       // the top faded out; the rest of the turn renders nothing until expanded. A
       // turn with no text (tool-only) falls back to a one-line card.
-      // Fold mode: the last reply in full, the steps before it behind the
-      // card on that reply; a tool-only turn is the card alone. The live
-      // turn's ask cards (a question, a permission prompt) stay.
-      let foldCard: React.ReactNode = null;
-      let foldedTurn = false;
       if (foldTurns && turnKey && !turnExpanded) {
         const lastText = turnAggregates.lastTextOf.get(turnKey);
+        if (lastText) {
+          if (msg._id !== lastText) return null;
+          return <CompactCollapsedTurn key={msg._id} content={msg.content || ""} onExpand={() => toggleGroup(turnKey)} />;
+        }
+        if (turnAggregates.firstAssistOf.get(turnKey) !== msg._id) return null;
         const stats = turnAggregates.statsOf.get(turnKey);
-        const cardAs = (variant: "card" | "steps") => <CompactTurnCard key={foldWorkingTurns ? `${msg._id}:folded` : msg._id} preview={stats?.preview || ""} messageCount={stats?.messages || 0} toolCount={stats?.tools || 0} workedMs={stats ? stats.endedAt - stats.startedAt : 0} onExpand={() => toggleGroup(turnKey)} variant={variant} />;
-        const card = cardAs("card");
-        if (!foldWorkingTurns) {
-          if (lastText) {
-            if (msg._id !== lastText) return null;
-            return <CompactCollapsedTurn key={msg._id} content={msg.content || ""} onExpand={() => toggleGroup(turnKey)} />;
-          }
-          if (turnAggregates.firstAssistOf.get(turnKey) !== msg._id) return null;
-          return card;
-        }
-        const liveAsk = openAsk(msg, index, turnKey);
-        if (msg._id !== lastText && !liveAsk) {
-          return !lastText && turnAggregates.firstAssistOf.get(turnKey) === msg._id ? card : null;
-        }
-        foldedTurn = true;
-        if (msg._id === lastText && ((stats?.messages ?? 0) > 1 || (stats?.tools ?? 0) > 0)) foldCard = cardAs("steps");
+        return <CompactTurnCard key={msg._id} preview={stats?.preview || ""} messageCount={stats?.messages || 0} toolCount={stats?.tools || 0} workedMs={stats ? stats.endedAt - stats.startedAt : 0} onExpand={() => toggleGroup(turnKey)} />;
       }
       // Condensed: a tool-only message folded into an earlier segment's receipt
       // never renders on its own — its tools show inside the owner's group.
       if (feedDensity === "condensed" && turnAggregates.absorbed.has(msg._id)) return null;
       // An expanded compact turn renders at full density (nothing clipped); the
       // collapse control sits on its first message.
-      // A folded turn's kept reply reads condensed with no receipt: its own
-      // tools are part of what folded.
-      const effectiveDensity: MessageFeedDensity = foldedTurn ? "condensed" : feedDensity === "compact" ? "full" : feedDensity;
+      const effectiveDensity: MessageFeedDensity = feedDensity === "compact" ? "full" : feedDensity;
       const isTurnFirst = turnKey ? turnAggregates.firstAssistOf.get(turnKey) === msg._id : false;
       // Condensed: this message's segment tools fold into one receipt rendered
       // inline right after its text — where the activity happened. Opening it
       // reveals the group under the chip, inside this same row.
-      const receiptEntries = feedDensity === "condensed" && !foldedTurn ? (turnAggregates.receiptOf.get(msg._id) ?? EMPTY_RECEIPT_ENTRIES) : EMPTY_RECEIPT_ENTRIES;
+      const receiptEntries = feedDensity === "condensed" ? (turnAggregates.receiptOf.get(msg._id) ?? EMPTY_RECEIPT_ENTRIES) : EMPTY_RECEIPT_ENTRIES;
       const condensedReceipt = condensedReceiptFor(msg, receiptEntries, expandedGroups.has(msg._id));
       const onCollapseTurn = foldTurns && turnKey && isTurnFirst ? collapseTurnHandlerFor(msg, turnKey) : undefined;
 
@@ -3803,7 +3782,7 @@ const ConversationViewInner = (
           className="mb-4 mt-0.5 pl-[42px] pr-4"
         />
       ) : null;
-      if (foldCard || connectChip || featureChip) return <Fragment key={msg._id}>{foldCard}{assistantBlock}{connectChip}{featureChip}</Fragment>;
+      if (connectChip || featureChip) return <Fragment key={msg._id}>{assistantBlock}{connectChip}{featureChip}</Fragment>;
       return assistantBlock;
     }
 

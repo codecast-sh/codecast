@@ -142,7 +142,7 @@ export function AnchorPanel() {
             <HireAssistantCard compact onHired={() => setHiring(false)} />
           ) : shown ? (
             shown.conversationId
-              ? <AnchorConversation conversationId={shown.conversationId} hideHeader foldBootstrap foldWorkingTurns composerNode={offer} />
+              ? <AnchorConversation conversationId={shown.conversationId} hideHeader foldBootstrap foldWorkingTurns initialDensity="condensed" composerNode={offer} />
               : <div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Coming online…</div>
           ) : (
             <AnchorOnboarding compact />
