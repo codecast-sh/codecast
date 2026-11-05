@@ -18,6 +18,7 @@
 
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import crypto from "crypto";
 import { walkDirsSync } from "./fsWalk.js";
 import { BUILD_ID_CHARS } from "./daemonBuildGate.js";
@@ -194,8 +195,13 @@ function allSourceFiles(dir: string): string[] {
   return out;
 }
 
+/** The directory of a module, from its import.meta.url. A URL's pathname keeps percent escapes (a space reads %20), which name no real directory. */
+export function moduleDir(url: string): string {
+  return path.dirname(fileURLToPath(url));
+}
+
 /** The repo root: the nearest ancestor that holds the daemon entry file. */
-export function findRepoRoot(start = path.dirname(new URL(import.meta.url).pathname)): string {
+export function findRepoRoot(start = moduleDir(import.meta.url)): string {
   let dir = start;
   for (let i = 0; i < 12; i++) {
     if (isFile(path.join(dir, ENTRY))) return dir;

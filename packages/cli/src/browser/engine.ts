@@ -31,6 +31,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn, spawnSync, whichBin } from "../proc.js";
 import { narrated } from "./narrate.js";
 import { browserHome } from "./profile.js";
@@ -67,7 +68,7 @@ export function findEngine(): string | null {
 
   // Relative to this module, for a source or npm install.
   try {
-    const here = path.dirname(new URL(import.meta.url).pathname);
+    const here = path.dirname(fileURLToPath(import.meta.url));
     candidates.push(path.resolve(here, "../../node_modules/.bin", ENGINE_PACKAGE));
     candidates.push(path.resolve(here, "../../../../node_modules/.bin", ENGINE_PACKAGE));
   } catch {

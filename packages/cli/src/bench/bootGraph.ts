@@ -12,6 +12,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface GraphNode {
   /** Absolute path of the source file. */
@@ -209,7 +210,7 @@ export function exclusiveTo(graph: BootGraph, via: string): Set<string> {
 }
 
 if (import.meta.main) {
-  const entry = process.argv[2] ?? path.join(path.dirname(new URL(import.meta.url).pathname), "..", "main.ts");
+  const entry = process.argv[2] ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "main.ts");
   const graph = buildBootGraph(entry);
   const root = repoRootFrom(path.resolve(entry));
   const rel = (f: string) => path.relative(root, f);

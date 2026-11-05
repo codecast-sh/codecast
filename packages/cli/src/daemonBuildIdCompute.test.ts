@@ -2,7 +2,8 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { computeDaemonBuildId, findRepoRoot, scanSpecifiers, codeForSpecifiers } from "./daemonBuildIdCompute.js";
+import { pathToFileURL } from "url";
+import { computeDaemonBuildId, findRepoRoot, moduleDir, scanSpecifiers, codeForSpecifiers } from "./daemonBuildIdCompute.js";
 
 // A miniature repo shaped like the real one: the walker only knows how to
 // start at packages/cli/src/daemon.ts, so the fixture provides that path.
@@ -23,7 +24,8 @@ const ENTRY_SRC =
   `export { a, m, ws, pkg, c, k, ghost };\n`;
 
 beforeAll(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "buildid-"));
+  // A space in the path, as in a checkout under "Some Folder" (#72).
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "buildid spaced-"));
   write("packages/cli/package.json", JSON.stringify({ version: "1.0.0", dependencies: { ws: "8.18.0" } }));
   write("packages/cli/src/daemon.ts", ENTRY_SRC);
   write("packages/shared/contracts.ts", `export const c = 1;\n`);
@@ -39,6 +41,14 @@ beforeAll(() => {
 
 afterAll(() => {
   try { fs.rmSync(root, { recursive: true, force: true }); } catch {}
+});
+
+describe("findRepoRoot", () => {
+  test("finds the root from a module URL whose path holds a space", () => {
+    const url = pathToFileURL(path.join(root, "packages/cli/src/daemonBuildIdCompute.ts")).href;
+    expect(url).toContain("%20");
+    expect(findRepoRoot(moduleDir(url))).toBe(root);
+  });
 });
 
 describe("computeDaemonBuildId", () => {
