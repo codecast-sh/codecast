@@ -177,7 +177,7 @@ async function verifyScopePage() {
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold-working"), "1", "working turns and machine prompts fold away (F4.1)");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-density"), "condensed", "working turns fold to receipts");
   assert.equal(q("[data-scope-lead]"), null, "the role's head says what it carries, so its thread opens on the thread itself");
-  assert.match(q("[data-scope-stripe]")!.textContent!, /Rewriting the weekly growth review/, "the header says what it is watching");
+  assert.equal(q("[data-scope-stripe]"), null, "a seated role's state line is pinned above its composer, so the header leaves it out");
   assert.equal(q("[data-scope-lead-ask]"), null, "the lead never counts sessions waiting on a person: those wait on the role, which raises what it cannot answer in its own thread");
   for (const word of ["trust", "model", "today", "wakes", "tokens", "host"]) assert.ok(!qa("header *").some((el) => el.children.length === 0 && el.textContent?.trim().toLowerCase() === word), `the header no longer says ${word}`);
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-autofocus"), "1", "the composer comes to hand on a desktop");
@@ -186,11 +186,11 @@ async function verifyScopePage() {
   // Under the name, the head its sheet and its hover card say: whom it
   // reports to (their sheet one click away), its state, what it carries, since when.
   const headFacts = q("[data-scope-head-facts]")!;
-  assert.ok(headFacts, "the role's head sits on its header row");
+  assert.ok(headFacts?.closest("[data-scope-head]"), "the role's head sits on its header row");
   const reportsTo = headFacts.querySelector("[data-scope-reports-to] a")!;
   assert.match(reportsTo.getAttribute("href")!, /^\/org\//, "whom it reports to opens their sheet on the Org screen");
   assert.ok(headFacts.querySelector("[data-role-state]"), "its state, in the word its line uses");
-  assert.match(headFacts.textContent!, /Owns organic search/, "with nothing led or owned, what it carries is what it is for");
+  assert.doesNotMatch(headFacts.textContent!, /Owns organic search/, "with nothing led or owned, the charter stays in the brief, not on the header row");
   assert.equal(q("[data-scope-state]"), null, "one state on the head, not a chip beside it");
   assert.equal(q("[data-scope-aside]"), null, "the page opens on the conversation, the panel collapsed");
   await click(headFacts);
