@@ -10,8 +10,6 @@
   height: clamp(520px, calc(100dvh - 250px), 1200px);
   border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); overflow: hidden; background: var(--lw-paper);
 }
-.fs[data-full] { padding-top: var(--lw-s3); }
-.fs[data-full] .fs-app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: clamp(520px, calc(100dvh - 150px), 2000px); }
 .fs-col-h {
   display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 14px 16px 8px;
   font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ink-3); letter-spacing: .02em;
@@ -147,3 +145,8 @@ a.fs-hot-s:hover { border-color: var(--lw-rule); color: var(--lw-ink); }
 .fs-full-name span b, .fs-full-name a b { color: var(--lw-ink); }
 .fs-full-name [data-tone="you"], .fs-full-name [data-tone="you"] b { color: var(--lw-person); text-decoration: none; }
 .fs-full-name [data-tone="bad"], .fs-full-name [data-tone="bad"] b { color: var(--lw-bad); }
+
+/* Full view (FullView): the whole window, the map filling it, the open station's drawer on its right. */
+.fs-full { position: fixed; inset: 0; z-index: 60; margin: 0; max-width: none; background: var(--lw-paper); color: var(--lw-ink); font-family: var(--lw-ui); }
+.fs-full > .fs-map { position: absolute; inset: 0; height: auto; }
+.fs-full[data-drawer] > .fs-map { right: var(--lw-drawer-w); }
