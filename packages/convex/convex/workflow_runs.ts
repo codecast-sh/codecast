@@ -947,6 +947,35 @@ export const byIds = query({
   },
 });
 
+/** The most live run ids one liveIds answer names, across the viewer's workspaces. */
+const LIVE_IDS_MAX = 2000;
+
+// Web: every live run (pending, running, paused) in each workspace the viewer
+// belongs to, by id. The store's runs arrive through windowed feeds, so a run
+// that ended while no tab was open, after it left every window, would read
+// live forever; the sync host checks each run it holds as live against this
+// answer and asks byIds for any the server no longer holds live
+// (useLiveRunsCheck), so the collection itself never shows an ended run as live.
+export const liveIds = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { workspaces: [], ids: [], complete: true };
+    const teams = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", userId)).collect();
+    const workspaces = [`user:${userId}`, ...teams.map((m: any) => `team:${m.team_id}`)];
+    const ids: string[] = [];
+    for (const workspace of workspaces) {
+      for (const status of LIVE_RUN_STATUSES) {
+        if (ids.length >= LIVE_IDS_MAX) break;
+        const rows = await ctx.db.query("workflow_runs").withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", workspace).eq("status", status)).take(LIVE_IDS_MAX - ids.length);
+        for (const r of rows) ids.push(String(r._id));
+      }
+    }
+    // A full answer names every live run; a capped one cannot say which held rows ended, and says so.
+    return { workspaces, ids, complete: ids.length < LIVE_IDS_MAX };
+  },
+});
+
 // Web: list the user's dynamic-workflow runs (run_kind=workflow) for the dashboard.
 export const listDynamicRuns = query({
   args: {},
