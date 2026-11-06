@@ -15,7 +15,7 @@ import { useSecrets, useVaultScope } from "../../hooks/useSyncSecrets";
 import { ScopePicker } from "./AddSecretDialog";
 import { VAULT_PRIMARY, defaultWhere } from "../../lib/secretLook";
 import { useCreate } from "../../hooks/useCreateSecret";
-import { nameIssue, namesIn, saveRemaining, withVaultReferences } from "./vaultModel";
+import { nameIssue, namesIn, readTypedName, saveRemaining, withVaultReferences } from "./vaultModel";
 
 export function ComposerCatch({
   text,
@@ -37,7 +37,11 @@ export function ComposerCatch({
   const rows = useSecrets(teamId);
   const create = useCreate(scope);
   const [where, setWhere] = useState(() => defaultWhere(scope));
-  const [names, setNames] = useState(() => found.map((f) => f.name));
+  // What the person typed for each; it saves as its slug, and an UPPER_SNAKE spelling is its env var (readTypedName).
+  const [typed, setTyped] = useState(() => found.map((f) => f.name));
+  const read = typed.map(readTypedName);
+  const names = read.map((r) => r.name);
+  const envs = read.map((r, i) => r.env ?? found[i]!.env);
   const [saving, setSaving] = useState(false);
   // Indexes already in the Vault from an earlier press that stopped at a refusal: kept, never created twice.
   const [saved, setSaved] = useState<ReadonlySet<number>>(() => new Set());
@@ -48,14 +52,14 @@ export function ComposerCatch({
   const save = async () => {
     if (!canSave) return;
     setSaving(true);
-    const res = await saveRemaining(found, saved, (f, i) => create(where, { name: names[i]!, kind: "key", payload: { value: f.value }, env: f.env ? [f.env] : undefined }));
+    const res = await saveRemaining(found, saved, (f, i) => create(where, { name: names[i]!, kind: "key", payload: { value: f.value }, env: envs[i] ? [envs[i]!] : undefined }));
     setSaved(res.saved);
     if (res.failed) {
       setSaving(false);
       toast.error(`${names[res.failed.index]} was not saved: ${res.failed.error}`);
       return;
     }
-    onSend(withVaultReferences(text, found, names));
+    onSend(withVaultReferences(text, found.map((f, i) => ({ ...f, env: envs[i] })), names));
   };
 
   return (
@@ -79,8 +83,8 @@ export function ComposerCatch({
           <span className="min-w-0 truncate font-mono text-[11.5px] text-sol-text-dim">{fingerprint(f.value) ?? ""}</span>
           <span className="ml-auto shrink-0 text-sol-text-muted">as</span>
           <input
-            value={names[i]}
-            onChange={(e) => setNames((xs) => xs.map((x, j) => (j === i ? e.target.value.toLowerCase() : x)))}
+            value={typed[i]}
+            onChange={(e) => setTyped((xs) => xs.map((x, j) => (j === i ? e.target.value : x)))}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
