@@ -90,7 +90,8 @@ describe("a run's end (LE16)", () => {
     expect(task.watch_from).toBeUndefined();
     expect(history.map((h: any) => [h.old_value, h.new_value])).toEqual([["in_progress", "in_review"]]);
     expect(notes.filter((n) => n.type === "change_shipped")).toHaveLength(0);
-    // Resumed at its merge station once merging is on, it lands: the problem is done.
+    // Resumed at its merge station once merging is on (a resume puts the run back to running), it lands: the problem is done.
+    await t.run(async (ctx) => { await ctx.db.patch(ids.runId, { status: "running" } as any); });
     await end([...lineNodes("decide", "ship", "push"), { ...node("merge", T0 + 20), result_preview: "merged codecast/agentwatch-ct-1 into main at 0123456789 (1 of 25 today)" }, node("watch", T0 + 21)]);
     await finish();
     expect((await read()).task.status).toBe("done");

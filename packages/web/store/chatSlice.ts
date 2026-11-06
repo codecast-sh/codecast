@@ -39,7 +39,7 @@
 
 import { threadRowId, type PageCommentRow, type PageThreadRow, type ThreadInboxRow, type ThreadKind } from "./threadTypes";
 import { inActiveWorkspace } from "../lib/workspaceScope";
-import { dmKeyFor, dmOtherIds, isLiveVoiceRow, isThreadMuted, mentionUserIds, withThreadMuted, type ChatMentionRef, type ChatVoiceStatus } from "@codecast/shared/chat";
+import { dmKeyFor, dmOtherIds, isThreadMuted, withThreadMuted, type ChatMentionRef, type ChatVoiceStatus } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { mirrorState, mergeLinkOptions, nextSlackMembers, type SlackDirection, type SlackLinkOptions, type SlackMemberWriter, type SlackSendAuth } from "@codecast/convex/convex/lib/slackMirror";
@@ -446,13 +446,14 @@ export type ChatSliceData = {
   /** The Threads inbox (threads.listMine): one row per thread the viewer is
    *  in, every kind. Keyed by threadRowId. */
   threadInbox: Record<string, ThreadInboxRow>;
-  /** The server's workspace-wide count of threads with unseen replies — the
-   *  badge for a client that has never opened the Threads page. */
+  /** The server's workspace-wide count of threads waiting on the viewer
+   *  (for_you rows) — the badge for a client that has never opened the
+   *  Threads page. */
   threadUnread: number;
   /** The same count for every OTHER workspace the viewer is in (threads.
-   *  unreadByWorkspace), only those with unread: the switcher's badges.
-   *  `team_id` null is personal. */
-  threadUnreadByWorkspace: Array<{ team_id: string | null; count: number }>;
+   *  unreadByWorkspace), only those with any, plus the newest one's activity
+   *  stamp: the switcher's badges. `team_id` null is personal. */
+  threadUnreadByWorkspace: Array<{ team_id: string | null; count: number; newest_at?: number }>;
   /** Published pages with their newest comments (threads.listMine payload),
    *  keyed by artifact id — the page kind's root_key. */
   pageThreads: Record<string, PageThreadRow>;
@@ -1062,7 +1063,8 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     markThreadRead: action(function (this: ChatDraft, kind: ThreadKind, rootKey: string) {
       const row = this.threadInbox[threadRowId(kind, rootKey)];
       if (!row) return;
-      if (row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+      if (row.for_you && row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+      row.for_you = false;
       row.last_read_at = Math.max(row.last_read_at, row.last_activity_at);
       row.unread = 0;
       row.unread_capped = false;
@@ -1076,7 +1078,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       const id = threadRowId(kind, rootKey);
       const row = this.threadInbox[id];
       if (!row) return;
-      if (row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+      if (row.for_you && row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
       delete this.threadInbox[id];
       excludeRow(this, "threadInbox", id);
     }),
@@ -1098,7 +1100,8 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         // Page rows follow the owner into every workspace (threadRowInWorkspace).
         if (row.kind !== "page" && String(row.team_id ?? "") !== String(teamId ?? "")) continue;
         if (scope && row.kind !== scope) continue;
-        if (onScreen && row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+        if (onScreen && row.for_you && row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+        row.for_you = false;
         row.last_read_at = Math.max(row.last_read_at, row.last_activity_at);
         row.unread = 0;
         row.unread_capped = false;
@@ -1710,26 +1713,7 @@ export function selectChatRail(
     }
 
     if (loaded && loaded.length > 0 && reachesTip) {
-      const tally = tallyUnread(
-        loaded.map((m) => ({
-          createdAt: m.created_at,
-          authorId: m.user_id,
-          // In a DM every line is addressed to the viewer — the local tally
-          // mirrors the server's rail rule exactly.
-          mentionsViewer:
-            isDm || m.mention_scope === "here" || mentionUserIds(m.mentions).includes(viewer),
-          deletedAt: m.deleted_at,
-          // Engages the server-mirrored rule: replies do not tick the channel
-          // number; mentions count wherever they live.
-          threadRootId: m.thread_root_id,
-          // A teammate mid-burst is heard, not missed: the badge waits for the
-          // release, exactly as the rail's count does.
-          voiceLive: isLiveVoiceRow(m),
-          agent: !!m.author_kind && m.author_kind !== "user",
-        })),
-        read?.last_read_at,
-        viewer,
-      );
+      const tally = tallyUnread(loaded, read?.last_read_at, viewer, { isDm });
       unread = tally.unread;
       mentions = tally.mentions;
       for (const m of loaded) if (m.created_at > sortAt) sortAt = m.created_at;

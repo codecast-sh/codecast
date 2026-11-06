@@ -40,6 +40,7 @@ import {
   isVisibleAgentPending,
   mentionSessions,
   mentionUserIds,
+  tallyUnread,
   threadFaceKey,
   withThreadMuted,
 } from "@codecast/shared/chat";
@@ -757,34 +758,12 @@ async function railFor(
           q.eq("channel_id", channel._id).gt("created_at", lastReadAt))
         .take(UNREAD_CAP * 2 + 1)
       : [];
-    // Channel-LEVEL rows only. A thread reply does not tick the channel's
-    // number: the reader cannot clear it from the channel view (the reply's
-    // body never appears there), so counting it makes a badge that reading
-    // cannot extinguish. Thread activity reaches its audience as chat_reply
-    // notifications — and a mention anywhere still counts below, because
-    // being named must never be invisible. A BROADCAST reply is the
-    // exception: it does appear in the channel, so reading clears it.
-    // History imported from Slack is never unread. Those lines were read
-    // where they were written, often months ago; arriving here is a move, not
-    // an event. Without this a freshly mirrored room opens with a badge for
-    // every line it brought, which is the one thing that makes a new mirror
-    // feel like a mess rather than a room you already know.
-    const counted = unreadRows.filter(
-      (row) => visible(row) && !mine(row)
-        && !isHistoryLine(row)
-        && (row.thread_root_id === undefined || row.broadcast === true),
-    );
-    // Two numbers, never one. A single count that includes ordinary chatter
-    // teaches people to ignore counts, and then the one that matters — someone
-    // said your name — is invisible inside the noise. In a DM every line is
-    // addressed to you, so every unread row counts as a mention.
-    const unreadMentions = unreadRows.filter((row) =>
-      visible(row) && !mine(row) && !isHistoryLine(row) && (
-        channel.kind === "dm"
-        || row.mention_scope === "here"
-        || (!!userId && mentionUserIds(row.mentions as any).includes(userId.toString()))
-      ),
-    ).length;
+    // The shared unread rule (@codecast/shared/chat tallyUnread): every
+    // client tallies the rows it holds with the same function, so the badge
+    // this rail raises is the one opening the channel clears.
+    const tally = userId
+      ? tallyUnread(unreadRows, lastReadAt, userId.toString(), { isDm: channel.kind === "dm" })
+      : { unread: 0, mentions: 0 };
 
     rail.push({
       channel_id: channel._id,
@@ -819,9 +798,9 @@ async function railFor(
         : null,
       // Sorts the rail by recency without any denormalized field.
       sort_at: lastMessage?.created_at ?? channel.created_at,
-      unread: Math.min(counted.length, UNREAD_CAP),
-      unread_capped: counted.length > UNREAD_CAP,
-      unread_mentions: unreadMentions,
+      unread: Math.min(tally.unread, UNREAD_CAP),
+      unread_capped: tally.unread > UNREAD_CAP,
+      unread_mentions: tally.mentions,
       // A missing read row means the member has never opened this channel,
       // which reads as "mentions only" until they join it for real.
       notify_level: read?.notify_level ?? "mentions",
