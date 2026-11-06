@@ -1,5 +1,7 @@
 /* The Flows view (flows.md FL6): the pool on the left, the picked flow on the right. */
-.flv { display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 22px; align-items: start; }
+.flv { display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 22px; align-items: start; padding: var(--lw-s4) var(--lw-s5) var(--lw-s6); }
+/* The list's headings and its way back line up with the rows' own text (a row's 9px padding and 1px border). */
+.flv-list > .flv-back, .flv-list .flv-h { padding-left: 10px; }
 .flv-list { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 16px; }
 .flv-list ul, .flv-runs ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .flv-h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px; font-size: var(--lw-fs-xs); font-weight: 700; letter-spacing: .02em; color: var(--lw-ink-2); }
@@ -48,7 +50,7 @@
 .flv-steps:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
 
 /* The flow list (/flows): one row per owned flow, then the pool. */
-.flh { display: flex; flex-direction: column; gap: 26px; }
+.flh { display: flex; flex-direction: column; gap: 26px; padding: var(--lw-s4) var(--lw-s5) var(--lw-s6); }
 .flh-table { width: 100%; border-collapse: collapse; font-size: var(--lw-fs-sm); }
 .flh-table th { text-align: left; font-size: var(--lw-fs-2xs); font-weight: 600; color: var(--lw-ink-3); padding: 0 10px 6px 0; white-space: nowrap; }
 .flh-table td { padding: 8px 10px 8px 0; border-top: 1px solid var(--lw-rule); vertical-align: baseline; }
@@ -140,3 +142,28 @@ a.flo-count:hover { border-color: var(--lw-ink-3); }
 .fll-fig-btn { all: unset; cursor: pointer; }
 .fll-fig-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
 .fll-live-figs .fll-fig-btn[data-tone="bad"], .fll-live-figs .fll-fig-btn[data-tone="bad"] b { color: var(--lw-bad); }
+
+/* The library page narrower than the list and a flow drawn whole need: the list becomes one scrolling row of flows
+   over the flow, so the drawing has the page's width (Live in view at laptop widths). */
+.flv-host { container: flv / inline-size; }
+@container flv (max-width: 1060px) {
+  .flv { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .flv-list { position: static; flex-direction: row; align-items: center; gap: 8px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: thin; }
+  .flv-list > section { display: contents; }
+  .flv-list .flv-h { display: none; }
+  .flv-list ul, .flv-list .fll-tree, .flv-list .fll-branch { flex-direction: row; gap: 4px; margin: 0; padding: 0; border: 0; }
+  /* An entry and the variants under it sit side by side in the row, never stacked over the next pill. */
+  .flv-list li { flex: none; display: flex; align-items: center; gap: 4px; }
+  .flv-list .flv-back { padding-left: 0; flex: none; margin-right: 4px; }
+  .flv-list .flv-row { display: inline-flex; align-items: center; gap: 6px; width: auto; padding: 4px 10px; border: 1px solid var(--lw-rule-2); border-radius: 999px; }
+  .flv-list .flv-row[aria-current="true"] { border-color: var(--lw-ink-3); background: var(--lw-card); }
+  .flv-list .flv-row-path, .flv-list .fll-changes, .flv-list .flv-row-n span, .flv-list .fll-tag { display: none; }
+  .flv-list .flv-row-n { flex-direction: row; }
+}
+/* Narrower still: the steps drop their kind icons (their names stay) and their routes stack, so the flow stays whole. */
+@container flv (max-width: 760px) {
+  .flv-diagram .fd-who { display: none; }
+  .flv-diagram .fd-step { padding: 0 9px; }
+  /* A step's routes stack one to a line, each no wider than a step, its whole words on hover. */
+  .flv-diagram .fd-routes { flex-direction: column; align-items: flex-start; max-width: 120px; }
+}

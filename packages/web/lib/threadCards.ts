@@ -66,6 +66,9 @@ export type ThreadCardModel = {
   /** Server: row.unread. dm: the rail count (0 when muted). session: 1. */
   unread: number;
   unreadCapped?: boolean;
+  /** The unread part waits on the viewer (row.for_you; a DM always does):
+   *  the counted kind. Other unread cards are activity. */
+  forYou?: boolean;
   /** Open-in-place link. */
   href: string;
   /** Kind-specific source: row | rail channel | session row | decision row.
@@ -259,6 +262,7 @@ export function serverCards(
       activityAt: row.last_activity_at,
       unread: answeredByViewer(row, viewerId) ? 0 : row.unread ?? 0,
       unreadCapped: !!row.unread_capped,
+      forYou: !!row.for_you,
       href,
       source: row,
       teamId: row.team_id,
@@ -284,6 +288,7 @@ export function dmCards(rail: ChatRailChannel[]): ThreadCardModel[] {
       activityAt: c.lastInboundAt ?? c.sortAt,
       unread: c.muted || !awaiting ? 0 : (c.unreadCount ?? 0),
       unreadCapped: !!c.unreadCapped,
+      forYou: true,
       href: `/chat/${c.id}`,
       source: c,
       teamId: c.teamId,
@@ -440,19 +445,27 @@ export function sortCards(cards: ThreadCardModel[]): ThreadCardModel[] {
   return [...cards].sort((a, b) => b.activityAt - a.activityAt);
 }
 
-/** How many cards carry unread, per chip and for the default view. Sessions
- *  never count: `all` equals the sidebar badge. */
+/** The new section's order: what waits on the viewer first, then activity,
+ *  each keeping the visit's own order. */
+export function forYouFirst(cards: ThreadCardModel[]): ThreadCardModel[] {
+  const waiting = cards.filter((c) => c.forYou && c.unread > 0);
+  return waiting.length ? [...waiting, ...cards.filter((c) => !(c.forYou && c.unread > 0))] : cards;
+}
+
+/** How many cards carry unread, per chip, and for the default view how many
+ *  wait on the viewer (forYou). Sessions never count: `all` equals the
+ *  sidebar badge. */
 export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> {
   const out: Record<ChipKey, number> = { all: 0, chat: 0, dm: 0, comment: 0, code: 0, task: 0, page: 0, question: 0 };
   for (const c of cards) {
     const meta = THREAD_KIND_META[c.kind] as ThreadKindMeta | undefined;
     if (!meta) continue;
     // A chip's own count includes every unread card it lists; only
-    // badge-counting kinds roll up into the default view's number (which is
-    // what the sidebar shows).
+    // badge-counting kinds that wait on the viewer roll up into the default
+    // view's number (which is what the sidebar shows).
     if (c.unread <= 0) continue;
     if (c.chip !== "session") out[c.chip]++;
-    if (meta.countsTowardBadge) out.all++;
+    if (meta.countsTowardBadge && c.forYou) out.all++;
   }
   return out;
 }

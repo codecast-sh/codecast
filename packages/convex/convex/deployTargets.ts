@@ -42,7 +42,7 @@ import {
   type DeployLiveReader,
 } from "@codecast/shared/contracts/deployTargets";
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
-import { commitBySha, deployCommitsOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
+import { commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
 
 /** Commits kept on one deploy's record. */
 const COMMITS_MAX = 200;
@@ -191,7 +191,8 @@ export const shipPasses = query({
 // ── what a deploy carried, from main's order ─────────────────────────────────
 
 /**
- * A live deploy's range on main: its previous sha (the deploy before it on the
+ * A live deploy's range on main: its sha's place in main's order (cut_at, what
+ * a merge is held against), its previous sha (the deploy before it on the
  * target, when it did not say) and the commits between, touching the target's
  * paths. Called once a deploy goes live.
  */
@@ -205,6 +206,10 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
     const repos = [...new Set((await targetRows(ctx, d.workspace)).filter((r) => r.name === d.target).map((r) => r.repository))];
     if (repos.length !== 1) return;
     d.repository = patch.repository = repos[0];
+  }
+  if (d.cut_at == null) {
+    const cut = await mainAtOf(ctx, d.repository, d.sha);
+    if (cut != null) patch.cut_at = cut;
   }
   let previous = d.previous_sha ?? null;
   if (!previous) {

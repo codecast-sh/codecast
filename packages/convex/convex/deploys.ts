@@ -33,6 +33,8 @@ import { tellRole } from "./pendingMessages";
 import { liveRoleByHandle } from "./lib/orgAccess";
 import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { fillDeployRange } from "./deployTargets";
+import { mainAtOf } from "./deployTargetsState";
+import { teamKey } from "./deployTargetsCi";
 import { afterFor, shapeView } from "./deploysView";
 import { DEPLOY_FAILED_EVENT, DEPLOY_LIVE_EVENT } from "@codecast/shared/contracts";
 import {
@@ -71,6 +73,7 @@ export function deployRowOf(d: Doc<"deploys">): DeployRow {
     project_id: d.project_id ? String(d.project_id) : null,
     at: d.live_at ?? d.created_at,
     sha: d.sha ?? null,
+    cut_at: d.cut_at ?? null,
     repository: d.repository ?? null,
     surface: d.target,
     environment: null,
@@ -339,16 +342,31 @@ export async function lineDeployTargets(ctx: any, workspace: string): Promise<Se
   return new Set(projects.flatMap((p: any) => (p.line_profile?.deploy?.command ? [normalizeDeployTarget(p.line_profile.deploy.target) ?? "deploy"] : [])));
 }
 
-/** The fixes a deploy recorded from a marker carried, by the history's rule over the workspace's merges and live deploys. */
-export async function carriesForMarker(ctx: any, row: Doc<"deploys">, now: number): Promise<Doc<"deploys">["carries"]> {
+/**
+ * The fixes a deploy recorded from a marker carried, by the history's rule over the workspace's merges and live
+ * deploys: the deploy's code holds a merge when the merge reached main by its cut (cut_at). `cuts` stands in for
+ * cut_at stamps not written yet (a dry repair).
+ */
+export async function carriesForMarker(ctx: any, row: Doc<"deploys">, now: number, cuts?: ReadonlyMap<string, number>): Promise<Doc<"deploys">["carries"]> {
   // Line fixes go out on the target a line deploys to (its [line.deploy] target). A marker for any other target (a web
   // build, a release, a second app) carries none of them.
   if (!(await lineDeployTargets(ctx, row.workspace)).has(row.target)) return [];
   const merges = (await workspaceMerges(ctx, row.workspace, now)).filter((m) => mergeInScope(m, row.project_id ? String(row.project_id) : null));
   // (A marker's deploy names no project: it ships the code, so it carries every fix in the workspace.)
   if (!merges.length) return [];
-  const deploys = (await workspaceDeploys(ctx, row.workspace)).filter(isLiveDeploy).map(deployRowOf);
-  return carriedBy(deployRowOf(row), merges, deploys).map((c) => ({
+  const withCut = (d: Doc<"deploys">): DeployRow => ({ ...deployRowOf(d), cut_at: d.cut_at ?? cuts?.get(String(d._id)) ?? null });
+  const self = withCut(row);
+  if (self.cut_at == null && row.sha) self.cut_at = await mainAtOf(ctx, row.repository, row.sha);
+  // A merge near or after the cut is held by its commit's own place on main; a time a day or more before it needs no read.
+  if (self.cut_at != null) {
+    for (const m of merges) {
+      if (m.at < self.cut_at - DAY) continue;
+      const at = await mainAtOf(ctx, row.repository, m.sha);
+      if (at != null) m.main_at = at;
+    }
+  }
+  const deploys = (await workspaceDeploys(ctx, row.workspace)).filter(isLiveDeploy).map((d) => (String(d._id) === String(row._id) ? self : withCut(d)));
+  return carriedBy(self, merges, deploys).map((c) => ({
     task_id: c.task_id as Id<"tasks">,
     ...(runIdOf(c.run_id) ? { run_id: runIdOf(c.run_id) } : {}),
     ...(c.decision_id ? { decision_id: c.decision_id as Id<"session_decisions"> } : {}),
@@ -696,6 +714,52 @@ export const rewatchFromLive = internalMutation({
     if (!d || d.status !== "live" || !d.live_at) throw new Error(`${args.deploy} is not a live deploy`);
     const moved = await watchFromLive(ctx, d, d.live_at, d.live_at + args.watch_days * DAY, new Set(args.tasks), !!args.dry);
     return { deploy: d.short_id, live_at: d.live_at, dry: !!args.dry, moved };
+  },
+});
+
+/**
+ * Repair: deploys recorded before cut_at was kept carried every merge that landed between their cut and going live
+ * (Union's dp-412 held ct-63003 and ct-74781, merged after its cut). Stamps cut_at on the target's live deploys,
+ * oldest first, then records again what each named deploy carried; a carry the line sent stays. `dry` lists the
+ * change without writing. Run with packages/convex/run.sh, then rewatchFromLive for the deploy that now carries a fix.
+ */
+export const recarryFromMain = internalMutation({
+  args: { team_id: v.id("teams"), target: v.string(), deploys: v.array(v.string()), take: v.optional(v.number()), dry: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const workspace = teamKey(args.team_id);
+    const cuts = new Map<string, number>();
+    let stamped = 0, unordered = 0;
+    const rows: Doc<"deploys">[] = await ctx.db
+      .query("deploys")
+      .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", workspace).eq("target", args.target))
+      .order("desc")
+      .take(args.take ?? 120);
+    for (const d of rows) {
+      if (d.status !== "live" || !d.sha || d.cut_at != null) continue;
+      const cut = await mainAtOf(ctx, d.repository, d.sha);
+      if (cut == null) { unordered++; continue; }
+      cuts.set(String(d._id), cut);
+      stamped++;
+      if (!args.dry) await ctx.db.patch(d._id, { cut_at: cut });
+    }
+    const now = Date.now();
+    const shortOf = async (id: Id<"tasks">) => (await ctx.db.get(id))?.short_id ?? String(id);
+    const out = [];
+    for (const ref of args.deploys) {
+      const d = await deployByRef(ctx, ref);
+      if (!d || d.workspace !== workspace || d.status !== "live") throw new Error(`${ref} is not a live deploy of that team`);
+      const sent = d.carries.filter((c) => c.how === "sent");
+      const sentTasks = new Set(sent.map((c) => String(c.task_id)));
+      const carries = [...sent, ...(await carriesForMarker(ctx, d, now, cuts)).filter((c) => !sentTasks.has(String(c.task_id)))];
+      const before = await Promise.all(d.carries.map((c) => shortOf(c.task_id)));
+      const after = await Promise.all(carries.map((c) => shortOf(c.task_id)));
+      if (!args.dry) await ctx.db.patch(d._id, { carries, updated_at: now });
+      out.push({
+        deploy: d.short_id, sha: d.sha ?? null, cut_at: d.cut_at ?? cuts.get(String(d._id)) ?? null, live_at: d.live_at ?? null,
+        dropped: before.filter((t) => !after.includes(t)), added: after.filter((t) => !before.includes(t)), carries: after.length,
+      });
+    }
+    return { dry: !!args.dry, stamped, unordered, deploys: out };
   },
 });
 
