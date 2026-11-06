@@ -560,14 +560,17 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-seg[data-state="done"] .fd-seg-name { color: var(--lw-ok); }
 .fd-seg[data-state="stopped"] .fd-seg-name { color: var(--lw-bad); }
 
-.fd-routes { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px; max-width: 150px; }
+.fd-routes { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px; max-width: 190px; }
 /* A route is a chip whose shape says what it does; its words are the outcome alone. */
 .fd-route {
   display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; padding: 1px 7px; border-radius: 6px;
   font-size: var(--lw-fs-2xs); line-height: 1.5; color: var(--lw-ink-2); border: 1px solid var(--lw-rule-2); background: var(--lw-card);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; overflow: hidden;
 }
-.fd-route-mark { color: var(--lw-ink-3); }
+.fd-route-mark { color: var(--lw-ink-3); flex: none; }
+/* Where a route leads is always whole; the outcome before it is what gives way in a narrow chip. */
+.fd-route-to { flex: none; }
+.fd-route-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* Back to the session: the rail's colour, the rail below carries it home. */
 .fd-route[data-form="session"] { color: color-mix(in srgb, var(--sol-violet) 85%, var(--lw-ink)); border-color: color-mix(in srgb, var(--sol-violet) 40%, transparent); background: color-mix(in srgb, var(--sol-violet) 8%, var(--lw-card)); }
 .fd-route[data-form="session"] .fd-route-mark { color: inherit; }
@@ -677,3 +680,25 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .lw-title-up { color: var(--lw-ink-3); text-decoration: none; font-weight: 600; }
 .lw-title-up:hover { color: var(--lw-ink); }
 .lw-title-sep { margin: 0 7px; color: var(--lw-ink-3); font-weight: 400; }
+/* A folded segment: one box, its step count beside its name; pressed, its frame opens, and the frame folds back. */
+.fd-fold-n { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); font-weight: 500; }
+.fd-step[data-folded] { border-style: dashed; cursor: pointer; font: inherit; color: inherit; text-align: left; }
+.fd-step[data-folded]:hover { border-color: color-mix(in srgb, var(--lw-ink-3) 60%, transparent); }
+.fd-seg-fold {
+  position: absolute; top: 4px; right: 6px; width: 18px; height: 18px; display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--lw-rule-2); border-radius: 5px; background: var(--lw-card); color: var(--lw-ink-3); font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
+}
+.fd-seg-fold:hover { color: var(--lw-ink); border-color: var(--lw-rule); }
+/* In a flow run around one step, the rail starts under that step: it turns up into its box, past the arrow before it. */
+.fd-cell[data-rail="start"][data-hub]::after { left: 38px; top: 38px; }
+.fd-cell[data-rail="start"][data-hub]::before { left: 35px; top: 32px; }
+.fd-cell[data-rail="start"][data-hub] .fd-rail::before { left: 38px; }
+/* The rows a drawing holds (a flow run around one step has two: its way in, then that step and its stages). */
+.fd-rows { display: flex; flex-direction: column; gap: 16px; width: max-content; min-width: 100%; }
+.fd-route-rail { display: none; }
+/* Too long for its column even small: the path wraps at full size, and the rail gives way to each route naming where it goes. */
+.fd[data-wrap] .fd-rows { width: auto; min-width: 0; }
+.fd[data-wrap] .fd-path { flex-wrap: wrap; width: auto; min-width: 0; row-gap: 14px; }
+.fd[data-wrap] .fd-rail, .fd[data-wrap] .fd-cell::before, .fd[data-wrap] .fd-cell::after { display: none; }
+.fd[data-wrap] .fd-route-rail { display: inline; }
+.fd[data-wrap] .fd-routes { max-width: 280px; }
