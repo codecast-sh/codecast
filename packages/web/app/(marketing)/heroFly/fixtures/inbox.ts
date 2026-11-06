@@ -18,7 +18,7 @@ export const TEAMMATES = [
 ];
 
 /** The rail's counts: the team's feed has moved, and #eng has unread messages (chapter 9's channel). */
-export const RAIL = { feedUnread: 3, chatUnread: 1 } as const;
+export const RAIL = { chatUnread: 1 } as const;
 
 /** The rail on the inbox: no other section is the page. */
 export const RAIL_ACTIVE: SidebarNavActive = {

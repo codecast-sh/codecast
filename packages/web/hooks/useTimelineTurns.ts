@@ -7,6 +7,7 @@ import { sameMessageAuthor } from "../lib/messageAuthors";
 import { FOLD_KEPT_USER_KINDS, isAlwaysVisibleToolCall, isHiddenStubMessage, parseCastCommand, stripSystemTags } from "../components/conversation/classify";
 import type { Message, ReceiptEntry, TimelineItem, UserMessageKind } from "../components/conversation/types";
 import { classifyUserRows, pairCommandExpansions } from "../lib/userRowKinds";
+import { buildCleanThread } from "../lib/cleanThread";
 import type { ConversationData } from "../components/conversation/types";
 
 export { foldMachineMove } from "../lib/userRowKinds";
@@ -157,6 +158,11 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
     return { turnKeyOf, firstAssistOf, lastTextOf, statsOf, receiptOf, absorbed, routingOf, setupResults };
   }, [timeline, messages, userMsgKindMap, messageAuthors, hasMoreBelow]);
 
+  // Fold mode's agent rows: what it said, and the cards waiting on the person.
+  const cleanRows = useMemo(() => foldWorkingTurns
+    ? buildCleanThread({ timeline, userKindOf: (id) => userMsgKindMap.get(id)?.kind, turnKeyOf: turnAggregates.turnKeyOf, lastTextOf: turnAggregates.lastTextOf, resultOf: (id) => turnAggregates.setupResults.get(id) })
+    : null, [foldWorkingTurns, timeline, userMsgKindMap, turnAggregates]);
+
   const commandExpansionMap = useMemo(() => pairCommandExpansions(timeline, userMsgKindMap), [timeline, userMsgKindMap]);
 
   // Bare nudges ("continue") render as one compact line, and a run of the same
@@ -207,5 +213,5 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
     return !!(hasThinkingContent && !hasVisibleContent);
   }, [conversation, timeline, hasMoreBelow]);
 
-  return { userMsgKindMap, turnAggregates, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse };
+  return { userMsgKindMap, turnAggregates, cleanRows, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse };
 }
