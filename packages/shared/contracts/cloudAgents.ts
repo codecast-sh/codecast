@@ -503,6 +503,22 @@ export interface CloudAgentSetupBlock {
   resets_at?: number;
   /** It holds sends alone (a limit a send met): the mirror keeps reading. Absent: nothing syncs either. */
   sends_only?: boolean;
+  /**
+   * The provider's credential is its agent's own CLI sign-in (`login`), and that CLI has none here at all: the
+   * machine cannot start a local session of the agent either. Absent when the CLI runs on another credential
+   * (an API key) or the daemon predates the flag.
+   */
+  cli_signed_out?: boolean;
+}
+
+/** The agents a machine cannot start a session for, from its blocks, each with the sign-in it lacks (`codex login`). */
+export function signedOutAgents(blocks: readonly Pick<CloudAgentSetupBlock, "provider" | "cli_signed_out">[] | null | undefined): Array<{ agent: AgentClientId; login: string }> {
+  const out: Array<{ agent: AgentClientId; login: string }> = [];
+  for (const b of blocks ?? []) {
+    const spec = b.cli_signed_out ? SPECS.find((s) => s.id === b.provider) : undefined;
+    if (spec?.login && !out.some((o) => o.agent === spec.agentType)) out.push({ agent: spec.agentType, login: spec.login.argv.join(" ") });
+  }
+  return out;
 }
 
 /**

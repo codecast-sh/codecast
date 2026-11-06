@@ -41,6 +41,12 @@ export function jwtClaims(token: unknown): Record<string, any> | null {
   }
 }
 
+/** Whether Codex has no credential here at all: an API key, in auth.json or the environment, still runs it. */
+export function codexCliSignedOut(raw: string | null, env: Record<string, string | undefined> = process.env): boolean {
+  const auth = decodeCodexAuth(raw);
+  return !auth.usable && !auth.api_key && !env.CODEX_API_KEY && !env.OPENAI_API_KEY;
+}
+
 /** Decode identity from an auth.json blob. The id_token is a JWT whose payload
  * carries the login email and ChatGPT plan; no verification needed — we only
  * ever read our own machine's file for display metadata. */

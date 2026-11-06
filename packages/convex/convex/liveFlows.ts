@@ -16,7 +16,7 @@ import { SESSION_SHORT_ID_RE } from "@codecast/shared/chat";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
 import { utcDay } from "./lib/orgCaps";
-import { WORKING_RUN_STATUSES } from "./lib/linePlacement";
+import { flowAgents, WORKING_RUN_STATUSES } from "./lib/linePlacement";
 import { barWords, byStartOrder, clearsBar, startValue, type FlowBar } from "./lib/linePriority";
 import { problemSourceOf } from "./workflows";
 import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
@@ -116,6 +116,8 @@ export async function planLiveFlow(ctx: Ctx, flow: any, roles: any[], now: numbe
   const hold = flowHold(flow, now);
   const offWords = !flow.on ? "the flow is off" : hold ? holdWords(hold) : handsLeft <= 0 ? "hands cap reached" : null;
   const candidates = await liveFlowCandidates(ctx, flow, roles, Math.max(take, 0) + 16);
+  // Only machines that can start every agent the flow's stations run take its problems (linePoolFor).
+  const needs = flowAgents(flow.workflow_id ? (await ctx.db.get(flow.workflow_id))?.nodes : null);
   // A judge problem waits while the flow's family has no judge route (lib/flowRoute); every other problem has a graph.
   const judgeRoute = candidates.some((c) => isJudgeProblem(c.task.cause)) ? await judgeRouteOf(ctx, flow) : null;
   const starts: LivePlanned[] = [];
@@ -126,7 +128,7 @@ export async function planLiveFlow(ctx: Ctx, flow: any, roles: any[], now: numbe
     if (!waiting && starts.length >= take) waiting = "waits for the next pass";
     let load: LineLoad | null = null;
     if (!waiting) {
-      load = await lineLoadFor(ctx, c.role, now, loads, roles);
+      load = await lineLoadFor(ctx, c.role, now, loads, roles, needs);
       if (freeSlots(load) <= 0) waiting = `${load.working} run${load.working === 1 ? " is" : "s are"} working on @${c.role.handle}'s machine${load.pool ? "s" : ""}`;
     }
     if (!waiting && load) {

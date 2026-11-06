@@ -232,6 +232,8 @@ export interface CloudAgentLogin<C = unknown> {
   whoami(client: C): Promise<{ account?: string; plan?: string }>;
   /** The account the sign-in on disk names, known without asking the provider. */
   localAccount?(): string | undefined;
+  /** Whether the agent's own CLI has no credential on this machine at all, so its local sessions cannot start either (CloudAgentSetupBlock.cli_signed_out). */
+  cliSignedOut?(): boolean;
   /**
    * Start the sign-in and return; the check tells when it lands. It opens the
    * browser on this machine, or with `deviceCode` (the person is on another

@@ -27,6 +27,8 @@ import { recordRoutineRunGraph, recordScriptRunGraph } from "./flowLibrary";
 import { libraryOfRun, runFlowVersions } from "./flowVersions";
 import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
+import { flowAgents, missingAgentOn } from "./lib/linePlacement";
+import { agentDisplayName, deviceDisplayName } from "@codecast/shared/contracts";
 import { navPromptField } from "./userMessagesFilter";
 import { retainSessionCreator } from "./sessionLaunch";
 import { isSessionOwner } from "./sessionOwners";
@@ -788,8 +790,21 @@ export const createFromCli = mutation({
       const match = wf.find(w => w.name === args.workflow_name);
       if (match) workflowDocId = match._id;
     }
+    const workflowRow: any = workflowDocId ? await ctx.db.get(workflowDocId) : null;
     // A line run: the shipped line or a role's, or a line version (one that serves a scenario).
-    const lineRun = isLineRunSlug(args.workflow_name) || !!((workflowDocId ? await ctx.db.get(workflowDocId) : null) as any)?.serves?.length;
+    const lineRun = isLineRunSlug(args.workflow_name) || !!workflowRow?.serves?.length;
+    // Every agent its stations start: a machine that cannot start one of them takes no part of the run.
+    const needs = flowAgents(workflowRow?.nodes);
+    // The asking machine, where a detached run stays when no pool takes it: held from line runs by an operator, or
+    // without a sign-in one of its agents needs, it is no place for this run.
+    const asker: any = args.detach && args.run_on_device
+      ? await ctx.db.query("devices").withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.run_on_device!)).first()
+      : null;
+    const missing = asker ? missingAgentOn(asker, needs) : null;
+    const unfit = !asker ? null
+      : missing ? `${deviceDisplayName(asker)} has no ${agentDisplayName(missing.agent)} sign-in, which ${workflowName} needs (\`${missing.login}\` there)`
+      : lineRun && asker.line_hold ? `${deviceDisplayName(asker)} is held from line runs (${asker.line_hold.why ?? "an operator's hold"})`
+      : null;
 
     // A detached line run on a problem whose role's runs work on a pool of
     // machines takes the sweep's admission (the-line-end-to-end.md LE6): the
@@ -797,14 +812,16 @@ export const createFromCli = mutation({
     // machine. With the pool full nothing starts, and the problem goes back to
     // the line's queue for the sweep to start in rank order.
     const lead = args.detach && lineRun && taskRow ? await projectLeadRole(ctx, taskRow) : null;
-    const room = lead ? await admitRoleRun(ctx, lead, now) : null;
-    const pooled = room?.pooled && room.runner === String(userId) ? room : null;
+    const room = lead ? await admitRoleRun(ctx, lead, now, undefined, needs) : null;
+    // The pool takes the runner's own runs, and anyone's the asking machine cannot run.
+    const pooled = room?.pooled && (room.runner === String(userId) || unfit) ? room : null;
     if (pooled && "waiting" in pooled) {
       const refusal = await liveRunRefusal(ctx, taskRow, args.force);
       if (refusal) throw new Error(refusal);
       return { run_id: null, queued: await requeueForSweep(ctx, lead, taskRow, userId, now, pooled.waiting), primary_conversation_id: null, spawner_conversation_id: null };
     }
     const place = pooled && "place" in pooled ? pooled.place : undefined;
+    if (!place && unfit) throw new Error(`${taskRow?.short_id ?? workflowName} did not start: ${unfit}, and no line machine can take it`);
     // A place on the team's pool runs as that machine's account, and the caller owns the run (orgLine.startRoleRun).
     const host = (place?.user ?? userId) as Id<"users">;
 

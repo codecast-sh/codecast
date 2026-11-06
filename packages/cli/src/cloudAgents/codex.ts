@@ -24,7 +24,7 @@
  */
 import { CLOUD_AGENT_BRANCH_SEPARATOR, CLOUD_AGENT_PROVIDERS, cloudAgentRootId, peggedWindow, planTypeLabel } from "@codecast/shared/contracts";
 import { readActiveCodexAuth } from "../codexAccounts.js";
-import { codexAccessExpired, decodeCodexAuth } from "../codexAuthDecode.js";
+import { codexAccessExpired, codexCliSignedOut, decodeCodexAuth } from "../codexAuthDecode.js";
 import { codexBackendHeadersFromAuth, codexBackendRequest, parseBackendUsageResponse, requestCodexBackendUsage } from "../codexBackendUsage.js";
 import { threadItemToMessage, type ThreadItem } from "../codexAppServer.js";
 import type { ParsedMessage } from "../parser.js";
@@ -682,6 +682,7 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
     this.login = {
       whoami: (api) => this.whoami(api),
       localAccount: () => decodeCodexAuth(this.readAuth()).email,
+      cliSignedOut: () => codexCliSignedOut(this.readAuth()),
       start: (opts) => this.startLogin(opts?.deviceCode === true),
     };
   }
