@@ -402,6 +402,68 @@ describe("orgLine admission (LE6)", () => {
       expect(tables.workflow_runs).toHaveLength(0);
     });
 
+    // Nov 6: two onefix runs landed on Cam's box, whose Codex had no sign-in, and died at the codex critic with a 401.
+    describe("a machine that cannot start an agent the run's flow needs", () => {
+      const signedOut = { cloud_agent_blocks: [{ provider: "codex", kind: "key_missing", cli_signed_out: true }] };
+      const flow = { _id: "workflows_line", user_id: HOST, name: "line", slug: "line", nodes: [
+        { id: "build", label: "Build", shape: "box", type: "agent", backend: "session" },
+        { id: "critic", label: "Critic", shape: "box", type: "agent", backend: "session", agent: "codex" },
+        { id: "check", label: "Check", shape: "parallelogram", type: "tool", script: "true" },
+      ], edges: [] };
+      const mateHost = (id: string, runs: number, over: Record<string, any> = {}) => ({ ...host(id, runs, over), _id: `devices_${id}`, user_id: MATE });
+      const MATE_TOKEN = "mate-token";
+      const start = async (devices: any[], o: { as?: "host" | "mate" } = {}) => {
+        const { hashToken } = await import("./apiTokens");
+        const f = fixtures({ role: caps({ hands_per_day: 100 }), extra: {
+          initiatives, tasks: [failed(0)], devices, workflow_runs: [dead(0)], workflows: [flow, { ...flow, _id: "workflows_line_mate", user_id: MATE }],
+          api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(TOKEN) }, { _id: "api_tokens_2", user_id: MATE, token_hash: await hashToken(MATE_TOKEN) }],
+        } });
+        const { createFromCli } = await import("./workflow_runs");
+        const mate = o.as === "mate";
+        const run = () => (createFromCli as any)._handler(f.ctx, { api_token: mate ? MATE_TOKEN : TOKEN, workflow_name: "line", task_id: "ct-c0", detach: true, run_on_device: mate ? "dev-mate" : "dev-laptop" });
+        return { ...f, run };
+      };
+
+      test("the flow's agents are every agent station's own, with Claude for one that names none", async () => {
+        const { flowAgents, missingAgentOn } = await import("./lib/linePlacement");
+        expect(flowAgents(flow.nodes)).toEqual(["claude", "codex"]);
+        expect(missingAgentOn(signedOut, ["claude", "codex"])).toEqual({ agent: "codex", login: "codex login" });
+        expect(missingAgentOn(signedOut, ["claude"])).toBeNull();
+        // Codex Cloud refusing an API-key login says nothing about local Codex, which runs on the key.
+        expect(missingAgentOn({ cloud_agent_blocks: [{ provider: "codex", kind: "key_missing", reason: "Codex there uses an API key" }] }, ["codex"])).toBeNull();
+      });
+
+      test("is no slot of the pool: the runner's own hosts all lacking it, the run takes the team's", async () => {
+        const { tables, run } = await start([laptop, host("h1", 2, signedOut), mateHost("m1", 1)]);
+        const out = await run();
+        expect(out).toMatchObject({ runner_device: "m1" });
+        expect(tables.workflow_runs.find((r) => r._id === out.run_id)).toMatchObject({ runner_device: "m1", user_id: MATE, project_path: "/home/ubuntu/m1/growth" });
+        // A host that can start it keeps the run on the runner's own pool.
+        const ok = await start([laptop, host("h1", 2), mateHost("m1", 1)]);
+        expect(await ok.run()).toMatchObject({ runner_device: "h1" });
+      });
+
+      test("a teammate's hand start from a machine without it goes to the pool, or is refused naming the machine and the sign-in", async () => {
+        const mateBox = { _id: "devices_mate_box", user_id: MATE, device_id: "dev-mate", label: "union-shared", last_seen: NOW, ...signedOut };
+        const pooled = await start([laptop, host("h1", 1), mateBox], { as: "mate" });
+        const out = await pooled.run();
+        expect(out).toMatchObject({ runner_device: "h1" });
+        expect(pooled.tables.daemon_commands.at(-1)!.target_device_id).toBe("h1");
+        // A box that can run every agent keeps a teammate's own start, as before.
+        const fit = await start([laptop, host("h1", 1), { ...mateBox, cloud_agent_blocks: [] }], { as: "mate" });
+        const kept = await fit.run();
+        expect(kept.runner_device).toBeUndefined();
+        expect(fit.tables.daemon_commands.at(-1)!.target_device_id).toBe("dev-mate");
+        // A box an operator holds from line runs takes no line run started on it either.
+        const held = await start([laptop, host("h1", 1), { ...mateBox, cloud_agent_blocks: [], line_hold: { why: "no Codex for the Review hand", at: NOW - 1_000 } }], { as: "mate" });
+        expect(await held.run()).toMatchObject({ runner_device: "h1" });
+        // No line machine can take it: nothing starts, and the error says where and what is missing.
+        const none = await start([laptop, host("h1", 1, signedOut), mateBox], { as: "mate" });
+        await expect(none.run()).rejects.toThrow("ct-c0 did not start: union-shared has no Codex sign-in, which line needs (`codex login` there), and no line machine can take it");
+        expect(none.tables.daemon_commands).toHaveLength(0);
+      });
+    });
+
     // A role seated on an account with no line machine (Union's @agent-quality on Jason's laptop, sd-2541): its runs
     // take the team's pool and run as the host's account, while the seat's person keeps their cards.
     describe("a seat whose account offers no machine for the checkout", () => {

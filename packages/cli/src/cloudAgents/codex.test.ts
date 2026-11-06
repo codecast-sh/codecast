@@ -17,6 +17,7 @@ import { classifyMirrorTranscriptTail, mirrorMessageUuid, readMetaJson } from ".
 import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentLoginCommand } from "./types.js";
 import { CloudAgentWatcher } from "./watcher.js";
 import { deviceLabel } from "../remote/device.js";
+import { codexCliSignedOut } from "../codexAuthDecode.js";
 import { json, type FakeCloudCall } from "../test-helpers/cloudFetch.js";
 import { fakeSessionWatcher, tmp, until } from "../test-helpers/cloudAgentFakes.js";
 import { clone, CODEX_NOW, CODEX_VALID, codexAuthJson, codexFixture, whamFetch } from "../test-helpers/codexCloudFixtures.js";
@@ -352,6 +353,14 @@ describe("Codex Cloud sign-in (read only, never refreshed)", () => {
     expect(apiKey.kind).toBe("key_missing");
     expect(apiKey.reason).toContain("API key");
     expect(cloudAgentCardOf(CLOUD_AGENT_PROVIDERS.codex, undefined, apiKey.message)?.kind).toBe("credential");
+  });
+
+  test("the CLI reads as signed out only with no credential at all: an API key still runs Codex here", () => {
+    expect(codexCliSignedOut(null, {})).toBe(true);
+    expect(codexCliSignedOut(JSON.stringify({ tokens: null }), {})).toBe(true);
+    expect(codexCliSignedOut(JSON.stringify({ OPENAI_API_KEY: "sk-test", tokens: null }), {})).toBe(false);
+    expect(codexCliSignedOut(null, { CODEX_API_KEY: "sk-env" })).toBe(false);
+    expect(adapter(VALID).login.cliSignedOut!()).toBe(false);
   });
 
   test("check (the core's verdict): the account and plan Codex names; signed out, expired, refused and turned off each say so", async () => {

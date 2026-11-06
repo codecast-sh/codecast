@@ -526,6 +526,8 @@ export function renderGalleryMessages(now: number): Row[] {
   sh(`cast decide "Ship the mobile renderer behind a flag?" -o "Ship now :: everyone gets it on the next OTA" -o "Flag it :: only staff see it for a week" --context - <<'EOF'\nThe renderer replaces the line parser.\nEOF`, "Queued decision sd-311");
   sh("cast decide answer sd-311 1", "Answered sd-311");
   sh('cast state --status done "Mobile renderings match web"', "ok pinned");
+  sh('cast say "The phone draws every table layout the web does now."', "shown to the person");
+  sh("cast say - <<'EOF'\nWhere the funnel stands:\n\n| Stage | Now |\n|---|---|\n| Introductions | 24 a week |\nEOF", "shown to the person");
   sh('cast chat reply j17zg9kjy1sk58qwqgnzcecme58cdmsp "Deploy is green."', "replied");
   sh("cast publish report.html", "https://codecast.sh/a/k3j9x2m4q8");
   sh("cast diff jx7bm3n", "2 files changed");

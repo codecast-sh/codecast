@@ -27,6 +27,8 @@ import { recordRoutineRunGraph, recordScriptRunGraph } from "./flowLibrary";
 import { libraryOfRun, runFlowVersions } from "./flowVersions";
 import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
+import { flowAgents, missingAgentOn } from "./lib/linePlacement";
+import { agentDisplayName, deviceDisplayName } from "@codecast/shared/contracts";
 import { navPromptField } from "./userMessagesFilter";
 import { retainSessionCreator } from "./sessionLaunch";
 import { isSessionOwner } from "./sessionOwners";
@@ -183,6 +185,16 @@ export async function pauseAtGateCore(
   if (!run || String(run.user_id) !== String(auth.userId)) return { error: "Not found" };
 
   const now = Date.now();
+  // A run that is over asks nobody (runOver). The card its presenting station posted on the way to this gate is the
+  // run's question, so it goes with the run: a runner from before runOver carries on to here.
+  const over = runOver(run);
+  if (over) {
+    const station = await stationSession(ctx, args.asker_session_id, run._id);
+    const card = station && isRunHand(station, run) ? await openDecisionOf(ctx, station._id) : null;
+    const why = over.ended.reason ?? over.ended.status;
+    if (card) await withdrawCore(ctx, card as any, now, undefined, `The run that asked it was over (${why}) before its gate took the question up, so an answer would drive nothing.`);
+    return { error: `the run is over (${why})`, ...over };
+  }
   // A trial project's run asks nobody (lineTrial.ts): the gate becomes a
   // trial card, before any stack or decision exists for it.
   const trialTask = run.task_id ? await ctx.db.get(run.task_id) : null;
@@ -391,13 +403,16 @@ export async function cancelCore(ctx: Ctx, run: any, now = Date.now(), reason = 
 // works in it, and the line releases it (lineTrialBranch.ts). Hands are the
 // node sessions nested under the run's own session (runner spawnHand);
 // `nodeIds` limits the stop to those stations.
+const isRunHand = (conv: { parent_conversation_id?: unknown }, run: { primary_conversation_id?: unknown }): boolean =>
+  String(conv.parent_conversation_id ?? "") === String(run.primary_conversation_id);
+
 export async function stopStationHands(ctx: Ctx, run: any, nodeIds?: string[]): Promise<number> {
   if (run.run_kind === "workflow" || !run.primary_conversation_id) return 0;
   let stopped = 0;
   for (const node of run.node_statuses ?? []) {
     if (!node.session_id || (nodeIds && !nodeIds.includes(node.node_id))) continue;
     const conv: any = await findConversationByAnyRef(ctx as any, node.session_id, run.user_id);
-    if (!conv || conv.inbox_killed_at || String(conv.parent_conversation_id ?? "") !== String(run.primary_conversation_id)) continue;
+    if (!conv || conv.inbox_killed_at || !isRunHand(conv, run)) continue;
     await killConversation(ctx, run.user_id, { conversation_id: conv._id, mark_completed: true }, { cause: "station_ended", keepWorkspace: true });
     stopped++;
   }
@@ -422,7 +437,7 @@ async function withdrawOpenGate(ctx: Ctx, run: any, now: number): Promise<void> 
   for (const node of run.node_statuses ?? []) {
     if (!node.session_id || !askers.has(node.node_id)) continue;
     const conv: any = await findConversationByAnyRef(ctx as any, node.session_id, run.user_id);
-    if (!conv || String(conv.parent_conversation_id ?? "") !== String(run.primary_conversation_id)) continue;
+    if (!conv || !isRunHand(conv, run)) continue;
     const open = await ctx.db.query("session_decisions").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id).eq("status", "pending")).collect();
     for (const d of open) if (!d.workflow_run_id) await withdrawCore(ctx, d as any, now, undefined, why);
   }
@@ -617,6 +632,19 @@ export const LIVE_RUN_STATUSES = ["pending", "running", "paused"] as const;
 export const isLiveRunStatus = (status: string | undefined): boolean =>
   (LIVE_RUN_STATUSES as readonly string[]).includes(status ?? "");
 
+/**
+ * What a run that is over answers its runner, or null while it is live. A cancel ends the run here while its runner
+ * may still be alive, waiting out a hold or inside a station's command; what that runner reports after the end
+ * changes nothing, and it stops on this answer (cli runner.ts). Taken as before, a late report carried the run on:
+ * five agentwatch runs stopped at their holds on Nov 5 went through Build and Present when the holds ended, so
+ * ct-73543 had two cards and ct-63003 merged. A gate card taken back fails the row only until its runner sends the
+ * run back to the presenter (presentAgain), so that run is live.
+ */
+export function runOver(run: { status: string; fail_reason?: string | null }): { ended: { status: string; reason: string | null } } | null {
+  if (isLiveRunStatus(run.status) || run.fail_reason === GATE_PRESENT_AGAIN) return null;
+  return { ended: { status: run.status, reason: run.fail_reason ?? null } };
+}
+
 // LE1.4: why a task may not get a new run now, or null when it may. The
 // task's bound run is the one that speaks for it; a second attempt waits for
 // it to end, unless the caller forces it (`cast workflow run --force`).
@@ -788,8 +816,21 @@ export const createFromCli = mutation({
       const match = wf.find(w => w.name === args.workflow_name);
       if (match) workflowDocId = match._id;
     }
+    const workflowRow: any = workflowDocId ? await ctx.db.get(workflowDocId) : null;
     // A line run: the shipped line or a role's, or a line version (one that serves a scenario).
-    const lineRun = isLineRunSlug(args.workflow_name) || !!((workflowDocId ? await ctx.db.get(workflowDocId) : null) as any)?.serves?.length;
+    const lineRun = isLineRunSlug(args.workflow_name) || !!workflowRow?.serves?.length;
+    // Every agent its stations start: a machine that cannot start one of them takes no part of the run.
+    const needs = flowAgents(workflowRow?.nodes);
+    // The asking machine, where a detached run stays when no pool takes it: held from line runs by an operator, or
+    // without a sign-in one of its agents needs, it is no place for this run.
+    const asker: any = args.detach && args.run_on_device
+      ? await ctx.db.query("devices").withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.run_on_device!)).first()
+      : null;
+    const missing = asker ? missingAgentOn(asker, needs) : null;
+    const unfit = !asker ? null
+      : missing ? `${deviceDisplayName(asker)} has no ${agentDisplayName(missing.agent)} sign-in, which ${workflowName} needs (\`${missing.login}\` there)`
+      : lineRun && asker.line_hold ? `${deviceDisplayName(asker)} is held from line runs (${asker.line_hold.why ?? "an operator's hold"})`
+      : null;
 
     // A detached line run on a problem whose role's runs work on a pool of
     // machines takes the sweep's admission (the-line-end-to-end.md LE6): the
@@ -797,14 +838,16 @@ export const createFromCli = mutation({
     // machine. With the pool full nothing starts, and the problem goes back to
     // the line's queue for the sweep to start in rank order.
     const lead = args.detach && lineRun && taskRow ? await projectLeadRole(ctx, taskRow) : null;
-    const room = lead ? await admitRoleRun(ctx, lead, now) : null;
-    const pooled = room?.pooled && room.runner === String(userId) ? room : null;
+    const room = lead ? await admitRoleRun(ctx, lead, now, undefined, needs) : null;
+    // The pool takes the runner's own runs, and anyone's the asking machine cannot run.
+    const pooled = room?.pooled && (room.runner === String(userId) || unfit) ? room : null;
     if (pooled && "waiting" in pooled) {
       const refusal = await liveRunRefusal(ctx, taskRow, args.force);
       if (refusal) throw new Error(refusal);
       return { run_id: null, queued: await requeueForSweep(ctx, lead, taskRow, userId, now, pooled.waiting), primary_conversation_id: null, spawner_conversation_id: null };
     }
     const place = pooled && "place" in pooled ? pooled.place : undefined;
+    if (!place && unfit) throw new Error(`${taskRow?.short_id ?? workflowName} did not start: ${unfit}, and no line machine can take it`);
     // A place on the team's pool runs as that machine's account, and the caller owns the run (orgLine.startRoleRun).
     const host = (place?.user ?? userId) as Id<"users">;
 
@@ -1094,6 +1137,8 @@ export const updateProgress = mutation({
 
     const run = await ctx.db.get(args.run_id);
     if (!run || run.user_id !== auth.userId) return { error: "Not found" };
+    const over = runOver(run);
+    if (over) return over;
 
     const now = Date.now();
     if (args.graph_hash) await recordRoutineRunGraph(ctx, run, args.graph_hash, now);
@@ -1122,8 +1167,7 @@ export const updateProgress = mutation({
       current_node_id: args.current_node_id,
       node_statuses: nodeStatuses,
       status: args.run_status ?? run.status,
-      // A run a cancel already ended keeps why: its runner, finding the gate gone, reports a failure of its own after it ("no outgoing edge from decide").
-      fail_reason: run.status === "failed" && run.fail_reason && args.run_status === "failed" ? run.fail_reason : args.fail_reason,
+      fail_reason: args.fail_reason,
       // A runner's first report names the graph it loaded, so a restart a re-pin asked for has happened.
       ...(args.graph_hash ? { graph_hash: args.graph_hash, restart_runner_at: undefined } : {}),
       ...(args.graph_nodes?.length ? { graph_nodes: args.graph_nodes } : {}),
@@ -1162,9 +1206,9 @@ export const updateProgress = mutation({
     // leaves no open gate behind. The run is already patched past its pause,
     // so the withdraw keeps this report's fail_reason.
     if (args.run_status === "completed" || args.run_status === "failed") await withdrawOpenGate(ctx, { ...run, node_statuses: nodeStatuses, status: args.run_status, fail_reason: args.fail_reason ?? run.fail_reason }, now);
-    const runOver = args.run_status === "completed" || args.run_status === "failed";
-    if (runOver || (nodeEntry && args.node_status !== "running")) {
-      await stopStationHands(ctx, { ...run, node_statuses: nodeStatuses }, runOver ? undefined : [args.node_id!]);
+    const endsRun = args.run_status === "completed" || args.run_status === "failed";
+    if (endsRun || (nodeEntry && args.node_status !== "running")) {
+      await stopStationHands(ctx, { ...run, node_statuses: nodeStatuses }, endsRun ? undefined : [args.node_id!]);
     }
 
     // Sync status to bound task/plan
