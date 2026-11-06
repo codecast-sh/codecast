@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { SECRET_VERSION_TTL_MS, type SecretMeta } from "@codecast/shared/contracts/secrets";
 import { findSecrets } from "@codecast/shared/contracts/secretShapes";
-import { classifyPaste, fillRequest, filterSecrets, formatIn, isStub, loginEnv, nameIssue, parseEnvText, readEnvText, payloadOf, isStaged, saveRemaining, secretHealth, stagedSwap, withPendingAskFirst, siteName, slugify, suggestName, whereUsed, withVaultReferences, envPairLabel } from "./vaultModel";
+import { classifyPaste, fillRequest, filterSecrets, formatIn, isStub, loginEnv, nameIssue, parseEnvText, readTypedName, readEnvText, payloadOf, isStaged, saveRemaining, secretHealth, stagedSwap, withPendingAskFirst, siteName, slugify, suggestName, whereUsed, withVaultReferences, envPairLabel } from "./vaultModel";
 
 describe("parseEnvText", () => {
   test("reads assignments and skips everything else", () => {
@@ -118,6 +118,14 @@ describe("names", () => {
     expect(nameIssue("Stripe", taken)).toBe("Lowercase letters, digits and dashes");
     expect(nameIssue("stripe-test", taken)).toBe("Already in this vault");
     expect(nameIssue("stripe-live", taken)).toBeNull();
+  });
+  test("readTypedName takes env-style spellings", () => {
+    expect(readTypedName("MERCURY_API_KEY")).toEqual({ name: "mercury-api-key", env: "MERCURY_API_KEY" });
+    expect(readTypedName("mercury_api_key")).toEqual({ name: "mercury-api-key" });
+    expect(readTypedName("Mercury API key")).toEqual({ name: "mercury-api-key" });
+    // Mid-typing a dash still reads as a name.
+    expect(readTypedName("mercury-")).toEqual({ name: "mercury" });
+    expect(readTypedName("stripe-test")).toEqual({ name: "stripe-test" });
   });
 });
 

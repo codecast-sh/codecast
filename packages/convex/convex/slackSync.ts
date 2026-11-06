@@ -1450,7 +1450,7 @@ type ResolvedPerson = {
   shadow_user_id: Id<"users"> | null;
 };
 
-export async function resolvePerson(ctx: ActionCtx, install: Install, slackUserId: string): Promise<ResolvedPerson> {
+async function resolvePerson(ctx: ActionCtx, install: Install, slackUserId: string): Promise<ResolvedPerson> {
   let row = await ctx.runQuery(internal.slackSync.getSlackUser, { workspace_id: install.workspace_id, slack_user_id: slackUserId });
   if (!row || Date.now() - row.fetched_at > PROFILE_TTL_MS) {
     const resp = await slackApi(install.bot_token, "users.info", { user: slackUserId });

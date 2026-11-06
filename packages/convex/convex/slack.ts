@@ -41,9 +41,6 @@ export const BOT_SCOPES = [
   "reactions:write",
   "files:read",
   "team:read",
-  // Unfurl codecast links posted in Slack as the poster sees them (slackUnfurl).
-  "links:read",
-  "links:write",
 ].join(",");
 
 // What a PERSON grants for themselves alongside the bot install: enough to

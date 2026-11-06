@@ -571,7 +571,6 @@ import type * as slack from "../slack.js";
 import type * as slackReactions from "../slackReactions.js";
 import type * as slackSchema from "../slackSchema.js";
 import type * as slackSync from "../slackSync.js";
-import type * as slackUnfurl from "../slackUnfurl.js";
 import type * as smallViewContracts from "../smallViewContracts.js";
 import type * as sourceVolume from "../sourceVolume.js";
 import type * as sources_app from "../sources/app.js";
@@ -1215,7 +1214,6 @@ declare const fullApi: ApiFromModules<{
   slackReactions: typeof slackReactions;
   slackSchema: typeof slackSchema;
   slackSync: typeof slackSync;
-  slackUnfurl: typeof slackUnfurl;
   smallViewContracts: typeof smallViewContracts;
   sourceVolume: typeof sourceVolume;
   "sources/app": typeof sources_app;
