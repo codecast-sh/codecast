@@ -3,8 +3,8 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import { api } from "../../convex/convex/_generated/api.js";
 import type { Id } from "../../convex/convex/_generated/dataModel";
-import { parseEntityUrl, parseSharePath } from "@codecast/shared/entities";
-import { convex, fetchGuestLink, fetchShared, guestMeetMeta, privateEntityMeta, shareMeta } from "./shareData";
+import { parseSharePath } from "@codecast/shared/entities";
+import { convex, fetchGuestLink, fetchShared, guestMeetMeta, shareMeta } from "./shareData";
 import { seoFor, SITE_URL } from "../lib/seoRoutes";
 
 /**
@@ -200,10 +200,6 @@ export async function botMetaMiddleware(c: Context, next: Next) {
           break;
         }
       }
-      // A workspace object the crawler cannot read: say what it is, at its
-      // own URL, rather than the landing page's card.
-      const entity = parseEntityUrl(path);
-      if (entity) return c.html(ogHtml(privateEntityMeta(entity.type, `${BASE_URL}${path}`)));
     }
     const entry = seoFor(path);
     if (entry) {
