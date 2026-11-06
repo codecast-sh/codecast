@@ -1229,6 +1229,20 @@ export interface RunOptions {
   loadedFlowVersions?: string;
   /** The flow versions the run is pinned to now, or null when that cannot be read. */
   pinnedFlowVersions?: () => Promise<string | null>;
+  /** Set when the server answers a report with the run already over (workflow_runs runOver): why it ended. */
+  endedOnServer?: string;
+}
+
+/** The run ended on the server while this runner drove it (a person stopped it, its problem closed). */
+class RunEndedOnServer extends Error {}
+
+/**
+ * A runner whose run is over starts no station after it. A cancel cannot reach a runner waiting out a hold or inside
+ * a station's command, so the runner learns of it from the answer to its next report, and stops there: five runs
+ * stopped at their holds on Nov 5 went on through Build and Present when the holds ended (ct-73543's two cards).
+ */
+function stopIfEnded(options: RunOptions): void {
+  if (options.endedOnServer) throw new RunEndedOnServer(options.endedOnServer);
 }
 
 /** A run's pinned flow versions as one comparable string. */
