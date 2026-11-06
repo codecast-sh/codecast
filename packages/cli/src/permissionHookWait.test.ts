@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   PermissionHookWaiters,
+  glanceCommand,
   parsePermissionHookInput,
   permissionDecisionOutput,
   type PermissionHookInput,
@@ -31,6 +32,7 @@ describe("parsePermissionHookInput", () => {
       sessionId: "perm-1",
       toolName: "Bash",
       preview: "bun test src/x.test.ts",
+      glance: "bun test src/x.test.ts",
       permissionMode: "default",
       suggestions: [RULE],
     });
@@ -40,6 +42,24 @@ describe("parsePermissionHookInput", () => {
     expect(parsePermissionHookInput("not json")).toBeNull();
     expect(parsePermissionHookInput(JSON.stringify({ ...PAYLOAD, hook_event_name: "PreToolUse" }))).toBeNull();
     expect(parsePermissionHookInput(JSON.stringify({ ...PAYLOAD, tool_name: "" }))).toBeNull();
+  });
+});
+
+describe("glanceCommand", () => {
+  test("drops the cd prefix and folds heredoc bodies so the flagged tail shows", () => {
+    const command = [
+      "cd /Users/a/src/repo/.codecast/worktrees/x/backend/src && python3 - <<'EOF'",
+      "p='persona.ts'",
+      "s=open(p).read()",
+      "EOF",
+      'grep -n "day ${\\|\\[day" persona.ts | head',
+    ].join("\n");
+    expect(glanceCommand(command)).toBe(["python3 - <<'EOF'", "…", 'grep -n "day ${\\|\\[day" persona.ts | head'].join("\n"));
+  });
+
+  test("leaves a plain command alone and folds an unterminated heredoc to its end", () => {
+    expect(glanceCommand("bun test src/x.test.ts")).toBe("bun test src/x.test.ts");
+    expect(glanceCommand('cd "/a b" && cat <<EOF\nbody')).toBe("cat <<EOF\n…");
   });
 });
 
