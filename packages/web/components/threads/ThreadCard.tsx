@@ -98,7 +98,7 @@ export const ThreadCard = memo(function ThreadCard({
           <Label card={card} />
         </span>
         {unread && (
-          <span className="th-row-badge" aria-label={`${card.unread} new`}>
+          <span className={`th-row-badge ${card.forYou ? "" : "th-row-badge-activity"}`} aria-label={`${card.unread} new`}>
             {card.unread}{card.unreadCapped ? "+" : ""} new
           </span>
         )}
