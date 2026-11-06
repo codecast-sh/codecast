@@ -18,7 +18,6 @@ import { FilmSwap } from "../film";
 import { PAGE, PUBLISH, REPLY } from "../fixtures/publish";
 import { SESSIONS } from "../fixtures/story";
 
-const noop = () => {};
 const TOOL_ID = "hero-tool-publish";
 const TOOL_CALLS = [{ id: TOOL_ID, name: "Bash", input: JSON.stringify({ command: REPLY.command, description: "Publish the report as a page" }) }];
 const TOOL_RESULTS = [{ tool_use_id: TOOL_ID, content: REPLY.output }];
@@ -60,7 +59,7 @@ function Page() {
       <FramelessPage
         title={PAGE.title}
         href={`https://${PAGE.url}`}
-        actions={<PublishedPageActions slug={PAGE.slug} expanded={false} onToggleExpand={noop} />}
+        actions={<PublishedPageActions slug={PAGE.slug} />}
         height={500}
         loaded
       >

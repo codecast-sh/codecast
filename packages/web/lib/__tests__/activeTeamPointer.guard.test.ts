@@ -106,7 +106,6 @@ describe("active-team pointer", () => {
       "hooks/useSyncSavedViews.ts",
       "hooks/useConversationsWithError.ts",
       "hooks/useMentionQuery.ts",
-      "components/Sidebar.tsx",
       "hooks/useTeamFeed.ts",
       "hooks/useSyncTeamMembers.ts",
       "components/InviteModal.tsx",

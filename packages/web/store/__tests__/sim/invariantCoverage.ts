@@ -28,7 +28,6 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   _seenMessageCount: "client-only unread baseline, no server truth",
   teams: "fed by useSyncTeams, which the sim does not mount; membership is checked through cursors and workspace rows",
   teamMembers: "roster cache with no feeder the sim mounts",
-  teamUnreadCount: "a sidebar badge fed by a component the sim does not mount",
   docProjectPaths: "client-side path index with no server truth",
   favorites: "fed by a sidebar component the sim does not mount",
   bookmarks: "fed by useSyncInboxSessions' bookmark query, which the sim does not mount",

@@ -98,6 +98,16 @@ export function taskCommentIsNews(
   return NEEDS_PERSON_TYPES.has(comment.comment_type ?? "note");
 }
 
+/** Whether one task comment waits on the viewer (the Threads count): a
+ *  person writing, or an agent naming them. An agent's blocker or review is
+ *  news under the default level but asks no one in particular (handoffs and
+ *  verdicts post as reviews); an ask that needs this person is a decision,
+ *  counted on the Decisions badge, or names them. */
+export function taskCommentIsForYou(author: TaskCommentAuthorKind, mentioned: boolean): boolean {
+  if (author === "self") return false;
+  return author === "person" || mentioned;
+}
+
 export type ThreadRefs = {
   channel_id?: Id<"chat_channels">;
   conversation_id?: Id<"conversations">;

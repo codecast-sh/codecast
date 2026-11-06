@@ -145,7 +145,7 @@ describe("client sync registry", () => {
     });
 
     it("live-synced singletons fill only an empty slot; everything else merges by shape", () => {
-      expect(hydrationMergeStrategy("teamUnreadCount")).toBe("fill");
+      expect(hydrationMergeStrategy("threadUnread")).toBe("fill");
       expect(hydrationMergeStrategy("currentUser")).toBe("fill");
       expect(hydrationMergeStrategy("sessions")).toBe("shape");
       expect(hydrationMergeStrategy("buckets")).toBe("shape");
