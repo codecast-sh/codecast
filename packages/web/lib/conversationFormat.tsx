@@ -3,12 +3,27 @@ import { toast } from "sonner";
 import { copyToClipboard, shareOrigin } from "./utils";
 import { openForwardToChat } from "./forwardToChat";
 import { formatMessageHash } from "./messageHash";
+import { getShareTokenScope } from "./shareTokenScope";
+import { useInboxStore } from "../store/inboxStore";
 import type { ToolCall, ToolResult } from "../components/conversation/types";
 import { cacheLocalDateFormat } from "./localDateCache";
 import { ansiSpans } from "./ansi";
 
+/** The token a copied link must present to open for anyone (issue #27: a bare
+ *  conversation id grants nothing). A guest who arrived with a token passes it
+ *  on; the owner adds it once link access is "Anyone", the same rule the share
+ *  popover uses for the page link. */
+function linkShareToken(conversationId: string): string | undefined {
+  const presented = getShareTokenScope(conversationId);
+  if (presented) return presented;
+  const row = useInboxStore.getState().conversations[conversationId] as { share_token?: string | null; is_own?: boolean } | undefined;
+  return row?.share_token && row.is_own !== false ? row.share_token : undefined;
+}
+
 export function messageLink(conversationId: string | undefined, messageId: string, block?: number) {
-  return `${shareOrigin()}/conversation/${conversationId}${formatMessageHash(messageId, block)}`;
+  const token = conversationId ? linkShareToken(conversationId) : undefined;
+  const query = token ? `?share=${encodeURIComponent(token)}` : "";
+  return `${shareOrigin()}/conversation/${conversationId}${query}${formatMessageHash(messageId, block)}`;
 }
 
 export function copyMessageLink(conversationId: string | undefined, messageId: string) {
