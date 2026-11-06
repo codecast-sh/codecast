@@ -35,7 +35,7 @@ import { track } from "../lib/analytics";
 import { runPlaced } from "../lib/desktopApps";
 import { deepLinkSessionId } from "../lib/pathLabel";
 import { cleanNotificationBody } from "../lib/notificationText";
-import { notificationActor, notificationRoute } from "../lib/notificationTypes";
+import { notificationActor, notificationRoute, notificationTypeLabel, sessionLabel } from "../lib/notificationTypes";
 import { recordNotificationMiss } from "../lib/notificationNudge";
 import { isChatContextOnScreen } from "../lib/chatFocus";
 import { useOsPermission } from "../hooks/useOsPermissions";
@@ -62,9 +62,25 @@ const BANNER_FRESH_MS = 3 * 60_000;
 // The engine is loaded lazily, on the desktop only: this provider wraps every
 // page, and the walkie pulls the media stack in with it.
 let walkie: typeof import("../lib/calls/walkie") | null = null;
+
+const SESSION_BANNER_TYPES = new Set(["session_idle", "permission_request", "session_error"]);
+
+/** A session row's banner names the session, from the row's conversation or the
+ *  local store, so rows written before the server titled them read right too.
+ *  A ready session needs no event word; the rest say what happened. */
+function sessionBannerTitle(n: { type?: unknown; conversation_id?: unknown; conversation?: any }): string | null {
+  const type = typeof n.type === "string" ? n.type : "";
+  if (!n.conversation_id || !SESSION_BANNER_TYPES.has(type)) return null;
+  const st = useInboxStore.getState() as any;
+  const id = String(n.conversation_id);
+  const conv = n.conversation ?? st.conversations?.[id] ?? st.sessions?.[id];
+  const name = sessionLabel(conv);
+  if (!name) return null;
+  return type === "session_idle" ? name : `${name} · ${notificationTypeLabel(type, conv?.agent_type)}`;
+}
+
 /** Exported for the call seam tests: a LiveKit reconnect must read as still
  *  in the huddle, which this answers from the store's `phase` alone. */
-
 export function DesktopProvider() {
   const router = useRouter();
   const initRef = useRef(false);
@@ -171,7 +187,7 @@ export function DesktopProvider() {
         Date.now() - n.created_at < BANNER_FRESH_MS
       ) {
         const actor = notificationActor(n).name;
-        const title = actor ? `${actor}` : "Codecast";
+        const title = sessionBannerTitle(n) || actor || n.title?.trim() || "Codecast";
         const body = cleanNotificationBody(n.message) || n.message;
         // The same click target the bell computes: a chat banner lands on the
         // message, a task banner on the task — not just "the app, focused".
