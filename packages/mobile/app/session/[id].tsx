@@ -100,6 +100,7 @@ import { BashModeBlock, FoldedPromptRow, SessionHandoffCard } from '@/components
 import { classifyUserRows, pairCommandExpansions } from '@codecast/web/lib/userRowKinds';
 import { parseJointMessage } from '@codecast/shared/contracts/jointMessage';
 import { parseCommandInvocation, cleanCommandExpansion, parseCastCommand, parseApiErrorContent, stripSystemTags as stripTagsShared } from '@codecast/web/components/conversation/classify';
+import { sayTextOf } from '@codecast/web/components/castCommand';
 import type { ParsedApiError } from '@codecast/web/components/conversation/types';
 import { compactionProgressMessage, type CompactionProgress } from '@codecast/web/lib/compactionProgress';
 import { CastCommandBlock } from '@/components/session/CastCommandBlock';
@@ -2609,6 +2610,11 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             // A `cast …` command reads as what it did (a message sent, a
             // decision asked, a task made), with the shell line one tap away.
             const castCmd = !hostedAgent ? parseCastCommand(tc as any) : null;
+            // A `cast say` is the agent talking: its words, not a command row.
+            const said = sayTextOf(castCmd);
+            if (said) {
+              return <MarkdownContent key={tc.id} text={said} baseStyle={[styles.bubbleText, { fontSize: 15, lineHeight: 24 }, styles.assistantText]} isUser={false} />;
+            }
             if (castCmd) {
               return (
                 <CastCommandBlock

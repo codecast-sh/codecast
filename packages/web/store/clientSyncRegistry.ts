@@ -1637,11 +1637,6 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     sync: { kind: "list" },
   },
-  teamUnreadCount: {
-    persistence: { kind: "meta", key: "teamUnreadCount" },
-    // Live-synced; a stale cached count must not clobber a fresh one.
-    hydration: { merge: "fill" },
-  },
   feedConversations: {
     persistence: { kind: "meta", key: "feedConversations" },
   },
@@ -2054,7 +2049,6 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   _seenMessageCount: "shared",
   teams: "shared",
   teamMembers: "shared",
-  teamUnreadCount: "shared",
   syncMeta: "shared",
   docProjectPaths: "shared",
   favorites: "shared",
