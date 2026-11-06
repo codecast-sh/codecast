@@ -4046,6 +4046,9 @@ export default defineSchema({
     repository: v.optional(v.string()),
     sha: v.optional(v.string()),
     previous_sha: v.optional(v.string()),
+    // The sha's place in main's order (its commit's commits.main_at), stamped when the deploy's range is filled: a
+    // merge is in the deploy's code when it reached main at or before this (contracts/causeHistory carryingDeploys).
+    cut_at: v.optional(v.number()),
     version: v.optional(v.string()),
     // The CI run or the page that shows the deploy.
     url: v.optional(v.string()),

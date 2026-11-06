@@ -33,6 +33,7 @@ import { tellRole } from "./pendingMessages";
 import { liveRoleByHandle } from "./lib/orgAccess";
 import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { fillDeployRange } from "./deployTargets";
+import { mainAtOf } from "./deployTargetsState";
 import { afterFor, shapeView } from "./deploysView";
 import { DEPLOY_FAILED_EVENT, DEPLOY_LIVE_EVENT } from "@codecast/shared/contracts";
 import {
@@ -71,6 +72,7 @@ export function deployRowOf(d: Doc<"deploys">): DeployRow {
     project_id: d.project_id ? String(d.project_id) : null,
     at: d.live_at ?? d.created_at,
     sha: d.sha ?? null,
+    cut_at: d.cut_at ?? null,
     repository: d.repository ?? null,
     surface: d.target,
     environment: null,
@@ -339,16 +341,31 @@ export async function lineDeployTargets(ctx: any, workspace: string): Promise<Se
   return new Set(projects.flatMap((p: any) => (p.line_profile?.deploy?.command ? [normalizeDeployTarget(p.line_profile.deploy.target) ?? "deploy"] : [])));
 }
 
-/** The fixes a deploy recorded from a marker carried, by the history's rule over the workspace's merges and live deploys. */
-export async function carriesForMarker(ctx: any, row: Doc<"deploys">, now: number): Promise<Doc<"deploys">["carries"]> {
+/**
+ * The fixes a deploy recorded from a marker carried, by the history's rule over the workspace's merges and live
+ * deploys: the deploy's code holds a merge when the merge reached main by its cut (cut_at). `cuts` stands in for
+ * cut_at stamps not written yet (a dry repair).
+ */
+export async function carriesForMarker(ctx: any, row: Doc<"deploys">, now: number, cuts?: ReadonlyMap<string, number>): Promise<Doc<"deploys">["carries"]> {
   // Line fixes go out on the target a line deploys to (its [line.deploy] target). A marker for any other target (a web
   // build, a release, a second app) carries none of them.
   if (!(await lineDeployTargets(ctx, row.workspace)).has(row.target)) return [];
   const merges = (await workspaceMerges(ctx, row.workspace, now)).filter((m) => mergeInScope(m, row.project_id ? String(row.project_id) : null));
   // (A marker's deploy names no project: it ships the code, so it carries every fix in the workspace.)
   if (!merges.length) return [];
-  const deploys = (await workspaceDeploys(ctx, row.workspace)).filter(isLiveDeploy).map(deployRowOf);
-  return carriedBy(deployRowOf(row), merges, deploys).map((c) => ({
+  const withCut = (d: Doc<"deploys">): DeployRow => ({ ...deployRowOf(d), cut_at: d.cut_at ?? cuts?.get(String(d._id)) ?? null });
+  const self = withCut(row);
+  if (self.cut_at == null && row.sha) self.cut_at = await mainAtOf(ctx, row.repository, row.sha);
+  // A merge near or after the cut is held by its commit's own place on main; a time a day or more before it needs no read.
+  if (self.cut_at != null) {
+    for (const m of merges) {
+      if (m.at < self.cut_at - DAY) continue;
+      const at = await mainAtOf(ctx, row.repository, m.sha);
+      if (at != null) m.main_at = at;
+    }
+  }
+  const deploys = (await workspaceDeploys(ctx, row.workspace)).filter(isLiveDeploy).map((d) => (String(d._id) === String(row._id) ? self : withCut(d)));
+  return carriedBy(self, merges, deploys).map((c) => ({
     task_id: c.task_id as Id<"tasks">,
     ...(runIdOf(c.run_id) ? { run_id: runIdOf(c.run_id) } : {}),
     ...(c.decision_id ? { decision_id: c.decision_id as Id<"session_decisions"> } : {}),

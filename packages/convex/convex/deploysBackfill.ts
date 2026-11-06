@@ -7,6 +7,7 @@ import { internalMutation, internalQuery } from "./functions";
 import { normalizeRepository } from "./lib/gitRefs";
 import { normalizeDeployTarget } from "@codecast/shared/contracts/deploys";
 import { carriesForMarker, recordDeployMarker, type DeployMarker } from "./deploys";
+import { fillDeployRange } from "./deployTargets";
 
 /**
  * Record every deploy marker already in external_events as a deploy object,
@@ -103,8 +104,12 @@ export const recarry = internalMutation({
       .take(PER_CALL);
     const now = Date.now();
     let changed = 0;
-    for (const d of rows) {
-      if (d.trigger !== "outside" || d.status !== "live") continue;
+    for (const row of rows) {
+      if (row.trigger !== "outside" || row.status !== "live") continue;
+      // Its sha's place on main first (cut_at), which the rule holds merges against; oldest first, so every earlier
+      // deploy is already placed when this one's carries are read.
+      if (row.cut_at == null) await fillDeployRange(ctx, row._id);
+      const d = (await ctx.db.get(row._id))!;
       // A marker's deploy names no project (it ships the code); one recorded before that rule lets go of its project.
       const wide = d.project_id ? { ...d, project_id: undefined } : d;
       const carries = await carriesForMarker(ctx, wide, now);
