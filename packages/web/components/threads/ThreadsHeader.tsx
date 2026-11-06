@@ -2,17 +2,25 @@ import { CheckCheck, MessagesSquare } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { summaryCount } from "../../lib/threadCards";
 
-// The page head: title, the count for the view on screen (unread first, else
-// the total), and Mark all read scoped to that view. Same chrome as the chat
+// The page head: title, the count for the view on screen (the default view
+// counts what waits on you, a kind's view every unread thread; else the
+// total), and Mark all read scoped to that view. Same chrome as the chat
 // page's head (ch-head) so the two pages sit in the titlebar the same way.
 
 export function ThreadsHeader({
   unread,
+  forYou,
+  anyUnread,
   total,
   onMarkAllRead,
 }: {
-  /** Unread cards in the view on screen (sessions never count). */
+  /** The view's count (sessions never count): waiting on you in the default
+   *  view, every unread card in a kind's view. */
   unread: number;
+  /** The count is the default view's: threads waiting on you. */
+  forYou: boolean;
+  /** Any card in the view has unread, counted or not: Mark all read shows. */
+  anyUnread: boolean;
   /** Cards in the view on screen. */
   total: number;
   onMarkAllRead: () => void;
@@ -28,8 +36,8 @@ export function ThreadsHeader({
       </span>
       <span className="ch-head-topic">
         {unread > 0 ? (
-          `${summaryCount(unread, "thread")} with new replies`
-        ) : total > 0 ? (
+          `${summaryCount(unread, "thread")} ${forYou ? "waiting on you" : "with new replies"}`
+        ) : total > 0 && !anyUnread ? (
           // Every thread in the view is read: say so, quietly, where the
           // unread count would have been.
           <span className="th-head-done">
@@ -38,7 +46,7 @@ export function ThreadsHeader({
           </span>
         ) : ""}
       </span>
-      {unread > 0 && (
+      {anyUnread && (
         <button type="button" className="th-markall" onClick={onMarkAllRead} title="Mark every thread in this view read">
           <CheckCheck className="w-3 h-3" />
           Mark all read

@@ -295,6 +295,7 @@ import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest, type PermissionDecision } from "./permissionHandler.js";
 import {
   PermissionHookWaiters,
+  glanceCommand,
   parsePermissionHookInput,
   PERMISSION_HOOK_PATH,
   PERMISSION_LAUNCH_TOKEN_HEADER,
@@ -12176,7 +12177,7 @@ async function processSessionFilePass(
         sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
 
         const permArgPreview = truncateForNotification(
-          `${permissionPrompt.tool_name}: ${permissionPrompt.arguments_preview || ""}`, 150
+          `${permissionPrompt.tool_name}: ${glanceCommand(permissionPrompt.arguments_preview || "")}`, 150
         );
         syncService.createSessionNotification({
           conversation_id: conversationId,
@@ -20319,7 +20320,7 @@ function startCodexPermissionPoller(sessionId: string, tmuxSession: string, conv
       sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
 
       const preview = truncateForNotification(
-        `${prompt.command || prompt.reason}`, 200
+        glanceCommand(prompt.command || prompt.reason), 200
       );
       syncService.createSessionNotification({
         conversation_id: conversationId,
@@ -30548,14 +30549,14 @@ async function main(): Promise<void> {
   function openPermissionRecord(
     convId: string,
     sessionId: string,
-    prompt: { tool_name: string; arguments_preview: string; suggestions?: unknown[] },
+    prompt: { tool_name: string; arguments_preview: string; glance?: string; suggestions?: unknown[] },
   ): { id: Promise<string | null>; decision: Promise<PermissionDecision | null> } {
     permissionRecordPending.add(sessionId);
     syncService.createSessionNotification({
       conversation_id: convId,
       type: "permission_request",
       title: "codecast - Permission needed",
-      message: truncateForNotification(`${prompt.tool_name}: ${prompt.arguments_preview}`, 150),
+      message: truncateForNotification(`${prompt.tool_name}: ${prompt.glance ?? glanceCommand(prompt.arguments_preview)}`, 150),
     }).catch(() => {});
     let setId!: (id: string | null) => void;
     const id = new Promise<string | null>((r) => { setId = r; });
@@ -30922,7 +30923,7 @@ async function main(): Promise<void> {
     // hook holds that one (a second prompt in parallel gets its own card).
     const opened = answerable && permissionRecordPending.has(sessionId) ? permissionRecordIds.get(sessionId) : undefined;
     const record = answerable && !permissionRecordPending.has(sessionId)
-      ? openPermissionRecord(convId, sessionId, { tool_name: toolName, arguments_preview: preview, suggestions: input.suggestions })
+      ? openPermissionRecord(convId, sessionId, { tool_name: toolName, arguments_preview: preview, glance: input.glance, suggestions: input.suggestions })
       : null;
     if (record) permissionJustResolved.add(sessionId);
     hookStatusGate.deliver(sessionId, normalizeHookStatus({
