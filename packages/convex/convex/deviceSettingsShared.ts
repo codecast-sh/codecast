@@ -58,6 +58,7 @@ export const cloudAgentBlocksValidator = v.array(v.object({
   reason: v.optional(v.string()),
   resets_at: v.optional(v.number()),
   sends_only: v.optional(v.boolean()),
+  cli_signed_out: v.optional(v.boolean()),
 }));
 
 export const modelInventoryValidator = v.object({

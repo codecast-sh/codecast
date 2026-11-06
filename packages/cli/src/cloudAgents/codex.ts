@@ -682,6 +682,11 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
     this.login = {
       whoami: (api) => this.whoami(api),
       localAccount: () => decodeCodexAuth(this.readAuth()).email,
+      // An API key in auth.json or the environment still runs Codex here, though Codex Cloud refuses it.
+      cliSignedOut: () => {
+        const auth = decodeCodexAuth(this.readAuth());
+        return !auth.usable && !auth.api_key && !process.env.CODEX_API_KEY && !process.env.OPENAI_API_KEY;
+      },
       start: (opts) => this.startLogin(opts?.deviceCode === true),
     };
   }

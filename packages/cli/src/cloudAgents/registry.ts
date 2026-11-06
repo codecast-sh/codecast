@@ -384,7 +384,7 @@ export class CloudAgentRegistry {
   setupBlocks(): CloudAgentSetupBlock[] {
     return this.runtimes.flatMap(({ adapter, watcher }) => {
       const problem = watcher?.setupProblem;
-      return problem ? [{ provider: adapter.spec.id, kind: problem.kind, ...(problem.reason ? { reason: problem.reason } : {}), ...(problem.resetsAt ? { resets_at: problem.resetsAt } : {}), ...(watcher?.holdsOnlySends ? { sends_only: true } : {}) }] : [];
+      return problem ? [{ provider: adapter.spec.id, kind: problem.kind, ...(problem.reason ? { reason: problem.reason } : {}), ...(problem.resetsAt ? { resets_at: problem.resetsAt } : {}), ...(watcher?.holdsOnlySends ? { sends_only: true } : {}), ...(adapter.login?.cliSignedOut?.() ? { cli_signed_out: true } : {}) }] : [];
     });
   }
 

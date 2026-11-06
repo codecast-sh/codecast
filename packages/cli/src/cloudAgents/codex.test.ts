@@ -354,6 +354,25 @@ describe("Codex Cloud sign-in (read only, never refreshed)", () => {
     expect(cloudAgentCardOf(CLOUD_AGENT_PROVIDERS.codex, undefined, apiKey.message)?.kind).toBe("credential");
   });
 
+  test("the CLI reads as signed out only with no credential at all: an API key still runs Codex here", () => {
+    const saved = { codex: process.env.CODEX_API_KEY, openai: process.env.OPENAI_API_KEY };
+    delete process.env.CODEX_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      expect(adapter(null).login.cliSignedOut!()).toBe(true);
+      expect(adapter(JSON.stringify({ tokens: null })).login.cliSignedOut!()).toBe(true);
+      expect(adapter(JSON.stringify({ OPENAI_API_KEY: "sk-test", tokens: null })).login.cliSignedOut!()).toBe(false);
+      expect(adapter(VALID).login.cliSignedOut!()).toBe(false);
+      process.env.CODEX_API_KEY = "sk-env";
+      expect(adapter(null).login.cliSignedOut!()).toBe(false);
+    } finally {
+      for (const [k, val] of [["CODEX_API_KEY", saved.codex], ["OPENAI_API_KEY", saved.openai]] as const) {
+        if (val === undefined) delete process.env[k];
+        else process.env[k] = val;
+      }
+    }
+  });
+
   test("check (the core's verdict): the account and plan Codex names; signed out, expired, refused and turned off each say so", async () => {
     const ok = wham({ "GET /usage": json({ email: "person@example.com", plan_type: "pro" }), "GET /tasks/list": json({ items: [] }) });
     expect(await checkCloudAgentLogin(adapter(VALID, ok.fetchImpl))).toEqual({ state: "signed_in", account: "person@example.com", plan: "Pro" });

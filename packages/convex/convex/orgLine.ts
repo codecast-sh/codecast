@@ -239,13 +239,17 @@ export type LineLoad = RunnerLoad & { pool: LinePool | null };
 /** Loads read once per pass and shared by every start in it, keyed by runner and folder. */
 export type LineLoads = Map<string, LineLoad>;
 
-/** The load a role's next run meets: its pool's slots when a machine of its runner, else of its team, offers its checkout; else its runner's own machine. */
-export async function lineLoadFor(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), roles?: any[]): Promise<LineLoad> {
+/**
+ * The load a role's next run meets: its pool's slots when a machine of its runner, else of its team, offers its
+ * checkout; else its runner's own machine. `needs`: the agents the run's flow starts (flowAgents), which every pool
+ * machine must be able to start.
+ */
+export async function lineLoadFor(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), roles?: any[], needs?: readonly string[]): Promise<LineLoad> {
   const seat = await seatOf(ctx, role);
-  const key = `${seat.runner}|${seat.project_path ?? ""}|${role.team_id ?? ""}`;
+  const key = `${seat.runner}|${seat.project_path ?? ""}|${role.team_id ?? ""}|${needs?.join(",") ?? ""}`;
   const known = loads.get(key);
   if (known) return known;
-  const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now, role.team_id ? String(role.team_id) : null);
+  const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now, role.team_id ? String(role.team_id) : null, needs);
   const load: LineLoad = pool
     ? { runner: seat.runner, working: poolWorking(pool), cap: poolCap(pool), pool }
     : { ...await runnerLoad(ctx, seat.runner, roles), pool: null };
@@ -268,8 +272,8 @@ export function claimSlot(load: LineLoad): RunPlace | undefined {
  */
 export type Admission = { runner: string; pooled: boolean } & ({ place?: RunPlace } | { waiting: string });
 
-export async function admitRoleRun(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map()): Promise<Admission> {
-  const load = await lineLoadFor(ctx, role, now, loads);
+export async function admitRoleRun(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), needs?: readonly string[]): Promise<Admission> {
+  const load = await lineLoadFor(ctx, role, now, loads, undefined, needs);
   const at = { runner: load.runner, pooled: !!load.pool };
   if (freeSlots(load) <= 0) return { ...at, waiting: `${load.working} run${load.working === 1 ? " is" : "s are"} working on @${role.handle}'s machine${load.pool ? "s" : ""}` };
   return { ...at, place: claimSlot(load) };
