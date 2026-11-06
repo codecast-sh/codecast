@@ -1784,6 +1784,10 @@ export type ClientUI = {
   // When the person last had a pull request open, by pull request id: what
   // the timeline draws its "since you last looked" line from.
   pr_last_seen?: Record<string, number>;
+  // When the person last left or entered each workspace ("personal" or a team
+  // id): the switcher's dot lights only for threads waiting on them that
+  // moved after it (useSwitchWorkspace stamps it).
+  workspace_seen_at?: Record<string, number>;
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
@@ -6708,7 +6712,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
     left?: { roomKey: string; at: number } | null;
   };
   setCallState: (patch: Partial<InboxStoreState["call"]>) => void;
-  teamUnreadCount: number | null;
   favorites: any[];
   bookmarks: any[];
 
@@ -7477,7 +7480,6 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
   // or to membership holds over pushes until the server agrees. teamMembers
   // adds presence quantization on top.
   teamMembers: { ...REGISTRY_SYNC_OPTS.teamMembers, normalize: quantizePresenceList },
-  teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list", normalize: (list: any, state: any) => reconcileFavoritesWithLocks(list ?? [], state) },
   // Run feeds overlay with different session budgets: a bare node keeps the
   // session another feed attached (lib/workflowRun carryNodeSessions).
@@ -14631,7 +14633,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   userSkills: undefined,
   teams: [],
   teamMembers: [],
-  teamUnreadCount: null,
   favorites: [],
   bookmarks: [],
 
