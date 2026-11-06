@@ -548,9 +548,9 @@ describe("unread state", () => {
   test("the rail counts what you have not read, and not your own lines", async () => {
     const ctx = context(BOB);
     const alice = as(ctx, ALICE);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "mine, already read" });
     await call(sendMessage, alice, { channel_id: CHANNEL, content: "one" });
     await call(sendMessage, alice, { channel_id: CHANNEL, content: "two @bob" });
-    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "mine, already read" });
     stampTimeline(ctx, 1_000);
 
     const rail = await railFor(ctx);
@@ -558,7 +558,7 @@ describe("unread state", () => {
     expect(rail.unread_mentions).toBe(1);
     expect(rail.unread_capped).toBe(false);
     expect(rail.joined).toBe(true);
-    expect(rail.last_message.preview).toBe("mine, already read");
+    expect(rail.last_message.preview).toBe("two @bob");
   });
 
   test("history imported from Slack is not unread, but a live line in the same room is", async () => {
@@ -579,12 +579,36 @@ describe("unread state", () => {
     expect(rail.unread_mentions).toBe(1);
   });
 
+  test("the viewer's own newest line reads everything before it, as every client counts", async () => {
+    const ctx = context(BOB);
+    const alice = as(ctx, ALICE);
+    await call(sendMessage, alice, { channel_id: CHANNEL, content: "before" });
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "my answer" });
+    await call(sendMessage, alice, { channel_id: CHANNEL, content: "after" });
+    stampTimeline(ctx, 1_000);
+
+    expect((await railFor(ctx)).unread).toBe(1);
+  });
+
+  test("a reply also sent to the channel ticks the channel; a plain reply does not", async () => {
+    const ctx = context(BOB);
+    const alice = as(ctx, ALICE);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "mine, so I have a read mark" });
+    const root = await call(sendMessage, alice, { channel_id: CHANNEL, content: "root" });
+    await call(sendMessage, alice, { channel_id: CHANNEL, content: "plain reply", thread_root_id: root.message_id });
+    const loud = await call(sendMessage, alice, { channel_id: CHANNEL, content: "loud reply", thread_root_id: root.message_id });
+    stampTimeline(ctx, 1_000);
+    messagesIn(ctx).find((m: any) => String(m._id) === String(loud.message_id)).broadcast = true;
+
+    expect((await railFor(ctx)).unread).toBe(2);
+  });
+
   test("a tombstone is not unread, and reading again clears the count", async () => {
     const ctx = context(BOB);
     const alice = as(ctx, ALICE);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "joins the channel" });
     await call(sendMessage, alice, { channel_id: CHANNEL, content: "keep" });
     const gone = await call(sendMessage, alice, { channel_id: CHANNEL, content: "retracted" });
-    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "joins the channel" });
     await call(deleteMessage, alice, { message_id: gone.message_id });
     stampTimeline(ctx, 1_000);
 
