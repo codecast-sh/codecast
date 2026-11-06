@@ -15,14 +15,26 @@ function liveTokens(): PageThemeTokens {
   return tokens;
 }
 
+/** The alpha of a computed CSS colour, in any syntax the browser serializes:
+ *  `rgba(r, g, b, a)`, or `/ a` in `rgb()`, `color(srgb …)`, `oklab()` and the
+ *  rest (a `color-mix()` background computes to `color(srgb … / a)`). */
+export function colorAlpha(color: string): number {
+  if (!color || color === "transparent") return 0;
+  const args = /\(([^)]*)\)/.exec(color)?.[1] ?? "";
+  const raw = args.includes("/") ? args.split("/").pop() : args.split(",")[3];
+  if (raw === undefined) return 1;
+  const value = parseFloat(raw);
+  if (Number.isNaN(value)) return 1;
+  return raw.trim().endsWith("%") ? value / 100 : value;
+}
+
 /** The opaque colour painted behind `el`: its nearest ancestor with a solid
  *  background. A page that paints itself with --sol-bg then shows no edge
  *  wherever it sits (a message, a decision card, a tinted bubble). */
 function surfaceBehind(el: Element | null): string | null {
   for (let node = el?.parentElement; node; node = node.parentElement) {
     const bg = getComputedStyle(node).backgroundColor;
-    const alpha = /rgba?\(([^)]+)\)/.exec(bg)?.[1]?.split(/[\s,/]+/).filter(Boolean)[3];
-    if (bg && bg !== "transparent" && (alpha === undefined || Number(alpha) >= 0.95)) return bg;
+    if (colorAlpha(bg) >= 0.95) return bg;
   }
   return null;
 }

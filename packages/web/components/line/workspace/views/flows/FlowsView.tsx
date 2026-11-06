@@ -353,6 +353,8 @@ function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
   const pick = (slug: string) => select({ item: slug, run: null });
 
   return (
+    // The page's own width decides its layout (flows.css @container flv): narrow, the list becomes a row over the flow.
+    <div className="flv-host">
     <div className="flv" data-line-flows>
       <nav className="flv-list" aria-label="Flows">
         <button type="button" className="flv-back" onClick={() => select({ item: null, run: null })} data-flows-back>All flows</button>
@@ -416,6 +418,7 @@ function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
           )}
         </section>
       </article>
+    </div>
     </div>
   );
 }
