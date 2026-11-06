@@ -446,13 +446,14 @@ export type ChatSliceData = {
   /** The Threads inbox (threads.listMine): one row per thread the viewer is
    *  in, every kind. Keyed by threadRowId. */
   threadInbox: Record<string, ThreadInboxRow>;
-  /** The server's workspace-wide count of threads with unseen replies — the
-   *  badge for a client that has never opened the Threads page. */
+  /** The server's workspace-wide count of threads waiting on the viewer
+   *  (for_you rows) — the badge for a client that has never opened the
+   *  Threads page. */
   threadUnread: number;
   /** The same count for every OTHER workspace the viewer is in (threads.
-   *  unreadByWorkspace), only those with unread: the switcher's badges.
-   *  `team_id` null is personal. */
-  threadUnreadByWorkspace: Array<{ team_id: string | null; count: number }>;
+   *  unreadByWorkspace), only those with any, plus the newest one's activity
+   *  stamp: the switcher's badges. `team_id` null is personal. */
+  threadUnreadByWorkspace: Array<{ team_id: string | null; count: number; newest_at?: number }>;
   /** Published pages with their newest comments (threads.listMine payload),
    *  keyed by artifact id — the page kind's root_key. */
   pageThreads: Record<string, PageThreadRow>;
@@ -1062,7 +1063,8 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     markThreadRead: action(function (this: ChatDraft, kind: ThreadKind, rootKey: string) {
       const row = this.threadInbox[threadRowId(kind, rootKey)];
       if (!row) return;
-      if (row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+      if (row.for_you && row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+      row.for_you = false;
       row.last_read_at = Math.max(row.last_read_at, row.last_activity_at);
       row.unread = 0;
       row.unread_capped = false;
@@ -1076,7 +1078,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       const id = threadRowId(kind, rootKey);
       const row = this.threadInbox[id];
       if (!row) return;
-      if (row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+      if (row.for_you && row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
       delete this.threadInbox[id];
       excludeRow(this, "threadInbox", id);
     }),
@@ -1098,7 +1100,8 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         // Page rows follow the owner into every workspace (threadRowInWorkspace).
         if (row.kind !== "page" && String(row.team_id ?? "") !== String(teamId ?? "")) continue;
         if (scope && row.kind !== scope) continue;
-        if (onScreen && row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+        if (onScreen && row.for_you && row.unread > 0 && this.threadUnread > 0) this.threadUnread -= 1;
+        row.for_you = false;
         row.last_read_at = Math.max(row.last_read_at, row.last_activity_at);
         row.unread = 0;
         row.unread_capped = false;

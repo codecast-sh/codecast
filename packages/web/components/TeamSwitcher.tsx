@@ -1,6 +1,6 @@
 import { useRouter } from "next/navigation";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
-import { useSwitchWorkspace } from "../hooks/useSwitchWorkspace";
+import { useSwitchWorkspace, workspaceSeenKey } from "../hooks/useSwitchWorkspace";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import {
   DropdownMenu,
@@ -25,24 +25,26 @@ export const TeamSwitcherButton = forwardRef<
   ButtonHTMLAttributes<HTMLButtonElement> & {
     team?: { icon?: string; icon_color?: string } | null;
     label: string;
-    elsewhereUnread?: number;
+    /** Workspaces not on screen where something waiting on you arrived since
+     *  you last visited them: the dot. Visiting one clears it. */
+    elsewhereNew?: number;
     variant?: "bar" | "rail";
     isNarrow?: boolean;
   }
->(function TeamSwitcherButton({ team, label, elsewhereUnread = 0, variant = "bar", isNarrow = false, ...props }, ref) {
+>(function TeamSwitcherButton({ team, label, elsewhereNew = 0, variant = "bar", isNarrow = false, ...props }, ref) {
   const rail = variant === "rail";
   const crest = team ? (
     <TeamCrest icon={team.icon} color={team.icon_color} size="sm" className="w-5 h-5 rounded" />
   ) : (
     <span className="flex h-5 w-5 items-center justify-center"><User className="w-4 h-4 text-sol-base1" /></span>
   );
-  // Unread in a workspace NOT on screen: a dot, so it never reads as this
-  // workspace's own count. The menu names where.
-  const dot = elsewhereUnread > 0 && (
+  // New for you in a workspace NOT on screen: a dot, so it never reads as
+  // this workspace's own count. The menu names where.
+  const dot = elsewhereNew > 0 && (
     <span
       data-cc-team-elsewhere
-      title={`${elsewhereUnread} unread in other workspaces`}
-      className="absolute -right-0.5 -top-1 h-2 w-2 rounded-full bg-sol-orange ring-2 ring-sol-bg"
+      title={elsewhereNew === 1 ? "New for you in another workspace" : `New for you in ${elsewhereNew} other workspaces`}
+      className="absolute -right-0.5 -top-1 h-2 w-2 rounded-full bg-sol-red ring-2 ring-sol-bg"
     />
   );
   if (rail && isNarrow) {
@@ -98,7 +100,12 @@ export function TeamSwitcher({
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const [inviteOpen, setInviteOpen] = useState(false);
   const unreadElsewhere = useInboxStore((s) => s.threadUnreadByWorkspace);
-  const unreadFor = (teamId: string | null) => unreadElsewhere?.find((w) => w.team_id === teamId)?.count ?? 0;
+  const seenAt = useInboxStore((s) => s.clientState.ui?.workspace_seen_at);
+  const badgeFor = (teamId: string | null) => {
+    const w = unreadElsewhere?.find((x) => x.team_id === teamId);
+    if (!w) return { count: 0, isNew: false };
+    return { count: w.count, isNew: (w.newest_at ?? 0) > (seenAt?.[workspaceSeenKey(teamId)] ?? 0) };
+  };
   const markAllThreadsRead = useInboxStore((s) => s.markAllThreadsRead);
 
   if (!user) {
@@ -108,9 +115,9 @@ export function TeamSwitcher({
   const shownTeamId = value === undefined ? activeTeamId : (value ?? undefined);
   // The server already leaves the active workspace out; the filter covers the
   // moment after a switch, before its answer for the new one lands.
-  const elsewhereUnread = (unreadElsewhere ?? [])
-    .filter((w) => w.team_id !== (activeTeamId ? String(activeTeamId) : null))
-    .reduce((n, w) => n + w.count, 0);
+  const elsewhereNew = (unreadElsewhere ?? [])
+    .filter((w) => w.team_id !== (activeTeamId ? String(activeTeamId) : null) && badgeFor(w.team_id).isNew)
+    .length;
   const activeTeam = teams?.find(t => t?._id === shownTeamId);
   // Invite targets the ACTIVE team; only its admins see the item.
   // A just-created team carries an optimistic stub id until the server row
@@ -141,7 +148,7 @@ export function TeamSwitcher({
         <TeamSwitcherButton
           team={activeTeam}
           label={activeTeam?.name || (teamsOnly ? "Choose a team" : "Personal")}
-          elsewhereUnread={teamsOnly ? 0 : elsewhereUnread}
+          elsewhereNew={teamsOnly ? 0 : elsewhereNew}
           variant={variant}
           isNarrow={isNarrow}
         />
@@ -154,7 +161,7 @@ export function TeamSwitcher({
             icon={<span className="flex h-6 w-6 items-center justify-center rounded bg-sol-bg-alt"><User className="w-3.5 h-3.5 text-sol-base1" /></span>}
             name="Personal"
             detail="Just you"
-            unread={shownTeamId ? unreadFor(null) : 0}
+            badge={shownTeamId ? badgeFor(null) : NO_BADGE}
             onClear={() => markAllThreadsRead(null, "all")}
             onSelect={(openThreads) => handleTeamChange(null, openThreads)}
           />
@@ -169,7 +176,7 @@ export function TeamSwitcher({
               icon={<TeamCrest icon={team.icon} color={team.icon_color} size="sm" className="w-6 h-6 rounded" />}
               name={team.name}
               detail={members ? `${members} ${members === 1 ? "member" : "members"}` : ""}
-              unread={shownTeamId === team._id ? 0 : unreadFor(String(team._id))}
+              badge={shownTeamId === team._id ? NO_BADGE : badgeFor(String(team._id))}
               onClear={() => markAllThreadsRead(String(team._id), "all")}
               onSelect={(openThreads) => handleTeamChange(team._id, openThreads)}
             />
@@ -211,18 +218,22 @@ export function TeamSwitcher({
   );
 }
 
-/** One workspace in the picker: its mark, name, who is in it, and how many of
- *  your threads in it have unseen replies. */
-function WorkspaceRow({ selected, icon, name, detail, unread, onClear, onSelect }: {
+const NO_BADGE = { count: 0, isNew: false };
+
+/** One workspace in the picker: its mark, name, who is in it, and how many
+ *  threads in it wait on you: red when some arrived since your last visit,
+ *  muted once you have been there since. */
+function WorkspaceRow({ selected, icon, name, detail, badge, onClear, onSelect }: {
   selected: boolean;
   icon: ReactNode;
   name: string;
   detail: string;
-  unread: number;
+  badge: { count: number; isNew: boolean };
   /** Marks that workspace's threads read without switching to it. */
   onClear: () => void;
   onSelect: (openThreads: boolean) => void;
 }) {
+  const unread = badge.count;
   return (
     <DropdownMenuItem
       onClick={(e) => onSelect(!!(e.target as Element).closest("[data-cc-workspace-unread]"))}
@@ -249,8 +260,10 @@ function WorkspaceRow({ selected, icon, name, detail, unread, onClear, onSelect 
       {unread > 0 && (
         <span
           data-cc-workspace-unread
-          title={`Open ${unread} unread ${unread === 1 ? "thread" : "threads"}`}
-          className="min-w-[18px] rounded-full bg-sol-orange px-1.5 text-center text-[10px] font-semibold leading-[18px] text-sol-bg transition-shadow hover:ring-2 hover:ring-sol-orange/40"
+          title={`Open ${unread} ${unread === 1 ? "thread" : "threads"} waiting on you`}
+          className={`min-w-[18px] rounded-full px-1.5 text-center text-[10px] font-semibold leading-[18px] transition-shadow hover:ring-2 ${badge.isNew
+            ? "bg-sol-red text-sol-bg hover:ring-sol-red/40"
+            : "bg-sol-bg-alt text-sol-text-muted hover:ring-sol-border"}`}
         >
           {unread > 99 ? "99+" : unread}
         </span>
