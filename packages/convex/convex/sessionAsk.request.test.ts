@@ -75,6 +75,7 @@ async function seedAsk(fx: (typeof askFixtures)[number]) {
     "./syncOutbox.ts": () => import("./syncOutbox"),
     "./sessionAsk.ts": () => import("./sessionAsk"),
     "./ipRateLimit.ts": () => import("./ipRateLimit"),
+    "./vendorCoverage.ts": () => import("./vendorCoverage"),
   });
   const conversation_id = await t.run(async (ctx) => {
     const user_id = await ctx.db.insert("users", { name: "Fixture" } as any);

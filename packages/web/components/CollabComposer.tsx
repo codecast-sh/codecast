@@ -20,6 +20,7 @@ import { KeyCap } from "./KeyCap";
 import { isMac } from "../shortcuts";
 import { useJointComposer } from "../hooks/useJointComposer";
 import { armJointSend, composeJointTurn } from "../lib/jointSend";
+import { parseSideQuestion } from "../lib/builtinCommands";
 import type { JointCandidate } from "../lib/jointSend";
 import { TypingIndicator } from "./chat/TypingIndicator";
 import { rosterIdentity } from "../hooks/useTeamRoster";
@@ -181,7 +182,9 @@ export const OwnerComposerPresence = memo(function OwnerComposerPresence({
   /** Replace the owner's composer text (a claim took words out of it). */
   onPopulate?: (text: string) => void;
 }) {
-  const draft = useInboxStore((s) => s.drafts[conversationId]?.draft_message ?? "") as string;
+  const stored = useInboxStore((s) => s.drafts[conversationId]?.draft_message ?? "") as string;
+  // A side question being typed (`/btw`) is the asker's own: the strip never shows it to the others.
+  const draft = parseSideQuestion(stored) === null ? stored : "";
   const me = useInboxStore((s) => personName(s.currentUser));
   const present = useComposerPresence(conversationId, draft, { enabled: true, forceBroadcast: false });
   const shared = useSharedDraftStatus(conversationId);

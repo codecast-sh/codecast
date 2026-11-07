@@ -95,6 +95,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   commentOnDecision: SEND,
   dropDecisionComment: LOCAL_ECHO,
   askDecisionSession: SEND,
+  askSideQuestion: never("send: the question goes to the model at once; its answer is private to the asker"),
+  dropSideAnswer: LOCAL_ECHO,
   deleteDecisionComment: DELETE,
   sendLineChat: SEND,
   dropLineChatSend: LOCAL_ECHO,
