@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Churn</title></head>
+<body>
+<h1>Churn</h1>
+<p id="phase">churning</p>
+<div id="feed"></div>
+<script>
+  // Heavy DOM mutation for the first ?ms= milliseconds (default 400), then a
+  // stable page with a Ready button. A snapshot that settles sees the button.
+  const ms = Number(new URLSearchParams(location.search).get("ms")) || 400;
+  const feed = document.getElementById("feed");
+  const start = performance.now();
+  let n = 0;
+  const tick = () => {
+    if (performance.now() - start >= ms) {
+      feed.replaceChildren();
+      document.getElementById("phase").textContent = "settled";
+      const b = document.createElement("button");
+      b.id = "ready"; b.textContent = "Ready";
+      document.body.appendChild(b);
+      return;
+    }
+    for (let i = 0; i < 20; i++) {
+      const row = document.createElement("div");
+      row.textContent = "row " + (n++);
+      feed.appendChild(row);
+      if (feed.children.length > 60) feed.firstChild.remove();
+    }
+    setTimeout(tick, 5);
+  };
+  tick();
+</script>
+</body></html>

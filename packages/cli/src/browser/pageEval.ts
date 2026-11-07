@@ -20,7 +20,7 @@
  * a restart would close every other session's tabs.
  */
 
-import { CdpConnection, CdpError, CdpTimeout, type CdpClient } from "./cdp.js";
+import { browserSocketUrl, CdpConnection, CdpError, CdpTimeout, type CdpClient } from "./cdp.js";
 import { readState } from "./instance.js";
 import { readBoundTarget } from "./pinnedTab.js";
 import { engineTabs, type EngineOptions } from "./engine.js";
@@ -33,7 +33,7 @@ export type PageCtx = EngineOptions & { session: string };
 
 /** This session's tab and a browser socket, or a human-readable refusal. */
 export async function connectToTab(o: PageCtx): Promise<
-  { conn: CdpConnection; sessionId: string; url: string } | { error: string; hint?: string }
+  { conn: CdpConnection; sessionId: string; url: string; targetId: string; browserUrl: string } | { error: string; hint?: string }
 > {
   // A real session carries the bridge's browser socket (engineBrowserFor);
   // the managed clone is found through its state file.
@@ -53,17 +53,14 @@ export async function connectToTab(o: PageCtx): Promise<
   if (!tab?.targetId) {
     return { error: "this session has no tab", hint: "cast browser open <url> first" };
   }
-  const conn = o.cdp
-    ? await CdpConnection.connect(o.cdp, 8000)
-    : state!.wsUrl
-      ? await CdpConnection.connect(state!.wsUrl, 8000)
-      : await CdpConnection.fromPort(state!.port, 8000);
+  const browserUrl = o.cdp ?? state!.wsUrl ?? (await browserSocketUrl(state!.port, 8000));
+  const conn = await CdpConnection.connect(browserUrl, 8000);
   try {
     const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", {
       targetId: tab.targetId,
       flatten: true,
     });
-    return { conn, sessionId, url: tab.url ?? "" };
+    return { conn, sessionId, url: tab.url ?? "", targetId: tab.targetId, browserUrl };
   } catch (err) {
     conn.close();
     return { error: `could not attach to this session's tab: ${(err as Error).message}` };
