@@ -3,7 +3,6 @@
 // returns which message row each cited number is, so the client never guesses
 // how the web timeline lines up with `cast read` numbering.
 
-import { ConvexError } from "convex/values";
 import { citationSpans, spanLines } from "@codecast/convex/convex/lib/sessionAskCitations";
 
 export const ASK_CITE_HREF = "#ask-cite-";
@@ -27,26 +26,4 @@ export function linkAskCitations(answer: string, citations: ReadonlyArray<{ line
 /** The message id a citation link points at, or null for any other link. */
 export function askCiteTarget(href: string | undefined): string | null {
   return href?.startsWith(ASK_CITE_HREF) ? href.slice(ASK_CITE_HREF.length) || null : null;
-}
-
-/** What the reader sees when an ask fails: the server's coded refusals in the
- *  panel's own words, anything else as a retry. */
-export function askErrorMessage(error: unknown): string {
-  const data = error instanceof ConvexError ? (error.data as { code?: string; message?: string } | string) : undefined;
-  const code = typeof data === "object" ? data?.code : undefined;
-  const message = typeof data === "object" ? data?.message : typeof data === "string" ? data : undefined;
-  switch (code) {
-    case "RATE_LIMITED":
-      return message?.replace(/^Too many questions this hour; retry in/, "You have asked a lot this hour. Try again in") ?? "You have asked a lot this hour. Try again later.";
-    case "INVALID":
-      return message ?? "That question could not be asked.";
-    case "NOT_FOUND":
-      return "This session could not be found.";
-    case "FORBIDDEN":
-      return "You do not have access to read this session.";
-    case "UNAUTHENTICATED":
-      return "Sign in to ask about this session.";
-    default:
-      return "Could not answer just now. Try again in a moment.";
-  }
 }
