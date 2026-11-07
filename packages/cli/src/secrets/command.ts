@@ -140,7 +140,7 @@ async function writeWhere(deps: PublishDeps, team: string | undefined): Promise<
  * machine's daemon takes the Vault's current values into redaction, so one
  * stored or rotated a moment ago is already redacted where the output lands.
  */
-async function readSecrets(deps: PublishDeps, refs: string[], purpose: SecretReadPurpose, why?: string): Promise<ReadSecret[]> {
+export async function readSecrets(deps: PublishDeps, refs: string[], purpose: SecretReadPurpose, why?: string): Promise<ReadSecret[]> {
   const prefer = await preferredWorkspace(deps);
   const res = await apiPost(deps, "/cli/vault/read", { refs, purpose, ...(why ? { why } : {}), ...(prefer ? { prefer } : {}), ...conversationOf(deps) });
   if (isNeedsApproval(res)) exitForApproval(res, why);
@@ -198,7 +198,7 @@ function reportGaps(gaps: VaultGap[], cleanup?: () => void): void {
 }
 
 /** One /cli/vault/list per command, however many checks ask for it. */
-function metasOnce(deps: PublishDeps): () => Promise<SecretMeta[]> {
+export function metasOnce(deps: PublishDeps): () => Promise<SecretMeta[]> {
   let metas: Promise<SecretMeta[]> | undefined;
   return () => (metas ??= apiPost(deps, "/cli/vault/list", {}, { read: true }));
 }

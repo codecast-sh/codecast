@@ -13,7 +13,13 @@
  *   2. `auditLanding(...)` AFTER any step that can move the page — same call
  *      the built-in driver makes after `settle`. It records the origin and
  *      returns a warning when the page is somewhere the policy would not have
- *      allowed (an in-page click, a redirect). It never yanks the page back.
+ *      allowed (an in-page click, a redirect).
+ *
+ * In the human's own Chrome the bridge host enforces the same policy for
+ * every client, raw CDP included (bridge/host.ts): it refuses an off-list
+ * `Page.navigate` and sends a tab that lands off the list back to
+ * about:blank. Its cookie, storage and method guardrails live in
+ * bridge/guardrails.ts.
  *
  * Both take the current URL as a string, so an engine only has to be able to
  * say where its tab is — nothing about CDP leaks through this seam.
