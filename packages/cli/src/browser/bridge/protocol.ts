@@ -253,8 +253,10 @@ export type BridgeEventMsg =
   | { op: "event"; tabId: number; method: string; params: Record<string, unknown> }
   /** Chrome's tab list changed (any tab, driven or not). */
   | { op: "tab"; kind: "created" | "removed" | "updated"; tab: BridgeTab }
-  /** The debugger left a tab without us asking — the user hit Cancel on the banner. */
-  | { op: "detached"; tabId: number };
+  /** The debugger left a tab without us asking: the user hit Cancel on the banner,
+   *  or (`reason: "reclaimed"`) took the tab back from the toolbar, after which no
+   *  session keeps a grant on it. */
+  | { op: "detached"; tabId: number; reason?: "reclaimed" };
 
 export interface BridgeTab {
   tabId: number;
@@ -267,7 +269,35 @@ export interface BridgeTab {
   owned?: boolean;
   /** The tab's group with its plain title (never the animated one), absent when ungrouped. */
   group?: BridgeGroup;
+  /** The human lent this tab of theirs to agents from the toolbar; it is `owned` while lent. */
+  lent?: boolean;
+  /** An agent tab whose page opened this one (window.open, target=_blank): every session holding the opener may see it. */
+  opener?: number;
+  /** A step an agent handed the human on this tab (`cast browser handoff`) and where it stands. */
+  handoff?: BridgeHandoff;
+  /** Why no idle cleanup or reaper may close this tab, when one applies. */
+  keep?: BridgeKeepReason;
 }
+
+export type BridgeHandoffState = "waiting" | "done" | "expired" | "cancelled";
+export interface BridgeHandoff {
+  id: string;
+  state: BridgeHandoffState;
+}
+
+/**
+ * Tabs the extension's idle cleanup and the CLI's reaper (engineReap.ts) both
+ * leave open: a handoff waiting on the human, a tab the human lent, pinned,
+ * or dragged out of the Cast group, and a tab playing sound.
+ */
+export type BridgeKeepReason = "handoff" | "lent" | "pinned" | "claimed" | "audible";
+
+/**
+ * Methods the extension answers itself on a tab's CDP session, never passed
+ * to Chrome. `Cast.handoff {text, id?, timeoutMs?, raise?}` shows the handoff
+ * card and answers `{id, state, shown, expires}`; `{cancel: true}` takes it down.
+ */
+export const CAST_HANDOFF_METHOD = "Cast.handoff";
 
 // ---------------------------------------------------------------------------
 // Tab id ⇄ CDP target id
