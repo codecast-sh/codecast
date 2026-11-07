@@ -19,7 +19,7 @@ import { Button } from "../ui/button";
 import { useFileDrop } from "../../hooks/useFileDrop";
 import { useCreate } from "../../hooks/useCreateSecret";
 import { ValueFields } from "./ValueForm";
-import { EMPTY_DRAFT, checkedPayload, loginEnv, nameIssue, namesIn, readEnvText, slugify, splitList, suggestName, type ValueDraft } from "./vaultModel";
+import { EMPTY_DRAFT, checkedPayload, loginEnv, nameIssue, namesIn, readEnvText, readTypedName, slugify, splitList, suggestName, type ValueDraft } from "./vaultModel";
 
 /** One secret of a kind, or Import with the .env text so far ("" for an empty paste box). */
 export type AddMode = { kind: SecretKind } | { import: string };
@@ -152,10 +152,12 @@ function SinglePane({
   const sites = splitList(sitesText);
   const typedEnv = kind === "login" ? [userVar.trim() || passVar.trim()].filter(Boolean) : splitList(envText);
   // The name follows the env var, site or pasted key until the person types one.
-  const name = typedName ?? (suggestName({ kind, env: typedEnv[0], site: sites[0], value: kind === "key" ? draft.value : undefined }) || slugify(issuer));
+  const typed = typedName === null ? null : readTypedName(typedName);
+  const name = typed?.name ?? (suggestName({ kind, env: typedEnv[0], site: sites[0], value: kind === "key" ? draft.value : undefined }) || slugify(issuer));
   // A login's empty slots show the pair its name implies, which is what it injects.
   const [userDefault, passDefault] = envFor({ name: name || "github", kind: "login" }).map((b) => b.var);
-  const env = kind === "login" ? loginEnv(userVar, passVar, passDefault!) : typedEnv;
+  // A name typed as an env var (MERCURY_API_KEY) is the env var too, unless one is typed in its own field.
+  const env = kind === "login" ? loginEnv(userVar, passVar, passDefault!) : typedEnv.length || !typed?.env ? typedEnv : [typed.env];
   const workspace = where === "team" ? scope.team?.key ?? null : scope.personal;
   const taken = useMemo(() => namesIn(rows, workspace), [rows, workspace]);
   const nameProblem = nameIssue(name, taken);
@@ -270,7 +272,7 @@ function SinglePane({
               <input
                 value={envText}
                 onChange={(e) => setEnvText(e.target.value)}
-                placeholder={kind === "file" ? "GOOGLE_APPLICATION_CREDENTIALS (optional)" : "STRIPE_SECRET_KEY (optional)"}
+                placeholder={typed?.env ?? (kind === "file" ? "GOOGLE_APPLICATION_CREDENTIALS (optional)" : "STRIPE_SECRET_KEY (optional)")}
                 spellCheck={false}
                 className={FIELD_MONO}
               />
@@ -280,8 +282,8 @@ function SinglePane({
           <Row label="Name" align="input">
             <input
               ref={nameRef}
-              value={name}
-              onChange={(e) => setTypedName(e.target.value.toLowerCase())}
+              value={typedName ?? name}
+              onChange={(e) => setTypedName(e.target.value)}
               // A suggested name is selected whole, so typing replaces it rather than adding to it.
               onFocus={(e) => typedName === null && e.target.select()}
               placeholder={NAME_EXAMPLE[kind]}
@@ -293,6 +295,10 @@ function SinglePane({
             {showNameProblem ? (
               <div className="mt-0.5 text-[11.5px] text-sol-red" data-vault-name-state>
                 {nameProblem}
+              </div>
+            ) : typedName !== null && name && typedName.trim() !== name ? (
+              <div className="mt-0.5 font-mono text-[11.5px] text-sol-text-dim" data-vault-name-saved-as>
+                Saved as {name}
               </div>
             ) : null}
           </Row>
@@ -339,7 +345,8 @@ function ImportPane({ initialText, scope, where, setWhere, rows, onClose }: { in
   const taken = useMemo(() => namesIn(rows, workspace), [rows, workspace]);
   const entries = read.entries.map((e) => {
     const slug = slugify(e.key);
-    return { ...e, name: edits[e.key]?.name ?? slug, on: edits[e.key]?.on ?? (!taken.has(slug) && !tooShort(e.value)) };
+    const typed = edits[e.key]?.name;
+    return { ...e, typed: typed ?? slug, name: typed === undefined ? slug : readTypedName(typed).name, on: edits[e.key]?.on ?? (!taken.has(slug) && !tooShort(e.value)) };
   });
   const picked = entries.filter((e) => e.on);
   const issueOf = (e: (typeof entries)[number], i: number) => (tooShort(e.value) ? "Too short" : null) ?? nameIssue(e.name, taken) ?? (entries.findIndex((x) => x.on && x.name === e.name) !== i ? "Twice in this list" : null);
@@ -423,8 +430,8 @@ function ImportPane({ initialText, scope, where, setWhere, rows, onClose }: { in
                   />
                   <span className={`w-[36%] min-w-0 truncate font-mono text-[12px] ${e.on ? "text-sol-text" : "text-sol-text-dim line-through"}`} title={e.key}>{e.key}</span>
                   <input
-                    value={e.name}
-                    onChange={(ev) => edit(e.key, { name: ev.target.value.toLowerCase() })}
+                    value={e.typed}
+                    onChange={(ev) => edit(e.key, { name: ev.target.value })}
                     disabled={!e.on}
                     spellCheck={false}
                     className={`min-w-0 flex-1 rounded border bg-transparent px-1.5 py-0.5 font-mono text-[12px] text-sol-text-muted outline-none focus:border-sol-yellow disabled:opacity-40 ${issue ? "border-sol-red/70" : "border-transparent hover:border-sol-border"}`}
