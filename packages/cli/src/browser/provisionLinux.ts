@@ -60,8 +60,10 @@ const MEDIAMTX_VERSION = "v1.20.1";
  * to enable the bridge on a host provisioned before it. Version 3 subtracts
  * each reached folder's connection the same way (cloud/reach.ts) and comes
  * with sshfs installed; `cast hosts reach` refuses a host below it.
+ * Version 4 subtracts the laptop Chrome link (cloud/browserLink.ts); the
+ * laptop daemon holds no link to a host below it.
  */
-export const IDLE_WATCHDOG_VERSION = 3;
+export const IDLE_WATCHDOG_VERSION = 4;
 
 /**
  * Everything that can be done with root and apt, in one shot. Idempotent:
@@ -221,6 +223,8 @@ sudo tee /usr/local/bin/cast-idle-check >/dev/null <<'IDLE'
 #     and must not be counted, or a real session could read as idle. A
 #     reached laptop folder (cast hosts reach) is the same: one connection
 #     per folder, whose sshfs runs as "cast-reach :<path> <mountpoint> ...".
+#     So is the laptop's Chrome link (one sleeper "cast-browser-link"),
+#     which only lets this box's sessions reach the laptop's browser.
 #   - the encoder running (someone is literally watching the screen)
 #   - the codecast daemon's activity stamp is fresh: it touches
 #     ~/.codecast/host-active when a message is delivered, a transcript grows
@@ -241,7 +245,9 @@ bridges=$(pgrep -c -f '^cast-agent-bridge$' 2>/dev/null)
 [ -n "$bridges" ] || bridges=0
 reaches=$(pgrep -c -f '^cast-reach :' 2>/dev/null)
 [ -n "$reaches" ] || reaches=0
-[ $(( conns - bridges - reaches )) -gt 0 ] && active=1
+links=$(pgrep -c -f '^cast-browser-link$' 2>/dev/null)
+[ -n "$links" ] || links=0
+[ $(( conns - bridges - reaches - links )) -gt 0 ] && active=1
 pgrep -f 'x11grab' >/dev/null 2>&1 && active=1
 if ! timeout 15s python3 /usr/local/lib/codecast/idle-probe.py /home/ubuntu > /run/cast-idle-work.json; then
   active=1
