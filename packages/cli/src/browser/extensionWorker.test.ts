@@ -1,10 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { webcrypto } from 'node:crypto';
-
-const source = readFileSync(new URL('../../../browser-extension/background.js', import.meta.url), 'utf8');
-const statusSource = readFileSync(new URL('../../../browser-extension/status.js', import.meta.url), 'utf8');
+import { chromeEvent as event, chromeStub, loadWorker } from './extensionStub.testutil';
 
 function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; keeperAlreadyOpen?: boolean; noOffscreenApi?: boolean; slowOverlay?: boolean; appWindowFocused?: boolean; groupFails?: boolean } = {}) {
   const grouped: unknown[] = [];
@@ -14,27 +10,17 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
   const keeperDocs: object[] = [];
   let keeperExists = !!opts.keeperAlreadyOpen;
   let selfHeld = !!opts.selfAlreadyAttached;
-  const event = () => {
-    const listeners: Array<(tab: object) => void> = [];
-    return { addListener(fn: (tab: object) => void) { listeners.push(fn); }, emit(tab: object) { listeners.forEach((fn) => fn(tab)); } };
-  };
   const tab = { id: 7, windowId: 1, groupId: -1, url: 'https://example.com', active: false };
-  const storage = (data: object) => ({ get: async () => data, set: async () => {} });
   let ownershipReads = 0;
-  const chrome = {
-    storage: { local: storage({}), session: {
-      ...storage({}),
+  const chrome = chromeStub({
+    storage: { session: {
       get: async () => ++ownershipReads === 1 && opts.firstOwnershipReadStalls
         ? new Promise(() => {}) : { ownedTabs: opts.ownedTabs ?? [] },
     } },
-    action: { setTitle: async () => {}, setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
-    ...(opts.noOffscreenApi ? {} : { offscreen: {
-      Reason: { WORKERS: 'WORKERS' },
+    offscreen: {
       hasDocument: async () => keeperExists,
       createDocument: async (p: object) => { keeperDocs.push(p); keeperExists = true; },
-    } }),
-    runtime: { onStartup: event(), onInstalled: event(), onMessage: event(), getManifest: () => ({ version: '0.1.0' }), getURL: (path: string) => `chrome-extension://ext/${path}` },
-    alarms: { create: async () => {}, onAlarm: event() },
+    },
     tabs: {
       get: async () => ({ ...tab }),
       query: async (q: { groupId?: number } = {}) => {
@@ -100,13 +86,9 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
       },
       onEvent: event(), onDetach: event(),
     },
-  };
-  const context = vm.createContext({ chrome, crypto: webcrypto, TextEncoder, navigator: { userAgent: 'test' },
-    importScripts() {}, setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms / 250), clearTimeout,
-    setInterval: () => 1, clearInterval() {},
   });
-  vm.runInContext(statusSource, context);
-  vm.runInContext(source, context);
+  if (opts.noOffscreenApi) delete chrome.offscreen;
+  const context = loadWorker({ chrome, globals: { setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms / 250), clearTimeout } });
   const selfSettled = () => vm.runInContext('selfSync', context);
   const dropSelf = () => { selfHeld = false; chrome.debugger.onDetach.emit({ targetId: 'sw-self' }); };
   const keeperSettled = () => vm.runInContext('keeperPending || Promise.resolve()', context);

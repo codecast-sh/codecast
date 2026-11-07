@@ -42,21 +42,22 @@ describe("BRIDGE_EXTENSION_ID", () => {
 });
 
 describe("bridgePairingUrl", () => {
-  test("carries token and port in the fragment of the options page", () => {
-    const url = new URL(bridgePairingUrl({ token: "ab".repeat(32), port: 41729 }));
+  test("carries a one-time code and the port in the fragment of the options page, never a token", () => {
+    const url = new URL(bridgePairingUrl({ code: "ABCD-EFGH", port: 41729 }));
     expect(url.protocol).toBe("chrome-extension:");
     expect(url.host).toBe(BRIDGE_EXTENSION_ID);
     expect(url.pathname).toBe("/options.html");
     expect(url.search).toBe("");
     const frag = new URLSearchParams(url.hash.slice(1));
-    expect(frag.get("token")).toBe("ab".repeat(32));
+    expect(frag.get("code")).toBe("ABCD-EFGH");
+    expect(frag.has("token")).toBe(false);
     expect(frag.get("port")).toBe("41729");
   });
 });
 
 describe("bridgePairingPage", () => {
   test("forwards to exactly the pairing URL, fragment included", () => {
-    const url = bridgePairingUrl({ token: "cd".repeat(32), port: 41729 });
+    const url = bridgePairingUrl({ code: "WXYZ-1234", port: 41729 });
     const page = bridgePairingPage(url);
     expect(page).toContain(`location.replace(${JSON.stringify(url)})`);
     expect(page).toContain(`href="${BRIDGE_STORE_URL}"`);
