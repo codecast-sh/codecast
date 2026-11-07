@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { agentTabInitScript } from "./engine.js";
+import { agentTabInitScript, agentTabInitSource } from "./engine.js";
+import { MUTATION_CLOCK_SOURCE } from "./snapshotSettle.js";
 import { AGENT_TAB_EVENT, AGENT_TAB_KEY, agentTabStampSource, recorderSource } from "./observe.js";
 
 // The stamp tells a codecast page that an agent drives the tab, so the
@@ -25,11 +26,17 @@ describe("agent-tab stamp", () => {
     expect(src.indexOf("window.__cast")).toBeGreaterThan(0);
   });
 
+  test("the engine init script stamps the tab first, then starts the snapshot's mutation clock", () => {
+    const src = agentTabInitSource();
+    expect(src.indexOf(agentTabStampSource())).toBe(0);
+    expect(src).toContain(MUTATION_CLOCK_SOURCE);
+  });
+
   test("the engine init script is written once and keeps a stable path across calls", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cast-engine-"));
     try {
       const first = agentTabInitScript(home);
-      expect(fs.readFileSync(first, "utf-8")).toBe(agentTabStampSource());
+      expect(fs.readFileSync(first, "utf-8")).toBe(agentTabInitSource());
       const before = fs.statSync(first).mtimeMs;
       // Unchanged source: no rewrite, same path — runEngine's flags must not vary.
       expect(agentTabInitScript(home)).toBe(first);
@@ -37,7 +44,7 @@ describe("agent-tab stamp", () => {
       // A stale file is brought up to date.
       fs.writeFileSync(first, "// old");
       expect(agentTabInitScript(home)).toBe(first);
-      expect(fs.readFileSync(first, "utf-8")).toBe(agentTabStampSource());
+      expect(fs.readFileSync(first, "utf-8")).toBe(agentTabInitSource());
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
