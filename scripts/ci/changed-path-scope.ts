@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Classifies the files a pull request touches into areas, then derives one
+// Classifies the files a pull request or a push to main touches into areas, then derives one
 // boolean per CI job from those areas. `.github/workflows/ci.yml` reads the
 // booleans from `code_paths` and gates each job on its own.
 //
@@ -13,6 +13,10 @@
 
 export const AREAS = [
   "cli",
+  // packages/evals, the eval home. Its own area rather than part of "cli":
+  // web tests read its token files, so folding it into "cli" would make every
+  // cli change run the web suite.
+  "evals",
   "web",
   "convex",
   "shared",
@@ -29,38 +33,48 @@ export const AREAS = [
 export type Area = (typeof AREAS)[number];
 
 // Which areas make each ci.yml job worth running. A job runs when any of its
-// areas changed. The mapping follows what the job actually executes: `lint`
-// only lints packages/web, `typecheck` filters to cli + web (with the sim
-// program) + convex + evals, and every package test reads @codecast/shared.
+// areas changed.
+//
+// For the package test jobs, the areas are what the job's test files reach:
+// every file they import, directly or through other files (convex imports
+// web's line helpers and cli's delivery admission, web imports cli's bench
+// walker and electron's window registry), and every package directory they
+// read off disk. scripts/ci/test-reach.ts computes that reach, and the workflow
+// contract test fails when a job reaches an area listed here for no job, so a
+// new cross-package import cannot quietly leave a job skipped. Tree-wide tests
+// (guards and ratchets) are outside that reach because the ungated
+// `test-guards` job runs them on every change.
+//
+// The other jobs follow what they execute: `lint` lints packages/web only,
+// `typecheck` filters to cli + web (with the sim program) + convex + evals +
+// playground, and `build` builds web, cli, the extensions and playground.
 export const JOB_AREAS: Record<string, Area[]> = {
-  build: ["cli", "web", "shared", "extension", "platform"],
+  // The web bundle pulls in convex and electron source the same way its tests
+  // do (see test-web).
+  build: ["cli", "web", "convex", "shared", "electron", "extension", "platform"],
   // The cli program's rootDir is the repo root and it imports the convex
-  // generated api, so a convex change can break the cli typecheck too.
-  typecheck: ["cli", "web", "convex", "shared", "platform"],
+  // generated api, so a convex change can break the cli typecheck too. The web
+  // program reaches electron's window registry.
+  typecheck: ["cli", "evals", "web", "convex", "shared", "electron", "platform"],
   lint: ["web"],
-  "test-convex": ["convex", "shared", "platform"],
-  "test-web": ["web", "shared", "platform"],
-  // "convex" because the eval home's unit tests run as a step of this job and
-  // import convex prompt builders and parsers directly (titleRequest,
-  // settleRequest, haikuRequest, anthropicBody and more), so a convex-only
-  // change can break them.
-  "test-cli": ["cli", "convex", "shared", "platform"],
+  "test-convex": ["convex", "web", "shared", "platform"],
+  "test-web": ["web", "convex", "electron", "shared", "platform"],
+  // Also runs the eval home's unit tests, which import convex prompt builders
+  // and read convex, cli and web files off disk. decisionKit.ts imports a
+  // README under docs/, and the bridge tests read the browser extension's
+  // manifest.
+  "test-cli": ["cli", "evals", "convex", "docs", "shared", "platform"],
   // The mirror's own job: its package tests, and the drift check. Every other
   // job lists "platform" too, because the mirror is a dependency of all of
   // them and is its own area, not part of "shared".
   "test-platform": ["platform"],
-  // Every area, because the shared suite reads more than shared: the max lines
-  // ratchet walks every package under packages/, the head of people prompt
-  // test reads its spec from docs/, and the doc references guard
-  // (packages/shared/ratchet/docRefs.guard.test.ts) checks every path the
-  // architecture docs and CLAUDE.md name against the whole tree, so a rename
-  // anywhere can turn it red. Gating it on less would let a change break it
-  // without CI running it.
-  "test-shared": [...AREAS],
-  // The guard tests walk the native bundle's import graph, which reaches into
-  // packages/web, packages/convex and packages/shared, and they borrow the
-  // graph walker from packages/cli/src/bench.
-  "test-mobile": ["mobile", "web", "convex", "shared", "cli", "platform"],
+  // The head of people prompt test reads its spec from docs/. The suite's
+  // tree-wide files (the doc references guard and the max lines ratchet) also
+  // run in test-guards on every change.
+  "test-shared": ["shared", "docs", "platform"],
+  // The mobile guards, which walk the native bundle's import graph with cli's
+  // bench walker, also run in test-guards on every change.
+  "test-mobile": ["mobile", "web", "convex", "electron", "shared", "platform"],
   // The shell requires @platform/desktop and nothing else in the repo.
   "test-electron": ["electron", "platform"],
 };
@@ -86,9 +100,10 @@ export function jobFlag(job: string): string {
 }
 
 const AREA_PREFIXES: Array<[Exclude<Area, "docs">, string[]]> = [
-  // packages/evals is the eval home (docs/architecture/evals-home.md). It
-  // imports cli source and its unit tests run as a step of test-cli.
-  ["cli", ["packages/cli/", "packages/evals/"]],
+  ["cli", ["packages/cli/"]],
+  // The eval home (docs/architecture/evals-home.md). Its unit tests run as a
+  // step of test-cli.
+  ["evals", ["packages/evals/"]],
   ["web", ["packages/web/"]],
   ["convex", ["packages/convex/"]],
   ["shared", ["packages/shared/"]],
@@ -166,7 +181,7 @@ export function classifyChangedPaths(files: string[]): Scope {
   const forcedBy: string[] = [];
 
   // Why fail closed: an empty diff is far more likely a broken checkout, a
-  // missing merge base or a push event than a genuine no-op, and a wrong false
+  // missing merge base or a push with no usable `before` than a genuine no-op, and a wrong false
   // silently drops a gate the branch protection thinks it ran.
   if (paths.length === 0) forcedBy.push("empty diff");
 
