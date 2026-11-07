@@ -23,14 +23,15 @@ function harnessCase(extra: string[] = []): Case<{}> {
   };
 }
 
+// Case names hold no comma: strobe's --filter splits its list on commas.
 const WORKLOAD: Record<string, string> = {
   // Two conversations of 200 messages, both cached and visited, over 2,000
   // sessions: switch to the other until its last answer is on screen.
   "switch conversation (warm)": "switch",
   // The inbox's session list mounting over 5,000 cached sessions.
-  "load the inbox (5,000 sessions)": "inbox-load",
+  "load an inbox of 5000 sessions": "inbox-load",
   // One drawn session's heartbeat through the liveness overlay.
-  "heartbeat in the inbox (5,000 sessions)": "inbox-heartbeat",
+  "heartbeat in an inbox of 5000 sessions": "inbox-heartbeat",
   // A 1,560-line diff shown whole, highlighted, in a warm app.
   "open a long diff": "diff",
 };
@@ -46,8 +47,8 @@ export default bench({
   },
   cases: {
     "switch conversation (warm)": harnessCase(),
-    "load the inbox (5,000 sessions)": harnessCase(["cards"]),
-    "heartbeat in the inbox (5,000 sessions)": harnessCase(),
+    "load an inbox of 5000 sessions": harnessCase(["cards"]),
+    "heartbeat in an inbox of 5000 sessions": harnessCase(),
     "open a long diff": harnessCase(["diffLines"]),
   },
 });
