@@ -1,0 +1,70 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Churn</title></head>
+<body>
+<h1>Churn</h1>
+<p id="phase">idle</p>
+<div id="feed"></div>
+<script>
+  // window.churn(ms): heavy DOM mutation (20 rows added and removed every
+  // 5 ms) for ms milliseconds, then a stable page with a Ready button. A
+  // snapshot taken mid-churn that settles shows "settled" and Ready, never
+  // "churning". ?ms=N starts one on load.
+  const feed = document.getElementById("feed");
+  const phase = document.getElementById("phase");
+  window.churn = (ms) => {
+    document.getElementById("ready")?.remove();
+    phase.textContent = "churning";
+    const start = performance.now();
+    let n = 0;
+    const tick = () => {
+      if (performance.now() - start >= ms) {
+        feed.replaceChildren();
+        phase.textContent = "settled";
+        const b = document.createElement("button");
+        b.id = "ready"; b.textContent = "Ready";
+        document.body.appendChild(b);
+        return;
+      }
+      for (let i = 0; i < 20; i++) {
+        const row = document.createElement("div");
+        row.textContent = "row " + (n++);
+        feed.appendChild(row);
+        if (feed.children.length > 60) feed.firstChild.remove();
+      }
+      setTimeout(tick, 5);
+    };
+    tick();
+    return "started";
+  };
+  // window.cycle(on, off): churn for on ms, then off ms quiet (phase
+  // "quiet"), forever. A raw read lands mid-churn most of the time; a
+  // settled snapshot waits for a quiet gap and reads "quiet".
+  window.cycle = (on, off) => {
+    const burst = () => {
+      phase.textContent = "churning";
+      const start = performance.now();
+      let n = 0;
+      const tick = () => {
+        if (performance.now() - start >= on) {
+          feed.replaceChildren();
+          phase.textContent = "quiet";
+          setTimeout(burst, off);
+          return;
+        }
+        for (let i = 0; i < 20; i++) {
+          const row = document.createElement("div");
+          row.textContent = "row " + (n++);
+          feed.appendChild(row);
+          if (feed.children.length > 60) feed.firstChild.remove();
+        }
+        setTimeout(tick, 5);
+      };
+      tick();
+    };
+    burst();
+    return "cycling";
+  };
+  const ms = Number(new URLSearchParams(location.search).get("ms"));
+  if (ms) window.churn(ms);
+</script>
+</body></html>
