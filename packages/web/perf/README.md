@@ -11,16 +11,16 @@ Both drive `harness.tsx`: the real components mounted in jsdom over a synthetic 
 | --- | --- | --- |
 | switch conversation (warm) | Two conversations of 200 cached messages, both visited, over 2,000 sessions; switch until the last answer is on screen | 0 one-shot fetches, 15 subscriptions opened, 2 store writes, 23 DOM mutation records |
 | load the inbox (5,000 sessions) | `SessionListPanel` mounting over 5,000 sessions | 51 cards drawn, 2 subscriptions, 0 fetches |
-| heartbeat in the inbox (5,000 sessions) | One drawn session's heartbeat arriving as a feed delta | 0 commits, 0 DOM mutations, 0 layout reads |
-| open a long diff | A 1,560-line TypeScript file with 52 changed lines, shown whole and highlighted, in a warm app | 1 commit, 1 DOM mutation, 0 layout reads, 0 store writes, 1,612 lines drawn |
+| heartbeat in the inbox (5,000 sessions) | One drawn session's heartbeat through the liveness overlay (`applyMineLivenessPayload`), after the overlay's first payload | 0 commits, 0 DOM mutations, 0 layout reads |
+| open a long diff | A 1,560-line TypeScript file with 52 changed lines, shown whole and highlighted, in a warm app | 1 commit, 11 DOM mutation records, 0 layout reads, 0 store writes, 1,612 lines drawn |
 
 The budgets also check that a rename arriving through the feed reaches its card.
 
-DOM mutations are counted under the mounted tree and inside every shadow root. The diff viewer draws its lines in a shadow root outside React, so the diff's 1 commit and 1 mutation record are the viewer's host going in; its first draw lands before the root can be observed, and any redraw after it counts.
+DOM mutations are counted under the mounted tree and inside every shadow root from the moment it is attached (the harness wraps `attachShadow`). The diff viewer draws its lines in a shadow root outside React, so the diff's 11 records are its host going in plus the viewer's own draw; a redraw would add to them.
 
 ## What the timing measures
 
-The primary is `cpu.work`: CPU time of the bench process during the action. That covers React, the store and the app's own code, plus jsdom's DOM work. It leaves out style, layout and paint, which jsdom does not do, so it is not the browser's main-thread time. Because jsdom's DOM operations are slower than a browser's, DOM-heavy cases are dominated by jsdom: opening the long diff costs about 6 s of CPU here and much less in Chrome. A/B differences still point the right way because both sides pay the same jsdom cost. Page-level cases (strobe `web()` targets in a real Chromium, measuring `main.work`, layout shift and frames) would need the app to boot offline against a mocked backend, which it cannot do today.
+The primary is `cpu.work`: CPU time of the bench process during the action. That covers React, the store and the app's own code, plus jsdom's DOM work. It leaves out style, layout and paint, which jsdom does not do, so it is not the browser's main-thread time. Because jsdom's DOM operations are slower than a browser's, DOM-heavy cases are dominated by jsdom: opening the long diff costs about 6 s of CPU here and much less in Chrome. A/B differences still point the right way because both sides pay the same jsdom cost. React also runs its development build here (plain bun leaves `NODE_ENV` unset, and `act()` and `<Profiler onRender>` need the development build), so `cpu.work` includes development-only work such as owner stacks and warnings that production never pays. Page-level cases (strobe `web()` targets in a real Chromium, measuring `main.work`, layout shift and frames) would need the app to boot offline against a mocked backend, which it cannot do today.
 
 Commits and layout reads in the switch case depend on wall time, because the transcript's interval timers (the 1 s size reconciler, the 350 ms scroll hold) tick while it settles. They are compared between base and head but not asserted.
 

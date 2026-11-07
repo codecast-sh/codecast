@@ -29,7 +29,7 @@ const WORKLOAD: Record<string, string> = {
   "switch conversation (warm)": "switch",
   // The inbox's session list mounting over 5,000 cached sessions.
   "load the inbox (5,000 sessions)": "inbox-load",
-  // One drawn session's heartbeat arriving through the feed.
+  // One drawn session's heartbeat through the liveness overlay.
   "heartbeat in the inbox (5,000 sessions)": "inbox-heartbeat",
   // A 1,560-line diff shown whole, highlighted, in a warm app.
   "open a long diff": "diff",

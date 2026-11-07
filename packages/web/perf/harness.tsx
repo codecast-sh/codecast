@@ -64,6 +64,16 @@ w.HTMLCanvasElement.prototype.getContext = () => ({ font: "", measureText: (t: s
 const realComputedStyle = w.getComputedStyle.bind(w);
 const getComputedStyle = (el: Element, pseudo?: string) => { layoutReads.push(readSite("getComputedStyle")); return realComputedStyle(el, pseudo); };
 w.getComputedStyle = getComputedStyle;
+// Shadow roots made during a measured action are watched from the moment they
+// exist, so a viewer that draws (or redraws) inside one is counted.
+let onShadowRoot: ((root: ShadowRoot) => void) | null = null;
+const realAttachShadow = w.Element.prototype.attachShadow;
+w.Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
+  const shadow = realAttachShadow.call(this, init);
+  onShadowRoot?.(shadow);
+  return shadow;
+};
+
 // Constructable stylesheets (the diff viewer styles its shadow root with
 // them); jsdom has neither the class nor adoptedStyleSheets.
 class CSSStyleSheet { cssRules: unknown[] = []; replaceSync(_text: string) {} replace(_text: string) { return Promise.resolve(this); } insertRule() { return 0; } deleteRule() {} }
@@ -288,13 +298,13 @@ async function measure(action: () => Promise<void>): Promise<Report> {
   // draws in one, outside React), including roots attached during the action.
   let mutations = 0;
   const observed = new Set<Node>();
-  const mo = new w.MutationObserver((records: MutationRecord[]) => { mutations += records.length; watchRoots(); });
+  const mo = new w.MutationObserver((records: MutationRecord[]) => { mutations += records.length; });
   const watch = (node: Node) => { if (observed.has(node)) return; observed.add(node); mo.observe(node, { subtree: true, childList: true, attributes: true, characterData: true }); };
-  const watchRoots = () => { for (const el of host.querySelectorAll("*")) if (el.shadowRoot) watch(el.shadowRoot); };
   watch(host);
-  watchRoots();
+  for (const el of host.querySelectorAll("*")) if (el.shadowRoot) watch(el.shadowRoot);
+  onShadowRoot = watch;
   await action();
-  watchRoots();
+  onShadowRoot = null;
   mutations += mo.takeRecords().length;
   mo.disconnect();
   unsub();
@@ -373,19 +383,25 @@ async function setupInboxLoad(): Promise<Bench> {
   };
 }
 
-// The feed applies a heartbeat to one drawn session the way
-// useLiveInboxSessions does (a delta through syncTable). It changes nothing
-// the list shows, so it may re-render nothing.
+// A heartbeat on one drawn session, through the path production heartbeats
+// take: the liveness overlay (useSyncInboxSessions' applyMineLivenessPayload,
+// the one inbox channel that re-runs every beat). It changes nothing the list
+// shows, so it may re-render nothing.
 async function setupInboxHeartbeat(): Promise<Bench> {
+  const { applyMineLivenessPayload } = await import("../hooks/useSyncInboxSessions");
   const { show } = await inboxPanel();
   await show();
   let n = 0;
   const target = host.querySelector("[data-session-id]")!.getAttribute("data-session-id")!;
+  const beat = async () => { n++; await act(async () => { applyMineLivenessPayload({ liveness: { [target]: { last_heartbeat: now + n * 1000 } } }); }); };
+  // The overlay's first payload after boot re-renders every drawn card's bars
+  // once (1 commit, 73 DOM records here); production pays that when the
+  // overlay first arrives. The budget is the steady beat after it.
+  await beat();
+  await settle();
   return {
     run: () => measure(async () => {
-      n++;
-      const row = useInboxStore.getState().sessions[target] as any;
-      useInboxStore.getState().syncTable("sessions", [{ ...row, last_heartbeat: now + n * 1000 }] as any, { isDelta: true } as any);
+      await beat();
       await settle();
     }),
     reset: () => settle(),

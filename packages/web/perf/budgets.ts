@@ -96,11 +96,11 @@ await test("inbox-heartbeat", "a rename that arrives through the feed reaches it
   expect(document.querySelector(`[data-session-id="${id}"] [data-sv-title]`)?.textContent).toBe("Renamed by the server");
 });
 
-await test("diff", "opening a long diff commits once, reads no layout and writes nothing to the store", async () => {
+await test("diff", "opening a long diff commits once, draws in 11 DOM mutation records, reads no layout and writes nothing to the store", async () => {
   await setup("diff");
   for (const r of await twice()) {
     expect({ ...pick(r, ["commits", "domMutations", "layoutReads", "storeWrites", "convexQueries", "convexSubscribes"]), reads: r.detail.layoutReads }).toEqual({
-      commits: 1, domMutations: 1, layoutReads: 0, storeWrites: 0, convexQueries: 0, convexSubscribes: 0, reads: [],
+      commits: 1, domMutations: 11, layoutReads: 0, storeWrites: 0, convexQueries: 0, convexSubscribes: 0, reads: [],
     });
     // Pierre draws every line, unwindowed: the file's 1,560 lines plus the
     // removed side of its 52 changed lines.
