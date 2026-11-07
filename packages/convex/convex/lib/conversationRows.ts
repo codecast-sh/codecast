@@ -13,6 +13,7 @@ export const CONVERSATION_ROW_TABLES: ReadonlyArray<readonly [string, string]> =
   ["conversation_images", "by_conversation_id"],
   ["conversation_summaries", "by_conversation_id"],
   ["session_insights", "by_conversation_id"],
+  ["side_answers", "by_conversation_user"],
   ["conversation_context", "by_conversation_id"],
   ["conversation_git_diffs", "by_conversation_id"],
   ["file_changes", "by_conversation_id"],

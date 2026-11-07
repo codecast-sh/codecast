@@ -24,6 +24,7 @@ const AFTER_CONVERSATIONS: ReadonlyArray<readonly [string, string, string]> = [
   ["rate_limits", "by_user_endpoint", "user_id"],
   ["pending_messages", "by_user_status", "from_user_id"],
   ["managed_sessions", "by_user_id", "user_id"],
+  ["side_answers", "by_user", "user_id"],
   ["notifications", "by_recipient", "recipient_user_id"],
   ["daemon_logs", "by_user_timestamp", "user_id"],
   ["reviews", "by_reviewer", "reviewer_user_id"],

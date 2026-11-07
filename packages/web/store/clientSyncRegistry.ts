@@ -378,6 +378,19 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, decision_id, created_at",
     feeds: ["decisionThread.thread"],
   },
+  // Side answers (`/btw` in a conversation's composer, convex/sideAnswers.ts):
+  // the viewer's own questions about a conversation and the cheap model's
+  // answers, shown in the Ask panel and never in the transcript. Delta: each
+  // open conversation feeds its own rows and must not evict the others'. A
+  // question paints from its stub, keyed by the client id it was sent with,
+  // until the server row carrying that client id supersedes it.
+  sideAnswers: {
+    persistence: { kind: "collection", key: "sideAnswers" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, altKey: "client_id" },
+    indexes: "_id, conversation_id",
+    feeds: ["sideAnswers.listForConversation"],
+  },
   // Task evidence (the-line.md L6): the one object taskEvidence.get computes
   // for a task (pages by station, docs, images, files, PR, verdict), one row
   // per task viewed, keyed by the task's Convex id. Delta: each task page
@@ -1911,6 +1924,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   orgTemplateInstances: "shared",
   decisionThreads: "shared",
   decisionComments: "shared",
+  sideAnswers: "shared",
   taskEvidence: "shared",
   projectExpectations: "shared",
   expectationsOverview: "shared",

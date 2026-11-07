@@ -584,6 +584,7 @@ import type * as sessionReads from "../sessionReads.js";
 import type * as sessionRelease from "../sessionRelease.js";
 import type * as sessionThreads from "../sessionThreads.js";
 import type * as ship from "../ship.js";
+import type * as sideAnswers from "../sideAnswers.js";
 import type * as signalRepairs from "../signalRepairs.js";
 import type * as signals from "../signals.js";
 import type * as slack from "../slack.js";
@@ -1247,6 +1248,7 @@ declare const fullApi: ApiFromModules<{
   sessionRelease: typeof sessionRelease;
   sessionThreads: typeof sessionThreads;
   ship: typeof ship;
+  sideAnswers: typeof sideAnswers;
   signalRepairs: typeof signalRepairs;
   signals: typeof signals;
   slack: typeof slack;
