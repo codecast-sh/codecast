@@ -8,7 +8,7 @@ import {
 import { liveDesktopPaneRegistry } from "./desktopPaneRegistry.js";
 import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
-import { grantTab } from "./bridge/host.js";
+import { grantTab, TabTakenBackError } from "./bridge/host.js";
 import { retryOnStall } from "./stall.js";
 import { CAST_TAB_GROUP } from "./bridge/protocol.js";
 import { isPidAlive } from "../workspace/chrome.js";
@@ -212,7 +212,20 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
     const target = bound;
     // The host verifies the grant with a tab listing from the worker, whose
     // process may be frozen (stall.ts): asked once more before it counts.
-    if (!(await retryOnStall(() => grantTab(bridge, session, target, { own: true })))) {
+    let granted: boolean;
+    try {
+      granted = await retryOnStall(() => grantTab(bridge, session, target, { own: true }));
+    } catch (err) {
+      // The human took the tab back. Any verb but `open` stops here and says
+      // so, rather than driving another of the session's tabs it never chose;
+      // `open <url>` drops the binding and moves to a page of its own. The
+      // daemon still holds the old tab and reads a binding only at attach.
+      if (!(err instanceof TabTakenBackError)) throw err;
+      if (!url) throw new Error(`${err.message}. Open a page of your own with \`cast browser open <url>\`; if they lend it to you again, \`cast browser tab switch ${err.targetId}\` takes it.`);
+      detachSessionDaemon(session);
+      granted = false;
+    }
+    if (!granted) {
       fs.rmSync(path.join(engineStateDir(), `${session}.target`), { force: true });
       bound = null;
     }
@@ -259,22 +272,33 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
 
 /**
  * The engine said this session's tab is gone. Drop the pin only when the
- * browser agrees, then bind one tab (reclaim or create) so a retry of `open`
- * does not mint a second one beside a tab that was merely slow to answer.
+ * browser agrees, then bind one tab so a retry does not mint a second one
+ * beside a tab that was merely slow to answer: another tab this session
+ * already holds, or with `url` one reclaimed or created. Returns whether the
+ * binding names a tab that may still be driven, so the caller knows a retry
+ * can reach a page.
  */
-export async function recoverGoneTab(session: string, url?: string): Promise<void> {
+export async function recoverGoneTab(session: string, url?: string): Promise<boolean> {
   // The engine daemon reads the binding only when it attaches, so the one
   // that just answered tab_gone still holds the dead tab and would refuse the
-  // retry the same way, whatever the binding file says now. Detach it (that
-  // closes nothing): the retry attaches afresh and adopts the binding below.
+  // retry the same way, whatever the binding file says now (`tab close` of
+  // the tab the daemon was on leaves exactly that: the next verb's
+  // ensurePinnedTab moved the binding to the session's other tab, and the
+  // daemon is still on the closed one). Detach it (that closes nothing): the
+  // retry attaches afresh and adopts the binding below.
   detachSessionDaemon(session);
   const bound = readBoundTarget(session);
   if (bound) {
     const browser = await pinnedTabBrowser(session);
-    if (!browser) return;
+    if (!browser) return false;
     const life = await targetLiveness(browser.endpoint, bound);
-    if (life !== "gone") return;
+    if (life !== "gone") return true;
     fs.rmSync(path.join(engineStateDir(), `${session}.target`), { force: true });
   }
-  if (url) await ensurePinnedTab(session, url);
+  try {
+    await ensurePinnedTab(session, url);
+  } catch {
+    return false; // no tab of this session's left, and no page asked for
+  }
+  return readBoundTarget(session) !== null;
 }
