@@ -159,3 +159,14 @@ $("version").textContent = `v${chrome.runtime.getManifest().version}`;
 
 pairFromFragment().then(load).then(refreshStatus);
 setInterval(refreshStatus, 2000);
+
+// Where agent tabs open (background.js separateWindowWanted). New tabs only.
+(async () => {
+  const { agentWindow } = await chrome.storage.local.get("agentWindow");
+  for (const input of document.querySelectorAll('input[name="agentWindow"]')) {
+    input.checked = input.value === (agentWindow === "separate" ? "separate" : "current");
+    input.addEventListener("change", () => {
+      if (input.checked) chrome.storage.local.set({ agentWindow: input.value });
+    });
+  }
+})();

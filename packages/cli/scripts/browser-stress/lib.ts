@@ -1,0 +1,330 @@
+/**
+ * Shared plumbing for the `cast browser` stress suites (soak.ts, fuzz.ts):
+ * the rig they run against, a seeded PRNG, a bounded CLI runner, a small CDP
+ * client for the bridge and the rig Chrome, and the run directory.
+ *
+ * Everything acts on ONE rig brought up by scripts/browser-rig.ts (its
+ * /tmp/cast-browser-rig/<name>/state.json and env). Nothing here reads the
+ * human's ~/.codecast or talks to port 41729: the bridge port, token and HOME
+ * all come from the rig's own files, and `requireRig` refuses a rig whose
+ * HOME is the real home.
+ */
+
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { BRIDGE_DEFAULT_PORT } from "../../src/browser/bridge/protocol.ts";
+
+export const REPO = path.resolve(import.meta.dir, "../../../..");
+export const CLI_ENTRY = path.join(REPO, "packages/cli/src/main.ts");
+export const RIG_SCRIPT = path.join(REPO, "packages/cli/scripts/browser-rig.ts");
+const RIG_ROOT = process.env.CAST_RIG_ROOT || "/tmp/cast-browser-rig";
+
+export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------
+// Arguments
+// ---------------------------------------------------------------------------
+
+export function args(argv = process.argv.slice(2)) {
+  const opt = (name: string, fallback?: string) => {
+    const i = argv.indexOf(`--${name}`);
+    return i >= 0 ? argv[i + 1] : fallback;
+  };
+  const num = (name: string, fallback: number) => {
+    const v = Number(opt(name));
+    return Number.isFinite(v) && opt(name) !== undefined ? v : fallback;
+  };
+  return { opt, num, flag: (name: string) => argv.includes(`--${name}`) };
+}
+
+// ---------------------------------------------------------------------------
+// Seeded PRNG: a failing run replays with the same --seed
+// ---------------------------------------------------------------------------
+
+export class Rng {
+  private s: number;
+  constructor(seed: number) {
+    this.s = seed >>> 0 || 1;
+  }
+  next(): number {
+    // xorshift32
+    let s = this.s;
+    s ^= s << 13;
+    s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    s >>>= 0;
+    this.s = s;
+    return s / 4294967296;
+  }
+  int(max: number): number {
+    return Math.floor(this.next() * max);
+  }
+  pick<T>(list: readonly T[]): T {
+    return list[this.int(list.length)]!;
+  }
+  chance(p: number): boolean {
+    return this.next() < p;
+  }
+  /** A child stream, so one consumer's draws do not shift another's. */
+  fork(salt: number): Rng {
+    return new Rng((this.int(2 ** 31) ^ Math.imul(salt + 1, 0x9e3779b1)) >>> 0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The rig
+// ---------------------------------------------------------------------------
+
+export interface Rig {
+  name: string;
+  dir: string;
+  bridgePort: number;
+  cdpPort: number;
+  chromePid: number;
+  fixtures?: [string, string];
+  /** The rig's env file, parsed: what `exec` sets, minus the session. */
+  env: Record<string, string>;
+  /** Variables the rig unsets so the calling agent's own ids do not leak in. */
+  unset: string[];
+}
+
+export function rigDir(name: string): string {
+  return path.join(RIG_ROOT, name);
+}
+
+export function requireRig(name: string | undefined): Rig {
+  if (!name) die("--rig <name> is required: bring one up with `bun packages/cli/scripts/browser-rig.ts up --fixtures --name <name>`");
+  const dir = rigDir(name);
+  let state: any;
+  try {
+    state = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf-8"));
+  } catch {
+    die(`rig "${name}" is not up (no ${dir}/state.json)`);
+  }
+  const env: Record<string, string> = {};
+  let unset: string[] = [];
+  for (const line of fs.readFileSync(path.join(dir, "env"), "utf-8").split("\n")) {
+    const ex = /^export ([A-Z_]+)='(.*)'$/.exec(line);
+    if (ex) env[ex[1]] = ex[2].replace(/'\\''/g, "'");
+    const un = /^unset (.+)$/.exec(line);
+    if (un) unset = un[1].split(/\s+/);
+  }
+  const realHome = path.resolve(os.userInfo().homedir);
+  if (!env.HOME || path.resolve(env.HOME).startsWith(realHome)) die(`rig "${name}" has HOME ${env.HOME}, which is not a /tmp rig home`);
+  if (state.bridgePort === BRIDGE_DEFAULT_PORT) die(`rig "${name}" sits on the live bridge port ${BRIDGE_DEFAULT_PORT}`);
+  return { name, dir, bridgePort: state.bridgePort, cdpPort: state.cdpPort, chromePid: state.chromePid, fixtures: state.fixtures, env, unset };
+}
+
+/** The rig's bridge.json: port, token and the current host pid (a respawned host rewrites it). */
+export function rigBridge(rig: Rig): { port: number; token: string; hostPid?: number } {
+  return JSON.parse(fs.readFileSync(path.join(rig.env.CODECAST_DIR, "browser", "bridge.json"), "utf-8"));
+}
+
+export function rigState(rig: Rig): { chromePid: number; cdpPort: number } {
+  return JSON.parse(fs.readFileSync(path.join(rig.dir, "state.json"), "utf-8"));
+}
+
+/** The env a CLI process acting as `session` runs with. */
+export function sessionEnv(rig: Rig, session: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const k of rig.unset) delete env[k];
+  return { ...env, ...rig.env, CAST_SESSION_ID: session, CODECAST_SESSION_ID: session };
+}
+
+/** Refuse to start a long run on an overloaded machine (the rule is the caller's: soak/fuzz pass their own ceiling). */
+export function checkLoad(ceiling: number, force: boolean): number {
+  const load = os.loadavg()[0];
+  if (load > ceiling && !force) die(`load average is ${load.toFixed(0)} (> ${ceiling}); try later, or pass --force`);
+  return load;
+}
+
+// ---------------------------------------------------------------------------
+// Processes
+// ---------------------------------------------------------------------------
+
+export interface RunResult {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  ms: number;
+  /** Killed at its deadline. */
+  hung: boolean;
+}
+
+/** Pids of every child this process started and has not seen exit; the end-of-run check reads it. */
+export const liveChildren = new Set<number>();
+
+/** Run a command with a hard deadline: past it the process group is killed and the result says `hung`. */
+export function run(cmd: string, argv: string[], opts: { env?: NodeJS.ProcessEnv; deadlineMs: number; cwd?: string }): Promise<RunResult> {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const child = spawn(cmd, argv, { env: opts.env, cwd: opts.cwd ?? REPO, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    if (child.pid) liveChildren.add(child.pid);
+    let stdout = "";
+    let stderr = "";
+    let hung = false;
+    child.stdout!.on("data", (d) => (stdout += d));
+    child.stderr!.on("data", (d) => (stderr += d));
+    const timer = setTimeout(() => {
+      hung = true;
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {}
+    }, opts.deadlineMs);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (child.pid) liveChildren.delete(child.pid);
+      resolve({ code, stdout, stderr, ms: Date.now() - started, hung });
+    });
+  });
+}
+
+export function cli(rig: Rig, session: string, browserArgs: string[], deadlineMs: number): Promise<RunResult> {
+  return run("bun", [CLI_ENTRY, "browser", ...browserArgs], { env: sessionEnv(rig, session), deadlineMs });
+}
+
+export function alive(pid: number | undefined): boolean {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The process state letter from ps (T = stopped, Z = zombie), or null when it is gone. */
+export function procState(pid: number): string | null {
+  const r = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)]);
+  const s = r.stdout.toString().trim();
+  return s ? s[0] : null;
+}
+
+// ---------------------------------------------------------------------------
+// CDP over a websocket (the bridge's face or the rig Chrome's own)
+// ---------------------------------------------------------------------------
+
+export class CdpError extends Error {
+  constructor(message: string, readonly code?: number) {
+    super(message);
+  }
+}
+
+export class CdpClient {
+  private id = 1;
+  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: Timer }>();
+  readonly events: Array<{ method: string; params: any; sessionId?: string }> = [];
+  closed: { code: number; reason: string } | null = null;
+  private constructor(readonly ws: WebSocket) {
+    ws.onmessage = (e) => {
+      let m: any;
+      try {
+        m = JSON.parse(String(e.data));
+      } catch {
+        return;
+      }
+      if (typeof m.id === "number" && this.pending.has(m.id)) {
+        const p = this.pending.get(m.id)!;
+        this.pending.delete(m.id);
+        clearTimeout(p.timer);
+        m.error ? p.reject(new CdpError(m.error.message, m.error.code)) : p.resolve(m.result);
+      } else if (m.method) {
+        if (this.events.length < 500) this.events.push(m);
+      }
+    };
+    ws.onclose = (e) => {
+      this.closed = { code: e.code, reason: e.reason };
+      for (const [, p] of this.pending) {
+        clearTimeout(p.timer);
+        p.reject(new CdpError(`socket closed (${e.code})`));
+      }
+      this.pending.clear();
+    };
+  }
+  static connect(url: string, timeoutMs = 15_000, headers?: Record<string, string>): Promise<CdpClient> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url, headers ? ({ headers } as any) : undefined);
+      const timer = setTimeout(() => {
+        try {
+          ws.close();
+        } catch {}
+        reject(new Error(`websocket ${url.replace(/\/devtools\/browser\/[^?]+/, "/devtools/browser/<token>")} did not open within ${timeoutMs}ms`));
+      }, timeoutMs);
+      ws.onopen = () => {
+        clearTimeout(timer);
+        resolve(new CdpClient(ws));
+      };
+      ws.onerror = () => {};
+      ws.onclose = (e) => {
+        clearTimeout(timer);
+        reject(new Error(`websocket closed before open (${e.code} ${e.reason})`));
+      };
+    });
+  }
+  /** The rig Chrome's own browser socket: the oracle, outside the bridge. */
+  static async chrome(cdpPort: number): Promise<CdpClient> {
+    const v = (await (await fetch(`http://127.0.0.1:${cdpPort}/json/version`, { signal: AbortSignal.timeout(10_000) })).json()) as any;
+    return CdpClient.connect(v.webSocketDebuggerUrl);
+  }
+  /** The bridge's CDP face as one cast session (or none: the human's own tooling). */
+  static bridge(port: number, token: string, session?: string): Promise<CdpClient> {
+    return CdpClient.connect(`ws://127.0.0.1:${port}/devtools/browser/${token}${session ? `?session=${encodeURIComponent(session)}` : ""}`);
+  }
+  send(method: string, params: unknown = {}, sessionId?: string, timeoutMs = 30_000): Promise<any> {
+    return this.sendRaw({ method, params, ...(sessionId ? { sessionId } : {}) }, timeoutMs);
+  }
+  /** Send a message with any shape (the id is assigned here); resolves with the result, rejects with the error. */
+  sendRaw(msg: Record<string, unknown>, timeoutMs = 30_000): Promise<any> {
+    if (this.closed || this.ws.readyState !== WebSocket.OPEN) return Promise.reject(new CdpError(`socket closed (${this.closed?.code ?? this.ws.readyState})`));
+    return new Promise((resolve, reject) => {
+      const id = this.id++;
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) reject(new CdpError(`${String(msg.method)} timed out after ${timeoutMs}ms`, -1));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      this.ws.send(JSON.stringify({ ...msg, id }));
+    });
+  }
+  close(): void {
+    try {
+      this.ws.close();
+    } catch {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Results
+// ---------------------------------------------------------------------------
+
+export class RunLog {
+  readonly dir: string;
+  private files = new Map<string, number>();
+  constructor(kind: string, seed: number) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    this.dir = path.join(os.tmpdir(), "cast-browser-stress", `${stamp}-${kind}-seed${seed}`);
+    fs.mkdirSync(this.dir, { recursive: true });
+  }
+  write(file: string, row: Record<string, unknown>): void {
+    let fd = this.files.get(file);
+    if (fd === undefined) this.files.set(file, (fd = fs.openSync(path.join(this.dir, file), "a")));
+    fs.writeSync(fd, JSON.stringify({ t: new Date().toISOString(), ...row }) + "\n");
+  }
+  text(file: string, body: string): string {
+    const p = path.join(this.dir, file);
+    fs.writeFileSync(p, body);
+    return p;
+  }
+}
+
+export function oneLine(s: string, max = 240): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+export function die(msg: string): never {
+  console.error(`browser-stress: ${msg}`);
+  process.exit(2);
+}

@@ -51,12 +51,11 @@
 import { spawn, execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
-import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
-import { pathToFileURL } from "node:url";
-import { BRIDGE_EXTENSION_ID, bridgePairingPage, bridgePairingUrl, CAST_TAB_GROUP, targetIdOfTab } from "../cli/src/browser/bridge/protocol.ts";
+import { BRIDGE_EXTENSION_ID, CAST_TAB_GROUP, targetIdOfTab } from "../cli/src/browser/bridge/protocol.ts";
+import { Cdp, extensionContext as sharedExtensionContext, findTestChrome as findChrome, freePort, pairExtension } from "../cli/scripts/lib/chromeRig.ts";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 const extDir = path.join(repoRoot, "packages/browser-extension");
@@ -79,17 +78,6 @@ const env = {
 const results = [];
 let chrome = null;
 let pageServer = null;
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.once("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const port = srv.address().port;
-      srv.close(() => resolve(port));
-    });
-  });
-}
 
 function cast(args, { timeoutMs = 60_000, env: cliEnv = env } = {}) {
   return new Promise((resolve) => {
@@ -156,77 +144,6 @@ function engine(binary, args, extraEnv = {}) {
  * or Chromium. Branded Chrome is the last resort, with a loud warning —
  * there the run fails at "service worker never appeared".
  */
-function findChrome() {
-  const home = os.homedir();
-  const candidates = [];
-  const glob = (dir, suffix) => {
-    try {
-      for (const entry of fs.readdirSync(dir)) candidates.push(path.join(dir, entry, suffix));
-    } catch {}
-  };
-  if (process.platform === "darwin") {
-    const cft = "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
-    glob(path.join(home, "Library/Caches/ms-playwright"), path.join("chrome-mac-arm64", cft));
-    glob(path.join(home, ".cache/puppeteer/chrome"), path.join("chrome-mac-arm64", cft));
-    candidates.push(
-      "/Applications/Chromium.app/Contents/MacOS/Chromium",
-      "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    );
-  } else {
-    glob(path.join(home, ".cache/puppeteer/chrome"), path.join("chrome-linux64", "chrome"));
-    candidates.push("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome");
-  }
-  const found = candidates.filter((p) => fs.existsSync(p)).sort().reverse(); // newest cache version first
-  if (!found.length) {
-    throw new Error(
-      "no Chromium/Chrome-for-Testing binary found — install one with `npx @puppeteer/browsers install chrome@stable`",
-    );
-  }
-  const pick = found[0];
-  if (pick.includes("Google Chrome.app")) {
-    console.log("WARN: only branded Google Chrome found — 137+ ignores --load-extension; expect failure.");
-  }
-  return pick;
-}
-
-// Minimal CDP client for the one-time token seeding.
-class Cdp {
-  constructor(ws) {
-    this.ws = ws;
-    this.id = 1;
-    this.pending = new Map();
-    ws.onmessage = (e) => {
-      const m = JSON.parse(e.data);
-      if (m.id && this.pending.has(m.id)) {
-        const p = this.pending.get(m.id);
-        this.pending.delete(m.id);
-        m.error ? p.reject(new Error(m.error.message)) : p.resolve(m.result);
-      }
-    };
-  }
-  static async connect(port, token) {
-    const res = await fetch(`http://127.0.0.1:${port}/json/version${token ? `?token=${token}` : ""}`);
-    const { webSocketDebuggerUrl } = await res.json();
-    const ws = new WebSocket(webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => {
-      ws.onopen = resolve;
-      ws.onerror = reject;
-    });
-    return new Cdp(ws);
-  }
-  send(method, params = {}, sessionId) {
-    return new Promise((resolve, reject) => {
-      const id = this.id++;
-      this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
-      setTimeout(() => {
-        if (this.pending.delete(id)) reject(new Error(`${method} timed out`));
-      }, 10_000);
-    });
-  }
-}
-
 /**
  * A Chrome Web Store screenshot of one target: 1280×800 (the store's larger
  * size), JPEG so there is no alpha channel to reject. Only under
@@ -256,33 +173,8 @@ async function storeShot(cdp, sessionId, name) {
  * token (the by-hand step) and to read tab groups, which CDP cannot see.
  */
 async function extensionContext(cdpPort) {
-  const cdp = await Cdp.connect(cdpPort);
-  const deadline = Date.now() + 20_000;
-  let extId = null;
-  while (!extId) {
-    const { targetInfos } = await cdp.send("Target.getTargets");
-    const sw = targetInfos.find(
-      (t) => t.type === "service_worker" && t.url.startsWith("chrome-extension://") && t.url.endsWith("background.js"),
-    );
-    if (sw) extId = new URL(sw.url).host;
-    else if (Date.now() > deadline) throw new Error("extension service worker never appeared — is this a branded Chrome ≥137?");
-    else await new Promise((r) => setTimeout(r, 400));
-  }
-  const { targetId } = await cdp.send("Target.createTarget", { url: `chrome-extension://${extId}/options.html`, background: true });
-  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
-  return {
-    cdp,
-    extId,
-    /** Evaluate an expression (a promise is awaited) and return its value. */
-    async eval(expression) {
-      const r = await cdp.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
-      if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + ": " + JSON.stringify(r.exceptionDetails.exception?.description));
-      return r.result?.value;
-    },
-    /** The options page itself, as the human sees it. */
-    storeShot: (name) => storeShot(cdp, sessionId, name),
-    close: () => cdp.send("Target.closeTarget", { targetId }).catch(() => {}),
-  };
+  const ext = await sharedExtensionContext(cdpPort);
+  return { ...ext, storeShot: (name) => storeShot(ext.cdp, ext.sessionId, name) };
 }
 
 /** The fallback pairing: write the token into extension storage directly. */
@@ -316,53 +208,7 @@ async function seedToken(ext, token, bridgePort) {
  */
 async function pair(ext, token, bridgePort) {
   if (process.env.SMOKE_SEED_TOKEN) return seedToken(ext, token, bridgePort);
-  const optionsUrl = `chrome-extension://${BRIDGE_EXTENSION_ID}/options.html`;
-  const pagePath = path.join(work, "pair.html");
-  fs.writeFileSync(pagePath, bridgePairingPage(bridgePairingUrl({ token, port: bridgePort })), { mode: 0o600 });
-  const { targetId } = await ext.cdp.send("Target.createTarget", { url: pathToFileURL(pagePath).href, background: true });
-  let { sessionId } = await ext.cdp.send("Target.attachToTarget", { targetId, flatten: true });
-  // The hop crosses from file: into the extension's process; a session that
-  // died with the old renderer is re-attached rather than reported.
-  const evalIn = async (expression) => {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const r = await ext.cdp.send("Runtime.evaluate", { expression, returnByValue: true }, sessionId).catch(() => null);
-      if (r?.result) return r.result.value;
-      ({ sessionId } = await ext.cdp.send("Target.attachToTarget", { targetId, flatten: true }).catch(() => ({ sessionId })));
-    }
-    return undefined;
-  };
-  const storedNow = async () => {
-    const b = await ext.eval(`chrome.storage.local.get("bridge").then((v) => v.bridge || null)`).catch(() => null);
-    return !!b && b.token === token && b.port === bridgePort;
-  };
-  const deadline = Date.now() + 15_000;
-  let href = null;
-  let hash = null;
-  let offered = false;
-  let storedBeforeClick = false;
-  while (Date.now() < deadline) {
-    href = (await evalIn("location.href")) ?? href;
-    if (href && href.startsWith(optionsUrl)) {
-      hash = await evalIn("location.hash");
-      offered = (await evalIn(`!document.getElementById("pair").hidden`)) === true;
-      if (hash === "" && offered) break;
-    }
-    await sleep(250);
-  }
-  const forwarded = !!href && href.startsWith(optionsUrl);
-  if (offered) {
-    storedBeforeClick = await storedNow();
-    await evalIn(`document.getElementById("pair").click()`);
-  }
-  let stored = false;
-  const storeDeadline = Date.now() + 10_000;
-  while (offered && Date.now() < storeDeadline) {
-    stored = await storedNow();
-    if (stored) break;
-    await sleep(250);
-  }
-  await ext.cdp.send("Target.closeTarget", { targetId }).catch(() => {});
-  return { href, hash, forwarded, offered, storedBeforeClick, stored };
+  return pairExtension(ext, { token, port: bridgePort }, work);
 }
 
 /** The extension's own view of its connection, as the options page reads it. */
@@ -455,16 +301,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * What the page says about the overlay: is it mounted, and is it hidden. The
- * element's id is random per attach (a page cannot pre-write a rule against
- * it), so the overlay is found by its shape: a direct child of <html> that is
- * aria-hidden and fixed, which the test page has no other of.
+ * element has no id or data attribute and draws in a closed shadow root (a
+ * page cannot target or read it), so the overlay is found by its shape: a
+ * direct child of <html> that is aria-hidden and fixed, which the test page
+ * has no other of. Its colour is the group's, which the caller knows; the
+ * pixel checks below prove it is drawn.
  */
 const BORDER_STATE_EXPR = `(() => {
   const e = [...document.documentElement.children].find((c) => c.getAttribute("aria-hidden") === "true" && c.style.position === "fixed");
   if (!e) return { present: false };
   const cs = getComputedStyle(e);
-  return { present: true, color: e.dataset.castColor || cs.borderTopColor, pointer: cs.pointerEvents, visibility: cs.visibility,
-    hit: document.elementFromPoint(1, 1)?.id === e.id };
+  return { present: true, color: "#1a73e8", pointer: cs.pointerEvents, visibility: cs.visibility,
+    hit: document.elementFromPoint(1, 1) === e };
 })()`;
 
 /**
