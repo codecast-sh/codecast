@@ -11,7 +11,7 @@
 
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
-import { Plus, X, Trash2, ChevronDown, ChevronUp, RotateCw, TerminalSquare, Eye } from "lucide-react";
+import { Plus, X, Trash2, ChevronDown, ChevronUp, RotateCw, TerminalSquare, Eye, Users } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { DEFAULT_TERMINAL_HEIGHT } from "../../lib/terminal/panelPrefs";
 import {
@@ -31,8 +31,10 @@ import {
   getTerminalsVersion,
   listTabs,
   openTerminal,
+  reconnectTab,
   setActiveTab,
   subscribeTerminals,
+  takeControl,
   type TermTabState,
 } from "../../lib/terminal/termSessions";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../ui/context-menu";
@@ -216,6 +218,9 @@ export function TerminalPanel() {
 
   const handleRestart = (tab: TermTabState) => {
     if (!endpoint) return;
+    // Same view, same seat: the daemon resumes it where it can, and a shell
+    // whose session ended starts again under its name.
+    if (reconnectTab(tab.id, endpoint)) return;
     const { kind, sessionName, cwd, target, title } = tab;
     closeTab(tab.id);
     if (kind === "shell") openShellTab(endpoint, { name: sessionName, cwd, title });
@@ -400,9 +405,9 @@ export function TerminalPanel() {
             </button>
           </div>
         )}
-        {activeTab?.readOnly && activeTab.status === "open" && (
-          <div className="absolute top-1.5 right-3 px-1.5 py-0.5 rounded text-[10px] font-mono text-sol-violet border border-sol-violet/30 bg-sol-bg/80 pointer-events-none">
-            read-only
+        {activeTab?.status === "open" && (
+          <div className="absolute top-1.5 right-3">
+            <TerminalSeat tab={activeTab} />
           </div>
         )}
       </div>
@@ -452,6 +457,55 @@ export function ConnectingNote({ label }: { label: string }) {
       {label}
     </CenteredNote>
   );
+}
+
+/**
+ * Where this view stands on a shared terminal: getting its socket back,
+ * watching (with the control to take over), read-only, or in control with
+ * others watching. Renders nothing for a lone controller. Shared with the
+ * per-conversation split.
+ */
+export function TerminalSeat({ tab }: { tab: TermTabState }) {
+  const chip = "inline-flex items-center gap-1 h-[18px] px-1.5 rounded text-[10px] font-mono border bg-sol-bg/80";
+  if (tab.reconnecting) {
+    return (
+      <span className={`${chip} text-sol-yellow border-sol-yellow/30`}>
+        <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" />
+        reconnecting
+      </span>
+    );
+  }
+  if (tab.readOnly && !tab.canControl) {
+    return <span className={`${chip} text-sol-violet border-sol-violet/30 pointer-events-none`}>read-only</span>;
+  }
+  if (tab.role === "observer") {
+    return (
+      <span className="inline-flex items-center gap-1">
+        <span
+          className={`${chip} ${tab.controlTaken ? "text-sol-orange border-sol-orange/30" : "text-sol-text-dim border-sol-border/40"}`}
+          title={tab.controlledElsewhere ? "Another view is typing here" : "Nobody is typing here"}
+        >
+          <Eye className="w-3 h-3" />
+          {tab.controlTaken ? "taken over" : "watching"}
+        </span>
+        <button
+          onClick={() => takeControl(tab.id)}
+          className={`${chip} text-sol-cyan border-sol-cyan/40 hover:bg-sol-cyan/10 transition-colors`}
+        >
+          {tab.controlTaken ? "Take back" : "Take control"}
+        </button>
+      </span>
+    );
+  }
+  if (tab.role === "controller" && (tab.viewers ?? 1) > 1) {
+    return (
+      <span className={`${chip} text-sol-text-dim border-sol-border/40`} title={`${tab.viewers} views on this terminal; you are typing`}>
+        <Users className="w-3 h-3" />
+        {tab.viewers}
+      </span>
+    );
+  }
+  return null;
 }
 
 function TermContainer({ tab, active }: { tab: TermTabState; active: boolean }) {
