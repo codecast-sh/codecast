@@ -69,6 +69,9 @@ export class FakeExtension {
   seen: any[] = [];
   private nextTab = 100;
 
+  /** A scripted `cdp` result for a method; anything it leaves undefined is echoed. */
+  cdpResult?: (method: string, params: any, tabId: number) => unknown;
+
   /** Answer the host's pings the way background.js does; off by default, which reads as a worker that stopped listening. */
   answersPings = false;
 
@@ -139,7 +142,7 @@ export class FakeExtension {
           if (m.method === "Boom.now") {
             return this.ws.send(JSON.stringify({ id: m.id, ok: false, error: "kaboom from chrome.debugger" }));
           }
-          return reply({ result: { echo: { tabId: m.tabId, method: m.method, params: m.params } } });
+          return reply({ result: this.cdpResult?.(m.method, m.params, m.tabId) ?? { echo: { tabId: m.tabId, method: m.method, params: m.params } } });
         default:
           return this.ws.send(JSON.stringify({ id: m.id, ok: false, error: "unknown op " + m.op }));
       }

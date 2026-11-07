@@ -51,7 +51,7 @@ export const AGENT_BRIDGE_REMOTE =
  * session, never the shared control socket, so it neither dies with that
  * socket nor counts as more than one connection to the idle watchdog.
  */
-export function heldSshArgs(host: RemoteHost, remoteCommand: string, opts: { forwardAgent?: boolean } = {}): string[] {
+export function heldSshArgs(host: RemoteHost, remoteCommand: string, opts: { forwardAgent?: boolean; extra?: string[] } = {}): string[] {
   return [
     "-i", host.keyPath,
     "-o", "IdentitiesOnly=yes",
@@ -63,6 +63,7 @@ export function heldSshArgs(host: RemoteHost, remoteCommand: string, opts: { for
     "-o", "ControlMaster=no",
     "-o", "ControlPath=none",
     ...(opts.forwardAgent ? ["-o", "ForwardAgent=yes"] : []),
+    ...(opts.extra ?? []),
     "-T",
     `${host.user}@${host.address}`,
     remoteCommand,
