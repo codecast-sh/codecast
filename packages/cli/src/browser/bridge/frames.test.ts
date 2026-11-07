@@ -18,6 +18,15 @@ describe("relay frames", () => {
     expect(out).toEqual({ method: "Network.webSocketFrameReceived", params, sessionId: "ABC" });
   });
 
+  test("a child session's event carries Chrome's session id; a tab's own carries none", () => {
+    const ev = readEventFrame(wire({ op: "event", tabId: 9, session: "4F1A2B", method: "DOM.documentUpdated", params }))!;
+    expect(ev).toMatchObject({ tabId: 9, session: "4F1A2B", method: "DOM.documentUpdated" });
+    expect(JSON.parse(String(ev.params))).toEqual(params);
+    // background.js leaves `session: undefined` in for a tab's own event; JSON.stringify drops it.
+    expect(readEventFrame(wire({ op: "event", tabId: 9, session: undefined, method: "A.b", params: {} }))!.session).toBeUndefined();
+    expect(readEventFrame(Buffer.from('{"op":"event","tabId":9,"session":"","method":"A.b","params":{}}'))).toBeNull();
+  });
+
   test("a successful reply keeps its result as bytes; errors and other shapes take the parsed path", () => {
     const r = readReplyFrame(wire({ id: 912, ok: true, result: params }))!;
     expect(r.id).toBe(912);
@@ -42,9 +51,10 @@ test("background.js still sends the two hot messages with the payload last", () 
   // frames.ts slices the payload up to the closing brace, so a key added
   // after it would be relayed inside the payload. Change both together.
   const src = fs.readFileSync(path.join(import.meta.dir, "../../../../browser-extension/background.js"), "utf-8");
-  expect(src).toContain('send({ op: "event", tabId: source.tabId, method, params: params || {} });');
+  expect(src).toContain('send({ op: "event", tabId, session: source.sessionId, method, params: params || {} });');
   expect(src).toContain("send({ id: msg.id, ok: true, ...result });");
-  expect(src).toContain("return { result: result || {} };");
+  expect(src).toContain("return { result: (await cdpPastForeignFrames(m.tabId, m.method, m.params || {})) || {} };");
+  expect(src).toContain("return { result: (await boundedCdp(m.tabId, m.method, m.params || {}, m.sessionId)) || {} };");
 });
 
 describe("TrafficMeter", () => {

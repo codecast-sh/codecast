@@ -38,7 +38,7 @@ import { REMOTE_BUNDLE_DIR } from "./castBundle.js";
 import { addUserRootScript, addUserSelfScript, enableUserDaemonScript, isLinuxUserName, sharedHostMarkScript, sharedHostSetupScript, teammateSteps, USER_DAEMON_UNIT, userToolPath } from "./sharedHost.js";
 import { summarizeHostTools } from "../cloud/hostTools.js";
 import { agentCliInstallScript, parseAgentCliReport } from "./provisionAgents.js";
-import { remoteExec, scpTo } from "./remote.js";
+import { remoteExec, remoteExecAsync, scpTo } from "./remote.js";
 import { isDeviceBoundToken, secretFromStored } from "../bearerToken.js";
 import { presentToken } from "@platform/auth/tokenFormat";
 import { mintTokenForDevice } from "../remote/convexClient.js";
@@ -60,8 +60,10 @@ const MEDIAMTX_VERSION = "v1.20.1";
  * to enable the bridge on a host provisioned before it. Version 3 subtracts
  * each reached folder's connection the same way (cloud/reach.ts) and comes
  * with sshfs installed; `cast hosts reach` refuses a host below it.
+ * Version 4 subtracts the laptop Chrome link (cloud/browserLink.ts); the
+ * laptop daemon holds no link to a host below it.
  */
-export const IDLE_WATCHDOG_VERSION = 3;
+export const IDLE_WATCHDOG_VERSION = 4;
 
 /**
  * Everything that can be done with root and apt, in one shot. Idempotent:
@@ -221,6 +223,8 @@ sudo tee /usr/local/bin/cast-idle-check >/dev/null <<'IDLE'
 #     and must not be counted, or a real session could read as idle. A
 #     reached laptop folder (cast hosts reach) is the same: one connection
 #     per folder, whose sshfs runs as "cast-reach :<path> <mountpoint> ...".
+#     So is the laptop's Chrome link (one sleeper "cast-browser-link"),
+#     which only lets this box's sessions reach the laptop's browser.
 #   - the encoder running (someone is literally watching the screen)
 #   - the codecast daemon's activity stamp is fresh: it touches
 #     ~/.codecast/host-active when a message is delivered, a transcript grows
@@ -241,7 +245,9 @@ bridges=$(pgrep -c -f '^cast-agent-bridge$' 2>/dev/null)
 [ -n "$bridges" ] || bridges=0
 reaches=$(pgrep -c -f '^cast-reach :' 2>/dev/null)
 [ -n "$reaches" ] || reaches=0
-[ $(( conns - bridges - reaches )) -gt 0 ] && active=1
+links=$(pgrep -c -f '^cast-browser-link$' 2>/dev/null)
+[ -n "$links" ] || links=0
+[ $(( conns - bridges - reaches - links )) -gt 0 ] && active=1
 pgrep -f 'x11grab' >/dev/null 2>&1 && active=1
 if ! timeout 15s python3 /usr/local/lib/codecast/idle-probe.py /home/ubuntu > /run/cast-idle-work.json; then
   active=1
@@ -550,6 +556,32 @@ export function hostIdleWatchdogCurrent(host: RemoteHost): boolean | null {
     return remoteExec(host, "sha256sum /usr/local/bin/cast-idle-check", 30_000).trim().split(/\s+/)[0] === want;
   } catch {
     return null;
+  }
+}
+
+/** The exit the rewrite reserves for a host missing what the new watchdog reads. */
+const WATCHDOG_REWRITE_MISSING_EXIT = 5;
+
+/**
+ * Bring a host's idle watchdog to this build's without a full provision, or
+ * say why not. Only the watchdog file changes: the threshold
+ * (/etc/cast-idle-minutes) and the probe it runs exist on a host provisioned
+ * at version 3 or later (cloud/browserLink.ts decides who qualifies), and the
+ * caller records the version. Asynchronous because the daemon calls it.
+ */
+export async function rewriteHostIdleWatchdog(host: RemoteHost, timeoutMs = 60_000): Promise<{ version: number } | { failed: string }> {
+  const script = idleWatchdogScript();
+  const want = createHash("sha256").update(script).digest("hex");
+  const cmd =
+    `[ -f /etc/cast-idle-minutes ] && [ -f /usr/local/lib/codecast/idle-probe.py ] && [ -x /usr/local/bin/cast-idle-check ] || exit ${WATCHDOG_REWRITE_MISSING_EXIT}; ` +
+    `t=$(mktemp) && cat > "$t" && sudo -n install -m 755 "$t" /usr/local/bin/cast-idle-check; r=$?; rm -f "$t"; [ $r = 0 ] || exit $r; ` +
+    "sha256sum /usr/local/bin/cast-idle-check";
+  try {
+    const got = (await remoteExecAsync(host, cmd, { input: script, timeoutMs })).split(/\s+/)[0];
+    return got === want ? { version: IDLE_WATCHDOG_VERSION } : { failed: "the rewritten watchdog does not match this build's" };
+  } catch (err) {
+    if ((err as { code?: number }).code === WATCHDOG_REWRITE_MISSING_EXIT) return { failed: "the host lacks the watchdog's threshold file or probe" };
+    return { failed: err instanceof Error ? err.message : String(err) };
   }
 }
 
