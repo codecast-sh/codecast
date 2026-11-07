@@ -383,22 +383,35 @@ async function setupInboxLoad(): Promise<Bench> {
   };
 }
 
-// A heartbeat on one drawn session, through the path production heartbeats
-// take: the liveness overlay (useSyncInboxSessions' applyMineLivenessPayload,
-// the one inbox channel that re-runs every beat). It changes nothing the list
-// shows, so it may re-render nothing.
+// A heartbeat through the path production heartbeats take: the liveness
+// overlay (useSyncInboxSessions' applyMineLivenessPayload, the one inbox
+// channel that re-runs every beat). Like the server's, each payload carries
+// the whole live set, the viewer's newest 600 sessions with every overlay
+// fact as the store holds it; only one drawn session's heartbeat moves. That
+// changes nothing the list shows, so it may re-render nothing.
+const LIVE_SET = 600;
 async function setupInboxHeartbeat(): Promise<Bench> {
   const { applyMineLivenessPayload } = await import("../hooks/useSyncInboxSessions");
+  const { INBOX_FACT_FIELDS } = await import("@codecast/shared/contracts");
   const { show } = await inboxPanel();
   await show();
-  let n = 0;
   const target = host.querySelector("[data-session-id]")!.getAttribute("data-session-id")!;
-  const beat = async () => { n++; await act(async () => { applyMineLivenessPayload({ liveness: { [target]: { last_heartbeat: now + n * 1000 } } }); }); };
-  // The overlay's first payload after boot re-renders every drawn card's bars
-  // once (1 commit, 73 DOM records here); production pays that when the
-  // overlay first arrives. The budget is the steady beat after it.
-  await beat();
-  await settle();
+  const sessions = useInboxStore.getState().sessions as Record<string, any>;
+  const live = Object.keys(sessions).filter((id) => sessions[id].user_id === ME).slice(0, LIVE_SET);
+  if (!live.includes(target)) live.push(target);
+  let n = 0;
+  const beat = async () => {
+    n++;
+    const rows = useInboxStore.getState().sessions as Record<string, any>;
+    const liveness: Record<string, Record<string, unknown>> = {};
+    for (const id of live) {
+      const row: Record<string, unknown> = {};
+      for (const key of INBOX_FACT_FIELDS) row[key] = rows[id][key] ?? null;
+      liveness[id] = row;
+    }
+    liveness[target].last_heartbeat = now + n * 1000;
+    await act(async () => { applyMineLivenessPayload({ liveness }); });
+  };
   return {
     run: () => measure(async () => {
       await beat();

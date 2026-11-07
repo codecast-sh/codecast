@@ -71,11 +71,13 @@ function leadRoleOf(session: { org_role_id?: string | null; standing_role_id?: s
   return null;
 }
 
-// Store actions the card reaches, the same for every card.
+// The card's name off its own store row: the hosted name rule for hosted
+// rows, the session's title otherwise.
 function liveCardTitle(s: Parameters<typeof hostedRowTitle>[0], cardId: string, hosted: boolean, session: InboxSession): string {
   return hosted ? hostedRowTitle(s, cardId) : sessionCardTitle(s.sessions[cardId] ?? session);
 }
 
+// Store actions the card reaches, the same for every card.
 const toggleFavorite = (id: string) => useInboxStore.getState().toggleFavorite(id);
 const openLabels = (session: InboxSession) =>
   useInboxStore.getState().openPalette({ targets: [session], targetType: "session", mode: "bucket" });

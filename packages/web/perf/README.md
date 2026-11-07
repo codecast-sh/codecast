@@ -11,7 +11,7 @@ Both drive `harness.tsx`: the real components mounted in jsdom over a synthetic 
 | --- | --- | --- |
 | switch conversation (warm) | Two conversations of 200 cached messages, both visited, over 2,000 sessions; switch until the last answer is on screen | 0 one-shot fetches, 15 subscriptions opened, 2 store writes, 23 DOM mutation records |
 | load the inbox (5,000 sessions) | `SessionListPanel` mounting over 5,000 sessions | 51 cards drawn, 2 subscriptions, 0 fetches |
-| heartbeat in the inbox (5,000 sessions) | One drawn session's heartbeat through the liveness overlay (`applyMineLivenessPayload`), after the overlay's first payload | 0 commits, 0 DOM mutations, 0 layout reads |
+| heartbeat in the inbox (5,000 sessions) | A liveness overlay payload (`applyMineLivenessPayload`) of the viewer's 600 newest sessions with their real facts, where one drawn session's heartbeat moved | 0 commits, 0 DOM mutations, 0 layout reads |
 | open a long diff | A 1,560-line TypeScript file with 52 changed lines, shown whole and highlighted, in a warm app | 1 commit, 11 DOM mutation records, 0 layout reads, 0 store writes, 1,612 lines drawn |
 
 The budgets also check that a rename arriving through the feed reaches its card.
