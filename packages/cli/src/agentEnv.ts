@@ -28,6 +28,16 @@ export const AGENT_SCRUBBED_ENV_VARS = [
   "CLAUDE_CODE_SESSION_ID",
 ] as const;
 
+// Variables an agent launch drops though they are no session marker (so they
+// stay off the list above, which doctor reports as leaks). MCP_TOOL_TIMEOUT
+// caps every MCP tool call, which fails cast's long running tools and a
+// permission prompt that waits on a person.
+export const AGENT_LAUNCH_UNSET_ENV = ["MCP_TOOL_TIMEOUT"] as const;
+
+// A shell-level effort override beats `--effort`, so it is dropped whenever
+// codecast picks the effort.
+export const EFFORT_OVERRIDE_ENV = "CLAUDE_CODE_EFFORT_LEVEL";
+
 // Claude's own override: any session that sees this saves its transcript even
 // with CLAUDE_CODE_CHILD_SESSION inherited (verified 2026-08-28: the footer
 // warning clears and JSONL is written).
@@ -49,8 +59,9 @@ export const CLOUD_ENV_VAR = "CODECAST_CLOUD";
 // silence a daemon-launched claude, and on a cloud host it names the host.
 // Pane-content detection keys off the literal "env -u CLAUDECODE" head
 // (daemon.ts findLaunchLine) — keep it first.
-export function agentEnvScrub(remote = isRemoteDevice()): string {
-  return `env ${AGENT_SCRUBBED_ENV_VARS.map((v) => `-u ${v}`).join(" ")} ${FORCE_PERSISTENCE_VAR}=1${remote ? ` ${CLOUD_ENV_VAR}=1` : ""}`;
+export function agentEnvScrub(remote = isRemoteDevice(), opts: { effortSet?: boolean } = {}): string {
+  const unset = [...AGENT_SCRUBBED_ENV_VARS, ...AGENT_LAUNCH_UNSET_ENV, ...(opts.effortSet ? [EFFORT_OVERRIDE_ENV] : [])];
+  return `env ${unset.map((v) => `-u ${v}`).join(" ")} ${FORCE_PERSISTENCE_VAR}=1${remote ? ` ${CLOUD_ENV_VAR}=1` : ""}`;
 }
 export const AGENT_ENV_SCRUB = agentEnvScrub();
 
