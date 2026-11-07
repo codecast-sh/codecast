@@ -1,3 +1,4 @@
+import { parseGoalMessage } from "@codecast/shared/contracts/sessionGoal";
 import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage, isInterruptNotice } from "../../lib/conversationProcessor";
 import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload, parseWorkflowHarnessFrame } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, parseVaultReady, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
@@ -295,7 +296,7 @@ const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Y
 // unprompted), and a role's brief or a workflow agent's task, because each is
 // the context every reply after it answers to. Everything else on the user rail was sent by a machine (a poll
 // answer, an interrupt, a notice, a session's report).
-export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'vault_ready', 'session_handoff', 'context_recovery', 'scheduled_task', 'role_brief', 'workflow_frame']);
+export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'vault_ready', 'session_handoff', 'context_recovery', 'scheduled_task', 'goal_round', 'role_brief', 'workflow_frame']);
 
 // Dedup key for matching a still-pending message against its eventual JSONL echo.
 // The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control
@@ -341,6 +342,8 @@ export function classifyUserMessage(
   const recovery = parseContextRecovery(tNoReminders);
   if (recovery) return { kind: 'context_recovery', recovery };
   if (tNoReminders.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
+  const goalFrame = parseGoalMessage(tNoReminders);
+  if (goalFrame) return { kind: 'goal_round', frame: goalFrame };
   // The brief that seats or re-seats a standing agent: the session's context,
   // written by a machine, so it folds to one row that opens it.
   if (isBootstrapPrompt(tNoReminders)) return { kind: 'role_brief' };

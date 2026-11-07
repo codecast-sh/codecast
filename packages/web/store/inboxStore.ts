@@ -1,5 +1,6 @@
 import { resourceOffloadStubs, cancelResourceBatch } from "./resourceOffloadActions";
 import { approvesCommandRun } from "@codecast/shared/contracts/commandRun";
+import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
 import type { InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { captureError } from "../lib/analytics";
@@ -6346,6 +6347,13 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // "Group into a stack": a stub row keyed by client_key (altKey supersedes
   // when the server row syncs) and stack_id stamped on the members.
   createStackWith: (input: { title: string; decision_ids: string[]; team_id?: string; client_key: string }) => void;
+  // A session's goal (convex sessionGoals.ts): /goal paints a stub keyed by
+  // client_key (altKey supersedes it) and clears the session's previous goal;
+  // pause, resume and clear flip the row. Each rides its named side effect.
+  setSessionGoal: (conversationId: string, objective: string, clientKey: string) => void;
+  pauseSessionGoal: (conversationId: string) => void;
+  resumeSessionGoal: (conversationId: string) => void;
+  clearSessionGoal: (conversationId: string) => void;
   // Local marks that a session's open AskUserQuestion / permission ask was
   // handled here (answered, dismissed, or evicted). Ephemeral by design — not
   // persisted, so a reload re-reads server truth. Every question surface reads
@@ -9990,6 +9998,38 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
     const row = this.sessionDecisions[decisionId];
     if (row && row.stack_id === stackId) row.stack_id = undefined;
+  }),
+  setSessionGoal: action(function (this: Draft, conversationId: string, objective: string, clientKey: string) {
+    const goals = this.sessionGoals;
+    const previous = sessionGoalOf(goals, conversationId);
+    if (previous && previous.status !== "cleared") previous.status = "cleared";
+    const now = Date.now();
+    goals[clientKey] = {
+      _id: clientKey, client_key: clientKey, conversation_id: conversationId, objective: objective.trim(),
+      status: "active", rounds: 0, max_rounds: GOAL_MAX_ROUNDS, stalls: 0, max_stalls: GOAL_MAX_STALLS,
+      idle_limit_ms: GOAL_IDLE_LIMIT_MS, last_activity_at: now, created_at: now, updated_at: now,
+    };
+  }),
+  pauseSessionGoal: action(function (this: Draft, conversationId: string) {
+    const goal = sessionGoalOf(this.sessionGoals, conversationId);
+    if (goal?.status !== "active") return;
+    goal.status = "paused";
+    goal.reason = "Paused by the person";
+  }),
+  resumeSessionGoal: action(function (this: Draft, conversationId: string) {
+    const goal = sessionGoalOf(this.sessionGoals, conversationId);
+    if (goal?.status !== "paused" && goal?.status !== "blocked") return;
+    goal.status = "active";
+    goal.rounds = 0;
+    goal.stalls = 0;
+    goal.reason = undefined;
+    goal.next_step = undefined;
+    goal.verdict = undefined;
+  }),
+  clearSessionGoal: action(function (this: Draft, conversationId: string) {
+    const goal = sessionGoalOf(this.sessionGoals, conversationId);
+    if (!goal || goal.status === "cleared") return;
+    goal.status = "cleared";
   }),
   createStackWith: action(function (this: Draft, input: { title: string; decision_ids: string[]; team_id?: string; client_key: string }) {
     const now = Date.now();

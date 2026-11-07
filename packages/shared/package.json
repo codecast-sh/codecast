@@ -60,6 +60,7 @@
     "./contracts/problemScore": "./contracts/problemScore.ts",
     "./contracts/lineWords": "./contracts/lineWords.ts",
     "./contracts/modelCall": "./contracts/modelCall.ts",
+    "./contracts/sessionGoal": "./contracts/sessionGoal.ts",
     "./contracts/pageData": "./contracts/pageData.ts",
     "./contracts/replay": "./contracts/replay.ts",
     "./contracts/replayPlayer": "./contracts/replayPlayer.ts",
