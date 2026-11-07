@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as net from "node:net";
 import * as os from "node:os";
+import * as path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
 import { freePort } from "../instance.js";
@@ -838,5 +839,68 @@ describe("bridge host as a CDP endpoint", () => {
     expect(await replaced).toBe(1000);
     expect(h.extensionConnected()).toBe(true);
     ext2.ws.close();
+  });
+});
+
+describe("bridge host guardrails", () => {
+  const agentTab = (tabId: number, url: string) => ({ ...FakeExtension.tab(tabId, url), owned: true });
+
+  test("refuses jar-wide wipes before the extension, and narrows cookie reads to the client's own tab hosts", async () => {
+    const h = await freshHost();
+    const ext = await new FakeExtension([agentTab(7, "https://www.example.com/a"), agentTab(8, "https://bank.com/")]).connect(h.port);
+    ext.cdpResult = (method) =>
+      method === "Network.getAllCookies" || method === "Storage.getCookies" || method === "Network.getCookies"
+        ? { cookies: [{ name: "site", domain: ".example.com" }, { name: "bank", domain: "bank.com" }] }
+        : undefined;
+    const conn = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+
+    for (const method of ["Network.getAllCookies", "Storage.getCookies", "Network.getCookies"]) {
+      const r = await conn.send<{ cookies: Array<{ name: string }> }>(method, {}, sessionId);
+      expect({ method, names: r.cookies.map((c) => c.name) }).toEqual({ method, names: ["site"] });
+    }
+    await expect(conn.send("Network.getCookies", { urls: ["https://bank.com/"] }, sessionId)).rejects.toThrow(/refuses Network.getCookies for https:\/\/bank.com/);
+    await expect(conn.send("Network.setCookie", { name: "x", value: "1", domain: ".bank.com" }, sessionId)).rejects.toThrow(/refuses Network.setCookie/);
+    expect((await conn.send<any>("Network.setCookie", { name: "x", value: "1", url: "https://www.example.com/" }, sessionId)).echo.method).toBe("Network.setCookie");
+    await expect(conn.send("Network.clearBrowserCookies", {}, sessionId)).rejects.toThrow(/refuses Network.clearBrowserCookies/);
+    await expect(conn.send("Storage.clearDataForOrigin", { origin: "https://www.example.com", storageTypes: "all" }, sessionId)).rejects.toThrow(/refuses Storage.clearDataForOrigin/);
+    await expect(conn.send("Page.navigate", { url: "file:///etc/passwd" }, sessionId)).rejects.toThrow(/refuses Page.navigate/);
+    await expect(conn.send("Browser.grantPermissions", { permissions: ["geolocation"] })).rejects.toThrow(/refuses Browser.grantPermissions/);
+    await expect(conn.send("Target.createTarget", { url: "chrome://settings" })).rejects.toThrow(/refuses Target.createTarget/);
+    const reached = ext.seen.filter((m) => m.op === "cdp").map((m) => m.method);
+    for (const m of ["Network.clearBrowserCookies", "Storage.clearDataForOrigin", "Browser.grantPermissions"]) expect(reached).not.toContain(m);
+    expect(reached.filter((m) => m === "Network.setCookie")).toHaveLength(1);
+    expect(reached.filter((m) => m === "Page.navigate")).toHaveLength(0);
+    conn.close();
+  });
+
+  test("a session's allowlist refuses an off-list navigate and blanks an off-list landing", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-guard-"));
+    fs.mkdirSync(path.join(dir, ".codecast"));
+    fs.writeFileSync(path.join(dir, ".codecast", "workspace.toml"), `[browser]\nallow = ["*.example.com"]\n`);
+    const h = await freshHost();
+    const ext = await new FakeExtension([agentTab(7, "https://www.example.com/a")]).connect(h.port);
+    const grant = await fetch(`http://127.0.0.1:${h.port}/grant?token=${TOKEN}&session=s1&target=${targetIdOfTab(7)}&cwd=${encodeURIComponent(dir)}`, { method: "POST" });
+    expect(grant.status).toBe(200);
+    const conn = await CdpConnection.fromPort({ ...cdpEndpoint(h.port), session: "s1" });
+    const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true });
+    await expect(conn.send("Page.navigate", { url: "https://evil.test/" }, sessionId)).rejects.toThrow(/refuses to navigate to https:\/\/evil.test\/: https:\/\/evil.test is not in the site allowlist/);
+    expect((await conn.send<any>("Page.navigate", { url: "https://docs.example.com/" }, sessionId)).echo.params.url).toBe("https://docs.example.com/");
+    await expect(conn.send("Target.createTarget", { url: "http://127.0.0.1:8080" })).rejects.toThrow(/refuses to open/);
+
+    // A redirect carries the tab off the list: the host sends it to about:blank.
+    ext.tabEvent("updated", agentTab(7, "https://evil.test/landing"));
+    const deadline = Date.now() + 3000;
+    const blanked = () => ext.seen.some((m) => m.op === "cdp" && m.tabId === 7 && m.method === "Page.navigate" && m.params.url === "about:blank");
+    while (!blanked() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 15));
+    expect(blanked()).toBe(true);
+    // An in-list landing and the blank page itself are left alone.
+    const before = ext.seen.length;
+    ext.tabEvent("updated", agentTab(7, "about:blank"));
+    ext.tabEvent("updated", agentTab(7, "https://www.example.com/b"));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(ext.seen.slice(before).filter((m) => m.op === "cdp" && m.method === "Page.navigate")).toEqual([]);
+    conn.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
