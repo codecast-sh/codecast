@@ -129,6 +129,10 @@ export const CODECAST_STATUS_HOOK = `#!/bin/bash
 # Reports Claude Code lifecycle events to codecast daemon via status files
 set -uo pipefail
 
+# A session on codecast's Claude SDK backend reports status and answers its
+# permission prompts through its host process, so this hook stands down there.
+[ "\${CODECAST_CLAUDE_BACKEND:-}" = "sdk" ] && { cat >/dev/null 2>&1; exit 0; }
+
 # Envelope keys sit at the front. A UserPromptSubmit payload can carry a
 # megabyte prompt after them; copying all of it into the shell is wasted work
 # except when we need the AskUserQuestion questions array for the sidecar.
