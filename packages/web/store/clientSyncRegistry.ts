@@ -1328,6 +1328,17 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["permissions.getPendingPermissions"],
   },
+  // The viewer's saved approvals and denies (permission_rules), listed in
+  // Settings > Approvals. permissionRules.list answers the complete set, so
+  // a snapshot (absence means removed). localFirst: Remove deletes the row on
+  // the draft and rides removePermissionRule to permissionRules.remove.
+  permissionRules: {
+    persistence: { kind: "collection", key: "permissionRules" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    sync: {},
+    feeds: ["permissionRules.list"],
+  },
   // Messages guests suggested for one of the owner's shared sessions
   // (guestSuggestions.listPending), the cards above the owner's composer.
   // localFirst like pendingPermissions: Send or Dismiss removes the row, and
@@ -2022,6 +2033,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sessionCommands: "local",
   sessionMetricsAggregate: "shared",
   pendingPermissions: "shared",
+  permissionRules: "shared",
   guestSuggestions: "shared",
   pendingMessageStatus: "shared",
   messageFeed: "shared",
