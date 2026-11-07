@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Popup opener</title></head>
+<body>
+<h1>Popup opener</h1>
+<button id="open-same" onclick="window.open('/popup-child.html', 'rigpopup', 'width=480,height=360')">Open popup</button>
+<button id="open-cross" onclick="window.open('{{OTHER_ORIGIN}}/popup-child.html', 'rigpopup2', 'width=480,height=360')">Open cross-origin popup</button>
+<a id="open-blank" href="/popup-child.html" target="_blank">Open in new tab</a>
+<p id="status">no popup yet</p>
+<script>
+  window.addEventListener("message", (e) => { document.getElementById("status").textContent = "popup said: " + e.data; });
+</script>
+</body></html>

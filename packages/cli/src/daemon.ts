@@ -4268,6 +4268,7 @@ const agentBridges = new HeldConnections({
   },
 });
 let agentBridgeNoAgentLogged = false;
+let browserLinks: import("./cloud/browserLink.js").BrowserLinks | null = null;
 let agentBridgesInFlight = false;
 
 async function maintainAgentBridges(): Promise<void> {
@@ -29800,6 +29801,13 @@ async function main(): Promise<void> {
   setInterval(() => { maintainAgentBridges().catch(() => {}); }, AGENT_BRIDGE_TICK_MS);
   setTimeout(() => { maintainReach().catch(() => {}); }, 20_000 * bootPacing.fanoutOffsetScale);
   setInterval(() => { maintainReach().catch(() => {}); }, REACH_TICK_MS);
+  // The laptop Chrome link (cloud/browserLink.ts, decision sd-2645): every
+  // managed host that is up drives this laptop's Chrome, on by default.
+  if (!isRemoteDevice()) {
+    void import("./cloud/browserLink.js").then(({ startBrowserLinks }) => {
+      browserLinks = startBrowserLinks({ log: (m, level) => log(m, level), firstTickMs: 30_000 * bootPacing.fanoutOffsetScale });
+    }).catch((err) => log(`[BROWSER-LINK] did not start: ${err instanceof Error ? err.message : String(err)}`));
+  }
   // The local halves of codecast mods (mods/localRunner.ts): each in its own
   // Worker, and only at a version a person approved on this machine.
   void import("./mods/localRunner.js").then(({ startLocalMods }) => { localMods = startLocalMods({
@@ -32605,6 +32613,7 @@ async function main(): Promise<void> {
     stopEvalsBridge();
     void mirrorProcess?.stop().catch((err) => log(`[MIRROR] stop failed: ${err instanceof Error ? err.message : String(err)}`));
     for (const [key] of [...reaches.entries()]) reaches.close(key, "daemon shutting down");
+    browserLinks?.closeAll("daemon shutting down");
     appServerShuttingDown = true;
     clearInterval(appServerRecoveryTimer);
     skipRespawn = true;
