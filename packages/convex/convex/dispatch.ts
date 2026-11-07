@@ -15,6 +15,7 @@ import type { AreaAssignment } from "@codecast/shared/contracts/decisionAreas";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { askCore as askDecisionCore, commentCore, deleteCore as deleteDecisionCommentCore, editCore as editDecisionCommentCore, resolveCore as resolveDecisionThreadCore } from "./decisionThread";
 import { sendLineChatCore } from "./lineChat";
+import { askCore as askSideQuestionCore } from "./sideAnswers";
 import { clearHoldCore, moveLiveFlowCore, setOnCore, startLiveFlowCore } from "./liveFlows";
 import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
@@ -519,6 +520,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // The name bundles from before the thread send under.
   discussDecision: async (ctx, userId, [decisionId, text, clientId]: [string, string, string]) =>
     commentCore(ctx, userId, { decision: decisionId, text, client_id: clientId }),
+  // `/btw` in a conversation's composer (sideAnswers.ts): a pending row the cheap model answers, never sent to the agent.
+  askSideQuestion: async (ctx, userId, [conversationId, question, clientId]: [string, string, string]) =>
+    askSideQuestionCore(ctx as any, userId, { conversation_id: conversationId, question, client_id: clientId }),
   // A person's words to the session that answers a project's line (lineChat.ts),
   // refused the same way: returned, never thrown.
   sendLineChat: async (ctx, userId, [projectId, text, clientId, graph, focus]: [string, string, string, string | null, string | null]) =>

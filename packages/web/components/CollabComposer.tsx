@@ -20,6 +20,8 @@ import { KeyCap } from "./KeyCap";
 import { isMac } from "../shortcuts";
 import { useJointComposer } from "../hooks/useJointComposer";
 import { armJointSend, composeJointTurn } from "../lib/jointSend";
+import { parseSideQuestion } from "../lib/builtinCommands";
+import { toast } from "sonner";
 import type { JointCandidate } from "../lib/jointSend";
 import { TypingIndicator } from "./chat/TypingIndicator";
 import { rosterIdentity } from "../hooks/useTeamRoster";
@@ -181,7 +183,11 @@ export const OwnerComposerPresence = memo(function OwnerComposerPresence({
   /** Replace the owner's composer text (a claim took words out of it). */
   onPopulate?: (text: string) => void;
 }) {
-  const draft = useInboxStore((s) => s.drafts[conversationId]?.draft_message ?? "") as string;
+  const stored = useInboxStore((s) => s.drafts[conversationId]?.draft_message ?? "") as string;
+  // A side question being typed (`/btw`) is the asker's own: the strip never shows it to the others,
+  // and Send together waits until the box holds a turn (that send would only ask the question).
+  const ownSideQuestion = parseSideQuestion(stored) !== null;
+  const draft = ownSideQuestion ? "" : stored;
   const me = useInboxStore((s) => personName(s.currentUser));
   const present = useComposerPresence(conversationId, draft, { enabled: true, forceBroadcast: false });
   const shared = useSharedDraftStatus(conversationId);
@@ -199,7 +205,7 @@ export const OwnerComposerPresence = memo(function OwnerComposerPresence({
         present={present}
         showHere={showHere}
         boxed
-        joint={{ candidates, mineEmpty: !draft.trim(), onSend: sendTogether }}
+        joint={ownSideQuestion ? undefined : { candidates, mineEmpty: !draft.trim(), onSend: sendTogether }}
         shared={shared.active ? shared : null}
         chat={people.length > 0 ? <ConversationChat conversationId={conversationId} people={people} /> : null}
       />
@@ -320,7 +326,7 @@ export const CollabComposer = memo(function CollabComposer({
   async function handleSend(together = false, queue = false) {
     // Together: one turn, my words and the others' live drafts each under
     // their author's name; the server checks each part against its draft.
-    if (busy) return;
+    if (busy || ownersSideQuestion()) return;
     const mine = attachReviewToMessage(convKey, message).trim();
     const body = together ? composeJointTurn(me, mine, candidates) : mine;
     if (!body) return;
@@ -354,7 +360,16 @@ export const CollabComposer = memo(function CollabComposer({
     return () => attachSend(null);
   }, [attachSend]);
 
+  // In a shared draft a leading `/btw` is the owner's side question: theirs to
+  // ask, never a turn here or in a fork. Every way out of this box asks first.
+  function ownersSideQuestion(): boolean {
+    if (!shared.active || parseSideQuestion(message) === null) return false;
+    toast.error("That is a side question; only the session's owner can ask it");
+    return true;
+  }
+
   function forkWithBatch() {
+    if (ownersSideQuestion()) return;
     const text = attachReviewToMessage(convKey, message).trim();
     if (text) onForkReply?.(text);
   }
