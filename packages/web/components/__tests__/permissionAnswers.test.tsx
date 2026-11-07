@@ -91,10 +91,29 @@ test("Always allow names the suggested rule and answers with it", async () => {
       onApproveAll: () => {}, onDenyAll: () => {},
     }));
     const btn = q("[data-always-allow]")!;
-    assert.equal(btn.textContent, "Always allow Bash(bun test:*)");
+    assert.deepEqual([...btn.querySelectorAll("[data-always-allow-rule]")].map((c) => c.textContent), ["Bash(bun test:*)"]);
     assert.equal(document.querySelectorAll("[data-always-allow]").length, 1, "only the row with a suggestion offers it");
     await React.act(async () => btn.click());
     assert.deepEqual(calls, ["p1"]);
+  } finally { await done(); }
+}, 120_000);
+
+test("Always allow names codecast's own rules, one chip each, and nothing for a call it cannot keep", async () => {
+  const { React, render, done } = await dom();
+  try {
+    const { PermissionStackView } = await import("../PermissionCard");
+    const pending = [
+      { _id: "p1", tool_name: "Bash", arguments_preview: "npm run build && rm -rf dist", status: "pending" as const, suggestions: [RULE],
+        rule_request: { permission: "bash", patterns: ["npm run build", "rm -rf dist"], always: ["npm run build *", "rm *"] } },
+      { _id: "p2", tool_name: "Bash", arguments_preview: "echo $(x)", status: "pending" as const,
+        rule_request: { permission: "bash", patterns: ["echo $(x)"], always: [], opaque: true } },
+    ];
+    await render(React.createElement(PermissionStackView, {
+      pending, inflight: new Set<string>(), onApprove: () => {}, onDeny: () => {}, onAlwaysAllow: () => {}, onApproveAll: () => {}, onDenyAll: () => {},
+    }));
+    const buttons = document.querySelectorAll("[data-always-allow]");
+    assert.equal(buttons.length, 1, "the opaque call offers nothing to keep");
+    assert.deepEqual([...buttons[0].querySelectorAll("[data-always-allow-rule]")].map((c) => c.textContent), ["npm run build *", "rm *"]);
   } finally { await done(); }
 }, 120_000);
 

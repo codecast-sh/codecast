@@ -10,6 +10,7 @@ import { allowAllLedger } from "./consequential/ledgers";
 import { useInboxStore } from "../store/inboxStore";
 import { formatToolName } from "@codecast/shared/render";
 import { permissionSourceTags, removalCountLabel, type PermissionRemoval } from "@codecast/shared/render/permissionCardStyle";
+import { keptPatterns, permissionRuleLabel, type PermissionRuleRequest } from "@codecast/shared/contracts/permissionRules";
 
 /**
  * The tool a permission asks for. Formatted (an MCP id like
@@ -54,6 +55,7 @@ type Permission = {
   safety_check?: boolean;
   intent?: string;
   removals?: PermissionRemoval[];
+  rule_request?: PermissionRuleRequest;
 };
 
 /** The fields the view renders. A real row satisfies it, and so does a fixture with a plain string id. */
@@ -74,6 +76,8 @@ export type PermissionViewItem<PId extends string = string> = {
   intent?: string;
   /** What each rm in the call would delete, read from the disk when it asked. */
   removals?: PermissionRemoval[];
+  /** The call in codecast's rule terms: "Always allow" keeps its `always` patterns. */
+  rule_request?: PermissionRuleRequest;
 };
 
 /** What the call is for and what it would delete: the two things a person
@@ -154,21 +158,33 @@ export function permissionRuleLabels(suggestions: unknown[] | undefined): string
   return labels;
 }
 
+/** What "Always allow" keeps for this row: codecast's own rules when it can
+ *  keep any, else Claude's suggestions (the server keeps the same ones). */
+export function alwaysAllowLabels(permission: Pick<PermissionViewItem, "rule_request" | "suggestions">): string[] {
+  const r = permission.rule_request;
+  const kept = keptPatterns(r);
+  if (r && kept.length) return kept.map((pattern) => permissionRuleLabel({ permission: r.permission, pattern }));
+  return permissionRuleLabels(permission.suggestions);
+}
+
 const DENY_CLASS = "px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none";
 
-/** Approves and keeps the rule Claude suggested, named on the button itself. */
+/** Approves and keeps the rules, each named as its own chip on the button,
+ *  so a compound command shows every rule it grants. */
 function AlwaysAllowButton({ permission, onAlwaysAllow, className = "" }: { permission: PermissionViewItem; onAlwaysAllow?: (id: string) => void; className?: string }) {
-  const rules = permissionRuleLabels(permission.suggestions);
+  const rules = alwaysAllowLabels(permission);
   if (!onAlwaysAllow || rules.length === 0) return null;
-  const named = rules.join(" ");
   return (
     <button
       onClick={() => onAlwaysAllow(permission._id)}
-      title={named}
+      title={rules.join("\n")}
       data-always-allow
-      className={`min-w-0 max-w-[18rem] truncate py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-green/30 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors ${className}`}
+      className={`flex min-w-0 max-w-[24rem] items-center gap-1 overflow-hidden py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-green/30 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors ${className}`}
     >
-      Always allow <span className="font-mono font-normal">{named}</span>
+      <span className="shrink-0">Always allow</span>
+      {rules.map((r) => (
+        <span key={r} data-always-allow-rule className="min-w-0 truncate rounded bg-sol-green/12 px-1 font-mono font-normal">{r}</span>
+      ))}
     </button>
   );
 }
