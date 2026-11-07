@@ -1,4 +1,5 @@
 import { permissionRemovalValidator } from "./lib/permissionRemoval";
+import { ruleRequestValidator } from "./lib/permissionRuleRequest";
 import { distributionValidator, updateStateValidator } from "./lib/deviceUpdate";
 import { resourceOffloadIntent } from "./resourceOffloadSchema";
 import { syncOutboxTables } from "./syncOutboxSchema";
@@ -4935,6 +4936,11 @@ export default defineSchema({
     // delete as the daemon read the disk when the prompt opened.
     intent: v.optional(v.string()),
     removals: v.optional(v.array(permissionRemovalValidator)),
+    // What the call asks for in codecast's own rule terms (shared/contracts
+    // permissionRules.ts): the permission, the patterns it touches, and the
+    // rules "always" would keep. An answer re-checks the session's other
+    // pending rows against the rules it saved.
+    rule_request: v.optional(ruleRequestValidator),
   })
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_session", ["session_id"])
@@ -5241,6 +5247,24 @@ export default defineSchema({
     .index("by_short_id", ["short_id"])
     .index("by_status", ["status"]),
 
+  // A saved approval or a configured deny (lib/permissionRules.ts): settles a
+  // tool call from any harness before a card exists. Owned and read by
+  // `user_id` alone; `project` and `scope` say where it applies (the
+  // repository, and the workspace key of the sessions it settles). `scope` is
+  // not access: a team-scoped rule still governs only its owner's sessions.
+  permission_rules: defineTable({
+    user_id: v.id("users"),
+    project: v.string(),
+    scope: v.string(),
+    permission: v.string(),
+    pattern: v.string(),
+    action: v.union(v.literal("allow"), v.literal("deny")),
+    created_at: v.number(),
+    source_conversation_id: v.optional(v.id("conversations")),
+  })
+    .index("by_user_project", ["user_id", "project"])
+    .index("by_user", ["user_id", "created_at"]),
+
   // A role may answer decisions of one category in one scope without a person
   // (D2). Earned from agreement history or delegated by a stack policy; expires
   // after 30 days; revoked after two consecutive overrides.
@@ -5282,6 +5306,8 @@ export default defineSchema({
   authority_events: defineTable({
     kind: v.union(
       v.literal("permission_answered"),
+      v.literal("permission_rule_saved"),
+      v.literal("permission_rule_removed"),
       v.literal("share_link_minted"),
       v.literal("share_link_revoked"),
       v.literal("share_link_redeemed"),
