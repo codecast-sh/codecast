@@ -4359,6 +4359,28 @@ export default defineSchema({
     .index("by_user_day", ["user_id", "day_start"])
     .index("by_user_team_day", ["user_id", "team_id", "day_start"]),
 
+  // Side answers (`/btw` in the composer, sideAnswers.ts): one person's
+  // question about a conversation, answered by the cheap model over its synced
+  // transcript and never sent to the agent. Private to the asker; readable only
+  // while the asker can still read the conversation. `client_id` is the id the
+  // composer's optimistic row carried, so the server row supersedes it.
+  side_answers: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    client_id: v.string(),
+    question: v.string(),
+    status: v.union(v.literal("pending"), v.literal("answered"), v.literal("failed")),
+    answer: v.optional(v.string()),
+    citations: v.optional(v.array(v.object({ line: v.number(), message_id: v.string() }))),
+    unread: v.optional(v.object({ after: v.number(), before: v.number() })),
+    error_code: v.optional(v.string()),
+    error_message: v.optional(v.string()),
+    created_at: v.number(),
+    answered_at: v.optional(v.number()),
+  })
+    .index("by_conversation_user", ["conversation_id", "user_id", "created_at"])
+    .index("by_client_id", ["client_id"]),
+
   session_insights: defineTable({
     conversation_id: v.id("conversations"),
     team_id: v.optional(v.id("teams")),
