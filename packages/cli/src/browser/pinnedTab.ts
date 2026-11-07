@@ -8,7 +8,7 @@ import {
 import { liveDesktopPaneRegistry } from "./desktopPaneRegistry.js";
 import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
-import { grantTab } from "./bridge/host.js";
+import { grantTab, TabTakenBackError } from "./bridge/host.js";
 import { retryOnStall } from "./stall.js";
 import { CAST_TAB_GROUP } from "./bridge/protocol.js";
 import { isPidAlive } from "../workspace/chrome.js";
@@ -212,7 +212,20 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
     const target = bound;
     // The host verifies the grant with a tab listing from the worker, whose
     // process may be frozen (stall.ts): asked once more before it counts.
-    if (!(await retryOnStall(() => grantTab(bridge, session, target, { own: true })))) {
+    let granted: boolean;
+    try {
+      granted = await retryOnStall(() => grantTab(bridge, session, target, { own: true }));
+    } catch (err) {
+      // The human took the tab back. Any verb but `open` stops here and says
+      // so, rather than driving another of the session's tabs it never chose;
+      // `open <url>` drops the binding and moves to a page of its own. The
+      // daemon still holds the old tab and reads a binding only at attach.
+      if (!(err instanceof TabTakenBackError)) throw err;
+      if (!url) throw new Error(`${err.message}. Open a page of your own with \`cast browser open <url>\`; if they lend it to you again, \`cast browser tab switch ${err.targetId}\` takes it.`);
+      detachSessionDaemon(session);
+      granted = false;
+    }
+    if (!granted) {
       fs.rmSync(path.join(engineStateDir(), `${session}.target`), { force: true });
       bound = null;
     }
