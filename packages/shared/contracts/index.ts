@@ -135,7 +135,7 @@ export * from "./unattended";
 export * from "./handoffPrompt";
 export * from "./browserExtension";
 export * from "./agentToolSetup";
-export type { AskResult } from "./sessionAsk";
+export type { AskResult, SideAnswerRow } from "./sessionAsk";
 export * from "./systemResources";
 export * from "./resourceOffloadPolicy";
 export * from "./testArtifacts";
