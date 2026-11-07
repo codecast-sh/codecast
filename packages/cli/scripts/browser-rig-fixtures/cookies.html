@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Cookies</title></head>
+<body>
+<h1>Cookies</h1>
+<p>The server set <code>rig_session</code> (HttpOnly), <code>rig_pref</code> (SameSite=Lax, 1 day) and <code>rig_strict</code> (SameSite=Strict) on this response; the page sets <code>rig_js</code>.</p>
+<p>document.cookie: <code id="cookies"></code></p>
+<button id="set-more" onclick="document.cookie = 'rig_clicked=' + Date.now() + '; path=/'; show()">Set another cookie</button>
+<script>
+  document.cookie = "rig_js=from-script; path=/";
+  function show() { document.getElementById("cookies").textContent = document.cookie; }
+  show();
+</script>
+</body></html>

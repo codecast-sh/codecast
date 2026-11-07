@@ -38,6 +38,16 @@
  */
 
 import type { PageSession } from "./instance.js";
+import { childFrames, frameRef } from "./oopif.js";
+
+/** A cross-origin frame's heading: its host, or the URL when it has none. */
+function frameLabel(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url || "blank";
+  }
+}
 
 /** Roles a user can act on. These always get a line and a ref. */
 const INTERACTIVE = new Set([
@@ -295,9 +305,9 @@ export async function snapshotPage(page: PageSession, opts: SnapshotOptions = {}
     .then((r) => JSON.parse(r.result.value) as [string, string])
     .catch(() => ["", ""] as [string, string]);
 
-  // Frame list: the main frame plus any child frames sharing this session.
-  // A cross-origin frame runs out of process and needs its own target, which
-  // `frames` handling below reports rather than silently omitting.
+  // Frame list: the main frame plus any child frames sharing this session,
+  // then each cross-origin frame through its own child session (oopif.ts),
+  // whose refs carry the frame's key.
   let frameIds: (string | undefined)[] = [undefined];
   if (opts.frames !== false) {
     try {
@@ -317,14 +327,26 @@ export async function snapshotPage(page: PageSession, opts: SnapshotOptions = {}
   let truncated = false;
   let rawNodes = 0;
 
-  for (const frameId of frameIds) {
+  const sources: Array<{ sessionId: string; frameId?: string; label?: string; key: number }> = frameIds.map((frameId) => ({
+    sessionId,
+    frameId,
+    label: frameId ? `frame ${frameId.slice(0, 8)}` : undefined,
+    key: 0,
+  }));
+  if (opts.frames !== false) {
+    for (const f of await childFrames(page).catch(() => [])) {
+      sources.push({ sessionId: f.sessionId, label: `frame ${frameLabel(f.url)} (cross-origin)`, key: f.key });
+    }
+  }
+
+  for (const source of sources) {
     if (truncated) break;
     let nodes: AXNode[];
     try {
       const res = await conn.send<{ nodes: AXNode[] }>(
         "Accessibility.getFullAXTree",
-        frameId ? { frameId } : {},
-        sessionId,
+        source.frameId ? { frameId: source.frameId } : {},
+        source.sessionId,
       );
       nodes = res.nodes;
     } catch {
@@ -335,9 +357,9 @@ export async function snapshotPage(page: PageSession, opts: SnapshotOptions = {}
 
     const byId = new Map(nodes.map((n) => [n.nodeId, n]));
     const root = nodes.find((n) => !n.parentId) ?? nodes[0];
-    const baseDepth = frameId ? 1 : 0;
-    if (frameId) {
-      const line = `frame ${frameId.slice(0, 8)}`;
+    const baseDepth = source.label ? 1 : 0;
+    if (source.label) {
+      const line = source.label;
       out.push(line);
       chars += line.length + 1;
     }
@@ -377,8 +399,9 @@ export async function snapshotPage(page: PageSession, opts: SnapshotOptions = {}
               .map((p) => (p.value?.value === true ? p.name : `${p.name}=${p.value?.value}`));
             if (flags.length) bits.push(`[${flags.join(",")}]`);
             if (interactive && node.backendDOMNodeId) {
-              bits.push(`#e${node.backendDOMNodeId}`);
-              refs.push({ ref: node.backendDOMNodeId, role, name });
+              const ref = source.key ? frameRef(source.key, node.backendDOMNodeId) : node.backendDOMNodeId;
+              bits.push(`#e${ref}`);
+              refs.push({ ref, role, name });
             }
             line = indent + bits.join(" ");
           }
