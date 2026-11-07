@@ -99,6 +99,7 @@ export {
   sessionRoomKey,
   type ParsedRoomKey,
 } from "@codecast/shared/contracts";
+import { featureVendorRefusal } from "./lib/vendorGuard";
 
 /** The lease is the truth: a row older than the stale window is not in the
  *  room, whatever else it says. One filter for every reader (occupancy,
@@ -459,6 +460,14 @@ export async function liveSeat(
   return row && liveMembers([row], now).length > 0 ? row : null;
 }
 
+/** Why a team cannot hold calls, or null when it can: the calls feature is
+ *  off, or the team holds regulated data and LiveKit, which carries every
+ *  call's audio and video, has no BAA with Codecast yet (lib/vendorGuard). */
+export async function callsOffReason(ctx: { db: any }, teamId: Id<"teams">): Promise<string | null> {
+  if (!(await teamHasFeature(ctx, teamId, "calls"))) return teamFeatureOffMessage("calls");
+  return featureVendorRefusal(ctx, teamId, "calls");
+}
+
 export type RoomAuthorization =
   | { ok: true; teamId: Id<"teams">; parsed: ParsedRoomKey }
   | { ok: false; reason: string };
@@ -483,10 +492,8 @@ export async function authorizeRoomNoGrant(
   }
   const auth = await authorizeRoomMembership(ctx, userId, roomKey);
   if (!auth.ok) return auth;
-  if (!(await teamHasFeature(ctx, auth.teamId, "calls"))) {
-    return { ok: false, reason: teamFeatureOffMessage("calls") };
-  }
-  return auth;
+  const off = await callsOffReason(ctx, auth.teamId);
+  return off ? { ok: false, reason: off } : auth;
 }
 
 /** May this user ring MORE people into the room? Membership answers yes as it
@@ -507,10 +514,8 @@ export async function authorizeRoomInviter(
   if (!parsed || parsed.kind === "channel") return auth;
   const seat = await liveSeat(ctx, userId, roomKey);
   if (!seat) return auth;
-  if (!(await teamHasFeature(ctx, seat.team_id, "calls"))) {
-    return { ok: false, reason: teamFeatureOffMessage("calls") };
-  }
-  return { ok: true, teamId: seat.team_id, parsed };
+  const off = await callsOffReason(ctx, seat.team_id);
+  return off ? { ok: false, reason: off } : { ok: true, teamId: seat.team_id, parsed };
 }
 
 // May `userId` participate in `roomKey`? Returns the team the room bills its
@@ -558,10 +563,8 @@ export async function authorizeRoom(
   // the server's OPENAI_API_KEY, and mintAsrToken says so in plain words when
   // it is missing.
   if (auth.parsed.kind === "rec") return auth;
-  if (!(await teamHasFeature(ctx, auth.teamId, "calls"))) {
-    return { ok: false, reason: teamFeatureOffMessage("calls") };
-  }
-  return auth;
+  const off = await callsOffReason(ctx, auth.teamId);
+  return off ? { ok: false, reason: off } : auth;
 }
 
 /** The membership rules alone, without the feature gate. Exported for

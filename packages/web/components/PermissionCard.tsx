@@ -1,4 +1,6 @@
 import { useState, useCallback } from "react";
+import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 import { useEventListener } from "../hooks/useEventListener";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { MenuKeyCaps } from "./KeyboardShortcutsHelp";
@@ -7,6 +9,7 @@ import { SwitchReview } from "./consequential/ConsequentialSwitch";
 import { allowAllLedger } from "./consequential/ledgers";
 import { useInboxStore } from "../store/inboxStore";
 import { formatToolName } from "@codecast/shared/render";
+import { permissionSourceTags, removalCountLabel, type PermissionRemoval } from "@codecast/shared/render/permissionCardStyle";
 
 /**
  * The tool a permission asks for. Formatted (an MCP id like
@@ -46,6 +49,11 @@ type Permission = {
   created_at: number;
   responded_at?: number;
   suggestions?: unknown[];
+  subagent_type?: string;
+  subagent_conversation_id?: string;
+  safety_check?: boolean;
+  intent?: string;
+  removals?: PermissionRemoval[];
 };
 
 /** The fields the view renders. A real row satisfies it, and so does a fixture with a plain string id. */
@@ -56,7 +64,75 @@ export type PermissionViewItem<PId extends string = string> = {
   status: Permission["status"];
   /** Claude Code's permission_suggestions: what "Always allow" would add. */
   suggestions?: unknown[];
+  /** The subagent that asked, by type; absent when the session's own agent did. */
+  subagent_type?: string;
+  /** That subagent's own conversation: its steps up to this call. */
+  subagent_conversation_id?: string;
+  /** Claude Code's built-in safety check asked (it still asks in bypass mode). */
+  safety_check?: boolean;
+  /** The agent's own one-line account of the call. */
+  intent?: string;
+  /** What each rm in the call would delete, read from the disk when it asked. */
+  removals?: PermissionRemoval[];
 };
+
+/** What the call is for and what it would delete: the two things a person
+ *  needs to answer it, above the raw command. */
+function PermissionContext({ permission }: { permission: Pick<PermissionViewItem, "intent" | "removals"> }) {
+  const removals = permission.removals ?? [];
+  if (!permission.intent && removals.length === 0) return null;
+  return (
+    <div className="px-2.5 pb-1 space-y-0.5 whitespace-normal">
+      {permission.intent && (
+        <div data-permission-intent className="text-[12px] text-sol-text">{permission.intent}</div>
+      )}
+      {removals.map((r, i) => (
+        <div key={i} data-permission-removal className="flex items-baseline gap-2 text-[11px] font-mono min-w-0">
+          <span className="text-sol-red flex-shrink-0">rm</span>
+          <span className="text-sol-text truncate min-w-0" title={r.target}>{r.target}</span>
+          <span className={`flex-shrink-0 font-sans ${r.note ? "text-sol-text-dim italic" : r.files || r.dirs ? "text-sol-red" : "text-sol-text-dim"}`}>
+            {removalCountLabel(r)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Who is asking, beside the tool name (permissionSourceTags). */
+function PermissionSourceTag({ permission, className = "text-[10px]" }: {
+  permission: Pick<PermissionViewItem, "subagent_type" | "subagent_conversation_id" | "safety_check">;
+  className?: string;
+}) {
+  const tags = permissionSourceTags(permission);
+  if (tags.length === 0) return null;
+  const subagentConv = permission.subagent_conversation_id;
+  return (
+    <span className={`flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${className}`}>
+      {tags.map((t) => {
+        const tone = t.kind === "subagent" ? "bg-sol-violet/12 text-sol-violet" : "bg-sol-orange/12 text-sol-orange";
+        // The subagent's own conversation holds what it did before asking;
+        // the parent thread shows only the Task call that started it.
+        return t.kind === "subagent" && subagentConv ? (
+          <Link
+            key={t.kind}
+            href={`/conversation/${subagentConv}`}
+            data-permission-source={t.kind}
+            data-permission-subagent-link
+            className={`inline-flex items-center gap-0.5 px-1 rounded ${tone} hover:bg-sol-violet/25 transition-colors`}
+          >
+            {t.label}
+            <ArrowUpRight className="w-2.5 h-2.5" />
+          </Link>
+        ) : (
+          <span key={t.kind} data-permission-source={t.kind} className={`px-1 rounded ${tone}`}>
+            {t.label}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
 
 /**
  * Claude's suggested permission updates, written the way its settings write
@@ -153,6 +229,7 @@ export function PermissionRow({
         {showToolName && (
           <ToolName name={permission.tool_name} className="text-[11px] font-semibold" />
         )}
+        <PermissionSourceTag permission={permission} />
         {/* Collapsed, the preview is one truncated line beside the buttons;
             expanded, it moves to its own full-width line below, since the
             space beside the buttons can be a few characters wide. */}
@@ -185,6 +262,7 @@ export function PermissionRow({
           )}
         </div>
       </div>
+      <PermissionContext permission={permission} />
       {denying && <DenyReason onDeny={onDeny} onCancel={() => setDenying(false)} />}
       {preview && isExpanded && (
         <button onClick={onToggleExpand} className="block w-full px-2 pb-1.5 -mt-0.5 text-left">
@@ -331,6 +409,7 @@ export function PermissionStackView<PId extends string>({
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2.5 py-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse flex-shrink-0" />
           <ToolName name={p.tool_name} className="text-[11px] font-semibold" />
+          <PermissionSourceTag permission={p} />
           {preview && !isLong && (
             <span className="flex-1 min-w-0 text-[11px] font-mono text-sol-text-dim truncate">
               {preview}
@@ -368,6 +447,7 @@ export function PermissionStackView<PId extends string>({
             <MenuKeyCaps action="permission.approve" className="contents" />/<MenuKeyCaps action="permission.deny" className="contents" />
           </span>
         </div>
+        <PermissionContext permission={p} />
         {preview && isLong && (
           <div className="px-2.5 pb-1.5 -mt-0.5">
             <span className="text-[11px] font-mono text-sol-text-dim block whitespace-pre-wrap break-words">

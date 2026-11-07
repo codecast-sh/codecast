@@ -132,6 +132,7 @@ import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, routineLine, standingSessionLine } from "./briefLines.js";
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
+import { orgAuthorityGrantsError } from "@codecast/shared/contracts/orgProposal";
 import { parkedNote, planReadiness, stuckAdvice, stuckNote } from "./planReadiness.js";
 import { listedBlockers, listedReady } from "./listedReadiness.js";
 import { checkoutWords } from "./checkoutWords.js";
@@ -13938,7 +13939,7 @@ roleGroup
   .command("authority")
   .description("Grant or revoke what a role may do outside codecast (a person's act): spend, publish, write, connect, each with a limit and an expiry")
   .argument("<handle>", "@handle, or-N, or id")
-  .option("--grant <json>", "A JSON list of grants [{ id, kind, label, scope?, limit?, expires? }]; '-' reads stdin")
+  .option("--grant <json>", "A JSON list of grants [{ id, kind: spend|publish|write|connect, label, scope?, limit?: { usd_per_month | usd_per_day | per_day: number }, expires?: \"90d\" }]; '-' reads stdin")
   .option("--revoke <id>", "Revoke a grant by id (repeatable)", (value: string, all: string[]) => [...all, value], [])
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
@@ -13946,7 +13947,8 @@ roleGroup
     const role_id = await resolveRoleId(handle, options.team);
     const raw = options.grant === "-" ? readStdinBody() : options.grant;
     const authority = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(authority)) { console.error("--grant is a JSON list"); process.exit(1); }
+    const invalid = orgAuthorityGrantsError(authority);
+    if (invalid) { console.error(`--grant: ${invalid}`); process.exit(1); }
     const result = await cliPost("/cli/role/authority", { role_id, authority, revoke: options.revoke, from_session: callingSession() });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
     const held = (result.authority ?? []) as any[];
@@ -15229,6 +15231,7 @@ trigger
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked. A run that continues an existing session inherits that session's rules instead.")
   .option("--mode <mode>", "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
+  .option("--device <name>", "Machine whose daemon runs this trigger (device id prefix, label or hostname, e.g. studio). Default: this machine. Runs wait while it is offline")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--as <definition>", "Spawned runs launch as this agent definition (cast agent ls): model, effort, tools and prompt")
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id). Default: the agent's saved default. Ignored by runs that inject into a session.")
@@ -15250,6 +15253,24 @@ trigger
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    // The trigger runs only on the device it is bound to (TaskScheduler.canServeTask):
+    // --device names one of yours; else a spawning trigger goes to your saved
+    // default device when it is online and holds the folder; else this machine.
+    let runDeviceId = deviceId();
+    if (options.device || options.spawn) {
+      const { convexClient } = await import("./remote/cli.js");
+      const { pickDevice } = await import("./migrate/pickDevice.js");
+      const { client, token, api } = await convexClient();
+      if (options.device) {
+        const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
+        runDeviceId = pickDevice(devices, options.device, "--device").device_id;
+      } else {
+        // A backend without the query answers an error: keep this machine.
+        const saved = await client.query(api.newSessionDefaults.defaultDevice, { api_token: token, project_path: options.project || getRealCwd() }).catch(() => null);
+        if (saved) runDeviceId = saved;
+      }
+    }
 
     let schedule_type: "once" | "recurring" | "event" = "once";
     let run_at: number | undefined;
@@ -15396,9 +15417,9 @@ trigger
           agent_type: options.agent,
           model: options.model,
           agent_definition: options.as || undefined,
-          // Bind the task to this machine: only the creating device's
-          // scheduler claims it (see TaskScheduler.canServeTask).
-          created_device_id: deviceId(),
+          // Bind the task to one machine: only that device's scheduler
+          // claims it (see TaskScheduler.canServeTask).
+          created_device_id: runDeviceId,
           schedule_type,
           run_at,
           interval_ms,
@@ -17671,6 +17692,37 @@ charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true
     }
     await cliPost("/cli/projects/update", body);
     console.log(`${c.green}ok${c.reset} Updated project ${c.cyan}${body.id}${c.reset}`);
+  });
+
+// A session in a project (docs/architecture/session-projects.md). Workers and
+// sessions it spawns follow it there: they derive theirs, nothing is copied.
+async function setSessionProject(sessionRef: string | undefined, projectId: string | null): Promise<void> {
+  const session = sessionRef || detectCurrentSessionId();
+  if (!session) {
+    console.error("No session given and none detected here: pass a session id");
+    process.exit(1);
+  }
+  const res: any = await cliPost("/cli/projects/set-session", { session, project_id: projectId });
+  const who = res?.short_id ?? session;
+  if (projectId) console.log(`${c.green}ok${c.reset} ${c.cyan}${who}${c.reset} is in the project, with the sessions it starts`);
+  else console.log(`${c.green}ok${c.reset} ${c.cyan}${who}${c.reset} left its project${res?.project_id ? ` (still in ${res.project_id} through its task or parent)` : ""}`);
+}
+
+projectCmd
+  .command("join")
+  .description("Put a session in a project; the sessions it starts belong there too")
+  .argument("<project>", "Project ID, short id or title substring")
+  .argument("[session]", "Session id or short id (default: this session)")
+  .action(async (ref: string, session: string | undefined) => {
+    await setSessionProject(session, await resolveProjectId(ref));
+  });
+
+projectCmd
+  .command("leave")
+  .description("Take a session out of the project it was put in")
+  .argument("[session]", "Session id or short id (default: this session)")
+  .action(async (session: string | undefined) => {
+    await setSessionProject(session, null);
   });
 
 // "2026-09-26" → ms at local end-of-day, so a deadline includes its own day.

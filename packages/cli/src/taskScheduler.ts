@@ -362,8 +362,9 @@ export class TaskScheduler {
    * in $HOME when the checkout is missing — ran apply-mode tasks blind on the
    * always-awake remote (same bug class as ct-32728/ct-36594).
    *
-   * Primary rule: a task runs ONLY on the device that created it
-   * (created_device_id, stamped by `cast trigger add`). Web-created and
+   * Primary rule: a task runs ONLY on the device it is bound to
+   * (created_device_id, stamped by `cast trigger add`: this machine, or the
+   * one `--device` names). Web-created and
    * legacy tasks carry no device id and fall back to checkout existence.
    */
   private canServeTask(task: any): boolean {

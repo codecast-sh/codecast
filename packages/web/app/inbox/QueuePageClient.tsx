@@ -64,7 +64,7 @@ export type SeatConversation = {
   head: { open: boolean; onToggle: () => void };
 };
 
-export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetNonce, targetTimestamp, highlightQuery, onClearHighlight, seat, headerEnd, autoFocusInput = true }: { sessionId: string; isIdle: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetNonce?: number; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void; seat?: SeatConversation; headerEnd?: ReactNode; autoFocusInput?: boolean }) {
+export const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetNonce, targetTimestamp, highlightQuery, onClearHighlight, seat, headerEnd, autoFocusInput = true, diffOnlyWithChanges }: { sessionId: string; isIdle: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetNonce?: number; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void; seat?: SeatConversation; headerEnd?: ReactNode; autoFocusInput?: boolean; diffOnlyWithChanges?: boolean }) {
   devRenderCount("InboxConversation2");
   // Non-blocking switch: the heavy work of a session switch is mounting the new
   // conversation's message tree (every block keyed by msg._id unmounts/remounts,
@@ -237,6 +237,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           conversation={(shown?.conversation ?? conversation) as ConversationData}
           embedded
           {...seat?.layout}
+          diffOnlyWithChanges={diffOnlyWithChanges}
           leadNode={leadNode}
           headerLeft={seatHeadState}
           headerEnd={headerEnd}
@@ -384,6 +385,12 @@ export function QueuePageClient() {
   // No machine and no conversation (lib/firstRun.ts); the string stays
   // stable across heartbeat churn on currentUser.
   const showFirstRun = useFirstRun() === "yes";
+  // A first run with no team, before the person has walked the setup flow:
+  // that flow is the start (/start), so the inbox hands them to it once.
+  // Finishing or skipping it stamps setup_done_at.
+  const sendToSetup = useInboxStore((s) =>
+    showFirstRun && s.clientStateInitialized && !s.clientState.ui?.setup_done_at
+    && !(s.currentUser as any)?.team_id && (s.teams ?? []).length === 0);
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const advanceToNext = useInboxStore((s) => s.advanceToNext);
   const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
@@ -421,6 +428,9 @@ export function QueuePageClient() {
   // Select session from URL param -- only when the param actually changes
   const paramSessionId = searchParams.get("s") || null;
   const router = useRouter();
+  useWatchEffect(() => {
+    if (sendToSetup) router.replace("/start");
+  }, [sendToSetup, router]);
   // Whether this tab's `?s=` target is already in the local cache. Used as the
   // re-assert effect's dependency INSTEAD of the whole `sessions` object: that
   // object gets a fresh reference on every daemon heartbeat (~4s, the only inbox

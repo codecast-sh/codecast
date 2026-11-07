@@ -48,18 +48,8 @@ const preInit = createPreInitBuffer();
 
 export let posthog: InstanceType<PostHogCtorT> | null = null;
 
-export interface NativeAnalyticsConfig extends AnalyticsConfig {
-  /**
-   * Session replay needs the posthog-react-native-session-replay NATIVE module,
-   * so it only takes effect on binaries built with it. The SDK guards its own
-   * require, so an OTA landing on an older binary degrades to no replay.
-   * Defaults to true (codecast's setting).
-   */
-  enableSessionReplay?: boolean;
-}
-
 /** Call after first mount, never at module eval (see header comment). */
-export function initAnalytics(input: NativeAnalyticsConfig) {
+export function initAnalytics(input: AnalyticsConfig) {
   config = resolveConfig(input);
   // A phone has neither an env nor a Do Not Track header, so the only opt out
   // here is the app's own setting, passed in as config.optedOut.
@@ -69,7 +59,10 @@ export function initAnalytics(input: NativeAnalyticsConfig) {
     optedOut: config.optedOut,
   });
   const isDev = config.environment === "development";
-  const enableSessionReplay = input.enableSessionReplay ?? true;
+  // Replay needs the posthog-react-native-session-replay NATIVE module, so it
+  // only takes effect on binaries built with it. The SDK guards its own
+  // require, so an OTA landing on an older binary degrades to no replay.
+  const replayRate = config.sessionReplaySampleRate ?? 0;
 
   if (config.sentryDsn && Sentry) {
     try {
@@ -94,8 +87,9 @@ export function initAnalytics(input: NativeAnalyticsConfig) {
         disabled: isDev,
         // Application Opened / Backgrounded / Updated events.
         captureAppLifecycleEvents: true,
-        enableSessionReplay,
+        enableSessionReplay: replayRate > 0,
         sessionReplayConfig: {
+          sampleRate: replayRate,
           // Text inputs can hold prompts and pasted secrets; images are often
           // the content itself, so masking them would blank replays.
           maskAllTextInputs: true,

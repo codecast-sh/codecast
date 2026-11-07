@@ -27,6 +27,8 @@ import { internal } from "./_generated/api";
 import { readableConversation, streamMessageRows, isNonEmptyMessage } from "./conversations";
 import { readFileChangeIndex } from "./fileChangeBodies";
 import { callModel, callModelMetered, cheapModelCost, CHEAP_MODEL } from "./lib/anthropic";
+import { requireVendorAllowed } from "./lib/vendorGuard";
+import type { Id } from "./_generated/dataModel";
 import {
   ASK_MAX_QUESTION_CHARS,
   askAnswerRequest,
@@ -154,6 +156,9 @@ async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<AskResult>
   const who = { api_token: args.api_token, conversation_id: args.conversation_id };
   const head: AskHead = await ctx.runQuery(internal.sessionAsk.askHead, who);
   if ("error" in head) throw accessError(head.error);
+  // A regulated team's session is read to Anthropic only once it holds a BAA: refused here, with its one line.
+  const gate = { ctx, scope: { conversationId: head.conversation.id as Id<"conversations">, apiToken: args.api_token } };
+  await requireVendorAllowed(ctx, gate.scope, "anthropic");
   const limited = await ctx.runMutation(internal.ipRateLimit.bump, {
     key: `read-ask:${head.user_id}`,
     max: ASK_RATE.max,
@@ -165,7 +170,7 @@ async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<AskResult>
   }
 
   const usage = { input_tokens: 0, output_tokens: 0 };
-  const expansion = await callModel({ ...askTermsRequest(question), label: "Ask terms", timeout_ms: ASK_TERMS_MS });
+  const expansion = await callModel({ ...askTermsRequest(question), label: "Ask terms", timeout_ms: ASK_TERMS_MS, gate });
   if (expansion) {
     usage.input_tokens += expansion.usage.input_tokens;
     usage.output_tokens += expansion.usage.output_tokens;
@@ -195,7 +200,7 @@ async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<AskResult>
     if (line !== undefined) extraFiles.set(line, [...(extraFiles.get(line) ?? []), change.path]);
   }
   const { context, request } = askAnswerRequest({ question, title: head.conversation.title, read, termCount: terms.length, extraFiles });
-  const answer = await callModelMetered({ ...request, label: "Ask answer", timeout_ms: ASK_ANSWER_MS });
+  const answer = await callModelMetered({ ...request, label: "Ask answer", timeout_ms: ASK_ANSWER_MS, gate });
   const reply = answer.reply;
   // Name the API's own reason: an empty credit balance or a refused request
   // will not clear on retry, and the caller has to know that to stop retrying.

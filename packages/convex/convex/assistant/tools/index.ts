@@ -19,6 +19,7 @@ import type { Id } from "../../_generated/dataModel";
 import { whiskAccessFor, type WhiskAccess } from "../../whisk";
 import { whiskConnectOpen, whiskWebUrl, type WhiskCall } from "../../lib/whisk";
 import { CODECAST_SCOPES, codecastTools, PERSON_APPROVED_TOOLS } from "./codecast";
+import { NO_TEAM_CONTENT_GATE } from "../../lib/vendorGuard";
 import { pageAllowedWithoutAsking, SEARCH_MAX_PER_TURN, searchesBefore, WEB_SCOPES, webTools } from "./web";
 
 /** How an Always allow narrows for every tool the assistant may be offered
@@ -127,7 +128,8 @@ export function allOutsideToolNames(): Set<string> {
     ...mailTools(whiskMailbox(NO_WHISK, whiskWebUrl()), ALL_MAIL),
     ...calendarTools(whiskCalendar(NO_WHISK)),
     ...codecastTools({ runQuery: none, runMutation: none, userId: "" as Id<"users">, conversationId: "" as Id<"conversations"> }),
-    ...webTools({}),
+    // Definitions only: nothing calls through this gate.
+    ...webTools({ gate: NO_TEAM_CONTENT_GATE }),
   ]);
 }
 
@@ -146,7 +148,7 @@ export async function toolsFor(
     ...(connected ? mailTools(mailbox, connected.can) : []),
     ...(connected?.can.calendar ? calendarTools(calendar) : []),
     ...codecastTools({ runQuery: ctx.runQuery, runMutation: ctx.runMutation, userId, conversationId }),
-    ...webTools({ fetch: options.fetch }),
+    ...webTools({ fetch: options.fetch, gate: { ctx, scope: { conversationId } } }),
   ];
   // Every outside tool, offered now or not: history read through a
   // connection the person has since narrowed or removed is still in front

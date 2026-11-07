@@ -357,7 +357,7 @@ writes card.json and card.html. --publish attaches the page to the task as evide
     token: "image",
     args: ["<target...>"],
     hasOptions: true,
-    description: `Upload images (files or URLs) and print stable links that render inline in messages and canvas`,
+    description: `Upload images (files or URLs) or video files and print stable links that render inline in messages: images as pictures, videos in the cast player`,
     load: () => import("./imageCommand.js").then((m) => m.registerImageCommand),
   },
   {
@@ -398,6 +398,27 @@ Examples:
   cast state --status done "Shipped — all four fixes verified in the browser"
   cast state clear               # the state no longer holds`,
     load: () => import("./stateCommand.js").then((m) => m.registerStateCommand),
+  },
+  {
+    token: "say",
+    args: ["[text...]"],
+    description: `Tell the person reading this thread something: the reply they see
+
+In a role's or the workspace agent's thread the person sees only what you say
+this way and their own messages; everything else you write is working notes.
+Say each thing once, whole: what you found, what you did and where it went,
+what you need from them. Markdown renders, so a table, a link, a page URL
+alone on a line or a cast-canvas block reads as it would anywhere.
+
+Examples:
+  cast say "Shipped the fix. CI is green on main."
+  cast say - <<'EOF'
+  The funnel this week:
+  | Stage | Now |
+  |---|---|
+  | Introductions | 24 |
+  EOF`,
+    load: () => import("./sayCommand.js").then((m) => m.registerSayCommand),
   },
   {
     token: "integrations",

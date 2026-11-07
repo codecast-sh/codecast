@@ -2,14 +2,13 @@ import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useState } from "react";
 import { Pin, Shield, SlidersHorizontal } from "lucide-react";
-import { AGENT_CLIENTS, AGENT_PICKER_OPTIONS, isHostedAgentType, type AgentClientId } from "@codecast/shared/contracts";
-import { useDefaultAgentType, useOnlyHostedAgent, usePinnedAgentIds } from "../../../hooks/usePinnedAgents";
+import { AGENT_CLIENTS, isHostedAgentType, type AgentClientId } from "@codecast/shared/contracts";
+import { usePinnedAgentIds } from "../../../hooks/usePinnedAgents";
+import { NewSessionDefaultsSection } from "../../../components/settings/NewSessionDefaults";
 import { AgentTypeIcon } from "../../../components/AgentTypeIcon";
-import { hasNoMachine } from "../../../lib/defaultAgent";
 import { Switch } from "../../../components/ui/switch";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
-import { SelectBox } from "../../../components/ui/select-box";
 import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
 import { SwitchReview } from "../../../components/consequential/ConsequentialSwitch";
@@ -76,6 +75,7 @@ export default function AgentsPage() {
 
   return (
     <SettingsPanel>
+      <NewSessionDefaultsSection />
       <PinnedAgentsSection />
 
       <SettingsSection
@@ -167,7 +167,6 @@ function PinnedAgentsSection() {
       icon={Pin}
       description="The agents offered when you start, switch, fork or hand off a session. Unpinned agents stay available from the CLI."
     >
-      <DefaultAgentRow />
       {clients.map((d) => {
         const on = pinned.includes(d.id);
         // Switch, fork and hand-off offer local agents only, so the last
@@ -184,34 +183,6 @@ function PinnedAgentsSection() {
         );
       })}
     </SettingsSection>
-  );
-}
-
-/** The agent a new conversation starts with (client_state.ui.default_agent,
- *  read through lib/defaultAgent). An account with no machine always starts
- *  the hosted assistant, so the row says so instead. */
-function DefaultAgentRow() {
-  const current = useDefaultAgentType();
-  const forced = useOnlyHostedAgent();
-  // Named by the cause the reader is actually in: with no machine there is a
-  // way out to say; in the calm lane there is nothing to fix.
-  const noMachine = useInboxStore(hasNoMachine);
-  return (
-    <SettingsRow
-      label="Default agent"
-      description={forced ? (noMachine ? "New conversations start with the Codecast assistant. Connect a computer to choose another agent." : "New conversations start with the Codecast assistant.") : "New conversations start with this agent unless the one on screen runs another."}
-    >
-      <SelectBox
-        value={current}
-        disabled={forced}
-        onChange={(e) => useInboxStore.getState().updateClientUI({ default_agent: e.target.value })}
-        aria-label="Default agent"
-      >
-        {AGENT_PICKER_OPTIONS.map((o) => (
-          <option key={o.id} value={o.convexType}>{o.label}</option>
-        ))}
-      </SelectBox>
-    </SettingsRow>
   );
 }
 

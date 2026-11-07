@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { inferHomeDir } from "../lib/utils";
+import { namedAbsolutePaths } from "../lib/filePathLinks";
 import type { SentFileData } from "../components/tools/SentFileBlock";
 import type { ImageData, Message, ToolResult } from "../components/conversation/types";
 import type { ConversationData } from "../components/conversation/types";
@@ -78,11 +79,29 @@ export function useToolResultMaps({ conversation, codeRepository, pullRequestIds
   // consumers — every cast row — don't re-render on unrelated syncs.
   // Where relative file mentions in this conversation resolve (FilePathLink):
   // the session's working directory, and the home it implies for `~/…`.
+  // knownPaths are the absolute paths its tool calls named, which place a
+  // mention written relative to somewhere else. Keyed by content so a message
+  // sync that named no new path keeps every link's context stable.
   const filePathBase = conversation?.project_path || conversation?.git_root || undefined;
   const gitRoot = conversation?.git_root || null;
+  const home = inferHomeDir([filePathBase]);
+  const knownPathsKey = useMemo(() => {
+    const inputs: string[] = [];
+    for (const msg of conversation?.messages ?? []) {
+      for (const tc of msg.tool_calls ?? []) inputs.push(tc.input);
+    }
+    return namedAbsolutePaths(inputs, home).join("\n");
+  }, [conversation?.messages, home]);
   const filePathCtx = useMemo(
-    () => ({ base: filePathBase, home: inferHomeDir([filePathBase]), repository: codeRepository, pullRequestIds, gitRoot }),
-    [filePathBase, codeRepository, pullRequestIds, gitRoot],
+    () => ({
+      base: filePathBase,
+      home,
+      repository: codeRepository,
+      pullRequestIds,
+      gitRoot,
+      knownPaths: knownPathsKey ? knownPathsKey.split("\n") : [],
+    }),
+    [filePathBase, home, codeRepository, pullRequestIds, gitRoot, knownPathsKey],
   );
 
   return { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx };

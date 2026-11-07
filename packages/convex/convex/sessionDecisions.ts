@@ -33,7 +33,7 @@ import { roleOfConversation } from "./lib/actor";
 import { headOfPeopleIn, projectLeadRole, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { gateMirror, gateResponseOf, optionMoves } from "./lib/gateChoices";
-import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
+import { assignCategory, isHumanOnlyCategory, isProtectedCategory } from "./lib/decisionCategory";
 import { syncDecisionInbox } from "./lib/decisionInbox";
 import { answerLabel, normalizeVerdict, verdictOfRow, type Verdict } from "./lib/decisionVerdict";
 import { noticeAreaOwner, routeByArea } from "./decisionRouting";
@@ -48,6 +48,8 @@ import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
 import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
+import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
+import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, type CommandRun } from "@codecast/shared/contracts/commandRun";
 import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded } from "./lib/superseded";
@@ -746,7 +748,7 @@ export async function hostedAnswerRefusal(ctx: Ctx, row: { conversation_id?: Id<
 // signed-in person's, whose Approve takes Touch ID (secretApprovalRefusal,
 // which reads the verdict for that). Returns why, or null.
 export async function answerRefusal(ctx: Ctx, row: DecisionRow, by: AnsweredBy, verdict?: Pick<Verdict, "status" | "answer_index">): Promise<string | null> {
-  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by, verdict));
+  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by, verdict)) ?? (await commandRunRefusal(ctx, row as any, by, verdict));
 }
 
 // The one place a decision is resolved, for every path (web resolve, CLI
@@ -793,13 +795,13 @@ export async function finalizeAnswer(
 
 // The "Decision: …" user message into the asking session, the one delivery
 // for every server path (finalizeAnswer, settleClientResolution).
-async function deliverAnswer(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: AnsweredBy) {
+async function deliverAnswer(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: Pick<AnsweredBy, "kind" | "user_id">, detail?: string) {
   const label = answerLabel(row, verdict);
   if (verdict.status !== "answered" || !label) return;
   const conversation = await ctx.db.get(row.conversation_id);
   if (!conversation) return;
   await enqueuePendingMessage(ctx, conversation, by.user_id ?? conversation.user_id, {
-    content: formatDecisionAnswer({ id: String(row._id), question: row.question, answer: label }),
+    content: formatDecisionAnswer({ id: String(row._id), question: row.question, answer: label, detail }),
     client_id: decisionAnswerClientId(String(row._id)),
     human: by.kind === "user",
     // Only the owner answers a hosted conversation's question
@@ -867,8 +869,45 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
     const conversation = await ctx.db.get(row.conversation_id);
     if (conversation) await wakeHostedConversation(ctx, conversation, "approval");
   }
-  return await settleGateRun(ctx, row, verdict, now);
+  // A Run (`cast decide --run`) goes to the session's machine; its answer is delivered with the result (lib/commandRuns.ts).
+  const ran = await settleCommandRun(ctx, row as any, verdict, by, now, (detail) => deliverAnswer(ctx, row, verdict, by, detail));
+  return (await settleGateRun(ctx, row, verdict, now)) || ran;
 }
+
+// What the asking session reads when its Run ends: the Run answer, with the
+// command's result after the tag.
+const deliverRunResult = (ctx: Ctx) => async (row: DecisionRow, detail: string) => {
+  const conversation = await ctx.db.get(row.conversation_id);
+  const index = row.options.findIndex((o) => o.label === RUN_OPTION);
+  await deliverAnswer(ctx, row, { status: "answered", answer_index: index }, { kind: "user", user_id: row.resolved_by ?? conversation?.user_id }, detail);
+};
+
+// The machine that ran a `cast decide --run` command reports it (daemon run_cast).
+export const reportCommandRun = mutation({
+  args: {
+    api_token: v.string(),
+    decision_id: v.id("session_decisions"),
+    state: v.union(v.literal("running"), v.literal("done"), v.literal("failed")),
+    exit_code: v.optional(v.number()),
+    output: v.optional(v.string()),
+  },
+  handler: async (ctx, { api_token, ...args }) => {
+    const auth = await verifyApiToken(ctx, api_token);
+    if (!auth) throw new Error("Unauthorized");
+    return await applyCommandRunReport(ctx, auth.userId, args, deliverRunResult(ctx) as any);
+  },
+});
+
+// A run_cast the machine could not take (an old daemon's "Unknown command",
+// bad args): the card says so and the session hears it (users.reportCommandResult).
+export const failCommandRun = internalMutation({
+  args: { user_id: v.id("users"), decision_id: v.string(), error: v.string() },
+  handler: async (ctx, args) => {
+    const id = ctx.db.normalizeId("session_decisions", args.decision_id);
+    if (!id) return;
+    await applyCommandRunReport(ctx, args.user_id, { decision_id: id, state: "failed", output: `The machine did not run it: ${args.error}` }, deliverRunResult(ctx) as any).catch(() => {});
+  },
+});
 
 // Any reader of a decision may answer it, not only the people it was asked
 // of (userMayRead); hosted conversations keep their owner-only rule
@@ -1011,6 +1050,8 @@ export type AskArgs = {
   report_slug?: string;
   /** A change card (LE10) the decision is about; rendered natively by the web. */
   card?: ChangeCard;
+  /** A cast command for a person to run (`cast decide --run`): the line as the agent wrote it, parsed here (commandRun.ts). */
+  run?: string;
   blocking?: boolean;
   /** A pointer card: answering resolves it and delivers nothing into the
    *  asking session (a staffing proposal's queue card, org-staffing.md S4). */
@@ -1115,6 +1156,10 @@ async function runAsksThrough(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow
 }
 
 export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: AskArgs): Promise<any> {
+  // A run request is always the same card: the command, Run or Don't run.
+  const parsedRun = args.run !== undefined ? parseRunCommand(args.run) : null;
+  if (parsedRun && "error" in parsedRun) return { error: parsedRun.error };
+  if (parsedRun) args = { ...args, options: RUN_OPTIONS.map((o) => ({ ...o })), kind: "single", form: undefined, default_option: undefined, blocking: true };
   const kind: DecisionKind = args.kind ?? "single";
   const shapeError = validateShape(kind, args) ?? (await missingOptionPage(ctx, args.options));
   if (shapeError) return { error: shapeError };
@@ -1146,7 +1191,12 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   const stack = trialProject ? await trialStackOf(ctx, trialProject, now) : bound.stack;
   if (trialProject) await gateTrialPages(ctx, trialProject, [args.report_slug, ...args.options.map((o) => o.page_slug)], now);
 
-  const { category, pinned } = assignCategory({ question: args.question, options: args.options, context_md: args.context_md }, args.category);
+  const assigned = assignCategory({ question: args.question, options: args.options, context_md: args.context_md }, args.category);
+  // Running a command in the person's name is always the person's (never a role's under a grant).
+  const { category, pinned } = parsedRun && !isProtectedCategory(assigned.category) ? { category: "access", pinned: true } : assigned;
+  const run: CommandRun | undefined = parsedRun
+    ? { argv: parsedRun.argv, state: "waiting", device_id: conversation.owner_device_id, cwd: conversation.git_root ?? conversation.project_path, at: now }
+    : undefined;
 
   // Re-asking the same question from the same session updates the open row
   // instead of stacking duplicates (an agent may retry after a crash).
@@ -1172,10 +1222,12 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   const docId = args.doc_md ? await upsertDecisionDoc(ctx, conversation, args.question, args.doc_md, now, existing?.doc_id) : undefined;
   const routed = await routeFor(ctx, conversation, now, task, args.as_station);
   // A hosted conversation asks its owner only, so an address (--to) is ignored.
-  const addressed = args.to?.length && !isHostedAgentType(conversation.agent_type)
+  const named = args.to?.length && !isHostedAgentType(conversation.agent_type)
     ? await resolveAskedPeople(ctx, conversation, args.to)
     : null;
-  if (addressed && "error" in addressed) return addressed;
+  if (named && "error" in named) return named;
+  // A run request is the session's people's alone, like a named card: no role hears it and no area owner takes it.
+  const addressed = named ?? (parsedRun ? { people: routed.people } : null);
   // An addressed card (--to) is the named people's alone: the ladder does not
   // hear it and nobody else is asked.
   const { role, ladder, people: routedPeople, hears } = addressed
@@ -1201,6 +1253,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       context_md: args.context_md,
       report_slug: args.report_slug,
       card: args.card,
+      run,
       blocking: args.blocking ?? true,
       default_option: args.default_option,
       kind,
@@ -1257,6 +1310,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     form: args.form,
     report_slug: args.report_slug,
     card: args.card,
+    ...(run ? { run } : {}),
     blocking: args.blocking ?? true,
     silent: args.silent || undefined,
     ...(trialProject ? { trial: true } : {}),
@@ -1315,6 +1369,7 @@ export const ask = mutation({
     context_md: v.optional(v.string()),
     report_slug: v.optional(v.string()),
     card: v.optional(v.any()),
+    run: v.optional(v.string()),
     blocking: v.optional(v.boolean()),
     default_option: v.optional(v.number()),
     kind: v.optional(kindValidator),
@@ -1419,6 +1474,8 @@ export const edit = mutation({
     }
     // The person confirms an Ask first read with Touch ID on the words of this decision, so its asker may not rewrite them.
     if (await pendingApproval(ctx, row._id)) return { error: "An Ask first decision is filed by the Vault and cannot be edited" };
+    // The person approves exactly the command on the card, so a run request is withdrawn and asked again, never rewritten.
+    if (row.run) return { error: "A --run decision cannot be edited: cancel it and ask again with the new command" };
     const now = Date.now();
 
     const question = args.question ?? row.question;
@@ -2221,6 +2278,7 @@ function answerBubbleShape(row: Doc<"session_decisions">) {
     form: row.form,
     report_slug: row.report_slug,
     card: row.card,
+    run: row.run,
     doc_id: row.doc_id,
     blocking: row.blocking,
     default_option: row.default_option,

@@ -353,14 +353,16 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
           } else if (block.type === "tool_result") {
             let toolResultContent = block.content;
             if (Array.isArray(block.content)) {
-              const contentArray = block.content as Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
+              const contentArray = block.content as Array<{ type: string; text?: string; tool_name?: string; source?: { type: string; media_type: string; data: string } }>;
               // One text block per step is how the browser extension reports a
               // batch ("[computer:click] …", "[computer:wait] …"); gluing them
               // with "" ran the steps into one line. Join on a newline unless
-              // the seam already has one.
+              // the seam already has one. A ToolSearch answer is only
+              // tool_reference blocks; dropping them showed "(empty)" for a
+              // search that loaded tools.
               toolResultContent = contentArray
-                .filter((c) => c.type === "text" && c.text)
-                .map((c) => c.text as string)
+                .map((c) => c.type === "text" ? c.text : c.type === "tool_reference" && c.tool_name ? `Loaded tool: ${c.tool_name}` : undefined)
+                .filter((text): text is string => !!text)
                 .reduce((acc, text) => (acc === "" || acc.endsWith("\n") || text.startsWith("\n") ? acc + text : `${acc}\n${text}`), "");
               const source = readImageSource(entry.toolUseResult);
               for (const item of contentArray) {

@@ -46,7 +46,7 @@ import { deviceDisplayName } from "../DeviceBadge";
 import { useHostLoads } from "../../hooks/useHostLoads";
 import { MachineChips } from "../MachineChips";
 import { SharedWithMark } from "../ProjectPathPicker";
-import { SessionModeToggles, SessionPlacementMenu, type SessionModeTogglesProps, type SessionPlacement } from "../SessionModeToggles";
+import { ModeSwitch, SessionModeToggles, SessionPlacementMenu, type SessionModeTogglesProps, type SessionPlacement } from "../SessionModeToggles";
 import { dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection } from "../../lib/machinePicker";
 import { cloudHostOf, cloudParkNeeded, cloudToggleAvailable, defaultSessionMachineId, isCloudHost, machineSelectionAfterCloudToggle, machineSelectionAfterPick, switchReconfigureArgs, type SessionMachine } from "../../lib/sessionMachines";
 import { useSessionMachines } from "../../hooks/useSessionMachines";
@@ -199,21 +199,22 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || ctxPath;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
 
-  // Where the picker opens. Deterministic (owner → your standing pick → the
-  // machine holding this checkout → stable tiebreak), so it can't change under
-  // the user between the render that shows a chip and the send that acts on it.
+  // Where the picker opens. Deterministic (owner → your saved default → your
+  // last hand pick → the machine this client runs on → the machine holding
+  // this checkout → stable tiebreak), so it can't change under the user
+  // between the render that shows a chip and the send that acts on it. The
+  // default and the pick are account-wide (sd-2611).
+  const defaultDevice = useInboxStore((s) => s.clientState.ui?.default_device ?? null);
   const lastPickedDeviceId = useInboxStore((s) => s.clientState.ui?.last_picked_device_id ?? null);
-  // The machine this client runs on. A session started here runs here: it
-  // outranks the standing pick, so no remembered choice or stale roster row
-  // re-homes a laptop launch to another machine.
   const localDeviceId = useLocalDeviceId(true);
   const ownerDeviceIdForPicker = storeSession?.owner_device_id ?? (conversation as any).owner_device_id ?? null;
   const machineOpts = useMemo(() => ({
     ownerDeviceId: ownerDeviceIdForPicker,
     projectPath: currentPath,
+    defaultDevice,
     lastPicked: lastPickedDeviceId,
     localDeviceId,
-  }), [ownerDeviceIdForPicker, currentPath, lastPickedDeviceId, localDeviceId]);
+  }), [ownerDeviceIdForPicker, currentPath, defaultDevice, lastPickedDeviceId, localDeviceId]);
   // The machine this session WILL run on, plus the two things that must agree
   // with it: what gets stamped, and which machine's folders we offer. The stamp
   // already on the row is the last-resort rung — `devices` reads empty on mount
@@ -949,6 +950,8 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
     try {
       const id = storeSession?._id || conversation._id;
       useInboxStore.getState().setConversationAgent(id, agentType);
+      // "Last used" for the next new session, on every device.
+      useInboxStore.getState().updateClientUI({ last_picked_agent: agentType });
 
       if (isConvexId(id)) {
         convCommand(id, "reconfigureSession", {
@@ -1242,6 +1245,26 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
   );
 }
 
+/** The new-session composer's Project switch: on, the session starts a new
+ *  project named after its first message and is that project's main session
+ *  (session-projects.md SP4). Shown only before the session exists, and not
+ *  for one already started inside a project. */
+function NewSessionProjectToggle({ conversation }: { conversation: ConversationData }) {
+  const id = conversation._id;
+  const on = useInboxStore((st) => !!st.sessions[id]?._newProject);
+  const inProject = useInboxStore((st) => !!st.sessions[id]?.project_id);
+  if (isConvexId(id) || inProject) return null;
+  return (
+    <ModeSwitch
+      on={on}
+      accent="cyan"
+      label="new project"
+      title="Start a project with this session as its main session"
+      onClick={() => useInboxStore.getState().setSessionNewProject(id, !on)}
+    />
+  );
+}
+
 /** The new-session composer's foot: the slot NewSessionView fills with the
  *  launch pickers, and attach. The page (ConversationView) and the popup
  *  (ComposeView) both hand it to MessageInput as composerFoot. */
@@ -1387,6 +1410,7 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
           <>
             {agentRow && agentSwitcher(true)}
             {!hosted && <div ref={setModeSlot} className="contents" />}
+            {!hosted && <span className="ml-2 inline-flex"><NewSessionProjectToggle conversation={conversation} /></span>}
           </>,
           slots.foot,
         )}
@@ -1426,6 +1450,7 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
             <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} />
           </ErrorBoundary>
           <div className="flex-1" />
+          <div className="w-full px-4 mb-2 flex"><NewSessionProjectToggle conversation={conversation} /></div>
           {contextLine("w-full px-4 mb-4")}
         </>
       )}

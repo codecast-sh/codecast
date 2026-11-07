@@ -274,7 +274,9 @@ export interface Config extends CloudSessionSyncSettings {
   // --- Browser (`cast browser`, browser/autoShot.ts) ---
   // Automatic screenshots after page-changing browser commands, so a browsing
   // thread self-documents. Absent → ON; `cast browser shots off` sets false.
-  browser?: { auto_shots?: boolean };
+  // human_input: curved, paced pointer and key timing on input the bridge
+  // relays to the human's Chrome (browser/humanInput.ts). Absent → ON.
+  browser?: { auto_shots?: boolean; human_input?: boolean };
 
   // --- Vaults (index.ts `cast files`, daemon /vault/* routes) ---
   // Directories of markdown the user registered for browsing over the loopback

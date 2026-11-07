@@ -35,8 +35,8 @@ order it:
    (live, with the sha);
 3. otherwise records a deploy of its own (`trigger: outside`) carrying the
    fixes the history's rule says it carried: the first live deploy on its
-   target at or after a merge, on the same code (`causeHistory
-   carryingDeploys`, the same rule a problem's timeline reads).
+   target whose code holds a merge, on the same code (`causeHistory
+   carryingDeploys`, the same rule a problem's timeline reads; DP3).
 
 A deploy recorded from a marker names no project: it ships the code, and one
 repository holds every project of a team like Union, so it carries the fixes
@@ -102,7 +102,26 @@ carriesOf`), so a deploy and a problem's timeline never disagree.
 
 Two answers, one rule. A deploy the stage sent carries what was waiting when it
 was asked for. A deploy recorded from a marker carries, by the history's rule,
-every merge it is the first live deploy after. A problem's timeline, its
+every merge it is the first live deploy to hold.
+
+A deploy holds a merge when the merge is in its code, never merely because it
+went live after the merge: a deploy cut at 00:07 and live at 01:06 does not
+carry a fix merged at 00:14 (Union's dp-412, Nov 6). Main has one order,
+`commits.main_at`, stamped per push, and each live deploy keeps its sha's place
+in it as `cut_at` (stamped by `deployTargets fillDeployRange`). A merge is held
+when its commit's place on main, else its recorded time (which follows its
+push), is at or before the cut. A deploy whose sha main never saw (a source
+naming only a version) is read by time, live at or after the merge.
+
+A placed deploy (a `cut_at`, after a placed live deploy on its target) also
+carries every problem named by a commit in its own range on main: after the
+previous deploy's cut, at or before its own (`deploys carriesForMarker`). The
+commits table keeps every landing a problem had, by a run or by hand, each with
+its place on main, while `tasks.landed` keeps only the newest, so for a placed
+deploy `tasks.landed` decides nothing. A commit counts for a problem only when
+its own message names it: a commit's `task_ids` also take the branch it was
+first pushed on, and a fix branch's push lists main commits it merely contains.
+A landing known only by its branch is a run merge, matched by sha. A problem's timeline, its
 band's "In production" and the deploy's own page all read the same rows.
 
 ## DP4. What starts the stage
@@ -163,7 +182,8 @@ as a deploy object, oldest first, one source or repository per call, paged by
 `since`/`next`; a marker whose `meta.deploy` is set is skipped, so a rerun
 writes nothing. `deploysBackfill:backfillTargets` lists the sources and repositories
 to walk. `deploysBackfill:recarry` recomputes the carries of deploys recorded from
-markers, ten per call, after the merges the rule reads change. Run them
+markers, ten per call, oldest first, after the merges the rule reads change; it
+stamps each deploy's `cut_at` first. Run them
 through `packages/convex/run.sh`.
 
 ## DP7. Where deploys show

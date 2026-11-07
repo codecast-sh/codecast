@@ -50,6 +50,41 @@ export function mergeStepLedger(r: { name: string; limit: number | null; used: n
   };
 }
 
+/** The merge step's mode (regret.md R7): merge while the measured regret-free rate holds a bar, or on the daily count alone. */
+export function mergeRateLedger(r: { name: string; to: "rate" | "count"; bar: number; min: number; rate: number | null; settled: number; limit: number | null; windowDays: number }): SwitchLedger {
+  const pct = (x: number | null) => (x === null ? "–" : `${Math.round(x * 100)}%`);
+  const holds = r.rate !== null && r.settled >= r.min && r.rate >= r.bar;
+  return r.to === "rate" ? {
+    name: "Merge on the rate",
+    subject: r.name,
+    shift: ["Count", "Rate"],
+    figures: [
+      { value: pct(r.bar), label: "bar", tone: "warn" },
+      { value: pct(r.rate), label: "now", ...(holds ? {} : { tone: "warn" as const }) },
+      { value: `${r.settled}/${r.min}`, label: "finished, min" },
+    ],
+    rows: [
+      { k: "Merges", v: holds ? "While the rate holds" : "Paused until it holds", tone: holds ? "warn" : "ok" },
+      { k: "Rate", v: `No fix in ${r.windowDays} days after live` },
+      { k: "Daily cap", v: r.limit === null ? "None" : `${r.limit} a day`, ...(r.limit === null ? { tone: "warn" as const } : {}) },
+      { k: "To undo", v: "Back to Count" },
+    ],
+    confirm: "Merge on the rate",
+    keep: "Keep the count",
+  } : {
+    name: "Merge on the count",
+    subject: r.name,
+    shift: ["Rate", "Count"],
+    figures: [{ value: r.limit === null ? "∞" : String(r.limit), label: "merges a day, max", tone: "warn" }, { value: pct(r.rate), label: "rate now" }],
+    rows: [
+      { k: "Merges", v: "Up to the daily cap", tone: "warn" },
+      { k: "Rate", v: "Shown, not gating" },
+    ],
+    confirm: "Merge on the count",
+    keep: "Keep the rate",
+  };
+}
+
 /** An issue source that starts a session whenever an outside issue takes its label or assignee. */
 export function issueSpawnLedger(r: { provider: "GitHub" | "Linear"; source: string; label?: string; assignee?: string }): SwitchLedger {
   return {

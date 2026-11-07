@@ -1,5 +1,6 @@
 import type { SyncService } from "./syncService.js";
 import type { PermissionPrompt } from "./permissionDetector.js";
+import type { RemovalPreview } from "./removalPreview.js";
 
 export interface PermissionDecision {
   approved: boolean;
@@ -7,6 +8,21 @@ export interface PermissionDecision {
   message?: string;
   /** The approval keeps Claude's suggested rules. */
   remember?: boolean;
+}
+
+/** Where a prompt came from, shown on its card so a person can tell who is
+ *  asking: a subagent (by type) rather than the session's own agent, and
+ *  Claude Code's built-in safety check (the only thing that still asks in
+ *  bypass mode, such as an rm whose target it cannot resolve). */
+export interface PermissionSource {
+  subagent_type?: string;
+  /** That subagent's own conversation, where its steps up to the call are. */
+  subagent_conversation_id?: string;
+  safety_check?: boolean;
+  /** The agent's one-line account of the call. */
+  intent?: string;
+  /** What each rm in the call would delete (removalPreview.ts). */
+  removals?: RemovalPreview[];
 }
 
 const POLL_INTERVAL_MS = 1000;
@@ -20,7 +36,7 @@ export async function handlePermissionRequest(
   syncService: SyncService,
   conversationId: string,
   sessionId: string,
-  prompt: PermissionPrompt & { suggestions?: unknown[] },
+  prompt: PermissionPrompt & { suggestions?: unknown[]; source?: PermissionSource },
   log: (msg: string) => void,
   onCreated?: (permissionId: string) => void,
 ): Promise<PermissionDecision | null> {
@@ -31,6 +47,7 @@ export async function handlePermissionRequest(
       tool_name: prompt.tool_name,
       arguments_preview: prompt.arguments_preview,
       ...(prompt.suggestions?.length ? { suggestions: prompt.suggestions } : {}),
+      ...prompt.source,
     });
 
     log(`Created permission request ${permissionId} for tool: ${prompt.tool_name}`);

@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   PermissionHookWaiters,
+  glanceCommand,
   parsePermissionHookInput,
   permissionDecisionOutput,
   type PermissionHookInput,
@@ -31,15 +32,48 @@ describe("parsePermissionHookInput", () => {
       sessionId: "perm-1",
       toolName: "Bash",
       preview: "bun test src/x.test.ts",
+      glance: "bun test src/x.test.ts",
       permissionMode: "default",
+      intent: "run tests",
+      command: "bun test src/x.test.ts",
       suggestions: [RULE],
     });
+    expect(parsePermissionHookInput(JSON.stringify({ ...PAYLOAD, cwd: "/tmp/lab" }))?.cwd).toBe("/tmp/lab");
+  });
+
+  test("names the subagent that raised the prompt, and only a subagent", () => {
+    const sub = parsePermissionHookInput(JSON.stringify({ ...PAYLOAD, agent_id: "a1b2", agent_type: "Explore" }));
+    expect(sub?.subagentType).toBe("Explore");
+    expect(sub?.agentId).toBe("a1b2");
+    const untyped = parsePermissionHookInput(JSON.stringify({ ...PAYLOAD, agent_id: "a1b2" }));
+    expect(untyped?.subagentType).toBe("subagent");
+    // The main agent's payload carries agent_type too, but no agent_id.
+    const main = parsePermissionHookInput(JSON.stringify({ ...PAYLOAD, agent_type: "claude" }));
+    expect(main?.subagentType).toBeUndefined();
   });
 
   test("refuses anything that is not a PermissionRequest", () => {
     expect(parsePermissionHookInput("not json")).toBeNull();
     expect(parsePermissionHookInput(JSON.stringify({ ...PAYLOAD, hook_event_name: "PreToolUse" }))).toBeNull();
     expect(parsePermissionHookInput(JSON.stringify({ ...PAYLOAD, tool_name: "" }))).toBeNull();
+  });
+});
+
+describe("glanceCommand", () => {
+  test("drops the cd prefix and folds heredoc bodies so the flagged tail shows", () => {
+    const command = [
+      "cd /Users/a/src/repo/.codecast/worktrees/x/backend/src && python3 - <<'EOF'",
+      "p='persona.ts'",
+      "s=open(p).read()",
+      "EOF",
+      'grep -n "day ${\\|\\[day" persona.ts | head',
+    ].join("\n");
+    expect(glanceCommand(command)).toBe(["python3 - <<'EOF'", "…", 'grep -n "day ${\\|\\[day" persona.ts | head'].join("\n"));
+  });
+
+  test("leaves a plain command alone and folds an unterminated heredoc to its end", () => {
+    expect(glanceCommand("bun test src/x.test.ts")).toBe("bun test src/x.test.ts");
+    expect(glanceCommand('cd "/a b" && cat <<EOF\nbody')).toBe("cat <<EOF\n…");
   });
 });
 
@@ -155,6 +189,16 @@ describe("codecast-status.sh on a PermissionRequest", () => {
     // Without one (a pane the daemon did not launch) the input carries none.
     await runHook(PAYLOAD, { CODECAST_LAUNCH_TOKEN: "" });
     expect(held.at(-1)?.launchToken).toBeUndefined();
+  });
+
+  test("a bypass-mode session's prompt is allowed at once, with no card and no status", async () => {
+    mode = "answer";
+    const heldBefore = held.length;
+    const statusesBefore = statuses.length;
+    const out = await runHook({ ...PAYLOAD, permission_mode: "bypassPermissions", tool_input: { command: "python3 - <<'EOF'\nprint(1)\nEOF" } });
+    expect(decisionOf(out)).toEqual({ behavior: "allow" });
+    expect(held).toHaveLength(heldBefore);
+    expect(statuses).toHaveLength(statusesBefore);
   });
 
   test("a daemon without the route gets an ordinary status report and no output", async () => {

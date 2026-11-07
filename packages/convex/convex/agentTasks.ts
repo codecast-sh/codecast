@@ -3010,6 +3010,8 @@ export const getTaskForSummary = internalQuery({
       interval_ms: task.interval_ms,
       event_filter: task.event_filter,
       hosted_home: task.hosted_home === true,
+      // The session whose team the trigger's prompt belongs to (lib/vendorGuard).
+      conversation_id: task.target_conversation_id ?? task.originating_conversation_id ?? task.created_by_conversation_id ?? null,
     };
   },
 });
@@ -3045,6 +3047,7 @@ export const generateDisplaySummary = internalAction({
         prompt: task.hosted_home ? buildRoutineSummaryPrompt({ prompt: task.prompt }) : buildTaskSummaryPrompt({ prompt: task.prompt, scheduleLine }),
         max_tokens: 300,
         label: "Task summary Haiku",
+        gate: { ctx, scope: { conversationId: task.conversation_id } },
       });
       if (!reply) return;
       const text = reply.text;

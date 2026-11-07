@@ -11,7 +11,7 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { X, UserCheck, ArrowRightLeft, Network, BadgePlus } from "lucide-react";
+import { X, UserCheck, ArrowRightLeft, ArrowLeft, Network, BadgePlus } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi, type HandoffInfo } from "../hooks/useOwners";
 import { useStoreOwnersEnv, useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
@@ -72,22 +72,29 @@ export function useOwnersFromStore(conversationId: string): OwnersApi {
 }
 
 /**
- * The owners section of an assignment popover: label + team roster as
- * checkboxes + clear-all. Drop inside an open DropdownMenuContent; rows
- * preventDefault so the menu stays open across multi-select toggles.
+ * The owners section of an assignment popover: the role line, then who owns
+ * the session and the hand-off step (OwnersSection). Drop inside an open
+ * DropdownMenuContent; `onDone` closes that menu once a hand-off is sent.
  */
 export function OwnerMenuItems({
   owners,
   conversationId,
   onMakeRole,
+  handingOff,
+  onHandingOff,
+  onDone,
 }: {
   owners: OwnersApi;
   conversationId: string;
+  /** The hand-off step is open: it takes the whole menu. */
+  handingOff: boolean;
+  onHandingOff: (on: boolean) => void;
+  onDone: () => void;
   /** Opens "Make this a role" (R2). The dialog lives outside the menu, which
    *  unmounts its content when it closes. */
   onMakeRole?: () => void;
 }) {
-  const { ownerIds, ownerList, displayFor, toggle, moveToRole, clearAll, currentUser } = owners;
+  const { ownerList, moveToRole, currentUser } = owners;
   // Mounted only while the assignment menu is open (Radix unmounts Content
   // when closed). This is the team-roster collect that must not run for
   // every open conversation.
@@ -105,20 +112,28 @@ export function OwnerMenuItems({
     const live = (s as any).resolveLiveSessionId?.(conversationId) ?? conversationId;
     return sessionFitsARole((s.sessions as any)?.[live] ?? (s.conversations as any)?.[conversationId], Date.now());
   });
-  const selectable = pickRoster(serverRoster, owners.selectable).filter(
-    isPerson,
-  );
-  // Optional handoff note, sent along with the NEXT assignment made from this
-  // menu. It rides the notification (push + inbox row) and the assignee's
-  // "assigned to you" banner, then clears once used.
-  const [note, setNote] = useState("");
+  const selectable = pickRoster(serverRoster, owners.selectable).filter(isPerson);
   return (
     <>
+      {seatRoleId && reparentOrgRole ? (
+        <SeatReportsToItems
+          people={selectable}
+          currentUserId={currentUser?._id}
+          ownerId={ownerList[0]}
+          roles={liveRoles.filter((r) => r._id !== seatRoleId)}
+          parentRoleId={orgRoleId}
+          onPick={(to) => reparentOrgRole(seatRoleId, to)}
+        />
+      ) : (
+        <OwnersSection owners={owners} people={selectable} handingOff={handingOff} onHandingOff={onHandingOff} onDone={onDone} />
+      )}
+      {!handingOff && (<>
       {/* The reporting line to a role (S11): the same act as a chart drag. When
           the session already reports to a role, name it; either way, offer to
           file it under a role, which clears the person-owner line. */}
       {currentRole && !seatRoleId && (
         <>
+          <DropdownMenuSeparator />
           <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
             Reports to a role
           </DropdownMenuLabel>
@@ -134,6 +149,7 @@ export function OwnerMenuItems({
       )}
       {moveToRole && !isStandingThread && liveRoles.length > 0 && (
         <>
+          {!currentRole && <DropdownMenuSeparator />}
           <DropdownMenuSub>
             <DropdownMenuSubTrigger className="text-xs gap-2">
               <Network className="w-3.5 h-3.5 shrink-0" /> Move to a role
@@ -156,87 +172,181 @@ export function OwnerMenuItems({
               ))}
             </DropdownMenuSubContent>
           </DropdownMenuSub>
-          <DropdownMenuSeparator />
         </>
       )}
       {onMakeRole && fitsARole && (
         <>
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onMakeRole} className="text-xs gap-2" data-make-role>
             <BadgePlus className="w-3.5 h-3.5 shrink-0" />
             <span>Make this a role<span className="block text-[10px] text-sol-text-dim">It keeps running as it is, and gets a name and a place on the chart</span></span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-        </>
-      )}
-      {seatRoleId && reparentOrgRole ? (
-        <SeatReportsToItems
-          people={selectable}
-          currentUserId={currentUser?._id}
-          ownerId={ownerList[0]}
-          roles={liveRoles.filter((r) => r._id !== seatRoleId)}
-          parentRoleId={orgRoleId}
-          onPick={(to) => reparentOrgRole(seatRoleId, to)}
-        />
-      ) : (<>
-      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
-        Owners · whose inbox
-      </DropdownMenuLabel>
-      {isPerson(currentUser) && !ownerIds.has(currentUser._id) && (
-        <DropdownMenuItem onSelect={(e) => { e.preventDefault(); toggle(currentUser._id); }} className="text-xs gap-2 text-sol-cyan">
-          <UserCheck className="w-3.5 h-3.5 shrink-0" />
-          <span>Take ownership<span className="block text-[10px] text-sol-text-dim">Add to your inbox; keep existing owners</span></span>
-        </DropdownMenuItem>
-      )}
-      {selectable.length === 0 && (
-        <div className="px-2 py-1.5 text-xs text-sol-text-dim">No teammates</div>
-      )}
-      {selectable.map((m: any) => {
-        const isYou = currentUser && m._id === currentUser._id;
-        return (
-          <DropdownMenuCheckboxItem
-            key={m._id}
-            checked={ownerIds.has(m._id)}
-            onSelect={(e) => {
-              e.preventDefault();
-              const wasOwner = ownerIds.has(m._id);
-              toggle(m._id, wasOwner ? undefined : note);
-              if (!wasOwner) setNote("");
-            }}
-            className="text-xs gap-2"
-          >
-            <OwnerAvatar name={m.name || m.email || "?"} image={m.image || m.github_avatar_url} />
-            <span className="flex-1 truncate">
-              {m.name || m.email?.split("@")[0]}
-              {isYou ? " (you)" : ""}
-            </span>
-          </DropdownMenuCheckboxItem>
-        );
-      })}
-      {selectable.some((m: any) => !currentUser || m._id !== currentUser._id) && (
-        <div className="px-2 pt-1 pb-1.5">
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            // The dropdown's typeahead would otherwise swallow letter keys.
-            onKeyDown={(e) => e.stopPropagation()}
-            placeholder="Add a note with the assignment…"
-            className="w-full px-1.5 py-1 text-[11px] rounded border border-sol-border/50 bg-sol-bg text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/60"
-          />
-        </div>
-      )}
-      {ownerList.length > 0 && (
-        <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onSelect={(e) => { e.preventDefault(); clearAll(); }}
-            className="text-[11px] text-sol-text-dim focus:text-sol-red gap-1.5"
-          >
-            <X className="w-3 h-3" /> Clear all owners
           </DropdownMenuItem>
         </>
       )}
       </>)}
     </>
+  );
+}
+
+const memberName = (m: any) => m.name || m.email?.split("@")[0] || "Teammate";
+const memberImage = (m: any) => m.image || m.github_avatar_url;
+
+/**
+ * Who owns the session, and handing it to someone. Two steps in one place:
+ * the owner list (each removable) with a Hand off button, and the hand-off
+ * step, where a person is picked, a note written, and one press sends both
+ * (OwnersApi.handoffTo, the composer's path). The picked person and the
+ * button's own label say what will happen before it does.
+ */
+function OwnersSection({ owners, people, handingOff, onHandingOff, onDone }: {
+  owners: OwnersApi;
+  people: any[];
+  handingOff: boolean;
+  onHandingOff: (on: boolean) => void;
+  onDone: () => void;
+}) {
+  const { ownerList, ownerIds, displayFor, toggle, currentUser } = owners;
+  const meId = currentUser?._id?.toString?.();
+  const others = people.filter((m) => m._id !== meId);
+  if (handingOff) {
+    return <HandoffStep owners={owners} people={others} onBack={() => onHandingOff(false)} onSent={onDone} />;
+  }
+  return (
+    <>
+      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
+        Owners · whose inbox
+      </DropdownMenuLabel>
+      {ownerList.length === 0 && (
+        <div className="px-2 py-1 text-xs text-sol-text-dim">Nobody yet</div>
+      )}
+      {ownerList.map((id) => {
+        const disp = id === meId && isPerson(currentUser) ? { name: memberName(currentUser), image: memberImage(currentUser) } : displayFor(id);
+        return (
+          <div key={id} className="group flex items-center gap-2 px-2 py-1 text-xs text-sol-text">
+            <OwnerAvatar name={disp.name} image={disp.image} size="w-5 h-5" />
+            <span className="flex-1 truncate">{disp.name}{id === meId ? " (you)" : ""}</span>
+            <button
+              type="button"
+              onClick={() => toggle(id)}
+              title={id === meId ? "Leave: take it out of your inbox" : `Remove ${disp.name}`}
+              aria-label={id === meId ? "Leave" : `Remove ${disp.name}`}
+              className="shrink-0 p-0.5 rounded text-sol-text-dim opacity-40 group-hover:opacity-100 hover:text-sol-red hover:bg-sol-red/10 transition-opacity"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        );
+      })}
+      {isPerson(currentUser) && meId && !ownerIds.has(meId) && (
+        <DropdownMenuItem onSelect={(e) => { e.preventDefault(); toggle(meId); }} className="text-xs gap-2 text-sol-cyan">
+          <UserCheck className="w-3.5 h-3.5 shrink-0" /> Take ownership
+        </DropdownMenuItem>
+      )}
+      {others.length > 0 && (
+        <DropdownMenuItem
+          onSelect={(e) => { e.preventDefault(); onHandingOff(true); }}
+          className="mx-1 my-1 justify-center gap-2 rounded-md border border-sol-violet/40 bg-sol-violet/10 py-1.5 text-xs font-medium text-sol-violet focus:bg-sol-violet/20 focus:text-sol-violet"
+          data-handoff-open
+        >
+          <ArrowRightLeft className="w-3.5 h-3.5 shrink-0" /> Hand off…
+        </DropdownMenuItem>
+      )}
+    </>
+  );
+}
+
+/** Pick one person, write a note, send. Plain buttons rather than menu items,
+ *  so a pointer passing over the list does not pull focus out of the note. */
+function HandoffStep({ owners, people, onBack, onSent }: {
+  owners: OwnersApi;
+  people: any[];
+  onBack: () => void;
+  onSent: () => void;
+}) {
+  const { ownerIds, handoffTo, currentUser } = owners;
+  const meId = currentUser?._id?.toString?.();
+  const [pickedId, setPickedId] = useState<string | null>(people.length === 1 ? people[0]._id : null);
+  const [note, setNote] = useState("");
+  const [keepSelf, setKeepSelf] = useState(false);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  const picked = people.find((m) => m._id === pickedId);
+  const firstName = picked ? memberName(picked).split(" ")[0] : "";
+  const send = () => {
+    if (!picked) return;
+    void handoffTo(picked._id, note, { keepSelf });
+    onSent();
+  };
+  return (
+    <div
+      // Keys belong to the step: the menu's typeahead and arrow handling would
+      // otherwise swallow letters typed into the note.
+      onKeyDown={(e) => { if (e.key !== "Escape") e.stopPropagation(); }}
+      className="px-1 pb-1"
+      data-handoff-step
+    >
+      <div className="flex items-center gap-1.5 px-1 pt-1 pb-1.5">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Back to owners"
+          className="p-0.5 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+        </button>
+        <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet">Hand off to</span>
+      </div>
+      <div role="radiogroup" aria-label="Hand off to" className="max-h-[220px] overflow-y-auto">
+        {people.map((m) => {
+          const on = m._id === pickedId;
+          return (
+            <button
+              key={m._id}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              onClick={() => { setPickedId(m._id); noteRef.current?.focus(); }}
+              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-xs transition-colors ${
+                on ? "bg-sol-violet/15 text-sol-text ring-1 ring-inset ring-sol-violet/50" : "text-sol-text hover:bg-sol-bg-highlight"
+              }`}
+            >
+              <OwnerAvatar name={memberName(m)} image={memberImage(m)} size="w-5 h-5" />
+              <span className="flex-1 truncate">{memberName(m)}</span>
+              {ownerIds.has(m._id) && <span className="shrink-0 text-[9px] uppercase tracking-wide text-sol-text-dim">owner</span>}
+              <span className={`shrink-0 w-3.5 h-3.5 rounded-full border flex items-center justify-center ${on ? "border-sol-violet bg-sol-violet" : "border-sol-border"}`}>
+                {on && <span className="w-1.5 h-1.5 rounded-full bg-sol-bg" />}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <textarea
+        ref={noteRef}
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+        rows={2}
+        placeholder={picked ? `Note for ${firstName} (optional)` : "Note (optional)"}
+        className="mt-1.5 w-full resize-none px-2 py-1.5 text-xs rounded-md border border-sol-border/60 bg-sol-bg text-sol-text placeholder:text-sol-text-dim/70 outline-none focus:border-sol-violet/60"
+      />
+      <div className="mt-1.5 flex items-center gap-2">
+        {/* Only an owner has anything to keep. */}
+        {meId && ownerIds.has(meId) && (
+          <label className="flex items-center gap-1.5 text-[11px] text-sol-text-muted cursor-pointer select-none">
+            <Switch checked={keepSelf} onCheckedChange={setKeepSelf} aria-label="Stay an owner" />
+            Stay an owner
+          </label>
+        )}
+        <button
+          type="button"
+          disabled={!picked}
+          onClick={send}
+          className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-sol-violet text-sol-bg hover:bg-sol-violet/90 disabled:bg-sol-bg-highlight disabled:text-sol-text-dim disabled:cursor-not-allowed transition-colors"
+        >
+          {picked ? `Hand off to ${firstName}` : "Pick someone"}
+          {picked && <KeyCap size="xs">↵</KeyCap>}
+        </button>
+      </div>
+    </div>
   );
 }
 

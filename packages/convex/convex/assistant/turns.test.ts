@@ -188,6 +188,25 @@ describe("a turn", () => {
     expect(s.managed?.agent_status).toBe("done");
   });
 
+  test("a regulated team's conversation gets the vendor's line and no model call while Anthropic has no BAA", async () => {
+    const { t, user, conversationId } = await setup();
+    await t.run(async (ctx) => {
+      const team = await ctx.db.insert("teams", { name: "Clinic", invite_code: "CLINIC12", created_at: 1, policy: { regulated_data: true } } as any);
+      await ctx.db.patch(conversationId, { team_id: team, team_visibility: "full" } as any);
+    });
+    faux.setResponses([reply("This must never be generated.")]);
+    await say(t, conversationId, user, "Summarize the intake notes");
+    await settle(t);
+    const s = await state(t, conversationId, user);
+    expect(s.messages.map((m) => [m.role, m.content])).toEqual([
+      ["user", "Summarize the intake notes"],
+      ["assistant", "AI features are off for Clinic: no BAA with Anthropic yet."],
+    ]);
+    expect(s.messages[1].subtype).toBe("hosted_notice:vendor");
+    expect(s.conversation?.hosted_stop).toBe("vendor");
+    expect(s.turns.every((turn) => (turn.cost_usd ?? 0) === 0)).toBe(true);
+  });
+
   test("the first message of a new conversation wakes its turn on its own", async () => {
     const t = convexTest(schema, modules);
     const user = await t.run((ctx) => ctx.db.insert("users", { emailVerificationTime: 1 }));

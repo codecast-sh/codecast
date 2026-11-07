@@ -1,5 +1,6 @@
 "use client";
 
+import { CommandRunView } from "./CommandRunView";
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { useRef, useState, type WheelEvent } from "react";
 import Link from "next/link";
@@ -179,6 +180,9 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             {meta}
           </section>
         )}
+
+        {/* ── The command a --run card executes, and how it went ── */}
+        {decision.run && <section className="mt-6"><CommandRunView run={decision.run} /></section>}
 
         {/* ── Body ── */}
         {!decision.card && body && <section className="mt-8">{body}</section>}

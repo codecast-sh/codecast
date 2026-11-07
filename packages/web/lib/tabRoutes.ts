@@ -24,6 +24,9 @@ export { IN_SHELL_ROOT_SEGMENTS };
 // marketing page stays mounted until a manual reload).
 export const NON_TAB_EXACT = new Set([
   "/",
+  // The first-run setup flow (components/onboarding) stands outside the shell,
+  // so leaving it for the inbox has to be a real navigation.
+  "/start",
   // Renamed pages that moved alone (lib/renamedPages.ts: /projects is the
   // Org screen's Projects filter): the router runs their redirect, while the
   // pages under them (/projects/<pj-…>) stay tab pages.
