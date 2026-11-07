@@ -118,3 +118,19 @@ const BUILTIN_COMMANDS: Record<string, Skill[]> = {
 export function getBuiltinCommands(agentType?: string): Skill[] {
   return BUILTIN_COMMANDS[agentType || "claude_code"] || CLAUDE_CODE;
 }
+
+/** Codecast's own composer command: `/btw <question>` asks a side question
+ *  about the session (lib/sideAnswers), answered beside the conversation and
+ *  never sent to the agent. In a conversation's composer it replaces the
+ *  agent's command of the same name, whose answer would only show in the
+ *  terminal. */
+export const SIDE_QUESTION_COMMAND: Skill = { name: "btw", description: "Ask about this session; the agent never sees it" };
+
+const SIDE_QUESTION_RE = /^\/btw(?:\s+([\s\S]*))?$/;
+
+/** The question in a composer message that is a side question ("" for a bare
+ *  `/btw`, which only opens the panel), or null when the message is for the agent. */
+export function parseSideQuestion(text: string): string | null {
+  const m = text.trim().match(SIDE_QUESTION_RE);
+  return m ? (m[1] ?? "").trim() : null;
+}

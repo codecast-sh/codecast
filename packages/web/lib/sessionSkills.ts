@@ -1,4 +1,4 @@
-import { getBuiltinCommands } from "./builtinCommands";
+import { getBuiltinCommands, SIDE_QUESTION_COMMAND } from "./builtinCommands";
 import { extractSkillsFromMessages, type SkillItem } from "./conversationProcessor";
 
 /**
@@ -18,8 +18,11 @@ export function resolveSessionSkills(opts: {
   projectPath?: string | null;
   agentType?: string | null;
   messages?: unknown[];
+  /** A conversation's own composer, where `/btw` asks codecast a side
+   *  question (lib/sideAnswers) in place of any agent command of that name. */
+  sideQuestions?: boolean;
 }): SkillItem[] {
-  const { availableSkills, projectPath, agentType, messages } = opts;
+  const { availableSkills, projectPath, agentType, messages, sideQuestions } = opts;
   let extracted: SkillItem[] = [];
   if (availableSkills) {
     try {
@@ -44,7 +47,9 @@ export function resolveSessionSkills(opts: {
   }
   const builtins = getBuiltinCommands(agentType || undefined);
   const names = new Set(extracted.map((s) => s.name.toLowerCase()));
-  return [...extracted, ...builtins.filter((b) => !names.has(b.name.toLowerCase()))];
+  const merged = [...extracted, ...builtins.filter((b) => !names.has(b.name.toLowerCase()))];
+  if (!sideQuestions) return merged;
+  return [SIDE_QUESTION_COMMAND, ...merged.filter((s) => s.name.toLowerCase() !== SIDE_QUESTION_COMMAND.name)];
 }
 
 // A slash command opens at the start of the text or of any word, so a skill

@@ -26,6 +26,8 @@ import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/se
 export { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
 import { create } from "zustand";
 import { decisionCommentStub, decisionCommentStubId, type DecisionCommentRow, type DecisionThreadItem } from "./decisionThreadTypes";
+import type { SideAnswerRow } from "@codecast/shared/contracts";
+import { sideAnswerStub, sideAnswerStubId } from "./sideAnswerTypes";
 import { useSyncExternalStore, useRef } from "react";
 import {
   mutativeMiddleware,
@@ -6307,6 +6309,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   decisionDetails: Record<string, DecisionDetailItem>;
   decisionThreads: Record<string, DecisionThreadItem>;
   decisionComments: Record<string, DecisionCommentRow>;
+  sideAnswers: Record<string, SideAnswerRow>;
+  askSideQuestion: (conversationId: string, question: string, clientId: string) => Promise<unknown>;
+  failSideAnswer: (clientId: string, message: string) => void;
   // A comment in a decision's team thread, relayed to the session that owns it (decisionThread.ts).
   // Resolves with the server's answer; a refusal comes back as { error } (lib/decisionThread sendDecisionComment).
   commentOnDecision: (decisionId: string, text: string, clientId: string, parentId?: string) => Promise<unknown>;
@@ -9800,6 +9805,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
   decisionDetails: {},
   decisionThreads: {},
   decisionComments: {},
+  // Side answers (lib/sideAnswers): the question paints pending at once; the
+  // askSideQuestion side effect stores it and schedules the answer, and the
+  // feed's row with the same client id supersedes the stub. A refusal is
+  // returned, not thrown, and turns the stub failed with its reason.
+  sideAnswers: {},
+  askSideQuestion: asyncAction(function (this: Draft, conversationId: string, question: string, clientId: string) {
+    const stub = sideAnswerStub({ conversationId, question, clientId });
+    this.sideAnswers[stub._id] = stub;
+  }),
+  failSideAnswer: sync(function (this: Draft, clientId: string, message: string) {
+    const row = this.sideAnswers[sideAnswerStubId(clientId)];
+    if (row) { row.status = "failed"; row.error_code = "REFUSED"; row.error_message = message; }
+  }),
   questionResolutions: {},
   // sync(): local-only bookkeeping — the mark never dispatches; server truth
   // arrives on its own rail (awaiting_input / agent_status) and expires it.

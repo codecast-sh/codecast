@@ -18,6 +18,7 @@ export function useSessionMentions({ conversation, managedSession }: {
     projectPath: conversation?.project_path,
     agentType: conversation?.agent_type,
     messages: conversation?.messages,
+    sideQuestions: true,
   }), [availableSkills, conversation?.project_path, conversation?.messages, conversation?.agent_type]);
 
   const sessionFilePaths = useMemo(() => {

@@ -1,19 +1,23 @@
 "use client";
 
-// "Ask this session": a question about the open conversation, answered by the
-// same server action as `cast read <id> --ask`, with every `msg N` citation a
-// chip that jumps to that message in the transcript.
+// "Ask this session": side answers about the open conversation (`/btw` in the
+// composer, or this panel's own box), answered by the same read as
+// `cast read <id> --ask` and never sent to the agent. Every `msg N` citation is
+// a chip that jumps to that message in the transcript.
 //
-// The questions and answers are ephemeral UI state kept by hooks/useAskSession.
+// The rows live in the store's sideAnswers collection (hooks/useSideAnswers),
+// kept per conversation on the server, so earlier answers can be reread.
 
-import { createContext, memo, useContext, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, memo, useContext, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import ReactMarkdownBase from "react-markdown";
-import type { AskResult } from "@codecast/shared/contracts";
+import type { SideAnswerRow } from "@codecast/shared/contracts";
+import { formatDateFull, relTimeShort } from "@codecast/shared/time";
 import { Loader2, MessageCircleQuestion, X } from "lucide-react";
 import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
 import { MESSAGE_MD_COMPONENTS } from "../messageMarkdown";
 import { askCiteTarget, linkAskCitations } from "../../lib/askSession";
-import { useAskSession, useAskThread, type AskEntry } from "../../hooks/useAskSession";
+import { askSideQuestion, sideAnswerView } from "../../lib/sideAnswers";
+import { useSideAnswers } from "../../hooks/useSideAnswers";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { MenuKeyCaps, KeyCap } from "../KeyboardShortcutsHelp";
 
@@ -39,8 +43,8 @@ function CiteAwareLink(props: { href?: string; children?: ReactNode }) {
 
 const ANSWER_COMPONENTS = { ...MESSAGE_MD_COMPONENTS, a: CiteAwareLink };
 
-const AnswerBody = memo(function AnswerBody({ result }: { result: AskResult }) {
-  const markdown = linkAskCitations(result.answer, result.citations ?? []);
+const AnswerBody = memo(function AnswerBody({ answer, citations }: { answer: string; citations: ReadonlyArray<{ line: number; message_id: string }> }) {
+  const markdown = linkAskCitations(answer, citations);
   return (
     <div className="prose prose-sm max-w-none text-[13px] leading-relaxed text-sol-text [&_p]:my-1.5 [&_ul]:my-1.5 [&_li]:my-0.5 [&_code]:text-[12px]">
       <ReactMarkdownBase remarkPlugins={entityRemarkPlugins} components={ANSWER_COMPONENTS}>{markdown}</ReactMarkdownBase>
@@ -53,7 +57,7 @@ function Elapsed({ since }: { since: number }) {
   return <span className="tabular-nums">{Math.max(0, Math.round((now - since) / 1000))}s</span>;
 }
 
-function PartialNote({ unread }: { unread: NonNullable<AskResult["unread"]> }) {
+function PartialNote({ unread }: { unread: { after: number; before: number } }) {
   return (
     <div className="mt-2 text-[11px] leading-snug text-sol-text-dim border-l-2 border-sol-yellow/50 pl-2">
       This session is too long to read whole. Messages between msg {unread.after} and msg {unread.before} (counted from the end) were not read.
@@ -61,22 +65,26 @@ function PartialNote({ unread }: { unread: NonNullable<AskResult["unread"]> }) {
   );
 }
 
-function Entry({ entry }: { entry: AskEntry }) {
+function Entry({ row, now }: { row: SideAnswerRow; now: number }) {
+  const view = sideAnswerView(row, now);
   return (
-    <div className="py-3 first:pt-1">
-      <div className="text-[12px] font-medium text-sol-text-secondary mb-1.5 break-words line-clamp-3" title={entry.question}>{entry.question}</div>
-      {entry.result ? (
+    <div className="py-3 first:pt-1" data-side-answer={row.status}>
+      <div className="flex items-baseline gap-2 mb-1.5">
+        <div className="flex-1 min-w-0 text-[12px] font-medium text-sol-text-secondary break-words line-clamp-3" title={row.question}>{row.question}</div>
+        <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim" title={formatDateFull(row.created_at)}>{relTimeShort(row.created_at, now)}</span>
+      </div>
+      {view.kind === "answered" ? (
         <>
-          <AnswerBody result={entry.result} />
-          {entry.result.unread && <PartialNote unread={entry.result.unread} />}
+          <AnswerBody answer={view.answer} citations={view.citations} />
+          {view.unread && <PartialNote unread={view.unread} />}
         </>
-      ) : entry.error ? (
-        <div className="text-[12px] text-sol-red">{entry.error}</div>
+      ) : view.kind === "failed" ? (
+        <div className="text-[12px] text-sol-red">{view.message}</div>
       ) : (
         <div className="flex items-center gap-2 text-[12px] text-sol-text-dim">
           <Loader2 className="w-3.5 h-3.5 animate-spin text-sol-cyan" />
           <span>Reading the session</span>
-          <span className="opacity-70"><Elapsed since={entry.started_at} /></span>
+          <span className="opacity-70"><Elapsed since={row.created_at} /></span>
         </div>
       )}
     </div>
@@ -97,17 +105,21 @@ export function AskSessionPanel({
   onCite: (messageId: string) => void;
   onClose: () => void;
 }) {
-  const entries = useAskThread(conversationId);
-  const ask = useAskSession(conversationId);
+  const rows = useSideAnswers(conversationId);
+  const now = useCoarseNow(30_000);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  // Opened, or a question added (here or by `/btw` in the composer): show the newest.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [rows.length]);
+
   const submit = () => {
     if (!draft.trim()) return;
-    ask(draft);
+    void askSideQuestion(conversationId, draft);
     setDraft("");
-    // The new entry renders on the next paint; keep it in view.
-    requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }));
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -137,18 +149,14 @@ export function AskSessionPanel({
       </div>
 
       <CiteContext.Provider value={onCite}>
-        {entries.length > 0 ? (
+        {rows.length > 0 && (
           <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-3 divide-y divide-sol-border/40">
-            {entries.map((e) => <Entry key={e.id} entry={e} />)}
-          </div>
-        ) : (
-          <div className="px-3 py-3 text-[12px] leading-relaxed text-sol-text-dim">
-            Ask what was decided, what changed, or where something stands. The answer cites the messages it rests on; click one to jump there.
+            {rows.map((r) => <Entry key={r.client_id} row={r} now={now} />)}
           </div>
         )}
       </CiteContext.Provider>
 
-      <div className="flex items-end gap-2 px-2.5 py-2 border-t border-sol-border/60">
+      <div className={`flex items-end gap-2 px-2.5 py-2 ${rows.length > 0 ? "border-t border-sol-border/60" : ""}`}>
         <textarea
           ref={inputRef}
           autoFocus
@@ -156,7 +164,7 @@ export function AskSessionPanel({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={entries.length > 0 ? "Ask a follow-up" : "What did this session decide about…"}
+          placeholder={rows.length > 0 ? "Ask another" : "What did this session change in…"}
           className="flex-1 resize-none bg-transparent outline-none text-[13px] leading-5 text-sol-text placeholder:text-sol-text-dim max-h-28 [field-sizing:content] [font-variant-ligatures:none]"
         />
         <button
