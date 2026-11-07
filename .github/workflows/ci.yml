@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       cli: ${{ steps.scope.outputs.cli }}
+      evals: ${{ steps.scope.outputs.evals }}
       web: ${{ steps.scope.outputs.web }}
       convex: ${{ steps.scope.outputs.convex }}
       shared: ${{ steps.scope.outputs.shared }}
@@ -49,46 +50,56 @@ jobs:
         with:
           deps: none
 
-      # No `bun install`: the classifier has no dependencies.
-      - name: Classify changed paths
-        id: scope
+      # One diff for both classifiers below. A pull request diffs its head
+      # against the merge base with main. A push to main diffs against the
+      # commit main pointed at before the push, so each push runs the jobs its
+      # own commits can break. Anything else leaves the list empty and the
+      # classifiers run every job: a first push sends zeros for `before`, a
+      # force push leaves it unreachable, and another event has no base.
+      # --no-renames: a rename reports only the destination, so a file moved
+      # out of a package would hide the change to that package.
+      - name: List changed paths
+        id: diff
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -uo pipefail
-          # Both empty on a push to main, which then classifies as an empty
-          # diff and runs everything.
-          CHANGED=""
-          if [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
-            # --no-renames: a rename reports only the destination, so a file
-            # moved out of a package would hide the change to that package.
-            CHANGED="$(git diff --name-only --no-renames --diff-filter=ACDMR --merge-base "$BASE_SHA" "$HEAD_SHA" || true)"
-          fi
-          echo "Changed paths:"
-          printf '%s\n' "$CHANGED"
-          printf '%s\n' "$CHANGED" | bun scripts/ci/changed-path-scope.ts | tee -a "$GITHUB_OUTPUT"
-
-      - name: Classify computer changes
-        id: computer_scope
-        env:
+          EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           PUSH_SHA: ${{ github.sha }}
         run: |
           set -uo pipefail
-          # A failed diff (a force push leaves `before` unreachable, the first
-          # push sends zeros) yields an empty list, which the classifier treats
-          # as "run the helper lane", the same fail-closed rule as the scope
-          # step above.
-          CHANGED=""
-          if [ -n "$PR_BASE_SHA" ] && [ -n "$PR_HEAD_SHA" ]; then
-            CHANGED="$(git diff --name-only --no-renames --merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA" || true)"
-          elif [ -n "$PUSH_BEFORE_SHA" ]; then
-            CHANGED="$(git diff --name-only --no-renames "$PUSH_BEFORE_SHA" "$PUSH_SHA" || true)"
+          list="$RUNNER_TEMP/changed-paths.txt"
+          : > "$list"
+          base="" head=""
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$PR_BASE_SHA" ] && [ -n "$PR_HEAD_SHA" ]; then
+            base="$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA" || true)"
+            head="$PR_HEAD_SHA"
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BEFORE_SHA" ] \
+            && [ "$PUSH_BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "$PUSH_BEFORE_SHA^{commit}" 2>/dev/null; then
+            base="$PUSH_BEFORE_SHA"
+            head="$PUSH_SHA"
           fi
-          printf '%s\n' "$CHANGED" | bun scripts/ci/changed-path-scope.ts --computer-only | tee -a "$GITHUB_OUTPUT"
+          if [ -n "$base" ]; then
+            echo "Diffing $base..$head ($EVENT_NAME)"
+            # A failed diff must not leave a partial list behind.
+            git diff --name-only --no-renames "$base" "$head" > "$list.tmp" && mv "$list.tmp" "$list"
+          else
+            echo "No diff base for this $EVENT_NAME event: running every job"
+          fi
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          echo "Changed paths:"
+          cat "$list"
+
+      # No `bun install`: the classifier has no dependencies.
+      - name: Classify changed paths
+        id: scope
+        run: bun scripts/ci/changed-path-scope.ts < "${{ steps.diff.outputs.list }}" | tee -a "$GITHUB_OUTPUT"
+
+      # An empty list runs the helper lane, the same fail-closed rule as above.
+      - name: Classify computer changes
+        id: computer_scope
+        run: bun scripts/ci/changed-path-scope.ts --computer-only < "${{ steps.diff.outputs.list }}" | tee -a "$GITHUB_OUTPUT"
 
   # Pins ci.yml against its classifier: the job list, the gates, and the
   # verify assertions. Ungated — it is the check that proves the gates.
@@ -105,6 +116,22 @@ jobs:
 
       - name: Unit tests (ci scripts + workflow contract)
         run: bun test scripts/ci/
+
+  # Guard and ratchet tests read source trees off disk, often across packages,
+  # so no path filter can say which change might break one. They run on every
+  # change, from each package's directory with the flags its own job uses
+  # (scripts/ci/tree-wide-tests.ts). The package jobs below still run them too.
+  test-guards:
+    name: guard and ratchet tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Guard and ratchet tests (every package)
+        run: bun scripts/ci/tree-wide-tests.ts
 
   build:
     needs: [code_paths]
@@ -584,6 +611,7 @@ jobs:
     needs:
       - code_paths
       - ci-contract
+      - test-guards
       - build
       - typecheck
       - lint
@@ -601,6 +629,7 @@ jobs:
         env:
           CODE_PATHS: ${{ needs.code_paths.result }}
           CI_CONTRACT: ${{ needs.ci-contract.result }}
+          TEST_GUARDS: ${{ needs.test-guards.result }}
           BUILD: ${{ needs.build.result }}
           BUILD_SHOULD_RUN: ${{ needs.code_paths.outputs.run_build }}
           TYPECHECK: ${{ needs.typecheck.result }}
@@ -623,14 +652,19 @@ jobs:
           TEST_ELECTRON_SHOULD_RUN: ${{ needs.code_paths.outputs.run_test_electron }}
         run: |
           failed=0
-          # The two ungated jobs: if either did not succeed, the gates below
-          # were computed by code nobody verified.
+          # The ungated jobs. If code_paths or ci-contract did not succeed, the
+          # gates below were computed by code nobody verified; test-guards runs
+          # on every change because no gate can cover it.
           if [ "$CODE_PATHS" != "success" ]; then
             echo "code_paths: expected success, got $CODE_PATHS"
             failed=1
           fi
           if [ "$CI_CONTRACT" != "success" ]; then
             echo "ci-contract: expected success, got $CI_CONTRACT"
+            failed=1
+          fi
+          if [ "$TEST_GUARDS" != "success" ]; then
+            echo "test-guards: expected success, got $TEST_GUARDS"
             failed=1
           fi
           check_job() {

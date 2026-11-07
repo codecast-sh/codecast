@@ -17,7 +17,7 @@ const flags = (files: string[]) => classifyChangedPaths(files).flags;
 describe("areaOf", () => {
   test("maps each package to its area", () => {
     expect(areaOf("packages/cli/src/daemon.ts")).toBe("cli");
-    expect(areaOf("packages/evals/src/x.ts")).toBe("cli");
+    expect(areaOf("packages/evals/src/x.ts")).toBe("evals");
     expect(areaOf("packages/web/components/DiffView.tsx")).toBe("web");
     expect(areaOf("packages/convex/convex/tasks.ts")).toBe("convex");
     expect(areaOf("packages/shared/contracts/agentClients.ts")).toBe("shared");
@@ -65,79 +65,62 @@ describe("touchesPlatform", () => {
 });
 
 describe("classifyChangedPaths", () => {
-  test("a docs-only change runs only the shared suite, which reads docs/", () => {
+  // The jobs one change runs. Each set follows from what the job's files
+  // import or read (test-reach.test.ts checks those edges against the tree).
+  const ran = (files: string[]) => GATED_JOBS.filter((job) => flags(files)[jobFlag(job)]).sort();
+
+  test("a docs-only change runs the cli and shared suites, which read docs/", () => {
     const result = flags(["docs/architecture/sync-host.md", "README.md"]);
     expect(result.docs).toBe(true);
-    for (const job of GATED_JOBS) {
-      expect(result[jobFlag(job)], job).toBe(job === "test-shared");
-    }
+    expect(ran(["docs/architecture/sync-host.md", "README.md"])).toEqual(["test-cli", "test-shared"]);
     for (const area of AREAS) {
       if (area !== "docs") expect(result[area]).toBe(false);
     }
   });
 
-  test("a cli change runs build, typecheck, the cli, shared and mobile tests", () => {
-    const result = flags(["packages/cli/src/daemon.ts"]);
-    expect(result.cli).toBe(true);
-    expect(result.run_build).toBe(true);
-    expect(result.run_typecheck).toBe(true);
-    expect(result.run_test_cli).toBe(true);
-    expect(result.run_test_shared).toBe(true);
-    // The mobile guards borrow the import graph walker from packages/cli.
-    expect(result.run_test_mobile).toBe(true);
-    expect(result.run_lint).toBe(false);
-    expect(result.run_test_web).toBe(false);
-    expect(result.run_test_convex).toBe(false);
-    expect(result.run_test_electron).toBe(false);
+  // convex imports web's line helpers and cli's delivery admission, web
+  // imports cli's bench walker, and cli tests read web and convex files, so
+  // these three run each other's suites.
+  test("a cli change runs build, typecheck and the cli, web and convex tests", () => {
+    expect(ran(["packages/cli/src/daemon.ts"])).toEqual(
+      ["build", "test-cli", "test-convex", "test-web", "typecheck"],
+    );
   });
 
-  // The eval home's unit tests are a step of test-cli, so an evals change has
-  // to reach that job, and only the jobs a cli change reaches.
-  test("an evals change runs the cli tests without forcing every job", () => {
+  test("a web change also lints and runs the mobile tests, which import web", () => {
+    expect(ran(["packages/web/components/DiffView.tsx"])).toEqual(
+      ["build", "lint", "test-cli", "test-convex", "test-mobile", "test-web", "typecheck"],
+    );
+  });
+
+  test("a convex change runs the convex, web, cli and mobile tests", () => {
+    expect(ran(["packages/convex/convex/tasks.ts"])).toEqual(
+      ["build", "test-cli", "test-convex", "test-mobile", "test-web", "typecheck"],
+    );
+  });
+
+  // The eval home's unit tests are a step of test-cli, and web tests read its
+  // token files. It is its own area so a cli change does not count as one.
+  test("an evals change runs typecheck and the cli and web tests without forcing every job", () => {
     const scope = classifyChangedPaths(["packages/evals/src/x.ts"]);
     expect(scope.forcedBy).toEqual([]);
-    expect(scope.flags).toEqual(flags(["packages/cli/src/daemon.ts"]));
-    expect(scope.flags.run_test_cli).toBe(true);
-    expect(scope.flags.run_test_web).toBe(false);
-    expect(scope.flags.run_test_convex).toBe(false);
-    expect(scope.flags.run_lint).toBe(false);
-  });
-
-  test("a web change runs lint, typecheck, build and the web tests", () => {
-    const result = flags(["packages/web/components/DiffView.tsx"]);
-    expect(result.run_lint).toBe(true);
-    expect(result.run_typecheck).toBe(true);
-    expect(result.run_build).toBe(true);
-    expect(result.run_test_web).toBe(true);
-    expect(result.run_test_cli).toBe(false);
-    expect(result.run_test_convex).toBe(false);
+    expect(ran(["packages/evals/src/x.ts"])).toEqual(["test-cli", "test-web", "typecheck"]);
   });
 
   test("a shared change runs every job that reads shared", () => {
-    const result = flags(["packages/shared/contracts/inboxProjection.ts"]);
-    expect(result.run_build).toBe(true);
-    expect(result.run_typecheck).toBe(true);
-    expect(result.run_test_cli).toBe(true);
-    expect(result.run_test_web).toBe(true);
-    expect(result.run_test_convex).toBe(true);
-    // Only packages/web has a lint script, so a shared change leaves it out.
-    expect(result.run_lint).toBe(false);
+    expect(ran(["packages/shared/contracts/inboxProjection.ts"])).toEqual(
+      ["build", "test-cli", "test-convex", "test-mobile", "test-shared", "test-web", "typecheck"],
+    );
   });
 
-  // The vendored mirror is a dependency of every package, so a change to it has
-  // to keep reaching the jobs that used to see it through "shared" — and now
-  // also reach the job that tests the mirror itself (ct-49675).
-  test("a vendored platform change runs every job that reads the mirror", () => {
+  // The vendored mirror is a dependency of every package, so a change to it
+  // reaches every job that reads it, and the job that tests the mirror itself
+  // (ct-49675). Only packages/web has a lint script.
+  test("a vendored platform change runs every job but lint", () => {
     const result = flags(["platform/packages/engine/src/store.ts"]);
     expect(result.platform).toBe(true);
     expect(result.shared).toBe(false);
-    expect(result.run_test_platform).toBe(true);
-    expect(result.run_build).toBe(true);
-    expect(result.run_typecheck).toBe(true);
-    expect(result.run_test_cli).toBe(true);
-    expect(result.run_test_web).toBe(true);
-    expect(result.run_test_convex).toBe(true);
-    expect(result.run_lint).toBe(false);
+    expect(ran(["platform/packages/engine/src/store.ts"])).toEqual(GATED_JOBS.filter((job) => job !== "lint").sort());
   });
 
   test("a workspace manifest re-checks the mirror it declares", () => {
@@ -156,48 +139,22 @@ describe("classifyChangedPaths", () => {
     expect(flags(["docs/architecture/sync-host.md"]).run_test_platform).toBe(false);
   });
 
-  // test-cli carries the eval home's unit tests, which import convex prompt
-  // builders and parsers, so a convex-only change has to run them.
-  test("a convex change runs typecheck, build, the convex tests and the cli job's evals step", () => {
-    const result = flags(["packages/convex/convex/tasks.ts"]);
-    expect(result.run_typecheck).toBe(true);
-    expect(result.run_test_convex).toBe(true);
-    expect(result.run_test_cli).toBe(true);
-    expect(result.run_test_web).toBe(false);
-    expect(result.run_lint).toBe(false);
+  test("a mobile change runs the mobile tests only", () => {
+    expect(flags(["packages/mobile/app/index.tsx"]).mobile).toBe(true);
+    expect(ran(["packages/mobile/app/index.tsx"])).toEqual(["test-mobile"]);
   });
 
-  test("a mobile change runs the mobile tests and the shared suite only", () => {
-    const result = flags(["packages/mobile/app/index.tsx"]);
-    expect(result.mobile).toBe(true);
-    for (const job of GATED_JOBS) {
-      expect(result[jobFlag(job)], job).toBe(job === "test-mobile" || job === "test-shared");
-    }
-  });
-
-  test("an electron or desktop change runs the electron tests and the shared suite only", () => {
+  // web imports electron's window registry, so an electron change reaches
+  // every job that loads web code.
+  test("an electron or desktop change runs the electron tests and everything that loads web", () => {
     for (const file of ["packages/electron/main.js", "packages/desktop/src-tauri/tauri.conf.json"]) {
-      const result = flags([file]);
-      expect(result.electron).toBe(true);
-      for (const job of GATED_JOBS) {
-        expect(result[jobFlag(job)], `${file} ${job}`).toBe(job === "test-electron" || job === "test-shared");
-      }
+      expect(flags([file]).electron).toBe(true);
+      expect(ran([file]), file).toEqual(["build", "test-cli", "test-electron", "test-mobile", "test-web", "typecheck"]);
     }
   });
 
-  test("the mobile guards rerun for every package the native bundle reaches", () => {
-    // bundleGraph.guard walks into web, convex and shared; both guards import
-    // the graph walker from packages/cli.
-    for (const file of [
-      "packages/web/components/DiffView.tsx",
-      "packages/convex/convex/tasks.ts",
-      "packages/shared/contracts/agentClients.ts",
-      "packages/cli/src/bench/bootGraph.ts",
-      "platform/packages/analytics/src/index.ts",
-    ]) {
-      expect(flags([file]).run_test_mobile, file).toBe(true);
-    }
-    expect(flags(["packages/electron/main.js"]).run_test_mobile).toBe(false);
+  test("an extension change runs build and the cli tests, which read its manifest", () => {
+    expect(ran(["packages/browser-extension/background.js"])).toEqual(["build", "test-cli"]);
   });
 
   test("the electron tests rerun for the vendored @platform/desktop they require", () => {
@@ -205,26 +162,6 @@ describe("classifyChangedPaths", () => {
     expect(flags(["packages/electron/package.json"]).run_test_electron).toBe(true);
     expect(flags(["packages/web/components/DiffView.tsx"]).run_test_electron).toBe(false);
     expect(flags(["packages/shared/contracts/agentClients.ts"]).run_test_electron).toBe(false);
-  });
-
-  test("the shared suite runs for any change at all", () => {
-    // The max lines ratchet walks every package and a contract test reads its
-    // spec from docs/, so no classified change leaves it out.
-    const samples: Record<string, string> = {
-      cli: "packages/cli/src/daemon.ts",
-      web: "packages/web/components/DiffView.tsx",
-      convex: "packages/convex/convex/tasks.ts",
-      shared: "packages/shared/contracts/agentClients.ts",
-      platform: "platform/vendor-manifest.txt",
-      electron: "packages/electron/main.js",
-      mobile: "packages/mobile/app/index.tsx",
-      extension: "packages/browser-extension/background.js",
-      docs: "docs/architecture/head-of-people-prompt.md",
-    };
-    expect(Object.keys(samples).sort()).toEqual([...AREAS].sort());
-    for (const [area, file] of Object.entries(samples)) {
-      expect(flags([file]).run_test_shared, area).toBe(true);
-    }
   });
 
   test("an empty diff runs everything", () => {
@@ -266,14 +203,14 @@ describe("classifyChangedPaths", () => {
 
 test("the classifier runs as a script and prints the flags", async () => {
   const proc = Bun.spawn(["bun", new URL("./changed-path-scope.ts", import.meta.url).pathname], {
-    stdin: new TextEncoder().encode("packages/web/components/DiffView.tsx\n"),
+    stdin: new TextEncoder().encode("packages/mobile/app/index.tsx\n"),
     stdout: "pipe",
     stderr: "pipe",
   });
   const stdout = await new Response(proc.stdout).text();
   expect(await proc.exited).toBe(0);
-  expect(stdout.split("\n")).toContain("run_test_web=true");
-  expect(stdout.split("\n")).toContain("run_test_cli=false");
+  expect(stdout.split("\n")).toContain("run_test_mobile=true");
+  expect(stdout.split("\n")).toContain("run_test_web=false");
 });
 
 describe("computer test scope", () => {
