@@ -63,6 +63,12 @@ export function runFastPath(argv: string[]): boolean {
       .catch(fail);
     return true;
   }
+  if (argv[2] === "_claude-sdk-host") {
+    // One Claude SDK session's long lived host (claudeSdk/host.ts), started by
+    // the daemon as its own launchd job.
+    import("./claudeSdk/host.js").then(({ claudeSdkHostMain }) => claudeSdkHostMain(argv.slice(3))).catch(fail);
+    return true;
+  }
   if (argv[2] === "_build-id" || (argv[2] === "--" && argv[3] === "_build-id")) {
     // Prints the build id of the daemon code this executable carries. The
     // update paths run it on the FRESHLY INSTALLED executable to decide whether
