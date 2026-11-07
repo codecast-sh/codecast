@@ -28,6 +28,23 @@ export const AGENT_SCRUBBED_ENV_VARS = [
   "CLAUDE_CODE_SESSION_ID",
 ] as const;
 
+// Set in a Claude SDK session's environment (claudeSdk/options.ts). The status
+// hook reads it and stands down there: the host reports status and answers
+// permission prompts itself.
+export const SDK_BACKEND_ENV = "CODECAST_CLAUDE_BACKEND";
+
+// Variables an agent launch drops though they are no session marker (so they
+// stay off the list above, which doctor reports as leaks). MCP_TOOL_TIMEOUT
+// caps every MCP tool call, which fails cast's long running tools and a
+// permission prompt that waits on a person. SDK_BACKEND_ENV is also how the
+// daemon is told to prefer the SDK backend, so a pane that inherited it from
+// the daemon would silence its own status hook; only an SDK host sets it back.
+export const AGENT_LAUNCH_UNSET_ENV = ["MCP_TOOL_TIMEOUT", SDK_BACKEND_ENV] as const;
+
+// A shell-level effort override beats `--effort`, so it is dropped whenever
+// codecast picks the effort.
+export const EFFORT_OVERRIDE_ENV = "CLAUDE_CODE_EFFORT_LEVEL";
+
 // Claude's own override: any session that sees this saves its transcript even
 // with CLAUDE_CODE_CHILD_SESSION inherited (verified 2026-08-28: the footer
 // warning clears and JSONL is written).
@@ -49,8 +66,9 @@ export const CLOUD_ENV_VAR = "CODECAST_CLOUD";
 // silence a daemon-launched claude, and on a cloud host it names the host.
 // Pane-content detection keys off the literal "env -u CLAUDECODE" head
 // (daemon.ts findLaunchLine) — keep it first.
-export function agentEnvScrub(remote = isRemoteDevice()): string {
-  return `env ${AGENT_SCRUBBED_ENV_VARS.map((v) => `-u ${v}`).join(" ")} ${FORCE_PERSISTENCE_VAR}=1${remote ? ` ${CLOUD_ENV_VAR}=1` : ""}`;
+export function agentEnvScrub(remote = isRemoteDevice(), opts: { effortSet?: boolean } = {}): string {
+  const unset = [...AGENT_SCRUBBED_ENV_VARS, ...AGENT_LAUNCH_UNSET_ENV, ...(opts.effortSet ? [EFFORT_OVERRIDE_ENV] : [])];
+  return `env ${unset.map((v) => `-u ${v}`).join(" ")} ${FORCE_PERSISTENCE_VAR}=1${remote ? ` ${CLOUD_ENV_VAR}=1` : ""}`;
 }
 export const AGENT_ENV_SCRUB = agentEnvScrub();
 
