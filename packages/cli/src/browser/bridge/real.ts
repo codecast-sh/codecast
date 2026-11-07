@@ -24,13 +24,14 @@ import { isRealSession, type EngineOptions } from "../engine.js";
 import { agentSetupLines } from "@codecast/shared/contracts";
 import { fmt } from "../../colors.js";
 import {
-  bridgeEndpoint, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, waitForExtension, type BridgeHostStarter,
+  bridgeEndpoint, bridgeStatus, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, waitForExtension, type BridgeHostStarter,
   type BridgeHostStatus, type BridgeState, type ProvenBridge,
 } from "./host.js";
 import { launchRealChrome, realChromeRunning, settlePairingPage, wakeExtension } from "./realChrome.js";
 import { realChromePid } from "../localChrome.js";
 import { BRIDGE_STORE_URL } from "./protocol.js";
 import { isRemoteDevice } from "../../remote/device.js";
+import { lastLinkedLaptop, probeLaptopLink, readLaptopLink, readLaptopLinkClosed, revokedVerdict, switchNotice, type LinkVerdict } from "./laptopLink.js";
 
 const cloneScope = new AsyncLocalStorage<boolean>();
 
@@ -109,10 +110,55 @@ export function forgetDesktopPane(sessionKey: string | null): void {
   writeRealState({ ...s, paneBySession: panes });
 }
 
-/** Has the extension ever proved itself to this machine's bridge host? */
+/** Has the extension ever proved itself to this machine's bridge host (or does a live laptop link stand in for it)? */
 export function extensionPaired(): boolean {
+  if (laptopBridge) return true;
   const state = readBridgeState();
   return !!state?.token && !!state.extensionSeenAt;
+}
+
+// ---------------------------------------------------------------------------
+// A cloud host driving its laptop's Chrome (bridge/laptopLink.ts)
+// ---------------------------------------------------------------------------
+
+/** The laptop's bridge, proven this invocation, when this host reaches it with the extension on it. */
+let laptopBridge: (ProvenBridge & { laptop: string }) | null = null;
+let hostBrowserVerdict: LinkVerdict | null = null;
+
+/**
+ * Decide, once per invocation, which Chrome a cloud host's commands drive:
+ * the laptop's through its link when that proves healthy within the probe
+ * budget, else the host's own exactly as before. Prints one line when the
+ * choice changed since the last command here. A no-op off a remote device,
+ * and on one with no link file or its own paired extension.
+ */
+export async function selectHostBrowser(note: (line: string) => void = (l) => console.error(fmt.muted(l))): Promise<LinkVerdict | null> {
+  laptopBridge = null;
+  hostBrowserVerdict = null;
+  if (!isRemoteDevice() || extensionPaired()) return null;
+  const link = readLaptopLink();
+  // The link's own connection removes the file when it ends, so a laptop
+  // that just went away usually leaves no file at all: still a switch. A
+  // laptop that closed it because it revoked this host said so first.
+  const closed = link ? null : readLaptopLinkClosed();
+  const gone = link ? null : closed?.laptop ?? lastLinkedLaptop();
+  if (!link && !gone) return null;
+  const v: LinkVerdict = link ? await probeLaptopLink(link)
+    : closed ? revokedVerdict(closed.laptop, closed.hostId)
+    : { mode: "host", laptop: gone!, reason: `${gone}'s link is closed (the laptop is off, asleep or offline)` };
+  hostBrowserVerdict = v;
+  if (v.mode === "laptop") laptopBridge = { ...v.bridge, laptop: v.laptop };
+  const line = switchNotice(v);
+  if (line) note(line);
+  return v;
+}
+
+/** What selectHostBrowser decided this invocation, for status. */
+export const hostBrowserChoice = (): LinkVerdict | null => hostBrowserVerdict;
+
+/** The bridge real mode talks to: the laptop's through the link, else this machine's own. */
+function activeBridgeState(): BridgeState | null {
+  return laptopBridge ?? readBridgeState();
 }
 
 /**
@@ -121,6 +167,7 @@ export function extensionPaired(): boolean {
  * verb can ask without a round trip.
  */
 export function extensionReady(): boolean {
+  if (laptopBridge) return true;
   const state = readBridgeState();
   return !!state?.token && !!state.hostPid && isPidAlive(state.hostPid) && state.extensionConnected === true;
 }
@@ -133,7 +180,18 @@ export function extensionReady(): boolean {
  * the ordinary default.
  */
 export function hostOwnsBrowser(): boolean {
-  return isRemoteDevice() && !extensionPaired();
+  return hostHasNoHumanChrome() && !laptopBridge;
+}
+
+/**
+ * A remote device with no extension of its own: no human's Chrome sits on
+ * it, whether or not its sessions reach the laptop's (selectHostBrowser).
+ * What decides how its own Chrome's profile starts (managedBrowser.ts).
+ */
+export function hostHasNoHumanChrome(): boolean {
+  if (!isRemoteDevice()) return false;
+  const state = readBridgeState();
+  return !state?.token || !state.extensionSeenAt;
 }
 
 /**
@@ -207,7 +265,7 @@ export function splitTargetFlags(args: string[]): TargetFlags & { args: string[]
 /** The bridge config, or the setup instruction. Sync, for callers that only
  *  need the port and token (the host itself is started on `open`). */
 export function requireBridgeConfigured(): BridgeState {
-  const state = readBridgeState();
+  const state = activeBridgeState();
   if (!state?.token) {
     throw new Error(`the extension bridge is not set up — install Codecast from ${BRIDGE_STORE_URL}, then run \`cast browser extension setup\` in a terminal on the same computer. No separate browser was started.\n${agentSetupLines("browser").join("\n")}`);
   }
@@ -221,6 +279,7 @@ export function requireBridgeConfigured(): BridgeState {
  * callers are courtesies that never start a host, so all three are "no".
  */
 export async function bridgeEndpointIfConfigured(session?: string | null): Promise<CdpEndpoint | null> {
+  if (laptopBridge) return bridgeEndpoint(laptopBridge, session);
   const state = readBridgeState();
   if (!state?.token) return null;
   try {
@@ -247,7 +306,7 @@ export async function engineBrowserFor(session: string, bridge?: ProvenBridge): 
   if (!isRealSession(session)) return { session };
   // The session rides on the socket URL: the host scopes what this engine
   // discovers to the tabs granted to that session (bridge/host.ts).
-  const state = bridge ?? (await proveBridgeHost(requireBridgeConfigured()));
+  const state = bridge ?? laptopBridge ?? (await proveBridgeHost(requireBridgeConfigured()));
   return { session, cdp: withSession(bridgeWsUrl(state), bridgeEndpoint(state, session)) };
 }
 
@@ -361,6 +420,9 @@ export async function connectRealBridge(
   deps: RealChromeDeps = {},
 ): Promise<{ bridge: ProvenBridge & { started: boolean }; status: BridgeHostStatus }> {
   requireBridgeConfigured();
+  // The laptop's bridge was proven this invocation; nothing here can start
+  // its host or its Chrome, so its status is the whole answer.
+  if (laptopBridge) return { bridge: { ...laptopBridge, started: false }, status: await bridgeStatus(laptopBridge) };
   const note = deps.note ?? ((line: string) => console.error(fmt.muted(`  ${line}`)));
   const bridge = await ensureBridgeHost(start, { note });
   const w: ExtensionWaits = { grace: EXTENSION_RECONNECT_GRACE_MS, alarm: EXTENSION_ALARM_MS, wake: EXTENSION_WAKE_WAIT_MS, launch: CHROME_LAUNCH_WAIT_MS, ...deps.waits };

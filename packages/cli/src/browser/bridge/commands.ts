@@ -18,12 +18,12 @@ import { realChromePid } from "../localChrome.js";
 import type { StartOptions } from "../managedBrowser.js";
 import {
   bridgeHostLogPath, bridgeStatePath, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, probeHost, readBridgeState,
-  reloadExtension, rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, writeBridgeState, type BridgeHostStatus, type BridgeState,
+  reloadExtension, revokeHostClient, rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, writeBridgeState, type BridgeHostStatus, type BridgeState,
 } from "./host.js";
 import { describeProfile, extensionProfiles, matchProfile, pickBridgeProfile, type ExtensionProfiles } from "./chromeProfiles.js";
 import type { RealProfile } from "../profile.js";
 import { BRIDGE_EXTENSION_ID, BRIDGE_STORE_URL, bridgePairingUrl } from "./protocol.js";
-import { connectRealBridge, hostOwnsBrowser, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
+import { connectRealBridge, hostBrowserChoice, hostOwnsBrowser, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
 import { CHROME_LAUNCHER_NAME, installChromeLauncher, openInRealChrome, REAL_CHROME_LAUNCH_ARGS, restartRealChrome, settlePairingPage } from "./realChrome.js";
 import { ownedDesktopPane, PANE_HOW_TO } from "../desktopPane.js";
 
@@ -75,7 +75,19 @@ function printSetupCard(): void {
 /** A remote host's browser is its own Chrome, which every verb starts on demand: nothing to pair. */
 function printHostBrowser(): void {
   console.log(`target: ${fmt.highlight("host")}${fmt.muted(" (this host's own Chrome, on the screen the session's browser view and `cast hosts vnc` show)")}`);
+  const choice = hostBrowserChoice();
+  if (choice?.mode === "host") console.log(`${WARN} ${choice.laptop ? `${choice.laptop}'s Chrome` : "the laptop's Chrome"} is not in use: ${choice.reason}`);
   console.log(fmt.muted("  no extension needed: `cast browser open <url>` starts it; `cast browser sync <site>` carries a login in from the owner's laptop"));
+}
+
+/** On a cloud host driving its laptop's Chrome: which laptop, and is the extension there. */
+function printLaptopBrowser(): boolean {
+  const choice = hostBrowserChoice();
+  if (choice?.mode !== "laptop") return false;
+  console.log(`target: ${fmt.highlight(`${choice.laptop}'s Chrome`)}${fmt.muted(` (the laptop's own Chrome, through its link on 127.0.0.1:${choice.bridge.port})`)}`);
+  console.log(connectedLine(choice.status));
+  console.log(fmt.muted("  agent tabs open in the laptop Chrome's group for this session; when the laptop is away this host falls back to its own Chrome"));
+  return true;
 }
 
 /** One line for a connected extension, the same wherever it is reported. */
@@ -285,9 +297,9 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       if (o.json) {
         // Read by the setup card's check (agentToolSetup.ts) on every poll, so
         // it repairs nothing: no Chrome launch, no wake tab.
-        let connected = false;
+        let connected = hostBrowserChoice()?.mode === "laptop";
         let detail: string | undefined;
-        if (state?.token) {
+        if (state?.token && !connected) {
           try {
             connected = (await connectRealBridge(undefined, { repair: false })).status.extensionConnected;
           } catch (err) {
@@ -298,6 +310,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         console.log(JSON.stringify({ paired, connected, chrome_running: !!realChromePid(), ...(detail ? { detail } : {}) }));
         return;
       }
+      if (printLaptopBrowser()) return;
       if (hostOwnsBrowser()) {
         printHostBrowser();
         return;
@@ -367,9 +380,48 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
     });
 
   ext
+    .command("link")
+    .description("Let a cloud host's sessions drive this laptop's Chrome while both are up (the default); --foreground holds the link here until Ctrl-C instead of leaving it to the daemon")
+    .requiredOption("--host <id>", "The cloud host (cast hosts ls)")
+    .option("--foreground", "Hold the link in this process, ignoring the host's watchdog version")
+    .action(async (o: { host: string; foreground?: boolean }) => {
+      const { resolveCloudHost, patchHost } = await import("../cloudHost.js");
+      const { BrowserLinks, browserLinkRefusal, BROWSER_LINK_TICK_MS } = await import("../../cloud/browserLink.js");
+      const host = (() => { try { return resolveCloudHost(o.host); } catch (err) { return die((err as Error).message); } })();
+      patchHost(host.id, { laptopBrowser: true });
+      const why = browserLinkRefusal({ ...host, laptopBrowser: true }, readBridgeState(), { explicit: o.foreground });
+      if (why) die(`no link to ${host.id}: ${why}`);
+      if (!o.foreground) {
+        console.log(`${OK} ${host.id} will drive this laptop's Chrome while both are up; the daemon opens the link within a minute`);
+        return;
+      }
+      if ((host.watchdogVersion ?? 0) < 4) console.log(`${WARN} ${host.id}'s idle watchdog counts this link as activity: the host stays awake while it is held`);
+      const links = new BrowserLinks({ only: host.id, explicit: true, log: (m) => console.log(fmt.muted(`  ${m}`)) });
+      const stop = () => { links.closeAll("stopped from the terminal"); setTimeout(() => process.exit(0), 1_500); };
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+      await links.tick();
+      if (!links.live().length) die(`${host.id} did not answer ssh; nothing was linked`);
+      console.log(`${OK} ${host.id} reaches this laptop's Chrome; Ctrl-C ends the link`);
+      setInterval(() => { void links.tick(); }, Math.min(BROWSER_LINK_TICK_MS, 15_000));
+      await new Promise(() => {});
+    });
+
+  ext
     .command("revoke")
-    .description("Rotate the token and disconnect the extension; nothing drives the real Chrome until setup hands it the new token")
-    .action(async () => {
+    .description("Rotate the token and disconnect the extension; nothing drives the real Chrome until setup hands it the new token. With --host, cut off one cloud host only")
+    .option("--host <id>", "Revoke only this cloud host's token and stop linking it")
+    .action(async (o: { host?: string }) => {
+      if (o.host) {
+        const { patchHost, readHosts } = await import("../cloudHost.js");
+        const known = readHosts().some((h) => h.id === o.host);
+        const revoked = revokeHostClient(o.host);
+        if (known) patchHost(o.host, { laptopBrowser: false });
+        if (!known && !revoked) die(`no cloud host ${o.host} holds a token here (cast hosts ls)`);
+        console.log(`${OK} ${o.host} is cut off from this laptop's Chrome${revoked ? "; its live connections close within seconds" : ""}`);
+        console.log(fmt.muted(`  to re-enable: cast browser extension link --host ${o.host}`));
+        return;
+      }
       const { stopped } = await rotateAndStopHost();
       console.log(`${OK} token rotated${stopped ? " and the old host stopped" : ""} — the extension is cut off`);
       console.log(fmt.muted("  to re-enable: `cast browser extension setup` hands the extension the new token"));
