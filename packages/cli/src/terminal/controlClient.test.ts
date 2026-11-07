@@ -9,7 +9,7 @@ describe("TmuxControlClient.start", () => {
   // status dot. start() must reject so the client gets an error it can show.
   it.skipIf(!hasTmux())("rejects when the attach target does not exist", async () => {
     const client = new TmuxControlClient(
-      { kind: "attach", target: "cast-term-does-not-exist-000", readOnly: true },
+      { kind: "attach", target: "cast-term-does-not-exist-000" },
       { onOutput() {}, onExit() {} },
     );
     try {
@@ -32,12 +32,17 @@ describe("TmuxControlClient interactive attach", () => {
     const size = () => tmuxExecSync(["display-message", "-p", "-t", name, "#{window_width}x#{window_height}"], { encoding: "utf-8" }).trim();
     tmuxExecSync(["new-session", "-d", "-s", name, "-x", "100", "-y", "30", "sleep 30"]);
     const client = new TmuxControlClient(
-      { kind: "attach", target: name, readOnly: false },
+      { kind: "attach", target: name },
       { onOutput() {}, onExit() {} },
     );
     try {
       // The hello size is a pre-layout guess: it must not touch the pane.
       await client.start(80, 24);
+      // Watching never sizes the pane; only holding control does.
+      client.resize(60, 10);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(size()).toBe("100x30");
+      await client.setSizing(true);
       expect(size()).toBe("100x30");
       client.resize(60, 10);
       await new Promise((r) => setTimeout(r, 300));
@@ -61,11 +66,12 @@ describe("TmuxControlClient interactive attach", () => {
     const size = () => tmuxExecSync(["display-message", "-p", "-t", name, "#{window_width}x#{window_height}"], { encoding: "utf-8" }).trim();
     tmuxExecSync(["new-session", "-d", "-s", name, "-x", "100", "-y", "30", "sleep 30"]);
     const client = new TmuxControlClient(
-      { kind: "attach", target: name, readOnly: false },
+      { kind: "attach", target: name },
       { onOutput() {}, onExit() {} },
     );
     try {
       await client.start(80, 24);
+      await client.setSizing(true);
       client.resize(60, 6);
       await new Promise((r) => setTimeout(r, 300));
       expect(size()).toBe("60x6");
