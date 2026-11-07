@@ -17,13 +17,14 @@ import { fmt, icons } from "../../colors.js";
 import { realChromePid } from "../localChrome.js";
 import type { StartOptions } from "../managedBrowser.js";
 import {
-  bridgeHostLogPath, bridgeStatePath, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, probeHost, readBridgeState,
-  reloadExtension, rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, writeBridgeState, type BridgeHostStatus, type BridgeState,
+  bridgeHostLogPath, bridgeStatePath, bridgeStatus, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, probeHost, readBridgeState,
+  reloadExtension, revokeHostClient, rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, waitForPairedProfile, writeBridgeState, type BridgeHostStatus, type BridgeState,
 } from "./host.js";
+import { findProfile, mintPairingCode, PAIRING_CODE_TTL_MS, readPairing, revokeAllProfiles, revokeProfile } from "./pairing.js";
 import { describeProfile, extensionProfiles, matchProfile, pickBridgeProfile, type ExtensionProfiles } from "./chromeProfiles.js";
 import type { RealProfile } from "../profile.js";
 import { BRIDGE_EXTENSION_ID, BRIDGE_STORE_URL, bridgePairingUrl } from "./protocol.js";
-import { connectRealBridge, hostOwnsBrowser, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
+import { connectRealBridge, hostBrowserChoice, hostOwnsBrowser, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
 import { CHROME_LAUNCHER_NAME, installChromeLauncher, openInRealChrome, REAL_CHROME_LAUNCH_ARGS, restartRealChrome, settlePairingPage } from "./realChrome.js";
 import { ownedDesktopPane, PANE_HOW_TO } from "../desktopPane.js";
 
@@ -45,7 +46,8 @@ export interface BridgeCommandDeps {
 export function targetFlags(cmd: Command): Command {
   return cmd
     .option("--real", "Use the human's Chrome through the extension (default)")
-    .option("--pane", "Use the desktop app's browser pane opened for this session (`target pane` makes it stick)");
+    .option("--pane", "Use the desktop app's browser pane opened for this session (`target pane` makes it stick)")
+    .option("--browser <id>", "The connected Chrome profile to open this session's tabs in (`cast browser extension status` lists ids); the session stays in it");
 }
 
 export const BROWSER_START_HELP = `
@@ -75,7 +77,19 @@ function printSetupCard(): void {
 /** A remote host's browser is its own Chrome, which every verb starts on demand: nothing to pair. */
 function printHostBrowser(): void {
   console.log(`target: ${fmt.highlight("host")}${fmt.muted(" (this host's own Chrome, on the screen the session's browser view and `cast hosts vnc` show)")}`);
+  const choice = hostBrowserChoice();
+  if (choice?.mode === "host") console.log(`${WARN} ${choice.laptop ? `${choice.laptop}'s Chrome` : "the laptop's Chrome"} is not in use: ${choice.reason}`);
   console.log(fmt.muted("  no extension needed: `cast browser open <url>` starts it; `cast browser sync <site>` carries a login in from the owner's laptop"));
+}
+
+/** On a cloud host driving its laptop's Chrome: which laptop, and is the extension there. */
+function printLaptopBrowser(): boolean {
+  const choice = hostBrowserChoice();
+  if (choice?.mode !== "laptop") return false;
+  console.log(`target: ${fmt.highlight(`${choice.laptop}'s Chrome`)}${fmt.muted(` (the laptop's own Chrome, through its link on 127.0.0.1:${choice.bridge.port})`)}`);
+  console.log(connectedLine(choice.status));
+  console.log(fmt.muted("  agent tabs open in the laptop Chrome's group for this session; when the laptop is away this host falls back to its own Chrome"));
+  return true;
 }
 
 /** One line for a connected extension, the same wherever it is reported. */
@@ -88,7 +102,7 @@ function connectedLine(s: BridgeHostStatus): string {
 
 /**
  * Rotate the token and stop the host holding the old one, waiting until the
- * port is free. Every Chrome profile paired with the old token is cut off.
+ * port is free. Every extension still on the shared token is cut off.
  */
 async function rotateAndStopHost(): Promise<{ next: BridgeState; stopped: boolean }> {
   const next = rotateBridgeToken();
@@ -107,13 +121,24 @@ async function rotateAndStopHost(): Promise<{ next: BridgeState; stopped: boolea
 /** The profile lines `setup` and `status` share: which profile agents use, and where else the extension is. */
 function printProfileLines(found: ExtensionProfiles, chosen: RealProfile | null, pinned: boolean): void {
   if (!found.known || !chosen) return;
-  console.log(`  Chrome profile: ${fmt.highlight(describeProfile(chosen))}`);
+  console.log(`  default Chrome profile: ${fmt.highlight(describeProfile(chosen))}`);
   const others = found.withExtension.filter((p) => p.dir !== chosen.dir);
   if (!others.length) return;
-  console.log(fmt.muted(`  also installed in ${others.map(describeProfile).join(", ")}${pinned ? "; agents use only the profile above" : ""}`));
+  console.log(fmt.muted(`  also installed in ${others.map(describeProfile).join(", ")}${pinned ? "; new sessions use the profile above unless they pass --browser <id>" : ""}`));
   console.log(fmt.muted(pinned
-    ? `  another profile: cast browser extension setup --profile "<name>"`
-    : `  not pinned yet: cast browser extension setup [--profile "<name>"] pairs one profile and unpairs the others`));
+    ? `  pair another profile, or make it the default: cast browser extension setup --profile "<name>"`
+    : `  no default yet: cast browser extension setup [--profile "<name>"] pairs a profile and makes it the default`));
+}
+
+/** One line per connected profile, the default first-marked: what `status` shows. */
+function printConnectedProfiles(s: BridgeHostStatus): void {
+  const profiles = s.profiles ?? [];
+  if (profiles.length < 1) return;
+  for (const p of profiles) {
+    const tags = [p.default ? "default" : null, p.legacy ? "shared token, pre-profile extension" : null, p.sessions ? `${p.sessions} session${p.sessions === 1 ? "" : "s"}` : null].filter(Boolean);
+    console.log(`  ${p.default ? fmt.success(icons.check) : fmt.muted(icons.dot)} ${fmt.highlight(p.id)}  ${p.name}${p.dir ? fmt.muted(` (${p.dir})`) : ""}${p.version ? fmt.muted(` v${p.version}`) : ""}${tags.length ? fmt.muted(`  ${tags.join(", ")}`) : ""}`);
+  }
+  if (profiles.length > 1) console.log(fmt.muted("  a session opens tabs in the default unless it passes `--browser <id>` on open; it stays in its profile"));
 }
 
 /**
@@ -169,16 +194,17 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
     .command("extension")
     .description("The bridge into the human's real Chrome: setup pairs the extension once, status, revoke");
 
-  // The token is printed only on request. These commands run inside agent
-  // sessions whose output syncs off the machine, and the redactor cannot
-  // tell a bridge token from any other hex; the pairing URL carries it too.
+  // The pairing code is printed only on request. These commands run inside
+  // agent sessions whose output syncs off the machine; the code works once
+  // and expires in ten minutes, but it is still a key to this Chrome until
+  // then.
   ext
     .command("setup")
-    .description("Start the bridge host and hand the extension its token: opens the extension's options in Chrome with the token filled in")
+    .description("Start the bridge host and pair a Chrome profile: opens the extension's options in Chrome with a one-time code filled in. The profile paired last is the one new sessions use")
     .option("--json", "Machine-readable output (does not open Chrome)")
-    .option("--show-token", "Print the token and the pairing URL, for entering into the extension by hand")
-    .option("--profile <name>", "The Chrome profile agents work in, by name, email or directory (default: the one paired before, else the last used one with the extension)")
-    .action(async (o: { json?: boolean; showToken?: boolean; profile?: string }) => {
+    .option("--show-code", "Print a one-time pairing code and the pairing URL, for entering into the extension by hand")
+    .option("--profile <name>", "The Chrome profile to pair and make the default, by name, email or directory (default: the one paired before, else the last used one with the extension)")
+    .action(async (o: { json?: boolean; showCode?: boolean; profile?: string }) => {
       const config = ensureBridgeConfig();
       // Which profile gets the pairing. Chrome opens a URL in its last-used
       // profile unless told otherwise, and the extension's page in a profile
@@ -205,75 +231,79 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         if (found.withExtension.length) console.log(fmt.muted(`  installed in: ${found.withExtension.map(describeProfile).join(", ")}`));
         return;
       }
-      // The extension in two profiles, and the pairing moving to one of
-      // them: the old token is replaced so only the profile paired now holds
-      // a working one. Otherwise the other profile's worker keeps the bridge
-      // and this one stands by.
-      if (chosen && found.withExtension.length > 1 && config.profile !== chosen.dir && config.extensionSeenAt && !o.json) {
-        await rotateAndStopHost();
-        console.log(fmt.muted(`  new token: the pairing moves to ${describeProfile(chosen)}, other profiles are unpaired`));
-      }
       let state;
       try {
         state = await ensureBridgeHost();
       } catch (err) {
         die((err as Error).message);
       }
-      const url = bridgePairingUrl(state);
-      const secret = o.showToken ? { token: state.token, url } : {};
+      // Pairing several profiles is fine: each keeps its own key and they
+      // all stay connected. What setup pins is the DEFAULT, the profile new
+      // sessions open their tabs in. A chosen profile that is already
+      // connected only needs that pin.
+      const before = await bridgeStatus(state).catch(() => null);
+      const live = chosen ? before?.profiles?.find((p) => p.dir === chosen!.dir) : undefined;
+      if (live && !o.showCode && !o.json) {
+        writeBridgeState({ ...(readBridgeState() ?? state), profile: chosen!.dir });
+        console.log(`${OK} ${fmt.highlight(live.id)} is paired and connected; new sessions use it by default`);
+        printProfileLines(found, chosen, true);
+        return;
+      }
+      const code = mintPairingCode(chosen ? { dir: chosen.dir, name: chosen.name } : null);
+      const url = bridgePairingUrl({ code, port: state.port });
       if (o.json) {
         console.log(JSON.stringify({
           port: state.port, tokenFile: bridgeStatePath(), extensionId: BRIDGE_EXTENSION_ID, storeUrl: BRIDGE_STORE_URL,
           ...(found.known ? { profile: installedInChosen ? chosen!.dir : null, profilesWithExtension: found.withExtension.map((p) => p.dir) } : {}),
-          ...secret,
+          ...(o.showCode ? { code, url, expiresInSeconds: PAIRING_CODE_TTL_MS / 1000 } : {}),
         }));
         return;
       }
       // The extension has a fixed ID, so its options page has a fixed URL:
-      // opened with the token in the fragment, the page saves it and
-      // connects. Nothing here can see whether Chrome showed that page or an
-      // error (the extension is not loaded yet), so the host is asked: the
-      // extension connecting is the one proof the pairing worked, and only
-      // when it does not arrive do the install steps belong on screen.
+      // opened with the code in the fragment, the page offers it for one
+      // click and the worker exchanges it for this profile's key. Nothing
+      // here can see whether Chrome showed that page or an error (the
+      // extension is not loaded yet), so the host is asked: the profile
+      // connecting is the one proof the pairing worked, and only when it
+      // does not arrive do the install steps belong on screen.
       console.log(`${OK} bridge host listening on 127.0.0.1:${state.port}`);
       console.log(`  Chrome extension: ${fmt.highlight(BRIDGE_STORE_URL)}`);
       printProfileLines(found, chosen, true);
-      const opened = openInRealChrome(url, chosen ? [`--profile-directory=${chosen.dir}`] : []);
+      const known = new Set((before?.profiles ?? []).map((p) => `${p.id}:${p.connectedAt}`));
+      const opened = !o.showCode && openInRealChrome(url, chosen ? [`--profile-directory=${chosen.dir}`] : []);
       if (opened) {
-        console.log(fmt.muted("  opened the pairing in your Chrome; a new token asks for one click there. Waiting for the extension to connect…"));
-        const status = await waitForExtension(state, PAIRING_WAIT_MS).catch((err) => {
+        console.log(fmt.muted("  opened the pairing in your Chrome; it asks for one click there. Waiting for the profile to connect…"));
+        const paired = await waitForPairedProfile(state, PAIRING_WAIT_MS, (p) => (chosen ? p.dir === chosen.dir : !known.has(`${p.id}:${p.connectedAt}`))).catch((err) => {
           settlePairingPage(false);
           throw err;
         });
-        settlePairingPage(status.extensionConnected);
-        if (status.extensionConnected) {
+        settlePairingPage(!!paired);
+        if (paired) {
           if (chosen) writeBridgeState({ ...(readBridgeState() ?? state), profile: chosen.dir });
-          console.log(connectedLine(status));
+          console.log(`${OK} paired ${fmt.highlight(paired.id)}${paired.version ? ` (v${paired.version}, protocol ${paired.protocol})` : ""}; new sessions use it by default`);
           console.log(fmt.muted("  sessions use your Chrome by default; no separate browser is started"));
           return;
         }
-        console.log(`${WARN} the extension did not connect within ${PAIRING_WAIT_MS / 1000}s`);
+        console.log(`${WARN} the profile did not connect within ${PAIRING_WAIT_MS / 1000}s`);
       }
       console.log("");
       console.log(opened
         ? "  If Chrome showed an error page instead of the extension's options, install it (one time), or reload it at chrome://extensions if it predates this pairing flow:"
-        : "  Install the extension (one time):");
+        : o.showCode ? "  Pair by hand:" : "  Install the extension (one time):");
       console.log(`    1. Install Codecast from the Chrome Web Store: ${fmt.highlight(BRIDGE_STORE_URL)}`);
       console.log(`    2. ${chosen ? `Install it in ${describeProfile(chosen)}, the profile this pairs.` : "Use the same Chrome profile you want your agents to work in."} Chrome keeps the extension up to date.`);
-      if (o.showToken) {
-        console.log(`    3. ${opened ? "Run this command again, or open" : "Open"} this URL in that Chrome:`);
+      if (o.showCode) {
+        console.log(`    3. Open this URL in that Chrome, or open the extension's ${fmt.highlight("options")} and enter the code under "Pair by hand":`);
         console.log(`         ${fmt.highlight(url)}`);
-        console.log(`       or open the extension's ${fmt.highlight("options")} and enter:`);
-        console.log(`         token  ${fmt.highlight(state.token)}`);
+        console.log(`         code   ${fmt.highlight(code)}  (works once, for ${PAIRING_CODE_TTL_MS / 60_000} minutes)`);
         console.log(`         port   ${fmt.highlight(String(state.port))}`);
       } else {
-        console.log(`    3. ${opened ? "Run this command again" : "Run this command with --show-token for the pairing URL"}`);
-        console.log(`       ${fmt.muted(`the token lives in ${bridgeStatePath()}; --show-token prints it for entering by hand`)}`);
+        console.log(`    3. ${opened ? "Run this command again" : "Run this command with --show-code for a one-time code to enter by hand"}`);
       }
       console.log(`    4. Check with ${fmt.highlight("cast browser extension status")}`);
       console.log("");
-      console.log(fmt.muted("  The token grants full control of that Chrome to local processes that hold it."));
-      console.log(fmt.muted("  Revoke any time with `cast browser extension revoke`; it rotates the token."));
+      console.log(fmt.muted("  A paired profile's key grants full control of that Chrome to local processes that hold the bridge token."));
+      console.log(fmt.muted("  Revoke one profile with `cast browser extension revoke --profile <id>`, or everything with `cast browser extension revoke`."));
     });
 
   ext
@@ -285,9 +315,9 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       if (o.json) {
         // Read by the setup card's check (agentToolSetup.ts) on every poll, so
         // it repairs nothing: no Chrome launch, no wake tab.
-        let connected = false;
+        let connected = hostBrowserChoice()?.mode === "laptop";
         let detail: string | undefined;
-        if (state?.token) {
+        if (state?.token && !connected) {
           try {
             connected = (await connectRealBridge(undefined, { repair: false })).status.extensionConnected;
           } catch (err) {
@@ -298,6 +328,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         console.log(JSON.stringify({ paired, connected, chrome_running: !!realChromePid(), ...(detail ? { detail } : {}) }));
         return;
       }
+      if (printLaptopBrowser()) return;
       if (hostOwnsBrowser()) {
         printHostBrowser();
         return;
@@ -327,6 +358,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       console.log(chrome ? `${OK} Chrome running (pid ${chrome})` : `${WARN} Chrome is not running on the default profile`);
       if (s.extensionConnected) {
         console.log(connectedLine(s));
+        printConnectedProfiles(s);
         const found = extensionProfiles();
         const chosen = pickBridgeProfile(found, state.profile);
         printProfileLines(found, chosen, !!chosen && chosen.dir === state.profile);
@@ -367,12 +399,67 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
     });
 
   ext
+    .command("link")
+    .description("Let a cloud host's sessions drive this laptop's Chrome while both are up (the default); --foreground holds the link here until Ctrl-C instead of leaving it to the daemon")
+    .requiredOption("--host <id>", "The cloud host (cast hosts ls)")
+    .option("--foreground", "Hold the link in this process, ignoring the host's watchdog version")
+    .action(async (o: { host: string; foreground?: boolean }) => {
+      const { resolveCloudHost, patchHost } = await import("../cloudHost.js");
+      const { BrowserLinks, browserLinkRefusal, BROWSER_LINK_TICK_MS } = await import("../../cloud/browserLink.js");
+      const host = (() => { try { return resolveCloudHost(o.host); } catch (err) { return die((err as Error).message); } })();
+      patchHost(host.id, { laptopBrowser: true });
+      const why = browserLinkRefusal({ ...host, laptopBrowser: true }, readBridgeState(), { explicit: o.foreground });
+      if (why) die(`no link to ${host.id}: ${why}`);
+      if (!o.foreground) {
+        console.log(`${OK} ${host.id} will drive this laptop's Chrome while both are up; the daemon opens the link within a minute`);
+        return;
+      }
+      if ((host.watchdogVersion ?? 0) < 4) console.log(`${WARN} ${host.id}'s idle watchdog counts this link as activity: the host stays awake while it is held`);
+      const links = new BrowserLinks({ only: host.id, explicit: true, log: (m) => console.log(fmt.muted(`  ${m}`)) });
+      const stop = () => { links.closeAll("stopped from the terminal"); setTimeout(() => process.exit(0), 1_500); };
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+      await links.tick();
+      if (!links.live().length) die(`${host.id} did not answer ssh; nothing was linked`);
+      console.log(`${OK} ${host.id} reaches this laptop's Chrome; Ctrl-C ends the link`);
+      setInterval(() => { void links.tick(); }, Math.min(BROWSER_LINK_TICK_MS, 15_000));
+      await new Promise(() => {});
+    });
+
+  ext
     .command("revoke")
-    .description("Rotate the token and disconnect the extension; nothing drives the real Chrome until setup hands it the new token")
-    .action(async () => {
+    .description("Rotate the token, forget every paired Chrome profile and disconnect them; nothing drives the real Chrome until setup pairs one again. With --profile, cut off one Chrome profile only; with --host, one cloud host")
+    .option("--host <id>", "Revoke only this cloud host's token and stop linking it")
+    .option("--profile <id>", "Revoke only this Chrome profile's key (`cast browser extension status` lists ids); every other profile keeps working")
+    .action(async (o: { host?: string; profile?: string }) => {
+      if (o.profile) {
+        const hit = findProfile(o.profile);
+        if (!hit) {
+          const ids = Object.values(readPairing().profiles).map((r) => r.id);
+          const s = readBridgeState();
+          const legacy = s?.token ? (await connectRealBridge(undefined, { repair: false }).catch(() => null))?.status.profiles?.find((p) => p.legacy && p.id === o.profile) : undefined;
+          if (legacy) die(`${o.profile} is still on the machine's shared token (an extension from before per-profile keys), which cannot be revoked alone`, "update the extension and it moves to its own key on its next connect; or `cast browser extension revoke` cuts off every profile");
+          die(`no paired Chrome profile "${o.profile}"`, ids.length ? `paired: ${ids.join(", ")}` : "none is paired with its own key yet");
+        }
+        revokeProfile(hit.key);
+        console.log(`${OK} ${fmt.highlight(hit.record.id)} is cut off; its connection closes within seconds and every other profile keeps working`);
+        console.log(fmt.muted(`  to pair it again: cast browser extension setup${hit.record.dir ? ` --profile "${hit.record.dir}"` : ""}`));
+        return;
+      }
+      if (o.host) {
+        const { patchHost, readHosts } = await import("../cloudHost.js");
+        const known = readHosts().some((h) => h.id === o.host);
+        const revoked = revokeHostClient(o.host);
+        if (known) patchHost(o.host, { laptopBrowser: false });
+        if (!known && !revoked) die(`no cloud host ${o.host} holds a token here (cast hosts ls)`);
+        console.log(`${OK} ${o.host} is cut off from this laptop's Chrome${revoked ? "; its live connections close within seconds" : ""}`);
+        console.log(fmt.muted(`  to re-enable: cast browser extension link --host ${o.host}`));
+        return;
+      }
+      revokeAllProfiles();
       const { stopped } = await rotateAndStopHost();
-      console.log(`${OK} token rotated${stopped ? " and the old host stopped" : ""} — the extension is cut off`);
-      console.log(fmt.muted("  to re-enable: `cast browser extension setup` hands the extension the new token"));
+      console.log(`${OK} token rotated and every profile's key forgotten${stopped ? "; the old host stopped" : ""} — every Chrome profile is cut off`);
+      console.log(fmt.muted("  to re-enable: `cast browser extension setup` pairs a profile with a one-time code"));
     });
 
   // ensureBridgeHost (host.ts) respawns `cast browser bridge-host` detached,
