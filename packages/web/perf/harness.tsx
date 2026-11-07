@@ -201,6 +201,10 @@ function sessionRows(n: number): Record<string, any> {
       status: i % 9 ? "completed" : "active", is_idle: i % 9 !== 0, agent_status: i % 9 ? "idle" : "working",
       message_count: 200 + (i % 50), updated_at: now - i * 60_000, started_at: now - i * 120_000, last_heartbeat: now,
       project_path: `/src/p${i % 40}`, git_branch: "main",
+      // Structured overlay facts on some rows, so a payload carries objects
+      // the overlay must compare by value.
+      ...(i % 11 === 0 ? { activity: { text: `editing file${i}.ts`, tool: "Edit", at: now - i * 1000 } } : {}),
+      ...(i % 17 === 0 ? { open_tasks: [{ id: `task-${i}`, kind: "background", started_at: now - 600_000, tool_use_id: `tool-${i}`, description: "Watch the build", command: "sleep 60" }] } : {}),
     };
   }
   return out;
@@ -385,33 +389,50 @@ async function setupInboxLoad(): Promise<Bench> {
 
 // A heartbeat through the path production heartbeats take: the liveness
 // overlay (useSyncInboxSessions' applyMineLivenessPayload, the one inbox
-// channel that re-runs every beat). Like the server's, each payload carries
-// the whole live set, the viewer's newest 600 sessions with every overlay
-// fact as the store holds it; only one drawn session's heartbeat moves. That
-// changes nothing the list shows, so it may re-render nothing.
+// channel that re-runs every beat). Each payload is shaped like the server's
+// (computeSessionsLiveness): the viewer's 600 newest sessions, each row its
+// overlay facts plus its placement stamps, and the projection envelope, all
+// fresh objects as a decoded push is. Only one drawn session's heartbeat
+// moves, which changes nothing the list shows, so a beat may re-render
+// nothing.
 const LIVE_SET = 600;
 async function setupInboxHeartbeat(): Promise<Bench> {
   const { applyMineLivenessPayload } = await import("../hooks/useSyncInboxSessions");
-  const { INBOX_FACT_FIELDS } = await import("@codecast/shared/contracts");
+  const { INBOX_FACT_FIELDS, INBOX_PROJECTION_VERSION } = await import("@codecast/shared/contracts");
+  const { placeInboxRows } = await import("../store/inboxStore");
   const { show } = await inboxPanel();
   await show();
   const target = host.querySelector("[data-session-id]")!.getAttribute("data-session-id")!;
   const sessions = useInboxStore.getState().sessions as Record<string, any>;
   const live = Object.keys(sessions).filter((id) => sessions[id].user_id === ME).slice(0, LIVE_SET);
   if (!live.includes(target)) live.push(target);
+  // The server stamps each row with the placement its facts give; the facts
+  // do not change between beats, so neither do the stamps.
+  const placed = placeInboxRows(useInboxStore.getState() as any, { scope: "mine" });
+  const stampOf = (id: string) => {
+    const p = placed.placements.get(id) as any;
+    return p ? { bucket: p.bucket, work_state: p.work_state, asking: !!p.asking, below_fold: !!p.below_fold, bucket_stale_at: null, stale_bucket: null } : {};
+  };
   let n = 0;
   const beat = async () => {
     n++;
     const rows = useInboxStore.getState().sessions as Record<string, any>;
     const liveness: Record<string, Record<string, unknown>> = {};
     for (const id of live) {
-      const row: Record<string, unknown> = {};
+      const row: Record<string, unknown> = stampOf(id);
       for (const key of INBOX_FACT_FIELDS) row[key] = rows[id][key] ?? null;
       liveness[id] = row;
     }
     liveness[target].last_heartbeat = now + n * 1000;
-    await act(async () => { applyMineLivenessPayload({ liveness }); });
+    const projection = { v: INBOX_PROJECTION_VERSION, epoch: placed.epoch, tally: placed.tally, set_digest: null, truncated: [] };
+    const payload = structuredClone({ liveness, projection });
+    await act(async () => { applyMineLivenessPayload(payload); });
   };
+  // The overlay's first payload hands placement to the server's stamps, which
+  // production pays once when the overlay first arrives after the cache
+  // paints. The budget is every beat after it.
+  await beat();
+  await settle();
   return {
     run: () => measure(async () => {
       await beat();
