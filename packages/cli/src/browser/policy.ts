@@ -21,7 +21,14 @@
  *   example.com:8443     exact host, exactly this port (default ports count:
  *                        `example.com:443` matches https://example.com)
  *   http://localhost     scheme-restricted — only that scheme matches
- *   *                    allow everything (an explicit escape hatch)
+ *   *                    allow every public site (an explicit escape hatch)
+ *
+ * Wildcards (`*` and `*.x`) never match a private address: loopback,
+ * link-local, RFC 1918 and CGNAT IPs, unique-local IPv6, `localhost` and the
+ * `.local`/`.internal`/`.localhost` names. A dev server, a router or a cloud
+ * metadata endpoint is reachable only through an entry naming it exactly
+ * (`localhost:3200`, `169.254.169.254`), so a broad list cannot open the
+ * machine's own network by accident.
  *
  * A pattern without a scheme matches http and https only. URLs on other
  * schemes (file:, data:, ...) are refused while a policy is active unless a
@@ -123,11 +130,51 @@ function effectivePort(u: URL): string {
   return "";
 }
 
+/** IPv4 dotted quad to its four octets, or null. */
+function ipv4(host: string): number[] | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return null;
+  const o = m.slice(1).map(Number);
+  return o.every((n) => n <= 255) ? o : null;
+}
+
+function privateIpv4([a, b]: number[]): boolean {
+  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+}
+
+/**
+ * Is this hostname (as `URL.hostname` spells it) loopback, link-local or
+ * otherwise private? Judged from the name alone: no DNS lookup.
+ */
+export function isPrivateHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "localhost" || /\.(localhost|local|internal)$/.test(host)) return true;
+  const v4 = ipv4(host);
+  if (v4) return privateIpv4(v4);
+  if (!host.startsWith("[")) return false;
+  const v6 = host.slice(1, -1);
+  if (v6 === "::1" || v6 === "::") return true;
+  if (/^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6)) return true;
+  const mapped = /^::ffff:(.+)$/.exec(v6);
+  if (mapped) {
+    const tail = mapped[1];
+    const dotted = ipv4(tail);
+    if (dotted) return privateIpv4(dotted);
+    const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(tail);
+    if (hex) {
+      const hi = parseInt(hex[1], 16);
+      return privateIpv4([hi >> 8, hi & 255]);
+    }
+  }
+  return false;
+}
+
 function matchesPattern(p: ParsedPattern, u: URL): boolean {
+  const host = u.hostname.toLowerCase();
+  if ((p.matchAll || p.wildcard) && isPrivateHost(host)) return false;
   if (p.matchAll) return true;
   const proto = u.protocol.replace(/:$/, "");
   if (p.scheme ? proto !== p.scheme : proto !== "http" && proto !== "https") return false;
-  const host = u.hostname.toLowerCase();
   const hostOk = p.wildcard ? host === p.host || host.endsWith(`.${p.host}`) : host === p.host;
   if (!hostOk) return false;
   if (p.port !== null && effectivePort(u) !== p.port) return false;
