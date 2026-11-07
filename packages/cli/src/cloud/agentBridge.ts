@@ -123,11 +123,16 @@ export function nextBridgeBackoff(prev: BridgeBackoff | undefined, livedMs: numb
  * the bridge left, and only its target says whether an agent is listening.
  */
 export function hostAgentSocketEnv(sockPath = HOST_AGENT_SOCK): string {
-  if (!isRemoteDevice()) return "";
+  const sock = hostAgentSocket(sockPath);
+  return sock ? `SSH_AUTH_SOCK='${sock.replace(/'/g, "'\\''")}'` : "";
+}
+
+/** The forwarded ssh-agent socket a launch on this host points SSH_AUTH_SOCK at, or null. */
+export function hostAgentSocket(sockPath = HOST_AGENT_SOCK): string | null {
+  if (!isRemoteDevice()) return null;
   try {
-    if (!fs.statSync(sockPath).isSocket()) return "";
+    return fs.statSync(sockPath).isSocket() ? sockPath : null;
   } catch {
-    return "";
+    return null;
   }
-  return `SSH_AUTH_SOCK='${sockPath.replace(/'/g, "'\\''")}'`;
 }
