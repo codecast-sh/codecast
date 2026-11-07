@@ -3,6 +3,20 @@
 // printed by `cast publish video` so agents read it when they publish a video
 // rather than carrying it in every session's instructions.
 
+/** Where uploaded video and audio is served from (R2, the codecast-media bucket). */
+export const MEDIA_ORIGIN = "https://media.codecast.sh";
+
+/** File extensions the cast player plays as video. */
+export const VIDEO_EXTENSIONS = ["mp4", "webm", "mov", "m4v"] as const;
+
+/** A URL or path naming a video file, by its extension (query and hash ignored).
+ *  A message's `![caption](clip.mp4)` renders as the player, not an image. */
+export function isVideoSrc(src: string | undefined): boolean {
+  if (!src) return false;
+  const path = src.split(/[?#]/, 1)[0];
+  return new RegExp(`\\.(${VIDEO_EXTENSIONS.join("|")})$`, "i").test(path);
+}
+
 /** A page that shows a video gets the player script. */
 export function pageUsesPlayer(html: string): boolean {
   return /<(cast-player|video)[\s>]/i.test(html);

@@ -2,7 +2,9 @@ import type { Components } from "react-markdown";
 import { useContext, useState, useCallback, Children } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery, useGalleryMessageId } from "../ImageGallery";
+import { isVideoSrc } from "@codecast/shared/contracts/castPlayer";
 import { isRemoteImageSrc } from "../../lib/trustedImageOrigins";
+import { loadCastPlayer } from "../../lib/loadCastPlayer";
 import { MarkdownImageSize, type ImageSize } from "../../lib/markdownImageSize";
 
 const MD_IMAGE_COLLAPSED_HEIGHT = 160;
@@ -27,6 +29,24 @@ function captionFromAlt(alt?: string): string | undefined {
   const trimmed = alt?.trim();
   if (!trimmed || /^(image|img)$/i.test(trimmed)) return undefined;
   return trimmed;
+}
+
+/** A third-party image or video held back until the viewer asks for it:
+ *  nothing is fetched from that host before the click. */
+function RemoteMediaGate({ src, kind, onLoad }: { src: string; kind: "image" | "video"; onLoad: () => void }) {
+  return (
+    <span
+      className="my-2 flex max-w-md flex-col gap-1.5 rounded-lg border border-dashed border-[color-mix(in_srgb,var(--sol-border)_50%,transparent)] bg-sol-bg-alt p-3 text-xs"
+      onClick={(e) => { e.stopPropagation(); onLoad(); }}
+      role="button"
+      tabIndex={0}
+      title={`This ${kind} is served from a third party. Loading it would let that server see your IP and the click. Only load it if you trust the source.`}
+    >
+      <span className="font-medium text-sol-text-muted">Remote {kind} not loaded</span>
+      <span className="break-all text-sol-text-dim">{src}</span>
+      <span className="text-sol-blue">Click to load {kind}</span>
+    </span>
+  );
 }
 
 export function CollapsibleImage({
@@ -70,21 +90,7 @@ export function CollapsibleImage({
 
   if (!src || errored) return null;
 
-  if (blocked) {
-    return (
-      <span
-        className="my-2 flex max-w-md flex-col gap-1.5 rounded-lg border border-dashed border-[color-mix(in_srgb,var(--sol-border)_50%,transparent)] bg-sol-bg-alt p-3 text-xs"
-        onClick={(e) => { e.stopPropagation(); setRevealed(true); }}
-        role="button"
-        tabIndex={0}
-        title="This image is served from a third party. Loading it would let that server see your IP and the click. Only load it if you trust the source."
-      >
-        <span className="font-medium text-sol-text-muted">Remote image not loaded</span>
-        <span className="break-all text-sol-text-dim">{src}</span>
-        <span className="text-sol-blue">Click to load image</span>
-      </span>
-    );
-  }
+  if (blocked) return <RemoteMediaGate src={src} kind="image" onLoad={() => setRevealed(true)} />;
 
   const caption = captionFromAlt(alt);
   const size = imageSizeFromTitle(title, fallbackSize);
@@ -154,7 +160,64 @@ function ClipProbe({ cap, onChange }: { cap: number; onChange: (clipped: boolean
 /** The `img` override every markdown surface shares. It forwards only what
  *  markdown can state, so a node prop can never switch on `trusted`. */
 export function MarkdownImg({ src, alt, title }: { src?: string | Blob; alt?: string; title?: string }) {
+  if (typeof src === "string" && isVideoSrc(src)) return <InlineVideo src={src} alt={alt} title={title} />;
   return <CollapsibleImage src={src} alt={alt} title={title} />;
+}
+
+// A portrait video stops at this height, like a portrait image shown whole.
+const VIDEO_MAX_HEIGHT = 480;
+
+/** `![caption](clip.mp4)`: the video plays inline in the cast player (speed,
+ *  scrubbing, theater), sized like an image and captioned the same way. */
+function InlineVideo({ src, alt, title }: { src: string; alt?: string; title?: string }) {
+  const [revealed, setRevealed] = useState(false);
+  const blocked = !revealed && isRemoteImageSrc(src);
+  const fallbackSize = useContext(MarkdownImageSize);
+  const size = imageSizeFromTitle(title, fallbackSize);
+  const caption = captionFromAlt(alt);
+
+  const mount = useCallback((host: HTMLSpanElement | null) => {
+    if (!host) return;
+    loadCastPlayer();
+    const player = document.createElement("cast-player");
+    player.setAttribute("src", src);
+    player.setAttribute("data-auto-aspect", "");
+    player.setAttribute("aria-label", caption ?? "Video");
+    // The player writes the file's shape into --cast-aspect once it knows it;
+    // a portrait clip then narrows so it stops at VIDEO_MAX_HEIGHT.
+    const shape = new MutationObserver(() => {
+      const [w, h] = player.style.getPropertyValue("--cast-aspect").split("/").map(Number);
+      if (w && h) player.style.maxWidth = h > w ? `${(VIDEO_MAX_HEIGHT * w) / h}px` : "";
+    });
+    shape.observe(player, { attributes: true, attributeFilter: ["style"] });
+    // Keys the player used (space, j/l, arrows, f, m) stop here, so they never
+    // also reach the app's own shortcuts.
+    const keys = (e: KeyboardEvent) => { if (e.defaultPrevented) e.stopPropagation(); };
+    host.addEventListener("keydown", keys);
+    host.appendChild(player);
+    return () => {
+      shape.disconnect();
+      host.removeEventListener("keydown", keys);
+      player.remove();
+    };
+  }, [src, caption]);
+
+  if (blocked) return <RemoteMediaGate src={src} kind="video" onLoad={() => setRevealed(true)} />;
+  const width = size === "small" ? "max-w-60" : size === "auto" ? "max-w-xl" : "max-w-full";
+  return (
+    <span className={`my-2 block ${width}`} onClick={(e) => e.stopPropagation()}>
+      <span
+        ref={mount}
+        className="block [&>cast-player]:block [&>cast-player]:w-full"
+        style={{
+          ["--cast-accent" as string]: "var(--sol-blue)",
+          ["--cast-radius" as string]: "8px",
+          ["--cast-font" as string]: "inherit",
+        }}
+      />
+      {caption && <span className="block mt-1 text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
+    </span>
+  );
 }
 
 // A paragraph that is exclusively images (plus whitespace/line breaks) renders

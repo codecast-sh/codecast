@@ -1,4 +1,6 @@
-import { OPEN_EVENT } from "../../lib/deviceSetup";
+import { OPEN_EVENT, deviceSetupSeen, markDeviceSetupSeen } from "../../lib/deviceSetup";
+import { isSetupFlowPath } from "../../lib/setupFlow";
+import { useLocation } from "react-router";
 import { useCallback, useState, type ReactNode } from "react";
 import { ShieldCheck } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -26,25 +28,11 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 // reason beside it, which is what keeps a browser from treating the asks as
 // spam and a person from clicking "Don't allow" on reflex.
 //
-// Re-openable from settings (`openDeviceSetup`), and the first-run stamp is
-// local to this device on purpose: the synced dismissed bag would let one
-// machine's answer silence a fresh one.
+// Re-openable from settings (`openDeviceSetup`); the first-run stamp lives in
+// lib/deviceSetup.
 
-const SEEN_KEY = "codecast.deviceSetup.v1";
-
-function seen(): boolean {
-  try {
-    return localStorage.getItem(SEEN_KEY) != null;
-  } catch {
-    return true;
-  }
-}
-
-function markSeen(): void {
-  try {
-    localStorage.setItem(SEEN_KEY, String(Date.now()));
-  } catch {}
-}
+const seen = deviceSetupSeen;
+const markSeen = markDeviceSetupSeen;
 
 export function DeviceSetupDialog() {
   const [open, setOpen] = useState(false);
@@ -56,6 +44,9 @@ export function DeviceSetupDialog() {
   // holds it, so the choice between the assistant and a machine comes first.
   // It opens once the person has a conversation.
   const firstRun = useFirstRun() !== "no";
+  // The setup flow asks for the same grants on its Agents step; the dialog
+  // waits until the person has left it (lib/setupFlow).
+  const inSetupFlow = isSetupFlowPath(useLocation().pathname);
 
   useMountEffect(() => {
     const onOpen = () => setOpen(true);
@@ -69,7 +60,7 @@ export function DeviceSetupDialog() {
   // (the inbox tour) defers the check, not the decision: it re-runs the
   // moment that dialog closes.
   useWatchEffect(() => {
-    if (autoChecked || open || blocked || firstRun) return;
+    if (autoChecked || open || blocked || firstRun || inSetupFlow) return;
     if (isDetachedTabWindow()) return;
     if (OS_PERMISSION_KINDS.every((k) => permissions[k] === "unknown")) return;
     const needed =
@@ -79,7 +70,7 @@ export function DeviceSetupDialog() {
     setAutoChecked(true);
     if (needed) setOpen(true);
     else if (!seen()) markSeen();
-  }, [permissions, autoChecked, open, blocked, claim, firstRun]);
+  }, [permissions, autoChecked, open, blocked, claim, firstRun, inSetupFlow]);
 
   const close = () => {
     markSeen();

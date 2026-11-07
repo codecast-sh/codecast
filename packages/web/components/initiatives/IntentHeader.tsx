@@ -25,7 +25,7 @@ export const INTENT_HAIRLINE = "color-mix(in srgb, var(--sol-border) 22%, transp
 
 type DataAttrs = Record<`data-${string}`, string | undefined>;
 
-export function IntentHeader({ accent = INITIATIVE_ACCENT, back, glyph, title, onRename, renameLabel, titleData, idChip, chips, actions, tabs, phone }: {
+export function IntentHeader({ accent = INITIATIVE_ACCENT, back, glyph, title, onRename, renameLabel, titleData, idChip, chips, actions, tabs, phone, dense }: {
   /** The page's own accent: the rename underline. */
   accent?: string;
   back: { href: string; label: string };
@@ -43,6 +43,8 @@ export function IntentHeader({ accent = INITIATIVE_ACCENT, back, glyph, title, o
   /** A tab strip under the row; its underline sits on the header's own border. */
   tabs?: ReactNode;
   phone?: boolean;
+  /** One row at any width: the chips keep their size and the title gives way. */
+  dense?: boolean;
 }) {
   return (
     <header className="shrink-0 border-b" style={{ borderColor: INTENT_HAIRLINE }} data-intent-header>
@@ -53,7 +55,7 @@ export function IntentHeader({ accent = INITIATIVE_ACCENT, back, glyph, title, o
         <span className="shrink-0 inline-flex items-center">{glyph}</span>
         <IntentTitle title={title} onRename={onRename} label={renameLabel} accent={accent} phone={phone} data={titleData} />
         {idChip && <span className="shrink-0 inline-flex items-center">{idChip}</span>}
-        <div className={cn("flex items-center gap-x-3 gap-y-1 min-w-0 text-[12.5px]", phone ? "order-last basis-full flex-wrap pl-[38px]" : "flex-wrap")} data-intent-chips>
+        <div className={cn("flex items-center gap-x-3 gap-y-1 min-w-0 text-[12.5px]", phone ? "order-last basis-full flex-wrap pl-[38px]" : dense ? "shrink-0 flex-nowrap" : "flex-wrap")} data-intent-chips>
           {chips}
         </div>
         <span className="flex-1" />

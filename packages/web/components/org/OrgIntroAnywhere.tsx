@@ -1,4 +1,5 @@
 import { useWorkspaceFeature } from "../../lib/teamFeatures";
+import { useLocation } from "react-router";
 import { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -8,6 +9,7 @@ import { markOrgUpsellSeen } from "../../lib/orgIntro";
 import { ORG_MEET_TOAST_ID, ORG_MEET_SETTLE_MS, orgIntroCardMayRise, composerHasText } from "../../lib/orgIntroCard";
 import type { OrgIntroCardFacts } from "../../lib/orgIntroCard";
 import { showOrgIntroCard } from "../../lib/showOrgIntroCard";
+import { isSetupFlowPath } from "../../lib/setupFlow";
 
 // ---------------------------------------------------------------- the mount
 
@@ -28,6 +30,8 @@ export function OrgIntroAnywhere() {
     (st) => st.call?.phase,
   ]);
   const risen = useRef(false);
+  // The setup flow on screen keeps the corner quiet (lib/setupFlow).
+  const blocked = isSetupFlowPath(useLocation().pathname);
   const initialized = s.clientStateInitialized;
   const signedIn = !!s.currentUser?._id;
   const introSeen = s.clientState.ui?.org_intro_seen === true;
@@ -44,7 +48,7 @@ export function OrgIntroAnywhere() {
 
   // eslint-disable-next-line no-restricted-syntax -- arms the rise timer when the facts that gate it change
   useEffect(() => {
-    if (risen.current || !orgOn) return;
+    if (risen.current || !orgOn || blocked) return;
     const facts: OrgIntroCardFacts = { initialized, signedIn, onOrgPage, phone, callPhase, composerHasText: false, introSeen, upsellSeen };
     if (!orgIntroCardMayRise(facts)) return;
     const t = window.setTimeout(() => {
@@ -66,7 +70,7 @@ export function OrgIntroAnywhere() {
       });
     }, ORG_MEET_SETTLE_MS);
     return () => window.clearTimeout(t);
-  }, [orgOn, initialized, signedIn, onOrgPage, phone, callPhase, introSeen, upsellSeen, pathname, router]);
+  }, [orgOn, blocked, initialized, signedIn, onOrgPage, phone, callPhase, introSeen, upsellSeen, pathname, router]);
 
   return null;
 }

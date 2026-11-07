@@ -31,7 +31,7 @@ import * as path from "node:path";
 import type { Command } from "commander";
 import {
   ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, isPaneSession, isRealSession,
-  parseEngineJson, realSessionKey, runEngine, runEngineJson,
+  parseEngineJson, realSessionKey, runEngine, runEngineJson, type EngineRun,
 } from "./engine.js";
 import { engineBrowserFor, isPaneMode, isRealMode, realModeHint, requireRealBridge, splitTargetFlags, walledOffFromExtension } from "./bridge/real.js";
 import { desktopPaneCtx, DesktopPaneUnavailable, PANE_TAB_NOTE } from "./desktopPane.js";
@@ -43,7 +43,11 @@ import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, ta
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans, scanLiveOwners, withEndedSession } from "./engineReap.js";
 import { engineSnapshotJson, type EngineSnapshotPayload, matchRefs, nearMatches, ordinal, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
 import { type EngineRef, parseEngineRefs, rankByVisibility, withOrdinals } from "./engineRefs.js";
-import { isStaleRefFailure, recallSnapshotRef, recoverRefPlan, rememberSnapshotRefs } from "./refMemory.js";
+import { isStaleRefFailure, recallSnapshotRef, recoverRefPlan, rememberedSnapshotUrl, rememberSnapshotRefs, SNAPSHOT_AGAIN } from "./refMemory.js";
+import { captureSettled, parseSettleProbe, SETTLE_PROBE_SOURCE, sleepSync } from "./snapshotSettle.js";
+import {
+  awaitChallenge, CHALLENGE_PROBE_SOURCE, challengeReport, challengeWaitMs, parseChallengeProbe, type ChallengeOutcome, type ChallengeProbe,
+} from "./challenge.js";
 import { ensurePinnedTab, pinnedTabBrowser, recoverGoneTab, touchBoundTarget } from "./pinnedTab.js";
 import { retryOnStall, shouldRetryAfterStall, STALL_NOTE, STALL_RETRY_DELAY_MS } from "./stall.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
@@ -658,11 +662,22 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     TARGETED.has(verb) && (TARGET_PLUS_VALUE.has(verb) ? positionals === 1 : positionals === 0);
 
   const calls = translate(verb, forwarded, recallFind(session));
+  const verbStarted = Date.now();
   let retried = false;
   let retriedStall = false;
   for (let i = 0; i < calls.length; i++) {
     const call = calls[i];
-    let res = await runEngine(call.args, { ...o, narrate: engineStepLabel(verb, call.args) });
+    // A snapshot is read until it describes one settled page (snapshotSettle.ts),
+    // and the URL it was read on goes into the ref table with it.
+    let snapUrl: string | null = null;
+    let res: EngineRun;
+    if (call.args[0] === "snapshot") {
+      const snap = settledSnapshot(call.args, o);
+      res = snap.res;
+      snapUrl = snap.url;
+    } else {
+      res = await runEngine(call.args, { ...o, narrate: engineStepLabel(verb, call.args) });
+    }
     // A ref the engine cannot resolve any more — the page re-rendered, or the
     // route changed since the snapshot. Re-find it and retry once. Gated on
     // the engine's own "no such element" wording, because a retry re-runs the
@@ -671,9 +686,11 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     if (res.status !== 0 && target && !retried && i === 0 && isStaleRefFailure(res.stderr + res.stdout)) {
       retried = true;
       const again = recoverStaleRef(target, o, usedLastFind ? recallFindQuery(session) : null);
-      if (again) {
+      if ("ref" in again) {
         console.log(fmt.muted(`  ${again.note}`));
         res = runEngine(call.args.map((x) => (x === target ? again.ref : x)), o);
+      } else {
+        res = { ...res, stderr: `${(res.stderr || res.stdout).trim().split("\n")[0]}\n  ${target.replace("@", "#")} went stale and was not retried: ${again.refused}\n` };
       }
     }
     // The session is pinned to one tab. When that tab is gone (closed by the
@@ -705,12 +722,12 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
       if (call.args.includes("--json")) {
         const snapshot = engineSnapshotJson(parseEngineJson<EngineSnapshotPayload>(res));
         const items = parseEngineRefs(snapshot.text);
-        rememberSnapshotRefs(session, items);
+        rememberSnapshotRefs(session, items, snapUrl);
         snapshot.text = withOrdinals(snapshot.text, items);
         res = { ...res, stdout: JSON.stringify(snapshot) + "\n" };
       } else {
         const items = parseEngineRefs(res.stdout);
-        if (items.length) rememberSnapshotRefs(session, items);
+        if (items.length) rememberSnapshotRefs(session, items, snapUrl);
         res = { ...res, stdout: withOrdinals(res.stdout, items) };
       }
     }
@@ -724,15 +741,50 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
   }
 
   const mutating = isMutatingStep(verb, forwarded);
+  if (mutating) settle(o);
+  // Keystrokes into a field never navigate; only a page load or a mutating
+  // step (which already paid for settle) pays for the probe.
+  const challenge = LOADS_A_PAGE.has(verb) || (mutating && NAVIGATING_VERBS.has(verb)) ? await checkChallenge(verb, o, verbStarted) : null;
   if (mutating) {
-    settle(o);
     const file = await maybeAutoShot(engineAutoShotSource(o), shot);
     if (file) console.log(inlineImageMarker(file));
   }
   if (!run.quiet && (TAB_AFFECTING_VERBS.has(verb) || NAVIGATING_VERBS.has(verb))) {
     printFooter(o, verb, owner);
   }
-  return 0;
+  return challenge && !challenge.cleared ? 1 : 0;
+}
+
+/** Verbs whose whole point is to load a document: always probed. Other
+ *  navigating verbs (a click, a submit) are probed only when they did load
+ *  one. */
+const LOADS_A_PAGE = new Set(["open", "goto", "reload", "back", "forward"]);
+
+/**
+ * After a verb that navigated, look for a bot challenge or block page
+ * (challenge.ts) and say what it means in the verb's output. A challenge that
+ * clears itself is waited out; one that needs a person, or a block, makes the
+ * verb fail with the instruction to hand it over or stop, so a `do` flow does
+ * not carry on against it and nothing loops.
+ */
+async function checkChallenge(verb: string, o: Ctx, started: number): Promise<ChallengeOutcome | null> {
+  const probe = async (): Promise<ChallengeProbe | null> => {
+    const r = await runEngine(["eval", CHALLENGE_PROBE_SOURCE, "--json"], { ...o, narrate: "checking the page for a bot check" });
+    return r.status === 0 ? parseChallengeProbe(r.stdout) : null;
+  };
+  const first = await probe().catch(() => null);
+  if (!first) return null;
+  // A click that did not load a new document cannot have landed on an interstitial.
+  if (!LOADS_A_PAGE.has(verb) && first.sinceLoad >= Date.now() - started) return null;
+  const outcome = await awaitChallenge(
+    first,
+    { probe, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), now: Date.now },
+    challengeWaitMs(),
+  );
+  if (!outcome) return null;
+  if (outcome.cleared) console.log(fmt.muted(`  ${challengeReport(outcome)}`));
+  else console.log(`${fmt.warning("!")} ${challengeReport(outcome)}`);
+  return outcome;
 }
 
 /**
@@ -951,13 +1003,13 @@ async function passthrough(verb: string, args: string[]): Promise<never> {
  *  Remembers the best hit AND the query, so a following bare action can use
  *  it and a stale ref can be re-found. */
 function findRefs(text: string, o: Ctx, opts: { lenient?: boolean } = {}): { hits: string[]; near: string[]; total: number } {
-  const res = runEngine(["snapshot"], o);
+  const { res, url } = settledSnapshot(["snapshot"], o);
   if (res.status !== 0) {
     if (opts.lenient) return { hits: [], near: [], total: 0 };
     die((res.stderr || res.stdout).trim().split("\n")[0] || "could not read the page");
   }
   const items = parseEngineRefs(res.stdout);
-  if (items.length) rememberSnapshotRefs(o.session, items);
+  if (items.length) rememberSnapshotRefs(o.session, items, url);
   // `find "Delete (2nd)"` asks for the second of the namesakes the snapshot
   // printed that way — one match, so the ranking below has nothing to do.
   const { text: query, nth } = splitOrdinalQuery(text);
@@ -985,30 +1037,61 @@ function findRefs(text: string, o: Ctx, opts: { lenient?: boolean } = {}): { hit
 /**
  * A ref the engine could not resolve, looked up again on a fresh snapshot.
  *
- * The ordinal first: the last snapshot wrote down what this ref was and which
- * of its namesakes it was, so the retry lands on the row the agent chose rather
- * than the first element that answers to the name — the difference between
- * deleting the third row and deleting the first (refMemory.ts). The remembered
- * words are the fallback, and only exist when the ref came from a `find`.
+ * Fails closed. The retry runs only when the page is the one the ref was read
+ * on and the ref's exact coordinate (the nth of the same number of namesakes)
+ * is still there (refMemory.ts recoverRefPlan): the difference between
+ * deleting the third row and deleting the first. The remembered words of a
+ * `find` are the fallback, held to the same page and to a single match.
+ * Anything less certain is refused with the instruction to snapshot again.
  */
-function recoverStaleRef(target: string, o: Ctx, query: string | null): { ref: string; note: string } | null {
+function recoverStaleRef(target: string, o: Ctx, query: string | null): { ref: string; note: string } | { refused: string } {
   const was = recallSnapshotRef(o.session, target);
-  if (!was && !query) return null; // nothing to look up: don't pay for a snapshot
-  const res = runEngine(["snapshot"], o);
-  if (res.status === 0 && res.stdout) {
-    const items = parseEngineRefs(res.stdout);
-    if (items.length) rememberSnapshotRefs(o.session, items);
-    const plan = recoverRefPlan(was, items);
-    if (plan && was) {
-      const which = was.nth ? `the ${ordinal(was.nth)} ` : "";
-      return { ref: `@${plan}`, note: `ref went stale — retried ${which}${was.role} ${JSON.stringify(was.name)} as #${plan}` };
-    }
+  const before = was?.url ?? rememberedSnapshotUrl(o.session);
+  if (!was && !query) return { refused: `it is not in the last snapshot; ${SNAPSHOT_AGAIN}` };
+  const { res, url } = settledSnapshot(["snapshot"], o);
+  if (res.status !== 0 || !res.stdout) return { refused: `the page could not be read again; ${SNAPSHOT_AGAIN}` };
+  const items = parseEngineRefs(res.stdout);
+  if (items.length) rememberSnapshotRefs(o.session, items, url);
+  if (was) {
+    const plan = recoverRefPlan(was, items, url);
+    if ("refused" in plan) return plan;
+    const which = was.nth ? `the ${ordinal(was.nth)} ` : "";
+    return { ref: `@${plan.ref}`, note: `ref went stale — retried ${which}${was.role} ${JSON.stringify(was.name)} as #${plan.ref}` };
   }
-  if (!query) return null;
-  const again = findRefs(query, o, { lenient: true }); // re-snapshots and re-remembers
-  const fresh = recallFind(o.session);
-  if (!again.hits.length || !fresh || fresh === target) return null;
+  if (!before || before !== url) return { refused: `the page changed since the find; ${SNAPSHOT_AGAIN}` };
+  const { text, nth } = splitOrdinalQuery(query!);
+  const matched = nth ? pickOrdinal(items, matchRefs(items, text), nth) : matchRefs(items, text);
+  if (matched.length !== 1 || !matched[0].ref || `@${matched[0].ref}` === target) {
+    return { refused: `${JSON.stringify(query)} now matches ${matched.length} elements; ${SNAPSHOT_AGAIN}` };
+  }
+  const fresh = `@${matched[0].ref}`;
+  rememberFind(o.session, fresh, query!);
   return { ref: fresh, note: `ref went stale — re-found ${JSON.stringify(query)} as ${fresh.replace("@", "#")}` };
+}
+
+/**
+ * The engine's snapshot, recaptured while the page is mid-mutation or
+ * mid-navigation (snapshotSettle.ts), with the URL it describes. A main frame
+ * that kept navigating through every attempt is a failure the agent can act
+ * on, never a snapshot of a document that is already gone.
+ */
+function settledSnapshot(args: string[], o: Ctx): { res: EngineRun; url: string | null } {
+  const out = captureSettled({
+    capture: () => runEngine(args, o),
+    probe: () => {
+      const r = runEngine(["eval", SETTLE_PROBE_SOURCE, "--json"], o);
+      return r.status === 0 ? parseSettleProbe(r.stdout) : null;
+    },
+    sleep: sleepSync,
+    now: Date.now,
+  });
+  if (out.navigating) {
+    return {
+      res: { status: 1, stdout: "", stderr: "the page kept navigating while the snapshot was read; wait for it to land, then snapshot again\n" },
+      url: null,
+    };
+  }
+  return { res: out.res, url: out.url };
 }
 
 /** A find result as the agent reads it: the engine's own line, with the

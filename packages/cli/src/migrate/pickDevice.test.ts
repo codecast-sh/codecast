@@ -32,3 +32,23 @@ describe("matchDevices", () => {
     expect(matchDevices(devices, "nonesuch")).toEqual([]);
   });
 });
+
+describe("naming a teammate's own other Mac (cast trigger add --device)", () => {
+  // Alexander's roster on 2026-11-06: a Mac Studio that holds the work
+  // checkouts and two MacBooks.
+  const roster = [
+    { device_id: "c5900012d741", label: "macOS - Alexanders-Mac-Studio", hostname: "Alexanders-Mac-Studio" },
+    { device_id: "65f260200e20", label: "macOS - Alexanders-MacBook-Pro-4", hostname: "Alexanders-MacBook-Pro-4" },
+    { device_id: "4e2cfe0d258f", label: "macOS - Alexanders-MacBook-Pro", hostname: "Alexanders-MacBook-Pro" },
+  ];
+
+  test("a short name reaches the Studio alone", () => {
+    expect(matchDevices(roster, "studio").map((d) => d.device_id)).toEqual(["c5900012d741"]);
+    expect(matchDevices(roster, "c590").map((d) => d.device_id)).toEqual(["c5900012d741"]);
+  });
+
+  test("an exact hostname wins over the longer one it prefixes", () => {
+    expect(matchDevices(roster, "Alexanders-MacBook-Pro").map((d) => d.device_id)).toEqual(["4e2cfe0d258f"]);
+    expect(matchDevices(roster, "macbook")).toHaveLength(2);
+  });
+});

@@ -1,12 +1,18 @@
+// The variables that name the agent session a shell belongs to, in the order
+// they are trusted: Claude Code, Codex, the `cast claude` wrapper, a managed session.
+const SESSION_ID_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION"] as const;
+
 export function sessionIdFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
-  return (
-    env.CLAUDE_CODE_SESSION_ID ||
-    env.CODEX_THREAD_ID ||
-    env.CODEX_SESSION_ID ||
-    env.CODECAST_SESSION_ID ||
-    env.CODECAST_MANAGED_SESSION ||
-    null
-  );
+  for (const key of SESSION_ID_KEYS) if (env[key]) return env[key]!;
+  return null;
+}
+
+/** `env` as a person's own shell would have it: nothing that ties a cast command to an agent session or its task and plan bindings. What a command a person approved runs with (daemon run_cast). */
+export function personEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const drop = new Set<string>([...SESSION_ID_KEYS, "CODECAST_TASK_ID", "CODECAST_PLAN_ID", "CODECAST_CWD"]);
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(env)) if (val !== undefined && !drop.has(k)) out[k] = val;
+  return out;
 }
 
 export function chatSendOrigin(

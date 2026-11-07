@@ -31,6 +31,19 @@ export async function commitBySha(ctx: any, repository: string, sha: string): Pr
   return mine.find((c) => c.main_at != null) ?? mine[0] ?? null;
 }
 
+/** A commit's place in main's order (commits.main_at), in its repository when named, else in whichever repository put it on main. */
+export async function mainAtOf(ctx: any, repository: string | null | undefined, sha: string): Promise<number | null> {
+  if (repository) return (await commitBySha(ctx, repository, sha))?.main_at ?? null;
+  const s = sha.toLowerCase();
+  if (s.length < 7) return null;
+  const rows: Doc<"commits">[] = s.length === 40
+    ? await ctx.db.query("commits").withIndex("by_sha", (q: any) => q.eq("sha", s)).take(10)
+    : await ctx.db.query("commits").withIndex("by_sha", (q: any) => q.gte("sha", s).lt("sha", `${s}~`)).take(20);
+  const ordered = rows.filter((c) => c.sha.startsWith(s) && c.main_at != null).map((c) => c.main_at!);
+  // Two repositories holding the same sha prefix is no answer.
+  return new Set(ordered).size === 1 ? ordered[0] : null;
+}
+
 /**
  * The session behind a commit: its Codecast-Session trailer, else the newest session that worked the task it names.
  * A line run's commits and a plain `(ct-N)` subject carry no trailer, but name their task.

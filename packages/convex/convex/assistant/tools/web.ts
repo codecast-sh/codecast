@@ -19,6 +19,7 @@ import {
 import { isMachineDeliveredMessage, parseDecisionAnswer } from "@codecast/shared/contracts";
 import { CHEAP_MODEL, postMessages } from "../../lib/anthropic";
 import { fetchPublicPage } from "../../lib/publicFetch";
+import type { VendorGate } from "../../lib/vendorGuard";
 
 export {
   PAGE_MAX_BYTES,
@@ -35,6 +36,8 @@ export {
 export interface WebDeps {
   /** The fetch fetch_page uses; tests pass a fake. */
   fetch?: typeof fetch;
+  /** Whose content search_web sends to the Messages API (lib/vendorGuard); without it there is no search_web. */
+  gate?: VendorGate;
 }
 
 const USER_AGENT = "Mozilla/5.0 (compatible; CodecastAssistant/1.0; +https://codecast.sh)";
@@ -44,7 +47,7 @@ const USER_AGENT = "Mozilla/5.0 (compatible; CodecastAssistant/1.0; +https://cod
 function webDeps(deps: WebDeps): PlatformWebDeps {
   return {
     readPage: (url, request) => fetchPublicPage(url, { ...request, fetch: deps.fetch }),
-    ...(process.env.ANTHROPIC_API_KEY ? { messages: postMessages } : {}),
+    ...(process.env.ANTHROPIC_API_KEY && deps.gate ? { messages: (req, opts) => postMessages(req, { ...opts, gate: deps.gate! }) } : {}),
     searchModel: CHEAP_MODEL,
     userAgent: USER_AGENT,
   };
@@ -66,7 +69,7 @@ export function searchWebTool(deps: WebDeps = {}, searches = { made: 0 }): Tool 
   return platformSearchWebTool(webDeps(deps), searches);
 }
 
-/** The web tools. search_web needs the deployment's Anthropic key. */
+/** The web tools. search_web needs the deployment's Anthropic key and a gate. */
 export function webTools(deps: WebDeps = {}): Tool[] {
   return platformWebTools(webDeps(deps));
 }

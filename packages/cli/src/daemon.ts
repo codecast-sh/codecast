@@ -287,14 +287,20 @@ import { subagentPromptParent } from "./agentPromptOrigin.js";
 import { declaredSpawnParent } from "./spawnParents.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
+import { RUN_TIMEOUT_MS } from "@codecast/shared/contracts/commandRun";
+import { personEnv } from "./sessionIdentity.js";
 import { RetryQueue, flushRetryQueueForShutdown, isSessionRefusal, type RetryOperation } from "./retryQueue.js";
 import { cursorDbOpenPath } from "./cursorDbPath.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
 import { detectPermissionPrompt } from "./permissionDetector.js";
-import { handlePermissionRequest, type PermissionDecision } from "./permissionHandler.js";
+import { watchPromptSettled } from "./permissionPromptWatch.js";
+import { describeRemovals, type RemovalPreview } from "./removalPreview.js";
+import { isOutsideGitRepo } from "./gitRepoProbe.js";
+import { handlePermissionRequest, type PermissionDecision, type PermissionSource } from "./permissionHandler.js";
 import {
   PermissionHookWaiters,
+  glanceCommand,
   parsePermissionHookInput,
   PERMISSION_HOOK_PATH,
   PERMISSION_LAUNCH_TOKEN_HEADER,
@@ -387,7 +393,7 @@ import { setBackgroundSessions, setGovernorBackground } from "./backgroundPriori
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
+import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -3314,13 +3320,16 @@ function logConvexFailure(err: unknown): void {
 // not found" while message sync (keyed by conversation _id) stayed healthy, so
 // nothing surfaced the break (union-mobile fleet, 2026-08-29). Ride the durable
 // retry queue instead: never rejects, so callers may await it or drop it.
+// A cwd that git says is outside any repo is reported as such, so the server
+// drops the git_root a web-started stub guessed from the chosen folder.
 async function pushSessionIdBinding(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string): Promise<void> {
+  const notARepo = !gitRoot && !!projectPath && (await isOutsideGitRepo(projectPath));
   try {
-    await syncServiceRef?.updateSessionId(conversationId, sessionId, projectPath, gitRoot, gitRemoteUrl);
+    await syncServiceRef?.updateSessionId(conversationId, sessionId, projectPath, gitRoot, gitRemoteUrl, notARepo);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`updateSessionId failed for ${conversationId.slice(0, 12)} <- ${sessionId.slice(0, 8)}: ${msg}; queuing for retry`, "warn");
-    retryQueueRef?.add("updateSessionId", { conversationId, sessionId, projectPath, gitRoot, gitRemoteUrl }, msg);
+    retryQueueRef?.add("updateSessionId", { conversationId, sessionId, projectPath, gitRoot, gitRemoteUrl, notARepo }, msg);
   }
 }
 
@@ -5956,9 +5965,23 @@ function startMigrateChild(key: string, args: string[]): { started: boolean; pid
   }
 }
 
+/** Run a `cast decide --run` command a person approved, and report it. */
+async function runApprovedCast(decisionId: string, argv: string[], cwd: string | undefined): Promise<void> {
+  const report = (state: "running" | "done" | "failed", extra: { exit_code?: number; output?: string } = {}) =>
+    syncServiceRef?.reportCommandRun({ decision_id: decisionId, state, ...extra }).catch((err: Error) => log(`[RUN] report ${state} for ${decisionId} failed: ${err.message}`));
+  await report("running");
+  // A person's shell, so the CLI sends no from_session and the act is theirs.
+  const env = personEnv();
+  if (cwd) env.CODECAST_CWD = cwd;
+  log(`[RUN] ${decisionId}: cast ${argv.join(" ").slice(0, 200)}`);
+  const res = await runCastCommand(argv, { env, cwd, timeoutMs: RUN_TIMEOUT_MS, inheritEnv: false });
+  const output = [res.stdout, res.stderr].filter((x) => x.trim()).join("\n");
+  await report(res.code === 0 ? "done" : "failed", { ...(res.code !== null ? { exit_code: res.code } : {}), output: res.code === null ? `${output}\nStopped after ${RUN_TIMEOUT_MS / 60000} minutes.` : output });
+}
+
 function runCastCommand(
   args: string[],
-  opts: { timeoutMs?: number; killGroup?: boolean; env?: Record<string, string>; cwd?: string } = {},
+  opts: { timeoutMs?: number; killGroup?: boolean; env?: Record<string, string>; cwd?: string; inheritEnv?: boolean } = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const timeoutMs = opts.timeoutMs ?? 30 * 60 * 1000;
   const { cmd, prefixArgs } = resolveCastInvocation();
@@ -5970,7 +5993,7 @@ function runCastCommand(
       child = spawn(cmd, [...prefixArgs, ...args], {
         // The daemon's launchd PATH has no node/bun/homebrew; the cast shim and
         // anything it execs (a browser driver, claude) need the agent PATH.
-        env: { ...process.env, ...opts.env, PATH: agentSpawnPath() },
+        env: { ...(opts.inheritEnv === false ? {} : process.env), ...opts.env, PATH: agentSpawnPath() },
         stdio: ["ignore", "pipe", "pipe"],
         ...(opts.cwd ? { cwd: opts.cwd } : {}),
         // killGroup: the child leads its own process group so the cap can
@@ -6957,6 +6980,15 @@ async function executeRemoteCommand(
           }
         }
 
+        // Before any worktree is made, so a refused start leaves none behind.
+        if (agentType === "codex" && codexAppServerInstance?.binaryMissing) {
+          error = "Codex is not installed. Install it from https://codex.openai.com then restart your daemon.";
+          if (conversationId) {
+            syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
+          }
+          break;
+        }
+
         let worktreeResult: WorktreeResult | null = null;
 
         if (isolated && cwd) {
@@ -6985,14 +7017,6 @@ async function executeRemoteCommand(
             cwd = worktreeResult.worktreePath;
             log(`[WORKTREE] Created isolated worktree: ${worktreeResult.worktreeName} at ${cwd}`);
           }
-        }
-
-        if (agentType === "codex" && codexAppServerInstance?.binaryMissing) {
-          error = "Codex is not installed. Install it from https://codex.openai.com then restart your daemon.";
-          if (conversationId) {
-            syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
-          }
-          break;
         }
 
         // `cast stable off` removes the Claude SessionStart hook, but the
@@ -8863,6 +8887,23 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "line_fixloop": {
+        // The nightly fix trace (docs/architecture/regret.md R2): record what
+        // landed on main and what each fix repaired. The checkouts only name
+        // the repositories; history is read from this machine's own mirror of
+        // origin. args: { team_id, roots }.
+        try {
+          const args = commandArgs ? JSON.parse(commandArgs) : {};
+          if (typeof args.team_id !== "string" || !Array.isArray(args.roots) || args.roots.length === 0) throw new Error("line_fixloop needs team_id and roots");
+          const roots = args.roots.filter((r: unknown): r is string => typeof r === "string");
+          void runCastCommand(["line", "fixloop", "--record", "--team", args.team_id, "--from", ...roots], { timeoutMs: 2 * 60 * 60 * 1000 })
+            .then((r) => log(`[LINE] Fix trace for ${args.team_id}: exit ${r.code}${r.code ? ` ${(r.stderr || r.stdout).trim().slice(-300)}` : ""}`));
+          result = JSON.stringify({ accepted: roots.length });
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+        }
+        break;
+      }
       case "line_trial_reask": {
         // "Re-ask" in the line app on a trial run paused where no answer can
         // land: the same re-ask the CLI does, run here because it stops the
@@ -9157,6 +9198,24 @@ async function executeRemoteCommand(
         await stopLocalSessionBackends(conversationId, sessionId).catch(() => {});
         await clearConversationDeliveryAndResumeState(conversationId, sessionId, "quiesce_session").catch(() => {});
         result = JSON.stringify({ quiesced: true, mode, had_pane: hadPane, status: status ?? null, outside: [...outsideTmux.map((name) => ({ name: `tmux session ${name}` })), ...outside.map((p) => ({ pid: p.pid, name: p.name, via: p.detached }))] });
+        break;
+      }
+      case "run_cast": {
+        // A person pressed Run on a `cast decide --run` card (commandRun.ts).
+        // The command runs as theirs: outside the asking session (its session
+        // env stripped, so the CLI sends no from_session), in the session's
+        // folder. In the background, so a long command never holds the queue;
+        // the run reports itself (sessionDecisions.reportCommandRun).
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const decisionId: string | undefined = typeof parsed.decision_id === "string" ? parsed.decision_id : undefined;
+        const argv: string[] | null = Array.isArray(parsed.argv) && parsed.argv.every((a: unknown) => typeof a === "string") ? parsed.argv : null;
+        if (!decisionId || !argv?.length || argv[0] === "decide") {
+          error = "run_cast: missing decision_id or argv";
+          break;
+        }
+        const cwd = typeof parsed.cwd === "string" && fs.existsSync(parsed.cwd) ? parsed.cwd : undefined;
+        void runApprovedCast(decisionId, argv, cwd);
+        result = JSON.stringify({ started: true });
         break;
       }
       case "merge_back": {
@@ -9966,7 +10025,7 @@ export async function executeRetryOperation(op: RetryOperation, deps: Pick<Trans
   }
 
   if (op.type === "updateSessionId") {
-    const params = op.params as { conversationId: string; sessionId: string; projectPath?: string; gitRoot?: string; gitRemoteUrl?: string };
+    const params = op.params as { conversationId: string; sessionId: string; projectPath?: string; gitRoot?: string; gitRemoteUrl?: string; notARepo?: boolean };
     // Superseded while queued: the session resumed under a fresh uuid (or the
     // local mapping was pruned). Executing anyway would clobber the newer
     // binding, so discard — the newer link enqueued its own op.
@@ -9976,7 +10035,7 @@ export async function executeRetryOperation(op: RetryOperation, deps: Pick<Trans
       deps.updateState();
       return true;
     }
-    await deps.syncService.updateSessionId(params.conversationId, params.sessionId, params.projectPath, params.gitRoot, params.gitRemoteUrl);
+    await deps.syncService.updateSessionId(params.conversationId, params.sessionId, params.projectPath, params.gitRoot, params.gitRemoteUrl, params.notARepo);
     log(`Retry: Rebound session ${params.sessionId.slice(0, 8)} -> conversation ${params.conversationId.slice(0, 12)}`);
     deps.updateState();
     return true;
@@ -10040,6 +10099,13 @@ export async function executeRetryOperation(op: RetryOperation, deps: Pick<Trans
 
 class TranscriptIngestRetry extends Error {}
 const transcriptRetries = new Set<string>();
+// Why each session's last transcript pass failed. A failing pass logs at info,
+// which never leaves the machine, so the hourly health report names the
+// reason beside each stuck file at warn, where it reaches the server.
+const transcriptLastFailure = new Map<string, { at: number; reason: string }>();
+function noteTranscriptFailure(sessionId: string, reason: string): void {
+  transcriptLastFailure.set(sessionId, { at: Date.now(), reason: reason.slice(0, 300) });
+}
 const transcriptRetryOwners = new TranscriptRetryOwner({
   allowed: () => !readDaemonState()?.authExpired && !isSyncPaused(),
   retryable: error => !(error instanceof AuthExpiredError),
@@ -10115,6 +10181,7 @@ const TRANSCRIPT_RECEIPT_BYTES = 8 * 1024 * 1024;
 let transcriptCapacityLogAt = 0;
 function transcriptCapacityRefused(sessionId: string, kind: string): void {
   transcriptRetries.add(sessionId);
+  noteTranscriptFailure(sessionId, `${kind} capacity refused`);
   if (Date.now() - transcriptCapacityLogAt >= 5000) {
     transcriptCapacityLogAt = Date.now();
     log(`Transcript ${sessionId} ${kind} capacity; source remains unread; receipts=${acceptedPendingCount} reserved=${acceptedPendingReserved} bytes=${acceptedPendingBytes + acceptedPendingReservedBytes}`);
@@ -12176,7 +12243,7 @@ async function processSessionFilePass(
         sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
 
         const permArgPreview = truncateForNotification(
-          `${permissionPrompt.tool_name}: ${permissionPrompt.arguments_preview || ""}`, 150
+          `${permissionPrompt.tool_name}: ${glanceCommand(permissionPrompt.arguments_preview || "")}`, 150
         );
         syncService.createSessionNotification({
           conversation_id: conversationId,
@@ -12318,6 +12385,7 @@ async function processSessionFilePass(
     const errMsg = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
     log(`processSessionFile failed for ${sessionId.slice(0, 8)} at position=${lastPosition}: ${errMsg}${stack}`);
+    noteTranscriptFailure(sessionId, errMsg);
     throw err;
   }
 }
@@ -15487,7 +15555,7 @@ export function extractTmuxLiveRegion(paneContent: string): string {
       return tail.slice(working).join("\n");
     }
   }
-  const isSep = (line: string) => /^[─━]{20,}\s*$/.test(line);
+  const isSep = (line: string) => /^[─━]{20,}\s*$/.test(line) || CLAUDE_OVERPAINTED_RULE.test(line);
   const sepIdx: number[] = [];
   for (let i = 0; i < tail.length; i++) {
     if (isSep(tail[i])) sepIdx.push(i);
@@ -18255,6 +18323,16 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // clears any residue if the pty buffer drains late.
     throw new Error("INJECT_UNVERIFIED: paste unconfirmed and payload never appeared, leaving message pending for retry");
   }
+  // The window closed with our text still in the composer: the opposite of no
+  // evidence. Returning here acked a message the agent never took, so nothing
+  // retried it, and its receipt held the pane against every later message. On
+  // a starved client (2026-11-06, jx751p3, load 14/core) 38 Enters went
+  // unanswered and the session took nothing for 12 hours. Throwing leaves it
+  // pending; the retry finds the payload at the prompt and submits it there.
+  if (verify.outcome === "agent_prompt_stalled"
+      && tmuxComposerHoldsPayload(await captureTmuxComposerPane(tmuxExec, target, captureLines).catch(() => ""), sanitized)) {
+    throw new Error("INJECT_UNVERIFIED: the payload is still in the composer after the submit window, leaving message pending for retry");
+  }
 
   const verdict = verify.outcome === "delivered" ? verify.evidence : verify.outcome;
   log(`Injected via tmux to ${target}${pasteConfirmed ? "" : " (unconfirmed)"}${verify.rePasted ? " (re-pasted)" : ""} (${verdict})`)
@@ -20319,7 +20397,7 @@ function startCodexPermissionPoller(sessionId: string, tmuxSession: string, conv
       sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
 
       const preview = truncateForNotification(
-        `${prompt.command || prompt.reason}`, 200
+        glanceCommand(prompt.command || prompt.reason), 200
       );
       syncService.createSessionNotification({
         conversation_id: conversationId,
@@ -28777,6 +28855,36 @@ async function logHealthReport(retryQueue: RetryQueue, config: Config): Promise<
       `Health: ${unsyncedFiles.length} pending files, ${droppedCount} dropped ops, ${queueSize} in retry queue`
     );
   }
+  for (const line of stuckTranscriptLines(unsyncedFiles, Date.now())) logWarn(line.message, line.sessionId);
+}
+
+const STUCK_TRANSCRIPT_REPORT_MS = 10 * 60_000;
+const STUCK_TRANSCRIPT_REPORT_MAX = 5;
+
+/** One line per transcript the hourly count calls pending for longer than
+ *  ten minutes: which session, since when, and the last reason its pass
+ *  failed. The count alone ("1 pending files" three hours running, 2026-11-05)
+ *  left nothing to tell a slow file from a wedged one. */
+export function stuckTranscriptLines(
+  files: string[],
+  now: number,
+  record: (file: string) => Pick<SyncRecord, "lastSyncedAt" | "lastSyncedPosition"> | null = getSyncRecord,
+  failures: ReadonlyMap<string, { at: number; reason: string }> = transcriptLastFailure,
+): Array<{ sessionId: string; message: string }> {
+  const lines: Array<{ sessionId: string; message: string }> = [];
+  for (const file of files) {
+    const rec = record(file);
+    if (!rec?.lastSyncedAt || now - rec.lastSyncedAt < STUCK_TRANSCRIPT_REPORT_MS) continue;
+    const sessionId = path.basename(file, ".jsonl");
+    const failure = failures.get(sessionId);
+    const why = failure ? `last failure ${new Date(failure.at).toISOString()}: ${failure.reason}` : "no pass failure recorded";
+    lines.push({
+      sessionId,
+      message: `Sync stuck: session ${sessionId} unsynced since ${new Date(rec.lastSyncedAt).toISOString()} at byte ${rec.lastSyncedPosition}; ${why}`,
+    });
+    if (lines.length >= STUCK_TRANSCRIPT_REPORT_MAX) break;
+  }
+  return lines;
 }
 
 function startReconciliation(
@@ -30539,6 +30647,15 @@ async function main(): Promise<void> {
     return file?.agentType === "claude" ? file.path : undefined;
   }
 
+  /** A subagent's transcript: beside its parent's under <parent>/subagents/,
+   *  else wherever the index has it (a workflow's agents sit a level deeper). */
+  function subagentTranscriptFor(parentSessionId: string, subagentSessionId: string): string | undefined {
+    const parent = claudeTranscriptFor(parentSessionId);
+    const direct = parent && path.join(path.dirname(parent), parentSessionId, "subagents", `${subagentSessionId}.jsonl`);
+    if (direct && fs.existsSync(direct)) return direct;
+    return claudeTranscriptFor(subagentSessionId);
+  }
+
   // Returns true when the status was handed to the async idle hop; the hop's
   // re-entry persists it, so a caller must not persist meanwhile (that wrote
   // the previous record under the new hook, one stale write per settle).
@@ -30548,14 +30665,14 @@ async function main(): Promise<void> {
   function openPermissionRecord(
     convId: string,
     sessionId: string,
-    prompt: { tool_name: string; arguments_preview: string; suggestions?: unknown[] },
+    prompt: { tool_name: string; arguments_preview: string; glance?: string; suggestions?: unknown[]; source?: PermissionSource },
   ): { id: Promise<string | null>; decision: Promise<PermissionDecision | null> } {
     permissionRecordPending.add(sessionId);
     syncService.createSessionNotification({
       conversation_id: convId,
       type: "permission_request",
       title: "codecast - Permission needed",
-      message: truncateForNotification(`${prompt.tool_name}: ${prompt.arguments_preview}`, 150),
+      message: truncateForNotification(`${prompt.tool_name}: ${prompt.glance ?? glanceCommand(prompt.arguments_preview)}`, 150),
     }).catch(() => {});
     let setId!: (id: string | null) => void;
     const id = new Promise<string | null>((r) => { setId = r; });
@@ -30901,6 +31018,19 @@ async function main(): Promise<void> {
     return claudeTranscriptFor(sessionId);
   }
 
+  // What a Bash call's rms would delete, so the card can say it. The read is
+  // capped (removalPreview.ts) and a failure only leaves the card without it.
+  function removalsFor(input: PermissionHookInput): { removals?: RemovalPreview[] } {
+    if (input.toolName !== "Bash" || !input.command || !input.cwd) return {};
+    try {
+      const removals = describeRemovals(input.command, input.cwd);
+      return removals.length ? { removals } : {};
+    } catch (err) {
+      log(`[PERMISSION] removal preview failed: ${err instanceof Error ? err.message : String(err)}`);
+      return {};
+    }
+  }
+
   // A PermissionRequest hook waiting for the web (permissionHookWait.ts). Its
   // status goes through the same sink a status post would, so the session
   // reads as blocked at once; the card it opens is the one the hook answers.
@@ -30918,11 +31048,28 @@ async function main(): Promise<void> {
     };
     const convId = conversationCache[sessionId];
     const answerable = !!convId && !PERMISSION_CARD_SKIP_TOOLS.has(toolName);
+    // A subagent's call sits in its own transcript (subagents/agent-<id>.jsonl),
+    // synced as its own conversation: the card links there, and the watch
+    // below reads that file, since the parent's only shows the Task call.
+    const subagentSession = input.agentId ? `agent-${input.agentId}` : undefined;
+    const subagentConv = subagentSession ? conversationCache[subagentSession] : undefined;
     // Bind to a card a Notification already opened for this prompt, unless a
     // hook holds that one (a second prompt in parallel gets its own card).
     const opened = answerable && permissionRecordPending.has(sessionId) ? permissionRecordIds.get(sessionId) : undefined;
     const record = answerable && !permissionRecordPending.has(sessionId)
-      ? openPermissionRecord(convId, sessionId, { tool_name: toolName, arguments_preview: preview, suggestions: input.suggestions })
+      ? openPermissionRecord(convId, sessionId, {
+          tool_name: toolName,
+          arguments_preview: preview,
+          glance: input.glance,
+          suggestions: input.suggestions,
+          source: {
+            ...(input.subagentType && { subagent_type: input.subagentType }),
+            ...(subagentConv && { subagent_conversation_id: subagentConv }),
+            ...(input.permissionMode === "bypassPermissions" && { safety_check: true }),
+            ...(input.intent && { intent: input.intent }),
+            ...removalsFor(input),
+          },
+        })
       : null;
     if (record) permissionJustResolved.add(sessionId);
     hookStatusGate.deliver(sessionId, normalizeHookStatus({
@@ -30937,7 +31084,30 @@ async function main(): Promise<void> {
     if (!idPromise) { reply(null); return; }
 
     const wait = permissionHookWaiters.wait(sessionId, input.suggestions);
-    res.on("close", wait.cancel);
+    // The prompt can end without the web: answered in the terminal, timed out
+    // (the dangerous rm dialog denies itself after 120s), interrupted. The
+    // status transition usually cancels the card, but it never fires when this
+    // prompt's permission_blocked was refused (launch fence, bypass-mode
+    // phantom), and the card then waits for a press that can only type a stray
+    // key into the pane. permissionPromptWatch.ts has the rest.
+    const abandon = (why: string) => {
+      void idPromise.then((id) => (id ? syncService.cancelPermissionRequest(id) : false))
+        .then((ok) => { if (ok) log(`[PERMISSION] cancelled ${toolName} card for ${shortId(sessionId)}: ${why}`); })
+        .catch((err) => log(`Failed to cancel abandoned permission card: ${err instanceof Error ? err.message : String(err)}`));
+    };
+    const transcript = subagentSession ? subagentTranscriptFor(sessionId, subagentSession) : claudeTranscriptFor(sessionId);
+    const stopWatch = transcript
+      ? watchPromptSettled({
+          readPending: () => extractPendingToolUseFromTranscriptAsync(transcript),
+          toolName,
+          onSettled: () => { wait.cancel(); abandon("its call settled in the transcript"); },
+        })
+      : () => {};
+    res.on("close", () => {
+      stopWatch();
+      wait.cancel();
+      if (!res.writableEnded) abandon("its hook was dropped unanswered");
+    });
     void idPromise.then((id) => {
       if (!id || (!record && permissionHookWaiters.holds(id))) { wait.cancel(); return; }
       wait.bind(id);

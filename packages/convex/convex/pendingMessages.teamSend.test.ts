@@ -6,6 +6,7 @@ import {
   markPendingDelivered,
   updatePendingMessageStatusForDaemon,
   healAndNotifyStuckMessages,
+  planStuckMessageIds,
   planStuckSendNotify,
   STUCK_SEND_NOTIFY_DEADLINE_MS,
   DEAD_SESSION_REVIVE_WINDOW_MS,
@@ -806,5 +807,35 @@ describe("stale target — the send that would rebuild a whole context", () => {
       performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "done", wake: false }),
     ).rejects.toThrow(/was killed/);
     expect(tables.pending_messages).toHaveLength(0);
+  });
+});
+
+describe("stuck message pass split into plan and apply", () => {
+  test("the plan writes nothing and names the row; applying just that row revives it", async () => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ now });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "The release is ready" });
+    const msg = tables.pending_messages[0];
+    await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob");
+    await updatePendingMessageStatusForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", { status: "injected" });
+    await db.patch(msg._id, { created_at: now - 6 * 60 * 60_000, retry_count: 6 });
+    await db.patch("msBob", { agent_status: "idle" });
+    const before = JSON.stringify(tables.pending_messages);
+
+    const planned = await planStuckMessageIds(ctx as any, now);
+    expect(planned).toEqual([msg._id]);
+    expect(JSON.stringify(tables.pending_messages)).toBe(before);
+
+    expect(await healAndNotifyStuckMessages(ctx as any, now, planned)).toMatchObject({ revived: 1, waiting: 0 });
+    expect(await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob")).toHaveLength(1);
+  });
+
+  test("a row waiting on a busy session is not planned", async () => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ now });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", body: "later" });
+    await db.patch(tables.pending_messages[0]._id, { status: "undeliverable", retry_count: 10, created_at: now - 600000 });
+    await db.patch("msBob", { agent_status: "working", agent_status_updated_at: now - 60000 });
+    expect(await planStuckMessageIds(ctx as any, now)).toEqual([]);
   });
 });

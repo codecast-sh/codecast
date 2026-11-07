@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { anthropicBody, callModel, CHEAP_MODEL, type SurfaceRequest } from "./anthropic";
+import { NO_TEAM_CONTENT_GATE } from "./vendorGuard";
 
 // Bodies recorded from callModel before it built them through anthropicBody.
 // Byte identity with these strings is the contract: the evals replay
 // anthropicBody, so any drift here means the evals measure a prompt prod
 // never sends.
-const CASES: Array<{ args: Parameters<typeof callModel>[0]; request: SurfaceRequest; golden: string }> = [
+const CASES: Array<{ args: Omit<Parameters<typeof callModel>[0], "gate">; request: SurfaceRequest; golden: string }> = [
   {
     args: { prompt: 'Name this session.\nLine two with "quotes".', max_tokens: 200, label: "a" },
     request: { model: CHEAP_MODEL, prompt: 'Name this session.\nLine two with "quotes".', max_tokens: 200 },
@@ -55,7 +56,7 @@ describe("anthropicBody", () => {
 
   for (const [i, c] of CASES.entries()) {
     test(`case ${i + 1}: callModel still sends the recorded body`, async () => {
-      expect(await callModel(c.args)).not.toBeNull();
+      expect(await callModel({ ...c.args, gate: NO_TEAM_CONTENT_GATE })).not.toBeNull();
       expect(sent).toEqual([c.golden]);
     });
 

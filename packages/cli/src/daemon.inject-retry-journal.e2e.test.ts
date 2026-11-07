@@ -247,3 +247,34 @@ test.skipIf(!Bun.which("tmux")).each(["submit", "verified"] as const)("an idle p
     rmSync(cwd, { recursive: true, force: true });
   }
 }, 120_000);
+
+// 2026-11-06, jx751p3: on a starved client the message rendered in the
+// composer and every Enter was lost. The submit window closed, the delivery
+// reported success with the text still at the prompt, nothing retried it, and
+// its receipt refused the pane to every later message for 12 hours.
+test.skipIf(!Bun.which("tmux"))("a payload left in the composer after the submit window stays pending, and its retry submits it", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "codecast-deaf-enter-"));
+  const statePath = join(cwd, "state.json");
+  const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
+  const pane = spawnHarness({ cwd, jsonlPath: statePath,
+    command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude-deaf"].map(shellQuote).join(" ")}` });
+  const target = `${pane.tmuxSession}:0.0`;
+  const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
+  const payload = "deaf-enter check: carry on with the plan";
+  const delivery = { messageId: "unsubmitted", conversationId: "fixture" };
+  const state = () => JSON.parse(readFileSync(statePath, "utf8"));
+  try {
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    await expect(injectViaTmux(target, payload, "claude", { delivery, journal })).rejects.toThrow("still in the composer");
+    expect(state().queued).toEqual(["Existing worker report."]);
+    await expect(injectViaTmux(target, "next message", "claude", { delivery: { ...delivery, messageId: "next" }, journal, gateBudgetMs: 500 })).rejects.toThrow("earlier message");
+    writeFileSync(`${statePath}.hear`, "");
+    await injectViaTmux(target, payload, "claude", { delivery, journal });
+    expect(state().queued).toEqual(["Existing worker report.", payload]);
+    expect(journal.get(delivery.messageId)?.phase).toBe("verified");
+  } finally {
+    journal.close();
+    pane.tearDown();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 120_000);

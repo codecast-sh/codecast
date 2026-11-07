@@ -1,0 +1,83 @@
+/* The setup flow's lists take the team's accent (--team-flow-accent, set by
+   TeamFlowShell from the crest color), so a switched-on feature and a chosen
+   agent feature read as the team's own. */
+
+/* A feature card wears its own color (--ob-f, set per card in FeatureStep):
+   full when on, a faint outline when off, so the grid reads as what the team
+   has at a glance. */
+.ob-card {
+  border-color: color-mix(in srgb, var(--sol-border) 70%, transparent);
+  background: transparent;
+  transition: border-color 200ms ease, background-color 200ms ease, box-shadow 200ms ease;
+}
+.ob-card[data-on] {
+  border-color: color-mix(in srgb, var(--ob-f) 40%, var(--sol-border));
+  background: color-mix(in srgb, var(--ob-f) 6%, var(--sol-bg));
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--ob-f) 12%, transparent);
+}
+.ob-card:not([data-on]) p {
+  opacity: 0.7;
+}
+.ob-card.cursor-pointer:hover {
+  border-color: color-mix(in srgb, var(--ob-f) 55%, var(--sol-border));
+}
+.ob-card-icon {
+  color: color-mix(in srgb, var(--ob-f) 60%, var(--sol-text-dim));
+  background: color-mix(in srgb, var(--ob-f) 8%, var(--sol-bg-alt));
+  transition: color 200ms ease, background-color 200ms ease;
+}
+.ob-card[data-on] .ob-card-icon {
+  color: color-mix(in srgb, var(--ob-f) 85%, var(--sol-text));
+  background: color-mix(in srgb, var(--ob-f) 18%, transparent);
+}
+.ob-card [role="switch"][aria-checked="true"] {
+  background-color: var(--ob-f);
+}
+/* Off is a neutral grey, never a tint of the theme or the feature. */
+.setup-screen [role="switch"][aria-checked="false"] {
+  background-color: rgb(128 128 128 / 0.38);
+}
+.ob-card-always {
+  color: color-mix(in srgb, var(--ob-f) 85%, var(--sol-text));
+}
+
+/* How many are on, in the team's color. */
+.ob-meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--sol-bg-alt);
+  overflow: hidden;
+}
+.ob-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--team-flow-accent, var(--sol-cyan));
+  transition: width 320ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.ob-all-on {
+  color: var(--team-flow-accent, var(--sol-cyan));
+  background: color-mix(in srgb, var(--team-flow-accent, var(--sol-cyan)) 12%, transparent);
+  transition: background-color 160ms ease;
+}
+.ob-all-on:hover {
+  background: color-mix(in srgb, var(--team-flow-accent, var(--sol-cyan)) 20%, transparent);
+}
+
+.ob-chip {
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.ob-chip-on {
+  color: var(--sol-text);
+  border-color: color-mix(in srgb, var(--team-flow-accent, var(--sol-cyan)) 45%, transparent);
+  background: color-mix(in srgb, var(--team-flow-accent, var(--sol-cyan)) 12%, transparent);
+}
+.ob-chip:focus-visible {
+  outline: 2px solid var(--team-flow-accent, var(--sol-cyan));
+  outline-offset: 1px;
+}
+
+/* Corner cards wait while a setup page is up (SetupScreen). */
+.setup-screen [data-sonner-toast][data-styled="false"] {
+  display: none;
+}

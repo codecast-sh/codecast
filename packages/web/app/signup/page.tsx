@@ -16,7 +16,8 @@ function SignUpForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to");
-  const redirectTo = returnTo ? decodeURIComponent(returnTo) : "/inbox";
+  // A new account with nowhere else to go starts in the setup flow.
+  const redirectTo = returnTo ? decodeURIComponent(returnTo) : "/start";
 
   const { email, setEmail, password, setPassword, confirmPassword, setConfirmPassword, error, loading, submit: handleSubmit, pendingVerification, verified, startOver } = useEmailAuth("signUp", redirectTo);
 

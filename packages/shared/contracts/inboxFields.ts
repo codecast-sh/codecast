@@ -70,7 +70,7 @@ export const INBOX_ROW_FIELDS = [
   "_id", "session_id", "user_id", "team_id", "status", "is_private", "team_visibility",
   "title", "subtitle", "started_at", "history_import", "agent_type", "model", "effort", "cc_account", "transcript_revision",
   "project_path", "git_root", "git_branch", "git_remote_url", "worktree_name", "worktree_branch",
-  "parent_conversation_id", "parent_message_uuid", "spawned_by_conversation_id", "forked_from",
+  "parent_conversation_id", "parent_message_uuid", "spawned_by_conversation_id", "forked_from", "project_id",
   "is_subagent", "is_workflow_sub", "is_workflow_primary", "agent_team_name", "agent_name",
   "handed_off_from_conversation_id", "handed_off_from_details", "handed_off_to_conversation_id", "handed_off_to_details",
   "implementation_session",

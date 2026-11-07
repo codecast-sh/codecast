@@ -14,7 +14,7 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
-import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useInboxStore } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useOwnedDecisionCount } from "../hooks/useDecisionRows";
@@ -24,6 +24,8 @@ import { ChannelContextMenu } from "./chat/ChannelMenu";
 import { useChannelMenu } from "../hooks/useChannelMenu";
 import { channelDisplayName, dmCounterpart, memberName } from "../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
+import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { conversationProjectRoot, foldCheckoutsByRepository, knownCheckoutRoots, type ProjectTally } from "@codecast/convex/convex/projectPaths";
 import { CommentAvatar } from "./comments/CommentAvatar";
 import { readPins, isPinned, isThreadsPin, pinApp, togglePin, type SidebarPin } from "../lib/sidebarPins";
 import { useConvexSync } from "../hooks/useConvexSync";
@@ -312,7 +314,7 @@ function PinnedRail({
 // and streamed token of every live session, and each tick woke the whole
 // Sidebar (measured 13 renders / 25s at idle). Recency order in this list only
 // needs minute resolution.
-const sidebarSessionSig = (r: any) => `${r.git_root ?? ""}|${r.project_path ?? ""}|${Math.floor((r.updated_at ?? 0) / 60_000)}`;
+const sidebarSessionSig = (r: any) => `${r.git_root ?? ""}|${r.project_path ?? ""}|${r.git_remote_url ?? ""}|${Math.floor((r.updated_at ?? 0) / 60_000)}`;
 const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
 export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope, peek = false }: SidebarProps) {
@@ -363,16 +365,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const teamsQuery = useSyncTeams();
   const teams = useInboxStore((s) => s.teams);
   const activeTeam = (teamsQuery ?? teams)?.find((t: any) => t?._id === activeTeamId);
-  // A badge, not the surface: a server failure (e.g. the backend's syscall
-  // budget under load) must degrade the count, never unmount the Sidebar.
-  // The query feeds the store (below); the badge renders from the store.
-  const { data: teamUnreadCountQuery } = useQueryNoThrow(
-    api.conversations.getTeamUnreadCount,
-    // isConvexId: a just-created team holds an optimistic stub id until the
-    // server echoes, and a stub is not an Id<"teams">.
-    activeTeamId && isConvexId(String(activeTeamId)) ? { teamId: activeTeamId } : "skip"
-  );
-  const teamUnreadCount = useInboxStore((s) => s.teamUnreadCount);
   const createModal = useInboxStore((s) => s.createModal);
   const createModalDefaults = useInboxStore((s) => s.createModalDefaults);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
@@ -566,7 +558,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // Pinned projects read their title from the store (PinnedRail).
   useSyncProjects();
 
-  useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
   useConvexSync(favoritesQuery, useCallback((d: any) => useInboxStore.getState().syncTable("favorites", d), []));
   // Local-first: the workspace/directory rail derives from the viewer's own
   // sessions already in the store (the inbox sync + persisted cache), not a
@@ -610,64 +601,34 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     [conversations]
   );
 
+  // One entry per repository, the same folding the new-session picker gets from
+  // the server (projectPaths.ts), so all worktrees of a repo are one workspace
+  // that opens its main checkout.
   const computedDirectories = useMemo(() => {
-    const stripWorktreeSuffix = (p: string): string => {
-      const patterns = [
-        /\/\.conductor\/[^/]+$/,
-        /\/\.codecast\/worktrees\/[^/]+$/,
-      ];
-      for (const re of patterns) {
-        const stripped = p.replace(re, '');
-        if (stripped !== p) return stripped;
-      }
-      return p;
-    };
-
-    const normalizeToRoot = (path: string): string | null => {
-      const cleaned = stripWorktreeSuffix(path);
-      if (/^\/(tmp|var|private\/tmp)\//.test(cleaned)) return null;
-      const parts = cleaned.split('/');
-      const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
-      if (srcIndex >= 0 && srcIndex < parts.length - 1) {
-        return parts.slice(0, srcIndex + 2).join('/');
-      }
-      return cleaned;
-    };
-
-    const deriveGitRoot = (c: ConversationItem): string | null => {
-      const rawPath = c.git_root || c.project_path;
-      if (!rawPath) return null;
-      return normalizeToRoot(rawPath);
-    };
-
-    const dirStats = new Map<string, { updatedAt: number; count: number }>();
+    const checkouts = knownCheckoutRoots(filteredConversations);
+    const tallies = new Map<string, ProjectTally>();
     for (const c of filteredConversations) {
-      const dir = deriveGitRoot(c);
-      if (dir) {
-        const existing = dirStats.get(dir);
-        if (existing) {
-          existing.count++;
-          if (c.updated_at > existing.updatedAt) existing.updatedAt = c.updated_at;
-        } else {
-          dirStats.set(dir, { updatedAt: c.updated_at, count: 1 });
-        }
-      }
-    }
-    const byName = new Map<string, { path: string; updatedAt: number; count: number }>();
-    for (const [path, stats] of dirStats) {
-      const name = path.split('/').filter(Boolean).pop() || path;
-      const existing = byName.get(name);
-      const preferSrc = path.includes('/src/') && (!existing || !existing.path.includes('/src/'));
-      const existingIsSrc = existing?.path.includes('/src/') && !path.includes('/src/');
-      if (!existing || preferSrc || (stats.updatedAt > (existing?.updatedAt ?? 0) && !existingIsSrc)) {
-        byName.set(name, { path, updatedAt: Math.max(stats.updatedAt, existing?.updatedAt ?? 0), count: stats.count + (existing?.count ?? 0) });
+      const path = conversationProjectRoot(c, checkouts);
+      if (!path) continue;
+      const tally = tallies.get(path);
+      if (tally) {
+        tally.count++;
+        tally.lastActive = Math.max(tally.lastActive, c.updated_at);
+        tally.repository ??= repositoryKeyOfRemote(c.git_remote_url) ?? undefined;
       } else {
-        byName.set(name, { ...existing!, updatedAt: Math.max(stats.updatedAt, existing.updatedAt), count: existing.count + stats.count });
+        tallies.set(path, { path, count: 1, lastActive: c.updated_at, repository: repositoryKeyOfRemote(c.git_remote_url) ?? undefined });
       }
     }
-    return Array.from(byName.values())
-      .sort((a, b) => b.count - a.count || b.updatedAt - a.updatedAt)
-      .map(v => v.path);
+    // The fold keeps one entry per home directory; the same repo on two
+    // machines is still one workspace here, under its busiest path.
+    const seen = new Set<string>();
+    return foldCheckoutsByRepository(Array.from(tallies.values()))
+      .sort((a, b) => b.count - a.count || b.lastActive - a.lastActive)
+      .map((p) => p.path)
+      .filter((path) => {
+        const name = path.split("/").pop()!;
+        return !seen.has(name) && !!seen.add(name);
+      });
   }, [filteredConversations]);
 
   const pinnedRail = (
@@ -697,7 +658,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               onMobileClose={onMobileClose}
             />
           }
-          feed={activeTeam && <FeedNavRowView team={activeTeam} isActive={!!isTeamActivity} isNarrow={isNarrow} unread={teamUnreadCount} />}
+          feed={activeTeam && <FeedNavRowView team={activeTeam} isActive={!!isTeamActivity} isNarrow={isNarrow} />}
           questions={<>
             <QuestionsNavRow
               isActive={pathname === "/decisions" || (pathname?.startsWith("/decisions/") ?? false)}

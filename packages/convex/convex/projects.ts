@@ -271,6 +271,33 @@ export const webGetByIds = query({
   },
 });
 
+/** Inserts a project row: its short id, owner and stamps. Every create path
+ *  (the projects page, a new session started as a project) goes through
+ *  here; the caller has already checked the team. */
+export async function insertProject(
+  ctx: { db: any },
+  userId: Id<"users">,
+  fields: { title: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number; labels?: string[]; team_id?: Id<"teams">; client_key?: string },
+): Promise<Id<"projects">> {
+  const now = Date.now();
+  const doc: any = {
+    user_id: userId,
+    short_id: await mintProjectShortId(ctx as any, now),
+    title: fields.title,
+    description: fields.description,
+    status: fields.status || "active",
+    color: fields.color,
+    icon: fields.icon,
+    target_date: fields.target_date,
+    labels: fields.labels,
+    created_at: now,
+    updated_at: now,
+  };
+  if (fields.team_id) doc.team_id = fields.team_id;
+  if (fields.client_key) doc.client_key = fields.client_key;
+  return await ctx.db.insert("projects", doc);
+}
+
 export const webCreate = mutation({
   args: {
     title: v.string(),
@@ -292,9 +319,6 @@ export const webCreate = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    const now = Date.now();
-    const short_id = await mintProjectShortId(ctx, now);
-
     let team_id: Id<"teams"> | undefined;
     if (args.workspace === "team") {
       if (!args.team_id) throw new Error("team_id is required for the team workspace");
@@ -309,26 +333,12 @@ export const webCreate = mutation({
     }
     if (team_id) await requireTeamMembership(ctx, userId, team_id);
 
-    const doc: any = {
-      user_id: userId,
-      short_id,
-      title: args.title,
-      description: args.description,
-      status: (args.status as any) || "active",
-      color: args.color,
-      icon: args.icon,
-      target_date: args.target_date,
-      labels: args.labels,
-      created_at: now,
-      updated_at: now,
-    };
-    if (team_id) doc.team_id = team_id;
-    if (args.client_key) doc.client_key = args.client_key;
-
-    const id = await ctx.db.insert("projects", doc);
+    const { workspace: _w, team_id: _t, ...fields } = args;
+    const id = await insertProject(ctx, userId, { ...fields, ...(team_id ? { team_id } : {}) });
 
     // Row rides back with the receipt: the client seeds its store before navigating.
-    return { id, short_id, row: await ctx.db.get(id) };
+    const row = await ctx.db.get(id);
+    return { id, short_id: row?.short_id, row };
   },
 });
 

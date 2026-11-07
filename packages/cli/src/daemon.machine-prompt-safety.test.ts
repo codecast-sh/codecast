@@ -23,7 +23,7 @@ import { SwapHeldError } from "./herdTake";
 import { TerminalHoldError } from "./terminalHold";
 import { ghosttyPane } from "./ghostty";
 import { unreachableTerminalOf } from "../../shared/contracts/deliveryHold";
-import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
+import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
 import { planHandoffTarget } from "./planHandoff";
@@ -190,6 +190,7 @@ function fixture(transport = "tmux", cached = true) {
     ensureTmuxPaneWide: async () => {}, glyphlessPromptPattern: () => null,
     classifyGlyphlessClientPaneState: fail("glyphless classification"), paneHasNoAgent: async () => false,
     acceptTrustPrompt: fail("trust input"), answerResumeCwdPicker: fail("cwd input"), DEAD_PANE_ERROR: "dead",
+    CLAUDE_OVERPAINTED_RULE,
     CLAUDE_TURN_STATUS_LINE,
     log: () => {}, logDelivery: () => {}, logConvexFailure: fail("convex failure"),
     // Free variables of the lifted delivery path. The real helper where it is

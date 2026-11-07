@@ -26,7 +26,7 @@ export const mediaAblation = internalAction({
           if (!prompt.includes(from)) throw new Error(`arm ${arm.name}: text not found: ${from.slice(0, 60)}`);
           prompt = prompt.replace(from, to);
         }
-        const { reply, usage } = await callModelMetered({ ...base, prompt, images: arm.images ? storyImages(dump.input) : undefined, label: "Changes ablation", timeout_ms: 180_000 });
+        const { reply, usage } = await callModelMetered({ ...base, prompt, images: arm.images ? storyImages(dump.input) : undefined, label: "Changes ablation", timeout_ms: 180_000, gate: { ctx, scope: { workspace: dump.team_id ? `team:${dump.team_id}` : null } } });
         const prose = reply ? parseStoryReply(reply.text, dump.input, { kind: "feature", importance: 2 }) : null;
         const body = prose?.body ?? "";
         out.push({

@@ -423,6 +423,29 @@ const capsOk = (x: any): boolean => !!x && typeof x === "object" && !Array.isArr
   ["hands_per_day", "wakes_per_day", "tokens_per_day"].some((k) => typeof x[k] === "number" || x[k] === null);
 
 /** Why a change is not one, or null when it is. One message, the first fault. */
+const ORG_AUTHORITY_LIMIT_KEYS = ["usd_per_month", "usd_per_day", "per_day"] as const;
+// The one check of a list of authority grants, shared by the proposal card,
+// the CLI (before it posts) and the server's set-authority core.
+export function orgAuthorityGrantsError(grants: any): string | null {
+  if (!Array.isArray(grants) || grants.length > 50) return "authority is a list of at most fifty grants";
+  const ids = new Set<string>();
+  for (const g of grants) {
+    if (!g || typeof g !== "object" || Array.isArray(g)) return "each authority grant is an object";
+    if (!nonEmpty(g.id) || !SLUG_RE.test(g.id) || ids.has(g.id)) return `authority grant id ${JSON.stringify(g.id)} is not a unique slug (a-z, 0-9 and -)`;
+    ids.add(g.id);
+    if (!(ORG_AUTHORITY_KINDS as readonly string[]).includes(g.kind)) return `authority ${g.id}: kind is one of ${ORG_AUTHORITY_KINDS.join(", ")}`;
+    if (!nonEmpty(g.label) || !optString(g.scope)) return `authority ${g.id}: needs a label; scope is text`;
+    if (g.limit !== undefined) {
+      const keys = g.limit && typeof g.limit === "object" && !Array.isArray(g.limit) ? Object.keys(g.limit) : [];
+      if (!keys.length || keys.some((k) => !(ORG_AUTHORITY_LIMIT_KEYS as readonly string[]).includes(k) || typeof g.limit[k] !== "number" || !(g.limit[k] >= 0))) {
+        return `authority ${g.id}: limit is an object of non-negative numbers keyed ${ORG_AUTHORITY_LIMIT_KEYS.join(", ")}, e.g. {"usd_per_month": 5000}; got ${JSON.stringify(g.limit)}`;
+      }
+    }
+    if (g.expires !== undefined && !(nonEmpty(g.expires) && EVERY_RE.test(g.expires))) return `authority ${g.id}: expires is a duration like 90d`;
+  }
+  return null;
+}
+
 export function orgChangeError(raw: any): string | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "a change is an object with a kind";
   if (!ORG_CHANGE_KINDS.includes(raw.kind)) return `unknown change kind ${JSON.stringify(raw.kind)}; one of ${ORG_CHANGE_KINDS.join(", ")}`;
@@ -485,22 +508,8 @@ export function orgChangeError(raw: any): string | null {
     }
     case "authority": {
       const h = handle(); if (h) return h;
-      if (!Array.isArray(raw.authority) || !raw.authority.length || raw.authority.length > 50) return "authority is a list of one to fifty grants";
-      const ids = new Set<string>();
-      for (const g of raw.authority) {
-        if (!g || typeof g !== "object") return "each authority grant is an object";
-        if (!nonEmpty(g.id) || !SLUG_RE.test(g.id) || ids.has(g.id)) return "each authority grant has a unique slug id";
-        ids.add(g.id);
-        if (!(ORG_AUTHORITY_KINDS as readonly string[]).includes(g.kind)) return `authority kind is one of ${ORG_AUTHORITY_KINDS.join(", ")}`;
-        if (!nonEmpty(g.label) || !optString(g.scope)) return "each authority grant has a label; scope is text";
-        if (g.limit !== undefined) {
-          if (!g.limit || typeof g.limit !== "object" || Array.isArray(g.limit)) return "authority limit is an object";
-          const keys = Object.keys(g.limit);
-          if (!keys.length || keys.some((k) => !["usd_per_month", "usd_per_day", "per_day"].includes(k) || typeof g.limit[k] !== "number" || !(g.limit[k] >= 0))) return "authority limit names usd_per_month, usd_per_day or per_day as non-negative numbers";
-        }
-        if (g.expires !== undefined && !(nonEmpty(g.expires) && EVERY_RE.test(g.expires))) return "authority expires is a duration like 90d";
-      }
-      return null;
+      if (!Array.isArray(raw.authority) || !raw.authority.length) return "authority is a list of one to fifty grants";
+      return orgAuthorityGrantsError(raw.authority);
     }
     case "hire": {
       const h = handle(); if (h) return h;

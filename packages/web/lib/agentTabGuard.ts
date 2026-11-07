@@ -4,8 +4,9 @@
 // theirs: the controls that open an Ask first secret, approve its read, or
 // take the guard off stay disabled here, saying who does it.
 
+import { approvesPersonsAct } from "@codecast/shared/contracts/commandRun";
 import { createContext, useCallback, useContext, useSyncExternalStore } from "react";
-import { approvesSecretRead } from "@codecast/shared/contracts/secrets";
+
 import { AGENT_TAB_EVENT, isAgentDrivenTab } from "./desktopHandoff";
 
 export const PERSON_ONLY = {
@@ -40,7 +41,7 @@ export function useAgentDrivenTab(): boolean {
 
 /** Why option `index` of `decision` is held in an agent's tab, else undefined. */
 export function heldOption(decision: { category?: string; options: readonly { label: string }[] }, index: number, agentTab: boolean): string | undefined {
-  return agentTab && approvesSecretRead(decision, index) ? PERSON_ONLY.approve : undefined;
+  return agentTab && approvesPersonsAct(decision, index) ? PERSON_ONLY.approve : undefined;
 }
 
 /** heldOption for this tab, as a per-position reader for an option list. */

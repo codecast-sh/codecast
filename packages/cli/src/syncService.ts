@@ -1,4 +1,5 @@
 import { ConvexHttpClient, ConvexClient } from "convex/browser";
+import type { PermissionSource } from "./permissionHandler.js";
 import { recoveringWebSocket } from "@codecast/shared/network";
 import { readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
@@ -1665,15 +1666,25 @@ export class SyncService {
   // silently stranded conversations on their spawn-time stub id, so every
   // session-bound `cast` write from the agent failed "Conversation not found"
   // while message sync (keyed by conversation _id) looked perfectly healthy.
-  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string): Promise<void> {
-    await this.mutate("conversations:updateSessionId" as any, {
+  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string, notARepo?: boolean): Promise<void> {
+    const base = {
       conversation_id: conversationId,
       session_id: sessionId,
       project_path: projectPath,
       git_root: gitRoot,
       git_remote_url: gitRemoteUrl,
       api_token: this.apiToken,
-    });
+    };
+    const bind = (args: Record<string, unknown>) => this.mutate("conversations:updateSessionId" as any, args);
+    if (!notARepo) return void (await bind(base));
+    try {
+      await bind({ ...base, not_a_repo: true });
+    } catch (err) {
+      // A server older than this CLI refuses the field and the whole call; the
+      // binding matters more than clearing a guessed git_root.
+      if (!argumentValidationProblem(err)) throw err;
+      await bind(base);
+    }
   }
 
   /** Owner device of a conversation (single-owner guard). null if unknown/unowned. */
@@ -2127,6 +2138,11 @@ export class SyncService {
     await this.mutate("subagentFleet:reportMergeBack", { api_token: this.apiToken, ...args });
   }
 
+  async reportCommandRun(args: { decision_id: string; state: "running" | "done" | "failed"; exit_code?: number; output?: string }): Promise<void> {
+    if (!this.apiToken) return;
+    await this.mutate("sessionDecisions:reportCommandRun" as any, { api_token: this.apiToken, ...args });
+  }
+
   async setSessionError(conversationId: string, error?: string, opts: { force?: boolean } = {}): Promise<void> {
     if (!this.apiToken) return;
     try {
@@ -2358,7 +2374,7 @@ export class SyncService {
     tool_name: string;
     arguments_preview: string;
     suggestions?: unknown[];
-  }): Promise<string> {
+  } & PermissionSource): Promise<string> {
     return this.guarded(async () => {
       const base = {
         conversation_id: params.conversation_id,
@@ -2368,12 +2384,20 @@ export class SyncService {
         api_token: this.apiToken,
       };
       const create = (args: Record<string, unknown>) => this.mutate("permissions:createPermissionRequest" as any, args);
-      if (!params.suggestions?.length) return (await create(base)) as string;
+      const extras = {
+        ...(params.suggestions?.length && { suggestions: params.suggestions }),
+        ...(params.subagent_type && { subagent_type: params.subagent_type }),
+        ...(params.subagent_conversation_id && { subagent_conversation_id: params.subagent_conversation_id }),
+        ...(params.safety_check && { safety_check: true }),
+        ...(params.intent && { intent: params.intent }),
+        ...(params.removals?.length && { removals: params.removals }),
+      };
+      if (Object.keys(extras).length === 0) return (await create(base)) as string;
       try {
-        return (await create({ ...base, suggestions: params.suggestions })) as string;
+        return (await create({ ...base, ...extras })) as string;
       } catch (err) {
-        // A server older than this CLI refuses the field and the whole call;
-        // the card still works without the "Always allow" rules.
+        // A server older than this CLI refuses the fields and the whole call;
+        // the card still works without the "Always allow" rules and the source.
         if (!argumentValidationProblem(err)) throw err;
         return (await create(base)) as string;
       }

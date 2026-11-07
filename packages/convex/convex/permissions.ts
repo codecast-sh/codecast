@@ -1,3 +1,4 @@
+import { permissionRemovalValidator } from "./lib/permissionRemoval";
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -62,6 +63,11 @@ export const createPermissionRequest = mutation({
     tool_name: v.string(),
     arguments_preview: v.string(),
     suggestions: v.optional(v.array(v.any())),
+    subagent_type: v.optional(v.string()),
+    subagent_conversation_id: v.optional(v.id("conversations")),
+    safety_check: v.optional(v.boolean()),
+    intent: v.optional(v.string()),
+    removals: v.optional(v.array(permissionRemovalValidator)),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -106,6 +112,13 @@ export const createPermissionRequest = mutation({
       created_at: now,
       owner_user_id: conversation.user_id,
       ...boundedSuggestions(args.suggestions),
+      ...(args.subagent_type && { subagent_type: args.subagent_type.slice(0, 80) }),
+      ...(args.subagent_conversation_id && { subagent_conversation_id: args.subagent_conversation_id }),
+      ...(args.safety_check && { safety_check: true }),
+      ...(args.intent && { intent: args.intent.slice(0, 200) }),
+      ...(args.removals?.length && {
+        removals: args.removals.slice(0, 5).map((r) => ({ ...r, target: r.target.slice(0, 300), ...(r.note && { note: r.note.slice(0, 100) }) })),
+      }),
     });
 
     return permissionId;

@@ -659,6 +659,8 @@ http.route({
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
       }
+      // `cast read` and `cast diff`: one audit entry per read of a regulated team's conversation (repeats collapse).
+      await ctx.runMutation(internal.accessLog.recordCliConversation, { api_token, conversation_id: String(conversation_id), action: "open" });
 
       return new Response(JSON.stringify(result), {
         status: 200,
@@ -719,6 +721,10 @@ http.route({
                  result.error === "Conversation not found" ? 404 : 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
+      }
+      // An export is recorded once, at its first page.
+      if (typeof cursor !== "string") {
+        await ctx.runMutation(internal.accessLog.recordCliConversation, { api_token, conversation_id: String(conversation_id), action: "export" });
       }
       return new Response(JSON.stringify(result), {
         status: 200,
@@ -1549,6 +1555,8 @@ http.route({
           to: body.to,
           // LE11: the change card the decision is about.
           card: body.card,
+          // `cast decide --run`: a cast command for a person to run (commandRun.ts).
+          run: typeof body.run === "string" ? body.run : undefined,
           // LM5: the expectations proposal the decision settles.
           proposal: body.proposal,
         });
@@ -4050,6 +4058,10 @@ cliRoute("/cli/projects/comment-update", async (ctx, body) => {
 cliRoute("/cli/projects/timeline", async (ctx, body) => {
   return await ctx.runQuery(api.projectUpdates.timeline, body);
 });
+// A session in a project (session-projects.md): `cast project join`.
+cliRoute("/cli/projects/set-session", async (ctx, body) => {
+  return await ctx.runMutation(api.sessionProjects.setSessionProject, body);
+});
 
 // Initiatives (initiatives-projects-role-page.md I1): `cast initiative`.
 for (const [verb, fn] of [
@@ -4199,6 +4211,9 @@ cliRoute("/cli/flow/live/bar", async (ctx, body) => ctx.runMutation(api.liveFlow
 cliRoute("/cli/line/deploy/stage", async (ctx, body) => ctx.runQuery(api.deploys.stage, body));
 cliRoute("/cli/line/deploy/request", async (ctx, body) => ctx.runMutation(api.deploys.request, body));
 cliRoute("/cli/line/deploy/report", async (ctx, body) => ctx.runMutation(api.deploys.report, body));
+cliRoute("/cli/line/fixloop/record", async (ctx, body) => ctx.runMutation((api as any).landedChanges.record, body));
+cliRoute("/cli/line/fixloop/cursor", async (ctx, body) => ctx.runQuery((api as any).landedChanges.cursor, body));
+cliRoute("/cli/line/fixloop/summary", async (ctx, body) => ctx.runQuery((api as any).landedChanges.summary, body));
 cliRoute("/cli/deploys/get", async (ctx, body) => ctx.runQuery(api.deploys.get, body));
 // Deploy targets (deploys.md DP10 to DP14): the checkout's declared targets, each one's live sha and waiting queue, a deploy of one from codecast, a ship pass.
 cliRoute("/cli/deploys/targets/publish", async (ctx, body) => ctx.runMutation(api.deployTargets.publish, body), { forwardDeviceId: true });
@@ -4581,7 +4596,9 @@ cliRoute("/cli/calls/get", async (ctx, body) => {
 // still recording carry their live frame instead (callRecordings.signForCli).
 cliRoute("/cli/calls/recordings", async (ctx, body) => {
   const res = await ctx.runQuery(internal.callRecordings.cliCallRecordings, { api_token: body.api_token, call: body.call });
-  return res ? await signForCli(res) : null;
+  if (!res) return null;
+  await ctx.runMutation(internal.accessLog.recordCliCallRecording, { api_token: body.api_token, call: String(body.call ?? "") });
+  return await signForCli(res);
 });
 // `cast call snap --share`: store a frame as a public image tied to the
 // recording file it came from, so deleting the recording deletes it.

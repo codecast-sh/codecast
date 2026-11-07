@@ -97,3 +97,56 @@ test("Always allow names the suggested rule and answers with it", async () => {
     assert.deepEqual(calls, ["p1"]);
   } finally { await done(); }
 }, 120_000);
+
+test("the card names who is asking: a subagent, and Claude Code's safety check", async () => {
+  const { React, q, render, done } = await dom();
+  try {
+    const { PermissionStackView } = await import("../PermissionCard");
+    const view = (pending: any[]) => React.createElement(PermissionStackView, {
+      pending, inflight: new Set<string>(), onApprove: () => {}, onDeny: () => {}, onApproveAll: () => {}, onDenyAll: () => {},
+    });
+    await render(view([{ _id: "p1", tool_name: "Bash", arguments_preview: "rm -f page/*", status: "pending", subagent_type: "Explore", safety_check: true }]));
+    assert.equal(q("[data-permission-source=subagent]")?.textContent, "Explore subagent");
+    assert.equal(q("[data-permission-source=safety]")?.textContent, "Claude Code safety check");
+    // Two rows: each row carries its own source.
+    await render(view([
+      { _id: "p1", tool_name: "Bash", arguments_preview: "ls", status: "pending" },
+      { _id: "p2", tool_name: "Bash", arguments_preview: "rm -f x/*", status: "pending", safety_check: true },
+    ]));
+    assert.equal(q("[data-permission-source=subagent]"), null, "the session's own agent gets no subagent tag");
+    assert.equal(q("[data-permission-source=safety]")?.textContent, "Claude Code safety check");
+  } finally { await done(); }
+}, 120_000);
+
+test("a subagent's tag opens that subagent's own conversation", async () => {
+  const { React, q, render, done } = await dom();
+  try {
+    const { PermissionStackView } = await import("../PermissionCard");
+    const { MemoryRouter } = await import("react-router");
+    await render(React.createElement(MemoryRouter, null, React.createElement(PermissionStackView, {
+      pending: [{ _id: "p1", tool_name: "Bash", arguments_preview: "rm -f page/*", status: "pending", subagent_type: "Explore", subagent_conversation_id: "conv_sub" }],
+      inflight: new Set<string>(), onApprove: () => {}, onDeny: () => {}, onApproveAll: () => {}, onDenyAll: () => {},
+    })));
+    const link = q("[data-permission-subagent-link]");
+    assert.equal(link?.getAttribute("href"), "/conversation/conv_sub");
+    assert.equal(link?.textContent, "Explore subagent");
+  } finally { await done(); }
+}, 120_000);
+
+test("the card says what the call is for and what its rm would delete", async () => {
+  const { React, q, render, done } = await dom();
+  try {
+    const { PermissionStackView } = await import("../PermissionCard");
+    await render(React.createElement(PermissionStackView, {
+      pending: [{
+        _id: "p1", tool_name: "Bash", arguments_preview: "cd /tmp/lab && rm -f page/*", status: "pending", safety_check: true,
+        intent: "Reprocess clips with leading-trim only",
+        removals: [{ target: "/tmp/lab/page/*", files: 79, dirs: 0 }, { target: "$OUT/*", note: "set by the shell when it runs" }],
+      }],
+      inflight: new Set<string>(), onApprove: () => {}, onDeny: () => {}, onApproveAll: () => {}, onDenyAll: () => {},
+    }));
+    assert.equal(q("[data-permission-intent]")?.textContent, "Reprocess clips with leading-trim only");
+    const rows = [...document.querySelectorAll("[data-permission-removal]")].map((e) => e.textContent);
+    assert.deepEqual(rows, ["rm/tmp/lab/page/*79 files", "rm$OUT/*set by the shell when it runs"]);
+  } finally { await done(); }
+}, 120_000);

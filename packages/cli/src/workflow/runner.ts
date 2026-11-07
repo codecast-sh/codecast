@@ -1229,6 +1229,20 @@ export interface RunOptions {
   loadedFlowVersions?: string;
   /** The flow versions the run is pinned to now, or null when that cannot be read. */
   pinnedFlowVersions?: () => Promise<string | null>;
+  /** Set when the server answers a report with the run already over (workflow_runs runOver): why it ended. */
+  endedOnServer?: string;
+}
+
+/** The run ended on the server while this runner drove it (a person stopped it, its problem closed). */
+class RunEndedOnServer extends Error {}
+
+/**
+ * A runner whose run is over starts no station after it. A cancel cannot reach a runner waiting out a hold or inside
+ * a station's command, so the runner learns of it from the answer to its next report, and stops there: five runs
+ * stopped at their holds on Nov 5 went on through Build and Present when the holds ended (ct-73543's two cards).
+ */
+function stopIfEnded(options: RunOptions): void {
+  if (options.endedOnServer) throw new RunEndedOnServer(options.endedOnServer);
 }
 
 /** A run's pinned flow versions as one comparable string. */
@@ -1525,11 +1539,14 @@ async function reportProgress(options: RunOptions, payload: Record<string, any>)
     body: JSON.stringify({ api_token: options.apiToken, run_id: options.runId, ...p }),
   });
   try {
-    const res = await post(payload);
-    if (res.ok) return true;
+    let res = await post(payload);
     // A backend older than this CLI rejects the whole report for an arg it does not know: the enrichments go, the report stays.
     const extras = PROGRESS_ENRICHMENTS.filter((k) => k in payload);
-    if (extras.length) return (await post(Object.fromEntries(Object.entries(payload).filter(([k]) => !extras.includes(k))))).ok;
+    if (!res.ok && extras.length) res = await post(Object.fromEntries(Object.entries(payload).filter(([k]) => !extras.includes(k))));
+    if (!res.ok) return false;
+    const answer = await res.json().catch(() => null) as { ended?: { status: string; reason: string | null } } | null;
+    if (answer?.ended) options.endedOnServer = answer.ended.reason || `the run is ${answer.ended.status}`;
+    return true;
   } catch {}
   return false;
 }
@@ -1718,6 +1735,11 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   }
   try {
     return await driveRun(graph, options, cwd, initialContext, startNode, hash, graphNodeHashes);
+  } catch (err) {
+    if (!(err instanceof RunEndedOnServer)) throw err;
+    // Nothing is reported: the run's end, its task and its hands were settled when it ended.
+    console.log(`\n${c.bold}${c.yellow}━━━ The run is over on the server (${err.message}): this runner stops ━━━${c.reset}`);
+    return "failed";
   } finally {
     claim?.release();
   }
@@ -2002,6 +2024,7 @@ async function runNodeLoop(
         visits,
       });
     }
+    stopIfEnded(options);
     const checkpoint = (next?: string) => {
       if (options.runId && !options.dryRun) writeCheckpoint(state.context["run_dir"], options.runId, state, nodeOutcomes, next);
     };
@@ -2070,6 +2093,7 @@ async function runNodeLoop(
         cost_usd: current.type === "call" ? Number(state.context[`${current.id}.cost_usd`] ?? 0) : undefined,
       });
     }
+    stopIfEnded(options);
 
     // A hand may have moved the task (handoff, verdict); the next edge routes
     // on the task as it is now. Verdicts older than this node read as none.

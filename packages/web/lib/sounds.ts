@@ -3,9 +3,12 @@ import { isNotificationLeader, isVoiceHost } from "./desktop";
 import { agentAlertsSuppressed, deliverAlert, reportAlertError } from "./notificationDelivery";
 import type { CueSpec } from "./cueSpec";
 import { afterCommit } from "@platform/engine";
-import { scheduleCue } from "./cuePlay";
+import { loadSample, scheduleCue } from "./cuePlay";
 import {
   CALL_JOIN,
+  CALL_RING,
+  CHAT_MARIMBA,
+  DOOR_KNOCK,
   DORMANT_SETTLE,
   KILL_DOOR,
   STASH_AWAY,
@@ -85,7 +88,11 @@ function isAnnouncer(): boolean {
 }
 
 function getCtx(resume = true): AudioContext {
-  if (!ctx) ctx = new AudioContext();
+  if (!ctx) {
+    ctx = new AudioContext();
+    // Fetch and decode the recordings now, so a first ring is not late.
+    for (const spec of [CHAT_MARIMBA, DOOR_KNOCK, CALL_RING, WALKIE_KEY_UP]) void loadSample(ctx, spec.sample!.src);
+  }
   if (resume && ctx.state === "suspended") void Promise.resolve(ctx.resume()).catch(reportAlertError);
   return ctx;
 }
@@ -161,11 +168,9 @@ export function soundDormant() {
 // the message matters, the sound only says "someone spoke". A separate louder
 // sound for mentions trains people to ignore the ordinary one.
 //
-// The character is a soft mallet on wood — two short marimba notes rising a
-// fourth (G5 → C6), each with the 4× partial that makes a marimba read as
-// marimba rather than as a sine, plus a 20 ms filtered-noise transient for
-// the wooden knock at the front. Over in ~300 ms, master gain kept low so it
-// can land mid-sentence in another window without startling.
+// The character is one struck marimba note, a recording (CHAT_MARIMBA), over
+// in about a third of a second at a peak low enough to land mid-sentence in
+// another window without startling.
 //
 // `messageId` collapses one arrival to one sound. Two layers watch the same
 // message through two different feeds and neither can see the other: the
@@ -178,7 +183,7 @@ export function soundDormant() {
 export function soundChatMessage(messageId?: string) {
   if (!isEnabled("chat") || !isSupported() || !isAnnouncer()) return;
   if (soundedRecently(messageId)) return;
-  announce("chat", `sound:chat:${messageId ?? "arrival"}`, playKnockMotif, { ttl: messageId ? 60_000 : 1_000 });
+  announce("chat", `sound:chat:${messageId ?? "arrival"}`, () => playCue(CHAT_MARIMBA), { ttl: messageId ? 60_000 : 1_000 });
 }
 
 // Long enough to cover the two feeds answering the same push (measured 15 ms
@@ -196,69 +201,12 @@ function soundedRecently(key: string | undefined): boolean {
   return seen;
 }
 
-// Someone knocking at the locked huddle you are in. The SAME two-tap wooden
-// motif — it is literally a knock, and it can't be mistaken for a ring — but
-// gated as a call event rather than a chat one: muting chat must not mute the
-// door. One motif, two gates, so the two can never drift apart.
+// Someone knocking at the locked huddle you are in: knuckles on a real wooden
+// door (DOOR_KNOCK). It is literally a knock, so it can't be mistaken for a
+// ring, and it is gated as a call event: muting chat must not mute the door.
 export function soundRoomKnock(key?: string) {
   if (!isEnabled("calls") || !isSupported() || !isAnnouncer()) return;
-  announce("calls", `sound:knock:${key ?? "arrival"}`, playKnockMotif, { ttl: key ? 60_000 : 1_000, preferDesktop: false });
-}
-
-function playKnockMotif() {
-  try {
-    const ac = getCtx();
-    const master = ac.createGain();
-    master.gain.value = 0.045 * volumeFactor();
-    master.connect(ac.destination);
-    const t0 = ac.currentTime;
-
-    const knock = (at: number, gain: number) => {
-      const len = Math.floor(ac.sampleRate * 0.03);
-      const buf = ac.createBuffer(1, len, ac.sampleRate);
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-      const src = ac.createBufferSource();
-      src.buffer = buf;
-      const bp = ac.createBiquadFilter();
-      bp.type = "bandpass";
-      bp.frequency.value = 1900;
-      bp.Q.value = 1.2;
-      const env = ac.createGain();
-      env.gain.setValueAtTime(gain, t0 + at);
-      env.gain.exponentialRampToValueAtTime(0.001, t0 + at + 0.03);
-      src.connect(bp);
-      bp.connect(env);
-      env.connect(master);
-      src.start(t0 + at);
-      src.stop(t0 + at + 0.035);
-    };
-
-    const mallet = (freq: number, at: number, dur: number, gain: number) => {
-      // Fundamental and the marimba's bright 4× partial, the partial dying
-      // faster — that is what makes it wood, not glass.
-      for (const [mult, g, d] of [[1, 1, dur], [4, 0.18, dur * 0.35]] as const) {
-        const osc = ac.createOscillator();
-        osc.type = "sine";
-        osc.frequency.value = freq * mult;
-        const env = ac.createGain();
-        env.gain.setValueAtTime(0, t0 + at);
-        env.gain.linearRampToValueAtTime(gain * g, t0 + at + 0.006);
-        env.gain.exponentialRampToValueAtTime(0.001, t0 + at + d);
-        osc.connect(env);
-        env.connect(master);
-        osc.start(t0 + at);
-        osc.stop(t0 + at + d + 0.01);
-      }
-    };
-
-    knock(0, 0.5);
-    mallet(783.99, 0, 0.26, 0.6);
-    // The second strike lands while the first still rings, so the two read as
-    // one gesture ("plink-plonk"), not two events.
-    knock(0.085, 0.35);
-    mallet(1046.5, 0.085, 0.32, 0.55);
-  } catch {}
+  announce("calls", `sound:knock:${key ?? "arrival"}`, () => playCue(DOOR_KNOCK), { ttl: key ? 60_000 : 1_000, preferDesktop: false });
 }
 
 // Older name for soundChatMessage. useChatToasts still imports it on main;
@@ -266,47 +214,33 @@ function playKnockMotif() {
 // a copy, so the two can never drift into different sounds.
 export const soundChatMention = soundChatMessage;
 
-// One ring cycle for an incoming huddle: two warm fifths, held slightly —
+// One ring cycle for an incoming huddle: a held vibraphone chord (CALL_RING),
 // unmistakably a "someone wants you", distinct from every notification chirp
 // above. The ring HOOK (useCallRing) repeats this on an interval and owns the
 // 45s ceiling; this stays a single cycle so a dismissed ring stops instantly.
 //
 // LOUD, AND RISING. A ring is the one cue in this file that has to reach a
 // person who is not listening for it — across a room, over headphones on
-// somebody else's call — so it does not sit with the chirps at 0.05. The
-// first cycle is twice a chirp, and the next two climb to nearly four times,
-// which is the difference between "something happened" and "somebody wants
-// you". `cycle` is which repeat this is; the callers that loop it count.
-// There is no ring volume of its own: the app's one volume scales it like
-// everything else, and the calls category mutes it.
-export const RING_MASTER_BY_CYCLE = [0.11, 0.15, 0.19];
+// somebody else's call — so it does not sit with the chirps. The first cycle
+// peaks where the old synthesized ring did, and the next two climb by these
+// factors, which is the difference between "something happened" and
+// "somebody wants you". `cycle` is which repeat this is; the callers that
+// loop it count. There is no ring volume of its own: the app's one volume
+// scales it like everything else, and the calls category mutes it.
+//
+// The mobile app plays its own ringtone (assets/sounds/huddle-ring.m4a).
+export const RING_GAIN_BY_CYCLE = [1, 1.36, 1.73];
 
 export function soundCallRing(cycle = 0, key?: string) {
   if (!isEnabled("calls") || !isAnnouncer()) return;
   announce("calls", `sound:ring:${key ?? "incoming"}`, () => {
     if (key && !useInboxStore.getState().myCalls?.incoming.some((invite) => String(invite._id) === key)) return false;
-    playRingMotif(RING_MASTER_BY_CYCLE[Math.min(Math.max(0, cycle | 0), RING_MASTER_BY_CYCLE.length - 1)]);
+    playRingCycle(RING_GAIN_BY_CYCLE[Math.min(Math.max(0, cycle | 0), RING_GAIN_BY_CYCLE.length - 1)]);
   }, { ttl: 2_500 });
 }
 
-function playRingMotif(master = RING_MASTER_BY_CYCLE[0]) {
-  // The huddle ring motif — same bell call-and-answer the mobile app plays
-  // (assets/sounds/huddle-ring.m4a, generated by packages/mobile/scripts/
-  // ringtone.py, candidate A): a friendly knock (G#5→E5), then a brighter
-  // answer (B5→E6), over a soft low E. Each strike carries a quiet octave
-  // partial for the struck-bell timbre. One cell = CALL_RING_PERIOD_MS.
-  play([
-    { freq: 329.63, start: 0, dur: 0.4, gain: 0.22, type: "sine" },
-    { freq: 830.61, start: 0, dur: 1.0, gain: 0.5, type: "sine" },
-    { freq: 1661.22, start: 0, dur: 0.6, gain: 0.14, type: "sine" },
-    { freq: 659.25, start: 0.18, dur: 1.1, gain: 0.45, type: "sine" },
-    { freq: 1318.51, start: 0.18, dur: 0.65, gain: 0.12, type: "sine" },
-    { freq: 247.22, start: 0.72, dur: 0.35, gain: 0.13, type: "sine" },
-    { freq: 987.77, start: 0.72, dur: 0.9, gain: 0.34, type: "sine" },
-    { freq: 1975.53, start: 0.72, dur: 0.5, gain: 0.09, type: "sine" },
-    { freq: 1318.51, start: 0.9, dur: 1.15, gain: 0.3, type: "sine" },
-    { freq: 2637.02, start: 0.9, dur: 0.55, gain: 0.07, type: "sine" },
-  ], master);
+function playRingCycle(gain = 1) {
+  playCue({ ...CALL_RING, master: CALL_RING.master * gain });
 }
 
 // The shell noticed a meeting starting and the offer window just appeared —
@@ -410,7 +344,7 @@ export function soundRecordingOff(runId: string) {
 //
 //   cue       peak     was      rms    >2k    length   what it says
 //   joined   0.0532      —    0.0138  0.07     310ms   they stepped in; a call now
-//   keyUp    0.0458   0.0124  0.0141  0.08     185ms   your mic is open, speak
+//   keyUp    0.0460   0.0124  (recording)    720ms   your mic is open, speak
 //   roger    0.0386   0.0122  0.0096  0.00     130ms   your burst is closed and sent
 //   open     0.0339   0.0121  0.0103  0.07     105ms   a teammate's burst is arriving
 //   away     0.0229      —    0.0057  0.00      90ms   nobody live; it goes as a message
@@ -450,20 +384,10 @@ export function soundRecordingOff(runId: string) {
 // either is ever raised from a watcher that is not narrowed to this window's
 // own room, it has become an announcement and belongs above.
 
-/** YOUR key going down, at the moment the mic is genuinely open — the classic
- *  two-tone rising chirp a radio makes when it keys up, a fifth from A5 to E6.
- *
- *  The cue the founder named, and the one everything else was levelled
- *  against: it is the only confirmation that arrives without looking at the
- *  screen, and it marks the exact instant it becomes worth speaking. It peaks
- *  at 0.0458, which is soundCallRing's peak to the fourth decimal.
- *
- *  Square waves, because that is what makes a chirp read as a radio rather
- *  than as a chime, but each note through its own lowpass — 1500 Hz for the
- *  A5, 2200 Hz for the E6 — placed just above that note's fundamental, where
- *  a handheld radio's speaker gives out. That keeps the buzz and drops the
- *  harmonics that would make it harsh at nearly four times its old level:
- *  measured share of energy above 2 kHz falls from 0.33 to 0.08. */
+/** YOUR key going down, at the moment the mic is genuinely open: a real
+ *  walkie-talkie's key-up beep (WALKIE_KEY_UP). It is the only confirmation
+ *  that arrives without looking at the screen, and it marks the exact instant
+ *  it becomes worth speaking, so it peaks level with the ring (0.046). */
 export function soundWalkieKeyUp() {
   if (!isEnabled("walkie")) return;
   playCue(WALKIE_KEY_UP);
@@ -577,8 +501,8 @@ export function previewSoundCategory(id: SoundCategory) {
   if (agentAlertsSuppressed()) return;
   switch (id) {
     case "sessions": return playIdleMotif();
-    case "chat": return playKnockMotif();
-    case "calls": return playRingMotif();
+    case "chat": return playCue(CHAT_MARIMBA);
+    case "calls": return playRingCycle();
     case "walkie": return playCue(WALKIE_KEY_UP);
     case "ui": return playSendMotif();
   }

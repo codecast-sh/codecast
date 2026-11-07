@@ -139,7 +139,7 @@ const NOUN = {
   lead: { none: "No lead", holds: "leads this project", pick: "No role leads this project yet. Click to pick one", label: "Lead" },
 } as const;
 
-export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChange, onHire, blockedReason, size = "sm", className }: {
+export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChange, onHire, blockedReason, size = "sm", faceOnly, className }: {
   /** The workspace's roles (useOrgRoles): null while they load. */
   roles: OrgRoles;
   ownerRoleId: string | undefined;
@@ -158,6 +158,8 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
    *  renders disabled and says so, instead of a button that does nothing. */
   blockedReason?: string;
   size?: "xs" | "sm";
+  /** A row with no room for the name: the face alone, the name on hover. */
+  faceOnly?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -183,7 +185,7 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
   // closed while the menu is open so the two never stack.
   const inner = role ? (
     <RoleHoverCard role={role} side="top" disabled={open} triggerClassName="inline-flex min-w-0 items-center gap-1.5">
-      <ChipFace role={role} px={px} /><span className="truncate">{role.name}</span>
+      <ChipFace role={role} px={px} />{!faceOnly && <span className="truncate">{role.name}</span>}
     </RoleHoverCard>
   ) : watchers.length ? (
     <>

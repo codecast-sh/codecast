@@ -48,13 +48,15 @@ initAnalytics({
 ```
 
 Behavior carried over from codecast: Sentry is disabled in development;
-the web entry captures errors without browser tracing; browser session
-recording, replay and dead click capture are off (they cost typing latency);
+the web entry captures errors without browser tracing; PostHog session
+replay records only the `sessionReplaySampleRate` fraction of sessions (unset
+records none, and on web never loads the recorder, since it costs main-thread
+time on every DOM change); browser tracing and dead click capture are off;
 SPA pageviews are captured on history changes; `platform`, `environment` and
 `app` ride every PostHog event as super properties. The native entry keeps
 Sentry tracing at 1.0 in dev and 0.2 in prod and adds
-`trackScreen`, `wrapRoot`, app lifecycle events, and mobile session replay
-(`enableSessionReplay`, default on). It requires its SDKs lazily and
+`trackScreen`, `wrapRoot`, app lifecycle events, and mobile session replay at
+the same `sessionReplaySampleRate`. It requires its SDKs lazily and
 degrades to no-ops when the native module is absent, so an OTA update can
 never crash a binary built before the SDKs were added.
 

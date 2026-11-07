@@ -53,6 +53,7 @@ import { teamHasFeature } from "./lib/teamFeatureGuard";
 import { agentLineText, liveTranscriptFor } from "./callChat";
 import { writeSegments } from "./transcripts";
 import { authorizeRoom } from "./callRooms";
+import { featureVendorRefusal } from "./lib/vendorGuard";
 
 // The name the worker registers under, and the data topic it listens on.
 export const FACE_HOST_AGENT = "codecast-face";
@@ -93,10 +94,15 @@ function faceConfig(): FaceConfig | null {
 }
 
 /** How an agent shows up in this team's calls: not at all, as a face, or as
- *  a face with a live model behind it. */
-async function faceMode(ctx: any, teamId: Id<"teams"> | null | undefined): Promise<"off" | "face" | "realtime"> {
+ *  a face with a live model behind it. A face is Tavus (it speaks the
+ *  session's replies), the live model is OpenAI's realtime voice (it hears
+ *  the room), so a regulated team gets each only once its vendor has a BAA
+ *  (lib/vendorGuard). */
+export async function faceMode(ctx: any, teamId: Id<"teams"> | null | undefined): Promise<"off" | "face" | "realtime"> {
   if (!faceConfig() || !(await teamHasFeature(ctx, teamId, "agent_faces"))) return "off";
-  return (await teamHasFeature(ctx, teamId, "agent_realtime")) ? "realtime" : "face";
+  if (await featureVendorRefusal(ctx, teamId, "agent_faces")) return "off";
+  if (!(await teamHasFeature(ctx, teamId, "agent_realtime"))) return "face";
+  return (await featureVendorRefusal(ctx, teamId, "agent_realtime")) ? "face" : "realtime";
 }
 
 /** One agent's mode: its team's, unless whoever added it left the avatar out. */

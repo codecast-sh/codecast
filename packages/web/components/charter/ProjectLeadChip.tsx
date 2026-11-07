@@ -45,9 +45,11 @@ function leadToast(role: OrgRole, title: string, outcome: ReturnType<typeof proj
   }
 }
 
-export function ProjectLeadChip({ projectId, size = "sm", editable = false, className }: {
+export function ProjectLeadChip({ projectId, size = "sm", editable = false, faceOnly, className }: {
   projectId: string;
   size?: "xs" | "sm";
+  /** The lead's face alone (the project page's one-line header). */
+  faceOnly?: boolean;
   /** The project page: the chip opens the workspace's roles to name a lead. */
   editable?: boolean;
   className?: string;
@@ -110,6 +112,7 @@ export function ProjectLeadChip({ projectId, size = "sm", editable = false, clas
         lead={lead}
         noun="lead"
         size={size}
+        faceOnly={faceOnly}
         onChange={editable ? onChange : undefined}
         // Editable with no role to offer: the chip is disabled and says why,
         // instead of a "No lead" that looks like nothing can be done.

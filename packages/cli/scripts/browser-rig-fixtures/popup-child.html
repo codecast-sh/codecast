@@ -1,0 +1,8 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Popup child</title></head>
+<body>
+<h1>Popup child</h1>
+<p id="opener">opener: <span id="has-opener"></span></p>
+<button id="reply" onclick="window.opener && window.opener.postMessage('hello from ' + location.origin, '*'); window.close()">Reply and close</button>
+<script>document.getElementById("has-opener").textContent = window.opener ? "yes" : "no";</script>
+</body></html>

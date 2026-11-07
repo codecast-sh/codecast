@@ -130,6 +130,7 @@ const LaneRedirect = lazy(() => import("@/components/LaneRedirect"));
 // Auth
 const Login = lazy(() => import("@/app/login/page"));
 const Signup = lazy(() => import("@/app/signup/page"));
+const Start = lazy(() => import("@/app/start/page"));
 const ForgotPassword = lazy(() => import("@/app/forgot-password/page"));
 const ResetPassword = lazy(() => import("@/app/reset-password/page"));
 const Confirm = lazy(() => import("@/app/confirm/page"));
@@ -285,6 +286,7 @@ const SettingsAccountPool = lazy(() => import("@/app/settings/account-pool/page"
 const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
+const SettingsTeamFeatures = lazy(() => import("@/app/settings/team/features/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
 const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
@@ -343,6 +345,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "auth/cli", component: cast(AuthCli), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "slack/connect", component: cast(SlackConnect), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "connect/whisk", component: cast(WhiskReturn), layout: "auth", guestOk: true, guestKind: "public" },
+  { path: "start", component: cast(Start), layout: "standalone" },
   { path: "pages/auth", component: cast(ArtifactAuth), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "join/:code", component: cast(JoinTeam), layout: "auth", guestOk: true, guestKind: "public" },
 
@@ -588,6 +591,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "settings/team", component: cast(SettingsTeam), layout: "settings" },
   { path: "settings/team/create", component: cast(SettingsTeamCreate), layout: "settings" },
   { path: "settings/team/join", component: cast(SettingsTeamJoin), layout: "settings" },
+  { path: "settings/team/features", component: cast(SettingsTeamFeatures), layout: "settings" },
   { path: "settings/notifications", component: cast(SettingsNotifications), layout: "settings" },
   { path: "settings/integrations", component: cast(SettingsIntegrations), layout: "settings" },
   { path: "settings/integrations/github-app", component: cast(SettingsIntegrations), layout: "settings" },
