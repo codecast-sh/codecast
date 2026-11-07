@@ -11,12 +11,18 @@
 //   {"hookSpecificOutput":{"hookEventName":"PermissionRequest",
 //     "decision":{"behavior":"deny","message":"...","interrupt":true}}}
 //
+// Before any of that, the daemon settles the call against codecast's own
+// rules (permissionHandler.ts settlePermission): a saved approval or a
+// configured deny answers at once, and so does a session nobody watches.
+//
 // A wait that ends without an answer (the bound, the agent moved on, the
 // terminal answered) prints nothing, and the prompt is the terminal's again; a
 // later web answer then falls back to pressing Enter/Escape in the pane.
 
 /** How long a hook holds for a web answer. The terminal dialog works the whole
  *  time; past this the web answer is delivered as a keystroke instead. */
+import { claudeToolRequest, type PermissionRuleRequest } from "@codecast/shared/contracts/permissionRules";
+
 export const PERMISSION_HOOK_WAIT_MS = 10 * 60 * 1000;
 /** Claude Code's timeout for the PermissionRequest entry: the wait plus room
  *  for the curl and the daemon's 204, so the hook is never killed mid-answer. */
@@ -40,6 +46,8 @@ export interface PermissionHookInput {
   command?: string;
   cwd?: string;
   suggestions: unknown[];
+  /** The call in codecast's rule terms: what it asks for and what "always" keeps. */
+  ruleRequest: PermissionRuleRequest;
   /** The launch that raised the prompt, so the status it reports passes the launch fence. */
   launchToken?: string;
 }
@@ -48,7 +56,9 @@ export interface PermissionAnswer {
   approved: boolean;
   /** A denial's reason, sent to the model. */
   message?: string;
-  /** Keep Claude's suggested rules (updatedPermissions). */
+  /** Keep the call's rules. Codecast keeps its own server side; Claude's
+   *  suggestions ride back (updatedPermissions) only for a card made without
+   *  codecast rules, which then holds the suggestions it was opened with. */
   remember?: boolean;
 }
 
@@ -82,6 +92,7 @@ export function parsePermissionHookInput(body: string): PermissionHookInput | nu
     suggestions: Array.isArray(d.permission_suggestions)
       ? d.permission_suggestions.filter((s: unknown) => s && typeof s === "object")
       : [],
+    ruleRequest: claudeToolRequest(toolName, input),
   };
 }
 

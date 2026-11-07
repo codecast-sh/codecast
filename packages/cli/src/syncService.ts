@@ -1,5 +1,6 @@
 import { ConvexHttpClient, ConvexClient } from "convex/browser";
 import type { PermissionSource } from "./permissionHandler.js";
+import { boundedRuleRequest, type PermissionRuleRequest } from "@codecast/shared/contracts/permissionRules";
 import { recoveringWebSocket } from "@codecast/shared/network";
 import { readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
@@ -2374,6 +2375,7 @@ export class SyncService {
     tool_name: string;
     arguments_preview: string;
     suggestions?: unknown[];
+    rule_request?: PermissionRuleRequest;
   } & PermissionSource): Promise<string> {
     return this.guarded(async () => {
       const base = {
@@ -2391,6 +2393,7 @@ export class SyncService {
         ...(params.safety_check && { safety_check: true }),
         ...(params.intent && { intent: params.intent }),
         ...(params.removals?.length && { removals: params.removals }),
+        ...(params.rule_request && { rule_request: boundedRuleRequest(params.rule_request) }),
       };
       if (Object.keys(extras).length === 0) return (await create(base)) as string;
       try {
@@ -2402,6 +2405,20 @@ export class SyncService {
         return (await create(base)) as string;
       }
     });
+  }
+
+  /** How codecast's rules settle a call before a card (permissionRules.check).
+   *  Throws when the server cannot answer, which the caller reads as "ask". */
+  async checkPermission(conversationId: string, request: PermissionRuleRequest): Promise<{
+    action: "allow" | "deny" | "ask";
+    reason?: "rule" | "unattended";
+    message?: string;
+  }> {
+    return this.guarded(async () => (await this.client.query("permissionRules:check" as any, {
+      conversation_id: conversationId,
+      request: boundedRuleRequest(request),
+      api_token: this.apiToken,
+    })) as any);
   }
 
   async cancelPermissionRequest(permissionId: string): Promise<boolean> {
