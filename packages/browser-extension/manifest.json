@@ -18,7 +18,12 @@
     "tabGroups",
     "storage",
     "alarms",
-    "offscreen"
+    "offscreen",
+    "scripting",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
