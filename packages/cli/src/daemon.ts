@@ -297,11 +297,14 @@ import { detectPermissionPrompt } from "./permissionDetector.js";
 import { watchPromptSettled } from "./permissionPromptWatch.js";
 import { describeRemovals, type RemovalPreview } from "./removalPreview.js";
 import { isOutsideGitRepo } from "./gitRepoProbe.js";
-import { handlePermissionRequest, type PermissionDecision, type PermissionSource } from "./permissionHandler.js";
+import { handlePermissionRequest, settlePermission, type PermissionDecision, type PermissionSource } from "./permissionHandler.js";
+import { boundedRuleRequest, codexApprovalRequest, keptPatterns, type PermissionRuleRequest } from "@codecast/shared/contracts/permissionRules";
 import {
   PermissionHookWaiters,
   glanceCommand,
+  permissionDecisionOutput,
   parsePermissionHookInput,
+  projectRootOf,
   PERMISSION_HOOK_PATH,
   PERMISSION_LAUNCH_TOKEN_HEADER,
   PERMISSION_HOOK_MAX_BODY,
@@ -3166,6 +3169,10 @@ export async function extractPendingToolUseFromTranscriptAsync(transcriptPath: s
 // by an Approve/Deny row. Matches PERMISSION_SKIP_TOOLS on the web.
 const PERMISSION_CARD_SKIP_TOOLS: ReadonlySet<string> = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
 const permissionRecordPending = new Set<string>();
+// Sessions whose PermissionRequest hook is being settled against codecast's
+// rules: the status path opens no card meanwhile, since the hook opens
+// its own if the rules leave the call to a person.
+const permissionSettling = new Map<string, number>();
 // The id of the web card a session's open prompt got, once it exists. A
 // PermissionRequest hook that arrives after a Notification already opened the
 // card binds to it rather than opening a second one.
@@ -30665,19 +30672,24 @@ async function main(): Promise<void> {
   function openPermissionRecord(
     convId: string,
     sessionId: string,
-    prompt: { tool_name: string; arguments_preview: string; glance?: string; suggestions?: unknown[]; source?: PermissionSource },
+    prompt: { tool_name: string; arguments_preview: string; glance?: string; suggestions?: unknown[]; source?: PermissionSource; ruleRequest?: PermissionRuleRequest; prechecked?: boolean },
   ): { id: Promise<string | null>; decision: Promise<PermissionDecision | null> } {
     permissionRecordPending.add(sessionId);
-    syncService.createSessionNotification({
-      conversation_id: convId,
-      type: "permission_request",
-      title: "codecast - Permission needed",
-      message: truncateForNotification(`${prompt.tool_name}: ${prompt.glance ?? glanceCommand(prompt.arguments_preview)}`, 150),
-    }).catch(() => {});
     let setId!: (id: string | null) => void;
     const id = new Promise<string | null>((r) => { setId = r; });
     permissionRecordIds.set(sessionId, id);
-    const decision = handlePermissionRequest(syncService, convId, sessionId, prompt, log, setId).finally(() => {
+    // The push goes out only once a card exists: a call codecast's rules
+    // settled (handlePermissionRequest) never pings anyone.
+    const onCreated = (permissionId: string) => {
+      setId(permissionId);
+      syncService.createSessionNotification({
+        conversation_id: convId,
+        type: "permission_request",
+        title: "codecast - Permission needed",
+        message: truncateForNotification(`${prompt.tool_name}: ${prompt.glance ?? glanceCommand(prompt.arguments_preview)}`, 150),
+      }).catch(() => {});
+    };
+    const decision = handlePermissionRequest(syncService, convId, sessionId, prompt, log, onCreated).finally(() => {
       setId(null);
       permissionRecordPending.delete(sessionId);
       if (permissionRecordIds.get(sessionId) === id) permissionRecordIds.delete(sessionId);
@@ -30873,7 +30885,7 @@ async function main(): Promise<void> {
         try { fs.unlinkSync(filePath); } catch {}
       }
 
-      if (data.status === "permission_blocked" && !permissionRecordPending.has(sessionId)) {
+      if (data.status === "permission_blocked" && !permissionRecordPending.has(sessionId) && !permissionSettling.has(sessionId)) {
         permissionRecordPending.add(sessionId);
         permissionJustResolved.add(sessionId);
         const transcriptPath = data.transcript_path || claudeTranscriptFor(sessionId);
@@ -31048,77 +31060,101 @@ async function main(): Promise<void> {
     };
     const convId = conversationCache[sessionId];
     const answerable = !!convId && !PERMISSION_CARD_SKIP_TOOLS.has(toolName);
-    // A subagent's call sits in its own transcript (subagents/agent-<id>.jsonl),
-    // synced as its own conversation: the card links there, and the watch
-    // below reads that file, since the parent's only shows the Task call.
-    const subagentSession = input.agentId ? `agent-${input.agentId}` : undefined;
-    const subagentConv = subagentSession ? conversationCache[subagentSession] : undefined;
-    // Bind to a card a Notification already opened for this prompt, unless a
-    // hook holds that one (a second prompt in parallel gets its own card).
-    const opened = answerable && permissionRecordPending.has(sessionId) ? permissionRecordIds.get(sessionId) : undefined;
-    const record = answerable && !permissionRecordPending.has(sessionId)
-      ? openPermissionRecord(convId, sessionId, {
-          tool_name: toolName,
-          arguments_preview: preview,
-          glance: input.glance,
-          suggestions: input.suggestions,
-          source: {
-            ...(input.subagentType && { subagent_type: input.subagentType }),
-            ...(subagentConv && { subagent_conversation_id: subagentConv }),
-            ...(input.permissionMode === "bypassPermissions" && { safety_check: true }),
-            ...(input.intent && { intent: input.intent }),
-            ...removalsFor(input),
-          },
-        })
-      : null;
-    if (record) permissionJustResolved.add(sessionId);
-    hookStatusGate.deliver(sessionId, normalizeHookStatus({
-      status: "permission_blocked",
-      ts: Math.floor(Date.now() / 1000),
-      ...(input.permissionMode && { permission_mode: input.permissionMode as PermissionMode }),
-      ...(input.launchToken && { launch_token: input.launchToken }),
-      message: preview ? `${toolName}: ${preview}` : toolName,
-      dialog: true,
-    }));
-    const idPromise = record?.id ?? opened;
-    if (!idPromise) { reply(null); return; }
+    // The card a person answers, with the hook waiting on it.
+    const openHookCard = () => {
+      // A subagent's call sits in its own transcript (subagents/agent-<id>.jsonl),
+      // synced as its own conversation: the card links there, and the watch
+      // below reads that file, since the parent's only shows the Task call.
+      const subagentSession = input.agentId ? `agent-${input.agentId}` : undefined;
+      const subagentConv = subagentSession ? conversationCache[subagentSession] : undefined;
+      // Bind to a card a Notification already opened for this prompt, unless a
+      // hook holds that one (a second prompt in parallel gets its own card).
+      const opened = answerable && permissionRecordPending.has(sessionId) ? permissionRecordIds.get(sessionId) : undefined;
+      const record = answerable && !permissionRecordPending.has(sessionId)
+        ? openPermissionRecord(convId, sessionId, {
+            tool_name: toolName,
+            arguments_preview: preview,
+            glance: input.glance,
+            suggestions: input.suggestions,
+            ruleRequest: input.ruleRequest,
+            prechecked: true,
+            source: {
+              ...(input.subagentType && { subagent_type: input.subagentType }),
+              ...(subagentConv && { subagent_conversation_id: subagentConv }),
+              ...(input.permissionMode === "bypassPermissions" && { safety_check: true }),
+              ...(input.intent && { intent: input.intent }),
+              ...removalsFor(input),
+            },
+          })
+        : null;
+      if (record) permissionJustResolved.add(sessionId);
+      hookStatusGate.deliver(sessionId, normalizeHookStatus({
+        status: "permission_blocked",
+        ts: Math.floor(Date.now() / 1000),
+        ...(input.permissionMode && { permission_mode: input.permissionMode as PermissionMode }),
+        ...(input.launchToken && { launch_token: input.launchToken }),
+        message: preview ? `${toolName}: ${preview}` : toolName,
+        dialog: true,
+      }));
+      const idPromise = record?.id ?? opened;
+      if (!idPromise) { reply(null); return; }
 
-    const wait = permissionHookWaiters.wait(sessionId, input.suggestions);
-    // The prompt can end without the web: answered in the terminal, timed out
-    // (the dangerous rm dialog denies itself after 120s), interrupted. The
-    // status transition usually cancels the card, but it never fires when this
-    // prompt's permission_blocked was refused (launch fence, bypass-mode
-    // phantom), and the card then waits for a press that can only type a stray
-    // key into the pane. permissionPromptWatch.ts has the rest.
-    const abandon = (why: string) => {
-      void idPromise.then((id) => (id ? syncService.cancelPermissionRequest(id) : false))
-        .then((ok) => { if (ok) log(`[PERMISSION] cancelled ${toolName} card for ${shortId(sessionId)}: ${why}`); })
-        .catch((err) => log(`Failed to cancel abandoned permission card: ${err instanceof Error ? err.message : String(err)}`));
+      // Codecast keeps an "always" answer itself (the row's rule_request);
+      // Claude's suggestions go back to Claude only for a call codecast can
+      // keep nothing for, the same rule the server and the card follow.
+      const wait = permissionHookWaiters.wait(sessionId, keptPatterns(input.ruleRequest).length ? [] : input.suggestions);
+      // The prompt can end without the web: answered in the terminal, timed out
+      // (the dangerous rm dialog denies itself after 120s), interrupted. The
+      // status transition usually cancels the card, but it never fires when this
+      // prompt's permission_blocked was refused (launch fence, bypass-mode
+      // phantom), and the card then waits for a press that can only type a stray
+      // key into the pane. permissionPromptWatch.ts has the rest.
+      const abandon = (why: string) => {
+        void idPromise.then((id) => (id ? syncService.cancelPermissionRequest(id) : false))
+          .then((ok) => { if (ok) log(`[PERMISSION] cancelled ${toolName} card for ${shortId(sessionId)}: ${why}`); })
+          .catch((err) => log(`Failed to cancel abandoned permission card: ${err instanceof Error ? err.message : String(err)}`));
+      };
+      const transcript = subagentSession ? subagentTranscriptFor(sessionId, subagentSession) : claudeTranscriptFor(sessionId);
+      const stopWatch = transcript
+        ? watchPromptSettled({
+            readPending: () => extractPendingToolUseFromTranscriptAsync(transcript),
+            toolName,
+            onSettled: () => { wait.cancel(); abandon("its call settled in the transcript"); },
+          })
+        : () => {};
+      res.on("close", () => {
+        stopWatch();
+        wait.cancel();
+        if (!res.writableEnded) abandon("its hook was dropped unanswered");
+      });
+      void idPromise.then((id) => {
+        if (!id || (!record && permissionHookWaiters.holds(id))) { wait.cancel(); return; }
+        wait.bind(id);
+        // The row's own poll backs up the subscription.
+        record?.decision.then((decision) => { if (decision) permissionHookWaiters.answer(id, decision); });
+      });
+      void wait.done.then((output) => {
+        reply(output);
+        if (!output) return;
+        log(`[PERMISSION] answered ${toolName} for ${shortId(sessionId)} through its hook`);
+        sendAgentStatus(syncService, convId, sessionId, "working");
+      });
     };
-    const transcript = subagentSession ? subagentTranscriptFor(sessionId, subagentSession) : claudeTranscriptFor(sessionId);
-    const stopWatch = transcript
-      ? watchPromptSettled({
-          readPending: () => extractPendingToolUseFromTranscriptAsync(transcript),
-          toolName,
-          onSettled: () => { wait.cancel(); abandon("its call settled in the transcript"); },
-        })
-      : () => {};
-    res.on("close", () => {
-      stopWatch();
-      wait.cancel();
-      if (!res.writableEnded) abandon("its hook was dropped unanswered");
-    });
-    void idPromise.then((id) => {
-      if (!id || (!record && permissionHookWaiters.holds(id))) { wait.cancel(); return; }
-      wait.bind(id);
-      // The row's own poll backs up the subscription.
-      record?.decision.then((decision) => { if (decision) permissionHookWaiters.answer(id, decision); });
-    });
-    void wait.done.then((output) => {
-      reply(output);
-      if (!output) return;
-      log(`[PERMISSION] answered ${toolName} for ${shortId(sessionId)} through its hook`);
-      sendAgentStatus(syncService, convId, sessionId, "working");
+    // Codecast's rules answer first: a saved approval, a configured deny, or a
+    // session nobody watches settles the call with no card, push or blocked
+    // status. Only a call they leave open reaches a person.
+    if (!answerable) { openHookCard(); return; }
+    permissionSettling.set(sessionId, (permissionSettling.get(sessionId) ?? 0) + 1);
+    void settlePermission(syncService, convId, input.ruleRequest, log).then((settled) => {
+      const left = (permissionSettling.get(sessionId) ?? 1) - 1;
+      if (left > 0) permissionSettling.set(sessionId, left); else permissionSettling.delete(sessionId);
+      if (!settled) { if (!res.writableEnded && !res.destroyed) openHookCard(); return; }
+      reply(permissionDecisionOutput(settled, []));
+      // A Notification can open a card before the hook arrives; the call is
+      // settled now, so that card goes (its own poll then presses nothing).
+      // A card a hook holds is another call's, still waiting on a person.
+      void permissionRecordIds.get(sessionId)?.then((id) => (id && !permissionHookWaiters.holds(id) ? syncService.cancelPermissionRequest(id) : false)).catch(() => {});
+      log(`[PERMISSION] ${settled.approved ? "allowed" : "denied"} ${toolName} for ${shortId(sessionId)} by codecast (${settled.settled})`);
     });
   };
 
@@ -31625,13 +31661,23 @@ async function main(): Promise<void> {
     onApproval: async (threadId: string, approval: ApprovalRequest) => {
       const entry = appServerThreads.get(threadId);
       if (!entry) return true;
+      // The same rules as Claude's calls: a command or an edit settles against
+      // codecast's saved approvals before any card, and "always" keeps one.
+      // A request of another kind has no rule terms: rules never allow it, and
+      // a session nobody watches still gets a decline instead of a wait.
+      const ruleRequest = boundedRuleRequest(codexApprovalRequest(approval.method, approval.params, { cwd: entry.cwd, root: projectRootOf(entry.cwd) })
+        ?? { permission: approval.method, patterns: [], always: [], opaque: true });
       if (entry.approvalPolicy === "never") {
+        // Nobody is asked here, but a configured deny still wins.
+        const settled = await settlePermission(syncService, entry.conversationId, ruleRequest, log);
+        if (settled && !settled.approved && settled.settled === "rule") return false;
         log(`[codex-app-server] auto-approving ${approval.method} for thread ${threadId.slice(0, 8)} (approvalPolicy=never)`);
         return true;
       }
       const permissionPrompt = {
         tool_name: approval.method,
         arguments_preview: JSON.stringify(approval.params).slice(0, 200),
+        ruleRequest,
       };
       try {
         const decision = await handlePermissionRequest(syncService, entry.conversationId, threadId, permissionPrompt, log);

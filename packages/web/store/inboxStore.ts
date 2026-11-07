@@ -160,6 +160,7 @@ export {
 export { monotonicNow } from "./syncActivity";
 import { decisionDraftKey, pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { LocalMirror, MergeBackStatus, OpenTaskReport, SessionActivity, SubagentCaps, SubagentSlot } from "@codecast/shared/contracts";
+import { cascadeFromAnswer } from "@codecast/shared/contracts/permissionRules";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
 import { escalationTargetIds } from "@codecast/shared/contracts/decisionEscalation";
@@ -5811,6 +5812,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Approve or deny one tool-permission request; the card leaves at once. */
   /** opts: a denial's reason for the model; remember keeps the row's suggested rules. */
   resolvePermission: (permissionId: string, status: "approved" | "denied", opts?: { message?: string; remember?: boolean }) => void;
+  /** Drop a saved approval or deny (Settings > Approvals); the next matching call asks again. */
+  /** `rule` names a row the server has not echoed yet, so the remove still finds it. */
+  removePermissionRule: (ruleId: string, rule?: { project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny" }) => void;
+  /** Keep a rule by hand where the viewer already keeps rules (a deny wins over every allow). */
+  addPermissionRule: (rule: { project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny"; label: string }) => void;
   /** Answer a workflow run's open gate (a choice key or free text). */
   respondToGate: (runId: string, response: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
@@ -10907,10 +10913,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // refuses it. Resolving the conversation's last pending request unblocks
   // the session, so its question is marked resolved in the same commit. The
   // resolvePermission side effect runs permissions.updatePermissionStatus.
-  resolvePermission: action(function (this: Draft, permissionId: string, _status: "approved" | "denied", _opts?: { message?: string; remember?: boolean }) {
+  // A denial with a reason settles the session's other cards, the same rule
+  // the server applies (cascadeFromAnswer), so they leave on the press. What
+  // an "always" approves depends on every saved rule, denies included, which
+  // only the server holds: those cards leave with its next snapshot.
+  resolvePermission: action(function (this: Draft, permissionId: string, status: "approved" | "denied", opts?: { message?: string; remember?: boolean }) {
     const row = this.pendingPermissions[permissionId] as any;
     if (!row) return;
+    const pending = Object.values(this.pendingPermissions).filter((p: any) => p?.status === "pending") as any[];
+    const cascade = cascadeFromAnswer(row, { status, ...opts }, pending, []);
     delete this.pendingPermissions[permissionId];
+    for (const id of [...cascade.approve, ...cascade.deny]) delete this.pendingPermissions[id];
     const convId = row.conversation_id as string | undefined;
     if (!convId) return;
     const stillPending = Object.values(this.pendingPermissions).some(
@@ -13377,6 +13390,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   removeIssueSyncSource: action(function (this: Draft, id: string) {
     delete (this.issueSyncSources as any)[id];
+  }),
+
+  removePermissionRule: action(function (this: Draft, ruleId: string, _rule?: { project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny" }) {
+    delete (this.permissionRules as any)[ruleId];
+  }),
+
+  // The stub paints at once; permissionRules.add takes no client key, so the
+  // next snapshot carries the real row and drops the stub.
+  addPermissionRule: action(function (this: Draft, rule: { project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny"; label: string }) {
+    const stubId = `temp_rule_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    (this.permissionRules as any)[stubId] = { _id: stubId, ...rule, created_at: Date.now() };
   }),
 
   // Agent definitions and chains. An upsert with an _id patches the row in
