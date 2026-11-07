@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 import { LOGIN_PATH_FILENAME } from "./loginShellPath.js";
+import { parsePollMessage, pollDeclineText, pollMenuSteps, type PollMessage } from "./pollMessage.js";
+import { ClaudeSdkBackend } from "./claudeSdk/backend.js";
+import { chooseClaudeBackend, sdkBackendRefusal } from "./claudeSdk/select.js";
+import type { SdkLaunchSpec } from "./claudeSdk/options.js";
 import { restoreSuspendedAgent } from "./tmuxSuspendedAgent.js";
 import { transcriptContainsDelivery } from "./tmuxDeliveryTranscript.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
@@ -86,7 +90,7 @@ import { checkoutOfMoveClone, copyAgentAuthToRemoteAsync, copyCredentialToRemote
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush, primeGhToken } from "./remote/agentAuth.js";
 import { hostForDevice, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
 import {
-  AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocketEnv,
+  AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocket, hostAgentSocketEnv,
   bridgeAddressStale, shouldRunBridge,
 } from "./cloud/agentBridge.js";
 import { HeldConnections } from "./cloud/heldConnection.js";
@@ -94,7 +98,7 @@ import {
   REACH_MOUNTED_LINE, REACH_TICK_MS, reachHostRefusal, reachLaptopArgs, reachRefusal, reachRemoveArgs, writeReachStatus,
   type ReachFolder, type ReachState, type ReachStatus,
 } from "./cloud/reach.js";
-import { worktreeEnvPrefix } from "./worktreeEnv.js";
+import { worktreeEnv, worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
 import { startMirrorProcess } from "./cloud/mirror/process.js";
 import { releaseSessionWorktree, runTreesInUseVia } from "./worktreeGc.js";
@@ -268,7 +272,7 @@ import { TokenDecryptError } from "./tokenEncryption.js";
 import { bearerFromStored, secretFromStored, storedFromBearer } from "./bearerToken.js";
 import { knownValueNames, refreshKnownVault, startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
 import { VAULT_REFRESH_PATH, vaultRedactionSource } from "./secrets/redactionSource.js";
-import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
+import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, CLOUD_ENV_VAR, agentEnvScrub, LAUNCH_TOKEN_VAR, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
 import { handStartedAt, launchTokenLedger } from "./launchToken.js";
 import { waitForHandHost } from "./handHostGrace.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
@@ -297,7 +301,7 @@ import { detectPermissionPrompt } from "./permissionDetector.js";
 import { watchPromptSettled } from "./permissionPromptWatch.js";
 import { describeRemovals, type RemovalPreview } from "./removalPreview.js";
 import { isOutsideGitRepo } from "./gitRepoProbe.js";
-import { handlePermissionRequest, type PermissionDecision, type PermissionSource } from "./permissionHandler.js";
+import { handlePermissionRequest, waitForPermissionDecision, type PermissionDecision, type PermissionSource } from "./permissionHandler.js";
 import {
   PermissionHookWaiters,
   glanceCommand,
@@ -1853,6 +1857,13 @@ const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 // live sessions dead fleet-wide.
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
 const PERMISSION_MODES: ReadonlySet<string> = new Set(["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk", "auto"]);
+// Shift+Tab's cycle in Claude Code, for an SDK session asked to step its mode
+// (codecast launches every Claude with bypass allowed, so bypass is in it).
+const SDK_PERMISSION_MODE_CYCLE = ["default", "acceptEdits", "plan", "bypassPermissions"] as const;
+function nextSdkPermissionMode(current: string | null | undefined): string {
+  const i = SDK_PERMISSION_MODE_CYCLE.indexOf((current ?? "default") as (typeof SDK_PERMISSION_MODE_CYCLE)[number]);
+  return SDK_PERMISSION_MODE_CYCLE[(i + 1) % SDK_PERMISSION_MODE_CYCLE.length];
+}
 // Claude Code paints the active permission mode in its composer footer
 // ("⏵⏵ bypass permissions on (shift+tab to cycle)", "⏸ plan mode on",
 // "⏸ manual mode on"). Which mode a shift+tab lands on is the TUI's own
@@ -3164,6 +3175,8 @@ export async function extractPendingToolUseFromTranscriptAsync(transcriptPath: s
 
 // Prompts answered by their own card (a question, a plan, a task move), never
 // by an Approve/Deny row. Matches PERMISSION_SKIP_TOOLS on the web.
+// How long an SDK session's permission prompt waits on its card; canUseTool itself has no deadline.
+const SDK_PERMISSION_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
 const PERMISSION_CARD_SKIP_TOOLS: ReadonlySet<string> = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
 const permissionRecordPending = new Set<string>();
 // The id of the web card a session's open prompt got, once it exists. A
@@ -5871,6 +5884,52 @@ function disclaimPrefix(): string {
   return buildDisclaimShellPrefix([cmd, ...prefixArgs].join(" "));
 }
 
+/** disclaimPrefix as argv, for a launch that execs without a shell (the Claude SDK host's claude). */
+function disclaimArgv(): string[] {
+  const { cmd, prefixArgs } = resolveCastInvocation();
+  return buildDisclaimShellPrefix(cmd) ? [cmd, ...prefixArgs, "_disclaimed", "--"] : [];
+}
+
+/** A definition's tool policy and prompt for an SDK launch: the argv and prompt the tmux path types as a shell fragment. */
+async function sdkDefinitionFlags(def: AgentDefinitionSpec): Promise<{ args: string[]; appendSystemPrompt?: string; warning?: string }> {
+  // Loaded inside the one command that launches from a definition (boot graph guard).
+  const { definitionLaunchFlags, describeDropped } = await import("./agentLaunch.js");
+  const { resolveAgentLaunch } = await import("@codecast/shared/contracts");
+  const flags = definitionLaunchFlags(resolveAgentLaunch(def, { agent: "claude" }, "claude"), "claude");
+  const args = [...flags.args, ...(flags.systemPrompt ? ["--system-prompt", flags.systemPrompt] : [])];
+  return { args, appendSystemPrompt: flags.systemPrompt ? undefined : flags.appendSystemPrompt, warning: describeDropped(def.name, flags.dropped) ?? undefined };
+}
+
+/** Record that `sessionId` is this conversation's session, here and on the server. */
+async function bindSessionToConversation(conversationId: string, sessionId: string, cwd: string): Promise<void> {
+  const cache = readConversationCache();
+  cache[sessionId] = conversationId;
+  if (conversationCacheRef) conversationCacheRef[sessionId] = conversationId;
+  saveConversationCache(cache);
+  if (!syncServiceRef) return;
+  // project_path/git_root follow the session's real cwd: it was launched there.
+  const gitInfo = await getGitInfo(cwd);
+  void pushSessionIdBinding(conversationId, sessionId, cwd, gitInfo?.repoRoot || gitInfo?.root, gitInfo?.remoteUrl);
+}
+
+/**
+ * Bind and register a session that runs on the Claude SDK backend. Like a
+ * codex app-server thread it has no pane, so it stays out of
+ * resumeSessionCache (the pane health sweep would read it as dead).
+ */
+async function bindSdkSession(conversationId: string, sessionId: string, cwd: string): Promise<void> {
+  const replaced = buildReverseConversationCache(readConversationCache())[conversationId];
+  if (replaced && replaced !== sessionId) stopManagedSessionHeartbeat(replaced);
+  await bindSessionToConversation(conversationId, sessionId, cwd);
+  clearHibernationPark(sessionId, conversationId);
+  if (!syncServiceRef) return;
+  syncServiceRef.claimSession(conversationId).catch(logConvexFailure);
+  syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
+  syncServiceRef.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(logConvexFailure);
+  syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+  ensureManagedSessionHeartbeat(sessionId);
+}
+
 /**
  * Run a `cast <args...>` subcommand in a child process WITHOUT blocking the
  * daemon's event loop. Critical for long, I/O-heavy subcommands (e.g. a remote
@@ -6238,7 +6297,7 @@ async function killConversationBackends(
   // start_session so "one backend per conversation" is enforced identically
   // -- and so a split-brained conversation gets BOTH backends killed, not
   // just the first one matched.
-  const teardown = await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true });
+  const teardown = await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true, keepSdkBinding: true });
   if (teardown.killedAppServer && teardown.appServerThreadId) {
     if (syncServiceRef) {
       syncServiceRef.markSessionCompleted(conversationId).catch(logConvexFailure);
@@ -6249,6 +6308,13 @@ async function killConversationBackends(
   }
   if (teardown.killedTmux) {
     result = "killed_tmux";
+  }
+  if (teardown.killedSdk) {
+    if (syncServiceRef) {
+      syncServiceRef.markSessionCompleted(conversationId).catch(logConvexFailure);
+      sendAgentStatus(syncServiceRef, conversationId, teardown.killedSdk, "stopped");
+    }
+    result = "killed_sdk";
   }
 
   const cache = readConversationCache();
@@ -6975,7 +7041,7 @@ async function executeRemoteCommand(
           // register the tmux — wiping the in-flight/dedup state here let the
           // subscription re-process that message and inject the briefing twice
           // (ct-40212 incident, msg ns74720h).
-          if (torn.killedAppServer || torn.killedTmux) {
+          if (torn.killedAppServer || torn.killedTmux || torn.killedSdk) {
             await clearConversationDeliveryAndResumeState(conversationId, undefined, "RECONFIG");
           }
         }
@@ -7060,10 +7126,12 @@ async function executeRemoteCommand(
         // Export the per-session stable-context choice (and the conversation id,
         // so the SessionStart hook records against it directly with no lookup
         // race). Values are validated above / Convex ids — shell-safe tokens.
-        const stableEnvParts: string[] = [];
-        if (stablePrefs.stable_mode) stableEnvParts.push(`${STABLE_ENV_MODE}=${stablePrefs.stable_mode}`);
-        if (stablePrefs.stable_exclude?.length) stableEnvParts.push(`${STABLE_ENV_EXCLUDE}=${stablePrefs.stable_exclude.join(",")}`);
-        if (conversationId && /^[a-z0-9]+$/i.test(conversationId)) stableEnvParts.push(`${STABLE_ENV_CONVERSATION_ID}=${conversationId}`);
+        const stableEnvVars: Record<string, string> = {
+          ...(stablePrefs.stable_mode ? { [STABLE_ENV_MODE]: stablePrefs.stable_mode } : {}),
+          ...(stablePrefs.stable_exclude?.length ? { [STABLE_ENV_EXCLUDE]: stablePrefs.stable_exclude.join(",") } : {}),
+          ...(conversationId && /^[a-z0-9]+$/i.test(conversationId) ? { [STABLE_ENV_CONVERSATION_ID]: conversationId } : {}),
+        };
+        const stableEnvParts = Object.entries(stableEnvVars).map(([k, v]) => `${k}=${v}`);
         const stableEnv = stableEnvParts.length ? ` ${stableEnvParts.join(" ")}` : "";
         // PORT_<NAME> and the worktree identity from the workspace state, for
         // any cwd inside a codecast worktree — the ones this daemon made
@@ -7078,10 +7146,13 @@ async function executeRemoteCommand(
         // Which launch this pane is running (ct-49532): recorded before the
         // command is built, so a hook post from the process that occupied this
         // pane before now carries a superseded token and is dropped.
-        const launchTokenEnvPart = launchTokenEnv(launchTokenLedger().issue(tmuxSession, assignedClaudeSessionId || undefined));
+        const launchToken = launchTokenLedger().issue(tmuxSession, assignedClaudeSessionId || undefined);
+        const launchTokenEnvPart = launchTokenEnv(launchToken);
+        // A shell's CLAUDE_CODE_EFFORT_LEVEL would beat the --effort this launch passes.
+        const launchScrub = binaryArgs.includes("--effort") ? agentEnvScrub(undefined, { effortSet: true }) : AGENT_ENV_SCRUB;
         const envPrefix = worktreeResult
-          ? `${AGENT_ENV_SCRUB}${launchTokenEnvPart} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${wtEnv}${stableEnv}`
-          : `${AGENT_ENV_SCRUB}${launchTokenEnvPart}${wtEnv}${stableEnv}`;
+          ? `${launchScrub}${launchTokenEnvPart} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${wtEnv}${stableEnv}`
+          : `${launchScrub}${launchTokenEnvPart}${wtEnv}${stableEnv}`;
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -7193,6 +7264,59 @@ async function executeRemoteCommand(
             log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
           }
           break;
+        }
+
+        // A Claude session on the SDK backend runs in a host process instead of
+        // a pane. Everything above (cwd, worktree, launch argv, account, stable
+        // context, launch token) is the same launch; only the transport differs.
+        // A refusal or a host that does not come up starts the tmux session below.
+        if (agentType === "claude" && conversationId && assignedClaudeSessionId && claudeSdkBackend
+          && chooseClaudeBackend(parsed.backend, process.env, config.claude_backend) === "sdk") {
+          const refusal = await sdkBackendRefusal(binary);
+          if (refusal) {
+            log(`[claude-sdk] ${conversationId.slice(0, 12)} starts in tmux: ${refusal}`, "warn");
+          } else {
+            try {
+              const definition = requestedDefinition ? await sdkDefinitionFlags(requestedDefinition) : null;
+              if (definition?.warning) log(`[definition ${requestedDefinition!.name}] ${definition.warning}`, "warn");
+              const spec: SdkLaunchSpec = {
+                conversationId,
+                sessionId: assignedClaudeSessionId,
+                // A start that names a session Claude already wrote continues it.
+                resume: fs.existsSync(path.join(process.env.HOME || "", ".claude", "projects", claudeProjectDirName(cwd), `${assignedClaudeSessionId}.jsonl`)),
+                cwd,
+                executable: binary,
+                args: [...binaryArgs, ...(definition?.args ?? [])],
+                // The variables the tmux launch line sets, as values (no shell quoting to undo).
+                env: {
+                  ...worktreeEnv(cwd),
+                  ...(hostAgentSocket() ? { SSH_AUTH_SOCK: hostAgentSocket()! } : {}),
+                  ...(worktreeResult ? { AGENT_RESOURCE_INDEX: String(worktreeResult.portIndex) } : {}),
+                  ...stableEnvVars,
+                  [LAUNCH_TOKEN_VAR]: launchToken,
+                  ...(isRemoteDevice() ? { [CLOUD_ENV_VAR]: "1" } : {}),
+                },
+                ...(definition?.appendSystemPrompt ? { appendSystemPrompt: definition.appendSystemPrompt } : {}),
+                spawnPrefix: disclaimArgv(),
+              };
+              await claudeSdkBackend.start(conversationId, spec, requestedAccount);
+              await bindSdkSession(conversationId, assignedClaudeSessionId, cwd);
+              const resultObj: Record<string, any> = { sdk_session: assignedClaudeSessionId, agent_type: agentType, project_path: cwd };
+              if (worktreeResult) {
+                resultObj.worktree_name = worktreeResult.worktreeName;
+                resultObj.worktree_branch = worktreeResult.worktreeBranch;
+                resultObj.worktree_path = worktreeResult.worktreePath;
+                resultObj.port_index = worktreeResult.portIndex;
+              }
+              result = JSON.stringify(resultObj);
+              log(`[REMOTE] Started claude session ${assignedClaudeSessionId.slice(0, 8)} on the SDK backend (cwd: ${cwd})`);
+              touchHostActivity();
+              break;
+            } catch (err) {
+              log(`[claude-sdk] host for ${conversationId.slice(0, 12)} did not start, starting tmux instead: ${err instanceof Error ? err.message : String(err)}`, "warn");
+              await claudeSdkBackend.stop(conversationId, { forget: true }).catch(() => {});
+            }
+          }
         }
 
         if (!hasTmux()) {
@@ -7314,6 +7438,17 @@ async function executeRemoteCommand(
           result = `escape_${verdict.reason}`;
           log(`[REMOTE] Escape skipped for ${conversationId.slice(0, 12)} (${where}): ${verdict.reason}${pressedAt ? ` pressed ${Date.now() - pressedAt}ms ago` : ""}${lastInjectedAt ? `, last injection ${Date.now() - lastInjectedAt}ms ago` : ""}`);
         };
+
+        // A Claude SDK session: a real interrupt, answered once the turn has drained.
+        if (claudeSdkBackend?.owns(conversationId)) {
+          const interrupted = await claudeSdkBackend.interrupt(conversationId).catch((err) => {
+            error = err instanceof Error ? err.message : String(err);
+            return false;
+          });
+          result = interrupted ? "escape_sent" : "escape_no_active_turn";
+          releaseStopAndSend();
+          break;
+        }
 
         // A cloud agent: Escape cancels its running turn.
         try {
@@ -7596,6 +7731,16 @@ async function executeRemoteCommand(
         }
         if (target && !PERMISSION_MODES.has(target)) {
           error = `Unknown permission mode '${target}'`;
+          break;
+        }
+        // A Claude SDK session changes mode through its host: no footer to press.
+        if (claudeSdkBackend?.owns(conversationId)) {
+          const current = claudeSdkBackend.permissionModeFor(conversationId);
+          const mode = target ?? nextSdkPermissionMode(current);
+          if (await claudeSdkBackend.setPermissionMode(conversationId, mode)) {
+            result = mode;
+            log(`[REMOTE] set_permission_mode: SDK session for ${conversationId.slice(0, 12)} now ${mode}`);
+          } else error = `The Claude SDK session for ${conversationId} is not running`;
           break;
         }
         const sessionId = await resolveCommandSessionId(conversationId);
@@ -14926,45 +15071,7 @@ export function resolveInteractiveQuestions(prompt: InteractivePrompt, sidecar: 
 // expected to stay on the same question after each one, so the tmux closed-loop must
 // not "confirm" them with Enter (Enter on a multiSelect list toggles the highlighted
 // row, corrupting the selection). The sender navigates tabs itself via Right/Enter.
-type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string; multi?: boolean };
-
-export function parsePollMessage(content: string): PollMessage | null {
-  try {
-    const parsed = JSON.parse(content);
-    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps) || typeof parsed.text === "string")) return parsed;
-  } catch {}
-  return null;
-}
-
-// A free-text answer to an AskUserQuestion menu. Claude Code's question menu has no
-// inline text slot, so the only way to enter free text is to decline the whole menu
-// (Escape) and type the answer at the prompt — which discards every menu selection. The
-// web sends such an answer as a top-level `text` with no menu keys; pre-2026-06-27 builds
-// embedded it inside `steps` (one step per `text`). BOTH are a decline: do it ONCE up
-// front, then type. Doing it per-step (the old behavior) declined the menu mid-loop and
-// spilled the remaining option digits into the freshly-reopened prompt box (the "211"
-// bug). The OTHER text shape — menu keys PLUS `poll.text` (e.g. plan feedback, where
-// option 4 opens a feedback field) — is NOT a decline: those keys drive a menu whose
-// final option opens the text input, so the text lands in the field, not at the prompt.
-//
-// Returns the text to type after the decline (newlines flattened — a literal LF reads as
-// Enter in the TUI and submits early, which is why the normal paste path flattens too; the
-// middot keeps multi-answer prose readable on one line), or null when this isn't a decline.
-export function pollDeclineText(poll: PollMessage): string | null {
-  const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
-  const menuSteps = steps.filter(s => !s.text);
-  const embeddedText = steps.filter(s => s.text).map(s => s.text!).join("\n\n");
-  const isDecline = (poll.text != null && menuSteps.length === 0) || (embeddedText !== "" && poll.text == null);
-  if (!isDecline) return null;
-  return (poll.text ?? embeddedText).replace(/\r?\n+/g, "  ·  ").trim();
-}
-
-// The menu-navigation steps of a poll (the option keystrokes), excluding any step that
-// carries embedded free text (those decline the menu — see pollDeclineText).
-export function pollMenuSteps(poll: PollMessage): Array<{ key: string; text?: string }> {
-  const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
-  return steps.filter(s => !s.text);
-}
+export { parsePollMessage, pollDeclineText, pollMenuSteps } from "./pollMessage.js";
 
 // The synthetic poll the daemon emits for a live interactive prompt must carry a
 // STABLE message id. checkForInteractivePrompt fires from several call sites
@@ -19530,6 +19637,9 @@ type AppServerTurnProgress = {
 };
 const appServerThreads = new Map<string, AppServerThreadEntry>();
 const appServerConversations = new Map<string, string>();
+// Claude conversations that run through the Agent SDK in a host process instead
+// of a tmux pane (claudeSdk/backend.ts). Set up in the daemon's main.
+let claudeSdkBackend: ClaudeSdkBackend | null = null;
 const persistedAppServerThreads = new Map<string, PersistedAppServerThreadRecord>();
 const appServerTurnProgress = new Map<string, AppServerTurnProgress>();
 const pendingAppServerForkParents = new Set<string>();
@@ -19746,14 +19856,24 @@ export async function teardownConversationBackends(
 }
 
 /** Bind {@link teardownConversationBackends} to the daemon's live globals. */
-function teardownConversationBackendsLive(
+async function teardownConversationBackendsLive(
   conversationId: string,
-  opts: { interruptActiveTurn?: boolean } = {},
-): Promise<{ killedAppServer: boolean; killedTmux: boolean; appServerThreadId?: string }> {
+  opts: { interruptActiveTurn?: boolean; keepSdkBinding?: boolean } = {},
+): Promise<{ killedAppServer: boolean; killedTmux: boolean; killedSdk?: string; appServerThreadId?: string }> {
   // A cloud agent has no pane to kill; stopping it cancels its running turn.
   if (opts.interruptActiveTurn) cloudAgents.interruptInBackground(conversationId);
+  // A Claude SDK host is stopped, and its binding dropped: whatever runs the
+  // conversation next (a new start, another agent) is not this host. A kill
+  // keeps it (keepSdkBinding), so a Restart or an account recycle resumes on the
+  // SDK backend; the resume gate keeps a killed conversation down.
+  const sdkSession = claudeSdkBackend?.sessionFor(conversationId);
+  if (sdkSession) {
+    await claudeSdkBackend!.stop(conversationId, { forget: !opts.keepSdkBinding }).catch((err) => log(`[claude-sdk] stop failed: ${err instanceof Error ? err.message : String(err)}`));
+    stopManagedSessionHeartbeat(sdkSession);
+    log(`[REMOTE] Tore down Claude SDK host ${sdkSession.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
+  }
   const persisted = persistedAppServerThreads.get(conversationId);
-  return teardownConversationBackends(conversationId, {
+  const torn = await teardownConversationBackends(conversationId, {
     appServerConversations,
     appServerThreads,
     startedTmux: startedSessionTmux,
@@ -19772,6 +19892,7 @@ function teardownConversationBackendsLive(
       : undefined,
     onLog: log,
   });
+  return sdkSession ? { ...torn, killedSdk: sdkSession } : torn;
 }
 
 /**
@@ -23618,16 +23739,8 @@ async function discoverAndLinkSession(
       return;
     }
     if (replacedSessionId && replacedSessionId !== linkedSessionId) stopManagedSessionHeartbeat(replacedSessionId);
-    cache[linkedSessionId] = conversationId;
-    if (conversationCacheRef) {
-      conversationCacheRef[linkedSessionId] = conversationId;
-    }
-    saveConversationCache(cache);
+    await bindSessionToConversation(conversationId, linkedSessionId, cwd);
     if (syncServiceRef) {
-      // Reconcile project_path/git_root to the real session cwd (see Claude
-      // match branch). `cwd` is authoritative here: the pane was launched in it.
-      const discoveryGitInfo = await getGitInfo(cwd);
-      void pushSessionIdBinding(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root, discoveryGitInfo?.remoteUrl);
       registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
       if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
         stopManagedSessionHeartbeat(startedEntry.sessionId);
@@ -24324,10 +24437,11 @@ export function resumeReuseCandidates(
 // previous process alive often enough that it is the main way an orphan ends up
 // posting for a pane it no longer owns; the new token is what the daemon fences
 // those posts out with.
-export function buildResumeEnvPrefix(agentType: string, cwd?: string, launchToken?: string): string {
+export function buildResumeEnvPrefix(agentType: string, cwd?: string, launchToken?: string, opts: { effortSet?: boolean } = {}): string {
   const token = launchTokenEnv(launchToken);
-  const prefix = agentType === "claude"    ? `${AGENT_ENV_SCRUB}${token} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
-    : `${AGENT_ENV_SCRUB}${token}`;
+  const scrub = opts.effortSet ? agentEnvScrub(undefined, { effortSet: true }) : AGENT_ENV_SCRUB;
+  const prefix = agentType === "claude"    ? `${scrub}${token} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
+    : `${scrub}${token}`;
   const workspaceEnv = [cwd ? worktreeEnvPrefix(cwd) : "", hostAgentSocketEnv()].filter(Boolean).join(" ");
   return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;
 }
@@ -24496,7 +24610,58 @@ export async function resolveLiveTmuxTarget(
 /** A live agent that no tmux pane holds (a herdr tab, a terminal): a resume now would start a second copy on its transcript. */
 export const liveOutsideTmux = (live: ResolvedLiveSession): boolean => !live.tmuxTarget && !!live.proc;
 
+/** May this session come back now: the lifecycle gate and the single-owner gate, for autoResumeSession and its SDK branch. */
+async function resumeAllowed(sessionId: string, conversationId: string | undefined, opts: ResumeOptions | undefined): Promise<boolean> {
+  // Lifecycle gate: a killed/completed conversation must never come back on its
+  // own. This is the chokepoint every AUTOMATIC resurrection path funnels through
+  // (the health check's reconstitution, message-delivery resume, the warm pool,
+  // repairAndResumeSession), so the check lives here rather than at each caller.
+  // Fails OPEN on a lookup error.
+  if (!opts?.userInitiated && conversationId && await conversationForbidsResurrection(conversationId, sessionId, "RESUME", { trustStatusFallback: false })) {
+    return false;
+  }
+
+  // Single-owner resume gate — see resumeOwnerVerdict for the two rules it folds
+  // together. One owner lookup serves both.
+  const ownerInfo = conversationId && syncServiceRef
+    ? await syncServiceRef.getConversationOwnerInfo(conversationId)
+    : null;
+  const verdict = resumeOwnerVerdict({ conversationId, localDeviceId: deviceId(), isRemote: isRemoteDevice(), owner: ownerInfo });
+  if (verdict === "owned_by_other_device") {
+    log(`[OWNER] skipping resume of ${sessionId.slice(0, 8)} — owned by device ${ownerInfo!.ownerDeviceId.slice(0, 8)}${ownerInfo!.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
+    return false;
+  }
+  if (verdict === "remote_no_conversation") {
+    log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
+    return false;
+  }
+  if (verdict === "remote_unowned") {
+    const owner = ownerInfo?.ownerDeviceId;
+    log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
+    return false;
+  }
+  return true;
+}
+
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId, opts?: ResumeOptions): Promise<boolean> {
+  // Every automatic resume comes through here. A session on the Claude SDK
+  // backend resumes in a host, never in a pane: two processes on one session
+  // would both answer.
+  // Matched by conversation too: a caller can still hold the session id from before a /clear.
+  const sdkConversation = claudeSdkBackend?.conversationForSession(sessionId)
+    ?? (conversationId && claudeSdkBackend?.owns(conversationId) ? conversationId : undefined);
+  if (sdkConversation && claudeSdkBackend) {
+    const client = await claudeSdkBackend.ensure(sdkConversation, { userInitiated: !!opts?.userInitiated }).catch((err) => {
+      log(`[claude-sdk] not resuming ${shortId(sessionId)}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    });
+    if (!client) return false;
+    sessionId = claudeSdkBackend.sessionFor(sdkConversation) ?? sessionId;
+    ensureManagedSessionHeartbeat(sessionId);
+    // Without a message id, the content names the send, so a repeated resume does not send it twice.
+    if (content) await claudeSdkBackend.deliver(sdkConversation, opts?.delivery?.messageId ?? `resume-${createHash("sha1").update(`${sessionId}\n${content}`).digest("hex").slice(0, 16)}`, content);
+    return true;
+  }
   if (swapHeld(sessionId)) {
     logDelivery(`Not resuming ${sessionId.slice(0, 8)}: a herdr take is swapping its agent`);
     return false;
@@ -24530,37 +24695,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   }
   let releaseAccountResume: (() => void) | undefined;
   const promise = Promise.resolve().then(async () => {
-    const canResume = async (): Promise<boolean> => {
-      // Lifecycle gate: a killed/completed conversation must never come back on its
-      // own. This is the chokepoint every AUTOMATIC resurrection path funnels through
-      // (the health check's reconstitution, message-delivery resume, the warm pool,
-      // repairAndResumeSession), so the check lives here rather than at each caller.
-      // Fails OPEN on a lookup error.
-      if (!opts?.userInitiated && conversationId && await conversationForbidsResurrection(conversationId, sessionId, "RESUME", { trustStatusFallback: false })) {
-        return false;
-      }
-
-      // Single-owner resume gate — see resumeOwnerVerdict for the two rules it folds
-      // together. One owner lookup serves both.
-      const ownerInfo = conversationId && syncServiceRef
-        ? await syncServiceRef.getConversationOwnerInfo(conversationId)
-        : null;
-      const verdict = resumeOwnerVerdict({ conversationId, localDeviceId: deviceId(), isRemote: isRemoteDevice(), owner: ownerInfo });
-      if (verdict === "owned_by_other_device") {
-        log(`[OWNER] skipping resume of ${sessionId.slice(0, 8)} — owned by device ${ownerInfo!.ownerDeviceId.slice(0, 8)}${ownerInfo!.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
-        return false;
-      }
-      if (verdict === "remote_no_conversation") {
-        log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
-        return false;
-      }
-      if (verdict === "remote_unowned") {
-        const owner = ownerInfo?.ownerDeviceId;
-        log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
-        return false;
-      }
-      return true;
-    };
+    const canResume = (): Promise<boolean> => resumeAllowed(sessionId, conversationId, opts);
     if (!(await canResume()) || resumeInFlight.get(sessionId) !== promise) return false;
     releaseAccountResume = await accountLifecycleGate.acquireResume(agentTypeHint);
     if (resumeInFlight.get(sessionId) !== promise) return false;
@@ -24927,7 +25062,7 @@ export async function buildClaudeResumeCommand(a: {
 function resumeLaunchLine(a: {
   agentType: AgentClientId; cwd: string; pane: string; sessionId: string; resumeAccountPrefix: string; resumeCmd: string;
 }): string {
-  const env = buildResumeEnvPrefix(a.agentType, a.cwd, launchTokenLedger().issue(a.pane, a.sessionId));
+  const env = buildResumeEnvPrefix(a.agentType, a.cwd, launchTokenLedger().issue(a.pane, a.sessionId), { effortSet: /(^|\s)--effort\s/.test(a.resumeCmd) });
   return `${a.resumeAccountPrefix}${providerKeySourcePrefix(a.agentType, CONFIG_DIR)}${disclaimPrefix()}${env} ${a.resumeCmd}`;
 }
 
@@ -26458,8 +26593,31 @@ async function deliverMessageIntoSession(
     return false;
   };
 
-  // Backends that are not a pane: a codex app-server thread, a cloud agent.
+  // A Claude conversation on the SDK backend: the message goes to its host,
+  // which resumes the saved session in a new host when the old one is gone. A
+  // failure throws, so the message is retried there, never pasted into a pane.
+  const trySdkDelivery = async (): Promise<boolean> => {
+    if (!claudeSdkBackend?.owns(conversationId)) return false;
+    // Bringing a dead host back is a resume and passes the resume gate inside the backend
+    // (a killed or completed conversation stays down). Refused, the message waits and retries, as on tmux.
+    await deliveryStep(messageId, "admit_sdk", admit);
+    // Marked before the send for the reason the started-pane path marks first:
+    // Claude echoes the message to its JSONL at once, and the echo promotes the row.
+    markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
+    const outcome = await claudeSdkBackend.deliver(conversationId, messageId, content);
+    // A menu answer reaches Claude as a tool result, never as a user line to echo: it is delivered now (as the tmux path marks it).
+    if (outcome !== "sent") await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+    // A host resumed by this delivery is live again.
+    const sdkSession = claudeSdkBackend.sessionFor(conversationId);
+    if (sdkSession) ensureManagedSessionHeartbeat(sdkSession);
+    syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+    logDelivery(`[claude-sdk] delivered msg=${messageId.slice(0, 8)} to conv=${conversationId.slice(0, 12)}`);
+    return true;
+  };
+
+  // Backends that are not a pane: a Claude SDK host, a codex app-server thread, a cloud agent.
   const tryBackendDelivery = async (): Promise<boolean> => {
+    if (await trySdkDelivery()) return true;
     // A cloud agent first: a Codex Cloud task is a codex conversation, and
     // must not start the local app-server on its way. A setup problem throws
     // after its card is posted (the turn-stopped card; a credential one
@@ -31031,6 +31189,25 @@ async function main(): Promise<void> {
     }
   }
 
+  // The card a permission prompt opens: the tool, its preview, and who asks.
+  // A subagent's card links to the subagent's own conversation.
+  function permissionCardPrompt(input: PermissionHookInput) {
+    const subagentConv = input.agentId ? conversationCache[`agent-${input.agentId}`] : undefined;
+    return {
+      tool_name: input.toolName,
+      arguments_preview: input.preview,
+      glance: input.glance,
+      suggestions: input.suggestions,
+      source: {
+        ...(input.subagentType && { subagent_type: input.subagentType }),
+        ...(subagentConv && { subagent_conversation_id: subagentConv }),
+        ...(input.permissionMode === "bypassPermissions" && { safety_check: true }),
+        ...(input.intent && { intent: input.intent }),
+        ...removalsFor(input),
+      },
+    };
+  }
+
   // A PermissionRequest hook waiting for the web (permissionHookWait.ts). Its
   // status goes through the same sink a status post would, so the session
   // reads as blocked at once; the card it opens is the one the hook answers.
@@ -31049,27 +31226,14 @@ async function main(): Promise<void> {
     const convId = conversationCache[sessionId];
     const answerable = !!convId && !PERMISSION_CARD_SKIP_TOOLS.has(toolName);
     // A subagent's call sits in its own transcript (subagents/agent-<id>.jsonl),
-    // synced as its own conversation: the card links there, and the watch
-    // below reads that file, since the parent's only shows the Task call.
+    // synced as its own conversation: the watch below reads that file, since
+    // the parent's only shows the Task call.
     const subagentSession = input.agentId ? `agent-${input.agentId}` : undefined;
-    const subagentConv = subagentSession ? conversationCache[subagentSession] : undefined;
     // Bind to a card a Notification already opened for this prompt, unless a
     // hook holds that one (a second prompt in parallel gets its own card).
     const opened = answerable && permissionRecordPending.has(sessionId) ? permissionRecordIds.get(sessionId) : undefined;
     const record = answerable && !permissionRecordPending.has(sessionId)
-      ? openPermissionRecord(convId, sessionId, {
-          tool_name: toolName,
-          arguments_preview: preview,
-          glance: input.glance,
-          suggestions: input.suggestions,
-          source: {
-            ...(input.subagentType && { subagent_type: input.subagentType }),
-            ...(subagentConv && { subagent_conversation_id: subagentConv }),
-            ...(input.permissionMode === "bypassPermissions" && { safety_check: true }),
-            ...(input.intent && { intent: input.intent }),
-            ...removalsFor(input),
-          },
-        })
+      ? openPermissionRecord(convId, sessionId, permissionCardPrompt(input))
       : null;
     if (record) permissionJustResolved.add(sessionId);
     hookStatusGate.deliver(sessionId, normalizeHookStatus({
@@ -31121,6 +31285,114 @@ async function main(): Promise<void> {
       sendAgentStatus(syncService, convId, sessionId, "working");
     });
   };
+
+  // The Claude SDK backend (claudeSdk/backend.ts). Its sessions take the paths
+  // a hook post takes: activity goes through the status sink a hook post feeds,
+  // and a canUseTool prompt opens the same web card and waits in the same
+  // waiter the PermissionRequest hook does, whose decision is the shape
+  // canUseTool returns. The status hook stands down in these sessions
+  // (CODECAST_SDK_SESSION), so nothing is reported twice.
+  claudeSdkBackend = new ClaudeSdkBackend({
+    log: (line) => log(line),
+    castArgv: () => {
+      const { cmd, prefixArgs } = resolveCastInvocation();
+      return [cmd, ...prefixArgs];
+    },
+    shellPrefix: (account) => `${launchAccountPrefix(account, log).prefix}${providerKeySourcePrefix("claude", CONFIG_DIR)}`,
+    activity: (convId, sessionId, a, launchToken) => {
+      const cwd = claudeSdkBackend?.specFor(convId)?.cwd;
+      hookStatusGate.deliver(sessionId, normalizeHookStatus({
+        status: a.status,
+        ts: a.ts,
+        ...(a.permissionMode && { permission_mode: a.permissionMode as PermissionMode }),
+        ...(a.message && { message: a.message }),
+        ...(a.sessionBoundary && { session_boundary: true }),
+        ...(a.dialog && { dialog: true }),
+        ...(a.turnCompletedAt && {
+          turn_completed_at: a.turnCompletedAt,
+          ...(cwd && { transcript_path: claudeTranscriptFor(sessionId) ?? path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(cwd), `${sessionId}.jsonl`) }),
+        }),
+        ...(launchToken && { launch_token: launchToken }),
+      }));
+    },
+    permission: (convId, sessionId, request, settled, cardOpened) => new Promise((resolve) => {
+      const input = parsePermissionHookInput(JSON.stringify({
+        hook_event_name: "PermissionRequest",
+        session_id: sessionId,
+        tool_name: request.toolName,
+        tool_input: request.input,
+        cwd: claudeSdkBackend?.specFor(convId)?.cwd,
+        ...(request.agentId && { agent_id: request.agentId }),
+        permission_suggestions: request.suggestions ?? [],
+      }));
+      if (!input) return resolve(null);
+      // canUseTool has no deadline, so the wait has none either; the card's own
+      // poll ends an unanswered card after an hour, and that denies the call.
+      const wait = permissionHookWaiters.wait(sessionId, input.suggestions, SDK_PERMISSION_WAIT_MS);
+      // A daemon that reattached binds to the card the previous daemon opened.
+      const record = request.cardId ? null : openPermissionRecord(convId, sessionId, permissionCardPrompt(input));
+      const idPromise = request.cardId ? Promise.resolve<string | null>(request.cardId) : record!.id;
+      settled.addEventListener("abort", () => {
+        wait.cancel();
+        void idPromise.then((id) => (id ? syncService.cancelPermissionRequest(id) : false)).catch(() => {});
+      }, { once: true });
+      void idPromise.then((id) => {
+        if (!id) { wait.cancel(); return; }
+        cardOpened(id);
+        wait.bind(id);
+        const decision = record ? record.decision : waitForPermissionDecision(syncService, sessionId, id, request.toolName, log);
+        void decision.then((d) => {
+          if (settled.aborted) return;
+          permissionHookWaiters.answer(id, d ?? { approved: false, message: "The permission request expired unanswered." });
+        });
+      });
+      void wait.done.then((output) => {
+        if (!output) return resolve(null);
+        try {
+          resolve(JSON.parse(output).hookSpecificOutput.decision);
+        } catch {
+          resolve(null);
+        }
+      });
+    }),
+    turnError: (convId, sessionId, err) => log(`[claude-sdk] turn for ${shortId(sessionId)} ended on ${err.kind}: ${err.message.slice(0, 200)}`),
+    mayResume: (convId, sessionId, userInitiated) => resumeAllowed(sessionId, convId, userInitiated ? { userInitiated: true } : undefined),
+    transcriptExists: (sessionId, cwd) => !!claudeTranscriptFor(sessionId)
+      || fs.existsSync(path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(cwd), `${sessionId}.jsonl`)),
+    transcriptHas: (sessionId, text, since) => {
+      const file = claudeTranscriptFor(sessionId);
+      if (!file) return false;
+      try {
+        return transcriptContainsDelivery(fs.readFileSync(file, "utf-8"), "claude", text, since);
+      } catch {
+        return false;
+      }
+    },
+    sessionChanged: (convId, _previous, next) => {
+      const cwd = claudeSdkBackend?.specFor(convId)?.cwd;
+      if (cwd) void bindSdkSession(convId, next, cwd).catch((err) => log(`[claude-sdk] rebind failed: ${err instanceof Error ? err.message : String(err)}`));
+    },
+    stopped: (convId, sessionId, reason) => {
+      log(`[claude-sdk] session ${shortId(sessionId)} stopped (${reason}); the next message resumes it`);
+      permissionHookWaiters.releaseSession(sessionId);
+      stopManagedSessionHeartbeat(sessionId);
+      sendAgentStatus(syncService, convId, sessionId, "stopped");
+    },
+    tooOld: (convId, sessionId, version, minimum) => {
+      const message = `Claude Code ${version ?? "(unknown)"} is older than ${minimum}, which the SDK backend needs. Update Claude Code (claude update); the next message runs this session in tmux.`;
+      syncService.setSessionError(convId, message).catch(logConvexFailure);
+      sendAgentStatus(syncService, convId, sessionId, "stopped");
+    },
+  });
+  void claudeSdkBackend.reattachAll().then((convs) => {
+    for (const conv of convs) {
+      const sid = claudeSdkBackend?.sessionFor(conv);
+      if (!sid) continue;
+      conversationCache[sid] = conv;
+      ensureManagedSessionHeartbeat(sid);
+    }
+    if (convs.length) log(`[claude-sdk] reattached ${convs.length} host(s)`);
+  }).catch((err) => log(`[claude-sdk] reattach failed: ${err instanceof Error ? err.message : String(err)}`));
 
   setHookStatusSink((sessionId, data) => {
     // One gate for every effect below. handleStatusData applies the same launch
