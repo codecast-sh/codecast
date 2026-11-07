@@ -2163,6 +2163,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(opts?.remember ? { remember: true } : {}),
     });
   },
+  // The client already shows the stub (store addPermissionRule).
+  addPermissionRule: async (ctx, _userId, [rule]: [{ project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny" }]) => {
+    await (ctx as any).runMutation(api.permissionRules.add, {
+      project: rule.project, scope: rule.scope, permission: rule.permission, pattern: rule.pattern, action: rule.action,
+    });
+  },
+  // The client already removed the row (store removePermissionRule).
+  removePermissionRule: async (ctx, _userId, [ruleId]: [string]) => {
+    if (!isServerId(ruleId)) return;
+    await (ctx as any).runMutation(api.permissionRules.remove, { rule_id: ruleId as Id<"permission_rules"> });
+  },
   // The client already shows the run as running (store respondToGate).
   respondToGate: async (ctx, _userId, [runId, response]: [string, string]) => {
     await (ctx as any).runMutation(api.workflow_runs.respondToGate, {

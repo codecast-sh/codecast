@@ -37,6 +37,7 @@ describe("parsePermissionHookInput", () => {
       intent: "run tests",
       command: "bun test src/x.test.ts",
       suggestions: [RULE],
+      ruleRequest: { permission: "bash", patterns: ["bun test src/x.test.ts"], always: ["bun test *"] },
     });
     expect(parsePermissionHookInput(JSON.stringify({ ...PAYLOAD, cwd: "/tmp/lab" }))?.cwd).toBe("/tmp/lab");
   });
