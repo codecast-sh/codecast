@@ -16,7 +16,7 @@ interface Call {
 }
 
 /** A page that records what was dispatched and answers geometry queries. */
-function recorder(opts: { quads?: number[][]; hit?: string | null; missing?: boolean; scale?: number } = {}) {
+function recorder(opts: { quads?: number[][]; hit?: string | null; missing?: boolean; detached?: boolean; scale?: number } = {}) {
   const calls: Call[] = [];
   const page = {
     sessionId: "s1",
@@ -28,7 +28,10 @@ function recorder(opts: { quads?: number[][]; hit?: string | null; missing?: boo
           throw new Error("Node with given id does not belong to the document");
         }
         if (method === "DOM.getContentQuads") return { quads: opts.quads ?? [[10, 20, 30, 20, 30, 40, 10, 40]] };
-        if (method === "DOM.resolveNode") return { object: { objectId: "obj-1" } };
+        if (method === "DOM.resolveNode") {
+          if (opts.detached) throw new Error("Node with given id does not belong to the document");
+          return { object: { objectId: "obj-1" } };
+        }
         if (method === "Runtime.callFunctionOn") return { result: { value: opts.hit ?? null } };
         // The pointer probe asks where the page saw the cursor. `scale` fakes a
         // page that receives input scaled, as happens under viewport emulation.
@@ -63,6 +66,13 @@ describe("locate", () => {
   test("reports a vanished element as gone rather than as a protocol error", async () => {
     const { page } = recorder({ missing: true });
     expect(locate(page, 5)).rejects.toThrow(ElementGone);
+  });
+
+  test("a node from before a navigation is gone, not a protocol error, and nothing is clicked", async () => {
+    // The old document's node still scrolls and measures; only resolving it fails.
+    const { page, of } = recorder({ detached: true });
+    await expect(click(page, 5)).rejects.toThrow(/no longer in the page — take a fresh snapshot/);
+    expect(of("Input.dispatchMouseEvent")).toHaveLength(0);
   });
 
   test("explains an element that exists but has no box", async () => {
