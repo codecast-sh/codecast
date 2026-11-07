@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  isPrivateHost,
   checkUrl, denyNavigation, findManifestFile, isInternalUrl, loadMachinePolicy, loadSitePolicy, originOf, parsePattern,
   type SitePolicy,
 } from "./policy.js";
@@ -71,9 +72,47 @@ describe("origin matching", () => {
     expect(checkUrl(p, "https://example.com/other").allowed).toBe(true);
   });
 
-  test("`*` allows everything", () => {
+  test("`*` allows every public site", () => {
     const p = policyOf("*");
     expect(checkUrl(p, "https://anything.at.all").allowed).toBe(true);
+  });
+
+  test("wildcards never match a private address; an exact entry does", () => {
+    const wild = policyOf("*", "*.local", "*.localhost", "*.internal");
+    for (const url of [
+      "http://localhost:3200",
+      "http://127.0.0.1",
+      "http://10.1.2.3",
+      "http://172.20.0.1",
+      "http://192.168.1.1",
+      "http://169.254.169.254/latest/meta-data",
+      "http://100.100.1.1",
+      "http://0.0.0.0:8080",
+      "http://[::1]:3000",
+      "http://[fe80::1]",
+      "http://[fd12::1]",
+      "http://[::ffff:127.0.0.1]",
+      "http://printer.local",
+      "http://app.localhost",
+      "http://metadata.google.internal",
+    ]) {
+      expect({ url, allowed: checkUrl(wild, url).allowed }).toEqual({ url, allowed: false });
+    }
+    expect(checkUrl(wild, "http://172.32.0.1").allowed).toBe(true);
+    expect(checkUrl(wild, "http://8.8.8.8").allowed).toBe(true);
+    const exact = policyOf("localhost:3200", "169.254.169.254", "printer.local", "[::1]");
+    expect(checkUrl(exact, "http://localhost:3200/inbox").allowed).toBe(true);
+    expect(checkUrl(exact, "http://169.254.169.254/").allowed).toBe(true);
+    expect(checkUrl(exact, "http://printer.local").allowed).toBe(true);
+    expect(checkUrl(exact, "http://[::1]:5000").allowed).toBe(true);
+  });
+
+  test("isPrivateHost judges the name alone", () => {
+    expect(isPrivateHost("LOCALHOST")).toBe(true);
+    expect(isPrivateHost("[::ffff:7f00:1]")).toBe(true);
+    expect(isPrivateHost("example.com")).toBe(false);
+    expect(isPrivateHost("[2606:4700::1111]")).toBe(false);
+    expect(isPrivateHost("300.1.1.1")).toBe(false);
   });
 
   test("blank and malformed patterns never match", () => {

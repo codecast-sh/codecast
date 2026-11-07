@@ -57,37 +57,59 @@ const SCRATCH_PAGE = "<!doctype html><title>cast vault</title>";
 
 // ── localStorage through a scratch document ─────────────────────────────────
 
-async function withOriginDocument<T>(conn: BrowserConn, origin: string, fn: (evaluate: (expression: string) => Promise<any>) => Promise<T>): Promise<T> {
+type ScratchTab = { targetId: string; sessionId: string; evaluate: (expression: string) => Promise<any>; close: () => Promise<void> };
+
+/**
+ * A background tab showing an empty document at `origin` (Fetch answers the
+ * request, so nothing reaches the site), or at about:blank with no origin.
+ * The extension bridge scopes a socket's cookie and storage calls to the
+ * sites its tabs show (bridge/guardrails.ts), and a tab at the sign-in's
+ * origin is what puts that site in scope.
+ */
+async function openScratchTab(conn: BrowserConn, origin?: string): Promise<ScratchTab> {
   const { targetId } = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank", background: true }, undefined, 8_000);
+  let off = () => {};
+  const close = async () => {
+    off();
+    await conn.send("Target.closeTarget", { targetId }, undefined, 5_000).catch(() => {});
+  };
   try {
     const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true }, undefined, 8_000);
-    const url = `${origin}${SCRATCH_PATH}`;
-    await conn.send("Fetch.enable", { patterns: [{ urlPattern: `${url}*` }] }, sessionId, 5_000);
-    const off = conn.on((ev) => {
-      if (ev.sessionId !== sessionId || ev.method !== "Fetch.requestPaused") return;
-      void conn
-        .send("Fetch.fulfillRequest", {
-          requestId: ev.params.requestId,
-          responseCode: 200,
-          responseHeaders: [{ name: "Content-Type", value: "text/html" }],
-          body: Buffer.from(SCRATCH_PAGE).toString("base64"),
-        }, sessionId, 5_000)
-        .catch(() => {});
-    });
     const evaluate = async (expression: string) =>
       (await conn.send<any>("Runtime.evaluate", { expression, returnByValue: true }, sessionId, 5_000)).result?.value;
-    try {
+    if (origin) {
+      const url = `${origin}${SCRATCH_PATH}`;
+      await conn.send("Fetch.enable", { patterns: [{ urlPattern: `${url}*` }] }, sessionId, 5_000);
+      off = conn.on((ev) => {
+        if (ev.sessionId !== sessionId || ev.method !== "Fetch.requestPaused") return;
+        void conn
+          .send("Fetch.fulfillRequest", {
+            requestId: ev.params.requestId,
+            responseCode: 200,
+            responseHeaders: [{ name: "Content-Type", value: "text/html" }],
+            body: Buffer.from(SCRATCH_PAGE).toString("base64"),
+          }, sessionId, 5_000)
+          .catch(() => {});
+      });
       await conn.send("Page.navigate", { url }, sessionId, 10_000);
       for (let i = 0; i < 50; i++) {
         if ((await evaluate("location.origin + ' ' + document.readyState").catch(() => "")) === `${origin} complete`) break;
         await new Promise((r) => setTimeout(r, 100));
       }
-      return await fn(evaluate);
-    } finally {
-      off();
     }
+    return { targetId, sessionId, evaluate, close };
+  } catch (err) {
+    await close();
+    throw err;
+  }
+}
+
+async function withOriginDocument<T>(conn: BrowserConn, origin: string, fn: (evaluate: (expression: string) => Promise<any>) => Promise<T>): Promise<T> {
+  const tab = await openScratchTab(conn, origin);
+  try {
+    return await fn(tab.evaluate);
   } finally {
-    await conn.send("Target.closeTarget", { targetId }, undefined, 5_000).catch(() => {});
+    await tab.close();
   }
 }
 
@@ -227,7 +249,8 @@ export type SigninUseDeps = {
   conversation: () => string | null;
   log: (line: string) => void;
   now?: () => number;
-  connect?: (port: CdpEndpoint) => Promise<BrowserConn>;
+  /** Opens the browser socket; `sites` are the sign-in's, for a socket that must hold them in scope first (bridgeBrowserConn). */
+  connect?: (port: CdpEndpoint, sites: string[]) => Promise<BrowserConn>;
   /** Where this machine's sign-in memory lives (signin.ts); tests point it elsewhere. */
   stateFile?: string;
 };
@@ -290,7 +313,7 @@ export async function useVaultSignin(rawUrl: string, deps: SigninUseDeps): Promi
     // else, and the open stops on a hold.
     const askedFirst = meta.ask_first ? await readSaved() : undefined;
     if (held) return held;
-    conn = await (deps.connect ?? ((port) => CdpConnection.fromPort(port, 5_000)))(deps.port);
+    conn = await (deps.connect ?? ((port) => CdpConnection.fromPort(port, 5_000)))(deps.port, sites);
     const browser = conn;
     /** Only the saved jar's part in the sign-in's own scope goes in (signin.ts scopedJar). */
     const putIn = async (jar: ReturnType<typeof scopedJar>) => {
@@ -357,19 +380,32 @@ export async function useVaultSignin(rawUrl: string, deps: SigninUseDeps): Promi
  * The human's Chrome over the extension bridge, as a browser socket. The
  * bridge answers only a handful of browser-wide methods (bridge/host.ts), so
  * a browser-wide `Storage` call (the whole cookie jar, read or set) runs in
- * the session of a background scratch tab, which reaches the same jar.
- * Everything else passes through. The tab opens on the first such call and
- * `dispose` closes it.
+ * the session of a background scratch tab, which reaches the same jar. The
+ * bridge narrows a socket's jar to the sites its tabs show, so with `sites`
+ * a scratch tab parks at each site's origin (an empty document Fetch serves).
+ * Everything else passes through. The tabs open on the first such call and
+ * `dispose` closes them.
  */
-export async function bridgeBrowserConn(ep: CdpEndpoint, connect: (ep: CdpEndpoint) => Promise<CdpClient> = (e) => CdpConnection.fromPort(e, 5_000)): Promise<BrowserConn> {
+export async function bridgeBrowserConn(
+  ep: CdpEndpoint,
+  connect: (ep: CdpEndpoint) => Promise<CdpClient> = (e) => CdpConnection.fromPort(e, 5_000),
+  sites: readonly string[] = [],
+): Promise<BrowserConn> {
   const conn = await connect(ep);
-  let scratch: Promise<{ targetId: string; sessionId: string }> | null = null;
-  const scratchSession = () =>
-    (scratch ??= (async () => {
-      const { targetId } = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank", background: true }, undefined, 8_000);
-      const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true }, undefined, 8_000);
-      return { targetId, sessionId };
-    })());
+  let scratch: Promise<ScratchTab[]> | null = null;
+  // One scratch tab per site, each at the site's origin: the bridge answers a
+  // socket's cookie calls only for the sites its tabs show.
+  const scratchSession = async () =>
+    (await (scratch ??= (async () => {
+      const tabs: ScratchTab[] = [];
+      try {
+        for (const origin of sites.length ? sites.map((s) => `https://${s}`) : [undefined]) tabs.push(await openScratchTab(conn, origin));
+      } catch (err) {
+        await Promise.all(tabs.map((t) => t.close()));
+        throw err;
+      }
+      return tabs;
+    })()))[0];
   return {
     send: async <T = any>(method: string, params?: Record<string, unknown>, sessionId?: string, timeoutMs?: number): Promise<T> =>
       conn.send<T>(method, params, sessionId ?? (method.startsWith("Storage.") ? (await scratchSession()).sessionId : undefined), timeoutMs),
@@ -377,7 +413,7 @@ export async function bridgeBrowserConn(ep: CdpEndpoint, connect: (ep: CdpEndpoi
     waitFor: (predicate, timeoutMs) => conn.waitFor(predicate, timeoutMs),
     close: () => conn.close(),
     dispose: async () => {
-      if (scratch) await scratch.then(({ targetId }) => conn.send("Target.closeTarget", { targetId }, undefined, 5_000)).catch(() => {});
+      if (scratch) await scratch.then((tabs) => Promise.all(tabs.map((t) => t.close()))).catch(() => {});
       conn.close();
     },
   };
@@ -394,6 +430,6 @@ export async function bridgeBrowserConn(ep: CdpEndpoint, connect: (ep: CdpEndpoi
 export async function signInOnOpen(url: string, conversation: () => string | null, log: (line: string) => void, bridge?: CdpEndpoint): Promise<void> {
   const port = bridge ?? readState()?.port;
   if (!port) return;
-  const held = await useVaultSignin(url, { port, conversation, log, ...(bridge ? { connect: bridgeBrowserConn } : {}) });
+  const held = await useVaultSignin(url, { port, conversation, log, ...(bridge ? { connect: (ep: CdpEndpoint, sites: string[]) => bridgeBrowserConn(ep, undefined, sites) } : {}) });
   if (held) exitForApproval(held);
 }

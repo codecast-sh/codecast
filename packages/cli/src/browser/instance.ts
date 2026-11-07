@@ -13,6 +13,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import { prepareBrowserApp } from "./appIdentity.js";
 import * as path from "node:path";
 import { execFileSync, execSync, spawn } from "../proc.js";
@@ -320,6 +321,30 @@ export function chromeLogTail(file: string, lines = 6): string {
     .join("\n");
 }
 
+/**
+ * Drop the profile lock of a Chrome on ANOTHER machine. Chrome's lock is a
+ * symlink naming `<hostname>-<pid>`; a cloud host made from a disk image
+ * carries the lock of the machine the image was taken on, and Chrome then
+ * refuses the profile as "in use by another computer" and never opens CDP
+ * (seen on i-068d38012e8d74307, 2026-11-07). A profile on this machine's own
+ * disk cannot be held by another machine, so such a lock is always stale. A
+ * lock naming this machine is left for Chrome, which checks the pid itself.
+ */
+export function clearForeignProfileLock(userDataDir: string, hostname = os.hostname()): boolean {
+  let target: string;
+  try {
+    target = fs.readlinkSync(path.join(userDataDir, "SingletonLock"));
+  } catch {
+    return false;
+  }
+  const holder = target.replace(/-\d+$/, "");
+  if (!holder || holder === hostname) return false;
+  for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+    try { fs.unlinkSync(path.join(userDataDir, name)); } catch { /* absent */ }
+  }
+  return true;
+}
+
 export async function launchManagedChrome(opts: LaunchOptions): Promise<number> {
   const channel = opts.channel ?? "chrome";
   const linux = process.platform === "linux" ? linuxDisplayPlan(process.env, !!opts.headless) : null;
@@ -330,6 +355,7 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
   const prepared = prepareBrowserApp(chromeBinaryFor(channel), headless);
   const bin = prepared.binary;
   fs.mkdirSync(opts.userDataDir, { recursive: true, mode: 0o700 });
+  clearForeignProfileLock(opts.userDataDir);
   const args = chromeLaunchArgs(opts);
   if (prepared.branded) args.push("--disable-updater-scheduler");
   // /dev/shm is 64MB on a stock cloud image and Chrome dies silently when it fills.
