@@ -130,10 +130,12 @@ describe.skipIf(!chrome || !!process.env.CI)("ordinals and stale refs in a real 
     expect(after.map((r) => r.ref)).not.toContain(wanted.ref);
     await expect(actions.click(page, wanted.ref)).rejects.toThrow();
 
-    const fresh = recoverRefPlan({ role: wanted.role, name: wanted.name, nth: wanted.nth }, asEntries(after));
+    const url = "same-page";
+    const plan = recoverRefPlan({ role: wanted.role, name: wanted.name, nth: wanted.nth, of: 3, url }, asEntries(after), url);
+    if (!("ref" in plan)) throw new Error(plan.refused);
     // Matching on role and name alone would have answered the first row here.
-    expect(fresh).not.toBe(String(after[0].ref));
-    await actions.click(page, Number(fresh));
+    expect(plan.ref).not.toBe(String(after[0].ref));
+    await actions.click(page, Number(plan.ref));
     expect(await evalPage("document.getElementById('log').textContent")).toBe("deleted Gamma");
   });
 });
