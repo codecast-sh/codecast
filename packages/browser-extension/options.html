@@ -58,6 +58,14 @@
   .bar { font-size: 9.5px; line-height: 1.35; color: var(--text); background: var(--bg-alt); border: 1px solid var(--line); border-radius: 4px; padding: 0.35em 0.6em; text-align: center; max-width: 100%; }
   .bar::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--coral); margin-right: 0.5em; vertical-align: -1px; }
 
+  .placement { display: flex; gap: 0.6rem; }
+  .placement label { flex: 1; display: grid; gap: 0.15rem; cursor: pointer; padding: 0.75rem 0.9rem; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--card) 55%, transparent); }
+  .placement label:has(input:checked) { border-color: var(--coral); background: var(--card); }
+  .placement input { position: absolute; opacity: 0; pointer-events: none; }
+  .placement b { font-size: 12.5px; }
+  .placement span { color: var(--muted); font-size: 11.5px; }
+  .placement label:has(input:focus-visible) { outline: 2px solid var(--coral); outline-offset: 2px; }
+
   details { margin-top: 2.4rem; }
   summary { cursor: pointer; color: var(--muted); font-weight: 500; list-style: none; display: inline-flex; align-items: center; gap: 0.4em; }
   summary::-webkit-details-marker { display: none; }
@@ -73,7 +81,7 @@
   .in { opacity: 0; transform: translateY(8px); animation: rise 520ms cubic-bezier(.2,.7,.2,1) forwards; }
   .in:nth-child(2) { animation-delay: 60ms; } .in:nth-child(3) { animation-delay: 120ms; }
   .in:nth-child(4) { animation-delay: 180ms; } .in:nth-child(5) { animation-delay: 240ms; }
-  .in:nth-child(6) { animation-delay: 300ms; } .in:nth-child(7) { animation-delay: 360ms; }
+  .in:nth-child(6) { animation-delay: 300ms; } .in:nth-child(7) { animation-delay: 360ms; } .in:nth-child(8) { animation-delay: 420ms; }
   @keyframes rise { to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: reduce) { .in { animation: none; opacity: 1; transform: none; } .chip i::after, .dot { animation: none; } }
   @media (max-width: 560px) { .signals { grid-template-columns: 1fr; } h1 { font-size: 30px; } }
@@ -126,6 +134,14 @@
         <b>Chrome's own notice</b>
         <span>Chrome shows this for any extension that drives a tab. Cancel there and the agent lets go.</span>
       </div>
+    </div>
+  </section>
+
+  <section class="in">
+    <h2>Where agent tabs open</h2>
+    <div class="placement" role="radiogroup">
+      <label><input type="radio" name="agentWindow" value="current" checked><b>Your window</b><span>In the background, in the Cast group</span></label>
+      <label><input type="radio" name="agentWindow" value="separate"><b>Their own window</b><span>One unfocused window beside yours</span></label>
     </div>
   </section>
 
