@@ -27,6 +27,7 @@ export type SettingsSectionId =
   | "agents"
   | "agent-library"
   | "harness"
+  | "approvals"
   | "daemon"
   | "provider-keys"
   | "claude-accounts"
@@ -58,6 +59,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/agents": "agents",
   "/settings/agent-library": "agent-library",
   "/settings/harness": "harness",
+  "/settings/approvals": "approvals",
   "/settings/daemon": "daemon",
   "/settings/provider-keys": "provider-keys",
   "/settings/claude-accounts": "claude-accounts",

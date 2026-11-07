@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers, ScrollText } from "lucide-react";
+  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers, ScrollText, BadgeCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -27,6 +27,7 @@ import IntegrationsPanel from "../../app/settings/integrations/page";
 import AgentsPanel from "../../app/settings/agents/page";
 import AgentLibraryPanel from "../../app/settings/agent-library/page";
 import HarnessPanel from "../../app/settings/harness/page";
+import ApprovalsPanel from "../../app/settings/approvals/page";
 import DaemonPanel from "../../app/settings/daemon/page";
 import ProviderKeysPanel from "../../app/settings/provider-keys/page";
 import ClaudeAccountsPanel from "../../app/settings/claude-accounts/page";
@@ -54,6 +55,7 @@ const PANELS: Record<PanelId, React.ComponentType> = {
   "agents": AgentsPanel,
   "agent-library": AgentLibraryPanel,
   "harness": HarnessPanel,
+  "approvals": ApprovalsPanel,
   "daemon": DaemonPanel,
   "provider-keys": ProviderKeysPanel,
   "claude-accounts": ClaudeAccountsPanel,
@@ -120,6 +122,7 @@ const GROUPS: { label: string; sections: NavDef[] }[] = [
       { id: "provider-keys", label: "Provider Keys", icon: KeyRound, desc: "Model provider credentials per device", keywords: "api key anthropic openai secret" },
       { id: "cli", label: "CLI", icon: Terminal, desc: "Install the cast CLI, sign a machine in and pair Chrome", keywords: "install token terminal shell chrome browser extension web store pair" },
       { id: "agents", label: "Agents", icon: Bot, desc: "Permission modes and default parameters", keywords: "permissions yolo model parameters defaults" },
+      { id: "approvals", label: "Approvals", icon: BadgeCheck, desc: "Commands and edits your agents run without asking, per project", keywords: "permissions always allow saved approvals rules deny never git push" },
       { id: "agent-library", label: "Agent Library", icon: Bot, desc: "Named agent definitions and chains: client, model, effort, tools, prompt", keywords: "definitions roles reviewer scout chain pipeline subagent model effort prompt as" },
       { id: "claude-accounts", label: "Claude Accounts", icon: UserCog, desc: "Saved Claude sign-ins, and whether codecast continues stopped sessions", keywords: "usage limits switch profiles anthropic recovery auto continue resume retry revive crash" },
       { id: "devices", label: "Devices", icon: Laptop, desc: "Every machine running the daemon", keywords: "machines daemon ssh checkouts online share team shared" },
