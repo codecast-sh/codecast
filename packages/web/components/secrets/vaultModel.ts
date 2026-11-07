@@ -79,6 +79,17 @@ export function suggestName(fields: { env?: string; site?: string; value?: strin
   return shape?.name ?? "";
 }
 
+/**
+ * What a typed name saves as. People type names the way they write env vars
+ * (`MERCURY_API_KEY`, `mercury_api_key`), so any spelling is taken: the name
+ * agents type is its slug, and an UPPER_SNAKE name is also the env var it fills.
+ */
+export function readTypedName(typed: string): { name: string; env?: string } {
+  const t = typed.trim();
+  const name = slugify(t);
+  return /^[A-Z_][A-Z0-9_]*$/.test(t) && /[A-Z]/.test(t) ? { name, env: t } : { name };
+}
+
 /** Why a name can't be used here, in a few words, or null. `taken` is every name already in the target workspace. */
 export function nameIssue(name: string, taken: ReadonlySet<string>): string | null {
   if (!name) return "Name it";
