@@ -160,6 +160,7 @@ export {
 export { monotonicNow } from "./syncActivity";
 import { decisionDraftKey, pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { LocalMirror, MergeBackStatus, OpenTaskReport, SessionActivity, SubagentCaps, SubagentSlot } from "@codecast/shared/contracts";
+import { cascadeFromAnswer, keptRules } from "@codecast/shared/contracts/permissionRules";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
 import { escalationTargetIds } from "@codecast/shared/contracts/decisionEscalation";
@@ -5811,6 +5812,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Approve or deny one tool-permission request; the card leaves at once. */
   /** opts: a denial's reason for the model; remember keeps the row's suggested rules. */
   resolvePermission: (permissionId: string, status: "approved" | "denied", opts?: { message?: string; remember?: boolean }) => void;
+  /** Drop a saved approval or deny (Settings > Approvals); the next matching call asks again. */
+  removePermissionRule: (ruleId: string) => void;
   /** Answer a workflow run's open gate (a choice key or free text). */
   respondToGate: (runId: string, response: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
@@ -10907,10 +10910,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // refuses it. Resolving the conversation's last pending request unblocks
   // the session, so its question is marked resolved in the same commit. The
   // resolvePermission side effect runs permissions.updatePermissionStatus.
-  resolvePermission: action(function (this: Draft, permissionId: string, _status: "approved" | "denied", _opts?: { message?: string; remember?: boolean }) {
+  // The answer settles the session's other cards as the server will
+  // (cascadeFromAnswer): an "always" removes the ones its rules cover, a
+  // denial with a reason removes them all. The server, holding every saved
+  // rule, may settle more; its snapshot prunes those.
+  resolvePermission: action(function (this: Draft, permissionId: string, status: "approved" | "denied", opts?: { message?: string; remember?: boolean }) {
     const row = this.pendingPermissions[permissionId] as any;
     if (!row) return;
+    const pending = Object.values(this.pendingPermissions).filter((p: any) => p?.status === "pending") as any[];
+    const cascade = cascadeFromAnswer(row, { status, ...opts }, pending, keptRules(row.rule_request));
     delete this.pendingPermissions[permissionId];
+    for (const id of [...cascade.approve, ...cascade.deny]) delete this.pendingPermissions[id];
     const convId = row.conversation_id as string | undefined;
     if (!convId) return;
     const stillPending = Object.values(this.pendingPermissions).some(
@@ -13377,6 +13387,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   removeIssueSyncSource: action(function (this: Draft, id: string) {
     delete (this.issueSyncSources as any)[id];
+  }),
+
+  removePermissionRule: action(function (this: Draft, ruleId: string) {
+    delete (this.permissionRules as any)[ruleId];
   }),
 
   // Agent definitions and chains. An upsert with an _id patches the row in
