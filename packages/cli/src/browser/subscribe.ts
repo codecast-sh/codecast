@@ -39,6 +39,9 @@ import { codecastDir } from "../codecastDir.js";
 import { resolveCastInvocation } from "../castInvocation.js";
 import { signInHost } from "./siteGuard.js";
 import { evalInPage, type PageCtx } from "./pageEval.js";
+import { bridgeEndpointIfConfigured } from "./bridge/real.js";
+import { readCdpJson } from "./cdp.js";
+import { readBoundTarget } from "./pinnedTab.js";
 
 export type PageCondition = {
   /** Plain words a model judges against the page: "the export finished". */
@@ -52,9 +55,15 @@ export type PageCondition = {
   signedIn?: boolean;
   /** Any change to the page text since the subscription started (or last woke). */
   change?: boolean;
+  /** A handoff (`cast browser handoff`) by id: holds once it is no longer waiting on the human. */
+  handoff?: string;
 };
 
-export type PageState = { url: string; title: string; text: string; selector: boolean | null; fn: boolean | null };
+export type PageState = {
+  url: string; title: string; text: string; selector: boolean | null; fn: boolean | null;
+  /** Where the condition's handoff stands, read from the extension's tab list: done, expired, cancelled, gone. */
+  handoff?: string;
+};
 
 type Data = {
   tab: string;
@@ -68,6 +77,8 @@ type Data = {
   /** The last check that could not read the page or reach the model. */
   error?: string;
   url?: string;
+  /** A handoff condition's state at the last check (done, expired, cancelled, gone, waiting). */
+  handoffState?: string;
 };
 
 export type Judge = (described: string, page: PageState) => Promise<{ met: boolean; why: string } | { error: string }>;
@@ -91,6 +102,7 @@ export function describeCondition(c: PageCondition): string {
   if (c.selector) parts.push(`selector ${c.selector}`);
   if (c.fn) parts.push(`fn ${c.fn}`);
   if (c.change) parts.push("page changed");
+  if (c.handoff) parts.push("the human finishing your handoff");
   return parts.join(" and ");
 }
 
@@ -126,7 +138,8 @@ export async function evaluateCondition(
     (!c.selector || page.selector === true) &&
     (!c.fn || page.fn === true) &&
     (!c.signedIn || signInHost(page.url) === null) &&
-    (!c.change || hash !== data.baseline);
+    (!c.change || hash !== data.baseline) &&
+    (!c.handoff || (page.handoff !== undefined && page.handoff !== "waiting"));
   if (!plain || !c.described) return { met: plain, judged: data.judged };
   if (data.judged?.hash === hash) return { met: data.judged.met, judged: data.judged };
   const answer = await judge(c.described, page);
@@ -171,6 +184,7 @@ export function modelJudge(onBudget: (spec: ModelCallSpec) => Promise<ModelCallR
 
 export function browserWakePrompt(sub: Subscription, until: string): string {
   const d = sub.data as Data;
+  if (d.condition.handoff) return handoffWakePrompt(sub);
   return [
     `Your browser tab now matches ${sub.label} (cast browser subscription ${sub.id}).`,
     "",
@@ -204,7 +218,21 @@ export type BrowserSubDeps = {
   file?: string;
 };
 
+/** True when the condition needs more than the handoff's state, which the tab list answers without touching the page. */
+const readsPage = (c: PageCondition): boolean => !!(c.described || c.url || c.text || c.selector || c.fn || c.signedIn || c.change);
+
 export async function readPage(o: PageCtx, c: PageCondition): Promise<PageState | { error: string }> {
+  if (c.handoff) {
+    const handoff = await readHandoffState(o, c.handoff);
+    if (typeof handoff !== "string") return handoff;
+    if (!readsPage(c) || handoff === "gone") return { url: "", title: "", text: "", selector: null, fn: null, handoff };
+    const page = await readPageText(o, c);
+    return "error" in page ? page : { ...page, handoff };
+  }
+  return readPageText(o, c);
+}
+
+async function readPageText(o: PageCtx, c: PageCondition): Promise<PageState | { error: string }> {
   const r = await evalInPage(pageReadScript(c), o);
   if (!r.ok) return { error: r.hint ? `${r.output} (${r.hint})` : r.output };
   try {
@@ -236,6 +264,7 @@ export function browserSource(deps: BrowserSubDeps, resolve?: () => Promise<Reso
         judged: r.judged,
         url: page.url,
         error: r.error,
+        ...(page.handoff !== undefined ? { handoffState: page.handoff } : {}),
         // After a wake, `change` waits for the page to move on from this one.
         baseline: rose && data.condition.change ? hashText(page.text) : data.baseline,
       };
@@ -344,7 +373,7 @@ export function registerBrowserSubscriptions(br: Command, deps: BrowserSubDeps &
       if (subs.length === 0) return console.log("No browser subscriptions. cast browser subscribe makes one.");
       for (const s of subs) {
         const d = s.data as Data;
-        const seen = d.error ? `error: ${d.error}` : `${d.met ? "met" : "not yet"}${d.url ? ` on ${d.url}` : ""}${d.judged?.why ? ` (${d.judged.why})` : ""}`;
+        const seen = d.error ? `error: ${d.error}` : `${d.met ? "met" : "not yet"}${d.handoffState ? ` (handoff ${d.handoffState})` : ""}${d.url ? ` on ${d.url}` : ""}${d.judged?.why ? ` (${d.judged.why})` : ""}`;
         console.log(`${s.id}  ${s.label}  ${s.trigger ?? "-"} every ${s.every}, until ${untilText(s.expires_at)}, ${s.once ? "once" : "each"}, session ${s.session?.slice(0, 7) ?? "-"}\n    ${seen}`);
       }
     });
@@ -363,4 +392,41 @@ export function registerBrowserSubscriptions(br: Command, deps: BrowserSubDeps &
 function fail(message: string): never {
   console.error(`✗ ${message}`);
   process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Handoffs: the condition `cast browser handoff` arms
+// ---------------------------------------------------------------------------
+
+type ListedTab = { id: string; url: string; handoff?: { id: string; state: string } };
+
+/**
+ * Where a handoff on this session's tab stands, from the bridge host's tab
+ * list: the extension reports each tab's handoff there, so a check never
+ * attaches to the page the human is working in. "gone" when the tab closed or
+ * now carries another handoff.
+ */
+export async function readHandoffState(o: PageCtx, id?: string): Promise<string | { error: string }> {
+  const endpoint = await bridgeEndpointIfConfigured(o.session);
+  if (!endpoint) return { error: "the bridge host is not running" };
+  const target = readBoundTarget(o.session);
+  let tabs: ListedTab[];
+  try {
+    tabs = await readCdpJson<ListedTab[]>(endpoint, "/json/list");
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+  const tab = tabs.find((t) => t.id === target) ?? (id ? tabs.find((t) => t.handoff?.id === id) : undefined);
+  if (!tab?.handoff) return id ? "gone" : "none";
+  return !id || tab.handoff.id === id ? tab.handoff.state : "gone";
+}
+
+/** Written when the trigger is armed, so it names every way a handoff ends; `subscriptions` shows which one. */
+function handoffWakePrompt(sub: Subscription): string {
+  return [
+    `The step you handed the human on your tab is no longer waiting (cast browser subscription ${sub.id}): they clicked Continue, it timed out, or the tab went away.`,
+    "",
+    `1. See which: \`cast browser handoff --status\` says how it ended, and \`${sub.read}\` shows where the page is now.`,
+    `2. ${sub.note ? `Carry on: ${sub.note}` : "Carry on with the work that needed them."}`,
+  ].join("\n");
 }

@@ -32,7 +32,7 @@ import {
   baseSessionKey, engineHome, engineSession, engineSessionKey, engineStateDir, findEngine, isPaneSession, isRealSession, managedPort, runEngine,
   type EngineOptions,
 } from "./engine.js";
-import { CdpConnection, type CdpEndpoint } from "./cdp.js";
+import { CdpConnection, readCdpJson, type CdpEndpoint } from "./cdp.js";
 import { authorizesTeardown, type LivenessVerdict } from "@codecast/shared/contracts";
 import { bridgeEndpointIfConfigured, engineBrowserFor } from "./bridge/real.js";
 import { defaultConfigDir } from "../config/configDir.js";
@@ -306,9 +306,17 @@ export async function sessionEndpoint(key: string): Promise<CdpEndpoint | null> 
  */
 export function detachSessionDaemon(key: string, binary: string | null = findEngine()): boolean {
   if (!binary) return false;
-  if (!listEngineSessions().some((session) => session.key === key && session.running)) return false;
+  const daemon = listEngineSessions().find((session) => session.key === key && session.running);
+  if (!daemon) return false;
   const env = { ...process.env, AGENT_BROWSER_SESSION: key };
   const res = spawnSync(binary, ["close"], { encoding: "utf-8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"], env });
+  // `close` returns while the daemon is still on its way out: its socket is
+  // gone but its pid is alive, and an engine command started in that window
+  // takes the daemon for running and dials the missing socket ("Failed to
+  // connect: No such file or directory"). The callers retry a verb right
+  // after, so the detach is done only once the process is.
+  const deadline = Date.now() + 5_000;
+  while (res.status === 0 && daemon.pid && isAlive(daemon.pid) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   return res.status === 0;
 }
 
@@ -354,8 +362,28 @@ export async function closeIdleTab(key: string, stateDir = engineStateDir(), bin
   if (isPaneSession(key)) return false;
   const target = sessionTargetId(key, stateDir);
   if (!target) return false;
+  const endpoint = await sessionEndpoint(key);
+  if (await keptTab(key, target, endpoint)) return false;
   if (listEngineSessions(stateDir).some((session) => session.key === key && session.running)) detachSessionDaemon(key, binary);
-  return closeTargetLater(target, await sessionEndpoint(key));
+  return closeTargetLater(target, endpoint);
+}
+
+/**
+ * Why the human's Chrome must keep this tab open, from the extension's own
+ * word on it (background.js keepReason, the `keep` field of the bridge's tab
+ * list): a handoff waiting on the human, a tab they lent, pinned or dragged
+ * out of the Cast group, a tab playing sound. The extension's idle cleanup
+ * follows the same rule, so neither side closes what the other keeps. Only a
+ * real session's tab has one; a listing that fails keeps nothing back.
+ */
+export async function keptTab(key: string, targetId: string, endpoint: CdpEndpoint | null): Promise<string | null> {
+  if (!endpoint || !isRealSession(key)) return null;
+  try {
+    const tabs = await readCdpJson<Array<{ id: string; keep?: string }>>(endpoint, "/json/list", 5_000);
+    return tabs.find((t) => t.id === targetId)?.keep ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -445,6 +473,13 @@ export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapRep
       if (now - s.lastSeen > tabIdleMs && (await closeIdleTab(s.key, stateDir))) report.idled.push(s.key);
       continue;
     }
+    // A tab the human kept (keptTab) outlives its session: only the daemon goes.
+    const target = sessionTargetId(s.key, stateDir);
+    if (target && (await keptTab(s.key, target, await sessionEndpoint(s.key)))) {
+      if (s.running) detachSessionDaemon(s.key);
+      gone.add(s.key);
+      continue;
+    }
     if (s.running) {
       await close(s.key);
       report.closed.push(s.key);
@@ -460,7 +495,6 @@ export async function reapEngineOrphans(opts: ReapOptions = {}): Promise<ReapRep
       // The daemon died but its tab may still be open in the shared browser.
       // Counted like any other close: a tab that vanished from the human's
       // Chrome must show up in the summary the caller prints.
-      const target = sessionTargetId(s.key, stateDir);
       if (target && (await closeTargetLater(target, await sessionEndpoint(s.key)))) report.closed.push(s.key);
     }
     gone.add(s.key);
