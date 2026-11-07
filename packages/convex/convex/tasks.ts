@@ -515,18 +515,26 @@ async function liveLineRun(ctx: any, task: any): Promise<any | null> {
 const LINE_CLOSING_STATIONS: ReadonlySet<string> = new Set(["drop", "dissolve"]);
 
 /**
- * Whether the close is the run's own station at work. On the line's graph
- * those stations are named; on any other graph (a trial's) a close made
- * while the run stands at a script station is taken as that script's, since
- * a person's close or a regroup's merge finds the run waiting at a gate or
- * inside a session. A run it leaves is cancelled by the trial dispatcher's
- * next pass once it waits (lineTrial.dueProblems `orphaned`).
+ * Whether the close is the run's own station at work. On the shipped line
+ * those stations are named. On any other graph a close made while the run
+ * stands at a script station is taken as that script's, since a person's
+ * close or a regroup's merge finds the run waiting at a gate or inside a
+ * session; on a line graph (onefix's close stations, say) only a script
+ * station that leads straight to the run's end counts, so a person's drop
+ * still stops a run waiting in a long script such as a queue. A trial run it
+ * leaves is cancelled by the trial dispatcher's next pass once it waits
+ * (lineTrial.dueProblems `orphaned`).
  */
 async function closesItself(ctx: any, run: any): Promise<boolean> {
   if (LINE_CLOSING_STATIONS.has(run.current_node_id)) return true;
-  if (isLineRun(run) || run.status === "paused") return false;
+  if (run.status === "paused") return false;
   const workflow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
-  return !!workflow?.nodes?.find((n: any) => n.id === run.current_node_id)?.script;
+  const station = workflow?.nodes?.find((n: any) => n.id === run.current_node_id);
+  if (!station?.script) return false;
+  if (!isLineRun(run)) return true;
+  const exits = new Set((workflow.nodes as any[]).filter((n) => n.type === "exit").map((n) => n.id));
+  const next = ((workflow.edges ?? []) as any[]).filter((e) => e.from === station.id);
+  return next.length > 0 && next.every((e) => exits.has(e.to));
 }
 
 /** What a status move does after its patch, for every writer: the plan's
