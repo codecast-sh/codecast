@@ -654,7 +654,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       [] as string[]
     )
     .option("--question <text>", stdinText("edit: replace the question"))
-    .option("--context <text>", stdinText("Markdown context for someone who never saw this session: what you would pick and why, the finding that forces the choice, what each answer does; a cast-canvas block renders inline, so options worth comparing can sit side by side"))
+    .option("--context <text>", stdinText("Markdown context for someone who never saw this session, read alone: what went wrong (one real case), what you would pick and why, what cuts against it. Explain everything where you mention it, with no ids, file paths or rule numbers; never repeat the question or options. A cast-canvas block renders inline, so options worth comparing can sit side by side"))
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
     .option("--proposal <xp-N>", "The expectations proposal this decision settles: an answer opening with Apply lands it, one opening with Keep closes it, any other course leaves it open for you")
     .option("--run <command>", "A cast command only your person may run (a grant, a spend, a publish): the card shows it with Run and Don't run; Run executes it on this machine as theirs and the output comes back as the answer")
@@ -690,7 +690,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--team <name|id>", "ls --answered-since: the team (default: the active one)")
     .option("-n, --limit <n>", "ls --answered-since: rows per page (default 50, at most 100)")
     .option("--calibration", "ls --answered-since: whether the cards' confidence holds, every answer in the window grouped by the confidence its card gave")
-    .option("--note <text>", stdinText("recommend / pass / escalate: what the person should know that the card does not say (escalate needs one)"))
+    .option("--note <text>", stdinText("recommend / pass / escalate: one or two plain sentences the person needs that the card does not already say; never retell the card, never cite ids (escalate needs one)"))
     .option("--form <k=v>", "answer: a form field value (repeatable)", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--for-human", "answer: from a session, answer as your human. Only when they explicitly told you in this conversation to answer this decision, or agreed to this choice; never on your own judgment")
     .option("--json", "Machine-readable output")

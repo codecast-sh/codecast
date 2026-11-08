@@ -92,10 +92,10 @@ export function DecisionBody({ decision, detail }: { decision: SessionDecisionIt
   return (
     <>
       {doc && (
-        <div className="decision-body text-sol-text-muted" data-decision-doc><MarkdownRenderer content={doc} /></div>
+        <div className="decision-body text-sol-text" data-decision-doc><MarkdownRenderer content={doc} /></div>
       )}
       {!doc && decision.context_md && (
-        <div className="decision-body text-sol-text-muted border-l-2 border-sol-border pl-4" data-decision-context><MarkdownRenderer content={decision.context_md} /></div>
+        <div className="decision-body text-sol-text" data-decision-context><MarkdownRenderer content={decision.context_md} /></div>
       )}
       {doc && decision.context_md && (
         <details className="mt-3 text-sm text-sol-text-dim">
@@ -114,11 +114,11 @@ export function LeadRecommendation({ decision, detail, className = "mt-4" }: { d
   if (!hop) return null;
   const option = decision.options[hop.recommendation!]?.label ?? `option ${hop.recommendation! + 1}`;
   return (
-    <div className={`${className} rounded-lg border border-sol-cyan/30 bg-sol-cyan/5 px-4 py-3`} data-decision-recommendation>
-      <div className="text-[12px] text-sol-text-muted">
-        <span className="text-sol-text">{hop.role?.name ?? "A lead"}</span> recommends <span className="text-sol-cyan">{option}</span>
+    <div className={`${className} decision-body border-t border-sol-border/70 pt-4`} data-decision-recommendation>
+      <div className="text-[13px] text-sol-text-muted">
+        <span className="text-sol-text">{hop.role?.name ?? "A lead"}</span> recommends <span className="text-sol-cyan font-medium">{option}</span>
       </div>
-      {hop.note && <div className="decision-body mt-1 text-sol-text-muted"><MarkdownRenderer content={hop.note} /></div>}
+      {hop.note && <div className="mt-1 text-sol-text-muted"><MarkdownRenderer content={hop.note} /></div>}
     </div>
   );
 }

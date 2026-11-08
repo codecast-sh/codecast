@@ -135,8 +135,13 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           </section>
         )}
 
-        {/* A lead's call and why, before the evidence it was made on. */}
-        <LeadRecommendation decision={decision} detail={detail} />
+        {/* A change card's lead verdict reads before its proof. A plain
+            decision reads question, context, then the lead's call beside
+            the options it picks between. */}
+        {decision.card && <LeadRecommendation decision={decision} detail={detail} />}
+
+        {/* What the question is about, straight under the question. */}
+        {!decision.card && body && <section className="mt-6">{body}</section>}
 
         {/* The doubt the record raised about the cause, where a reviewer cannot miss it. */}
         {doubt && <DoubtChip doubt={doubt} className="mt-3" />}
@@ -194,8 +199,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {/* ── The command a --run card executes, and how it went ── */}
         {decision.run && <section className="mt-6"><CommandRunView run={decision.run} /></section>}
 
-        {/* ── Body ── */}
-        {!decision.card && body && <section className="mt-8">{body}</section>}
+        {!decision.card && <LeadRecommendation decision={decision} detail={detail} className="mt-8" />}
 
         {/* ── Options ── */}
         {/* A settled card's options collapse into its outcome line. */}
