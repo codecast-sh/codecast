@@ -635,7 +635,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes, tail } = body;
+      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes, tail, grep } = body;
 
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
@@ -649,7 +649,7 @@ http.route({
           scan: (stepArgs) => ctx.runQuery(internal.conversations.scanConversationLines, stepArgs),
           fetch: (stepArgs) => ctx.runQuery(internal.conversations.readConversationLines, stepArgs),
         },
-        { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes, tail: typeof tail === "number" ? tail : undefined },
+        { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes, tail: typeof tail === "number" ? tail : undefined, grep: typeof grep === "string" && grep.trim() ? grep : undefined },
       );
 
       if (result.error) {
@@ -1642,7 +1642,7 @@ cliRoute("/cli/decide/comment", (ctx, body) =>
   ctx.runMutation(api.decisionThread.commentForCli, { api_token: body.api_token, decision_id: body.decision_id, text: body.text, client_id: body.client_id, parent_id: body.parent_id, session_id: body.session_id }),
 );
 cliRoute("/cli/decide/show", (ctx, body) =>
-  ctx.runMutation(api.sessionDecisions.showForCli, { api_token: body.api_token, decision_id: body.decision_id }),
+  ctx.runQuery(api.sessionDecisions.showForCli, { api_token: body.api_token, decision_id: body.decision_id }),
 );
 // Stacks (D5): create | ls | show | add | remove | reorder | policy. Delegation
 // rides create and policy (`delegate: "@handle"`).
@@ -3416,8 +3416,11 @@ http.route({
         conversation_id: body.conversation_id,
         run_session_uuid: body.run_session_uuid,
         ...(body.needs_attention !== undefined ? { needs_attention: !!body.needs_attention } : {}),
+        ...(typeof body.rearm_at === "number" ? { rearm_at: body.rearm_at } : {}),
       });
-      return new Response(JSON.stringify({ success: result }), {
+      // Echoed so the CLI can tell a backend that books the recheck from one
+      // that predates it and dropped the field.
+      return new Response(JSON.stringify({ success: result, ...(result && typeof body.rearm_at === "number" ? { rearm_at: body.rearm_at } : {}) }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
       });
@@ -4141,6 +4144,8 @@ cliRoute("/cli/route", async (ctx, body) => ctx.runAction(api.orgRoute.route, bo
 cliRoute("/cli/org/tree", async (ctx, body) => {
   return await ctx.runQuery(api.org.tree, body);
 });
+// The roles and seats without the session scan: what naming a role needs.
+cliRoute("/cli/org/roles", async (ctx, body) => ctx.runQuery(api.org.roles, body));
 // Where the calling session sits (`cast org where`, the session-start org context).
 cliRoute("/cli/org/where", async (ctx, body) => ctx.runQuery((api as any).orgWhere.where, body));
 cliRoute("/cli/org/sessions-under", async (ctx, body) => {
@@ -4987,6 +4992,7 @@ cliRoute("/cli/workflow-runs/graph", async (ctx, body) => ctx.runMutation(api.fl
 cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api.workflow_runs.getByExternalRun, body));
 // the-line.md L8: `cast workflow runs [--task|--plan]`, one list across workflows.
 cliRoute("/cli/workflow-runs/list", async (ctx, body) => ctx.runQuery(api.workflow_runs.listRunsFromCli, body));
+cliRoute("/cli/workflow-runs/cancel", async (ctx, body) => ctx.runMutation(api.workflow_runs.cancelFromCli, body));
 
 // Session-to-session messaging
 cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
