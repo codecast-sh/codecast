@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers } from "lucide-react";
+  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers, ScrollText, BadgeCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -20,11 +20,14 @@ import KeyboardPanel from "../../app/settings/keyboard/page";
 import CallsPanel from "../../app/settings/calls/page";
 import TeamPanel from "../../app/settings/team/page";
 import ManagedDevicesPanel from "../../app/settings/managed-devices/page";
+import AccessLogPage from "../../app/settings/access-log/page";
+import { useActiveTeamLogsAccess } from "./AccessLogPanel";
 import SyncPanel from "../../app/settings/sync/page";
 import IntegrationsPanel from "../../app/settings/integrations/page";
 import AgentsPanel from "../../app/settings/agents/page";
 import AgentLibraryPanel from "../../app/settings/agent-library/page";
 import HarnessPanel from "../../app/settings/harness/page";
+import ApprovalsPanel from "../../app/settings/approvals/page";
 import DaemonPanel from "../../app/settings/daemon/page";
 import ProviderKeysPanel from "../../app/settings/provider-keys/page";
 import ClaudeAccountsPanel from "../../app/settings/claude-accounts/page";
@@ -46,11 +49,13 @@ const PANELS: Record<PanelId, React.ComponentType> = {
   "calls": CallsPanel,
   "team": TeamPanel,
   "managed-devices": ManagedDevicesPanel,
+  "access-log": AccessLogPage,
   "sync": SyncPanel,
   "integrations": IntegrationsPanel,
   "agents": AgentsPanel,
   "agent-library": AgentLibraryPanel,
   "harness": HarnessPanel,
+  "approvals": ApprovalsPanel,
   "daemon": DaemonPanel,
   "provider-keys": ProviderKeysPanel,
   "claude-accounts": ClaudeAccountsPanel,
@@ -76,6 +81,8 @@ interface SectionDef {
   desktopOnly?: boolean;
   /** Shown only to an admin of the active team. */
   adminOnly?: boolean;
+  /** Shown only to an admin of the active team when its regulated mode is on. */
+  regulatedOnly?: boolean;
 }
 
 /** A nav entry for a surface that outgrew settings: it leaves for its page. */
@@ -101,6 +108,7 @@ const GROUPS: { label: string; sections: NavDef[] }[] = [
     sections: [
       { id: "team", label: "Team", icon: Users, desc: "Members, identity and the features your team runs", keywords: "members invite roles icon org statuses" },
       { id: "managed-devices", label: "Managed devices", icon: ShieldCheck, desc: "Deploy codecast to your team's Macs with an MDM, and the policy they carry", adminOnly: true, keywords: "mdm jamf kandji intune mosyle enrollment profile pkg installer policy restrictions fleet it admin" },
+      { id: "access-log", label: "Access log", icon: ScrollText, desc: "Every open, export, download and staff read of your team's regulated data", regulatedOnly: true, keywords: "audit hipaa access log compliance views exports downloads staff reads" },
       { id: "account-pool", label: "Account pool", icon: Layers, desc: "Claude accounts your team shares, and who spends them", keywords: "shared pool team claude accounts usage tokens who spent" },
       { id: "sync", label: "Sync & Privacy", icon: RefreshCw, desc: "Which projects sync, and who can see them", keywords: "projects sharing visibility private workspace directories" },
       { id: "integrations", label: "Integrations", icon: Plug, desc: "The Chrome extension, Slack, GitHub, Linear, Google, Notion, and the product sources Ops reads", keywords: "whisk mail email calendar assistant chrome browser extension web store pair slack github linear google gmail notion connect oauth install repositories issues sync apps sentry posthog sdk ingest key product sources ops" },
@@ -114,6 +122,7 @@ const GROUPS: { label: string; sections: NavDef[] }[] = [
       { id: "provider-keys", label: "Provider Keys", icon: KeyRound, desc: "Model provider credentials per device", keywords: "api key anthropic openai secret" },
       { id: "cli", label: "CLI", icon: Terminal, desc: "Install the cast CLI, sign a machine in and pair Chrome", keywords: "install token terminal shell chrome browser extension web store pair" },
       { id: "agents", label: "Agents", icon: Bot, desc: "Permission modes and default parameters", keywords: "permissions yolo model parameters defaults" },
+      { id: "approvals", label: "Approvals", icon: BadgeCheck, desc: "Commands and edits your agents run without asking, per project", keywords: "permissions always allow saved approvals rules deny never git push" },
       { id: "agent-library", label: "Agent Library", icon: Bot, desc: "Named agent definitions and chains: client, model, effort, tools, prompt", keywords: "definitions roles reviewer scout chain pipeline subagent model effort prompt as" },
       { id: "claude-accounts", label: "Claude Accounts", icon: UserCog, desc: "Saved Claude sign-ins, and whether codecast continues stopped sessions", keywords: "usage limits switch profiles anthropic recovery auto continue resume retry revive crash" },
       { id: "devices", label: "Devices", icon: Laptop, desc: "Every machine running the daemon", keywords: "machines daemon ssh checkouts online share team shared" },
@@ -134,6 +143,7 @@ export function SettingsModal() {
     const active = s.clientState.ui?.active_team_id;
     return !!active && s.teams.some((t) => t?._id === active && t.role === "admin");
   });
+  const logsAccess = useActiveTeamLogsAccess();
   const router = useRouter();
   const backdropRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
@@ -213,11 +223,12 @@ export function SettingsModal() {
       sections: group.sections.filter((d) => {
         if (d.desktopOnly && !isDesktop) return false;
         if (d.adminOnly && !isTeamAdmin) return false;
+        if (d.regulatedOnly && !logsAccess) return false;
         if (!q) return true;
         return `${d.label} ${d.desc} ${d.keywords} ${group.label}`.toLowerCase().includes(q);
       }),
     })).filter((g) => g.sections.length > 0);
-  }, [q, isDesktop, isTeamAdmin]);
+  }, [q, isDesktop, isTeamAdmin, logsAccess]);
   const firstMatch = visibleGroups[0]?.sections[0];
   const go = (d: NavDef) => {
     if (d.id) return useInboxStore.getState().openSettingsModal(d.id);
