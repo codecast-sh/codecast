@@ -1,0 +1,159 @@
+import { describe, expect, test } from "bun:test";
+import {
+  awaitChallenge, CHALLENGE_PROBE_SOURCE, challengeReport, challengeWaitMs, classifyChallenge, parseChallengeProbe, type ChallengeProbe,
+} from "./challenge.js";
+
+const page = (over: Partial<ChallengeProbe> = {}): ChallengeProbe => ({
+  url: "https://shop.test/item",
+  title: "Item",
+  text: "",
+  textLength: 0,
+  frameUrls: [],
+  scriptSrcs: [],
+  selectors: [],
+  visibleSelectors: [],
+  sinceLoad: 100,
+  ...over,
+});
+const short = (text: string, over: Partial<ChallengeProbe> = {}) => page({ text, textLength: text.length, ...over });
+
+describe("classifyChallenge", () => {
+  test("Cloudflare's 'Just a moment' clears itself; with the Turnstile box showing it needs a person", () => {
+    expect(classifyChallenge(page({ title: "Just a moment..." }))).toMatchObject({ vendor: "cloudflare", kind: "clears-itself" });
+    expect(
+      classifyChallenge(page({ title: "Just a moment...", selectors: [".cf-turnstile"], visibleSelectors: [".cf-turnstile"] })),
+    ).toMatchObject({ vendor: "cloudflare", kind: "needs-person" });
+    expect(classifyChallenge(short("Verify you are human by completing the action below.", { selectors: ["#challenge-form"] })))
+      .toMatchObject({ vendor: "cloudflare", kind: "needs-person" });
+  });
+
+  test("Cloudflare's block page stops", () => {
+    expect(classifyChallenge(short("Sorry, you have been blocked. Cloudflare Ray ID: 1"))).toMatchObject({ vendor: "cloudflare", kind: "blocked" });
+  });
+
+  test("a Turnstile frame on a short page is a challenge; on a long article it is not", () => {
+    const frame = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/turnstile/if/ov2";
+    expect(classifyChallenge(short("checking", { frameUrls: [frame] }))?.vendor).toBe("cloudflare");
+    expect(classifyChallenge(page({ frameUrls: [frame], textLength: 20_000, text: "long article" }))).toBeNull();
+  });
+
+  test("PerimeterX press and hold needs a person", () => {
+    expect(classifyChallenge(short("Press & Hold to confirm you are a human"))).toMatchObject({ vendor: "perimeterx", kind: "needs-person" });
+  });
+
+  test("DataDome: the interstitial clears itself, the captcha needs a person", () => {
+    expect(classifyChallenge(page({ frameUrls: ["https://geo.captcha-delivery.com/interstitial/?x=1"] }))?.kind).toBe("clears-itself");
+    expect(classifyChallenge(page({ frameUrls: ["https://geo.captcha-delivery.com/captcha/?x=1"] }))?.kind).toBe("needs-person");
+  });
+
+  test("Akamai: silent challenge, and the Access Denied reference page", () => {
+    expect(classifyChallenge(page({ selectors: ["#sec-if-cpt-container"] }))).toMatchObject({ vendor: "akamai", kind: "clears-itself" });
+    expect(
+      classifyChallenge(short("You don't have permission to access this resource. Reference #18.abc", { title: "Access Denied" })),
+    ).toMatchObject({ vendor: "akamai", kind: "blocked" });
+  });
+
+  test("Imperva: incident page blocks, resource with captcha needs a person", () => {
+    expect(classifyChallenge(short("Request unsuccessful. Incapsula incident ID: 1", { scriptSrcs: ["https://x.test/_Incapsula_Resource?a"] })))
+      .toMatchObject({ vendor: "imperva", kind: "blocked" });
+    expect(classifyChallenge(short("please complete the captcha", { frameUrls: ["https://x.test/_Incapsula_Resource?b"] })))
+      .toMatchObject({ vendor: "imperva", kind: "needs-person" });
+  });
+
+  test("AWS WAF captcha and silent challenge", () => {
+    expect(classifyChallenge(page({ selectors: ["awswaf-captcha"] }))).toMatchObject({ vendor: "aws-waf", kind: "needs-person" });
+    expect(classifyChallenge(short("", { scriptSrcs: ["https://abc.token.awswaf.com/x/challenge.js"] })))
+      .toMatchObject({ vendor: "aws-waf", kind: "clears-itself" });
+  });
+
+  test("captcha walls and Google's sorry page", () => {
+    expect(classifyChallenge(short("Please complete the captcha", { frameUrls: ["https://www.google.com/recaptcha/api2/anchor?k=1"] })))
+      .toMatchObject({ vendor: "recaptcha", kind: "needs-person" });
+    expect(classifyChallenge(short("captcha", { frameUrls: ["https://newassets.hcaptcha.com/captcha/v1/x"] })))
+      .toMatchObject({ vendor: "hcaptcha", kind: "needs-person" });
+    expect(classifyChallenge(short("unusual traffic", { url: "https://www.google.com/sorry/index?continue=x" })))
+      .toMatchObject({ vendor: "recaptcha", kind: "needs-person" });
+  });
+
+  test("generic phrases count only on short pages", () => {
+    expect(classifyChallenge(short("Access denied", { title: "403 Forbidden" }))).toMatchObject({ vendor: "generic", kind: "blocked" });
+    expect(classifyChallenge(short("Pardon our interruption..."))).toMatchObject({ vendor: "generic", kind: "needs-person" });
+    const article = "x".repeat(5000);
+    expect(classifyChallenge(page({ title: "Access Denied", text: `access denied ${article}`, textLength: 5014 }))).toBeNull();
+  });
+
+  test("an ordinary page and a non-http page are not challenges", () => {
+    expect(classifyChallenge(short("Welcome to the shop"))).toBeNull();
+    expect(classifyChallenge(short("Just a moment", { url: "about:blank", title: "Just a moment..." }))).toBeNull();
+  });
+});
+
+describe("awaitChallenge", () => {
+  const clock = () => {
+    let t = 0;
+    return { now: () => t, sleep: async (ms: number) => void (t += ms) };
+  };
+
+  test("waits out a challenge that clears itself", async () => {
+    const c = clock();
+    const probes = [page({ title: "Just a moment..." }), page({ title: "Just a moment..." }), page({ title: "Shop" })];
+    const out = await awaitChallenge(probes[0], { ...c, probe: async () => probes.shift()! }, 15_000);
+    expect(out).toMatchObject({ cleared: true, vendor: "cloudflare" });
+    expect(out!.waitedMs).toBeGreaterThan(0);
+  });
+
+  test("gives up after the bound, still blocked, and asks for a person", async () => {
+    const c = clock();
+    const cf = page({ title: "Just a moment..." });
+    const out = await awaitChallenge(cf, { ...c, probe: async () => cf }, 15_000);
+    expect(out).toMatchObject({ cleared: false, kind: "clears-itself" });
+    expect(out!.waitedMs).toBe(15_000);
+    expect(challengeReport(out!)).toMatch(/needs a person.*still there after 15 s.*Hand it to the human/);
+  });
+
+  test("a challenge that needs a person is reported at once, without waiting or touching it", async () => {
+    let probed = 0;
+    const px = short("Press & Hold");
+    const out = await awaitChallenge(px, { ...clock(), probe: async () => (probed++, px) }, 15_000);
+    expect(probed).toBe(0);
+    expect(out).toMatchObject({ cleared: false, kind: "needs-person", waitedMs: 0 });
+  });
+
+  test("a block is reported with an instruction to stop", async () => {
+    const out = await awaitChallenge(short("Sorry, you have been blocked. cloudflare"), { ...clock(), probe: async () => null }, 15_000);
+    expect(challengeReport(out!)).toMatch(/refused the visit.*Stop here. Do not retry or reload/);
+  });
+
+  test("an ordinary page returns null", async () => {
+    expect(await awaitChallenge(page(), { ...clock(), probe: async () => null }, 15_000)).toBeNull();
+  });
+});
+
+describe("the probe", () => {
+  test("reads a page-like DOM and parses back", () => {
+    const el = { getBoundingClientRect: () => ({ width: 10, height: 10 }) };
+    const document: any = {
+      body: { innerText: "Just a moment" },
+      title: "Just a moment...",
+      querySelector: (s: string) => (s === "#challenge-form" ? el : null),
+      querySelectorAll: () => [{ src: "https://challenges.cloudflare.com/x" }],
+      scripts: [{ src: "" }, { src: "https://a.test/s.js" }],
+    };
+    const run = new Function("document", "location", "performance", `return ${CHALLENGE_PROBE_SOURCE}`);
+    const p = parseChallengeProbe(JSON.stringify(run(document, { href: "https://a.test/" }, { now: () => 42 })));
+    expect(p).toMatchObject({
+      url: "https://a.test/",
+      selectors: ["#challenge-form"],
+      visibleSelectors: ["#challenge-form"],
+      scriptSrcs: ["https://a.test/s.js"],
+      sinceLoad: 42,
+    });
+    expect(classifyChallenge(p!)?.vendor).toBe("cloudflare");
+  });
+
+  test("wait bound reads the env, within 0 to 60 s", () => {
+    expect(challengeWaitMs({})).toBe(15_000);
+    expect(challengeWaitMs({ CAST_BROWSER_CHALLENGE_WAIT_MS: "0" })).toBe(0);
+    expect(challengeWaitMs({ CAST_BROWSER_CHALLENGE_WAIT_MS: "999999" })).toBe(15_000);
+  });
+});

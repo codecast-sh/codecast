@@ -153,6 +153,35 @@ describe("real tab ownership", () => {
   });
 });
 
+describe("real tab claims under concurrency", () => {
+  // Each session's claim is a read-modify-write of one shared file; two that
+  // overlapped each wrote back a copy without the other's claim, and the loser
+  // was told it had no tab while its tab leaked (soak ct-87421).
+  test("every session's claim survives many processes writing at once", async () => {
+    const real = path.resolve(import.meta.dir, "real.ts");
+    const writers = 8;
+    const rounds = 25;
+    const script = (i: number) => `
+      const { rememberRealTab, pruneRealTabs } = await import(${JSON.stringify(real)});
+      const live = new Set(Array.from({ length: ${writers * rounds} }, (_, n) => "T" + Math.floor(n / ${rounds}) + "-" + (n % ${rounds})));
+      for (let r = 0; r < ${rounds}; r++) {
+        rememberRealTab("session:${i}", "T${i}-" + r);
+        // A claim on a closed tab, pruned by this writer while the others write theirs.
+        rememberRealTab("session:dead-${i}", "GONE");
+        pruneRealTabs(live);
+      }`;
+    const procs = Array.from({ length: writers }, (_, i) =>
+      Bun.spawn(["bun", "-e", script(i)], { env: { ...process.env, CODECAST_DIR: dir }, stdout: "ignore", stderr: "pipe" }),
+    );
+    const codes = await Promise.all(procs.map((p) => p.exited));
+    expect(codes).toEqual(Array(writers).fill(0));
+    for (let i = 0; i < writers; i++) {
+      expect(ownedRealTab(`session:${i}`)).toBe(`T${i}-${rounds - 1}`);
+      expect(ownedRealTab(`session:dead-${i}`)).toBeUndefined();
+    }
+  }, 60_000);
+});
+
 describe("resolveRealTarget", () => {
   const targets = [
     { targetId: targetIdOfTab(1), type: "page", title: "Human's mail", url: "https://mail.example/inbox" },
