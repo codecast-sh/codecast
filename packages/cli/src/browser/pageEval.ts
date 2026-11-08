@@ -63,14 +63,19 @@ export async function connectToTab(o: PageCtx): Promise<
     return { conn, sessionId, url: tab.url ?? "", targetId: tab.targetId, browserUrl };
   } catch (err) {
     conn.close();
-    return { error: `could not attach to this session's tab: ${(err as Error).message}` };
+    const message = (err as Error).message;
+    // Chrome refused the debugger on the tab: a fresh tab is the way out.
+    const hint = /Cannot attach to this target/i.test(message) ? "`cast browser stop`, then `cast browser open <url>` starts on a fresh tab" : undefined;
+    return { error: `could not attach to this session's tab: ${message}`, hint };
   }
 }
 
 export interface EvalOutcome {
   ok: boolean;
-  /** What to print: the JSON value, or the page's exception text. */
+  /** The JSON value exactly (what parsers and `--json` read), or the page's exception text. */
   output: string;
+  /** The value as a person reads it (renderEvalForReading); absent on failure. */
+  display?: string;
   hint?: string;
 }
 
@@ -83,6 +88,20 @@ export function renderEvalValue(result: { type?: string; value?: unknown; descri
   }
   const json = JSON.stringify(result.value, null, undefined);
   return json ?? "undefined";
+}
+
+/**
+ * The value as an agent reads it: a string prints as itself, so
+ * `document.body.innerText` keeps its newlines and `JSON.stringify(x)` prints
+ * the JSON once instead of quoted with every quote escaped. Anything else is
+ * JSON, indented once it is too long to scan on one line. `--json` keeps the
+ * exact encoding (renderEvalValue) for a caller that parses it.
+ */
+export function renderEvalForReading(result: { type?: string; value?: unknown; description?: string }): string {
+  if (typeof result.value === "string") return result.value;
+  const exact = renderEvalValue(result);
+  if (result.value === null || typeof result.value !== "object" || exact.length <= 100) return exact;
+  return JSON.stringify(result.value, null, 2);
 }
 
 /**
@@ -137,7 +156,7 @@ export async function evaluateOn(
       const ex = res.exceptionDetails;
       return { ok: false, output: ex.exception?.description ?? ex.text ?? "the script threw" };
     }
-    return { ok: true, output: renderEvalValue(res.result) };
+    return { ok: true, output: renderEvalValue(res.result), display: renderEvalForReading(res.result) };
   } catch (err) {
     if (err instanceof CdpTimeout) {
       return {
@@ -147,6 +166,30 @@ export async function evaluateOn(
       };
     }
     return { ok: false, output: (err as CdpError).message };
+  }
+}
+
+/**
+ * The whole scroll height of this session's page as a PNG, through CDP's
+ * captureBeyondViewport (no scroll-and-stitch, which double-fires lazy
+ * loaders). What `shot --full` falls back to when the engine's own full-page
+ * capture writes nothing, as it does over the extension bridge.
+ */
+export async function captureFullPage(o: PageCtx, timeoutMs = 30_000): Promise<{ png: Buffer } | { error: string }> {
+  const at = await connectToTab(o);
+  if ("error" in at) return { error: at.error };
+  try {
+    const res = await at.conn.send<{ data: string }>(
+      "Page.captureScreenshot",
+      { format: "png", captureBeyondViewport: true },
+      at.sessionId,
+      timeoutMs,
+    );
+    return res?.data ? { png: Buffer.from(res.data, "base64") } : { error: "the browser returned no image" };
+  } catch (err) {
+    return { error: (err as Error).message };
+  } finally {
+    at.conn.close();
   }
 }
 
