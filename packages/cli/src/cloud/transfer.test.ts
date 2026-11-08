@@ -405,6 +405,9 @@ await program.parseAsync(process.argv);
     // walks the host's /home/<user>/work back under the temp dir, so the
     // "host" checkout lands there and never in the real ~/work.
     const hostId = "i-test";
+    // The host already runs this laptop's cast, so prepare installs nothing (castForPrepare
+    // reads the version over execFileSync ssh, which the PATH-shimmed fake ssh never sees).
+    const currentCast = () => "cast current on the host";
     let work: string;
     beforeEach(() => {
       work = path.join(dir, "work");
@@ -413,7 +416,7 @@ await program.parseAsync(process.argv);
 
     test("the hostGit command runs BEFORE any git clone/fetch, records the probe in the registry, and the checkout follows", async () => {
       const lines: string[] = [];
-      const prepared = await prepareCloudHost({ hostArg: hostId, seedCwd: laptop, repoRoot: laptop, onProgress: (m) => lines.push(m) });
+      const prepared = await prepareCloudHost({ castStep: currentCast, hostArg: hostId, seedCwd: laptop, repoRoot: laptop, onProgress: (m) => lines.push(m) });
       expect(prepared.repoPath).toBe(path.join(work, "laptop repo"));
       expect(prepared.deviceId).toBe("0123456789abcdef");
       expect(prepared.git?.access).toEqual({ origin, read: true, write: true });
@@ -440,7 +443,7 @@ await program.parseAsync(process.argv);
       git(repoPath, "checkout", "-qb", "codecast/cloud-shared");
       const shared = commit(repoPath, "shared.txt", "a shared session's work");
       const head = advanceOrigin();
-      const prepared = await prepareCloudHost({ hostArg: hostId, seedCwd: laptop, repoRoot: laptop });
+      const prepared = await prepareCloudHost({ castStep: currentCast, hostArg: hostId, seedCwd: laptop, repoRoot: laptop });
       expect(prepared.mainHead).toBe(head);
       expect(git(repoPath, "rev-parse", "HEAD")).toBe(shared);
       expect(git(repoPath, "rev-parse", "--abbrev-ref", "HEAD")).toBe("codecast/cloud-shared");
@@ -450,7 +453,7 @@ await program.parseAsync(process.argv);
     test("a transport-failing hostGit step is non-fatal: prepareCloudHost still returns the checkout", async () => {
       process.env.CLOUD_TEST_FAIL_HOSTGIT = "1";
       const lines: string[] = [];
-      const prepared = await prepareCloudHost({ hostArg: hostId, seedCwd: laptop, repoRoot: laptop, onProgress: (m) => lines.push(m) });
+      const prepared = await prepareCloudHost({ castStep: currentCast, hostArg: hostId, seedCwd: laptop, repoRoot: laptop, onProgress: (m) => lines.push(m) });
       expect(prepared.repoPath).toBe(path.join(work, "laptop repo"));
       expect(prepared.git).toBeUndefined();
       expect(lines.some((l) => l.startsWith("host git setup skipped: host git setup on") && l.includes("Connection refused"))).toBe(true);
@@ -465,7 +468,7 @@ case "$*" in *ls-remote*) echo "git@github.com: Permission denied (publickey)." 
 exec ${realGit} "$@"
 `, { mode: 0o755 });
       const lines: string[] = [];
-      const prepared = await prepareCloudHost({ hostArg: hostId, seedCwd: laptop, repoRoot: laptop, onProgress: (m) => lines.push(m) });
+      const prepared = await prepareCloudHost({ castStep: currentCast, hostArg: hostId, seedCwd: laptop, repoRoot: laptop, onProgress: (m) => lines.push(m) });
       expect(prepared.git?.access).toEqual({ origin, read: false, write: false, error: "git@github.com: Permission denied (publickey)." });
       expect(lines).toContain(`host has no push access to ${origin} (git@github.com: Permission denied (publickey).) — cast hosts key ${hostId}`);
       expect(fs.existsSync(path.join(prepared.repoPath, "app.txt"))).toBe(true);

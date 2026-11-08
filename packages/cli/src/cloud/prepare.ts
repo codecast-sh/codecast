@@ -620,6 +620,8 @@ export interface PrepareCloudHostOptions {
   onProgress?: Progress;
   /** Each placement step as it begins (contracts/cloudPlacementProgress). */
   onStep?: (step: CloudPlacementStep) => void;
+  /** Injection for tests: the host cast step (readyHostHome's castStep). */
+  castStep?: ReadyHostHomeOptions["castStep"];
 }
 
 export async function wakeCloudHost(opts: PrepareCloudHostOptions): Promise<PreparedHost> {
@@ -637,7 +639,7 @@ export async function wakeCloudHost(opts: PrepareCloudHostOptions): Promise<Prep
   // Host-home steps BEFORE the checkout: the known_hosts pin and the device
   // key are what let the host's own clone/fetch succeed.
   opts.onStep?.("config");
-  const home = await readyHostHome(host, { localGitRoot: opts.repoRoot, repoPath, cloudId: up.id, onProgress: log });
+  const home = await readyHostHome(host, { localGitRoot: opts.repoRoot, repoPath, cloudId: up.id, onProgress: log, castStep: opts.castStep });
   if (home.castBehind) throw new HostCastBehind(home.castBehind);
   return { cloud: { ...up, deviceId }, host, deviceId, repoPath, repoRoot: opts.repoRoot, seedCwd: opts.seedCwd, previousAddress: cloud.address, ...(home.git ? { git: home.git } : {}) };
 }

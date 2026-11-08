@@ -40,6 +40,12 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["readiness = ready and goal_ref and goal_ref != none and risk = plan", { readiness: "ready", goal_ref: "none", risk: "plan" }, false],
     ["readiness = ready and goal_ref and goal_ref != none and risk != plan", { readiness: "ready", goal_ref: "in-3:x", risk: "low" }, true],
     ["readiness = ready and goal_ref and goal_ref != none and risk != plan", { readiness: "needs_context", goal_ref: "in-3:x", risk: "low" }, false],
+    // judge.cast's high-risk exit, with $above at its default of 50.
+    ["outcome = success and judge.json.risk >= 50", { outcome: "success", "judge.json": '{"risk":70}' }, true],
+    ["outcome = success and judge.json.risk >= 50", { outcome: "success", "judge.json": '{"risk":30}' }, false],
+    ["outcome = success and judge.json.risk >= 50", { outcome: "failure", "judge.json": '{"risk":70}' }, false],
+    ["outcome = success and judge.json.risk < 50", { outcome: "success", "judge.json": '{"risk":30}' }, true],
+    ["outcome = success and judge.json.risk < 50", { outcome: "success", "judge.json": '{"risk":70}' }, false],
     ["prove.json.reproduced = true", { "prove.json": '{"reproduced":true}' }, true],
     ["prove.json.reproduced = true", {}, false],
     ["prove.json.reproduced = false", { "prove.json": '{"reproduced":false}' }, true],
