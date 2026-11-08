@@ -640,7 +640,7 @@ describe("a hosted status row is not a daemon's", () => {
       for (const row of await ctx.db.query("managed_sessions").collect()) await ctx.db.patch(row._id, { last_heartbeat: twoHoursAgo });
       await ctx.db.insert("managed_sessions", { session_id: "dead", user_id: user, pid: 42, started_at: twoHoursAgo, last_heartbeat: twoHoursAgo, agent_status: "working" });
     });
-    expect(await t.mutation(internal.managedSessions.reapStaleManagedSessions, {})).toEqual({ deleted: 1 });
+    expect(await t.mutation(internal.managedSessions.reapStaleManagedSessions, {})).toEqual({ deleted: 1, more: false });
     const rows = await t.run((ctx) => ctx.db.query("managed_sessions").collect());
     expect(rows.map((r) => [r.conversation_id, r.agent_status, r.hosted])).toEqual([[started.conversation_id, "permission_blocked", true]]);
   });

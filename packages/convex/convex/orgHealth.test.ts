@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { HEALTH_CAPS, computeOrgHealth, roleActivity } from "./orgHealth";
+import { HEALTH_CAPS, NAV_PROMPT_LIVE_SINCE, computeOrgHealth, readTurnsSince, roleActivity } from "./orgHealth";
 import { collectOrgSessions } from "./org";
 import { reachedSentence } from "@codecast/shared/contracts/orgAreas";
 
@@ -65,9 +65,9 @@ function fixtures(extra: Record<string, any[]> = {}) {
     // Eight turns of the standing session this week, four today and four
     // yesterday (both at the cap of 4): two cap hit days. One old turn.
     messages: [
-      ...Array.from({ length: 4 }, (_, i) => ({ _id: `mw${i}`, conversation_id: S_GROWTH, role: "user", content: "hi", timestamp: NOW - i * 1000 })),
-      ...Array.from({ length: 4 }, (_, i) => ({ _id: `my${i}`, conversation_id: S_GROWTH, role: "user", content: "hi", timestamp: NOW - D - i * 1000 })),
-      { _id: "m_old", conversation_id: S_GROWTH, role: "user", content: "hi", timestamp: NOW - 10 * D },
+      ...Array.from({ length: 4 }, (_, i) => ({ _id: `mw${i}`, conversation_id: S_GROWTH, role: "user", content: "hi", nav_prompt: true, timestamp: NOW - i * 1000 })),
+      ...Array.from({ length: 4 }, (_, i) => ({ _id: `my${i}`, conversation_id: S_GROWTH, role: "user", content: "hi", nav_prompt: true, timestamp: NOW - D - i * 1000 })),
+      { _id: "m_old", conversation_id: S_GROWTH, role: "user", content: "hi", nav_prompt: true, timestamp: NOW - 10 * D },
     ],
     projects: [
       { _id: P, user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-1", title: "Growth", goal: "Bring users in", status: "active", project_path: "/repo/growth", created_at: 1, updated_at: NOW - 10 * H },
@@ -489,5 +489,53 @@ describe("company.watched_without_lead (org-roles-run-work.md R4)", () => {
   test("the stock fixture, one role per project, flags nothing", async () => {
     const r = await computeOrgHealth(ctxOf(fixtures()), ME as any, TEAM, NOW);
     expect(r.company.watched_without_lead).toEqual([]);
+  });
+});
+
+describe("readTurnsSince counts inbound turns, not tool results", () => {
+  // A browser-heavy routine: each wake is followed by dozens of tool calls
+  // whose results the CLI stores as user-role rows, beside other user rows
+  // that are no wake (a compaction summary, local command output, a task
+  // notification). Live writes flag prompts (nav_prompt) only since
+  // NAV_PROMPT_LIVE_SINCE; the window here straddles it.
+  const T = NAV_PROMPT_LIVE_SINCE + 2 * D;
+  const thread = (backfilled: boolean) => {
+    const flag = (at: number) => (backfilled || at >= NAV_PROMPT_LIVE_SINCE ? { nav_prompt: true } : {});
+    const prompt = (id: string, at: number, content: string) => ({ _id: id, conversation_id: S_GROWTH, role: "user", content, timestamp: at, ...flag(at) });
+    const rows: any[] = [
+      prompt("w1", T - H, "<session-message from=\"billing\">look at the invoices</session-message>"),
+      prompt("w2", T - D, "check the launch metrics"),
+      prompt("w3", T - 4 * D, "routine: weekly growth review"),
+      prompt("w4", T - 5 * D, "a person's line before the flag existed"),
+      prompt("w_old", T - 10 * D, "outside the window"),
+      { _id: "compact", conversation_id: S_GROWTH, role: "user", content: "This session is being continued from a previous conversation that ran out of context. Summary: ...", timestamp: T - 3 * H },
+      { _id: "local", conversation_id: S_GROWTH, role: "user", content: "<local-command-stdout>ok</local-command-stdout>", timestamp: T - 4 * D - 1 },
+      { _id: "notice", conversation_id: S_GROWTH, role: "user", content: "<task-notification>done</task-notification>", timestamp: T - 4 * D - 2 },
+    ];
+    for (const base of [T - H, T - 4 * D]) {
+      for (let i = 0; i < 40; i++) rows.push({ _id: `tr${base}_${i}`, conversation_id: S_GROWTH, role: "user", content: "", tool_results: [{ tool_use_id: `t${i}`, content: "x".repeat(100) }], timestamp: base + 1 + i });
+    }
+    return rows;
+  };
+  const read = async (backfilled: boolean) => {
+    const db = fixtures({ messages: thread(backfilled) });
+    if (backfilled) await db.patch(S_GROWTH as any, { nav_prompts_indexed_at: T - 30 * D });
+    const role = await db.get(GROWTH as any);
+    return { db, role, turns: await readTurnsSince(ctxOf(db), role, T - 7 * D) };
+  };
+  const WAKES = [T - H, T - D, T - 4 * D, T - 5 * D];
+
+  test("flagged rows come off the prompt index, older ones are walked with the same predicate", async () => {
+    expect((await read(false)).turns).toEqual(WAKES);
+  });
+
+  test("a backfilled thread is read off the prompt index alone", async () => {
+    expect((await read(true)).turns).toEqual(WAKES);
+  });
+
+  test("the role's load counts four wakes, not eighty-seven user rows", async () => {
+    const { db, role } = await read(false);
+    const a = await roleActivity(ctxOf(db), ME as any, role, T, { wholeWorkspaceLatest: null });
+    expect(a.wakes_7d.total).toBe(4);
   });
 });

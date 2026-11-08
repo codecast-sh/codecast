@@ -125,7 +125,7 @@ const AGENT_AUTHORED_ENVELOPES = [
 
 export function parseAgentAuthoredMessage(
   rawContent: string | null | undefined,
-): { from: string; body: string; label: string } | null {
+): { from: string; name?: string; body: string; label: string } | null {
   if (!rawContent) return null;
   const cleaned = stripInjectionNoise(rawContent);
   for (const { tag, label } of AGENT_AUTHORED_ENVELOPES) {
@@ -135,6 +135,7 @@ export function parseAgentAuthoredMessage(
     const close = rest.lastIndexOf(`</${tag}>`);
     return {
       from: open[1].trim(),
+      name: open[0].match(/\sname="([^"]*)"/)?.[1]?.trim() || undefined,
       body: (close === -1 ? rest : rest.slice(0, close)).trim(),
       label,
     };

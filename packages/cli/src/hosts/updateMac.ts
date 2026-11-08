@@ -2,14 +2,14 @@ import { execFileSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { buildHostCast, cliSourceVersion, hasHostBuildSource } from "../browser/provisionLinux.js";
-import { installHostRelease, type HostCastSource } from "./installRelease.js";
+import { installHostRelease, type CastRelease, type HostCastSource } from "./installRelease.js";
 import { remoteExec, scpTo } from "../browser/remote.js";
 import { remoteHome, shq, type RemoteHost } from "../remote/session-move.js";
 import { MAC_HOST_PATH } from "./provisionMac.js";
 import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
 
-export function installMacCast(host: RemoteHost, log: (message: string) => void, source: HostCastSource = "release"): string {
-  if (source === "release" || !hasHostBuildSource()) return installHostRelease(host, "darwin", log);
+export function installMacCast(host: RemoteHost, log: (message: string) => void, source: HostCastSource = "release", release?: CastRelease): string {
+  if (source === "release" || !hasHostBuildSource()) return installHostRelease(host, "darwin", log, release);
   const build = buildHostCast(log, "darwin");
   try {
     const archive = path.join(build.distDir, "../", `${path.basename(build.distDir)}.tar.gz`);

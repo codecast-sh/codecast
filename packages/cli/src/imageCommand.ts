@@ -1,5 +1,7 @@
 // `cast image` — upload a screenshot (local file or remote image URL) to
 // codecast storage and print a stable URL that renders inline for the human.
+// A video file (.mp4, .webm, .mov, .m4v) goes to media hosting instead, and its
+// markdown line plays in the cast player inline.
 //
 // Why this exists: agents kept "sharing" screenshots as links to local temp
 // paths (/var/folders/...), which are dead in the web UI — the viewer's browser
@@ -20,6 +22,7 @@ import { hashImageBytes, lookupByHash, storeUpload } from "./imageCache.js";
 import { spawnSync } from "./proc.js";
 import { fmt, icons } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
+import { isVideoSrc } from "@codecast/shared/contracts/castPlayer";
 
 const FETCH_TIMEOUT_MS = 20_000;
 
@@ -189,6 +192,26 @@ export async function uploadOne(deps: PublishDeps, target: string, alt?: string)
   return { ...base, url: resolved.url, storageId, markdown: markdownFor({ source: target, url: resolved.url, alt }) };
 }
 
+/** A local video file, uploaded to media hosting (publish.ts, the same upload
+ *  `cast publish` uses), where it streams with range requests. */
+async function shareVideo(deps: PublishDeps, target: string, alt?: string): Promise<SharedImage> {
+  if (isRemoteTarget(target)) throw new Error("a video must be a local file; put a hosted video's URL in the markdown yourself");
+  const absPath = path.resolve(target);
+  if (!fs.existsSync(absPath)) throw new Error(`no such file: ${target}`);
+  const { uploadMediaFile } = await import("./publish.js");
+  const { url, bytes, existed } = await uploadMediaFile(deps, absPath, target);
+  const ext = path.extname(absPath).slice(1).toLowerCase();
+  return {
+    source: target,
+    url,
+    storageId: url.split("/").pop()!,
+    mediaType: ext === "mov" ? "video/quicktime" : `video/${ext === "m4v" ? "mp4" : ext}`,
+    bytes,
+    markdown: markdownFor({ source: target, url, alt }),
+    ...(existed ? { deduped: true } : {}),
+  };
+}
+
 export function registerImageCommand(program: Command, deps: PublishDeps): void {
   program
     .command("image <target...>")
@@ -200,7 +223,7 @@ export function registerImageCommand(program: Command, deps: PublishDeps): void 
       const failures: { source: string; error: string }[] = [];
       for (const target of targets) {
         try {
-          shared.push(await uploadOne(deps, target, options.alt));
+          shared.push(await (isVideoSrc(target) ? shareVideo : uploadOne)(deps, target, options.alt));
         } catch (err) {
           failures.push({ source: target, error: err instanceof Error ? err.message : String(err) });
         }
@@ -210,7 +233,7 @@ export function registerImageCommand(program: Command, deps: PublishDeps): void 
       } else {
         for (const img of shared) {
           const notes = [
-            `${img.mediaType}, ${(img.bytes / 1000).toFixed(0)}KB`,
+            `${img.mediaType}, ${img.bytes >= 1e6 ? `${(img.bytes / 1e6).toFixed(1)}MB` : `${(img.bytes / 1000).toFixed(0)}KB`}`,
             ...(img.downscaledFrom ? [`downscaled from ${(img.downscaledFrom / 1e6).toFixed(1)}MB`] : []),
             ...(img.deduped ? ["already uploaded — same link"] : []),
           ];

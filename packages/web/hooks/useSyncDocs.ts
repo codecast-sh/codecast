@@ -11,22 +11,16 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useWorkspaceArgs, type WorkspaceArgs as StoreWorkspaceArgs } from "./useWorkspaceArgs";
 
 import { useMountEffect } from "./useMountEffect";
+import { conversationProjectRoot, knownCheckoutRoots } from "@codecast/convex/convex/projectPaths";
 import { useWatchEffect } from "./useWatchEffect";
 const api = _api as any;
 
-function normalizeProjectPath(path: string): string {
-  const parts = path.split("/");
-  const srcIndex = parts.findIndex((p) => p === "src" || p === "projects" || p === "repos" || p === "code");
-  if (srcIndex >= 0 && srcIndex < parts.length - 1) {
-    return parts.slice(0, srcIndex + 2).join("/");
-  }
-  return path;
-}
-
-function dedupeProjectPaths(paths: string[]): string[] {
+// One folder per repository name, each doc path named by the checkout a
+// session names (conversationProjectRoot), else by its own folder.
+function dedupeProjectPaths(paths: string[], checkouts: Set<string>): string[] {
   const byName = new Map<string, string>();
   for (const path of paths) {
-    const root = normalizeProjectPath(path);
+    const root = conversationProjectRoot({ project_path: path }, checkouts) ?? path;
     const name = root.split("/").filter(Boolean).pop() || path;
     const existing = byName.get(name);
     if (!existing || (path.includes("/src/") && !existing.includes("/src/"))) {
@@ -193,9 +187,10 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
         // mid-crawl checkpoint (reconcileCrawl's reload-resume): `all` is then
         // only the tail of the table, and neither the derived project paths nor
         // the absent-prune below may treat it as the whole workspace.
-        const projectPaths = dedupeProjectPaths([
-          ...new Set(all.map((d) => d.project_path).filter(Boolean) as string[]),
-        ]);
+        const projectPaths = dedupeProjectPaths(
+          [...new Set(all.map((d) => d.project_path).filter(Boolean) as string[])],
+          knownCheckoutRoots(Object.values(useInboxStore.getState().sessions)),
+        );
         // Only attach `extra` when the derived paths actually changed. `extra`
         // forces syncTable past its no-op guard, so passing it every crawl would
         // rewrite `docs` (and re-persist it) every 5 minutes even when nothing

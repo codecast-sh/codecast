@@ -51,6 +51,7 @@ const USER_ROW_KINDS: Record<UserMessageKind["kind"], true | string> = {
   continuation: true,
   poll_response: true,
   scheduled_task: true,
+  goal_round: true,
   role_brief: true,
   machine_move: true,
   agent_switch: true,

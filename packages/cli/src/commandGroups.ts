@@ -357,7 +357,7 @@ writes card.json and card.html. --publish attaches the page to the task as evide
     token: "image",
     args: ["<target...>"],
     hasOptions: true,
-    description: `Upload images (files or URLs) and print stable links that render inline in messages and canvas`,
+    description: `Upload images (files or URLs) or video files and print stable links that render inline in messages: images as pictures, videos in the cast player`,
     load: () => import("./imageCommand.js").then((m) => m.registerImageCommand),
   },
   {
@@ -400,6 +400,45 @@ Examples:
     load: () => import("./stateCommand.js").then((m) => m.registerStateCommand),
   },
   {
+    token: "loop",
+    description: `Keep this session working toward a goal until a review says it is met
+
+After every turn a review reads the goal and what the turn's tools showed
+(command output, test results, file contents; never what the agent says about
+it) and answers: met, continue with the next step, blocked on the person, or
+paused. Continue sends the next step into the session; met and blocked stop
+the loop and pin the outcome (blocked files the session under Needs Input).
+It stops on its own at 50 rounds, 3 rounds without progress, or 30 minutes
+with nothing happening. The composer's /goal and the goal bar above it write
+the same goal. (cast goal is the company's goals; this is one session's.)
+
+  cast loop set "Make bun test packages/billing pass"
+  cast loop show                 # state, round, the review's last finding
+  cast loop pause | resume | clear`,
+    load: () => import("./loopCommand.js").then((m) => m.registerLoopCommand),
+  },
+  {
+    token: "say",
+    args: ["[text...]"],
+    description: `Tell the person reading this thread something: the reply they see
+
+In a role's or the workspace agent's thread the person sees only what you say
+this way and their own messages; everything else you write is working notes.
+Say each thing once, whole: what you found, what you did and where it went,
+what you need from them. Markdown renders, so a table, a link, a page URL
+alone on a line or a cast-canvas block reads as it would anywhere.
+
+Examples:
+  cast say "Shipped the fix. CI is green on main."
+  cast say - <<'EOF'
+  The funnel this week:
+  | Stage | Now |
+  |---|---|
+  | Introductions | 24 |
+  EOF`,
+    load: () => import("./sayCommand.js").then((m) => m.registerSayCommand),
+  },
+  {
     token: "integrations",
     aliases: ["integration"],
     description: `Connect Slack, GitHub, Linear, Gmail and Notion; sync issues into tasks`,
@@ -425,7 +464,7 @@ Subcommands:
   cast pr threads [ref]          Its review threads, open ones first
   cast pr resolve <thread> [ref] Settle a thread (unresolve reopens it)
   cast pr review [ref] --approve Approve, request changes, or just comment
-  cast pr merge [ref]            Merge it (--squash by default)
+  cast pr merge [ref]            Merge it (--squash by default; --admin bypasses protection)
   cast pr auto-merge [ref]       Merge once checks pass (--off to cancel)
   cast pr update-branch [ref]    Merge the base branch into it
   cast pr close [ref]            Close it without merging`,

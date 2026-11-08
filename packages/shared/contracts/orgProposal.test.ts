@@ -26,7 +26,7 @@ describe("org proposal block", () => {
 
 // Staffing changes (org-staffing.md S4): one validator per kind, the spec
 // envelope, the accept order and the one-line describer.
-import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, ORG_CHARTER_MAX, ORG_PROPOSAL_MAX, ORG_PROPOSAL_WORKS, ORG_VERDICT_REVISED, applyCharterEdits, deriveAsks, describeOrgChange, describeTenure, isOrgChange, latestOrgRevisionAt, orderOrgChanges, orgChangeDependencies, orgChangeError, orgProposalWork, orgProposalWorkErrors, orgRecordGroups, orgRecordRedundancyErrors, orgTenureError, orgVerdictSeenFault, orgWorkOfChange, parseOrgProposalSpec, recordGroupTotalsLine, type OrgChange } from "./orgProposal";
+import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, ORG_CHARTER_MAX, ORG_PROPOSAL_MAX, ORG_PROPOSAL_WORKS, ORG_VERDICT_REVISED, applyCharterEdits, deriveAsks, describeOrgChange, describeTenure, isOrgChange, latestOrgRevisionAt, orderOrgChanges, orgChangeDependencies, orgAuthorityGrantsError, orgChangeError, orgProposalWork, orgProposalWorkErrors, orgRecordGroups, orgRecordRedundancyErrors, orgTenureError, orgVerdictSeenFault, orgWorkOfChange, parseOrgProposalSpec, recordGroupTotalsLine, type OrgChange } from "./orgProposal";
 
 const GOOD: Record<OrgChange["kind"], OrgChange> = {
   role: { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-1"] }, reports_to: "me" },
@@ -217,9 +217,12 @@ describe("status changes, tenure and horizon", () => {
     const a = GOOD.authority as any;
     expect(orgChangeError({ ...a, authority: [] })).toContain("one to fifty");
     expect(orgChangeError({ ...a, authority: [{ ...a.authority[0], kind: "delete" }] })).toContain("spend, publish, write, connect");
-    expect(orgChangeError({ ...a, authority: [a.authority[0], a.authority[0]] })).toContain("unique slug id");
+    expect(orgChangeError({ ...a, authority: [a.authority[0], a.authority[0]] })).toContain("not a unique slug");
     expect(orgChangeError({ ...a, authority: [{ ...a.authority[0], limit: { usd_per_month: -1 } }] })).toContain("non-negative");
     expect(orgChangeError({ ...a, authority: [{ ...a.authority[0], limit: {} }] })).toContain("non-negative");
+    // A limit written as prose ("$5,000/month") names the object shape it needs.
+    expect(orgAuthorityGrantsError([{ ...a.authority[0], limit: "$5,000/month" }])).toContain('{"usd_per_month": 5000}');
+    expect(orgAuthorityGrantsError([])).toBeNull();
     expect(orgChangeError({ ...a, authority: [{ ...a.authority[0], expires: "never" }] })).toContain("duration like 90d");
     const h = GOOD.hire as any;
     expect(orgChangeError({ ...h, template: "Growth Pack" })).toContain("slug");

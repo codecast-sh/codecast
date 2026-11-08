@@ -221,3 +221,18 @@ test("the write count survives a reopen and a replaced pane", async () => {
   const other = JSON.stringify(["101", "/socket", "%2", "201", "301"]);
   expect(reopened.begin(identity, other, "continue").receipt.writes).toBe(2);
 });
+
+// The turn claims read the same outcome: a failed or undeliverable continue
+// stalled on a session that never came up (its attempt is spent), while a
+// receipt keeps guarding its pane until delivery or a cancel.
+test("pendingMessageOutcome tells a stalled message from an open one; receipts still finish only on delivery or cancel", async () => {
+  const { pendingMessageOutcome, pendingMessageFinished } = await import("./tmuxDeliveryJournal.js");
+  const at = (status: string) => ({ getPendingMessageStatus: async () => status });
+  expect(await pendingMessageOutcome(at("undeliverable"), "m")).toBe("stalled");
+  expect(await pendingMessageOutcome(at("failed"), "m")).toBe("stalled");
+  expect(await pendingMessageOutcome(at("injected"), "m")).toBe("open");
+  expect(await pendingMessageOutcome(at("cancelled"), "m")).toBe("cancelled");
+  expect(await pendingMessageOutcome({ getPendingMessageStatus: async () => { throw new Error("Message not found"); } }, "m")).toBe("delivered");
+  expect(await pendingMessageFinished(at("undeliverable"), "m")).toBe(false);
+  expect(await pendingMessageFinished(at("delivered"), "m")).toBe(true);
+});

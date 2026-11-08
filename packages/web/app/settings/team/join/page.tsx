@@ -20,6 +20,8 @@ import { useShareImpact } from "../../../../hooks/useShareImpact";
 import { shareActionLabel } from "../../../../lib/team/shareImpact";
 import { useCurrentUser } from "../../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../../store/inboxStore";
+import { ConnectStep } from "../../../../components/onboarding/ConnectStep";
+import { useAgentFeatureChoice } from "../../../../hooks/useAgentFeatureChoice";
 
 import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 const CODE_FORM_ID = "team-join-code";
@@ -28,15 +30,17 @@ const TEAM_FEED_PATH = "/team/activity";
 
 const STEPS: TeamFlowStep[] = [
   { key: "code", label: "Invite code" },
-  { key: "visibility", label: "Visibility" },
-  { key: "workspaces", label: "Workspaces" },
+  { key: "agents", label: "Agents" },
+  { key: "sharing", label: "Sharing" },
 ];
 
 /**
- * Join team flow. The code step joins for real; visibility and workspaces
- * continue inline in the same shell, so a joiner gets the same guided push
- * to share their repos as a creator does. The public /join/<code> landing
- * hands off here with ?teamId= once it has joined, skipping the code step.
+ * Join team flow. The code step joins for real; the Agents and Sharing steps
+ * are the setup flow's own (components/onboarding), so a joiner connects
+ * their machine with every agent feature on and shares their repos the same
+ * way a creator does. The public /join/<code> landing hands off here with
+ * ?teamId= once it has joined, skipping the code step. An existing member
+ * tuning their sharing (?setup=1) sees only Sharing.
  */
 export default function JoinTeamPage() {
   const router = useRouter();
@@ -51,8 +55,9 @@ export default function JoinTeamPage() {
   const [teamId, setTeamId] = useState<Id<"teams"> | null>(
     () => (searchParams.get("teamId") as Id<"teams"> | null) || null,
   );
-  const [step, setStep] = useState(() => (searchParams.get("teamId") ? 1 : 0));
   const isSetup = searchParams.get("setup") === "1";
+  const [step, setStep] = useState(() => (isSetup ? 2 : searchParams.get("teamId") ? 1 : 0));
+  const agents = useAgentFeatureChoice();
   const [inviteCode, setInviteCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState("");
@@ -102,15 +107,15 @@ export default function JoinTeamPage() {
       : { name: "" };
 
   const goBack = useCallback(() => {
-    if (step === 0 || step === 1) {
+    if (step === 0 || step === 1 || isSetup) {
       // Before joining, leaving is a cancel. Once joined, the membership is
-      // real and visibility is the first step, so back exits the flow too;
+      // real and Agents is the first step, so back exits the flow too;
       // everything here can be changed later in Settings.
       router.push("/settings/team");
       return;
     }
     setStep((s) => s - 1);
-  }, [step, router]);
+  }, [step, router, isSetup]);
 
   const handleJoinTeam = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,19 +165,19 @@ export default function JoinTeamPage() {
           toast.error("Could not save the team settings", { description: "You can change them in Settings." });
         });
     }
+    useInboxStore.getState().updateClientUI({ setup_done_at: Date.now() });
     router.push(TEAM_FEED_PATH);
     toast.success(isSetup ? `Saved your ${name} setup` : `Welcome to ${name}`, {
       description: "This is its feed. Sessions from shared workspaces land here.",
     });
   };
 
-  const laterEyebrow = isSetup
-    ? teamName ? `Set up ${teamName}` : "Team setup"
-    : teamName ? `Welcome to ${teamName}` : "Welcome";
-  // An existing member tuning sharing never sees the code step, so the rail
-  // shows only the two steps they can actually visit.
-  const steps = isSetup ? STEPS.slice(1) : STEPS;
-  const stepOffset = isSetup ? 1 : 0;
+  // The rail already names the team under its crest.
+  const laterEyebrow = isSetup ? "Team setup" : "Joined";
+  // An existing member tuning sharing never sees the code or agents step, so
+  // the rail shows only the step they can actually visit.
+  const steps = isSetup ? STEPS.slice(2) : STEPS;
+  const stepOffset = isSetup ? 2 : 0;
 
   if (step === 0) {
     return (
@@ -245,20 +250,19 @@ export default function JoinTeamPage() {
       <TeamFlowShell
         eyebrow={laterEyebrow}
         steps={steps}
-        stepIndex={1 - stepOffset}
+        stepIndex={1}
         crest={crest}
-        heading="What teammates see"
-        description={
-          isSetup
-            ? "Choose how much of your work shows in the team feed. You can change this any time."
-            : "You're on the team; the rest is optional tuning. Choose how much of your work shows in the team feed. You can change this any time."
-        }
+        heading="Connect your agents"
+        description={`Sessions from this computer sync, and agents learn chat, tasks and everything else ${teamName || "the team"} has on.`}
         onBack={goBack}
         backLabel="Set up later"
-        onContinue={() => setStep(2)}
+        onSkip={agents.allChosen ? undefined : () => { agents.commit(); setStep(2); }}
+        skipLabel={`Continue with ${agents.chosen.size}`}
+        onContinue={() => { agents.commit(true); setStep(2); }}
+        continueLabel={agents.allChosen ? "Continue" : `Turn on all ${agents.total}`}
         enterAdvances
       >
-        <VisibilityPicker value={visibility} onChange={setVisibility} />
+        <ConnectStep choice={agents} />
       </TeamFlowShell>
     );
   }
@@ -269,8 +273,8 @@ export default function JoinTeamPage() {
       steps={steps}
       stepIndex={2 - stepOffset}
       crest={crest}
-      heading="Where you work"
-      description="Pick the repos you work in with this team. Sessions there show in the team feed; the summary below says exactly how many."
+      heading="What teammates see"
+      description="Pick the repos you work in with this team and how much of your work shows in its feed."
       onBack={goBack}
       onSkip={() => finishSetup({})}
       skipLabel="Skip for now"
@@ -278,6 +282,8 @@ export default function JoinTeamPage() {
       continueLabel={shareActionLabel(impact, since) ?? "Open team"}
       enterAdvances
     >
+      <div className="space-y-6">
+      <VisibilityPicker value={visibility} onChange={setVisibility} compact />
       <WorkspaceSharePicker
         data={data}
         teamId={teamId}
@@ -291,6 +297,7 @@ export default function JoinTeamPage() {
           onSinceChange: setSince,
         }}
       />
+      </div>
     </TeamFlowShell>
   );
 }

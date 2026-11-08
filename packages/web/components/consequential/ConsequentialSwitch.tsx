@@ -48,6 +48,8 @@ export type SwitchLedger = {
   /** A limit the person sets as part of the act ("A day": 5, 10, 20, No limit): the pressed option is `value`, and the
    *  figures already read it. The site applies it with the confirm (SwitchReview onPick). */
   pick?: { k: string; options: ReadonlyArray<string>; value: string };
+  /** A word the person types to confirm (a team's name): the confirm stays disabled until it matches. */
+  typed?: { k: string; expect: string };
 };
 
 export type SwitchTriggerProps = { on: boolean; press: () => void; reviewing: boolean };
@@ -94,7 +96,9 @@ const CAPTURE = { capture: true };
 /** The review itself: controlled, for a site that opens it from somewhere other than a trigger of its own. */
 export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger: SwitchLedger; onClose: () => void; onConfirm: () => void; onPick?: (option: string) => void }) {
   const cancel = useRef<HTMLButtonElement>(null);
-  const blocked = !!l.blocked;
+  const [typed, setTyped] = useState("");
+  const unmatched = !!l.typed && typed.trim() !== l.typed.expect.trim();
+  const blocked = !!l.blocked || unmatched;
   // The modifier makes confirming a chord: a stray Enter, or one meant for the page behind, does nothing.
   useEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.stopPropagation(); onConfirm(); }
@@ -182,11 +186,27 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger
           ))}
         </dl>
 
+        {l.typed && (
+          <label className="flex items-center gap-3 border-t border-sol-border/60 px-5 py-2.5 text-[12.5px]" data-switch-typed data-switch-part>
+            <span className="w-[6rem] shrink-0 truncate text-sol-text-dim">{l.typed.k}</span>
+            <input
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={l.typed.expect}
+              autoComplete="off"
+              spellCheck={false}
+              aria-invalid={unmatched && typed.length > 0}
+              className="h-8 min-w-0 flex-1 rounded-md border border-sol-border bg-sol-bg px-2.5 text-sol-text placeholder:text-sol-text-dim/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50 aria-[invalid=true]:border-sol-red/60"
+              data-switch-typed-input
+            />
+          </label>
+        )}
+
         <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-sol-border/60 bg-sol-bg-alt/40 px-5 py-3 sm:rounded-b-xl" data-switch-part>
           <button ref={cancel} type="button" onClick={onClose} className="inline-flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text-muted hover:text-sol-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50" data-switch-cancel>
             {l.keep ?? "Keep off"} <KeyCap size="xs">esc</KeyCap>
           </button>
-          <Button type="button" variant="orange" size="sm" disabled={blocked} onClick={onConfirm} title={l.blocked ?? l.confirm} className="ml-auto min-w-0 max-w-full" data-switch-confirm>
+          <Button type="button" variant="orange" size="sm" disabled={blocked} onClick={() => { if (!blocked) onConfirm(); }} title={l.blocked ?? l.confirm} className="ml-auto min-w-0 max-w-full" data-switch-confirm>
             <span className="min-w-0 truncate">{l.blocked ?? l.confirm}</span>
             {!blocked && <span className="inline-flex shrink-0 items-center gap-0.5"><KeyCap size="xs" tone="onAccent">{isMac ? "⌘" : "ctrl"}</KeyCap><KeyCap size="xs" tone="onAccent">↵</KeyCap></span>}
           </Button>

@@ -6,8 +6,12 @@
 // here; we mint an identity token scoped to (user, artifact) and bounce back
 // to the page with the token in the #i= fragment. One click when a session
 // exists; via /login (which preserves return_to) when it doesn't.
+//
+// A team-gated page (regulated data) opens only with its member token, which
+// ownerUnlock hands to the owner and the team's members; the relay adds it to
+// the page address on the way back. This is the gate page's "Open in Codecast".
 
-import { useConvexAuth, useMutation } from "convex/react";
+import { useConvex, useConvexAuth, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRef, useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -17,6 +21,7 @@ import { AppLoader } from "../../../components/AppLoader";
 export default function ArtifactAuthPage() {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const mint = useMutation(api.artifacts.mintCommentIdentity);
+  const convex = useConvex();
   const searchParams = useSearchParams();
   const router = useRouter();
   const started = useRef(false);
@@ -48,23 +53,26 @@ export default function ArtifactAuthPage() {
         // query (gate tokens, deep-link params) and fragment, never its host.
         // Redirecting to a caller-supplied host would hand the identity token
         // to an arbitrary site.
-        let search = "";
+        let search = new URLSearchParams();
         let hash = "";
         try {
           const b = new URL(back);
-          search = b.search;
+          search = b.searchParams;
           hash = b.hash;
         } catch {
           /* no usable back URL — plain landing */
         }
+        const unlock = await convex.query(api.artifacts.ownerUnlock, { slug });
+        if (unlock?.m) search.set("m", unlock.m);
+        const qs = search.toString();
         const frag = new URLSearchParams(hash.replace(/^#/, ""));
         frag.set("i", res.token);
-        window.location.replace(`${window.location.origin}/a/${slug}${search}#${frag.toString()}`);
+        window.location.replace(`${window.location.origin}/a/${slug}${qs ? `?${qs}` : ""}#${frag.toString()}`);
       } catch {
         setError("Could not sign you in to this page.");
       }
     })();
-  }, [isAuthenticated, isLoading, slug, back, router, mint]);
+  }, [isAuthenticated, isLoading, slug, back, router, mint, convex]);
 
   return (
     <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">

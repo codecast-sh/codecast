@@ -67,6 +67,10 @@ import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { useMountEffect } from "./useMountEffect";
 import { useWatchEffect } from "./useWatchEffect";
 import { prefersReducedMotion } from "../lib/reducedMotion";
+import { attributeMeasurementsByKey } from "../lib/virtualList/attributeByKey";
+import { createScrollHold, type ScrollHold } from "../lib/virtualList/scrollHold";
+import { VLIST_LEGACY } from "../lib/virtualList/legacyFlags";
+import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
 
 // ── Height cache ────────────────────────────────────────────────────────────
 
@@ -255,19 +259,16 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
   );
 
   // Mirrors virtual-core's default measureElement and persists what it measures.
-  // The attribution guard is the important part: the virtualizer files a
-  // measurement under getItemKey(el.dataset.index), but data-index is written at
-  // COMMIT time while getItemKey reflects the RENDER time list. Under a deferred
-  // update or a prepend those disagree, and the height lands under a neighbour's
-  // key — a wrong entry that never heals, because the observer only reports size
-  // changes. Each row stamps data-vkey; a disagreement means measure nothing.
+  // The element's index comes from its own data-vkey stamp
+  // (attributeMeasurementsByKey below), so the key here is always the row's own.
   const measureElement = useCallback(
     (element: Element, entry: ResizeObserverEntry | undefined, instance: any) => {
       const horizontal = instance.options.horizontal;
       const index = instance.indexFromElement(element);
+      if (index < 0) return 0;
       const key = instance.options.getItemKey(index);
       const stamped = (element as HTMLElement).dataset?.vkey;
-      if (stamped !== undefined && stamped !== String(key)) {
+      if (VLIST_LEGACY && stamped !== undefined && stamped !== String(key)) {
         return instance.itemSizeCache.get(key) ?? instance.options.estimateSize(index);
       }
       const box = entry?.borderBoxSize?.[0];
@@ -283,6 +284,9 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     },
     [heightKey],
   );
+
+  // The one pending programmatic scroll target (lib/virtualList/scrollHold).
+  const holdRef = useRef<ScrollHold | null>(null);
 
   // Generics pinned: without them the scroll element widens to `Element` and the
   // returned virtualizer stops matching the hook's own declared return type.
@@ -316,7 +320,17 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     anchorTo: userScrolled ? undefined : "end",
     followOnAppend: userScrolled ? false : "auto",
     scrollEndThreshold: bottomThresholdPx,
+    onChange: () => holdRef.current?.onChange(),
   } as any);
+  if (!VLIST_LEGACY) attributeMeasurementsByKey(virtualizer);
+  // The lists set overflow-anchor:none, so nothing else holds the view when a
+  // row above it swaps its estimate for a measured height. The library's
+  // default skips that correction while scrolling up, which is exactly when
+  // those rows measure in (lib/virtualList/resizeAdjust).
+  if (!VLIST_LEGACY) adjustScrollForResizeRule(virtualizer);
+
+  holdRef.current ??= createScrollHold(virtualizer, () => containerRef.current);
+  const hold = holdRef.current;
 
   const rowProps = useCallback(
     (item: { index: number; key: string | number; start: number }) => ({
@@ -338,15 +352,40 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
   // ── Programmatic scrolls ──────────────────────────────────────────────────
   // Reassigned every render so the closure always sees the current count and
   // virtualizer. One shot is never enough: the target offset comes from believed
-  // sizes, and as rows measure in the end moves by whole screens.
-  const scrollToRef = useRef<(target: number | "bottom", o?: { align?: "start" | "center" | "end"; smooth?: boolean; bailOnUserScroll?: boolean }) => void>(() => {});
+  // sizes, and as rows measure in the end moves by whole screens. The hold
+  // re-aims each time sizes move, for a second of visible time.
+  const scrollToRef = useRef<(target: number | "bottom", o?: { align?: "start" | "center" | "end"; smooth?: boolean; bailOnUserScroll?: boolean; holdMs?: number }) => void>(() => {});
   const scrollRequestRef = useRef(0);
   const scrollScopeRef = useRef(resetKey);
   scrollScopeRef.current = resetKey;
-  useMountEffect(() => () => { scrollRequestRef.current++; });
+  useMountEffect(() => () => { scrollRequestRef.current++; holdRef.current?.release(); });
   scrollToRef.current = (target, o) => {
     const sc = containerRef.current;
     if (!sc) return;
+    if (!VLIST_LEGACY) {
+      const aim = () => hold.set(target === "bottom" ? "bottom" : { index: target, align: o?.align ?? "start" }, {
+        holdMs: o?.holdMs ?? 1000,
+        bail: o?.bailOnUserScroll ? () => userScrolledRef.current : undefined,
+      });
+      // Smooth is offered only for the bottom, and only as native scrollTo: the
+      // virtualizer's own smooth mode is unsupported alongside dynamic
+      // measurement. The hold takes over once the animation lands. Reduced
+      // motion turns it back into a jump.
+      if (o?.smooth && target === "bottom" && !prefersReducedMotion()) {
+        hold.release();
+        const request = ++scrollRequestRef.current;
+        sc.scrollTo({ top: sc.scrollHeight, behavior: "smooth" });
+        setTimeout(() => {
+          if (request !== scrollRequestRef.current || resetKey !== scrollScopeRef.current) return;
+          if (o?.bailOnUserScroll && userScrolledRef.current) return;
+          aim();
+        }, 450);
+        return;
+      }
+      ++scrollRequestRef.current;
+      aim();
+      return;
+    }
     const request = ++scrollRequestRef.current;
     const pull = () => {
       if (request !== scrollRequestRef.current || resetKey !== scrollScopeRef.current) return;
@@ -436,20 +475,34 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     // A wheel or touch is the one signal the virtualizer cannot forge. Arm here,
     // consume in the loader, so a page is pulled once per gesture to an edge.
     const arm = () => {
+      holdRef.current?.release();
       loadOlderArmedRef.current = true;
       loadNewerArmedRef.current = true;
       maybeLoadRef.current();
+    };
+    // Any reader input takes the view: a pending target must not pull them back.
+    const take = () => holdRef.current?.release();
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.isContentEditable || t?.closest?.("input, textarea, select")) return;
+      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(e.key)) take();
     };
 
     sc.addEventListener("scroll", onScroll);
     sc.addEventListener("wheel", arm, { passive: true });
     sc.addEventListener("touchmove", arm, { passive: true });
+    sc.addEventListener("touchstart", take, { passive: true });
+    sc.addEventListener("pointerdown", take, { passive: true });
+    sc.addEventListener("keydown", onKey);
     requestAnimationFrame(onScroll);
     return () => {
       ro.disconnect();
       sc.removeEventListener("scroll", onScroll);
       sc.removeEventListener("wheel", arm);
       sc.removeEventListener("touchmove", arm);
+      sc.removeEventListener("touchstart", take);
+      sc.removeEventListener("pointerdown", take);
+      sc.removeEventListener("keydown", onKey);
     };
   });
 
@@ -571,6 +624,10 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     paginationCooldownRef.current = Date.now() + 1000;
 
     const target = initialIndex != null && initialIndex >= 0 && initialIndex < count ? initialIndex : "bottom";
+    if (!VLIST_LEGACY) {
+      scrollToRef.current(target, { align: "start", bailOnUserScroll: true, holdMs: 8000 });
+      return;
+    }
     scrollToRef.current(target, { align: "start", bailOnUserScroll: true });
 
     const start = Date.now();
@@ -596,8 +653,9 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
     // resetKey. A live unread watermark must not re-snap a reader mid read.
   }, [resetKey, count > 0, holdLanding]);
 
-  // A new list means a fresh landing next time this key comes back.
-  useWatchEffect(() => () => { landedRef.current = null; }, [resetKey]);
+  // A new list means a fresh landing next time this key comes back, and the old
+  // list's pending target must not pull the new one.
+  useWatchEffect(() => () => { landedRef.current = null; holdRef.current?.release(); }, [resetKey]);
 
   // ── Size drift self heal ──────────────────────────────────────────────────
   // A height filed under the wrong key never heals on its own: the observer only
@@ -620,6 +678,7 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
         // offsetHeight, not a rect: rect heights are screen px under CSS zoom.
         const real = el.offsetHeight;
         if (Math.abs(real - v.size) > 1) {
+          (((window as any).__VSTAT ??= {}).heal ??= []).push({ k: String(v.key), from: v.size, to: real, t: Date.now() }); // TEMP-VSTAT
           virtualizer.resizeItem(v.index, real);
           corrected = true;
         }

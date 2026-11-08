@@ -8,13 +8,13 @@ import {
   MANAGED_POLICY,
   parseTeamPolicy,
   policyBlockedMessage,
+  type RestrictionKey,
   type TeamPolicy,
-  type TeamPolicyKey,
 } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
 import type { Device } from "../components/DeviceBadge";
 
-export type RestrictionKey = Extract<TeamPolicyKey, `${string}_disabled`>;
+export type { RestrictionKey };
 
 export interface TeamPolicyView {
   team_id: string;
@@ -54,3 +54,4 @@ export function autoUpdateLock(view: TeamPolicyView | null): { on: boolean; mess
   if (!view || !value) return null;
   return { on: value === "on", message: `${value === "on" ? "On" : "Off"}, set by ${view.team_name}'s admins.` };
 }
+

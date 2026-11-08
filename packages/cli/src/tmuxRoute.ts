@@ -151,6 +151,36 @@ function socketOf(argv: string[]): string | null {
 }
 
 /**
+ * The per-session server an argv reaches, by socket path, for the fleet
+ * inventory (tmuxFleetInventory.ts); null for the shared server, which holds
+ * many sessions and is always asked directly.
+ */
+export function sessionServerKey(argv: string[], env: NodeJS.ProcessEnv = process.env): string | null {
+  const globals = argv.slice(0, verbIndex(argv));
+  const l = globals.indexOf("-L");
+  if (l >= 0) return globals[l + 1]?.startsWith(SESSION_SOCKET_PREFIX) ? path.join(tmuxSocketDir(env), globals[l + 1]) : null;
+  const s = globals.indexOf("-S");
+  return s >= 0 && path.basename(globals[s + 1] ?? "").startsWith(SESSION_SOCKET_PREFIX) ? globals[s + 1] : null;
+}
+
+/** The server's flags and the command, split where the verb starts. */
+export function splitServerFlags(argv: string[]): [string[], string[]] {
+  const i = verbIndex(argv);
+  return [argv.slice(0, i), argv.slice(i)];
+}
+
+const READ_VERBS = new Set([
+  ...FLEET_LISTINGS, "capture-pane", "capturep", "display-message", "display", "show-options", "show",
+  "show-window-options", "showw", "has-session", "has", "show-environment", "showenv", "list-buffers", "show-buffer",
+]);
+
+/** Whether a call may change what a server lists: anything but a plain read, and every command chain. */
+export function tmuxCallWrites(argv: string[]): boolean {
+  const verb = argv[verbIndex(argv)] ?? "";
+  return !READ_VERBS.has(verb) || argv.some((word, i) => i > verbIndex(argv) && (word === ";" || word.endsWith(";")));
+}
+
+/**
  * Whether a server's failure leaves a fleet listing complete. A socket file
  * that is gone held nothing, and neither did a running server with no sessions
  * (`exit-empty off`), which tmux 3.7c answers with "no current target". A socket nobody accepts on is either a server too

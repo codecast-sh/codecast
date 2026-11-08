@@ -13,7 +13,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { execFileAsync } from "../proc.js";
 import { isWSL } from "../windowsSupport.js";
+import { isPidAlive } from "../workspace/chrome.js";
 
 export interface ChromeDebugPort {
   port: number;
@@ -32,13 +34,42 @@ export interface BrowserProcess {
  * from one `ps` pass. The single process listing both scans below read.
  */
 export function listBrowserProcesses(): BrowserProcess[] {
-  const out: BrowserProcess[] = [];
   let ps: string;
   try {
-    ps = spawnSync("ps", ["ax", "-o", "pid=,command="], { encoding: "utf-8", timeout: 10_000 }).stdout ?? "";
+    ps = spawnSync("ps", PS_ARGS, { encoding: "utf-8", timeout: 10_000 }).stdout ?? "";
   } catch {
-    return out;
+    return [];
   }
+  return parseBrowserProcesses(ps);
+}
+
+const PS_ARGS = ["ax", "-o", "pid=,command="];
+// A listing this recent answers the next caller too: one click asks both
+// engines, twice when the row's tab is gone, and hovers ask again.
+const SHARED_LISTING_MS = 2_000;
+let sharedListing: { promise: Promise<BrowserProcess[]>; settledAt: number | null } | null = null;
+
+/**
+ * The same listing for the daemon, off its event loop. On a loaded machine
+ * `ps` takes tens of seconds; run synchronously from the focus route it froze
+ * the whole daemon for 50s to 244s at a time (2026-11-07), and every "open
+ * tab" click and hover waited behind it. Callers in flight share one `ps`.
+ */
+export function listBrowserProcessesAsync(): Promise<BrowserProcess[]> {
+  const cached = sharedListing;
+  if (cached && (cached.settledAt === null || Date.now() - cached.settledAt < SHARED_LISTING_MS)) return cached.promise;
+  const entry: { promise: Promise<BrowserProcess[]>; settledAt: number | null } = { promise: Promise.resolve([]), settledAt: null };
+  entry.promise = execFileAsync("ps", PS_ARGS, { encoding: "utf-8", timeout: 30_000, maxBuffer: 32 * 1024 * 1024 })
+    .then(({ stdout }) => parseBrowserProcesses(stdout), () => [])
+    .finally(() => {
+      entry.settledAt = Date.now();
+    });
+  sharedListing = entry;
+  return entry.promise;
+}
+
+function parseBrowserProcesses(ps: string): BrowserProcess[] {
+  const out: BrowserProcess[] = [];
   for (const line of ps.split("\n")) {
     const m = line.match(/^\s*(\d+)\s+(.*)$/);
     if (!m) continue;
@@ -86,6 +117,27 @@ export function realChromePid(processes?: BrowserProcess[]): number | null {
   return (real.find((p) => !/for Testing/.test(p.command)) ?? real[0])?.pid ?? null;
 }
 
+let knownChromePid: number | null = null;
+let chromePidLookup: Promise<void> | null = null;
+
+/**
+ * The human's Chrome pid as last seen, without waiting on a process listing:
+ * it lives across many clicks, so the answer is remembered while that process
+ * does. A missing or dead one starts a lookup in the background and reads
+ * null until it lands; the hover probe before a click usually starts it.
+ */
+export function knownRealChromePid(): number | null {
+  if (knownChromePid !== null && isPidAlive(knownChromePid)) return knownChromePid;
+  chromePidLookup ??= (isWSL() ? Promise.resolve(windowsChromePid()) : listBrowserProcessesAsync().then((procs) => realChromePid(procs)))
+    .then((pid) => {
+      knownChromePid = pid;
+    })
+    .finally(() => {
+      chromePidLookup = null;
+    });
+  return null;
+}
+
 /** A running Windows chrome.exe, seen from WSL through interop. */
 export function windowsChromePid(): number | null {
   try {
@@ -98,10 +150,10 @@ export function windowsChromePid(): number | null {
 }
 
 /** Live debug ports, one per Chrome user-data-dir. */
-export function listChromeDebugPorts(): ChromeDebugPort[] {
+export function listChromeDebugPorts(processes: BrowserProcess[] = listBrowserProcesses()): ChromeDebugPort[] {
   const out: ChromeDebugPort[] = [];
   const seen = new Set<string>();
-  for (const { pid, command } of listBrowserProcesses()) {
+  for (const { pid, command } of processes) {
     const dirMatch = command.match(/--user-data-dir=(\S+)/);
     if (!dirMatch) continue;
     const userDataDir = dirMatch[1];

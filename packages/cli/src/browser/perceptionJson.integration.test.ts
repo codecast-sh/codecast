@@ -115,7 +115,14 @@ for (const driver of ["direct", "engine"] as const) {
       expect(json.lifecycle).toBeUndefined();
       if (driver === "engine") {
         expect(json.text).toContain("Save (2nd)");
-        expect(JSON.parse(fs.readFileSync(path.join(result.dir, "memory.json"), "utf8"))).toEqual({ role: "button", name: "Save", nth: 2 });
+        expect(JSON.parse(fs.readFileSync(path.join(result.dir, "memory.json"), "utf8"))).toEqual({
+          role: "button",
+          name: "Save",
+          nth: 2,
+          // Two namesakes; the fixture engine's eval answers no settle probe, so the page is unknown.
+          of: 2,
+          url: null,
+        });
       }
     }, 15000);
 

@@ -74,7 +74,7 @@ function extractSessionIdFromPath(filePath: string): string {
   return path.basename(filePath, ".jsonl");
 }
 
-function readTranscriptCwd(filePath: string): string | undefined {
+export function readTranscriptCwd(filePath: string): string | undefined {
   let fd: number | undefined;
   try {
     fd = fs.openSync(filePath, "r");

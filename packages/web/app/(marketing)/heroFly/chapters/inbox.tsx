@@ -72,7 +72,7 @@ export function DeskRail(_: PartProps) {
         <SidebarNavView
           isNarrow={false}
           threads={<ThreadsNavRowView isActive={false} isNarrow={false} unread={0} />}
-          feed={<FeedNavRowView team={TEAM_CHIP} isActive={false} isNarrow={false} unread={RAIL.feedUnread} />}
+          feed={<FeedNavRowView team={TEAM_CHIP} isActive={false} isNarrow={false} />}
           // The decision's queue entry opens its own room in the rail and closes it once answered, so the rows under it glide.
           questions={
             <FilmGrow at={CUES.decisionAsked} until={CUES.decisionAnswered} dur={0.45}>

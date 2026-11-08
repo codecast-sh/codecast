@@ -12,11 +12,27 @@ export const flowMapOutcomesValidator = v.object({
   shipped: v.number(), closed: v.number(), failed: v.number(), parked: v.number(), total: v.number(),
 });
 
+const reasonCounts = v.record(v.string(), v.number());
+// How far the problems opened in each window got through the live flow (shared/contracts/lineFunnel.ts FlowFunnel).
+export const flowFunnelValidator = v.object({
+  at: v.number(),
+  windows: v.array(v.object({
+    days: v.number(),
+    signals: v.number(),
+    sources: v.array(v.object({ key: v.string(), n: v.number() })),
+    steps: v.array(v.object({ key: v.string(), label: v.string(), n: v.number(), drops: reasonCounts })),
+  })),
+  items: v.array(v.object({
+    task: v.string(), ref: v.union(v.string(), v.null()), title: v.string(), run: v.union(v.string(), v.null()), at: v.number(),
+    level: v.number(), why: v.union(v.string(), v.null()), node: v.union(v.string(), v.null()), status: v.union(v.string(), v.null()),
+  })),
+});
+
 export const flowMapTables = {
   flow_map_rollups: defineTable({
     workspace: v.string(),
     rolled_at: v.number(),
-    // By signals.source: findings per UTC day (FLOW_MAP_DAYS), the newest, problems opened in
+    // By signals.source: findings per UTC day (FUNNEL_DAYS; the map's rows show the last FLOW_MAP_DAYS), the newest, problems opened in
     // FLOW_MAP_OUTCOME_DAYS by where they stand, and problems that ran off the live flow in FLOW_MAP_ESCAPE_DAYS.
     sources: v.array(v.object({
       key: v.string(),
@@ -39,5 +55,7 @@ export const flowMapTables = {
     queued: v.number(),
     // Problems a finding reopened while they were under watch (LE12), newest reopening each, in the window.
     reopened: v.array(v.object({ task_id: v.string(), at: v.number() })),
+    // The Flows page's Volume chart; absent on a row from before it, which the next pass recounts in full.
+    funnel: v.optional(flowFunnelValidator),
   }).index("by_workspace", ["workspace"]),
 };

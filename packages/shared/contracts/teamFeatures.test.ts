@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { teamFeatureEnabled, workspaceFeatureEnabled, workspaceFeatureState } from "./teamFeatures";
+import { DEFAULT_TEAM_FEATURES, TEAM_FEATURES, teamFeatureEnabled, undecidedSetupFeatures, workspaceFeatureEnabled, workspaceFeatureState } from "./teamFeatures";
 
 // The org feature is seated per team AND per person, and the personal
 // workspace has no flag row. The rule that decides whose personal org exists
@@ -42,5 +42,16 @@ describe("workspaceFeatureState", () => {
     expect(workspaceFeatureState([off], null, "org")).toBe("off");
     // A team-only feature is never offered in the personal workspace.
     expect(workspaceFeatureState([undecided], null, "calls")).toBe("off");
+  });
+});
+
+describe("undecidedSetupFeatures", () => {
+  it("names only the setup features a team never set", () => {
+    const keys = (f: Parameters<typeof undecidedSetupFeatures>[0]) => undecidedSetupFeatures(f).map((d) => d.key);
+    expect(keys({ features: {} })).toEqual(TEAM_FEATURES.filter((f) => f.onByDefault).map((f) => f.key));
+    expect(keys({ features: { chat: false, calls: true } })).not.toContain("chat");
+    expect(keys({ features: { chat: false, calls: true } })).not.toContain("calls");
+    expect(keys({ features: { ...DEFAULT_TEAM_FEATURES } })).toEqual([]);
+    expect(keys(null)).toEqual([]);
   });
 });
