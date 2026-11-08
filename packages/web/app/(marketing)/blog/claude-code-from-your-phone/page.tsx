@@ -77,7 +77,7 @@ export default function ClaudeCodeFromYourPhonePost() {
         <H2>The session list</H2>
         <P>
           The app opens on the same inbox as the Codecast web and desktop apps. Sessions sit under
-          who acts next: <em>Needs Input</em> when the agent is waiting on you,{" "}
+          who acts next: <em>Needs You</em> when the agent is waiting on you,{" "}
           <em>Working</em> while it runs. We had also started Codex in a second terminal on the
           same project, asking it to check the README, so the list had two. The menu at the top
           left narrows the list to one project:
@@ -86,7 +86,7 @@ export default function ClaudeCodeFromYourPhonePost() {
         <CardShot
           src={`${DIR}/inbox.png`}
           width={402}
-          alt="The Codecast inbox on iPhone, narrowed to the tidebook project: tides.py --days option under Needs Input, and Check whether README.md describes every option under Working"
+          alt="The Codecast inbox on iPhone, narrowed to the tidebook project: tides.py --days option under Needs You, and Check whether README.md describes every option under Working"
           caption="Claude Code waiting on us, Codex still working."
         />
 
@@ -101,7 +101,7 @@ export default function ClaudeCodeFromYourPhonePost() {
           Claude read the script and the CSV, then asked its question with two choices. Opening the
           session on the phone shows the conversation as it happened: our prompt, Claude&apos;s
           note, a folded row for the commands it ran, and the question with its choices as buttons.
-          The status under the message box reads <em>Needs Input</em>.
+          The status under the message box reads <em>Needs You</em>.
         </P>
 
         <CardShot
@@ -135,7 +135,7 @@ export default function ClaudeCodeFromYourPhonePost() {
           Tapping <em>Approve</em> answered the prompt in the terminal; Claude&apos;s output there
           marks each one <em>Allowed by PermissionRequest hook</em>. In the build we used, the card
           appears at the top of the conversation, above the first message, so if a session reads{" "}
-          <em>Needs Input</em> and you see no question at the bottom, scroll up.
+          <em>Needs You</em> and you see no question at the bottom, scroll up.
         </P>
 
         <H2>Reading the result and sending the next message</H2>
