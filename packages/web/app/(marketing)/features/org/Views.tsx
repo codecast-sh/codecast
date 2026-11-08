@@ -154,14 +154,14 @@ export function Views() {
       <style>{CSS}</style>
       <Frame>
         <div className="og-views-bar flex flex-nowrap sm:flex-wrap items-center gap-2 px-3 py-2 border-b font-mono text-[12px] overflow-x-auto sm:overflow-visible" style={{ borderColor: LINE, background: tint(SAND, 35) }}>
-          <span className="font-bold text-[14px] mr-1 shrink-0" style={{ color: INK }}>Org</span>
+          <span className="font-bold text-[14px] mr-1 shrink-0 whitespace-nowrap" style={{ color: INK }}>Org</span>
           <div className="flex shrink-0 rounded-lg p-[3px] border" style={{ background: tint(SAND, 90), borderColor: LINE }} role="tablist">
             {VIEWS.map((v) => (
-              <button key={v.id} type="button" role="tab" aria-selected={view === v.id} onClick={() => view !== v.id && moving(() => { setView(v.id); setFocus(0); })} className={`og-press h-7 px-3 rounded-md font-semibold ${view === v.id ? "" : "hover:bg-[#fffdf6]/70 cursor-pointer"}`} style={view === v.id ? { background: "#fffdf6", color: INK, boxShadow: `0 1px 3px rgba(0,43,54,.18), inset 0 0 0 1px ${LINE}` } : { color: MUTED }}>{v.label}</button>
+              <button key={v.id} type="button" role="tab" aria-selected={view === v.id} onClick={() => view !== v.id && moving(() => { setView(v.id); setFocus(0); })} className={`og-press shrink-0 whitespace-nowrap h-7 px-3 rounded-md font-semibold ${view === v.id ? "" : "hover:bg-[#fffdf6]/70 cursor-pointer"}`} style={view === v.id ? { background: "#fffdf6", color: INK, boxShadow: `0 1px 3px rgba(0,43,54,.18), inset 0 0 0 1px ${LINE}` } : { color: MUTED }}>{v.label}</button>
             ))}
           </div>
           {view === "people" && <Toggle on={week} onClick={() => moving(() => setWeek(!week))}>This week</Toggle>}
-          <label className="flex shrink-0 items-center gap-1.5 h-8 px-2.5 rounded-lg border w-[200px] sm:w-[230px]" style={{ borderColor: LINE, background: "#fffdf6" }}>
+          <label className="flex shrink-0 whitespace-nowrap items-center gap-1.5 h-8 px-2.5 rounded-lg border w-[200px] sm:w-[230px]" style={{ borderColor: LINE, background: "#fffdf6" }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={DIM} strokeWidth="2.2" aria-hidden><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
             <input value={q} onChange={(e) => { setQ(e.target.value); setFocus(0); }} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); step(e.shiftKey ? -1 : 1); } }} placeholder="Find on the chart" aria-label="Find on the chart" className="min-w-0 flex-1 bg-transparent outline-none text-[12px]" style={{ color: TEXT }} />
             {q.trim() && <span className="shrink-0 tabular-nums text-[11px]" style={{ color: hits.length ? MUTED : SOL.red }}>{hits.length ? `${(focus % hits.length) + 1} of ${hits.length}` : "none"}</span>}
@@ -175,7 +175,7 @@ export function Views() {
           <Toggle on={needs} onClick={() => setNeeds(!needs)} lead={<span className="w-[7px] h-[7px] rounded-full" style={{ background: SOL.yellow }} />}>
             Needs you{needs && <span className="tabular-nums" style={{ color: DIM }}> {litCount}</span>}
           </Toggle>
-          <span className="ml-auto hidden lg:inline-flex items-center gap-2 h-8 px-2.5 rounded-lg border" style={{ borderColor: LINE, color: TEXT }}>
+          <span className="ml-auto hidden lg:inline-flex shrink-0 whitespace-nowrap items-center gap-2 h-8 px-2.5 rounded-lg border" style={{ borderColor: LINE, color: TEXT }}>
             <Tile k="org chart" size={18} /> Head of People
           </span>
         </div>
@@ -259,7 +259,7 @@ function Kids({ children }: { children: ReactNode[] }) {
 
 function Toggle({ on, onClick, children, lead }: { on: boolean; onClick: () => void; children: ReactNode; lead?: ReactNode }) {
   return (
-    <button type="button" aria-pressed={on} onClick={onClick} className={`og-press inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border font-semibold ${on ? "" : "hover:border-[rgba(88,110,117,.45)]"}`} style={on ? { borderColor: tint(SOL.yellow, 70), background: tint(SOL.yellow, 16, "#fffdf6"), color: INK } : { borderColor: LINE, color: TEXT, background: "#fffdf6" }}>
+    <button type="button" aria-pressed={on} onClick={onClick} className={`og-press inline-flex shrink-0 whitespace-nowrap items-center gap-1.5 h-8 px-2.5 rounded-lg border font-semibold ${on ? "" : "hover:border-[rgba(88,110,117,.45)]"}`} style={on ? { borderColor: tint(SOL.yellow, 70), background: tint(SOL.yellow, 16, "#fffdf6"), color: INK } : { borderColor: LINE, color: TEXT, background: "#fffdf6" }}>
       {lead}{children}
     </button>
   );

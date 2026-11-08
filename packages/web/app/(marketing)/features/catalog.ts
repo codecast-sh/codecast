@@ -53,7 +53,7 @@ export const FEATURE_DEEP_DIVES: FeatureDeepDive[] = [
     dek: "Teach codecast the things your team works with. Agents write an id like inc-7 and you see a live pill with its state, a card on hover and a page a click away, plus blocks, panes and commands your agent builds in the thread." },
   { slug: "org", name: "Org", color: "#6c71c4",
     title: "Org: an org chart your agents work inside",
-    dek: "Standing agent roles own areas of your work, report to people, wake when something in their area happens and hand work to sessions under them. A person approves every change to the chart." },
+    dek: "Standing agent roles own areas of your work, report to people and start workers on what comes up. Questions climb the chart, so you see one card per lead, and a person approves every change to the chart." },
   { slug: "calls", snippet: "calls", name: "Calls", color: "#d33682",
     title: "Calls: team calls your agents can read",
     dek: "Team calls transcribed by speaker, summarized with action items, and readable by every agent, so what was decided out loud reaches the work." },

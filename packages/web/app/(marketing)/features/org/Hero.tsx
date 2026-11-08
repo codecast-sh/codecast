@@ -12,18 +12,18 @@ import { at, BODY, DIM, INK, LINE, MUTED, PAPER, SOL, STATE, TEXT, accentOf, per
  * Engineering lead adds its recommendation and
  * the question climbs the reporting line to the person at the top.
  *
- * Positions are in a 1120 x 500 stage. Resting styles are the END state, so
+ * Positions are in a 1120 x 560 stage. Resting styles are the END state, so
  * ?static, reduced motion and a background tab all read complete; Replay
  * remounts the stage to play it again.
  */
 
 const W = 1120;
-const H = 500;
+const H = 560;
 const MAYA = { x: 560, y: 22, w: 230, h: 60 };
-const LEAD_Y = 166;
+const LEAD_Y = 222;
 const LEAD_H = 92;
 const LEAD_W = 214;
-const SUB_Y = 356;
+const SUB_Y = 412;
 const LEADS: Record<string, number> = { eng: 250, growth: 640, people: 930 };
 const SUBS: Record<string, number> = { infra: 70, release: 190, mobile: 310, evals: 430, social: 580, ads: 700, support: 930 };
 
@@ -128,8 +128,11 @@ function AskCard() {
         <span className="ml-auto font-mono text-[10px]" style={{ color: SOL.yellow }}>waiting on you</span>
       </div>
       <div className="mt-1.5 font-mono text-[12px] font-semibold leading-snug" style={{ color: INK }}>Ship the checkout fix now?</div>
-      <div className="mt-1 flex items-center gap-1 font-mono text-[10px]" style={{ color: MUTED }}>
-        <Tile k={release.k} size={13} /> @release → <Tile k={eng.k} size={13} /> @eng → you · recommends Ship
+      <div className="mt-1 font-mono text-[10.5px]" style={{ color: MUTED }}>
+        <span style={{ color: SOL.green }}>Recommends</span> Ship · tests green
+      </div>
+      <div className="mt-1 flex items-center gap-1 whitespace-nowrap font-mono text-[10px]" style={{ color: DIM }}>
+        <Tile k={release.k} size={13} /> @release <span>→</span> <Tile k={eng.k} size={13} /> @eng <span>→</span> you
       </div>
       <div className="mt-2 flex gap-1.5">
         <span className="rounded-md px-2 py-0.5 font-mono text-[10.5px]" style={{ backgroundColor: INK, color: PAPER }}>Ship</span>
@@ -206,7 +209,7 @@ function Stage() {
         {SUB_LINES.map(({ id, d }, i) => (
           <path key={id} d={d} pathLength={1} className="og-anim og-draw" style={at(1.3 + i * 0.06)} stroke={SOL.base1} strokeWidth={1.5} />
         ))}
-        <path d={`M${MAYA.x + MAYA.w / 2} ${MAYA.y + 30} H870`} pathLength={1} className="og-anim og-draw" style={at(T.ask - 0.2, { animationDuration: ".4s" })} stroke={SOL.yellow} strokeWidth={1.5} />
+        <path d={`M${MAYA.x + MAYA.w / 2} ${MAYA.y + 30} H840`} pathLength={1} className="og-anim og-draw" style={at(T.ask - 0.2, { animationDuration: ".4s" })} stroke={SOL.yellow} strokeWidth={1.5} />
         <path d={ROUTE} pathLength={1} className="og-anim og-draw" style={at(T.route, { animationDuration: ".8s" })} stroke={SOL.red} strokeWidth={1.5} strokeDasharray="1" />
       </svg>
 
@@ -271,7 +274,7 @@ function Stage() {
         </div>
       </Box>
       {/* The question, raised with Maya by the lead that reports to her. */}
-      <Box x={990} y={4} w={240} className="og-anim og-ask" style={at(T.ask)}>
+      <Box x={978} y={6} w={276} className="og-anim og-ask" style={at(T.ask)}>
         <AskCard />
       </Box>
 

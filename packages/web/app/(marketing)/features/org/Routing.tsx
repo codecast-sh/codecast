@@ -87,11 +87,11 @@ export function Routing() {
       }
     >
       <style>{CSS}</style>
-      <div className="grid gap-x-5 gap-y-2 lg:grid-cols-[minmax(0,4fr)_minmax(0,6fr)_minmax(0,4fr)] lg:grid-rows-[auto_1fr]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-x-5 gap-y-2 lg:grid-cols-[minmax(0,4fr)_minmax(0,6fr)_minmax(0,4fr)] lg:grid-rows-[auto_1fr]">
         <Label className="lg:col-start-1 lg:row-start-1">Incoming</Label>
-        <div className="lg:col-start-1 lg:row-start-2 mb-4 lg:mb-0"><Stack sel={sel} onPick={pick} /></div>
+        <div className="min-w-0 lg:col-start-1 lg:row-start-2 mb-4 lg:mb-0"><Stack sel={sel} onPick={pick} /></div>
         <Label className="lg:col-start-2 lg:row-start-1">Four rules, first match decides</Label>
-        <div className="lg:col-start-2 lg:row-start-2 mb-4 lg:mb-0"><Sieve it={it} s={s} run={run} acc={acc} still={still} /></div>
+        <div className="min-w-0 lg:col-start-2 lg:row-start-2 mb-4 lg:mb-0"><Sieve it={it} s={s} run={run} acc={acc} still={still} /></div>
         <Label className="lg:col-start-3 lg:row-start-1">Lands on</Label>
         <Destination it={it} done={s >= it.decide + 2} run={run} picked={picked} onPick={setPicked} acc={acc} />
       </div>
@@ -292,14 +292,14 @@ function Destination({ it, done, run, picked, onPick, acc }: {
 }) {
   if (!done) {
     return (
-      <div className="lg:col-start-3 lg:row-start-2 rounded-2xl border border-dashed min-h-[220px] flex items-center justify-center font-mono text-[12px]" style={{ borderColor: LINE, color: DIM }}>
+      <div className="min-w-0 lg:col-start-3 lg:row-start-2 rounded-2xl border border-dashed min-h-[220px] flex items-center justify-center font-mono text-[12px]" style={{ borderColor: LINE, color: DIM }}>
         routing…
       </div>
     );
   }
   const roleId = picked ?? (it.owner && "role" in it.owner ? it.owner.role : null);
   return (
-    <div key={`${it.id}-${run}-${picked ?? ""}`} className="lg:col-start-3 lg:row-start-2 og-anim og-routing-arrive rounded-2xl border p-4 flex flex-col" style={{ borderColor: tint(acc, 45), backgroundColor: "#fffdf6", boxShadow: `0 24px 50px -32px rgba(0,43,54,.5), 0 0 0 3px ${tint(acc, 14, "transparent")}` }}>
+    <div key={`${it.id}-${run}-${picked ?? ""}`} className="min-w-0 lg:col-start-3 lg:row-start-2 og-anim og-routing-arrive rounded-2xl border p-4 flex flex-col" style={{ borderColor: tint(acc, 45), backgroundColor: "#fffdf6", boxShadow: `0 24px 50px -32px rgba(0,43,54,.5), 0 0 0 3px ${tint(acc, 14, "transparent")}` }}>
       {roleId ? <RoleLanding r={role(roleId)} it={it} picked={!!picked} />
         : it.owner && "person" in it.owner ? <PersonLanding id={it.owner.person} />
         : <Choose read={it.read!} onPick={onPick} />}
@@ -312,7 +312,7 @@ function Destination({ it, done, run, picked, onPick, acc }: {
 function Trail({ it, acc, picked }: { it: Item; acc: string; picked: boolean }) {
   const unsure = !it.owner;
   return (
-    <div className="og-anim og-fade mt-auto pt-4 flex items-center gap-1.5" style={{ ["--d" as string]: "0.45s" } as CSSProperties}>
+    <div className="og-anim og-fade mt-auto pt-4 flex flex-wrap items-center gap-1.5" style={{ ["--d" as string]: "0.45s" } as CSSProperties}>
       {LINES.map((l) => {
         const mark = l.n < it.decide ? "✕" : l.n > it.decide ? "–" : unsure ? "?" : "✓";
         const on = l.n === it.decide;

@@ -342,7 +342,7 @@ function Toggle({ mode, onPick }: { mode: Mode; onPick: (m: Mode) => void }) {
             role="radio"
             aria-checked={on}
             onClick={() => onPick(m)}
-            className={`og-press og-ladder-seg rounded-2xl px-4 sm:px-5 py-3.5 text-left flex items-end justify-between gap-3 ${on ? "" : "og-ladder-seg-off"}`}
+            className={`og-press og-ladder-seg rounded-2xl px-3 sm:px-5 py-3 sm:py-3.5 text-left flex items-end justify-between gap-3 ${on ? "" : "og-ladder-seg-off"}`}
             style={{
               border: `2px solid ${on ? accent : LINE}`,
               backgroundColor: on ? tint(accent, 12, "#fffdf6") : PAPER,
@@ -350,13 +350,13 @@ function Toggle({ mode, onPick }: { mode: Mode; onPick: (m: Mode) => void }) {
             }}
           >
             <span className="min-w-0">
-              <span className="flex items-center gap-2 font-mono text-[13px] sm:text-[14px] font-semibold" style={{ color: on ? INK : TEXT }}>
+              <span className="flex items-center gap-1.5 sm:gap-2 font-mono text-[12px] sm:text-[14px] font-semibold leading-tight" style={{ color: on ? INK : TEXT }}>
                 <span aria-hidden className="w-3.5 h-3.5 rounded-full shrink-0" style={{ border: `2px solid ${on ? accent : DIM}`, backgroundColor: on ? accent : "transparent", boxShadow: on ? `inset 0 0 0 2px ${PAPER}` : "none" }} />
                 {label}
               </span>
               <span className="block mt-1 font-mono text-[11px]" style={{ color: on ? MUTED : DIM }}>questions that reach Maya</span>
             </span>
-            <span className="font-mono font-bold text-[40px] sm:text-[56px] leading-none tracking-[-0.04em] tabular-nums" style={{ color: on ? strong : DIM }}>{COUNT[m]}</span>
+            <span className="shrink-0 whitespace-nowrap font-mono font-bold text-[30px] sm:text-[56px] leading-none tracking-[-0.04em] tabular-nums" style={{ color: on ? strong : DIM }}>{COUNT[m]}</span>
           </button>
         );
       })}
