@@ -74,6 +74,17 @@ describe("session-register hook", () => {
     expect(claim(id)).toEqual(existing);
   });
 
+  test("SessionStart takes the claim from a live older copy of the same session", () => {
+    // A second `cast resume` of a session on a machine where yesterday's copy
+    // still runs: the new process is the one deliveries must reach.
+    const id = "reg-relaunch";
+    const dir = path.join(home, ".codecast", "session-registry");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ pid: process.pid, tty: "ttys999", ts: 1, term: "test", launch_token: "" }));
+    run({ session_id: id, hook_event_name: "SessionStart", source: "resume" });
+    expect(claim(id).tty).toBe("ttys001");
+  });
+
   test("a dead-pid claim is rewritten", () => {
     const id = "reg-dead";
     const dir = path.join(home, ".codecast", "session-registry");
