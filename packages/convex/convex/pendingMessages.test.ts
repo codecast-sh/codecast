@@ -555,6 +555,12 @@ describe("planStuckMessageHeal", () => {
     expect(recent("injected", "real text", 3 * 60_000).kind).toBe("repend");
   });
 
+  test("a submitted message that never echoed fails visibly instead of being typed again", () => {
+    expect(planStuckMessageHeal({ status: "injected", content: "continue", created_at: now - 3 * 60_000, paste_verified_at: now - 170_000 }, now).kind).toBe("fail_unconfirmed");
+    // Failed that way, only a person's retry moves it again.
+    expect(planStuckMessageHeal({ status: "failed", content: "continue", created_at: now - 3 * 60_000, delivery_disposition_reason: "unconfirmed" }, now).kind).toBe("skip");
+  });
+
   test("leaves a freshly-injected message alone so the JSONL ack can land", () => {
     expect(recent("injected", "real text", 30_000).kind).toBe("skip");
   });
@@ -571,8 +577,8 @@ describe("planStuckMessageHeal", () => {
   });
 
   test("revives an abandoned pending message — a dropped status-write left it with no backstop", () => {
-    // Past the grace, a still-pending row provably never landed (a delivered message is promoted
-    // to terminal "delivered" by the content-match ack), so reviving it can't duplicate delivery.
+    // Past the grace, a still-pending row provably never landed (a handed-over message is
+    // "injected", and a submitted one fails as unconfirmed), so reviving it can't duplicate delivery.
     expect(recent("pending", "real text", 3 * 60_000).kind).toBe("repend");
   });
 
