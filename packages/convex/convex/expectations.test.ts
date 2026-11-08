@@ -94,6 +94,22 @@ describe("expectations data path", () => {
     expect((await run(brief, ctx, { ...scope(), version: 1 })).text).toContain("version 1");
   });
 
+  test("show <id> names its own project and narrows to that line or proposal", async () => {
+    const ctx = await makeCtx();
+    await run(propose, ctx, { ...scope(), summary: "Seed", ops: [{ op: "add", part: "Calls", text: "A call card's facts are true.", citations: [QUOTED] }] });
+    await run(propose, ctx, { ...scope(), summary: "Sharpen", ops: [{ op: "edit", id: "ex-callers-call-1", text: "Facts hold.", citations: [BARE] }] });
+    const { project: _named, ...unscoped } = scope(MATE);
+    const line = await run(show, ctx, { ...unscoped, id: "ex-callers-call-1" });
+    expect(line.project.title).toBe("Callers & Call Management");
+    expect(line.line).toMatchObject({ id: "ex-callers-call-1", text: "A call card's facts are true." });
+    const xp = await run(show, ctx, { ...unscoped, id: "xp-2" });
+    expect(xp.proposal).toMatchObject({ short_id: "xp-2", status: "open", ops: [{ op: "edit", id: "ex-callers-call-1" }] });
+    await expect(run(show, ctx, { ...unscoped, id: "ex-callers-call-9" })).rejects.toThrow(/no line ex-callers-call-9/);
+    await expect(run(show, ctx, { ...unscoped, id: "ex-nowhere-1" })).rejects.toThrow(/No expectation line/);
+    await expect(run(show, ctx, { ...unscoped, id: "sd-4" })).rejects.toThrow(/neither an expectation line/);
+    await expect(run(show, ctx, { ...scope(OUTSIDER), project: undefined, team_id: undefined, workspace: "personal", id: "xp-2" })).rejects.toThrow(/No expectation proposal/);
+  });
+
   test("a proposal that cannot apply is refused whole and stores nothing", async () => {
     const ctx = await makeCtx();
     await expect(run(propose, ctx, { ...scope(), summary: "x", ops: [{ op: "retire", id: "ex-callers-call-4", reason: "gone", citations: [BARE] }] })).rejects.toThrow(/no such expectation/);

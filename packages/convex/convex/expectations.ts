@@ -272,13 +272,44 @@ async function proposerRoutine(ctx: Ctx, project: Doc<"projects">) {
 /** The line template's routine that proposes expectation changes (org-templates/line). */
 const EXPECTATIONS_ROUTINE = "expectations-daily";
 
-/** `cast expectations show`: a version of the project's document with its history. */
+const isProposalRef = (ref: string) => /^xp-\d+$/.test(ref);
+
+/** The project an ex-<prefix>-<n> or xp-N id belongs to, so `cast expectations show <id>` needs no --project. */
+async function projectOfRef(ctx: Ctx, userId: Id<"users">, args: Parameters<typeof projectInScope>[2], ref: string): Promise<Doc<"projects">> {
+  let projectId: Id<"projects"> | undefined;
+  if (isProposalRef(ref)) {
+    projectId = (await proposalByRef(ctx, ref))?.project_id;
+  } else if (isExpectationId(ref)) {
+    const { db } = await createWorkContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path, conversation_id: args.conversation_id });
+    projectId = (await ctx.db.query("project_expectations").withIndex("by_workspace_prefix", (q: any) => q.eq("workspace", db.workspaceKey).eq("prefix", expectationIdPrefix(ref))).first())?.project_id;
+  } else {
+    throw new Error(`"${ref}" is neither an expectation line (ex-<project>-<n>) nor a proposal (xp-N)`);
+  }
+  const project = projectId ? await ctx.db.get(projectId) : null;
+  if (!project || !(await canAccessProject(ctx, userId, project))) notFound(`No expectation ${isProposalRef(ref) ? "proposal" : "line"} ${ref} in this workspace`);
+  return project as Doc<"projects">;
+}
+
+/** `cast expectations show`: a version of the project's document with its history.
+ *  `id` narrows it to one line (`line`) or one proposal with its changes
+ *  (`proposal`), and names the project when --project does not. */
 export const show = query({
-  args: { api_token: v.string(), version: v.optional(v.number()), ...scopeArgs },
+  args: { api_token: v.string(), version: v.optional(v.number()), id: v.optional(v.string()), ...scopeArgs },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx, args.api_token);
-    const { project } = await projectInScope(ctx, userId, args);
-    return readExpectations(ctx, project, args.version);
+    const ref = args.id?.trim();
+    const project = ref && !args.project?.trim() ? await projectOfRef(ctx, userId, args, ref) : (await projectInScope(ctx, userId, args)).project;
+    const read = await readExpectations(ctx, project, args.version);
+    if (!ref) return read;
+    if (isProposalRef(ref)) {
+      const proposal = await proposalByRef(ctx, ref);
+      if (!proposal || String(proposal.project_id) !== String(project._id)) notFound(`${ref} is not a proposal of ${project.title}`);
+      const decision = proposal!.decision_id ? await ctx.db.get(proposal!.decision_id) : null;
+      return { ...read, proposal: proposalView(proposal, decision, true) };
+    }
+    const line = read.doc?.items.find((e) => e.id === ref);
+    if (!line) notFound(`${project.title} has no line ${ref}${args.version !== undefined ? ` in version ${args.version}` : ""}`);
+    return { ...read, line };
   },
 });
 
