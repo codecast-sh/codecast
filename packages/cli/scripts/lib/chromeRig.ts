@@ -14,6 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BRIDGE_EXTENSION_ID, bridgePairingPage, bridgePairingUrl } from "../../src/browser/bridge/protocol.ts";
+import { loadScaledMs } from "../../src/test-helpers/machineLoad.ts";
 
 /** Opening a page in a Chrome that just started can take most of a minute on a loaded machine. */
 const PAGE_OPEN_MS = 60_000;
@@ -107,8 +108,8 @@ export class Cdp {
   }
 }
 
-/** Wait until a Chrome's CDP HTTP port answers. */
-export async function waitForCdp(cdpPort: number, timeoutMs = 30_000): Promise<void> {
+/** Wait until a Chrome's CDP HTTP port answers; the budget stretches with machine load. */
+export async function waitForCdp(cdpPort: number, timeoutMs = loadScaledMs(30_000)): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
