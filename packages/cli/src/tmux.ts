@@ -446,8 +446,11 @@ export function isTmuxSessionMissingError(error: unknown): boolean {
   const e = error as { code?: unknown; status?: unknown; signal?: unknown; killed?: unknown; stderr?: unknown };
   if (e.killed || e.signal || typeof e.code === "string") return false;
   if (e.code !== 1 && e.status !== 1) return false;
+  // "no current target": tmux 3.6 asked for a target on a server that is
+  // running but holds no sessions, the usual state of the default server
+  // once every agent has a tmux server of its own.
   return typeof e.stderr === "string" &&
-    /can't find session|no such session|session not found|no server running on |error connecting to .+ \(No such file or directory\)/i.test(e.stderr);
+    /can't find session|no such session|session not found|no current target|no server running on |error connecting to .+ \(No such file or directory\)/i.test(e.stderr);
 }
 
 // The promise twin of tmuxRun for callers on the daemon's event loop (the
