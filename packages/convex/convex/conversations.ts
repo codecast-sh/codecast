@@ -8809,7 +8809,7 @@ async function enrichInboxSessionRow(
     // along so the client re-checks currency as updated_at moves), and the
     // settle classifier's verdict, current per isSettleVerdictCurrent — the
     // client's sessionRestState reads these next to agent_status to place a
-    // settled row in Needs Input / Done / Dormant exactly as classifyWorkState does.
+    // settled row in Needs You / Done / Dormant exactly as classifyWorkState does.
     user_rest: userRestOf(conv),
     inbox_rest: userRestStampOf(conv)?.rest ?? null,
     inbox_rest_at: userRestStampOf(conv)?.at ?? null,
@@ -9464,7 +9464,7 @@ export async function scanInboxConversations(
 
   // Assignment moves the session into the owners' inboxes. The recent / pin /
   // stash windows are keyed on the runner (`user_id`), so without this drop a
-  // session handed to a teammate stays in the host's QUESTIONS and Needs Input
+  // session handed to a teammate stays in the host's QUESTIONS and Needs You
   // while also sitting in the assignee's owned window.
   //
   // Only rows the caller RUNS are dropped, and only when the caller did not ask
