@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ConvexError } from "convex/values";
-import { askCiteTarget, askErrorMessage, linkAskCitations } from "../askSession";
+import { askCiteTarget, linkAskCitations } from "../askSession";
 
 describe("linkAskCitations", () => {
   const citations = [
@@ -24,16 +23,5 @@ describe("linkAskCitations", () => {
     expect(askCiteTarget("#ask-cite-m12")).toBe("m12");
     expect(askCiteTarget("https://example.com")).toBeNull();
     expect(askCiteTarget(undefined)).toBeNull();
-  });
-});
-
-describe("askErrorMessage", () => {
-  test("maps coded refusals to the panel's words", () => {
-    expect(askErrorMessage(new ConvexError({ code: "RATE_LIMITED", message: "Too many questions this hour; retry in 12 min" })))
-      .toBe("You have asked a lot this hour. Try again in 12 min");
-    expect(askErrorMessage(new ConvexError({ code: "INVALID", message: "The question is 2400 characters; keep it under 2000" })))
-      .toBe("The question is 2400 characters; keep it under 2000");
-    expect(askErrorMessage(new ConvexError({ code: "FORBIDDEN", message: "x" }))).toBe("You do not have access to read this session.");
-    expect(askErrorMessage(new Error("boom"))).toBe("Could not answer just now. Try again in a moment.");
   });
 });

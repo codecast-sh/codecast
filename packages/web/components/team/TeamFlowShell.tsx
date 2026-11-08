@@ -25,7 +25,8 @@ interface TeamFlowShellProps {
   crest: TeamFlowCrest;
   heading: string;
   description?: string;
-  onBack: () => void;
+  /** Absent on a first step there is nothing to go back to (the first run). */
+  onBack?: () => void;
   backLabel?: string;
   onSkip?: () => void;
   skipLabel?: string;
@@ -118,6 +119,7 @@ export function TeamFlowShell({
           el.blur();
           return;
         }
+        if (!onBack) return;
         e.preventDefault();
         onBack();
         return;
@@ -261,14 +263,14 @@ export function TeamFlowShell({
           )}
           style={{ "--tf-i": 3 } as CSSProperties}
         >
-          <button
+          {onBack && <button
             type="button"
             onClick={onBack}
             className="tf-ghost -ml-3 inline-flex items-center gap-1.5 h-9 px-3 rounded-md text-sm text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--team-flow-accent)]"
           >
             {backLabel}
             <span className="tf-key-hint"><KeyCap size="xs">Esc</KeyCap></span>
-          </button>
+          </button>}
           <div className="flex-1" />
           {onSkip && (
             <button

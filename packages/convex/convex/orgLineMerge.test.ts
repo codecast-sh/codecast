@@ -128,3 +128,37 @@ describe("recordMergeCore", () => {
     expect(tables.org_roles[0].counters?.merges ?? 0).toBe(0);
   });
 });
+
+// The merge step on the measured rate (regret.md R7).
+describe("merge on the rate", () => {
+  const measured = (o: Partial<{ settled: number; regretted: number; partial: number; rate: number | null }> = {}) => ({ settled: 30, regretted: 2, partial: 4, rate: 28 / 30, ...o });
+  const rateRole = { line_merge: true, authority: [grant()], line_merge_rate: { bar: 0.9, min: 20 } };
+
+  test("merges while the rate holds its bar over the minimum, with the daily cap kept", () => {
+    expect(mergeAllowance(rateRole, NOW, measured())).toMatchObject({ allowed: true, mode: "rate", bar: { bar: 0.9, min: 20 } });
+    expect(mergeAllowance(rateRole, NOW, measured({ settled: 12, rate: 1 }))).toMatchObject({ allowed: false, reason: "only 12 of the 20 finished changes the rate needs" });
+    expect(mergeAllowance(rateRole, NOW, measured({ rate: 0.8 }))).toMatchObject({ allowed: false, reason: "the role's regret-free rate is 80%, under its bar of 90%" });
+    expect(mergeAllowance(rateRole, NOW, null)).toMatchObject({ allowed: false, reason: "the role's regret-free rate could not be read" });
+    const today = new Date(NOW).toISOString().slice(0, 10);
+    expect(mergeAllowance({ ...rateRole, counters: { day: today, hands: 0, wakes: 0, tokens: 0, merges: 2 } }, NOW, measured()).reason).toBe("the role has reached its daily merge limit (2 of 2)");
+    // The default stays the count: no bar, no rate read.
+    expect(mergeAllowance({ line_merge: true, authority: [grant()] }, NOW)).toMatchObject({ allowed: true, mode: "count", bar: null, measured: null });
+  });
+
+  test("a person sets and clears it from the settings; a token or a session may not", async () => {
+    const { ctx, tables, role } = world({ line_merge: true, authority: [grant()] });
+    await expect(performSetLineMerge(ctx, HOST as any, { role_id: "or-1", on: true, rate: { bar: 0.9, min: 20 }, api_token: "t" })).rejects.toThrow("Only a person");
+    await expect(performSetLineMerge(ctx, HOST as any, { role_id: "or-1", on: true, rate: { bar: 0.9, min: 20 }, from_session: "standing" })).rejects.toThrow("Only a person");
+    await expect(performSetLineMerge(ctx, HOST as any, { role_id: "or-1", on: true, rate: { bar: 1.5, min: 20 } })).rejects.toThrow("bar");
+    const set = await performSetLineMerge(ctx, HOST as any, { role_id: "or-1", on: true, rate: { bar: 0.9, min: 20 } });
+    expect(role().line_merge_rate).toMatchObject({ bar: 0.9, min: 20, set_by: HOST });
+    expect(set.merge).toMatchObject({ mode: "rate", allowed: false });
+    // Flipping the switch alone leaves the mode where it is.
+    await performSetLineMerge(ctx, HOST as any, { role_id: "or-1", on: true, from_session: "standing" });
+    expect(role().line_merge_rate).toBeDefined();
+    await performSetLineMerge(ctx, HOST as any, { role_id: "or-1", on: true, rate: null });
+    expect(role().line_merge_rate).toBeUndefined();
+    expect(tables.org_role_history.filter((h) => h.field === "line_merge_rate").map((h) => [h.old_value, h.new_value])).toEqual([["count", "0.9/20"], ["0.9/20", "count"]]);
+  });
+});
+

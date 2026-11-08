@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { THIS_DEVICE } from "@codecast/shared/contracts";
 import {
   cloudHostOf,
   cloudParkNeeded,
@@ -40,6 +41,13 @@ describe("a cloud host whose instance is gone", () => {
     expect(defaultSessionMachineId(roster, { lastPicked: live.device_id })).toBe(live.device_id);
   });
 
+  test("at a machine, a last pick of a sleeping host yields to it; a saved default still waits for the boot", () => {
+    const asleep = { ...live, online: false };
+    const r = [laptop, asleep];
+    expect(defaultSessionMachineId(r, { lastPicked: asleep.device_id, localDeviceId: laptop.device_id })).toBe(laptop.device_id);
+    expect(defaultSessionMachineId(r, { defaultDevice: asleep.device_id, localDeviceId: laptop.device_id })).toBe(asleep.device_id);
+  });
+
   test("the cloud toggle points at the live host, and at nothing when every host is dead", () => {
     expect(cloudHostOf(roster)).toBe(live);
     expect(cloudHostOf([laptop, deadA, deadB, { ...live, cloud_host: report(now, { state: "missing" }) }])).toBeNull();
@@ -75,16 +83,34 @@ describe("new-session machines", () => {
     expect(defaultSessionMachineId([mini, laptop], { lastPicked: mini.device_id })).toBe(mini.device_id);
   });
 
-  test("the machine this client runs on beats the standing pick and the checkout holder", () => {
-    // Started from the thinkpad, runs on the thinkpad: neither a remembered
-    // laptop pick nor the laptop's checkout re-homes the launch.
-    expect(defaultSessionMachineId([laptop, linuxLaptop], {
-      projectPath: "/Users/me/src/app", lastPicked: laptop.device_id, localDeviceId: linuxLaptop.device_id,
-    })).toBe(linuxLaptop.device_id);
-    // A stale roster row does not matter: the local daemon answered on loopback.
-    expect(defaultSessionMachineId([{ ...laptop, online: false }, cloudAwake], {
-      lastPicked: cloudAwake.device_id, localDeviceId: laptop.device_id,
+  test("a saved default, then the last hand pick, outrank the machine this client runs on", () => {
+    const studio = { ...laptop, device_id: "studio", label: "Mac Studio" };
+    // sd-2611: picked the Studio once, so a launch from the laptop opens on it.
+    expect(defaultSessionMachineId([laptop, studio], {
+      projectPath: "/Users/me/src/app", lastPicked: studio.device_id, localDeviceId: laptop.device_id,
+    })).toBe(studio.device_id);
+    // A saved default beats the last pick; "This device" means the client's machine.
+    expect(defaultSessionMachineId([laptop, studio, linuxLaptop], {
+      defaultDevice: studio.device_id, lastPicked: linuxLaptop.device_id, localDeviceId: laptop.device_id,
+    })).toBe(studio.device_id);
+    expect(defaultSessionMachineId([laptop, studio], {
+      defaultDevice: THIS_DEVICE, lastPicked: studio.device_id, localDeviceId: laptop.device_id,
     })).toBe(laptop.device_id);
+    // "This device" on a client with no machine (a phone) falls to the last pick.
+    expect(defaultSessionMachineId([laptop, studio], { defaultDevice: THIS_DEVICE, lastPicked: studio.device_id })).toBe(studio.device_id);
+    // Offline default and offline pick fall through, never block.
+    expect(defaultSessionMachineId([laptop, { ...studio, online: false }, linuxLaptop], {
+      defaultDevice: studio.device_id, lastPicked: linuxLaptop.device_id, localDeviceId: laptop.device_id,
+    })).toBe(linuxLaptop.device_id);
+    expect(defaultSessionMachineId([laptop, { ...studio, online: false }], {
+      defaultDevice: studio.device_id, lastPicked: studio.device_id, localDeviceId: laptop.device_id,
+    })).toBe(laptop.device_id);
+    // A pick that cannot open the folder falls through to the client's machine.
+    expect(defaultSessionMachineId([laptop, linuxLaptop], {
+      projectPath: "/Users/me/src/app", lastPicked: linuxLaptop.device_id, localDeviceId: laptop.device_id,
+    })).toBe(laptop.device_id);
+    // A stale roster row does not matter for the client's machine: its daemon answered on loopback.
+    expect(defaultSessionMachineId([{ ...laptop, online: false }, cloudAwake], { localDeviceId: laptop.device_id })).toBe(laptop.device_id);
     // An existing session still stays where it is; a box is never "here".
     expect(defaultSessionMachineId([laptop, cloudAwake], { ownerDeviceId: cloudAwake.device_id, localDeviceId: laptop.device_id })).toBe(cloudAwake.device_id);
     expect(defaultSessionMachineId([mini, laptop], { localDeviceId: mini.device_id })).toBe(laptop.device_id);

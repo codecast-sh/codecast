@@ -191,6 +191,20 @@ describe("agent logins step (readyHostHome step 1)", () => {
     expect(toolsForPrepare(host, () => {}, { deps: { required: () => ({ node: { minMajor: 20, install: NODE_22_VERSION, source: "x" }, clients: {}, tools: [], unsupported: [] }), run: () => { throw new Error("ssh: Connection refused"); } } })).toBeUndefined();
   });
 
+  test("a host behind this laptop's cast is reported, and the other home steps still run", async () => {
+    const { writeHosts } = await import("../browser/cloudHost.js");
+    const { HostCastBehind } = await import("../hosts/installRelease.js");
+    writeHosts([{ id: "box", address: "10.0.0.9", provider: "aws" } as any]);
+    let mirrored = false;
+    const report = await readyHostHome(host, {
+      cloudId: "box", skipGit: true, skipLogins: true, diskStep: () => FREE,
+      castStep: () => { throw new HostCastBehind("the host runs cast 1.1.200, behind this laptop's 1.1.213"); },
+      mirrorDeps: async () => { mirrored = true; return { pushed: true, changed: 0, hash: "abcdef1234" }; },
+    });
+    expect(report.castBehind).toContain("behind this laptop's 1.1.213");
+    expect(mirrored).toBe(true);
+  });
+
   test("readyHostHome refuses a host whose disk is full before any step runs", async () => {
     const mustNot = () => { throw new Error("must not run"); };
     await expect(readyHostHome(host, {

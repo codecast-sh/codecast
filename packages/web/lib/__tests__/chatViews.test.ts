@@ -1,5 +1,6 @@
 import { describe, expect, it, test } from "bun:test";
 import {
+  channelDisplayName,
   railRowTip,
   authorFor,
   seatAuthorFor,
@@ -14,6 +15,7 @@ import {
   type ChatMember,
 } from "../chatViews";
 import type { ChatMessageRow, ChatReactionRow } from "../../store/chatSlice";
+import { dmOtherIds, sessionDmKeyFor } from "@codecast/shared/chat";
 
 const ME: ChatMember = { _id: "u1", name: "Ashot", github_username: "Ashot", email: "ashot@codecast.sh" };
 const MAYA: ChatMember = { _id: "u2", name: "Maya", email: "maya@codecast.sh" };
@@ -385,5 +387,18 @@ describe("role and session mentions on the view", () => {
     expect(view.mentionsMe).toBe(false);
     expect(view.mentionFolded).toBe(true);
     expect(view.mentionRefs).toHaveLength(2);
+  });
+});
+
+describe("channelDisplayName", () => {
+  test("a session's own DM is named for the session, never as the viewer's DM with its people", () => {
+    const key = sessionDmKeyFor("t1", [MAYA._id], "conv-1");
+    // Maya sees the session alone; Ashot (its owner, not a member) is never named.
+    const forMaya = dmOtherIds(key, MAYA._id);
+    expect(forMaya).toEqual(["session:conv-1"]);
+    expect(channelDisplayName({ name: "Morning deal desk refresh", kind: "dm", dmMemberIds: forMaya }, [ME, MAYA]))
+      .toBe("Morning deal desk refresh");
+    // A people DM still reads as its people.
+    expect(channelDisplayName({ name: "", kind: "dm", dmMemberIds: [MAYA._id] }, [ME, MAYA])).toBe("Maya");
   });
 });

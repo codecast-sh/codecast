@@ -20,19 +20,8 @@ export const PENDING_MESSAGE_STATUSES = [
 export type PendingMessageStatus = (typeof PENDING_MESSAGE_STATUSES)[number];
 
 /**
- * The daemon's delivery acks after a transcript sync (DWB-03). The rows this
- * process pasted and the user turns just committed are both in order, so the
- * newest common suffix pairs each pasted row with the transcript line that
- * echoed it, and the server stamps that line's client_id exactly. Older
- * pastes with no echo yet stay injected for healing.
+ * A row the agent took an Enter for whose echo never came. It may have
+ * landed, so nothing types it again: it waits for a person's retry, and a
+ * late echo still settles it.
  */
-export function pairDeliveryAcks(
-  pastedIds: readonly string[],
-  transcriptIds: readonly string[],
-): { pendingMessageId: string; transcriptMessageId: string }[] {
-  const n = Math.min(pastedIds.length, transcriptIds.length);
-  return pastedIds.slice(pastedIds.length - n).map((pendingMessageId, i) => ({
-    pendingMessageId,
-    transcriptMessageId: transcriptIds[transcriptIds.length - n + i]!,
-  }));
-}
+export const UNCONFIRMED_DELIVERY_REASON = "unconfirmed";

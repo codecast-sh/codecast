@@ -41,6 +41,13 @@ export async function landedCommit(cwd: string, branch: string, base: string, kn
     const got = await Promise.all(files.map((f) => blob(c, f)));
     if (got.every((g, i) => g === want[i])) return { sha: c, files };
   }
+  // A change replayed onto a main that moved in the same files (the merge step replays a branch onto main) has no
+  // commit reading as the branch left it. It landed at the first commit that already holds all of it: merging the
+  // branch into that commit changes nothing.
+  for (const c of candidates) {
+    const merged = await gitTry(cwd, ["merge-tree", "--write-tree", c, tip]);
+    if (merged && merged.split("\n")[0].trim() === (await git(cwd, ["rev-parse", `${c}^{tree}`])).trim()) return { sha: c, files };
+  }
   return null;
 }
 

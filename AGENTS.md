@@ -12,6 +12,12 @@ Work directly in the main checkout. Other sessions may have uncommitted work in 
 
 Typecheck with `cast check`; never run `tsc --noEmit` yourself. This tree's programs are listed in `.codecast/check.toml`: `cli`, `web`, `convex`, `mobile`, `sim`, `evals` and `playground`. `cast check` runs all seven, and `cast check web` runs one. A fresh `tsc` for each session builds the same program again every time: thirty of them across two repos on 2026-09-17 put this machine into swap and stalled everything on it, Chrome's extension included. Run test files directly (`bun test <file>`), and keep whole suite runs rare, because they are the other load the machine cannot absorb in parallel. `cast install check` adds the full command reference to your global instructions.
 
+A watcher built while other sessions were editing several packages keeps checking the half-written tree it first saw: it reports "has no exported member 'X'" for exports present on disk (once 9 errors in `cli` and 25 in `mobile` while `convex` was clean on the same files). When a check is red with errors nobody wrote, confirm the code on disk, then run `cast check <project> --fresh` before changing anything.
+
+## Tests
+
+Each package's test guidance is in its own `AGENTS.md` (`packages/web`, `packages/cli`, `packages/convex`, `packages/mobile`). A flaky test is fixed or deleted within 14 days of being quarantined; the policy and the list are in `QUARANTINE.md`.
+
 ## Git history
 
 Keep history flat — rebase, never merge. Pull with `git pull --rebase` (never plain `git pull` when it would create a merge commit), and bring branches up to date with `git rebase origin/main` instead of merging main in. Merge commits from routine syncing don't belong in the log.

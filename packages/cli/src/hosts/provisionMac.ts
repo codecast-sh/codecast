@@ -10,6 +10,7 @@ import { readHostDeviceId, readyHostHome, remoteRepoPath, waitForDeviceOnline } 
 import { convexClient } from "../remote/convexClient.js";
 import { SSHD_KEEPALIVE_SCRIPT } from "../cloud/reach.js";
 import { macDesktopScript, parseMacDesktop } from "./macLogin.js";
+import { DESKTOP_APP_BUNDLE_ID } from "../launchdJob.js";
 
 /**
  * FUSE for reached folders (cloud/reach.ts): FUSE-T needs no kernel extension
@@ -95,6 +96,7 @@ sudo tee /Library/LaunchDaemons/${label}.plist >/dev/null <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>${label}</string>
+<key>AssociatedBundleIdentifiers</key><array><string>${DESKTOP_APP_BUNDLE_ID}</string></array>
 <key>UserName</key><string>${host.user}</string>
 <key>ProgramArguments</key><array><string>$CAST_BIN</string><string>_daemon</string></array>
 <key>WorkingDirectory</key><string>${home}</string>

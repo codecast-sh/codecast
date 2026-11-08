@@ -44,9 +44,9 @@ describe("role authority", () => {
     expect(again.authority).toHaveLength(1);
     expect(again.authority[0]).toMatchObject({ id: "ads-spend", limit: { usd_per_month: 500 }, granted_at: granted.authority[0].granted_at });
     // Bad grants are refused before any write.
-    await expect(performSetAuthority(ctx, ME, { role_id: role._id, authority: [{ id: "Bad Id", kind: "spend", label: "x" }] })).rejects.toThrow(/not a slug/);
+    await expect(performSetAuthority(ctx, ME, { role_id: role._id, authority: [{ id: "Bad Id", kind: "spend", label: "x" }] })).rejects.toThrow(/not a unique slug/);
     await expect(performSetAuthority(ctx, ME, { role_id: role._id, authority: [{ id: "x", kind: "delete" as any, label: "x" }] })).rejects.toThrow(/one of spend, publish, write, connect/);
-    await expect(performSetAuthority(ctx, ME, { role_id: role._id, authority: [{ id: "x", kind: "spend", label: "x", limit: { usd_per_day: -1 } }] })).rejects.toThrow(/non negative/);
+    await expect(performSetAuthority(ctx, ME, { role_id: role._id, authority: [{ id: "x", kind: "spend", label: "x", limit: { usd_per_day: -1 } }] })).rejects.toThrow(/non-negative/);
     // A change log row records it.
     expect(db._tables.org_changes.some((r: any) => r.kind === "authority" || "authority" in (r.kinds ?? {}))).toBe(true);
   });

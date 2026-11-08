@@ -3,12 +3,14 @@
 import { useRef, useState } from "react";
 import { track } from "@/lib/analytics";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
+import { loadCastPlayer } from "@/lib/loadCastPlayer";
+import { MEDIA_ORIGIN } from "@codecast/shared/contracts/castPlayer";
 import { DOTS } from "./chapterDots";
 
 // The hand drawn tour (videos/codecast-explainer), hosted on media.codecast.sh
 // and played by the same <cast-player> published pages use. One chapter per
 // file; the player runs them back to back as one film.
-const MEDIA = "https://media.codecast.sh/media/";
+const MEDIA = `${MEDIA_ORIGIN}/media/`;
 const TOUR_CHAPTERS = [
   { title: "Prologue: five steps out of the dark", duration: 120.3, file: "55f1381fa127e7ed37592e6a1e7f997890d70cf3df345552f5505cb6abe25e59" },
   { title: "Setup", duration: 40.6, file: "4d0722e7c34931c0b94d88c6ac7fde48fbebaa323a6c45ea0c602e46395ebb29" },
@@ -35,16 +37,6 @@ type CastPlayerEl = HTMLElement & {
 
 // The one film on the page. Links further down ("watch this part") reach it here.
 let film: CastPlayerEl | null = null;
-
-// The element's code, served same-origin by plugins/castPlayerScript.ts. The
-// element upgrades itself whenever the script lands, before or after mount.
-function loadCastPlayer() {
-  if (customElements.get("cast-player") || document.querySelector('script[src="/cast-player.js"]')) return;
-  const s = document.createElement("script");
-  s.src = "/cast-player.js";
-  s.async = true;
-  document.head.appendChild(s);
-}
 
 function clock(t: number): string {
   return `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;

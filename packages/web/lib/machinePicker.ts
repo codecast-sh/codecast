@@ -23,7 +23,7 @@
  * Kept pure, and out of the component, so the ladder is testable.
  */
 
-import { cloudHostBootable, deviceServesPath, deviceWakesOnUse, machineGoneQuiet, machineOutOfService, platformCanOpenPath, type CloudHostReport } from "@codecast/shared/contracts";
+import { cloudHostBootable, deviceServesPath, deviceWakesOnUse, machineGoneQuiet, machineOutOfService, platformCanOpenPath, THIS_DEVICE, type CloudHostReport } from "@codecast/shared/contracts";
 
 export type MachineCandidate = {
   device_id: string;
@@ -144,6 +144,19 @@ export function pathOnMyMachines(
   return devices.some((d) => deviceSeesPath(d, path));
 }
 
+/**
+ * The project the person saved as their new-session default (client_state.ui
+ * default_project), while one of their machines can still open it. Absent or
+ * unreachable means "where you are working": every caller's own ladder.
+ */
+export function savedDefaultProject(
+  ui: { default_project?: string | null } | null | undefined,
+  devices: Array<Pick<MachineCandidate, "local_project_roots">>,
+): string | undefined {
+  const path = ui?.default_project;
+  return path && pathOnMyMachines(devices, path) ? path : undefined;
+}
+
 /** Last path segment — the name the whole resolver stack keys checkouts by. */
 export const repoName = (path: string): string =>
   path.split("/").filter(Boolean).pop() ?? path;
@@ -178,37 +191,63 @@ export function dedupeProjectsByRepoName<T extends { path: string }>(
   return order.length === projects.length ? projects : order.map((n) => byName.get(n)!);
 }
 
+export type MachineIntentOpts = {
+  projectPath?: string | null;
+  /**
+   * The person's "New session defaults" device (client_state.ui.default_device,
+   * stamped so it follows them everywhere): THIS_DEVICE or a device id. Absent
+   * means "last used", i.e. lastPicked.
+   */
+  defaultDevice?: string | null;
+  /**
+   * The machine the user last chose by hand, persisted across sessions and
+   * devices. Intent beats every heuristic below it: if you work on your Mac
+   * Studio, the picker opens on it until you say otherwise.
+   */
+  lastPicked?: string | null;
+  /**
+   * The machine this client runs on: the device whose daemon answers on
+   * loopback (useLocalDeviceId). Its daemon answered, so it is alive whatever
+   * the roster's minute-old `online` says. It ranks below a saved default and
+   * the last hand pick (sd-2611): a person with three Macs who picked the
+   * Studio means the Studio, from the laptop too.
+   */
+  localDeviceId?: string | null;
+  /**
+   * Accept an OFFLINE machine when this says it can still serve: a cloud host
+   * that is merely asleep boots when the session starts, so a saved default of
+   * it holds while it sleeps (a last pick only off a machine). Default: online only.
+   */
+  wakeOk?: (d: MachineCandidate) => boolean;
+};
+
+/**
+ * Where the person said new work goes, in order: the default they set, their
+ * last hand pick, the machine they are sitting at. A default or pick that
+ * cannot serve (offline, removed, unable to open the folder) falls through to
+ * the next rung rather than highlight a chip that can't run anything.
+ */
+export function intendedMachineId(devices: MachineCandidate[], opts: MachineIntentOpts): string | null {
+  // A saved default waits for a sleeping cloud host to boot. A last pick of one
+  // waits only where there is no machine here (phone, plain web): at a laptop,
+  // a host asleep for days must not pull new sessions off it.
+  const usable = (id: string | null | undefined, wake: boolean): string | null => {
+    const d = id ? devices.find((x) => x.device_id === id) : undefined;
+    if (!d) return null;
+    const waking = wake && !!opts.wakeOk?.(d);
+    if (!(d.online || waking)) return null;
+    return canOpen(d, opts.projectPath) || waking ? d.device_id : null;
+  };
+  const here = opts.localDeviceId ? devices.find((d) => d.device_id === opts.localDeviceId)?.device_id ?? null : null;
+  const fromDefault = opts.defaultDevice === THIS_DEVICE ? here : usable(opts.defaultDevice, true);
+  return fromDefault ?? usable(opts.lastPicked, !here) ?? here;
+}
+
 export function defaultMachineId(
   devices: MachineCandidate[],
-  opts: {
-    ownerDeviceId?: string | null;
-    projectPath?: string | null;
-    /**
-     * The machine the user last chose by hand, persisted across sessions. Intent
-     * beats every heuristic below it: if you work on your laptop, the picker opens
-     * on your laptop, and it stays there until you say otherwise.
-     */
-    lastPicked?: string | null;
-    /**
-     * The machine this client runs on: the device whose daemon answers on
-     * loopback (useLocalDeviceId). A session started here runs here. It
-     * outranks the standing pick and every heuristic below, so a launch from
-     * a laptop is never re-homed to another machine by a remembered choice or
-     * a stale roster row; only an existing owner (rung 1) or a hand pick in
-     * this composer beats it.
-     */
-    localDeviceId?: string | null;
-    /**
-     * Rungs 1-2 accept an OFFLINE machine when this says it can still serve: a
-     * cloud host that is merely asleep boots when the session starts, so a
-     * standing pick of it (or an existing session parked on it) holds while it
-     * sleeps. Default: online only — an offline laptop or agent box is gone.
-     */
-    wakeOk?: (d: MachineCandidate) => boolean;
-    now?: number;
-  } = {},
+  opts: MachineIntentOpts & { ownerDeviceId?: string | null; now?: number } = {},
 ): string | null {
-  const { ownerDeviceId, projectPath, lastPicked, localDeviceId } = opts;
+  const { ownerDeviceId, projectPath } = opts;
   const now = opts.now ?? Date.now();
   const roster = devices;
   const canServe = (d: MachineCandidate) => d.online || !!opts.wakeOk?.(d);
@@ -220,16 +259,9 @@ export function defaultMachineId(
   const owner = ownerDeviceId ? devices.find((d) => d.device_id === ownerDeviceId) : undefined;
   if (owner && canServe(owner)) return owner.device_id;
 
-  // 1b. The machine you are sitting at. Its daemon answered this client on
-  //     loopback, so it is alive whatever the roster's minute-old `online`
-  //     says, and new work started here belongs here.
-  const here = localDeviceId ? devices.find((d) => d.device_id === localDeviceId) : undefined;
-  if (here) return here.device_id;
-
-  // 2. Your standing choice. A stale id (machine removed or asleep) isn't
-  //    selectable, so fall through rather than highlight a chip that can't serve.
-  const picked = lastPicked ? devices.find((d) => d.device_id === lastPicked) : undefined;
-  if (picked && canServe(picked) && (canOpen(picked, projectPath) || opts.wakeOk?.(picked))) return picked.device_id;
+  // 2. Your intent: saved default, last hand pick, the machine you are at.
+  const intended = intendedMachineId(devices, opts);
+  if (intended) return intended;
 
   const hasCheckout = (d: MachineCandidate) => !!projectPath && deviceSeesPath(d, projectPath);
   // Narrow to the machines that can open the path, but only on the word of

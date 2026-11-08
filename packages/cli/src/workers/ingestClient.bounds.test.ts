@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { configureDaemonWorkers, closeDaemonWorkers, ingestWorkerHost } from './bridge.js';
 import { WorkerUnavailable } from './host.js';
-import { readTranscriptIngest, serializeTranscript, IngestDeadlineExceeded, ingestIdentity } from './ingestClient.js';
+import { readTranscriptIngest, serializeTranscript, IngestDeadlineExceeded, IngestCapacityError, ingestIdentity, retryOnIngestCapacity } from './ingestClient.js';
 import { ingestTokens } from './ingestTransport.js';
 import { checkTranscriptDeadline } from './ingestDeadline.js';
 import { IngestCursors } from './ingestCursors.js';
@@ -95,6 +95,23 @@ test('expired waiters retain their bounded barrier until the active owner settle
   expect(errors.every(error=>error instanceof IngestDeadlineExceeded)).toBe(true);
   await new Promise(resolve=>setImmediate(resolve));
   await expect(serializeTranscript('unrelated-owner',async()=>42)).resolves.toBe(42);
+});
+test('a sweep refused for capacity syncs its transcript once a reservation frees, instead of skipping it',async()=>{
+  let release!:()=>void;
+  const blocked=new Promise<void>(resolve=>{release=resolve;});
+  const holders=Array.from({length:MAX_QUEUE+MAX_INFLIGHT},(_,i)=>serializeTranscript(`busy-${i}`,()=>blocked));
+  await expect(serializeTranscript('swept-file',async()=>{})).rejects.toBeInstanceOf(IngestCapacityError);
+  let attempts=0,synced=false;
+  const swept=retryOnIngestCapacity(()=>{attempts++;return serializeTranscript('swept-file',async()=>{synced=true;});},{waitMs:60_000});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  expect(synced).toBe(false);
+  release();await Promise.all(holders);
+  await swept;
+  expect(synced).toBe(true);
+  expect(attempts).toBe(2);
+  let other=0;
+  await expect(retryOnIngestCapacity(async()=>{other++;throw new Error('parse');})).rejects.toThrow('parse');
+  expect(other).toBe(1);
 });
 test('cursor absolute lifetime rejects an otherwise valid next page and closes resources',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'f3-cursor-budget-')),file=path.join(dir,'source.jsonl');

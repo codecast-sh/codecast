@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isHarnessEmittedUserTurn } from "./daemon.js";
+import { isHarnessEmittedUserTurn } from "./deliveryEchoLedger.js";
 
 // The positional delivery-ack pairing in syncMessagesBatch vouches user turns
 // from a synced batch as echoes of rows this daemon pasted. Harness-emitted

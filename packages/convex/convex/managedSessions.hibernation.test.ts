@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { heartbeat, updateAgentStatus, reapStaleManagedSessions, performListActiveSessions } from "./managedSessions";
+import { heartbeat, updateAgentStatus, reapStaleManagedSessions, performListActiveSessions, REAP_PAGE_SIZE } from "./managedSessions";
 import { makeFakeDb } from "./testDb";
 
 function fixture(overrides: Record<string, unknown> = {}) {
@@ -85,10 +85,27 @@ describe("hibernation status mutation ordering", () => {
   test("stale reaper preserves intentional parks and drops stopped rows with stale stamps", async () => {
     const f = fixture({ agent_status: "hibernated", hibernated_at: 10, last_heartbeat: Date.now() - 2 * 3600_000 });
     f.db._tables.managed_sessions.push({ _id: "dead", last_heartbeat: Date.now() - 2 * 3600_000, agent_status: "stopped", hibernated_at: 10 });
-    expect(await (reapStaleManagedSessions as any)._handler(f.ctx, {})).toEqual({ deleted: 1 });
+    expect(await (reapStaleManagedSessions as any)._handler(f.ctx, {})).toEqual({ deleted: 1, more: false });
     expect(f.row()._id).toBe("managed");
     const rows = await performListActiveSessions(f.ctx as any, "owner" as any);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ agent_status: "hibernated", hibernated_at: 10, user_id: "owner" });
+  });
+
+  test("stale reaper deletes a page per pass and continues after the last heartbeat it read", async () => {
+    const f = fixture({ last_heartbeat: Date.now() });
+    const base = Date.now() - 2 * 3600_000;
+    const total = REAP_PAGE_SIZE + 7;
+    for (let i = 0; i < total; i++) {
+      f.db._tables.managed_sessions.push({ _id: `dead${i}`, last_heartbeat: base + i, agent_status: "stopped" });
+    }
+    const reap = (args: object) => (reapStaleManagedSessions as any)._handler(f.ctx, args);
+    expect(await reap({})).toEqual({ deleted: REAP_PAGE_SIZE, more: true });
+    expect(f.scheduled).toHaveLength(1);
+    const next = (f.scheduled[0] as unknown[])[2] as { cutoff: number; after: number };
+    expect(next.after).toBe(base + REAP_PAGE_SIZE - 1);
+    expect(await reap(next)).toEqual({ deleted: 7, more: false });
+    expect(f.scheduled).toHaveLength(1);
+    expect(f.db._tables.managed_sessions.map((r: any) => r._id)).toEqual(["managed"]);
   });
 });

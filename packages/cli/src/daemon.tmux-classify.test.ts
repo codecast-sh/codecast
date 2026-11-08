@@ -1125,3 +1125,28 @@ describe("a composer box taller than the live tail", () => {
     expect(region).not.toContain("<session-message");
   });
 });
+
+// Real tail of cc-claude-ygh6wn8hrdd4 after an idle compaction (2026-11-07):
+// the status line is painted over the composer's top rule. Read as a lone
+// footer rule, the pane classified "unknown" and held five messages for hours.
+describe("a composer whose top rule a status line painted over", () => {
+  const pane = [
+    "⏺ Task \"until ! pgrep -f \"cast check backend\" >/dev/null; do sleep 20; done\" still running in background",
+    "",
+    "⏺ Compacted while idle, before the prompt cache expired · turn off with \"idleCompaction\": false in settings.json",
+    "",
+    `✽─Jitterbugging… ───────────────────────────1──────4──13${"─".repeat(160)}`,
+    "❯ ",
+    "─".repeat(218),
+    "  week 59%, resets in 47m",
+    "  ⏵⏵ bypass permissions on · 9 shells",
+  ].join("\n");
+
+  test("keeps the composer in the live region", () => {
+    expect(extractTmuxLiveRegion(pane)).toContain("❯ ");
+  });
+
+  test("reads busy, so delivery pastes into type-ahead instead of deferring", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(pane))).toBe("busy");
+  });
+});

@@ -3,7 +3,8 @@
 // escalate them, answer them with an option they all offer, dismiss them. Every verb writes through
 // the store's own decision actions, one row at a time, so each paints at once
 // and rides the same dispatch a single row's press does.
-import { approvesSecretRead } from "@codecast/shared/contracts/secrets";
+
+import { approvesPersonsAct } from "@codecast/shared/contracts/commandRun";
 import { useInboxStore, type SessionDecisionItem } from "../../store/inboxStore";
 import { isOpen, type DecisionOwner } from "./decisionRows";
 
@@ -33,7 +34,7 @@ export function unassignDecisions(rows: Rows): number {
 export function sharedAnswers(rows: Rows): string[] {
   const targets = open(rows);
   if (targets.length === 0 || targets.some((d) => d.kind && d.kind !== "single")) return [];
-  const pickable = (d: SessionDecisionItem) => new Set(d.options.filter((_, i) => !approvesSecretRead(d, i)).map((o) => o.label));
+  const pickable = (d: SessionDecisionItem) => new Set(d.options.filter((_, i) => !approvesPersonsAct(d, i)).map((o) => o.label));
   const [first, ...rest] = targets.map(pickable);
   return targets[0].options.map((o) => o.label).filter((l) => first.has(l) && rest.every((s) => s.has(l)));
 }
@@ -43,7 +44,7 @@ export function answerDecisions(rows: Rows, label: string): number {
   let n = 0;
   for (const d of open(rows)) {
     const index = d.options.findIndex((o) => o.label === label);
-    if (index < 0 || approvesSecretRead(d, index)) continue;
+    if (index < 0 || approvesPersonsAct(d, index)) continue;
     void answerDecision(d._id, { index });
     n++;
   }

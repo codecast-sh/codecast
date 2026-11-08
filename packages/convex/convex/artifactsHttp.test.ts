@@ -179,6 +179,7 @@ function makePublishCtx(resolveEvidence: (args: Record<string, any>) => Record<s
       if (name === "artifacts:slugTaken") return false;
       if (name === "artifacts:resolveSessionRef") return { short_id: "jx1", conversation_id: "conversations_s1" };
       if (name === "artifacts:resolveEvidence") return resolveEvidence(args);
+      if (name === "artifacts:publishGate") return null;
       throw new Error(`unexpected query ${name}`);
     },
     runMutation: async (fn: unknown, args: Record<string, any>) => {
