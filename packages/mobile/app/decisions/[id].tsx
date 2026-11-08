@@ -1,4 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
+import { approvesPersonsAct } from '@codecast/shared/contracts/commandRun';
+import { CommandRunBlock } from '@/components/decisions/CommandRunBlock';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -17,7 +19,7 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import type { AnswerDraft } from '@codecast/web/lib/decisionAnswer';
 import { AnswerButton, AnswerControls, appAnswerLook } from '@/components/decisions/AnswerControls';
 import { decisionAnswerLabel } from '@codecast/shared/contracts';
-import { approvesSecretRead } from '@codecast/shared/contracts/secrets';
+
 import { DecisionThread } from '@/components/decisions/DecisionThread';
 import { reportUrl, useDecisionAnswer } from '@/components/decisions/DecisionCard';
 
@@ -106,6 +108,7 @@ export default function DecisionScreen() {
         <ScrollView style={{ backgroundColor: Theme.bg }} contentContainerStyle={styles.body}>
           <Text style={styles.question}>{source.question}</Text>
           <Text style={styles.muted}>{settled}</Text>
+          {row?.run ? <CommandRunBlock run={row.run} /> : null}
           {nextId ? <AnswerButton look={look} label="Next decision" onPress={goNext} /> : null}
         </ScrollView>
       </>
@@ -119,6 +122,7 @@ export default function DecisionScreen() {
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <QueueChip item={item} now={now} />
           <Text style={styles.question} selectable>{item.question}</Text>
+          {row?.run ? <CommandRunBlock run={row.run} /> : null}
           {row ? <HandoffNote row={row} /> : null}
           {askingSessionLine(item) ? (
             <TouchableOpacity onPress={() => router.push(`/session/${item.conversationId}`)} hitSlop={8}>
@@ -135,7 +139,7 @@ export default function DecisionScreen() {
           ) : null}
           {reportSlug ? <LinkRow label="Open the report" onPress={() => openLink(reportUrl(reportSlug))} /> : null}
 
-          <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} guarded={(i) => approvesSecretRead(source, i)} />
+          <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} guarded={(i) => approvesPersonsAct(source, i)} />
 
           {kind === 'single' && !writing ? (
             <TouchableOpacity onPress={() => patchDraft({ otherOpen: true })} hitSlop={8}>

@@ -33,6 +33,10 @@ describe("parseManagedProfile", () => {
     expect(parseManagedProfile({ cloud_hosts_disabled: true })).toEqual({ cloud_hosts_disabled: true });
   });
 
+  test("a profile marks a device's data as regulated", () => {
+    expect(parseManagedProfile({ RegulatedData: true })).toEqual({ regulated_data: true });
+  });
+
   test("team policy keeps team keys only", () => {
     expect(parseTeamPolicy({ public_sharing_disabled: true, enrollment_token: "cc_enr_x", auto_update: "on" }))
       .toEqual({ public_sharing_disabled: true, auto_update: "on" });
@@ -57,6 +61,15 @@ describe("mergePolicies", () => {
     expect(merged.values.auto_update).toBe("on");
     expect(merged.sources.auto_update).toEqual({ kind: "profile" });
     expect(merged.values.excluded_paths).toEqual(["~/a", "~/b"]);
+  });
+
+  test("regulated data cannot be switched off by a later layer", () => {
+    const merged = mergePolicies([
+      { source: team, policy: { regulated_data: true } },
+      { source: { kind: "team", team_id: "t2", team_name: "Other" }, policy: { regulated_data: false } },
+    ]);
+    expect(merged.values.regulated_data).toBe(true);
+    expect(merged.sources.regulated_data).toEqual(team);
   });
 
   test("nothing set merges to nothing", () => {

@@ -5,7 +5,7 @@ import { blockAt, functionBlock } from "./test-helpers/sourceRegion.js";
 import { waitFor } from "./test-helpers/messagingHarness.js";
 
 const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
-const resumeSource = functionBlock(source, "autoResumeSession").text;
+const resumeSource = [functionBlock(source, "resumeAllowed").text, functionBlock(source, "autoResumeSession").text].join("\n");
 const ownedSource = functionBlock(source, "ownedByOtherDevice").text.replace("export ", "");
 const ownerSource = functionBlock(source, "resumeOwnerVerdict").text.replace("export ", "");
 const switchSource = blockAt(source, source.indexOf('      case "switch_account": {')).text;
@@ -53,6 +53,7 @@ function harness() {
     hibernationInFlight, expectedHibernationExits, lastResumeAt: new Map<string, number>(),
     RESUME_IN_FLIGHT_TIMEOUT_MS: 60_000, SWITCH_CONTINUE_SPACING_MS: 1,
     swapHeld: (id: string) => state.swapping.has(id),
+    claudeSdkBackend: null,
     conversationForbidsResurrection: async () => state.forbidden,
     syncServiceRef: sync, deviceId: () => "local", isRemoteDevice: () => false,
     log: () => {}, logDelivery: () => {},

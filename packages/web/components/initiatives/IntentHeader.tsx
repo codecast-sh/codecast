@@ -25,7 +25,7 @@ export const INTENT_HAIRLINE = "color-mix(in srgb, var(--sol-border) 22%, transp
 
 type DataAttrs = Record<`data-${string}`, string | undefined>;
 
-export function IntentHeader({ accent = INITIATIVE_ACCENT, back, glyph, title, onRename, renameLabel, titleData, idChip, chips, actions, tabs, phone }: {
+export function IntentHeader({ accent = INITIATIVE_ACCENT, back, glyph, title, onRename, renameLabel, titleData, idChip, chips, actions, tabs, phone, dense, chipsBelow }: {
   /** The page's own accent: the rename underline. */
   accent?: string;
   back: { href: string; label: string };
@@ -43,22 +43,32 @@ export function IntentHeader({ accent = INITIATIVE_ACCENT, back, glyph, title, o
   /** A tab strip under the row; its underline sits on the header's own border. */
   tabs?: ReactNode;
   phone?: boolean;
+  /** One row at any width: the chips keep their size and the title gives way. */
+  dense?: boolean;
+  /** The facts on their own row under the title, at every width: a header
+   *  whose chips would otherwise wrap around the title in a narrow pane. */
+  chipsBelow?: boolean;
 }) {
   return (
     <header className="shrink-0 border-b" style={{ borderColor: INTENT_HAIRLINE }} data-intent-header>
-      <div className={cn("flex items-center gap-x-2.5 gap-y-1.5 min-w-0", phone ? "flex-wrap px-3 pt-2 pb-1.5" : "px-4 py-2 min-h-[46px]")} data-intent-row>
+      <div className={cn("flex items-center gap-x-2.5 gap-y-1.5 min-w-0", phone ? "flex-wrap px-3 pt-2 pb-1.5" : chipsBelow ? "px-4 pt-2 pb-0.5 min-h-[40px]" : "px-4 py-2 min-h-[46px]")} data-intent-row>
         <Link href={back.href} className="shrink-0 inline-flex items-center justify-center w-7 h-7 -ml-1 rounded-lg hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label={back.label} title={back.label} data-intent-back>
           <ArrowLeft className="w-4 h-4" />
         </Link>
         <span className="shrink-0 inline-flex items-center">{glyph}</span>
         <IntentTitle title={title} onRename={onRename} label={renameLabel} accent={accent} phone={phone} data={titleData} />
         {idChip && <span className="shrink-0 inline-flex items-center">{idChip}</span>}
-        <div className={cn("flex items-center gap-x-3 gap-y-1 min-w-0 text-[12.5px]", phone ? "order-last basis-full flex-wrap pl-[38px]" : "flex-wrap")} data-intent-chips>
+        {!(chipsBelow && !phone) && <div className={cn("flex items-center gap-x-3 gap-y-1 min-w-0 text-[12.5px]", phone ? "order-last basis-full flex-wrap pl-[38px]" : dense ? "shrink-0 flex-nowrap" : "flex-wrap")} data-intent-chips>
           {chips}
-        </div>
+        </div>}
         <span className="flex-1" />
         {actions && <span className="shrink-0 inline-flex items-center gap-1.5">{actions}</span>}
       </div>
+      {chipsBelow && !phone && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 text-[12.5px] pl-[54px] pr-4 pb-2" data-intent-chips>
+          {chips}
+        </div>
+      )}
       {tabs && <div className={phone ? "px-2" : "px-3"}>{tabs}</div>}
     </header>
   );

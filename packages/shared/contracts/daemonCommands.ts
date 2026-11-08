@@ -84,6 +84,12 @@ export const DAEMON_COMMANDS = [
   // target_path }. Old daemons: "Unknown command" (the chip stays "merging
   // back"; the worktree keeps the work).
   "merge_back",
+  // A person pressed Run on a `cast decide --run` card (commandRun.ts):
+  // run that cast command here, outside the asking session, and report its
+  // exit and output (sessionDecisions.reportCommandRun). Targeted at the
+  // asking session's machine. args: { decision_id, argv, cwd? }. Old daemons:
+  // "Unknown command", and the card says the run did not start.
+  "run_cast",
   // Swap the machine's active Claude Code account to a saved profile, tear down
   // the listed blocked sessions (parked on a limit, auth, or dropped-connection
   // banner), and enqueue "continue" to each so the delivery rail resumes them
@@ -175,6 +181,12 @@ export const DAEMON_COMMANDS = [
   // reason) while a turn is in progress; "force" interrupts it. Old daemons:
   // "Unknown command" (the runner reports the source must be upgraded).
   "quiesce_session",
+  // Move a live Claude conversation between the tmux and Agent SDK backends,
+  // keeping its session id and transcript (claudeSdk/switchBackend.ts). args:
+  // { conversation_id, session_id, project_path, backend: "sdk" | "tmux",
+  // interrupt }. Without interrupt, a running turn refuses the switch. Old
+  // daemons: "Unknown command".
+  "switch_claude_backend",
   // The app's edit of a project's .codecast/line.toml (plan pl-838), sent
   // through users.sendConfigCommand like config_read/config_write and
   // targeted at the device that published the profile. args:
@@ -186,6 +198,12 @@ export const DAEMON_COMMANDS = [
   // as an unknown edit op. Result: LineProfileEditReply. Old daemons:
   // "Unknown command".
   "line_profile_edit",
+  // "Rewind to here" on a user message (cli/src/rewindTree.ts), targeted at
+  // the session's owning device. args: RewindFilesArgs (contracts/rewindFiles)
+  // — plan, diff, stage, put_back or keep a rewind of the session's checkout
+  // to just before that turn. Result: RewindFilesReply. Old daemons:
+  // "Unknown command" (the review says to update codecast there).
+  "rewind_files",
   // The app's edit of one step of a published graph (line-workspace.md LW4):
   // the prompt or script file a .cast names, in the checkout its origin
   // names (workflows.origin), targeted at the device that pushed it. args:
@@ -213,6 +231,12 @@ export const DAEMON_COMMANDS = [
   // and answers at once; the run reports to the deploy row. Old daemons:
   // "Unknown command" (the deploy stays requested until someone runs it).
   "line_deploy",
+  // The nightly fix trace (regret.md R2), queued by convex landedChanges.nightly
+  // at each machine that publishes a team's line profile. args: { team_id,
+  // roots }. Runs `cast line fixloop --record` detached, which reads main from
+  // this machine's own mirror of origin and answers at once. Old daemons:
+  // "Unknown command" (that night goes unrecorded; the next run backfills).
+  "line_fixloop",
   // The setup card under a `cast browser`/`cast computer` command that failed
   // for want of the Chrome extension or the macOS grants (agentToolSetup.ts).
   // Targeted at the session's device. args: AgentToolSetupArgs — check answers

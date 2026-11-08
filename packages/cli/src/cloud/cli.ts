@@ -169,8 +169,11 @@ export function registerCloudCommand(program: Command): void {
       const { readyHostHome } = await import("./prepare.js");
       const { summarizeHostTools } = await import("./hostTools.js");
       const home = await readyHostHome(toRemoteHost(up), { cloudId: up.id, onProgress: say, skipLogins: !deviceId, toolsInstall: false });
+      // A host behind this laptop's cast is reported here, not fatal: the wake
+      // boots the box, and placements and moves refuse it themselves.
       console.log(JSON.stringify({
         host: up.id, address: up.address, device_id: deviceId ?? null,
+        ...(home.castBehind ? { cast_behind: home.castBehind } : {}),
         logins_pushed: home.logins?.pushed ?? false,
         ...(home.logins && !home.logins.pushed && home.logins.reason ? { logins_reason: home.logins.reason } : {}),
         tools: home.tools ? summarizeHostTools(home.tools) : null,

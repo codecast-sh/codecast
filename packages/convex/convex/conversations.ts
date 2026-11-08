@@ -2689,19 +2689,6 @@ export const listConversations = query({
     const allTeamUsers = [...teamUsers, ...additionalUsers.filter((u): u is NonNullable<typeof u> => u !== null)];
     const teamUserMap = new Map(allTeamUsers.map(u => [u._id.toString(), u]));
 
-    const normalizeToRoot = (path: string): string => {
-      const parts = path.split('/');
-      const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
-      if (srcIndex >= 0 && srcIndex < parts.length - 1) {
-        return parts.slice(0, srcIndex + 2).join('/');
-      }
-      return path;
-    };
-    const deriveGitRoot = (c: { git_root?: string; project_path?: string }): string | null => {
-      const rawPath = c.git_root || c.project_path;
-      if (!rawPath) return null;
-      return normalizeToRoot(rawPath);
-    };
 
     const now = Date.now();
     const fiveMinutesAgo = now - 5 * 60 * 1000;
@@ -2718,7 +2705,9 @@ export const listConversations = query({
         if (args.subagentFilter === "main" && isSub) return false;
       }
       if (args.directoryFilter) {
-        const root = deriveGitRoot(c);
+        // Matched by the folder's name anywhere in the session's path, as the
+        // web feed does (ActivityFeed), so a subfolder or a teammate's copy counts.
+        const root = c.git_root || c.project_path;
         if (!root) return false;
         const filterName = args.directoryFilter.split('/').filter(Boolean).pop();
         const rootParts = root.split('/').filter(Boolean);
@@ -5016,6 +5005,12 @@ async function foldChangesPayload(ctx: QueryCtx, conversationId: Id<"conversatio
 export async function readableConversation(ctx: QueryCtx, apiToken: string, ref: string) {
   const authUserId = await getAuthenticatedUserIdReadOnly(ctx, apiToken);
   if (!authUserId) return { error: "Unauthorized" as const };
+  return readableConversationAs(ctx, authUserId, ref);
+}
+
+/** readableConversation for a caller already identified (a scheduled action
+ *  acting for the person who asked): the same access rule, no token. */
+export async function readableConversationAs(ctx: QueryCtx, authUserId: Id<"users">, ref: string) {
   const user = await ctx.db.get(authUserId);
   if (!user) return { error: "User not found" as const };
   const conv = await resolveConversationRef(ctx, ref, authUserId);
@@ -8228,6 +8223,7 @@ type InboxSessionMaps = {
   settleFactsMap: Map<string, { boundary: boolean; turnCompletedAt?: number }>;
   hibernatedAtMap: Map<string, number>;
   tmuxSessionMap: Map<string, string>;
+  sdkBackendConvIds: Set<string>; // managed_sessions.backend === "sdk"
   permissionModeMap: Map<string, string>;
   agentStartedAtMap: Map<string, number>;
   // The daemon's last verified open-task report per conversation (see
@@ -8370,6 +8366,7 @@ export function sessionMapsFromManagedRows(
   const settleFactsMap = new Map<string, { boundary: boolean; turnCompletedAt?: number }>();
   const hibernatedAtMap = new Map<string, number>();
   const tmuxSessionMap = new Map<string, string>();
+  const sdkBackendConvIds = new Set<string>();
   const permissionModeMap = new Map<string, string>();
   const agentStartedAtMap = new Map<string, number>();
   const openTasksMap = new Map<string, { tasks: any[]; at: number }>();
@@ -8377,6 +8374,7 @@ export function sessionMapsFromManagedRows(
     if (!s.conversation_id) continue;
     const cid = s.conversation_id.toString();
     if (s.tmux_session) tmuxSessionMap.set(cid, s.tmux_session);
+    if (s.backend === "sdk") sdkBackendConvIds.add(cid);
     if (s.permission_mode) permissionModeMap.set(cid, s.permission_mode);
     // Above the agent_status guard on purpose: a session whose status hasn't
     // been reported yet still has a process generation, and that is exactly
@@ -8406,7 +8404,7 @@ export function sessionMapsFromManagedRows(
   if (latestHeartbeat !== undefined) latestHeartbeat = Math.floor(latestHeartbeat / 60_000) * 60_000;
   const userDaemonAlive = userDaemonAliveAt({ latestHeartbeat }, now);
 
-  return { agentStatusMap, agentStatusUpdatedAtMap, settleFactsMap, hibernatedAtMap, tmuxSessionMap, permissionModeMap, agentStartedAtMap, openTasksMap, liveConvIds, userDaemonAlive, lastHeartbeatMap, latestHeartbeat };
+  return { agentStatusMap, agentStatusUpdatedAtMap, settleFactsMap, hibernatedAtMap, tmuxSessionMap, sdkBackendConvIds, permissionModeMap, agentStartedAtMap, openTasksMap, liveConvIds, userDaemonAlive, lastHeartbeatMap, latestHeartbeat };
 }
 
 // Empty maps for the liveness-excluded path: computeInboxSessions({includeLiveness:false})
@@ -8419,6 +8417,7 @@ const EMPTY_INBOX_MAPS: InboxSessionMaps = {
   settleFactsMap: new Map(),
   hibernatedAtMap: new Map(),
   tmuxSessionMap: new Map(),
+  sdkBackendConvIds: new Set(),
   permissionModeMap: new Map(),
   agentStartedAtMap: new Map(),
   openTasksMap: new Map(),
@@ -8450,6 +8449,7 @@ async function mergeForeignConversationLiveness(
     if (!managed) continue;
     noteHeartbeat(maps, cid, managed.last_heartbeat, now);
     if (managed.tmux_session) maps.tmuxSessionMap.set(cid, managed.tmux_session);
+    if (managed.backend === "sdk") maps.sdkBackendConvIds.add(cid);
     if (managed.permission_mode) maps.permissionModeMap.set(cid, managed.permission_mode);
     if (managed.agent_started_at !== undefined) maps.agentStartedAtMap.set(cid, managed.agent_started_at);
     if (managed.open_tasks !== undefined && managed.open_tasks_at !== undefined) maps.openTasksMap.set(cid, { tasks: managed.open_tasks, at: managed.open_tasks_at });
@@ -8760,6 +8760,7 @@ async function enrichInboxSessionRow(
     started_at: conv.started_at,
     ...(conv.history_import ? { history_import: true } : {}),
     project_path: conv.project_path,
+    rewind_staged: conv.rewind_staged ?? null,
     git_root: conv.git_root,
     git_branch: conv.git_branch,
     git_remote_url: conv.git_remote_url,
@@ -8826,6 +8827,7 @@ async function enrichInboxSessionRow(
     // clock (trustedStatusAt), since a verdict does not replay (ct-56054).
     agent_status: maps.agentStatusMap.get(conv._id.toString()) ?? null,
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
+    claude_backend: maps.sdkBackendConvIds.has(conv._id.toString()) ? "sdk" as const : null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(conv._id.toString()) ?? null,
     open_tasks: maps.openTasksMap.get(conv._id.toString())?.tasks ?? null,
@@ -8907,6 +8909,9 @@ async function enrichInboxSessionRow(
     // teammate/spawned session to its parent WITHOUT the subagent
     // nesting/hiding that parent_conversation_id implies.
     spawned_by_conversation_id: conv.spawned_by_conversation_id?.toString() || null,
+    // The project a person put this session in; workers derive theirs from
+    // the links above (shared/contracts/sessionProject).
+    project_id: conv.project_id?.toString() || null,
     // Handoff link (see schema): the card reads handed_off_from the way it
     // reads spawned_by, since a handoff run from a human shell has no spawner.
     handed_off_from_conversation_id: conv.handed_off_from_conversation_id?.toString() || null,
@@ -8986,6 +8991,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     updated_at: child.updated_at,
     started_at: child.started_at,
     project_path: child.project_path,
+    rewind_staged: child.rewind_staged ?? null,
     git_root: child.git_root,
     git_branch: child.git_branch,
     git_remote_url: child.git_remote_url,
@@ -9031,6 +9037,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_rest_at: userRestStampOf(child)?.at ?? null,
     agent_status: maps.agentStatusMap.get(child._id.toString()) ?? null,
     tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
+    claude_backend: maps.sdkBackendConvIds.has(child._id.toString()) ? "sdk" as const : null,
     permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(child._id.toString()) ?? null,
     open_tasks: maps.openTasksMap.get(child._id.toString())?.tasks ?? null,
@@ -9895,6 +9902,7 @@ type LivenessFields = {
   awaiting_input: boolean;
   is_connected: boolean;
   tmux_session: string | null;
+  claude_backend: "sdk" | null; // "sdk" while the session runs in an Agent SDK host
   permission_mode: string | null;
   // Start of the agent process currently behind this conversation. Rides the
   // overlay rather than the base row because it changes on restart, exactly
@@ -10429,6 +10437,7 @@ function deriveLivenessAt(
     awaiting_input: live.awaiting_input,
     is_connected: live.daemon_alive,
     tmux_session: maps.tmuxSessionMap.get(cid) ?? null,
+    claude_backend: maps.sdkBackendConvIds.has(cid) ? "sdk" as const : null,
     permission_mode: maps.permissionModeMap.get(cid) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(cid) ?? null,
     open_tasks: facts.open_tasks,
@@ -13049,6 +13058,10 @@ export const updateSessionId = mutation({
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
     git_remote_url: v.optional(v.string()),
+    // The daemon found the session's cwd outside any git repo, so a git_root
+    // the stub guessed from the chosen folder is cleared. Absent from older
+    // daemons, which leave the stored value as it was.
+    not_a_repo: v.optional(v.boolean()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -13064,6 +13077,10 @@ export const updateSessionId = mutation({
     if (args.project_path) patch.project_path = args.project_path;
     if (args.git_root) patch.git_root = args.git_root;
     if (args.git_remote_url) patch.git_remote_url = args.git_remote_url;
+    if (args.not_a_repo && !args.git_root) {
+      patch.git_root = undefined;
+      if (!args.git_remote_url) patch.git_remote_url = undefined;
+    }
 
     // Stubs are created before their real path exists, so their team/privacy
     // resolved against nothing (→ private, teamless). Re-resolve against the

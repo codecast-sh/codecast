@@ -660,9 +660,21 @@ export async function gitPullWorktree(
 // Auth: copy a FRESH credential to the remote
 // --------------------------------------------------------------------------
 
-/** ssh argv that writes stdin to the remote's credential file (0600 via umask). */
+/**
+ * Remote shell that replaces `<dir>/<file>` with stdin (0600 via umask) by
+ * renaming a finished temp file over it. A plain `cat > file` empties the file
+ * the moment the shell opens it and refills it only when stdin arrives over
+ * ssh, and a process reading it in between sees nothing: a line host's Build
+ * hand read the credential in that gap on 2026-11-07 and stopped on "Not
+ * logged in". A failed or cut-off transfer leaves the old file in place.
+ */
+export function replaceFromStdin(dir: string, file: string): string {
+  return `umask 077; mkdir -p ${dir}; t=$(mktemp ${dir}/.cast-push.XXXXXX) && cat > "$t" && mv -f "$t" ${dir}/${file} || { rm -f "$t"; exit 1; }`;
+}
+
+/** ssh argv that writes stdin to the remote's credential file. */
 function credentialPushArgs(host: RemoteHost): string[] {
-  return [...sshBase(host), `${host.user}@${host.address}`, `${SHARED_HOST_PUSH_GUARD}umask 077; mkdir -p ~/.claude; cat > ~/.claude/.credentials.json`];
+  return [...sshBase(host), `${host.user}@${host.address}`, `${SHARED_HOST_PUSH_GUARD}${replaceFromStdin("~/.claude", ".credentials.json")}`];
 }
 
 export interface CredentialPushOutcome {
@@ -770,9 +782,9 @@ export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<Cre
 // Convex. The remote daemon reads the file it lands in for its launch injection.
 // --------------------------------------------------------------------------
 
-/** ssh argv that writes stdin to the remote's provider-key store (0600 via umask). */
+/** ssh argv that writes stdin to the remote's provider-key store. */
 function providerKeysPushArgs(host: RemoteHost): string[] {
-  return [...sshBase(host), `${host.user}@${host.address}`, `${SHARED_HOST_PUSH_GUARD}umask 077; mkdir -p ~/.codecast; cat > ~/.codecast/provider-keys.json`];
+  return [...sshBase(host), `${host.user}@${host.address}`, `${SHARED_HOST_PUSH_GUARD}${replaceFromStdin("~/.codecast", "provider-keys.json")}`];
 }
 
 export interface ProviderKeysPushOutcome {
@@ -1431,6 +1443,10 @@ export function loadRemoteHost(hostId?: string): RemoteHost {
  * The OWNERSHIP flip + resume is a separate Convex mutation the caller runs.
  */
 export async function performMoveToRemote(host: RemoteHost, sessionId: string): Promise<MoveResult> {
+  // A host behind this laptop's cast refuses the move before anything moves
+  // (cloud/prepare.ts readyHostCast); readyHostHome below checks again.
+  const { readyHostCast } = await import("../cloud/prepare.js");
+  await readyHostCast(host, host.address, (m) => console.error(`  ${m}`));
   const move = await pushSession(sessionId, host);
   ensureRemoteClaudeReady(host, move.remoteCwd);
   // codex's folder trust for the moved dir (its own `[projects."…"]` table:

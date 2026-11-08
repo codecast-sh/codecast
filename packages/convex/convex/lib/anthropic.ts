@@ -6,6 +6,7 @@
 import { priceFor, usageCost } from "@platform/agent/meter";
 import { replyText, type MessagesRequest } from "@platform/assistant/messages";
 import { CHEAP_MODEL, sendsThinkingOff } from "@codecast/shared/contracts/modelOptions";
+import { vendorRefusalFor, type VendorGate } from "./vendorGuard";
 
 // sendsThinkingOff: whether prod posts this model with thinking off; the evals
 // read the same rule to know which surfaces their replay cannot match.
@@ -85,17 +86,36 @@ export function anthropicBody(req: SurfaceRequest) {
 }
 
 /**
- * POST one request to the Messages API on the deployment's key: the one fetch
- * every server site goes through. Returns the raw response so a site that
- * reads the status or the usage can; null when the key is missing.
+ * Who a call on the deployment's key is for. Prod passes the gate (the content's
+ * scope), and a regulated team's content goes nowhere while Anthropic is not
+ * BAA covered (lib/vendorGuard). The evals pass their own key and send only
+ * frozen fixtures.
  */
-export async function postMessages(req: SurfaceRequest, opts: { signal?: AbortSignal; apiKey?: string } = {}): Promise<Response | null> {
-  // The evals pass their own key; prod reads its deployment's.
-  const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
+export type AnthropicAuth = { gate: VendorGate } | { apiKey: string };
+
+/** The refusal for this call's content, or null when it may go. */
+async function anthropicRefusal(auth: AnthropicAuth): Promise<string | null> {
+  return "gate" in auth ? vendorRefusalFor(auth.gate.ctx, auth.gate.scope, "anthropic") : null;
+}
+
+/**
+ * POST one request to the Messages API: the one fetch every server site goes
+ * through. Returns the raw response so a site that reads the status or the
+ * usage can; null when the key is missing or the content's team may not send
+ * to Anthropic.
+ */
+export async function postMessages(req: SurfaceRequest, opts: AnthropicAuth & { signal?: AbortSignal }): Promise<Response | null> {
+  const apiKey = "apiKey" in opts ? opts.apiKey : process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
+  if (await anthropicRefusal(opts)) return null;
+  return sendMessages(req, apiKey, opts.signal);
+}
+
+/** The fetch itself, for a caller that has already asked the gate. */
+function sendMessages(req: SurfaceRequest, apiKey: string, signal?: AbortSignal): Promise<Response> {
   return fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    signal: opts.signal,
+    signal,
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify(anthropicBody(req)),
   });
@@ -113,10 +133,12 @@ export interface BatchState {
   results_url: string | null;
 }
 
-/** One batch of requests, each under its own id. Throws on a refusal, since a caller that submits wants to know why. */
-export async function createBatch(requests: Array<{ custom_id: string; req: SurfaceRequest }>): Promise<BatchState> {
+/** One batch of requests from one scope, each under its own id. Throws on a refusal, since a caller that submits wants to know why. */
+export async function createBatch(gate: VendorGate, requests: Array<{ custom_id: string; req: SurfaceRequest }>): Promise<BatchState> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this deployment");
+  const refusal = await anthropicRefusal({ gate });
+  if (refusal) throw new Error(refusal);
   const response = await fetch("https://api.anthropic.com/v1/messages/batches", {
     method: "POST",
     headers: apiHeaders(apiKey),
@@ -171,6 +193,8 @@ export { replyText } from "@platform/assistant/messages";
 type CallArgs = Omit<SurfaceRequest, "model"> & {
   model?: string;
   label: string;
+  /** Whose content this call sends (lib/vendorGuard). */
+  gate: VendorGate;
   /** Give up after this long, so a stalled call cannot outlive its caller. */
   timeout_ms?: number;
 };
@@ -186,11 +210,14 @@ const usageOf = (data: any): ModelUsage | null =>
 
 /** callModel, keeping the usage of a call that failed when the API reported it, so a caller with a spend cap can bill it. */
 export async function callModelMetered(args: CallArgs): Promise<MeteredCall> {
-  if (!process.env.ANTHROPIC_API_KEY) return { reply: null, usage: null };
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return { reply: null, usage: null };
+  const refusal = await anthropicRefusal({ gate: args.gate });
+  if (refusal) return { reply: null, usage: null, error: refusal };
   const abort = new AbortController();
   const timer = args.timeout_ms ? setTimeout(() => abort.abort(), args.timeout_ms) : undefined;
   try {
-    const response = await postMessages(
+    const response = await sendMessages(
       {
         model: args.model ?? CHEAP_MODEL,
         system: args.system,
@@ -200,9 +227,9 @@ export async function callModelMetered(args: CallArgs): Promise<MeteredCall> {
         images: args.images,
         output_schema: args.output_schema,
       },
-      { signal: abort.signal },
+      apiKey,
+      abort.signal,
     );
-    if (!response) return { reply: null, usage: null };
     if (!response.ok) {
       const body = await response.text();
       console.error(`${args.label} API error:`, response.status, body.slice(0, 300));

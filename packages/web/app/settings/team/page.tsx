@@ -25,6 +25,7 @@ import { TeamIdentityPicker, type TeamIdentity } from "../../../components/team/
 import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatusEditor";
 import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
 import { ManagedDevicesLink } from "../../../components/settings/ManagedDevicesEditor";
+import { AccessLogLink } from "../../../components/settings/AccessLogPanel";
 import { TeamTemplateLearning } from "../../../components/settings/TeamTemplateLearning";
 import { TeamModelBudget } from "../../../components/settings/TeamModelBudget";
 import { TeamDomainAccess } from "../../../components/settings/TeamDomainAccess";
@@ -35,6 +36,9 @@ import {
 } from "../../../components/settings/ui";
 import { TeamMachines } from "../../../components/settings/TeamMachines";
 import { TeamWorkspaceAgent } from "../../../components/settings/TeamWorkspaceAgent";
+import { SwitchReview } from "../../../components/consequential/ConsequentialSwitch";
+import { destroyTeamLedger, regulatedTeam } from "../../../components/consequential/deletionLedgers";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 
 export default function TeamPage() {
   const router = useRouter();
@@ -65,6 +69,10 @@ export default function TeamPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTyped, setDeleteTyped] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
+  // A regulated team's delete takes its data with it, for good (regulatedDeletion.destroyTeam).
+  const [destroyOpen, setDestroyOpen] = useState(false);
+  const regulated = !!regulatedTeam(team ? [team] : [], team?._id);
+  const destroyPreview = useQueryNoThrow(api.regulatedDeletion.destroyPreview, destroyOpen && effectiveTeamId ? { team_id: effectiveTeamId } : "skip").data;
   const [roleChangeInProgress, setRoleChangeInProgress] = useState<Id<"users"> | null>(null);
   const [githubOrgName, setGithubOrgName] = useState("");
   const [isSyncingGithub, setIsSyncingGithub] = useState(false);
@@ -77,6 +85,7 @@ export default function TeamPage() {
   useWatchEffect(() => {
     setDeleteOpen(false);
     setDeleteTyped("");
+    setDestroyOpen(false);
   }, [dialogTeamId]);
 
   if (!user) {
@@ -148,6 +157,18 @@ export default function TeamPage() {
       toast.error(error?.message?.replace(/^.*Uncaught Error: /, "") || "Could not delete the team");
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleDestroyTeam = async () => {
+    if (!effectiveTeamId || !team) return;
+    const name = team.name;
+    setDestroyOpen(false);
+    try {
+      await useInboxStore.getState().deleteTeam(effectiveTeamId, name, { permanent: true });
+      toast.success(`Deleting ${name} and all its data`);
+    } catch (error: any) {
+      toast.error(error?.message?.replace(/^.*Uncaught (Convex)?Error: /, "") || "Could not delete the team");
     }
   };
 
@@ -473,6 +494,7 @@ export default function TeamPage() {
       )}
 
       {isAdmin && effectiveTeamId && <ManagedDevicesLink teamId={String(effectiveTeamId)} />}
+      {isAdmin && effectiveTeamId && <AccessLogLink teamId={String(effectiveTeamId)} />}
 
       {effectiveTeamId && <TeamTemplateLearning teamId={String(effectiveTeamId)} />}
 
@@ -493,24 +515,49 @@ export default function TeamPage() {
           description="Deleting a team ends it for everyone. Nothing here can be undone from the app."
           className="[&_h3]:text-sol-red [&_svg]:text-sol-red"
         >
-          <SettingsRow
-            label="Delete this team"
-            description={membersUnknown
-              ? "Every member loses access the moment you confirm."
-              : memberCount === 1
-              ? "You are the only member. The team ends the moment you confirm."
-              : `${memberCount} members lose access the moment you confirm.`}
-          >
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setDeleteOpen(true)}
-              className="border-sol-red/60 text-sol-red hover:bg-sol-red/10 hover:text-sol-red"
+          {regulated ? (
+            <SettingsRow
+              label="Delete team and all data"
+              description="Sessions, calls, pages and files are deleted for good. Members lose access at once."
             >
-              Delete team
-            </Button>
-          </SettingsRow>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDestroyOpen(true)}
+                className="border-sol-red/60 text-sol-red hover:bg-sol-red/10 hover:text-sol-red"
+                data-destroy-team
+              >
+                Delete team and data
+              </Button>
+            </SettingsRow>
+          ) : (
+            <SettingsRow
+              label="Delete this team"
+              description={membersUnknown
+                ? "Every member loses access the moment you confirm."
+                : memberCount === 1
+                ? "You are the only member. The team ends the moment you confirm."
+                : `${memberCount} members lose access the moment you confirm.`}
+            >
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDeleteOpen(true)}
+                className="border-sol-red/60 text-sol-red hover:bg-sol-red/10 hover:text-sol-red"
+              >
+                Delete team
+              </Button>
+            </SettingsRow>
+          )}
         </SettingsSection>
+      )}
+
+      {destroyOpen && (
+        <SwitchReview
+          ledger={destroyTeamLedger({ team: team.name, preview: destroyPreview })}
+          onClose={() => setDestroyOpen(false)}
+          onConfirm={() => void handleDestroyTeam()}
+        />
       )}
 
       <Dialog open={deleteOpen} onOpenChange={(open) => { if (!open) closeDelete(); }}>

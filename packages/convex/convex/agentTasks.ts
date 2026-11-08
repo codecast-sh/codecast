@@ -19,7 +19,7 @@ import { armedTriggerKindFor } from "./dormancy";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
-import { isHostedAgentType, triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
+import { isHostedAgentType, triggerFiringSource, triggerFiringContinues, TRIGGER_PRECHECK_MESSAGE_CHARS, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
 import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
 import { isOrgReviewFocusKey, type OrgReviewFocusKey } from "@codecast/shared/contracts/orgReview";
 import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, roleMachineAway, type RoleEventSpec } from "./lib/orgRoutine";
@@ -235,6 +235,13 @@ export async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
     status: "scheduled",
     canceled_on_kill_at: undefined,
     requested_run_source: undefined,
+    // A revived schedule starts fresh: its first firing is not a retry of
+    // the dead one (triggerFiringContinues), carries none of its message, and
+    // its gate asks again from nothing (a change the dead run never acted on
+    // must not read as "unchanged").
+    retry_count: 0,
+    precheck_message: undefined,
+    precheck_state: undefined,
     cadence_slot_at: undefined,
     run_at:
       task.schedule_type === "event"
@@ -561,6 +568,8 @@ export async function reactivateTasksCanceledOnKill(
   return rearmed;
 }
 
+const precheckModeValidator = v.union(v.literal("changes"), v.literal("state"));
+
 interface NewTaskArgs {
   title: string;
   prompt: string;
@@ -582,6 +591,7 @@ interface NewTaskArgs {
   max_runtime_ms?: number;
   max_retries?: number;
   precheck?: string;
+  precheck_mode?: "changes" | "state";
   wake_creator?: boolean;
   /** The org role whose routine this is. */
   role_id?: Id<"org_roles">;
@@ -597,6 +607,7 @@ interface NewTaskArgs {
 }
 
 export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) {
+  assertPrecheckModeFits(args.schedule_type, args.precheck?.trim() ? args.precheck_mode : undefined);
   if (args.schedule_type === "recurring" && !args.interval_ms) {
     throw new Error("interval_ms required for recurring tasks");
   }
@@ -664,6 +675,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     mode: (args.mode === "propose" ? "propose" : "apply") as "propose" | "apply",
     max_runtime_ms: args.max_runtime_ms || DEFAULT_MAX_RUNTIME_MS,
     precheck: args.precheck?.trim() || undefined,
+    precheck_mode: args.precheck?.trim() ? args.precheck_mode : undefined,
     wake_creator: args.wake_creator || undefined,
     role_id: args.role_id,
     status: paused ? ("paused" as const) : ("scheduled" as const),
@@ -742,6 +754,7 @@ export const createTask = mutation({
     max_runtime_ms: v.optional(v.number()),
     max_retries: v.optional(v.number()),
     precheck: v.optional(v.string()),
+    precheck_mode: v.optional(precheckModeValidator),
     // `--spawn --wake`: a clean report wakes the session that armed the
     // trigger (runOwnerWakeOf). Meaningful for once spawn triggers only.
     wake_creator: v.optional(v.boolean()),
@@ -1269,6 +1282,7 @@ export const claimTask = mutation({
 
     const now = Date.now();
     const sourceFields = claimRunSourceFields(task);
+    const continues = triggerFiringContinues(task);
     // Through patchTask (scheduled → running are both armed statuses, so the
     // home's armed_trigger_kind is unchanged — but every lifecycle writer
     // routes through the one restamping chokepoint; see the exhaustive test).
@@ -1279,6 +1293,10 @@ export const claimTask = mutation({
       lease_holder: args.daemon_id,
       lease_expires_at: now + LEASE_DURATION_MS,
       parked_run_session_uuid: undefined,
+      // A message belongs to the run its precheck woke; this firing's gate
+      // writes its own (passTaskPrecheck), an ungated one carries none, and a
+      // retry or resumed run keeps the one it was woken with.
+      ...(continues ? {} : { precheck_message: undefined }),
       // This run sees every pending event, including ones a previous run
       // missed, so none is still owed a run of its own.
       ...(task.pending_events?.some((e) => e.after_claim)
@@ -1287,7 +1305,7 @@ export const claimTask = mutation({
       ...sourceFields,
     });
 
-    return { ...task, status: "running" as const, ...sourceFields };
+    return { ...task, status: "running" as const, ...(continues ? {} : { precheck_message: undefined }), ...sourceFields };
   },
 });
 
@@ -1335,8 +1353,11 @@ function completedTaskRunFields(
     last_run_needs_attention: !!args.needs_attention,
     lease_holder: undefined,
     lease_expires_at: undefined,
-    // The focus was for this run; the next one is the routine's own.
+    // The focus was for this run; the next one is the routine's own. So was
+    // the precheck's message: paths that build a frame without a claim
+    // (cloud dispatch, role events) must not read it again.
     requested_run_focus: undefined,
+    precheck_message: undefined,
   };
   if (!isLateSummary) {
     updates.run_count = task.run_count + 1;
@@ -1641,6 +1662,7 @@ export const failTaskRun = mutation({
         last_run_summary: args.error ? `Failed: ${args.error}` : "Failed (max retries)",
         last_run_failed: true,
         last_run_session_uuid: runUuid,
+        precheck_message: undefined,
       });
 
       // Retries exhausted = the loop is dead, and a hidden home must not stay
@@ -1703,6 +1725,10 @@ export const skipTaskRun = mutation({
     output: v.optional(v.string()),
     reason: v.string(),
     source: v.optional(v.string()),
+    // A `changes` or `state` precheck's state for the next firing; absent keeps the stored one.
+    precheck_state: v.optional(v.string()),
+    // The mode the daemon read the precheck in (with `command`, the gate it ran).
+    precheck_mode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1730,8 +1756,54 @@ export const skipTaskRun = mutation({
       ...nextArmingAfterRun(task, now),
       last_precheck_skip_at: now,
       last_precheck_skip_reason: args.reason,
+      ...(args.precheck_state !== undefined && sameGate(task, args.command, args.precheck_mode) ? { precheck_state: args.precheck_state } : {}),
       lease_holder: undefined,
       lease_expires_at: undefined,
+    });
+    return true;
+  },
+});
+
+/** A `changes` gate spends its first firing recording what it watches, so a
+ *  trigger that fires once would never run. */
+function assertPrecheckModeFits(scheduleType: string | undefined, mode: string | undefined): void {
+  if (mode === "changes" && scheduleType === "once") {
+    throw new Error("--precheck-mode changes needs a trigger that fires more than once (--every): its first firing only records what the command prints");
+  }
+}
+
+/** Whether the gate a daemon ran is still the trigger's: an edit during the
+ *  firing reset the state for a new gate, which the old gate's answer must
+ *  not overwrite. A daemon that does not say which gate it ran is believed. */
+function sameGate(task: Doc<"agent_tasks">, command: string | undefined, mode: string | undefined): boolean {
+  if (command === undefined) return true;
+  return command === task.precheck && (mode ?? "exit") === (task.precheck_mode ?? "exit");
+}
+
+// A `changes` or `state` precheck woke the firing this daemon holds: keep the
+// state its next firing compares against, and the message this run's frame
+// carries (triggerRunFrame reads it from the row). Written before the run
+// starts, so an inject run's server-built frame already has it.
+export const passTaskPrecheck = mutation({
+  args: {
+    api_token: v.string(),
+    task_id: v.id("agent_tasks"),
+    daemon_id: v.string(),
+    // The gate the daemon ran: its command and mode.
+    command: v.optional(v.string()),
+    precheck_mode: v.optional(v.string()),
+    precheck_state: v.optional(v.string()),
+    message: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const task = await ctx.db.get(args.task_id);
+    if (!task || task.user_id !== auth.userId) return false;
+    if (task.status !== "running" || task.lease_holder !== args.daemon_id) return false;
+    await patchTask(ctx, task, {
+      ...(args.precheck_state !== undefined && sameGate(task, args.command, args.precheck_mode) ? { precheck_state: args.precheck_state } : {}),
+      precheck_message: args.message?.slice(0, TRIGGER_PRECHECK_MESSAGE_CHARS),
     });
     return true;
   },
@@ -2394,6 +2466,8 @@ type TaskUpdateArgs = {
   project_path?: string;
   max_runtime_ms?: number;
   precheck?: string;
+  /** "exit" (or "") goes back to reading the exit code. */
+  precheck_mode?: string;
   // A role's own tuning of its check (org-staffing.md S38), written only by
   // orgRoles.performTuneRoutine: "" clears the focus.
   role_focus?: string;
@@ -2423,6 +2497,7 @@ const EDITABLE_FIELDS = [
   "project_path",
   "max_runtime_ms",
   "precheck",
+  "precheck_mode",
   "role_focus",
   "tune_why",
   "originating_conversation_id",
@@ -2446,6 +2521,7 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
     status: task.status,
     max_runtime_ms: task.max_runtime_ms,
     precheck: task.precheck,
+    precheck_mode: task.precheck_mode,
     role_focus: task.role_focus,
     tune_why: task.tune_why,
     originating_conversation_id: task.originating_conversation_id,
@@ -2470,7 +2546,7 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
 // The edits assertRoutineAllowed rechecks: the ones that can take an armed
 // routine past its plan's limits, and a result thread that may be hosted.
 const ROUTINE_LIMIT_FIELDS: ReadonlySet<string> = new Set(["originating_conversation_id", "target_conversation_id", "schedule_type", "interval_ms"]);
-const RUNNING_SAFE_FIELDS: ReadonlySet<string> = new Set(["interval_ms", "precheck", "role_focus", "tune_why"]);
+const RUNNING_SAFE_FIELDS: ReadonlySet<string> = new Set(["interval_ms", "precheck", "precheck_mode", "role_focus", "tune_why"]);
 
 export async function applyTaskUpdate(
   ctx: TaskCtx,
@@ -2501,6 +2577,22 @@ export async function applyTaskUpdate(
   if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
   // "" removes the gate — `cast trigger update tr-42 --precheck ""`.
   if (args.precheck !== undefined) patch.precheck = args.precheck.trim() || undefined;
+  // Removing the gate removes how it was read, and a trigger with no gate has no mode to set.
+  const gateAfter = args.precheck !== undefined ? args.precheck.trim() : task.precheck;
+  if (!gateAfter) {
+    if (task.precheck_mode !== undefined) patch.precheck_mode = undefined;
+  } else if (args.precheck_mode !== undefined) patch.precheck_mode = args.precheck_mode === "changes" || args.precheck_mode === "state" ? args.precheck_mode : undefined;
+  assertPrecheckModeFits(
+    (args.schedule_type ?? task.schedule_type) as string,
+    ("precheck_mode" in patch ? patch.precheck_mode : task.precheck_mode) as string | undefined,
+  );
+  // A new gate, or the gate read another way, starts from nothing: the stored
+  // state answered the old question.
+  const gate = (t: { precheck?: string; precheck_mode?: string }) => `${t.precheck ?? ""}\u0000${t.precheck_mode ?? ""}`;
+  if (gate({ precheck: task.precheck, precheck_mode: task.precheck_mode, ...patch } as any) !== gate(task)) {
+    patch.precheck_state = undefined;
+    patch.precheck_message = undefined;
+  }
   if (args.role_focus !== undefined) patch.role_focus = args.role_focus.trim() || undefined;
   if (args.tune_why !== undefined) patch.tune_why = args.tune_why.trim() || undefined;
 
@@ -2600,6 +2692,7 @@ const TASK_UPDATE_ARG_VALIDATORS = {
   project_path: v.optional(v.string()),
   max_runtime_ms: v.optional(v.number()),
   precheck: v.optional(v.string()),
+  precheck_mode: v.optional(v.string()),
   // null clears; absent keeps. The CLI sends refs (--for/--thread) and the
   // mutation resolves them to ids before calling applyTaskUpdate.
   originating_conversation_id: v.optional(v.union(v.id("conversations"), v.null())),
@@ -2901,6 +2994,7 @@ export const reclaimStaleTasks = internalMutation({
             lease_holder: undefined,
             lease_expires_at: undefined,
             last_run_summary: "Lease expired, max retries exceeded",
+            precheck_message: undefined,
           });
 
           const user = await ctx.db.get(task.user_id);
@@ -3010,6 +3104,8 @@ export const getTaskForSummary = internalQuery({
       interval_ms: task.interval_ms,
       event_filter: task.event_filter,
       hosted_home: task.hosted_home === true,
+      // The session whose team the trigger's prompt belongs to (lib/vendorGuard).
+      conversation_id: task.target_conversation_id ?? task.originating_conversation_id ?? task.created_by_conversation_id ?? null,
     };
   },
 });
@@ -3045,6 +3141,7 @@ export const generateDisplaySummary = internalAction({
         prompt: task.hosted_home ? buildRoutineSummaryPrompt({ prompt: task.prompt }) : buildTaskSummaryPrompt({ prompt: task.prompt, scheduleLine }),
         max_tokens: 300,
         label: "Task summary Haiku",
+        gate: { ctx, scope: { conversationId: task.conversation_id } },
       });
       if (!reply) return;
       const text = reply.text;

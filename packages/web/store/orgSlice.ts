@@ -354,7 +354,8 @@ type OrgServerVerbs<R> = {
   /** Run or close a role's handoff (S32): orgHandoff.settle. */
   settleOrgHandoff: (roleId: string, how: "run" | "close") => R;
   /** The line's merge step (L12): orgLineMerge.setLineMerge. */
-  setOrgLineMerge: (roleId: string, on: boolean, perDay?: number) => R;
+  /** `rate`: a bar the line merges on (regret.md R7), null for the count alone, absent to leave it. */
+  setOrgLineMerge: (roleId: string, on: boolean, perDay?: number, rate?: { bar: number; min: number } | null) => R;
   /** Reset the org (S27): orgRoles.reset. */
   resetOrg: (teamId?: string) => R;
   /** Bring an unseated role's agent online: orgRoles.provision. */
@@ -1504,7 +1505,7 @@ export function createOrgSlice(): OrgSliceImpl {
     // caller awaits it to word its toast. The arguments ride to the dispatch.
     splitOrgRole: asyncAction(function (this: OrgDraft, _args: Parameters<OrgServerVerbs<void>["splitOrgRole"]>[0]) {}),
     settleOrgHandoff: asyncAction(function (this: OrgDraft, _roleId: string, _how: "run" | "close") {}),
-    setOrgLineMerge: asyncAction(function (this: OrgDraft, _roleId: string, _on: boolean, _perDay?: number) {}),
+    setOrgLineMerge: asyncAction(function (this: OrgDraft, _roleId: string, _on: boolean, _perDay?: number, _rate?: { bar: number; min: number } | null) {}),
     resetOrg: asyncAction(function (this: OrgDraft, _teamId?: string) {}),
     provisionOrgRole: asyncAction(function (this: OrgDraft, _roleId: string) {}),
     markOrgTemplateSetup: asyncAction(function (this: OrgDraft, _instanceKey: string, _id: string, _status: "done" | "open" | "skipped") {}),

@@ -10,6 +10,12 @@
 // The tokens are deterministic digests rather than stored secrets: the URL
 // stays a stable cache key, and changing the password rotates every `?k=`
 // link that was ever handed out.
+//
+// A team gate (team_gate) is the one gate that is access control rather than a
+// shared secret: the page belongs to a team whose policy marks its data as
+// regulated, and only that team's signed-in members are handed its `m` token
+// (artifacts.ownerUnlock / embedInfo). It is checked before the others, so a
+// password or email wall on top of it never opens it to anyone else.
 
 export type GatedArtifact = {
   slug: string;
@@ -17,6 +23,7 @@ export type GatedArtifact = {
   email_gate?: boolean;
   owner_key?: string | null;
   expires_at?: number | null;
+  team_gate?: string | null;
 };
 
 export async function sha256Hex(s: string): Promise<string> {
@@ -39,11 +46,24 @@ export async function eTokenFor(owner_key: string, slug: string): Promise<string
   return (await sha256Hex(`${owner_key}:emailgate:${slug}`)).slice(0, 24);
 }
 
+/** The member token for a team-gated page. Keyed on owner_key (a secret the
+ * page holds) so it cannot be computed from the slug and team id alone; a page
+ * without one has no member token, and its gate stays shut. */
+export async function mTokenFor(a: { slug: string; owner_key?: string | null; team_gate?: string | null }): Promise<string | null> {
+  if (!a.team_gate || !a.owner_key) return null;
+  return (await sha256Hex(`${a.owner_key}:team:${a.team_gate}:${a.slug}`)).slice(0, 24);
+}
+
+/** The words a team-gated page shows anyone without its member token. */
+export function teamGateMessage(teamName: string | null | undefined): string {
+  return `This page holds ${teamName ?? "a team"}'s regulated data and opens only for its signed-in members`;
+}
+
 /** True when the artifact's own state makes it unreadable without a token.
  * The email wall counts: it is a capture step, not secrecy, but it still
  * stands between an anonymous visitor and the page. */
 export function isGated(a: GatedArtifact, now = Date.now()): boolean {
-  return !!a.password_hash || !!a.email_gate || (!!a.expires_at && now > a.expires_at);
+  return !!a.team_gate || !!a.password_hash || !!a.email_gate || (!!a.expires_at && now > a.expires_at);
 }
 
 export function isExpired(a: GatedArtifact, now = Date.now()): boolean {
@@ -51,13 +71,17 @@ export function isExpired(a: GatedArtifact, now = Date.now()): boolean {
 }
 
 /** Null when the caller may act on the page, else the reason it cannot.
- * Order matches the serve route: expiry, then password, then email wall. */
+ * Order matches the serve route: expiry, team, password, then email wall. */
 export async function gateFailure(
   a: GatedArtifact,
-  presented: { k?: string; e?: string; now?: number },
+  presented: { k?: string; e?: string; m?: string; now?: number },
 ): Promise<string | null> {
   const now = presented.now ?? Date.now();
   if (isExpired(a, now)) return "This page has expired";
+  if (a.team_gate) {
+    const m = await mTokenFor(a);
+    if (!m || presented.m !== m) return teamGateMessage(null);
+  }
   if (a.password_hash && presented.k !== (await kTokenFor(a.password_hash, a.slug))) {
     return "This page is password protected";
   }

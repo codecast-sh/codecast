@@ -5,7 +5,8 @@ import * as path from "node:path";
 import { defaultConfigDir } from "./config/configDir.js";
 import { startLaunchdJob, startLaunchdJobAsync, stopLaunchdJob } from "./launchdJob.js";
 import { tmuxSessionEnvUpdates } from "./processEnv.js";
-import { joinListings, ownServerSession, routeTmuxArgs, runRouted, runRoutedSync, sessionSocketName, tmuxSocketDir } from "./tmuxRoute.js";
+import { joinListings, ownServerSession, routeTmuxArgs, runRouted, runRoutedSync, sessionServerKey, sessionSocketName, splitServerFlags, tmuxCallWrites, tmuxSocketDir } from "./tmuxRoute.js";
+import { fleetInventory } from "./tmuxFleetInventory.js";
 
 const ENRICHED_PATH = TOOL_PATH;
 
@@ -109,22 +110,45 @@ type TmuxEnv = Record<string, string | undefined>;
 export function runTmuxSync<T>(args: string[], env: TmuxEnv, exec: (argv: string[]) => T, join: (results: T[]) => T): T {
   const own = ownServerSession(args, env);
   if (own) {
+    fleetInventory.invalidate(path.join(tmuxSocketDir(env), sessionSocketName(own)));
     startSessionServerSync(own, args, env, exec);
     return join([]);
   }
   const run = (argv: string[]) => (startsTmuxServer(withoutGlobals(argv)) ? startTmuxGuardedSync(argv, exec) : exec(argv));
-  return runRoutedSync(routeTmuxArgs(args, env), run, join, env);
+  const argvs = routeTmuxArgs(args, env);
+  if (argvs.length === 1) noteTmuxWrite(argvs[0], env);
+  return runRoutedSync(argvs, run, join, env);
+}
+
+/** A write reaches a server: the fleet inventory's answers for it no longer hold. */
+function noteTmuxWrite(argv: string[], env: TmuxEnv): void {
+  if (!tmuxCallWrites(argv)) return;
+  const key = sessionServerKey(argv, env);
+  if (key) fleetInventory.invalidate(key);
+}
+
+/** One server's part of a fleet listing, answered from the fleet inventory when it is a session's own server. */
+function inventoryMember<T>(argv: string[], run: (argv: string[]) => Promise<T>, env: TmuxEnv): Promise<T> {
+  const key = sessionServerKey(argv, env);
+  if (!key || env.CODECAST_FLEET_INVENTORY === "0") return run(argv);
+  const [server, cmd] = splitServerFlags(argv);
+  return fleetInventory.read(key, cmd, async (c) => stdoutText(await run([...server, ...c])))
+    .then((stdout) => ({ status: 0, stdout, stderr: "" }) as T);
 }
 
 export async function runTmux<T>(args: string[], env: TmuxEnv, exec: (argv: string[]) => Promise<T>, join: (results: T[]) => T): Promise<T> {
   const own = ownServerSession(args, env);
   if (own) {
+    fleetInventory.invalidate(path.join(tmuxSocketDir(env), sessionSocketName(own)));
     await startSessionServer(own, args, env, exec);
     return join([]);
   }
   const run = (argv: string[]) => (startsTmuxServer(withoutGlobals(argv)) ? startTmuxGuarded(argv, exec) : exec(argv));
   const argvs = routeTmuxArgs(args, env);
-  if (argvs.length === 1) return run(argvs[0]);
+  if (argvs.length === 1) {
+    noteTmuxWrite(argvs[0], env);
+    return run(argvs[0]);
+  }
   // A fleet listing asks every server; callers asking the same one at the same
   // moment, through the same wrapper (its join shapes the answer), share it
   // rather than each paying a call per server.
@@ -133,7 +157,7 @@ export async function runTmux<T>(args: string[], env: TmuxEnv, exec: (argv: stri
   fleetListingsInFlight.set(join, inFlight);
   const shared = inFlight.get(key) as Promise<T> | undefined;
   if (shared) return shared;
-  const listing = runRouted(argvs, run, join, env).finally(() => inFlight.delete(key));
+  const listing = runRouted(argvs, (argv) => inventoryMember(argv, run, env), join, env).finally(() => inFlight.delete(key));
   inFlight.set(key, listing);
   return listing;
 }

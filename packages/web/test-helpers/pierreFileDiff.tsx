@@ -7,7 +7,7 @@
 // DiffView passed and call its handlers. What Pierre itself draws is checked
 // in the browser.
 import { createElement, type ReactNode } from "react";
-import type { DiffLineAnnotation, FileDiffMetadata, FileDiffOptions } from "@pierre/diffs/react";
+import { useVirtualizer, type DiffLineAnnotation, type FileDiffMetadata, type FileDiffOptions, type VirtualFileMetrics } from "@pierre/diffs/react";
 
 export type FileDiffProps = {
   fileDiff: FileDiffMetadata;
@@ -15,9 +15,14 @@ export type FileDiffProps = {
   lineAnnotations?: DiffLineAnnotation<any>[];
   renderAnnotation?: (annotation: DiffLineAnnotation<any>) => ReactNode;
   selectedLines?: unknown;
+  metrics?: VirtualFileMetrics;
 };
 
-export const fileDiffRenders: FileDiffProps[] = [];
+/** One render of the stand-in: its props, and the Virtualizer it would draw
+ *  windowed under (none for a diff drawn whole). */
+export type FileDiffRender = FileDiffProps & { virtualizer: ReturnType<typeof useVirtualizer> };
+
+export const fileDiffRenders: FileDiffRender[] = [];
 
 type Line = { type: "added" | "removed" | "context"; content: string; lineNumber: number };
 
@@ -41,7 +46,7 @@ function hunkLines(meta: FileDiffMetadata): Line[] {
 }
 
 export function FileDiffStandIn(props: FileDiffProps) {
-  fileDiffRenders.push(props);
+  fileDiffRenders.push({ ...props, virtualizer: useVirtualizer() });
   const { fileDiff, lineAnnotations = [], renderAnnotation } = props;
   const children: ReactNode[] = [];
   let previous: number | undefined;

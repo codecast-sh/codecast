@@ -17,45 +17,57 @@ function isPhantomProjectPath(p: string): boolean {
 }
 
 /**
- * Collapse a raw cwd/git_root into a canonical project root, or return null if
- * the path is not a real project we should ever surface as a chip.
+ * A raw cwd/git_root as a project folder, or null if it is not a real project we
+ * should ever surface as a chip.
  *
  * Rejects temp dirs and bare home directories or shallower (/Users/m1,
- * /home/ubuntu, /root, /) — those come from a session whose cwd fell back to
+ * /home/ubuntu, /root, /): those come from a session whose cwd fell back to
  * $HOME and are phantoms. Strips worktree suffixes (.conductor/<x>,
- * .codecast/worktrees/<x>) and, when a recognized code parent
- * (src/projects/repos/code) is present, trims to the repo directory one level
- * below it.
+ * .codecast/worktrees/<x>).
  */
 export function normalizeProjectPath(raw: string): string | null {
-  let p = raw;
+  let p = raw.replace(/\/+$/, '');
   p = p.replace(/\/\.conductor\/[^/]+$/, '');
   p = p.replace(/\/\.codecast\/worktrees\/[^/]+$/, '');
-  if (isPhantomProjectPath(p)) return null;
-
-  const parts = p.split('/');
-  const srcIdx = parts.findIndex(s => s === 'src' || s === 'projects' || s === 'repos' || s === 'code');
-  if (srcIdx >= 0 && srcIdx < parts.length - 1) {
-    return parts.slice(0, srcIdx + 2).join('/');
-  }
-  return p;
+  return isPhantomProjectPath(p) ? null : p;
 }
 
 /**
- * The project folder a session belongs to, for the recent-projects picker.
+ * The project folder a session belongs to, for the recent-projects picker and
+ * the sidebar's workspaces.
  *
- * A git_root already names the checkout, so it is taken as it stands: trimming
- * it to one level below a code parent files every repo in
- * ~/code/work/GitHub/<repo> under ~/code/work, a folder that is not a checkout
- * at all. Only a bare cwd, which may be anywhere inside a repo, gets the trim.
+ * A git_root already names the checkout, so it is taken as it stands. A bare cwd
+ * (a subagent, a session from an older daemon) may sit anywhere inside a repo:
+ * it belongs to the deepest checkout among `knownRoots` that contains it, else
+ * to the cwd itself. Guessing the repo from the folder layout (one level below
+ * a folder named code or src) files ~/code/work/GitHub/<repo> under ~/code/work,
+ * which is not a checkout, and a new session started from that chip lands there.
  */
-export function conversationProjectRoot(conv: {
-  git_root?: string | null;
-  project_path?: string | null;
-}): string | null {
-  if (!conv.git_root) return conv.project_path ? normalizeProjectPath(conv.project_path) : null;
+export function conversationProjectRoot(
+  conv: { git_root?: string | null; project_path?: string | null },
+  knownRoots: Iterable<string> = [],
+): string | null {
+  if (!conv.git_root) {
+    const cwd = conv.project_path ? normalizeProjectPath(conv.project_path) : null;
+    if (!cwd) return null;
+    let best: string | null = null;
+    for (const root of knownRoots) {
+      if ((cwd === root || cwd.startsWith(root + '/')) && root.length > (best?.length ?? 0)) best = root;
+    }
+    return best ?? cwd;
+  }
   const root = (worktreeOfPath(conv.git_root)?.root || conv.git_root).replace(/\/+$/, '');
   return isPhantomProjectPath(root) ? null : root;
+}
+
+/** The checkouts named by the git_roots of these sessions, for conversationProjectRoot. */
+export function knownCheckoutRoots(convs: Iterable<{ git_root?: string | null }>): Set<string> {
+  const roots = new Set<string>();
+  for (const conv of convs) {
+    const root = conv.git_root ? conversationProjectRoot(conv) : null;
+    if (root) roots.add(root);
+  }
+  return roots;
 }
 
 export type ProjectTally = {

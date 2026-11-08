@@ -45,7 +45,7 @@ import {
   updateChannel,
 } from "./chat";
 import schema from "./schema";
-import { dmKeyFor } from "@codecast/shared/chat";
+import { dmKeyFor, dmOtherIds } from "@codecast/shared/chat";
 import { isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import { listMine, markAllRead, markRead as markThreadReadMine, unreadCount } from "./threads";
 import { backfillThreadReads } from "./threadReads";
@@ -548,9 +548,9 @@ describe("unread state", () => {
   test("the rail counts what you have not read, and not your own lines", async () => {
     const ctx = context(BOB);
     const alice = as(ctx, ALICE);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "mine, already read" });
     await call(sendMessage, alice, { channel_id: CHANNEL, content: "one" });
     await call(sendMessage, alice, { channel_id: CHANNEL, content: "two @bob" });
-    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "mine, already read" });
     stampTimeline(ctx, 1_000);
 
     const rail = await railFor(ctx);
@@ -558,7 +558,7 @@ describe("unread state", () => {
     expect(rail.unread_mentions).toBe(1);
     expect(rail.unread_capped).toBe(false);
     expect(rail.joined).toBe(true);
-    expect(rail.last_message.preview).toBe("mine, already read");
+    expect(rail.last_message.preview).toBe("two @bob");
   });
 
   test("history imported from Slack is not unread, but a live line in the same room is", async () => {
@@ -579,12 +579,36 @@ describe("unread state", () => {
     expect(rail.unread_mentions).toBe(1);
   });
 
+  test("the viewer's own newest line reads everything before it, as every client counts", async () => {
+    const ctx = context(BOB);
+    const alice = as(ctx, ALICE);
+    await call(sendMessage, alice, { channel_id: CHANNEL, content: "before" });
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "my answer" });
+    await call(sendMessage, alice, { channel_id: CHANNEL, content: "after" });
+    stampTimeline(ctx, 1_000);
+
+    expect((await railFor(ctx)).unread).toBe(1);
+  });
+
+  test("a reply also sent to the channel ticks the channel; a plain reply does not", async () => {
+    const ctx = context(BOB);
+    const alice = as(ctx, ALICE);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "mine, so I have a read mark" });
+    const root = await call(sendMessage, alice, { channel_id: CHANNEL, content: "root" });
+    await call(sendMessage, alice, { channel_id: CHANNEL, content: "plain reply", thread_root_id: root.message_id });
+    const loud = await call(sendMessage, alice, { channel_id: CHANNEL, content: "loud reply", thread_root_id: root.message_id });
+    stampTimeline(ctx, 1_000);
+    messagesIn(ctx).find((m: any) => String(m._id) === String(loud.message_id)).broadcast = true;
+
+    expect((await railFor(ctx)).unread).toBe(2);
+  });
+
   test("a tombstone is not unread, and reading again clears the count", async () => {
     const ctx = context(BOB);
     const alice = as(ctx, ALICE);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "joins the channel" });
     await call(sendMessage, alice, { channel_id: CHANNEL, content: "keep" });
     const gone = await call(sendMessage, alice, { channel_id: CHANNEL, content: "retracted" });
-    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "joins the channel" });
     await call(deleteMessage, alice, { message_id: gone.message_id });
     stampTimeline(ctx, 1_000);
 
@@ -4152,12 +4176,46 @@ describe("session thinking rows", () => {
     const group = await call(openDm, ctx, { team_id: TEAM, handles: ["alice", "bob"], ...asRole });
     expect(members(group.channel_id)).toEqual(["user-growth-bot", String(ALICE), String(BOB)].sort());
 
-    // The host's own DM with Alice, and a plain session of theirs, stay separate.
+    // The host's own DM with Alice stays separate.
     const own = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"] });
-    const plain = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"], origin: "agent", origin_session_id: "sess-bob" });
     expect(members(own.channel_id)).toEqual([String(ALICE), String(BOB)].sort());
-    expect(String(plain.channel_id)).toBe(String(own.channel_id));
     expect(String(own.channel_id)).not.toBe(String(dm.channel_id));
+  });
+
+  test("a session with no role DMs from its own room with the people it named, never its owner's DM", async () => {
+    const ctx = context(BOB, seed());
+    const asSession = { origin: "agent" as const, origin_session_id: "sess-bob" };
+    const members = (id: any) => ctx.db._tables.chat_channel_members
+      .filter((r: any) => String(r.channel_id) === String(id)).map((r: any) => String(r.user_id)).sort();
+    const own = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"] });
+
+    // Its own room: Alice is the only member, the session the party she talks to.
+    const dm = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"], ...asSession });
+    expect(String(dm.channel_id)).not.toBe(String(own.channel_id));
+    expect(members(dm.channel_id)).toEqual([String(ALICE)]);
+    const room = ctx.db._tables.chat_channels.find((c: any) => String(c._id) === String(dm.channel_id));
+    expect(dmOtherIds(room.dm_key, String(ALICE))).toEqual(["session:conv-bob"]);
+    expect(room.name).toBe(seed().conversations.find((c: any) => c._id === "conv-bob").title);
+    // Opening it again finds the same room.
+    const again = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"], ...asSession });
+    expect(String(again.channel_id)).toBe(String(dm.channel_id));
+
+    // The owner's token posts there through the session.
+    const sent = await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "deal desk is up", ...asSession });
+    expect(messagesIn(ctx).find((m: any) => m._id === sent.message_id)).toMatchObject({ origin_session_id: "conv-bob" });
+    // Alice's bell goes to her alone; the owner is not in the room.
+    const bells = ctx._emitted.filter((e: any) => String(e.args.chat_message_id) === String(sent.message_id)).map((e: any) => e.args.direct_recipient_id);
+    expect(bells).toEqual([ALICE]);
+
+    // A line Alice writes at room level reaches the session.
+    const reply = await call(sendMessage, as(ctx, ALICE), { channel_id: dm.channel_id, content: "what does it cost?" });
+    expect(reply.mention_wakes.sessions).toBe(1);
+    expect(pending(ctx).map((p: any) => p.conversation_id)).toEqual(["conv-bob"]);
+    expect(pending(ctx)[0].content).toContain("wrote to you in your direct message");
+
+    // Naming its owner too is writing to them: the owner's room with Alice.
+    const withOwner = await call(openDm, ctx, { team_id: TEAM, handles: ["alice", "bob"], ...asSession });
+    expect(String(withOwner.channel_id)).toBe(String(own.channel_id));
   });
 
   test("a session working for a role DMs as the role, and a reply in its thread goes to the hand, not the role", async () => {

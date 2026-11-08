@@ -32,7 +32,7 @@ import { bringsByDefault } from "@codecast/shared/contracts/moveRehearsal";
 import { humanizeConvexError } from "@codecast/shared/contracts/convexErrors";
 import { createRunnerIo } from "./io.js";
 import { hostResolver } from "./hosts.js";
-import { matchDevices } from "./pickDevice.js";
+import { pickDevice } from "./pickDevice.js";
 import { exitIfPolicyBlocks } from "../config/managedPolicy.js";
 import { formatBytes, rehearseMove, unreachableRehearsal } from "./rehearse.js";
 import { awaitCommand, runBatch } from "./runner.js";
@@ -56,13 +56,6 @@ function deviceName(devices: any[], id: string | null | undefined): string {
 // How long `move` waits for an online destination to answer its resume.
 const MOVE_ANSWER_MS = 60_000;
 
-function pickDevice(devices: any[], needle: string, what: string): any {
-  const matches = matchDevices(devices, needle);
-  if (matches.length === 1) return matches[0];
-  console.error(matches.length === 0 ? `no device matches ${what} "${needle}"` : `${what} "${needle}" matches ${matches.length} devices; be more specific:`);
-  for (const d of matches.length ? matches : devices) console.error(`  ${d.device_id.slice(0, 8)}  ${d.label ?? d.hostname ?? ""}${d.is_remote ? " (cloud)" : ""}${d.online ? "" : "  offline"}`);
-  process.exit(1);
-}
 
 function printBatch(b: any, devices: any[]): void {
   console.log(`${b.batch_id}  → ${deviceName(devices, b.to_device_id)}  ${b.state}  ${b.done}/${b.total} done${b.failed ? `, ${b.failed} failed` : ""}${b.cancelled ? `, ${b.cancelled} cancelled` : ""}  created ${ago(b.created_at)}`);
