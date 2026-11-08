@@ -41,20 +41,19 @@ function Rail() {
   useMountEffect(() => {
     const els = STATIONS.map((s) => document.getElementById(s.id)).filter((e): e is HTMLElement => !!e);
     if (typeof IntersectionObserver === "undefined" || els.length === 0) return;
-    const seen = new Map<string, boolean>();
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) seen.set(e.target.id, e.isIntersecting);
-        // The section crossing the band near the top of the screen is the station;
-        // above the first one (back in the hero) nothing is lit.
-        const idx = STATIONS.findIndex((s) => seen.get(s.id));
-        if (idx >= 0) return setActive(idx);
-        const first = document.getElementById(STATIONS[0].id);
-        if (first && first.getBoundingClientRect().top > 0) setActive(-1);
-      },
-      { rootMargin: "-30% 0px -60% 0px" },
-    );
-    els.forEach((el) => io.observe(el));
+    // Any section crossing the band is only the cue; the station is read from
+    // positions, so a jump that skips sections (an anchor, back to the top)
+    // still lands on the right one: the last section whose top has passed
+    // a third of the way down the screen, or none while the hero is there.
+    const io = new IntersectionObserver(() => {
+      const line = window.innerHeight * 0.33;
+      let idx = -1;
+      els.forEach((el, i) => { if (el.getBoundingClientRect().top <= line) idx = i; });
+      setActive(idx);
+    }, { rootMargin: "-33% 0px -66% 0px" });
+    // The hero and the merge section are not stations but still move the line.
+    const others = [document.querySelector(".flx-root")?.firstElementChild, document.getElementById("merge")];
+    [...els, ...others].forEach((el) => el && io.observe(el));
     return () => io.disconnect();
   });
   return (

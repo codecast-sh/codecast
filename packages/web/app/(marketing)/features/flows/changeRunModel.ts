@@ -6,7 +6,7 @@ import { KeyCap } from "@/components/KeyboardShortcutsHelp";
 import { BACK, BAD, GOOD, LINE, PERSON, TEXT } from "./base";
 import { CHANGE } from "./story";
 
-const keyMeta = (k: string) => createElement(KeyCap, { size: "xs", children: k });
+const keyMeta = (k: string) => createElement(KeyCap, { size: "xs" }, k);
 
 // ---------- Steps, ways out, ways back ----------
 

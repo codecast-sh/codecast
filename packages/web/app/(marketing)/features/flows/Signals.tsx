@@ -427,7 +427,7 @@ export function SignalsSection() {
 
 const PERSON_STEPS = [1700, 1500, 1700, 1700, 3200];
 const WAYS_BACK = ["Fix check", "Address review", "Revise", "Resolve conflict"];
-const EDITS = Object.entries(CHANGE.diff).map(([path, d]) => ({ name: path.replace(/^packages\//, ""), ...d }));
+const EDITS = Object.entries(CHANGE.diff).map(([path, d]) => ({ name: path, ...d }));
 
 function TermIcon() {
   return (

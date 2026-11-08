@@ -110,7 +110,7 @@
 .flx-root .flx-rate-row[data-st="clean"] .flx-rate-fill { background: #859900; }
 .flx-root .flx-rate-row[data-st="regret"] .flx-rate-fill { background: #dc322f; }
 .flx-root .flx-rate-row[data-st="clean"] .flx-rate-wbar,
-.flx-root .flx-rate-row[data-st="regret"] .flx-rate-wbar { opacity: .35; }
+.flx-root .flx-rate-row[data-st="regret"] .flx-rate-wbar { background: none; box-shadow: inset 0 0 0 1px rgba(147, 161, 161, .4); }
 .flx-root .flx-rate-sq { position: absolute; top: 0; width: 9px; height: 9px; margin-left: -1px; border-radius: 2px; background: #93a1a1; transition: background-color .3s; }
 .flx-root .flx-rate-row[data-st="partial"] .flx-rate-sq { background: #657b83; }
 .flx-root .flx-rate-row[data-st="clean"] .flx-rate-sq { background: #859900; }
