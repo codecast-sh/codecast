@@ -56,17 +56,9 @@
  * subshell and call the CLI yourself; never source it in a shell you use for
  * other cast commands, since it swaps HOME.
  *
- * --fixtures serves packages/cli/scripts/browser-rig-fixtures/ on two
- * loopback ports, two origins ($CAST_RIG_FIXTURES and $CAST_RIG_FIXTURES_B):
- * index.html, login.html (POST /login sets a session cookie and redirects to
- * the welcome page), popup.html (window.open, same and cross origin),
- * delete-list.html (identical "Delete" buttons), challenge.html (a fake
- * Cloudflare "Just a moment..." page, served 403 with cf-mitigated:
- * challenge), cookies.html (Set-Cookie HttpOnly/Lax/Strict plus a script
- * cookie), iframe.html (the other origin's login in an iframe), churn.html
- * (window.churn(ms) and window.cycle(on, off): heavy DOM mutation, for
- * snapshot settling) and mouse.html (records every mousemove in
- * window.__moves, for human-like input). In the pages, {{ORIGIN}} and {{OTHER_ORIGIN}} are replaced per request.
+ * --fixtures serves packages/cli/scripts/browser-rig-fixtures/ on two loopback
+ * ports, two origins ($CAST_RIG_FIXTURES and $CAST_RIG_FIXTURES_B); lib/rigFixtures.ts
+ * lists the pages.
  *
  * --headed shows the rig Chrome's window; the default is headless, so nothing
  * appears on the human's screen.
@@ -80,6 +72,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { BRIDGE_DEFAULT_PORT, BRIDGE_EXTENSION_ID } from "../src/browser/bridge/protocol.ts";
+import { serveFixtures, writeForwarder } from "./lib/rigFixtures.ts";
 import { enableDeveloperMode, extensionContext, extensionInfo, findTestChrome, freePort, pairExtension, reloadUnpacked, seedExtensionToken, sleep, waitForCdp } from "./lib/chromeRig.ts";
 
 const REPO = path.resolve(import.meta.dir, "../../..");
@@ -399,75 +392,9 @@ function chromeArgs(s: { cdpPort: number; headed: boolean; extDir?: string }, us
   ];
 }
 
-/**
- * CODECAST_CHROMIUM for the rig: the CLI starts "Chrome" with switches and
- * one URL when it launches the human's Chrome or wakes the extension. This
- * opens that URL as a tab in the rig Chrome instead, and logs the call.
- */
-function writeForwarder(cdpPort: number): void {
-  const script = `#!/bin/sh
-# browser-rig: stands in for the human's Chrome (CODECAST_CHROMIUM). Opens the
-# URL argument in the rig Chrome over its CDP port; switches are ignored.
-echo "$(date -u +%FT%TZ) $*" >> ${JSON.stringify(path.join(paths.logs, "chrome-forward.log"))}
-url=""
-for a in "$@"; do case "$a" in -*) ;; *) url="$a" ;; esac; done
-[ -n "$url" ] || exit 0
-exec /usr/bin/curl -s -o /dev/null -X PUT "http://127.0.0.1:${cdpPort}/json/new?$url"
-`;
-  fs.writeFileSync(paths.forward, script, { mode: 0o755 });
-}
-
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
-
-/** `serve-fixtures <portA> <portB>`: the detached fixture server `up --fixtures` starts. */
-function serveFixtures(portA: number, portB: number): void {
-  const origin = (p: number) => `http://127.0.0.1:${p}`;
-  for (const [port, other] of [[portA, portB], [portB, portA]]) {
-    Bun.serve({
-      port,
-      hostname: "127.0.0.1",
-      async fetch(req) {
-        const url = new URL(req.url);
-        const fill = (html: string, extra: Record<string, string> = {}) =>
-          Object.entries({ ORIGIN: origin(port), OTHER_ORIGIN: origin(other), ...extra }).reduce((h, [k, v]) => h.replaceAll(`{{${k}}}`, v), html);
-        const page = (name: string) => fs.readFileSync(path.join(FIXTURES_DIR, name), "utf-8");
-        const html = (body: string, init: ResponseInit = {}) => {
-          const headers = new Headers(init.headers);
-          headers.set("content-type", "text/html; charset=utf-8");
-          return new Response(body, { ...init, headers });
-        };
-        if (url.pathname === "/login" && req.method === "POST") {
-          const form = await req.formData();
-          const user = String(form.get("email") ?? "");
-          const headers = new Headers({ location: `/welcome.html?user=${encodeURIComponent(user)}` });
-          headers.append("set-cookie", `rig_auth=${encodeURIComponent(user)}; Path=/; HttpOnly; SameSite=Lax`);
-          return new Response(null, { status: 303, headers });
-        }
-        if (url.pathname === "/welcome.html") {
-          const user = url.searchParams.get("user") ?? /rig_auth=([^;]+)/.exec(req.headers.get("cookie") ?? "")?.[1] ?? "nobody";
-          return html(fill(page("welcome.html"), { USER: Bun.escapeHTML(decodeURIComponent(user)) }));
-        }
-        if (url.pathname === "/challenge.html") {
-          return html(fill(page("challenge.html")), { status: 403, headers: { "cf-mitigated": "challenge", server: "cloudflare", "cf-ray": "8f0000000000rig0-SJC" } });
-        }
-        if (url.pathname === "/cookies.html") {
-          const headers = new Headers();
-          headers.append("set-cookie", "rig_session=s3cr3t; Path=/; HttpOnly");
-          headers.append("set-cookie", "rig_pref=dark; Path=/; Max-Age=86400; SameSite=Lax");
-          headers.append("set-cookie", "rig_strict=1; Path=/; SameSite=Strict");
-          return html(fill(page("cookies.html")), { headers });
-        }
-        if (url.pathname === "/healthz") return new Response("ok");
-        const name = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-        if (!/^[a-z0-9-]+\.html$/.test(name) || !fs.existsSync(path.join(FIXTURES_DIR, name))) return new Response("not found", { status: 404 });
-        return html(fill(page(name)));
-      },
-    });
-  }
-  console.log(`fixtures on ${origin(portA)} and ${origin(portB)}`);
-}
 
 async function startFixtures(s: Pick<RigState, "bridgePort">): Promise<{ pid: number; urls: [string, string] }> {
   const a = await freePort();
@@ -506,7 +433,7 @@ async function up(): Promise<void> {
   while (bridgePort === BRIDGE_DEFAULT_PORT) bridgePort = await freePort();
   const cdpPort = await freePort();
   const headed = flag("headed");
-  writeForwarder(cdpPort);
+  writeForwarder(cdpPort, paths.forward, path.join(paths.logs, "chrome-forward.log"));
 
   // The token and port, written into the rig's own bridge.json by the same
   // code the CLI uses. CODECAST_DIR is read per call, so setting it here
@@ -842,7 +769,7 @@ async function main(): Promise<void> {
     case "down":
       return down();
     case "serve-fixtures":
-      return serveFixtures(parseInt(own[1], 10), parseInt(own[2], 10));
+      return serveFixtures(parseInt(own[1], 10), parseInt(own[2], 10), FIXTURES_DIR);
     default:
       console.error("usage: browser-rig.ts up [--fixtures] [--headed] [--legacy-pair] [--extension <dir|git:rev>] [--engine] [--cli <main.ts>] [--name <n>] | add-profile [--legacy-pair] | exec [--name <n>] [--session <id>] [--cli <main.ts>] -- <verb> [args] | reload-ext | restart-host [--build <stamp>] [--cli <main.ts>] | restart-chrome | status | down");
       process.exit(sub ? 1 : 0);

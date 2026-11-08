@@ -177,7 +177,8 @@ describe("FramelessPage", () => {
         title="Q3 funnel report"
         href="https://codecast.sh/a/hero-report"
         caption="Built from the canvas"
-        actions={<PublishedPageActions slug="hero-report" expanded={false} onToggleExpand={() => {}} />}
+        actions={<PublishedPageActions slug="hero-report" />}
+        expand={{ expanded: false, onToggle: () => {} }}
         height={500}
         loaded
       >
@@ -186,7 +187,9 @@ describe("FramelessPage", () => {
     );
     expect(html).toContain("Q3 funnel report");
     expect(html).toContain('aria-label="Copy link"');
-    expect(html).toContain('aria-label="Expand"');
+    expect(html).toContain('aria-label="Open beside your work"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("Expand");
     expect(html).toContain("Built from the canvas");
   });
 });

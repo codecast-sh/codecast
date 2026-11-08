@@ -159,7 +159,7 @@ describe("the pass reads only what opted in", () => {
   test("nothing typed and nothing stalled asks no model", async () => {
     const db = fixtures({ messages: [], agent_tasks: [], org_template_instances: [instance({ created_at: NOW - DAY, routines: {} })] });
     await optIn(db);
-    expect(await performDigest(ctx(db), { instance_id: INSTANCE, now: NOW })).toEqual({ request: null, signal_keys: [] });
+    expect(await performDigest(ctx(db), { instance_id: INSTANCE, now: NOW })).toEqual({ request: null, signal_keys: [], workspace: WS });
   });
 });
 
@@ -199,7 +199,7 @@ describe("filing what was learned", () => {
     expect((await db.get(INSTANCE)).learning).toBeUndefined();
     const first = (await performDigest(ctx(db), { instance_id: INSTANCE, now: NOW }))!;
     await performFileLearned(ctx(db), { instance_id: INSTANCE, user_id: ME, reply: "[]", signal_keys: first.signal_keys, now: NOW });
-    expect(await performDigest(ctx(db), { instance_id: INSTANCE, now: NOW + DAY })).toEqual({ request: null, signal_keys: [] });
+    expect(await performDigest(ctx(db), { instance_id: INSTANCE, now: NOW + DAY })).toEqual({ request: null, signal_keys: [], workspace: WS });
     expect(await performPassPlan(ctx(db), ME, { template_id: "growth", now: NOW + 60_000 })).toMatchObject({ instances: [] });
   });
   test("a reply that is not a list files nothing and still moves the cursor", async () => {

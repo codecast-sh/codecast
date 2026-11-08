@@ -17,8 +17,8 @@ import type { LineViewProps } from "../types";
 import "./flowVolume.css";
 
 const REASON_WORDS: Record<FunnelReason, string> = {
-  closed: "closed, no fix", dropped: "dropped", failed: "failed", cancelled: "cancelled", regressed: "came back", other: "other",
-  here: "here now", waiting: "on a person", queued: "queued", held: "held back", watching: "watching",
+  closed: "not needed", dropped: "dropped", failed: "failed", cancelled: "cancelled", regressed: "came back", other: "other",
+  here: "here now", waiting: "on a person", unstarted: "not started", held: "held back", watching: "watching",
 };
 
 /** What the list under the chart shows: the signals by source, everyone who reached a step, or those who stopped there for one reason. */
@@ -33,7 +33,9 @@ export function FlowVolume({ map, href, select, now }: { map: FlowMap; href: Lin
   const f = map.funnel;
   if (!f) return <section className="fv" data-flow-volume=""><p className="fv-none">No rollup yet</p></section>;
   const w = f.windows.find((x) => x.days === days) ?? f.windows[0];
-  const top = Math.max(1, w.steps[0]?.n ?? 0);
+  // Signals and problems each fill their own column (thousands of findings, most problems never started); from the
+  // runs on, every bar and share is against the runs started.
+  const runs = Math.max(1, w.steps[1]?.n ?? 0);
   const label = new Map(map.sources.map((s) => [s.key, s.label]));
 
   return (
@@ -65,16 +67,16 @@ export function FlowVolume({ map, href, select, now }: { map: FlowMap; href: Lin
           // The ones that went on to the next step; at the last, all of them made it.
           const on = i === w.steps.length - 1 ? s.n : w.steps[i + 1].n;
           const reasons = FUNNEL_REASONS.filter((r) => s.drops[r]);
-          const share = s.n && i > 0 ? Math.round((s.n / top) * 100) : null;
+          const share = s.n && i > 1 ? Math.round((s.n / runs) * 100) : null;
           return (
-            <li key={s.key} className="fv-col" data-step={s.key}>
+            <li key={s.key} className="fv-col" data-step={s.key} data-own={i === 0 ? "" : undefined}>
               <span className="fv-name">{s.label}</span>
               <button type="button" className="fv-count" aria-pressed={same(pick, { kind: "step", level: i })} disabled={!s.n} onClick={() => toggle({ kind: "step", level: i })} data-flow-volume-count={s.key}>
                 <b className="lw-num">{s.n.toLocaleString()}</b>
                 {share != null ? <span className="fv-share lw-num">{share}%</span> : null}
               </button>
               <span className="fv-track">
-                <span className="fv-bar" style={{ ["--f" as string]: s.n / top }}>
+                <span className="fv-bar" style={{ ["--f" as string]: i === 0 ? (s.n ? 1 : 0) : s.n / runs }}>
                   {/* The ones that went on, then the ones that stopped here, by why. */}
                   {on ? <span className="fv-seg" data-why="on" style={{ flexGrow: on }} /> : null}
                   {reasons.map((r) => (
@@ -86,7 +88,7 @@ export function FlowVolume({ map, href, select, now }: { map: FlowMap; href: Lin
                 {reasons.map((r) => (
                   <li key={r}>
                     <button type="button" className="fv-drop" data-why={r} aria-pressed={same(pick, { kind: "step", level: i, why: r })} onClick={() => toggle({ kind: "step", level: i, why: r })} data-flow-volume-drop={`${s.key}:${r}`}>
-                      <i aria-hidden /><b className="lw-num">{s.drops[r]}</b>{REASON_WORDS[r]}
+                      <i aria-hidden /><b className="lw-num">{s.drops[r]!.toLocaleString()}</b><span className="fv-drop-w">{REASON_WORDS[r]}</span>
                     </button>
                   </li>
                 ))}
@@ -152,7 +154,7 @@ function Items({ pick, w, f, days, label, href, select, now, onClose }: {
                   <span>{x.node ?? reached?.label}</span><span className="fv-status">{x.status}</span>
                 </a>
               ) : <span className="fv-row-run" data-status="none"><span>No run</span></span>}
-              {!pick.why && x.why ? <span className="fv-drop" data-why={x.why} title={`Stopped at ${reached?.label}`}><i aria-hidden />{REASON_WORDS[x.why]}</span> : <span />}
+              {!pick.why && x.why ? <span className="fv-drop" data-why={x.why} title={`Stopped at ${reached?.label}`}><i aria-hidden /><span className="fv-drop-w">{REASON_WORDS[x.why]}</span></span> : <span />}
               <span className="fv-row-at lw-num">{ageShort(Math.max(0, now - x.at))}</span>
             </li>
           );

@@ -7,7 +7,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./functions";
 import { normalizeRepository } from "./lib/gitRefs";
 import { normalizeDeployTarget } from "@codecast/shared/contracts/deploys";
-import { carriesForMarker, lineDeployTargets, recordDeployMarker, workspaceMergeWindow, type DeployMarker } from "./deploys";
+import { recordDeployMarker, type DeployMarker } from "./deploys";
+import { carriesForMarker, lineDeployTargets, workspaceMergeWindow } from "./deployCarries";
 import { fillDeployRange } from "./deployTargets";
 import { mainAtOf } from "./deployTargetsState";
 
