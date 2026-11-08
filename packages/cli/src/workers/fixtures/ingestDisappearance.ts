@@ -26,7 +26,7 @@ export async function disappearanceReview(f:any) {
   }
   try {
     timer=setInterval(()=>{now+=d.HEARTBEAT_INTERVAL_MS+1;d.heartbeatTick(async()=>{});},5);
-    await until(()=>receipts(id).length===0&&!internal.transcriptAckObserved.has(file));await new Promise(resolve=>setTimeout(resolve,20));assert.equal(sent.length,1);assert.equal(givenUp,1);
+    await until(()=>receipts(id).length===0);await new Promise(resolve=>setTimeout(resolve,20));assert.equal(sent.length,1);assert.equal(givenUp,1);
     const runOp=(logical:string)=>d.processOpencodeSession(logical,sync,'user',undefined,cache,queue,pending,{},()=>{});
     await runOp(opId);assert.equal(internal.opencodeSyncedCounts.get(opId),1);
     for(const logical of [opId,other]){

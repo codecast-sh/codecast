@@ -97,3 +97,14 @@ test("an unsettled send never leaves on transcript movement alone", () => {
   useInboxStore.getState().setMessages("c", [{ _id: "later", role: "assistant", content: "a later turn", timestamp: Date.now() + 10 * 60_000 }] as any);
   expect(useInboxStore.getState().pendingMessages.c).toEqual([input]);
 });
+
+test("a settled send the agent took in one turn with another send retires on that turn; an unsettled one does not", () => {
+  const now = Date.now();
+  const first = { _id: "first", _clientId: "first", role: "user" as const, content: "check the tests", timestamp: now - 5_000, _isOptimistic: true as const };
+  const second = { _id: "second", _clientId: "second", role: "user" as const, content: "and the lint", timestamp: now - 4_000, _isOptimistic: true as const, _isSettled: true as const };
+  const unsettled = { ...second, _id: "third", _clientId: "third", _isSettled: undefined };
+  const turn = [{ _id: "server", role: "user", client_id: "first", content: "check the tests\nand the lint", timestamp: now - 3_000 }] as any;
+  const state = { c: [first, second, unsettled] };
+  reconcilePendingSendForSession(state, "c", { agent_status: "working", is_idle: false, has_pending: false, updated_at: now }, "elsewhere", turn);
+  expect(state.c.map((m) => m._id)).toEqual(["third"]);
+});

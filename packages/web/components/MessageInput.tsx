@@ -29,6 +29,7 @@ import { cancelDraftWrite, scheduleDraftWrite } from "../lib/pendingDraftWrites"
 import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { KeyCap, ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { QUEUE_CHORD } from "../shortcuts/sendChords";
 import { toast } from "sonner";
 import { appendToDraft } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
@@ -2121,6 +2122,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     setSelectedQueueIndex(null);
   };
 
+  // Queue for the end of the turn, from the chord or the pill's button alike;
+  // a credential in the text is held first, as a plain send holds it.
+  const queueFromComposer = () => {
+    if (!holdForCredential(messageRef.current, queueComposerText)) queueComposerText();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (caught && e.key === "Escape") {
       e.preventDefault();
@@ -2425,8 +2432,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       if (onGateSend) { void handleSubmit(e); return; }
-      if (holdForCredential(message, queueComposerText)) return;
-      queueComposerText();
+      queueFromComposer();
       return;
     }
     if (e.key === "Enter" && e.altKey && e.shiftKey && onSendAndDismiss) {
@@ -2475,7 +2481,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     onStopAndSend: stopAndSendComposerText,
     wrap: (square: ReactElement) => <ShortcutTooltip label="Stop the turn, then send" action="msg.stopSend" side="top">{square}</ShortcutTooltip>,
   } : undefined;
-  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} title={allowanceOut ?? undefined} label={batchWords.button ?? undefined} stop={hostedStop ?? sessionStop} stopAndSend={stopAndSend} tip={(button, words, accel) => <ShortcutTooltip label={words} accel={accel} side="top">{button}</ShortcutTooltip>} />;
+  // The same pill's middle choice: hold the text for the end of the turn
+  // (the shared queue, the same as its chord) rather than send it into the turn now. A session
+  // the server queues for; a hosted one keeps its queue in this window.
+  const queueSend = stopAndSend && canSubmit && canQueryServer && !hostedConversation ? {
+    onQueue: queueFromComposer,
+    wrap: (button: ReactElement) => <ShortcutTooltip label="Send when this turn ends" accel={QUEUE_CHORD} side="top">{button}</ShortcutTooltip>,
+  } : undefined;
+  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} title={allowanceOut ?? undefined} label={batchWords.button ?? undefined} stop={hostedStop ?? sessionStop} stopAndSend={stopAndSend} queueSend={queueSend} tip={(button, words, accel) => <ShortcutTooltip label={words} accel={accel} side="top">{button}</ShortcutTooltip>} />;
   // Expand, stash, hand off and fork: beside the text, or in the surface's foot
   // row next to send when it brings one.
   const rowActions = (
