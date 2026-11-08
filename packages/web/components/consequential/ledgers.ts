@@ -50,6 +50,41 @@ export function mergeStepLedger(r: { name: string; limit: number | null; used: n
   };
 }
 
+/** The merge step's mode (regret.md R7): merge while the measured regret-free rate holds a bar, or on the daily count alone. */
+export function mergeRateLedger(r: { name: string; to: "rate" | "count"; bar: number; min: number; rate: number | null; settled: number; limit: number | null; windowDays: number }): SwitchLedger {
+  const pct = (x: number | null) => (x === null ? "–" : `${Math.round(x * 100)}%`);
+  const holds = r.rate !== null && r.settled >= r.min && r.rate >= r.bar;
+  return r.to === "rate" ? {
+    name: "Merge on the rate",
+    subject: r.name,
+    shift: ["Count", "Rate"],
+    figures: [
+      { value: pct(r.bar), label: "bar", tone: "warn" },
+      { value: pct(r.rate), label: "now", ...(holds ? {} : { tone: "warn" as const }) },
+      { value: `${r.settled}/${r.min}`, label: "finished, min" },
+    ],
+    rows: [
+      { k: "Merges", v: holds ? "While the rate holds" : "Paused until it holds", tone: holds ? "warn" : "ok" },
+      { k: "Rate", v: `No fix in ${r.windowDays} days after live` },
+      { k: "Daily cap", v: r.limit === null ? "None" : `${r.limit} a day`, ...(r.limit === null ? { tone: "warn" as const } : {}) },
+      { k: "To undo", v: "Back to Count" },
+    ],
+    confirm: "Merge on the rate",
+    keep: "Keep the count",
+  } : {
+    name: "Merge on the count",
+    subject: r.name,
+    shift: ["Rate", "Count"],
+    figures: [{ value: r.limit === null ? "∞" : String(r.limit), label: "merges a day, max", tone: "warn" }, { value: pct(r.rate), label: "rate now" }],
+    rows: [
+      { k: "Merges", v: "Up to the daily cap", tone: "warn" },
+      { k: "Rate", v: "Shown, not gating" },
+    ],
+    confirm: "Merge on the count",
+    keep: "Keep the rate",
+  };
+}
+
 /** An issue source that starts a session whenever an outside issue takes its label or assignee. */
 export function issueSpawnLedger(r: { provider: "GitHub" | "Linear"; source: string; label?: string; assignee?: string }): SwitchLedger {
   return {
@@ -223,11 +258,14 @@ export function startTheseAgainLedger(r: { name?: string; cause: string; count: 
   };
 }
 
-/** A pull request merged into its base branch: one act, undone only by a revert. */
-export function prMergeLedger(r: { title: string; number: number; base: string; head?: string; headSha?: string; method: string; deleteBranch: boolean; files?: number; additions?: number; deletions?: number; checks?: string; blockedBy?: string }): SwitchLedger {
-  const alert = r.checks === "failure" ? "Checks failing" : r.blockedBy ? `GitHub: ${r.blockedBy}` : r.checks === "pending" ? "Checks still running" : undefined;
+/** A pull request merged into its base branch: one act, undone only by a revert.
+ *  `bypass` is a merge past the branch's protection, under the person's own
+ *  GitHub account: what it skips and whose name it goes out under lead the review. */
+export function prMergeLedger(r: { title: string; number: number; base: string; head?: string; headSha?: string; method: string; deleteBranch: boolean; files?: number; additions?: number; deletions?: number; checks?: string; blockedBy?: string; bypass?: { skips: string; as: string } }): SwitchLedger {
+  const alert = r.bypass ? "Bypasses branch protection"
+    : r.checks === "failure" ? "Checks failing" : r.blockedBy ? `GitHub: ${r.blockedBy}` : r.checks === "pending" ? "Checks still running" : undefined;
   return {
-    name: `Merge #${r.number}`,
+    name: r.bypass ? `Bypass and merge #${r.number}` : `Merge #${r.number}`,
     subject: r.title,
     shift: ["Open", "Merged"],
     alert,
@@ -237,6 +275,7 @@ export function prMergeLedger(r: { title: string; number: number; base: string; 
       { value: r.base, label: "lands on", tone: "warn" as const },
     ],
     rows: [
+      ...(r.bypass ? [{ k: "Skips", v: r.bypass.skips, tone: "warn" as const }, { k: "As", v: r.bypass.as }] : []),
       { k: "Method", v: r.method },
       ...(r.checks === "success" ? [{ k: "Checks", v: "Passing", tone: "ok" as const }] : []),
       ...headRow(r.headSha),
@@ -244,7 +283,7 @@ export function prMergeLedger(r: { title: string; number: number; base: string; 
       { k: "Then", v: `Deploys from ${r.base}` },
       { k: "To undo", v: "Revert PR" },
     ],
-    confirm: alert ? "Merge anyway" : `Merge into ${r.base}`,
+    confirm: r.bypass ? "Bypass and merge" : alert ? "Merge anyway" : `Merge into ${r.base}`,
     keep: "Not now",
   };
 }

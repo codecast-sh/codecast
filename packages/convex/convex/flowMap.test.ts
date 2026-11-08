@@ -4,6 +4,7 @@ import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import * as flowMap from "./flowMap";
 import { foldRollup, recountFrom } from "./flowMap";
+import { FUNNEL_DAYS } from "@codecast/shared/contracts/lineFunnel";
 import { DAY_MS, STALLED_MS, normalDay, problemOutcome, sourceState, utcDayKey, windowDays } from "@codecast/shared/contracts/flowMap";
 
 // The flow map (flowMap.ts): the hourly rollup of a workspace's sources and
@@ -112,10 +113,12 @@ describe("a source's normal day and state", () => {
 
 describe("the rollup's fold", () => {
   const days = windowDays(NOW);
-  test("a new row counts the whole window; a fresh one recounts yesterday and today", () => {
-    expect(utcDayKey(recountFrom(null, NOW))).toBe(days[0]);
-    expect(utcDayKey(recountFrom({ rolled_at: NOW - H }, NOW))).toBe(days[12]);
-    expect(utcDayKey(recountFrom({ rolled_at: NOW - 5 * DAY_MS }, NOW))).toBe(days[0]);
+  const kept = windowDays(NOW, FUNNEL_DAYS);
+  test("a new row counts the whole window; a fresh one recounts yesterday and today; one from before the funnel recounts it all", () => {
+    expect(utcDayKey(recountFrom(null, NOW))).toBe(kept[0]);
+    expect(utcDayKey(recountFrom({ rolled_at: NOW - H, funnel: {} }, NOW))).toBe(days[12]);
+    expect(utcDayKey(recountFrom({ rolled_at: NOW - 5 * DAY_MS, funnel: {} }, NOW))).toBe(kept[0]);
+    expect(utcDayKey(recountFrom({ rolled_at: NOW - H }, NOW))).toBe(kept[0]);
   });
   test("keeps the last row's older days, replaces the recounted ones, drops days outside the window", () => {
     const prev = {
@@ -123,7 +126,7 @@ describe("the rollup's fold", () => {
       reopened: [{ task_id: "tasks_old", at: NOW - 30 * DAY_MS }, { task_id: "tasks_kept", at: NOW - 3 * DAY_MS }],
     };
     const out = foldRollup({
-      workspace: WS, now: NOW, from: recountFrom({ rolled_at: NOW - H }, NOW), prev,
+      workspace: WS, now: NOW, from: recountFrom({ rolled_at: NOW - H, funnel: {} }, NOW), prev,
       counts: [{ source: "person", day: days[12], n: 2, last_at: NOW - 20 * H }, { source: "person", day: days[13], n: 1, last_at: NOW - H }],
       reopened: [{ task_id: "tasks_new", at: NOW - H }],
       outcomes: [{ source: "person", outcome: "queued" }, { source: "person", outcome: "failed" }],

@@ -18,6 +18,10 @@ import {
   WEB_SEARCH_TOOL,
   webTools,
 } from "./web";
+import { NO_TEAM_CONTENT_GATE } from "../../lib/vendorGuard";
+
+/** Deps for a turn whose content may reach Anthropic. */
+const OPEN = { gate: NO_TEAM_CONTENT_GATE };
 
 const textOf = async (t: Tool, args: unknown) => (await runTool(t, args, { callId: "c" })).content.map((c) => (c.type === "text" ? c.text : "")).join("");
 
@@ -183,7 +187,7 @@ describe("search_web", () => {
       }), { status: 200 });
     }) as typeof fetch;
     const charged: number[] = [];
-    const result = await runTool(searchWebTool(), { query: "first ferry tomorrow" }, { callId: "c", charge: (usd) => charged.push(usd) });
+    const result = await runTool(searchWebTool(OPEN), { query: "first ferry tomorrow" }, { callId: "c", charge: (usd) => charged.push(usd) });
     const out = result.content.map((c) => (c.type === "text" ? c.text : "")).join("");
     expect(sent).toMatchObject({ model: CHEAP_MODEL, tools: [WEB_SEARCH_TOOL], messages: [{ role: "user", content: "first ferry tomorrow" }] });
     expect(out).toContain("<untrusted-");
@@ -202,10 +206,19 @@ describe("search_web", () => {
       content: [{ type: "web_search_tool_result", tool_use_id: "s1", content: { type: "web_search_tool_result_error", error_code: "too_many_requests" } }],
       usage: { input_tokens: 10, output_tokens: 0 },
     }), { status: 200 })) as typeof fetch;
-    await expect(runTool(searchWebTool(), { query: "x" }, { callId: "c" })).rejects.toThrow("too_many_requests");
-    expect(webTools().map((t) => t.name)).toEqual(["fetch_page", "search_web"]);
+    await expect(runTool(searchWebTool(OPEN), { query: "x" }, { callId: "c" })).rejects.toThrow("too_many_requests");
+    expect(webTools(OPEN).map((t) => t.name)).toEqual(["fetch_page", "search_web"]);
     delete process.env.ANTHROPIC_API_KEY;
-    expect(webTools().map((t) => t.name)).toEqual(["fetch_page"]);
+    expect(webTools(OPEN).map((t) => t.name)).toEqual(["fetch_page"]);
+  });
+
+  test("a regulated team's search sends nothing while Anthropic has no BAA", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    let sent = 0;
+    globalThis.fetch = (async () => { sent++; return new Response("{}", { status: 200 }); }) as typeof fetch;
+    const regulated = { gate: { ctx: { runQuery: async () => "AI features are off for Clinic: no BAA with Anthropic yet." }, scope: { workspace: "team:clinic" } } };
+    await expect(runTool(searchWebTool(regulated), { query: "x" }, { callId: "c" })).rejects.toThrow();
+    expect(sent).toBe(0);
   });
 
   test("a search that ends before its usage is read is charged an estimate; a refused one is not", async () => {
@@ -214,13 +227,13 @@ describe("search_web", () => {
     globalThis.fetch = (async () => {
       throw new DOMException("The operation was aborted.", "AbortError");
     }) as unknown as typeof fetch;
-    await expect(runTool(searchWebTool(), { query: "x" }, { callId: "c", charge: (usd) => costs.push(usd) })).rejects.toThrow();
+    await expect(runTool(searchWebTool(OPEN), { query: "x" }, { callId: "c", charge: (usd) => costs.push(usd) })).rejects.toThrow();
     expect(costs).toEqual([SEARCH_ESTIMATE_USD()]);
     costs.length = 0;
     expect(SEARCH_ESTIMATE_USD()).toBeGreaterThan(WEB_SEARCH_TOOL.max_uses * WEB_SEARCH_PRICE_USD);
 
     globalThis.fetch = (async () => new Response("{}", { status: 429 })) as typeof fetch;
-    await expect(runTool(searchWebTool(), { query: "x" }, { callId: "c", charge: (usd) => costs.push(usd) })).rejects.toThrow("(429)");
+    await expect(runTool(searchWebTool(OPEN), { query: "x" }, { callId: "c", charge: (usd) => costs.push(usd) })).rejects.toThrow("(429)");
     // Reserved, then given back in full.
     expect(costs.reduce((a, b) => a + b, 0)).toBe(0);
   });
@@ -234,7 +247,7 @@ describe("search_web", () => {
     }) as unknown as typeof fetch;
     const costs: number[] = [];
     const context = { callId: "c", charge: (usd: number) => costs.push(usd), remainingUsd: () => SEARCH_ESTIMATE_USD() / 2 };
-    await expect(runTool(searchWebTool(), { query: "x" }, context)).rejects.toThrow("budget");
+    await expect(runTool(searchWebTool(OPEN), { query: "x" }, context)).rejects.toThrow("budget");
     expect(sent).toBe(0);
     expect(costs).toEqual([]);
   });
@@ -245,7 +258,7 @@ describe("search_web", () => {
       content: [{ type: "text", text: "Answer.", citations: [{ url: "https://src.example/a", title: "A" }] }],
       usage: { input_tokens: 10, output_tokens: 5 },
     }), { status: 200 })) as typeof fetch;
-    const search = webTools().find((t) => t.name === "search_web")!;
+    const search = webTools(OPEN).find((t) => t.name === "search_web")!;
     for (let i = 0; i < SEARCH_MAX_PER_TURN; i++) await runTool(search, { query: `q${i}` }, { callId: `c${i}` });
     await expect(runTool(search, { query: "one more" }, { callId: "c" })).rejects.toThrow(`No more than ${SEARCH_MAX_PER_TURN}`);
   });

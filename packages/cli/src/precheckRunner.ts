@@ -3,7 +3,8 @@
 // The gate exists so a trigger that should act only when something changed
 // ("has main moved?", "is the queue non-empty?") can answer that in a shell
 // command instead of spending a whole agent session on it. Exit 0 means run;
-// anything else, a timeout included, means skip this firing.
+// anything else, a timeout included, means skip this firing. The `changes` and
+// `state` modes read its stdout as well (judgeTriggerPrecheck in contracts).
 //
 // Three rules the daemon depends on:
 //   • It never blocks the loop. spawn() is asynchronous end to end, and the
@@ -21,14 +22,21 @@
 //     fires — eight of them did on 2026-09-22. agentSpawnPath() is the one
 //     list of where CLIs actually live.
 
+import { createHash } from "node:crypto";
 import { spawn } from "./proc.js";
 import {
   TRIGGER_PRECHECK_OUTPUT_CHARS,
+  TRIGGER_PRECHECK_STATE_CHARS,
   TRIGGER_PRECHECK_TIMEOUT_MS,
   type TriggerPrecheckResult,
 } from "@codecast/shared/contracts";
 import { scrubAgentEnv } from "./agentEnv.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
+
+/** What a `changes` precheck keeps of its stdout: enough to tell it changed. */
+export function precheckFingerprint(stdout: string): string {
+  return `sha256:${createHash("sha256").update(stdout).digest("hex")}`;
+}
 
 /** Grace between "stop" and "stop for real" after a timeout. */
 const SIGKILL_DELAY_MS = 2_000;
@@ -45,11 +53,16 @@ export function runTriggerPrecheck(opts: {
   command: string;
   cwd: string;
   timeoutMs?: number;
+  /** Extra environment (a `state` precheck's previous state). */
+  env?: Record<string, string>;
 }): Promise<TriggerPrecheckResult> {
   const timeoutMs = opts.timeoutMs ?? TRIGGER_PRECHECK_TIMEOUT_MS;
   const startedAt = Date.now();
   return new Promise((resolve) => {
     let output = "";
+    // Stdout alone, from the start, for the modes that read it (judgeTriggerPrecheck).
+    let stdout = "";
+    let stdoutTruncated = false;
     let timedOut = false;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -65,6 +78,8 @@ export function runTriggerPrecheck(opts: {
         timedOut,
         durationMs: Date.now() - startedAt,
         output: output || undefined,
+        stdout,
+        ...(stdoutTruncated ? { stdoutTruncated } : {}),
         ...fields,
       });
     };
@@ -77,7 +92,7 @@ export function runTriggerPrecheck(opts: {
         // Own process group, so the timeout kill reaches the whole pipeline.
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
-        env: scrubAgentEnv({ ...process.env, PATH: agentSpawnPath() }),
+        env: scrubAgentEnv({ ...process.env, PATH: agentSpawnPath(), ...opts.env }),
       });
     } catch (err) {
       settle({ error: err instanceof Error ? err.message : String(err) });
@@ -111,6 +126,8 @@ export function runTriggerPrecheck(opts: {
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
       output = appendTail(output, chunk);
+      if (stdout.length + chunk.length > TRIGGER_PRECHECK_STATE_CHARS) stdoutTruncated = true;
+      stdout = (stdout + chunk).slice(0, TRIGGER_PRECHECK_STATE_CHARS);
     });
     child.stderr?.on("data", (chunk: string) => {
       output = appendTail(output, chunk);

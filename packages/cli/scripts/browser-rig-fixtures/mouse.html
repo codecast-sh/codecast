@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mouse</title>
+<style>#target{position:absolute;left:600px;top:420px;width:120px;height:40px}</style></head>
+<body>
+<h1>Mouse</h1>
+<button id="target">Target</button>
+<p id="status">no click</p>
+<script>
+  // Records every mousemove (x, y, time) in window.__moves and the click point
+  // in window.__click, for checking how input reached the page.
+  window.__moves = [];
+  window.__click = null;
+  document.addEventListener("mousemove", (e) => window.__moves.push([e.clientX, e.clientY, Math.round(performance.now())]));
+  document.getElementById("target").addEventListener("click", (e) => {
+    window.__click = [e.clientX, e.clientY];
+    document.getElementById("status").textContent = "clicked after " + window.__moves.length + " moves";
+  });
+</script>
+</body></html>

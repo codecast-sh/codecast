@@ -643,14 +643,21 @@ export function isBootstrapPrompt(rawContent: string | null | undefined): boolea
   return BOOTSTRAP_PROMPT_RE.test(stripInjectionNoise(rawContent));
 }
 
+// A session goal's round (contracts/sessionGoal.ts): the loop's own message
+// into the session, the start, a next step or a resume.
+export function isGoalMessage(rawContent: string | null | undefined): boolean {
+  return !!rawContent && /^<codecast-goal[\s>]/.test(stripInjectionNoise(rawContent));
+}
+
 // Any user-role message delivered by machinery rather than typed by the human:
 // a cross-session `cast send` message, a subagent's report to its parent, an
 // inter-agent teammate broadcast, a scheduled-task injection, a harness task
 // notification, a team-chat mention waking the anchor, a `cast send --raw`
 // report that lost its session wrapper, or the prompt that seated a standing
-// agent, or the brief a context recovery restarted the session with.
+// agent, the brief a context recovery restarted the session with, or a
+// session goal's round.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent) || isSessionEscalationMessage(rawContent) || isRoleWakeFrame(rawContent) || isCodexApprovalReviewPrompt(rawContent) || isAgentDefinitionPrompt(rawContent) || isContextRecoveryPrompt(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent) || isSessionEscalationMessage(rawContent) || isRoleWakeFrame(rawContent) || isCodexApprovalReviewPrompt(rawContent) || isAgentDefinitionPrompt(rawContent) || isContextRecoveryPrompt(rawContent) || isGoalMessage(rawContent);
 }
 
 // The prompt Codex writes into the thread it spawns to assess an approval

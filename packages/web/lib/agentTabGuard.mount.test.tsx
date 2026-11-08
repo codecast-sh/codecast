@@ -56,6 +56,12 @@ describe("heldOption", () => {
     expect(heldOption(approval, 0, false)).toBeUndefined();
     expect(heldOption({ ...approval, category: "product" }, 0, true)).toBeUndefined();
   });
+  test("holds a --run card's Run in an agent's tab, never its Don't run", () => {
+    const run = { category: "billing", run: { argv: ["role", "authority", "@ads"], state: "waiting" }, options: [{ label: "Run" }, { label: "Don't run" }] };
+    expect(heldOption(run, 0, true)).toBe(PERSON_ONLY.approve);
+    expect(heldOption(run, 1, true)).toBeUndefined();
+    expect(heldOption(run, 0, false)).toBeUndefined();
+  });
 });
 
 describe("useAgentDrivenTab", () => {

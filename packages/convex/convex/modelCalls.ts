@@ -20,6 +20,7 @@ import { readBudget, setBudgetCap, settleBudget, takeBudget, worstCaseCost } fro
 import { recordModelSpend } from "./lib/modelSpend";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { modelCallProblem, parseJsonBlock, type BudgetPurpose, type BudgetSummary, type ModelCallResult, type ModelCallSpec } from "@codecast/shared/contracts/modelCall";
+import { vendorRefusalFor } from "./lib/vendorGuard";
 
 const purposeValidator = v.union(v.literal("judge"), v.literal("grouping"), v.literal("call"));
 
@@ -104,12 +105,16 @@ export async function withinBudget<T>(
  * anything when the cap has no room; otherwise charges what the call cost,
  * failed or not (a call that reported no usage is charged its prompt).
  */
-export async function runModelCall(ctx: { runMutation: any; scheduler: any }, scope: CallScope, purpose: BudgetPurpose, spec: ModelCallSpec, label: string, timeoutMs = 60_000): Promise<ModelCallResult> {
+export async function runModelCall(ctx: { runQuery: any; runMutation: any; scheduler: any }, scope: CallScope, purpose: BudgetPurpose, spec: ModelCallSpec, label: string, timeoutMs = 60_000): Promise<ModelCallResult> {
   const problem = modelCallProblem(spec);
   if (problem) return { ok: false, reason: "failed", error: problem, cost_usd: 0, model: spec.model };
+  // A regulated team's call is refused before its budget is touched, so it costs nothing.
+  const gate = { ctx, scope: { workspace: scope.workspace } };
+  const refusal = await vendorRefusalFor(ctx, gate.scope, "anthropic");
+  if (refusal) return { ok: false, reason: "failed", error: refusal, cost_usd: 0, model: spec.model };
   const held = worstCaseCost(spec.model, (spec.system?.length ?? 0) + spec.prompt.length, spec.max_tokens);
   const spent = await withinBudget(ctx, scope, purpose, held, async (charge): Promise<ModelCallResult> => {
-    const { reply, usage, error } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, output_schema: spec.output_schema, label, timeout_ms: timeoutMs });
+    const { reply, usage, error } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, output_schema: spec.output_schema, label, timeout_ms: timeoutMs, gate });
     const cost = modelCost(spec.model, usage ?? estimatedUsage(spec.system, spec.prompt));
     charge(cost);
     if (!reply) return { ok: false, reason: "failed", error: error ?? "the model gave no answer", cost_usd: cost, model: spec.model };

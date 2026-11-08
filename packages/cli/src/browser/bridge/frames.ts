@@ -6,6 +6,7 @@
  * shape fixed by background.js (send() is JSON.stringify of an object literal):
  *
  *   {"op":"event","tabId":7,"method":"Network.dataReceived","params":{…}}
+ *   {"op":"event","tabId":7,"session":"4F…","method":"DOM.documentUpdated","params":{…}}
  *   {"id":12,"ok":true,"result":{…}}
  *
  * so the routing fields sit in the first bytes and the payload runs to the
@@ -21,6 +22,7 @@
  */
 
 const EVENT_HEAD = Buffer.from('{"op":"event","tabId":', "latin1");
+const EVENT_SESSION = Buffer.from(',"session":"', "latin1");
 const EVENT_METHOD = Buffer.from(',"method":"', "latin1");
 const EVENT_PARAMS = Buffer.from(',"params":', "latin1");
 const REPLY_HEAD = Buffer.from('{"id":', "latin1");
@@ -53,6 +55,8 @@ export const UNRELAYED_EVENTS: ReadonlySet<string> = new Set(["Network.webSocket
 
 export interface EventFrame {
   tabId: number;
+  /** Chrome's id of the child session (a cross-origin iframe) the event came from; absent for the tab's own. */
+  session?: string;
   method: string;
   /** The event's params, still JSON bytes. */
   params: Buffer;
@@ -62,13 +66,26 @@ export interface EventFrame {
 export function readEventFrame(buf: Buffer): EventFrame | null {
   if (buf[buf.length - 1] !== CLOSE_BRACE || !holds(buf, EVENT_HEAD, 0)) return null;
   const tab = readUint(buf, EVENT_HEAD.length);
-  if (!tab || !holds(buf, EVENT_METHOD, tab.end)) return null;
-  const start = tab.end + EVENT_METHOD.length;
+  if (!tab) return null;
+  let at = tab.end;
+  let session: string | undefined;
+  if (holds(buf, EVENT_SESSION, at)) {
+    const from = at + EVENT_SESSION.length;
+    let j = from;
+    while (j < buf.length && buf[j] !== QUOTE && buf[j] !== BACKSLASH) j++;
+    if (buf[j] !== QUOTE || j === from) return null;
+    session = buf.toString("latin1", from, j);
+    at = j + 1;
+  }
+  if (!holds(buf, EVENT_METHOD, at)) return null;
+  const start = at + EVENT_METHOD.length;
   let i = start;
   // CDP method names are plain identifiers; an escape means some other shape.
   while (i < buf.length && buf[i] !== QUOTE && buf[i] !== BACKSLASH) i++;
   if (buf[i] !== QUOTE || i === start || !holds(buf, EVENT_PARAMS, i + 1)) return null;
-  return { tabId: tab.value, method: buf.toString("latin1", start, i), params: buf.subarray(i + 1 + EVENT_PARAMS.length, buf.length - 1) };
+  const frame: EventFrame = { tabId: tab.value, method: buf.toString("latin1", start, i), params: buf.subarray(i + 1 + EVENT_PARAMS.length, buf.length - 1) };
+  if (session) frame.session = session;
+  return frame;
 }
 
 /** A successful reply's id and its `result` as JSON bytes; null for anything else (errors included). */

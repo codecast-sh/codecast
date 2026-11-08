@@ -70,6 +70,7 @@ const CURRENT_USER_METADATA_FIELDS = [
   "muted_members",
   "agent_permission_modes",
   "agent_default_params",
+  "claude_backend",
 ] as const;
 
 /** Canonical v2 current-user projection shared by the endpoint and interceptor. */

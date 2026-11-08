@@ -39,6 +39,7 @@ afterEach(() => {
 async function setup(opts: { budget?: boolean } = {}) {
   const t = convexTest(schema, {
     "./_generated/server.ts": () => import("./_generated/server"),
+    "./vendorCoverage.ts": () => import("./vendorCoverage"),
     "./syncOutbox.ts": () => import("./syncOutbox"),
     "./decisionAreas.ts": () => import("./decisionAreas"),
     "./modelCalls.ts": () => import("./modelCalls"),

@@ -806,6 +806,29 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(cap.logs.some(l => l.includes("jx7hand: pinned dormant"))).toBe(true);
   }, 30000);
 
+  test("a hand that pinned done after arming a check into its own session settles", async () => {
+    // ct-74310 and ct-86290, 2026-11-07: each onefix Build armed its seven-day check (a once trigger into its own
+    // session) and pinned done with outcome watching. The inbox files a done rest with such a trigger as dormant,
+    // so the run waited on a hand that had answered.
+    const resting = { id: "conv_hand", work_state: "dormant", is_live: true, agent_status: "idle", message_count: 297 };
+    inboxReads = [{ ...resting, work_state: "working", agent_status: "working" }, resting];
+    pinned = { state: "Merged; watching from the deploy that carries it", status: "done", result: '{"outcome":"watching"}' };
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
+    // The pin read that settled it is the answer; it is not read a second time.
+    expect(calls.filter(c => c.route === "/cli/sessions/state/get").length).toBe(1);
+  }, 30000);
+
+  test("a dormant hand whose pin names a wake keeps the run waiting", async () => {
+    const resting = { id: "conv_hand", work_state: "dormant", is_live: true, agent_status: "idle", message_count: 40 };
+    const dormant = { state: "Waiting on the replay to finish", status: "dormant" };
+    inboxReads = [resting, resting];
+    pinnedReads = [dormant, dormant];
+    workState = "done";
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(3);
+  }, 30000);
+
   test("a dormant hand that is killed, or asks a person, settles", async () => {
     const dormant = { state: "waiting on the replay", status: "dormant" };
     pinned = dormant;

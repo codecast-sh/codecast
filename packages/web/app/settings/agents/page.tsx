@@ -1,15 +1,14 @@
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useState } from "react";
-import { Pin, Shield, SlidersHorizontal } from "lucide-react";
-import { AGENT_CLIENTS, AGENT_PICKER_OPTIONS, isHostedAgentType, type AgentClientId } from "@codecast/shared/contracts";
-import { useDefaultAgentType, useOnlyHostedAgent, usePinnedAgentIds } from "../../../hooks/usePinnedAgents";
+import { Pin, Shield, SlidersHorizontal, SquareTerminal } from "lucide-react";
+import { AGENT_CLIENTS, CLAUDE_BACKEND_LABELS, DEFAULT_CLAUDE_BACKEND, asClaudeBackend, isHostedAgentType, type AgentClientId, type ClaudeBackend } from "@codecast/shared/contracts";
+import { usePinnedAgentIds } from "../../../hooks/usePinnedAgents";
+import { NewSessionDefaultsSection } from "../../../components/settings/NewSessionDefaults";
 import { AgentTypeIcon } from "../../../components/AgentTypeIcon";
-import { hasNoMachine } from "../../../lib/defaultAgent";
 import { Switch } from "../../../components/ui/switch";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
-import { SelectBox } from "../../../components/ui/select-box";
 import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
 import { SwitchReview } from "../../../components/consequential/ConsequentialSwitch";
@@ -76,7 +75,9 @@ export default function AgentsPage() {
 
   return (
     <SettingsPanel>
+      <NewSessionDefaultsSection />
       <PinnedAgentsSection />
+      <ClaudeBackendSection current={asClaudeBackend(user?.claude_backend) ?? DEFAULT_CLAUDE_BACKEND} />
 
       <SettingsSection
         title="Permissions"
@@ -167,7 +168,6 @@ function PinnedAgentsSection() {
       icon={Pin}
       description="The agents offered when you start, switch, fork or hand off a session. Unpinned agents stay available from the CLI."
     >
-      <DefaultAgentRow />
       {clients.map((d) => {
         const on = pinned.includes(d.id);
         // Switch, fork and hand-off offer local agents only, so the last
@@ -187,31 +187,24 @@ function PinnedAgentsSection() {
   );
 }
 
-/** The agent a new conversation starts with (client_state.ui.default_agent,
- *  read through lib/defaultAgent). An account with no machine always starts
- *  the hosted assistant, so the row says so instead. */
-function DefaultAgentRow() {
-  const current = useDefaultAgentType();
-  const forced = useOnlyHostedAgent();
-  // Named by the cause the reader is actually in: with no machine there is a
-  // way out to say; in the calm lane there is nothing to fix.
-  const noMachine = useInboxStore(hasNoMachine);
+const claudeBackendOptions: { value: ClaudeBackend; description: string }[] = [
+  { value: "sdk", description: "No pane; prompts and status come from Claude itself" },
+  { value: "tmux", description: "A tmux pane you can watch and attach to" },
+];
+
+/** Where new Claude sessions run. A running session switches from its header. */
+export function ClaudeBackendSection({ current }: { current: ClaudeBackend }) {
   return (
-    <SettingsRow
-      label="Default agent"
-      description={forced ? (noMachine ? "New conversations start with the Codecast assistant. Connect a computer to choose another agent." : "New conversations start with the Codecast assistant.") : "New conversations start with this agent unless the one on screen runs another."}
-    >
-      <SelectBox
-        value={current}
-        disabled={forced}
-        onChange={(e) => useInboxStore.getState().updateClientUI({ default_agent: e.target.value })}
-        aria-label="Default agent"
-      >
-        {AGENT_PICKER_OPTIONS.map((o) => (
-          <option key={o.id} value={o.convexType}>{o.label}</option>
-        ))}
-      </SelectBox>
-    </SettingsRow>
+    <SettingsSection title="Claude sessions run in" icon={SquareTerminal} description="For new sessions. A running session switches from its header.">
+      <div className="px-4 py-3.5 sm:px-5" data-claude-backend-setting>
+        <SettingsOptionGroup
+          label="Claude sessions run in"
+          value={current}
+          onChange={(v) => useInboxStore.getState().setClaudeBackend(v as ClaudeBackend)}
+          options={claudeBackendOptions.map((o) => ({ value: o.value, label: CLAUDE_BACKEND_LABELS[o.value], description: o.description }))}
+        />
+      </div>
+    </SettingsSection>
   );
 }
 

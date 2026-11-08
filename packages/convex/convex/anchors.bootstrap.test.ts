@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { bootstrapMessage } from "./anchors";
+import { SAY_GUIDANCE } from "./lib/anchorBootstrap";
 import { isBootstrapPrompt } from "@codecast/shared/contracts";
 
 // A role's opening message (org-roles-standing.md T1): who it is and whom it
 // reports to, what it looks after, how it wakes, that its sessions stay out of the
-// person's inbox, that the person reads only its last message of each turn,
+// person's inbox, that the person reads only what it says with `cast say`,
 // and that its brief is its memory, in under 300 plain words.
 const opening = (startsOnItsOwn: boolean) => bootstrapMessage({
   name: "Calling", scopeType: "team", scopeLabel: "the Union workspace", teamName: "Union",
@@ -28,7 +29,7 @@ describe("a role's opening message", () => {
     expect(m).toContain("`cast spawn --subagent`");
     expect(opening(false)).toContain("You do not start work on your own");
     expect(opening(false)).not.toContain("`cast spawn --subagent`");
-    expect(m).toContain("The person sees only your last message of each turn, so make it stand on its own");
+    expect(m).toContain(SAY_GUIDANCE);
     // The decision it presents is answered from the record (decisionDiscussion.ts).
     expect(m).toContain("A person may ask you about a decision you present");
     expect(m.split(/\s+/).length).toBeLessThan(440);
@@ -63,7 +64,7 @@ describe("a role's opening message", () => {
   test("an assistant's is the right hand's, built from its reach (org-staffing.md S30)", () => {
     const m = bootstrapMessage({ name: "Executive Assistant", scopeType: "user", scopeLabel: "personal", ownerName: "Ashot", role: { handle: "executive-assistant", scopeNames: [], parentName: "Ashot", startsOnItsOwn: true, assistantOpening: "You are Ada, Ashot's Executive Assistant for everything Ashot works on." } });
     expect(m.startsWith("You are Ada, Ashot's Executive Assistant")).toBe(true);
-    expect(m).toContain("Read `cast brief` now, post a one-line hello, then stand by.");
+    expect(m).toContain("Read `cast brief` now, say a one-line hello, then stand by.");
     expect(m).toContain("Start every turn with `cast brief`");
     expect(isBootstrapPrompt(m)).toBe(true);
   });

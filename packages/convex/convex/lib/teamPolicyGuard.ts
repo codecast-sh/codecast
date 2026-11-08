@@ -17,13 +17,12 @@ import {
   policyBlocks,
   policyTeamOf,
   type HeartbeatTeamPolicy,
+  type RestrictionKey,
   type TeamPolicy,
-  type TeamPolicyKey,
 } from "@codecast/shared/contracts";
 import { parseWorkspaceKey } from "./accessKeys";
 
 type DbCtx = { db: any };
-type RestrictionKey = Extract<TeamPolicyKey, `${string}_disabled`>;
 
 /** A live team's stored policy, parsed; null for a missing or deleted team. */
 export async function teamPolicyOf(
@@ -138,6 +137,15 @@ export async function teamPolicyBlocker(
     if (p && policyBlocks(p.policy, key)) return { team_id: p.team_id, team_name: p.team_name };
   }
   return null;
+}
+
+/**
+ * The team that marks this request's data as regulated health data (HIPAA),
+ * or null. Every chokepoint that sends transcript content out (analytics, LLM
+ * providers, publishing, Slack, calls) asks here, so the rule has one home.
+ */
+export function regulatedTeamFor(ctx: DbCtx, scope: PolicyScope): Promise<{ team_id: Id<"teams">; team_name: string } | null> {
+  return teamPolicyBlocker(ctx, scope, "regulated_data");
 }
 
 /** The refusal for `key` under this scope, or null when the request may proceed. */

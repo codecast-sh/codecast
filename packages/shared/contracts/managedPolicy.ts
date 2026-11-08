@@ -31,6 +31,8 @@ export type TeamPolicyKey =
   | "browser_control_disabled"
   | "computer_control_disabled"
   | "cloud_hosts_disabled"
+  | "regulated_data"
+  | "slack_baa_confirmed"
   | "auto_update"
   | "excluded_paths";
 
@@ -38,6 +40,9 @@ export type TeamPolicyKey =
 export type DevicePolicyKey = "web_url" | "convex_url" | "enrollment_token" | "user_email";
 
 export type ManagedPolicyKey = TeamPolicyKey | DevicePolicyKey;
+
+/** The on/off keys: on when any layer turns them on (mergePolicies). */
+export type RestrictionKey = Extract<TeamPolicyKey, `${string}_disabled` | "regulated_data" | "slack_baa_confirmed">;
 
 export interface TeamPolicy {
   /** No published pages and no public share links. */
@@ -48,6 +53,18 @@ export interface TeamPolicy {
   computer_control_disabled?: boolean;
   /** No cloud hosts: no --cloud sessions, no cloud mirror. */
   cloud_hosts_disabled?: boolean;
+  /**
+   * The workspace holds protected health information under a BAA (HIPAA).
+   * Its transcripts reach only vendors covered by a BAA and surfaces gated to
+   * its members; each feature's chokepoint reads this one flag.
+   */
+  regulated_data?: boolean;
+  /**
+   * A team admin's record that the team's Slack plan is covered by a BAA. Until
+   * it is on, a regulated team's Slack posts carry a neutral line and a link
+   * back, never transcript text (convex lib/slackSend.ts).
+   */
+  slack_baa_confirmed?: boolean;
   /** Force the CLI's and the desktop app's own updates on or off. Unset leaves it to the person. */
   auto_update?: "on" | "off";
   /** Folders whose sessions never leave the device. `~` expands per user. */
@@ -78,6 +95,8 @@ export interface ManagedPolicyDescriptor {
   subject?: string;
   /** For a restriction: the agent feature (snippet slug) it holds off on a device. */
   feature?: string;
+  /** A switch that only means something while another one is on; settings show it only then. */
+  requires?: TeamPolicyKey;
 }
 
 export const MANAGED_POLICY: ManagedPolicyDescriptor[] = [
@@ -85,6 +104,8 @@ export const MANAGED_POLICY: ManagedPolicyDescriptor[] = [
   { key: "browser_control_disabled", profileKey: "BrowserControlDisabled", kind: "restriction", team: true, name: "Block agent browser control", subject: "Agent browser control", feature: "browser" },
   { key: "computer_control_disabled", profileKey: "ComputerControlDisabled", kind: "restriction", team: true, name: "Block agent desktop control", subject: "Agent desktop control", feature: "computer" },
   { key: "cloud_hosts_disabled", profileKey: "CloudHostsDisabled", kind: "restriction", team: true, name: "Block cloud hosts", subject: "Cloud hosting" },
+  { key: "regulated_data", profileKey: "RegulatedData", kind: "restriction", team: true, name: "Regulated health data (HIPAA)" },
+  { key: "slack_baa_confirmed", profileKey: "SlackBAAConfirmed", kind: "restriction", team: true, name: "Slack plan covered by our BAA", requires: "regulated_data" },
   { key: "auto_update", profileKey: "AutoUpdate", kind: "choice", team: true, name: "Automatic updates" },
   { key: "excluded_paths", profileKey: "ExcludedPaths", kind: "paths", team: true, name: "Never sync these folders" },
   { key: "web_url", profileKey: "WebURL", kind: "string", team: false, name: "Web URL" },
@@ -225,8 +246,14 @@ export function policyTeamOf(table: string, row: any): string | null {
 }
 
 /** Is a restriction on? */
-export function policyBlocks(policy: TeamPolicy | null | undefined, key: Extract<TeamPolicyKey, `${string}_disabled`>): boolean {
+export function policyBlocks(policy: TeamPolicy | null | undefined, key: RestrictionKey): boolean {
   return policy?.[key] === true;
+}
+
+/** Whether any of a viewer's teams holds regulated health data; null while the list is empty or not yet fed. */
+export function teamsHoldRegulatedData(teams: ReadonlyArray<{ policy?: unknown } | null | undefined> | null | undefined): boolean | null {
+  if (!teams?.length) return null;
+  return teams.some((t) => !!t && parseTeamPolicy(t.policy).regulated_data === true);
 }
 
 /** The words a refused action shows, on the CLI and the web alike. */

@@ -83,3 +83,22 @@ test("a new line scrolls the card's messages to the bottom, even once the card h
   expect(leave).toHaveBeenCalledTimes(3);
   host.remove();
 });
+
+test("lines an agent typed into the DM stay out of the card, on either side", async () => {
+  const now = Date.now();
+  useInboxStore.setState({ currentUser: { _id: ME, name: "Me" }, chatReads: {} } as any);
+  useInboxStore.setState({
+    chatChannels: { [DM]: { _id: DM, kind: "dm", dm_key: dmKeyFor(activeTeamIdOf(useInboxStore.getState()) ?? "", [ME, ANN]) } },
+    chatMessages: {
+      a: { _id: "a", channel_id: DM, user_id: ANN, content: "from ann", created_at: now - 3000 },
+      b: { _id: "b", channel_id: DM, user_id: ME, content: "my session's status", origin: "agent", origin_session_id: "s1", created_at: now - 2000 },
+      c: { _id: "c", channel_id: DM, user_id: ANN, content: "ann's session's status", origin: "agent", origin_session_id: "s2", created_at: now - 1500 },
+      d: { _id: "d", channel_id: DM, user_id: ME, content: "from me", created_at: now - 1000 },
+    },
+  } as any);
+  const host = dom.window.document.body.appendChild(dom.window.document.createElement("div"));
+  root = createRoot(host);
+  await act(async () => root!.render(<FaceMessages memberId={ANN} name="Ann" focus={false} onLeave={() => {}} />));
+  expect(Array.from(host.querySelectorAll(".fc-text")).map((n) => n.textContent)).toEqual(["from ann", "from me"]);
+  host.remove();
+});

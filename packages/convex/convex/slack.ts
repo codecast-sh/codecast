@@ -9,6 +9,8 @@ import { installationForTeam } from "./lib/slackOutbound";
 import { tokenHasScope } from "./lib/slackMirror";
 import { signStateWith, verifyStateWith } from "./lib/hmac";
 import { webOrigins } from "./lib/siteUrl";
+import { teamPolicyOf } from "./lib/teamPolicyGuard";
+import { slackMayCarryContent, slackSend } from "./lib/slackSend";
 
 // The Slack adapter. Workspaces connect via the "Add to Slack" OAuth flow, which
 // stores a per-workspace bot token in `slack_installations` (replacing the single
@@ -719,11 +721,17 @@ export const sweepSlackEvents = internalMutation({
 
 // ── Outbound (post-back) ────────────────────────────────────────────────────
 
+// Whether this team's Slack posts may carry transcript content (lib/slackSend).
+export const slackMayCarryContentFor = internalQuery({
+  args: { team_id: v.id("teams") },
+  handler: async (ctx, args): Promise<boolean> => slackMayCarryContent((await teamPolicyOf(ctx, args.team_id))?.policy),
+});
+
 // resolvePostContext — authorize the caller for the channel and hand back the
 // workspace's bot token (internal; the postMessage action can't read the db).
 export const resolvePostContext = internalQuery({
   args: { api_token: v.optional(v.string()), channel: v.string() },
-  handler: async (ctx, args): Promise<{ ok: boolean; bot_token?: string }> => {
+  handler: async (ctx, args): Promise<{ ok: boolean; bot_token?: string; team_id?: Id<"teams"> }> => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return { ok: false };
     const row = await channelRow(ctx, args.channel);
@@ -732,7 +740,7 @@ export const resolvePostContext = internalQuery({
     if (!anchor || anchor.status === "decommissioned") return { ok: false };
     if (!(await userCanAccessAnchor(ctx, userId, anchor))) return { ok: false };
     const install = await installationForAnchor(ctx, anchor);
-    return { ok: true, bot_token: install?.bot_token };
+    return { ok: true, bot_token: install?.bot_token, team_id: anchor.team_id };
   },
 });
 
@@ -755,12 +763,9 @@ export const postMessage = action({
     // be a confused deputy (post to the wrong workspace). Require the installation.
     const token = pc.bot_token;
     if (!token) return { ok: false, error: "Slack is not connected for this workspace's agent: reconnect Slack" };
-    const resp = await fetch("https://slack.com/api/chat.postMessage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json; charset=utf-8", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ channel: args.channel, thread_ts: args.thread_ts, text: args.text }),
+    const data = await slackSend(ctx, { team_id: pc.team_id, open_url: `${webBaseUrl()}/anchor` }, token, "chat.postMessage", {
+      channel: args.channel, thread_ts: args.thread_ts, text: args.text,
     });
-    const data = (await resp.json()) as { ok: boolean; error?: string };
     return { ok: data.ok, error: data.error };
   },
 });

@@ -27,13 +27,13 @@ import {
   type ManagedPolicyKey,
   type PolicyLayer,
   type PolicySource,
-  type TeamPolicyKey,
+  type RestrictionKey,
 } from "@codecast/shared/contracts/managedPolicy";
 import { folderCovers } from "@codecast/shared/team/folderLists";
 import type { Config } from "./types.js";
 import { defaultConfigDir } from "./configDir.js";
 
-export type RestrictionKey = Extract<TeamPolicyKey, `${string}_disabled`>;
+export type { RestrictionKey };
 
 /** Points the resolver at one profile file instead of the system paths (tests, a dry run). A .json file is read as JSON, anything else through plutil. */
 export const MANAGED_PREFS_ENV = "CODECAST_MANAGED_PREFS";
