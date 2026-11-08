@@ -14,6 +14,9 @@
  * machine to release its copy.
  */
 
+import * as fs from "node:fs";
+import { deviceId } from "./remote/device.js";
+
 export interface ResumeOwnershipDeps {
   thisDeviceId: string;
   /** The conversation's current owner device, or null when it has none. Throws on a failed lookup. */
@@ -65,4 +68,34 @@ function errorText(err: unknown): string {
   // Convex wraps server errors as "[Request ID: …] Server Error\nUncaught Error: <message>\n    at …".
   const uncaught = raw.match(/Uncaught Error:\s*([^\n]+)/);
   return (uncaught ? uncaught[1] : raw.split("\n")[0]).trim();
+}
+
+/** Adopt the conversation for a foreground launch about to run in `projectPath`
+ *  (or this directory, when that path is not on this machine), and say what happened. */
+export async function adoptForForegroundResume(conversationId: string, projectPath?: string | null): Promise<void> {
+  const cwd = projectPath && fs.existsSync(projectPath) ? projectPath : process.cwd();
+  let result: ResumeOwnershipResult;
+  try {
+    const { convexClient } = await import("./remote/convexClient.js");
+    const { client, token, api } = await convexClient({ timeoutMs: 10_000 });
+    result = await adoptConversationForResume({
+      thisDeviceId: deviceId(),
+      getOwnerDeviceId: async () => {
+        const info = await client.query(api.devices.getConversationOwner, { api_token: token, conversation_id: conversationId });
+        if (!info) throw new Error("conversation not found");
+        return info.owner_device_id ?? null;
+      },
+      moveHere: (path) => client.mutation(api.devices.moveSessionToDevice, {
+        api_token: token,
+        conversation_id: conversationId,
+        owner_device_id: deviceId(),
+        project_path: path,
+        resume: false,
+      }),
+    }, cwd);
+  } catch (err) {
+    result = { kind: "failed", error: errorText(err) };
+  }
+  const line = describeResumeOwnership(result, conversationId);
+  if (line) console.log(result.kind === "failed" ? `! ${line}` : line);
 }
