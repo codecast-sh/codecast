@@ -32,6 +32,7 @@ const ERROR_TEXT: Record<string, string> = {
   too_large: 'too large to attach',
   missing: 'the file was gone when this synced',
   upload_failed: 'the upload did not go through',
+  unreadable: 'the file could not be read',
 };
 
 function FileCard({ file }: { file: SentFileData }) {

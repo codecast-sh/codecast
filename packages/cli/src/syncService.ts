@@ -84,6 +84,23 @@ const ADD_MESSAGES_BATCH_SIZE = 25;
 // syncing. Time-box each network leg so a stuck upload degrades to null (the caller
 // then inlines small images or drops oversized ones) instead of freezing the session.
 const UPLOAD_IMAGE_TIMEOUT_MS = 30_000;
+// A file an agent names (a SendUserFile, a screenshot, a linked image) is read
+// inside its transcript's sync pass, and the pass holds that transcript's lock
+// until the read returns. macOS can hold the read for as long as a privacy
+// prompt waits on the person (a launchd daemon reading ~/Desktop), and nothing
+// else bounds it: on 2026-11-05 one SendUserFile from ~/Desktop held a
+// transcript's lock for 2h56m, and every later pass spent its 60s waiting for
+// it. Each local call gets this long, and a path whose call never returned is
+// not asked again until it does, so a stuck path holds one I/O thread at most.
+const LOCAL_FILE_IO_TIMEOUT_MS = 10_000;
+
+/** A local file call that did not return in time, or a path whose earlier call still has not. */
+export class LocalFileUnreadable extends Error {
+  constructor(path: string, why: string) {
+    super(`${path}: ${why}`);
+    this.name = "LocalFileUnreadable";
+  }
+}
 
 export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -432,6 +449,9 @@ export class SyncService {
   // Per-network-leg deadline for image uploads. A field (not the bare constant)
   // only so tests can shorten it; production always uses UPLOAD_IMAGE_TIMEOUT_MS.
   private imageUploadTimeoutMs = UPLOAD_IMAGE_TIMEOUT_MS;
+  // Same, for each local file call (LOCAL_FILE_IO_TIMEOUT_MS).
+  private localFileIoTimeoutMs = LOCAL_FILE_IO_TIMEOUT_MS;
+  private stuckLocalPaths = new Set<string>();
   // App-server progress is re-materialized after every item, so the same local
   // path can be seen repeatedly during one turn. Reuse its storage object while
   // the file's size/mtime are unchanged. Shared by images and sent files: the
@@ -784,6 +804,23 @@ export class SyncService {
     }
   }
 
+  /** One stat or read of a file an agent named, bounded (LOCAL_FILE_IO_TIMEOUT_MS). */
+  private async localFileIo<T>(path: string, io: (path: string) => Promise<T>): Promise<T> {
+    if (this.stuckLocalPaths.has(path)) throw new LocalFileUnreadable(path, "an earlier read has not returned");
+    let settled = false;
+    const call = io(path).finally(() => {
+      settled = true;
+      this.stuckLocalPaths.delete(path);
+    });
+    try {
+      return await withTimeout(call, this.localFileIoTimeoutMs, path);
+    } catch (err) {
+      if (settled) throw err;
+      this.stuckLocalPaths.add(path);
+      throw new LocalFileUnreadable(path, `no answer in ${this.localFileIoTimeoutMs}ms`);
+    }
+  }
+
   /**
    * Upload sent files to storage, in place, before the messages enter the send
    * path or the retry queue — the same treatment images get, for the same
@@ -803,7 +840,7 @@ export class SyncService {
       const mediaType = file.mediaType || mediaTypeForFile(name);
       if (!file.localPath) return { ...file, name, mediaType, error: "missing" };
       try {
-        const fileStat = await stat(file.localPath);
+        const fileStat = await this.localFileIo(file.localPath, (p) => stat(p));
         if (!fileStat.isFile()) return { ...file, name, mediaType, error: "missing" };
         if (fileStat.size > MAX_USER_FILE_SIZE) {
           return { ...file, name, mediaType, size: fileStat.size, error: "too_large" };
@@ -812,7 +849,7 @@ export class SyncService {
         if (cached && cached.size === fileStat.size && cached.mtimeMs === fileStat.mtimeMs) {
           return { ...file, name, mediaType: cached.mediaType, size: fileStat.size, storageId: cached.storageId };
         }
-        const bytes = await readFile(file.localPath);
+        const bytes = await this.localFileIo(file.localPath, (p) => readFile(p));
         const storageId = await uploads.run(() => this.uploadBytes(bytes, mediaType, "Sent file"));
         if (!storageId) return { ...file, name, mediaType, size: fileStat.size, error: "upload_failed" };
         this.localUploads.set(file.localPath, {
@@ -824,7 +861,7 @@ export class SyncService {
         return { ...file, name, mediaType, size: fileStat.size, storageId };
       } catch (err) {
         console.warn(`[SyncService] Failed to read sent file ${file.localPath}: ${err instanceof Error ? err.message : String(err)}`);
-        return { ...file, name, mediaType, error: "missing" };
+        return { ...file, name, mediaType, error: err instanceof LocalFileUnreadable ? "unreadable" : "missing" };
       }
     };
 
@@ -866,7 +903,7 @@ export class SyncService {
       let localFile: { path: string; size: number; mtimeMs: number } | undefined;
       if (img.localPath) {
         try {
-          const fileStat = await stat(img.localPath);
+          const fileStat = await this.localFileIo(img.localPath, (p) => stat(p));
           if (!fileStat.isFile()) {
             console.warn(`[SyncService] Local image is not a file: ${img.localPath}`);
             return null;
@@ -883,7 +920,7 @@ export class SyncService {
               toolUseId: img.toolUseId,
             };
           }
-          const bytes = await readFile(img.localPath);
+          const bytes = await this.localFileIo(img.localPath, (p) => readFile(p));
           const detectedMediaType = detectImageMediaType(bytes);
           if (!detectedMediaType) {
             console.warn(`[SyncService] Local image has an unsupported or invalid payload: ${img.localPath}`);
@@ -1007,7 +1044,7 @@ export class SyncService {
     const absPath = rawPath.startsWith("~/") ? nodePath.join(os.homedir(), rawPath.slice(2)) : rawPath;
     let bytes: Buffer;
     try {
-      bytes = await readFile(absPath);
+      bytes = await this.localFileIo(absPath, (p) => readFile(p));
     } catch {
       // Temp screenshots get cleaned up; if this exact path uploaded before,
       // its last-known URL still points at the same picture.

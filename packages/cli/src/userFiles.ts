@@ -39,7 +39,7 @@ export type SyncFile = {
   caption?: string;
   /** "render" (preview inline) or "attach" (save and open elsewhere). */
   display?: string;
-  /** Why there is nothing to download: "missing" | "too_large" | "upload_failed". */
+  /** Why there is nothing to download: "missing" | "too_large" | "unreadable" | "upload_failed". */
   error?: string;
 };
 

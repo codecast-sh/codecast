@@ -63,38 +63,37 @@ test('actual ingest client applies one budget to pages, local reads, fallback an
     closeDaemonWorkers();fs.rmSync(dir,{recursive:true,force:true});
   }
 });
-test('expired reservations never release a held continuation into successor state',async()=>{
-  let release!:()=>void,settled=false,position=0;
+// 2026-11-05: a pass hung on a local file read for 2h56m kept its transcript's
+// lock, so every later pass spent its budget waiting and failed with "ingest
+// transaction deadline". The lock now ends with the pass's deadline; the hung
+// work keeps its expired deadline, so whatever it does on waking cannot commit.
+test('a pass hung past its deadline releases the lock, and cannot commit when it wakes',async()=>{
+  let release!:()=>void,oldDone!:()=>void,position=0;
   const blocked=new Promise<void>(resolve=>{release=resolve;});
+  const oldSettled=new Promise<void>(resolve=>{oldDone=resolve;});
   const order:string[]=[];
   const first=serializeTranscript('held-session',()=>serializeTranscript('held-file',async()=>{
-    await blocked;order.push('old resumed');checkTranscriptDeadline();position++;
-  }),{timeoutMs:5}).then(()=>{settled=true;return null;},error=>{settled=true;return error;});
-  const expired=serializeTranscript('held-session',async()=>{order.push('expired ran');},{timeoutMs:5}).catch(error=>error);
-  await new Promise(resolve=>setTimeout(resolve,20));
-  expect(await expired).toBeInstanceOf(IngestDeadlineExceeded);
-  expect(settled).toBe(false);
-  let successorRan=false;
-  const next=serializeTranscript('held-session',async()=>{successorRan=true;order.push('new ran');position++;});
-  await new Promise(resolve=>setImmediate(resolve));expect(successorRan).toBe(false);
-  release();expect(await first).toBeInstanceOf(IngestDeadlineExceeded);await next;
-  expect(order).toEqual(['old resumed','new ran']);expect(position).toBe(1);
+    try { await blocked;order.push('old resumed');checkTranscriptDeadline();position++; } finally { oldDone(); }
+  }),{timeoutMs:50}).catch(error=>error);
+  expect(await first).toBeInstanceOf(IngestDeadlineExceeded);
+  const next=await serializeTranscript('held-session',()=>serializeTranscript('held-file',async()=>{order.push('new ran');position++;return 'synced';}));
+  expect(next).toBe('synced');
+  release();await oldSettled;
+  expect(order).toEqual(['new ran','old resumed']);
+  expect(position).toBe(1);
 });
-test('expired waiters retain their bounded barrier until the active owner settles',async()=>{
+test('waiters that give up free their slots while the pass ahead is still hung',async()=>{
   let release!:()=>void,owning!:()=>void;
   const blocked=new Promise<void>(resolve=>{release=resolve;});
   const owned=new Promise<void>(resolve=>{owning=resolve;});
-  const expire=new AbortController();
-  const results=[];
-  for(let i=0;i<MAX_QUEUE+MAX_INFLIGHT;i++) results.push(serializeTranscript('capacity-owner',()=>serializeTranscript('capacity-file',async()=>{owning();await blocked;checkTranscriptDeadline();}),{signal:expire.signal}).catch(error=>error));
+  const holder=serializeTranscript('stuck-owner',async()=>{owning();await blocked;});
   await owned;
-  expire.abort(new IngestDeadlineExceeded('expired'));
-  await Promise.all(results.slice(1));
-  await expect(serializeTranscript('unrelated-owner',async()=>{})).rejects.toThrow('capacity');
-  release();const errors=await Promise.all(results);
-  expect(errors.every(error=>error instanceof IngestDeadlineExceeded)).toBe(true);
-  await new Promise(resolve=>setImmediate(resolve));
+  const waiters=Array.from({length:MAX_QUEUE+MAX_INFLIGHT-1},()=>serializeTranscript('stuck-owner',async()=>'ran',{timeoutMs:30}).catch(error=>error));
+  const gaveUp=await Promise.all(waiters);
+  expect(gaveUp.every(error=>error instanceof IngestDeadlineExceeded)).toBe(true);
   await expect(serializeTranscript('unrelated-owner',async()=>42)).resolves.toBe(42);
+  release();await holder;
+  await expect(serializeTranscript('stuck-owner',async()=>'after')).resolves.toBe('after');
 });
 test('a sweep refused for capacity syncs its transcript once a reservation frees, instead of skipping it',async()=>{
   let release!:()=>void;
