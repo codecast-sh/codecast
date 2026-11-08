@@ -3,7 +3,7 @@
 // what that account can do (switch to it, sign in again). Signing in finishes
 // here on the phone (SignInSteps, CodexSignIn); the machine opens nothing.
 import { useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
+import { ActivityIndicator, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -15,7 +15,7 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { Text as RNText } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { SettingsGroup, SettingsScroll } from '@/components/settings/SettingsUI';
-import { showActionSheet } from '@/lib/actionSheet';
+import { appAlert, showActionSheet } from '@/lib/popups';
 import { SignInSteps } from '@/components/accounts/SignInSteps';
 import { CodexSignIn } from '@/components/accounts/CodexSignIn';
 import { loginFlowPhase, useAccountDevices, useClaudeSignIn, type AccountDevice } from '@/components/accounts/claudeSignIn';
@@ -62,7 +62,7 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
       await signIn.start(device.device_id, profile, loginFlowPhase(device.login_flow, Date.now(), profile) !== 'idle');
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (err) {
-      Alert.alert('Could not start the sign-in', err instanceof Error ? err.message : undefined);
+      appAlert('Could not start the sign-in', err instanceof Error ? err.message : undefined);
     }
   };
 
@@ -87,7 +87,7 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
       items.push({ label: 'Sign in again', onPress: () => void startSignIn(current && !p.login_expired_at ? undefined : p.name) });
     }
     if (items.length === 0) {
-      Alert.alert(p.name, blocked?.label ?? `${machine} is offline.`);
+      appAlert(p.name, blocked?.label ?? `${machine} is offline.`);
       return;
     }
     showActionSheet(p.email ?? p.name, items);

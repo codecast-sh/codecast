@@ -7,7 +7,7 @@
 // conversation's batch, and the send (this card's, or the composer's)
 // applies the acceptances and tells the agent the rest in words.
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { Text, TextInput } from '@/components/Themed';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
@@ -27,6 +27,7 @@ import {
 import { ORG_REPLY_WORDS, isOrgChangeApprovable, type OrgReplyVerdict } from '@codecast/shared/contracts/orgProposal';
 import type { ChangeField } from '@codecast/shared/contracts/orgChangeWords';
 import type { OrgProposalChange, OrgProposalListRow } from '@codecast/web/components/org/orgStaffingTypes';
+import { appAlert } from '@/lib/popups';
 
 /** The conversation whose send carries a proposal's answers, and whether this
  *  viewer can send there. Absent (a share, a chat room): cards read only. */
@@ -44,7 +45,7 @@ function useHireConfirm(): HireReview {
   const host = useInboxStore((s) => (s.currentUser as { name?: string } | null)?.name ?? 'The approver');
   return (roles, go) => {
     const l = newRolesLedger(roles, host);
-    Alert.alert(l.name, ledgerLines(l).join('\n'), [{ text: l.keep ?? 'Not yet', style: 'cancel' }, { text: l.confirm, onPress: go }]);
+    appAlert(l.name, ledgerLines(l).join('\n'), [{ text: l.keep ?? 'Not yet', style: 'cancel' }, { text: l.confirm, onPress: go }]);
   };
 }
 
