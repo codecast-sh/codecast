@@ -29,9 +29,14 @@ export function cliErrorReply(error: unknown, path: string): { status: number; b
   const refused = argumentValidationProblem(msg);
   if (refused !== null) {
     console.warn(`${path}: arguments refused: ${refused}`);
+    // Only a field one side has and the other lacks says cast and the server
+    // are different versions; a value of the wrong shape is this call's own.
+    const versions = /extra field|missing the required field/i.test(refused)
+      ? ": update cast with `cast update`, or this server is behind your cast"
+      : "";
     return {
       status: CLI_ERROR_STATUS.INVALID,
-      body: { code: "INVALID", error: `The server did not accept this request (${refused || "its arguments do not match"}): update cast with \`cast update\`, or this server is behind your cast` },
+      body: { code: "INVALID", error: `The server did not accept this request (${refused || "its arguments do not match"})${versions}` },
     };
   }
   return { status: msg.includes("Unauthorized") ? 401 : 500, body: { error: msg } };
