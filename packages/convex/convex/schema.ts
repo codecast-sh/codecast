@@ -1212,6 +1212,11 @@ export default defineSchema({
       files: v.optional(v.array(v.string())),
       reason: v.optional(v.string()),
     })),
+    // A rewind of this session's checkout staged by "Rewind to here"
+    // (cli/src/rewindTree.ts), as the daemon that holds it reported it: the
+    // header's Put back chip in every window reads this. Null once put back
+    // or kept.
+    rewind_staged: v.optional(v.union(v.null(), v.object({ id: v.string(), files: v.number(), staged_at: v.number(), at: v.number() }))),
     workflow_run_id: v.optional(v.id("workflow_runs")),
     is_workflow_sub: v.optional(v.boolean()),
     is_workflow_primary: v.optional(v.boolean()),
@@ -3504,6 +3509,8 @@ export default defineSchema({
     timestamp: v.number(),
   })
     .index("by_conversation_id", ["conversation_id"])
+    // "Rewind to here" reads one conversation's changes after a moment (treeSnapshots.editedPaths).
+    .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
     .index("by_conversation_change_key", ["conversation_id", "change_key"])
     // cast blame: resolve a git SHA to the session that committed it. Stored
     // hashes are short (parsed from `[branch abc1234]` output), so lookups
@@ -3774,7 +3781,7 @@ export default defineSchema({
     checkout_key: v.string(),
     device_id: v.optional(v.string()),
     /** Why the snapshot was taken: a lead turn ended, or the periodic sweep ran. */
-    source: v.union(v.literal("turn"), v.literal("sweep")),
+    source: v.union(v.literal("turn"), v.literal("sweep"), v.literal("prompt")),
     taken_at: v.number(),
     /** The Stop hook's turn_completed_at for a turn snapshot, in ms. */
     turn_completed_at: v.optional(v.number()),
