@@ -84,6 +84,8 @@ import type * as changesWeek from "../changesWeek.js";
 import type * as chat from "../chat.js";
 import type * as chatAccess from "../chatAccess.js";
 import type * as chatAgents from "../chatAgents.js";
+import type * as chatExcerpt from "../chatExcerpt.js";
+import type * as chatRounds from "../chatRounds.js";
 import type * as chatSessionReplies from "../chatSessionReplies.js";
 import type * as chatText from "../chatText.js";
 import type * as chatTyping from "../chatTyping.js";
@@ -244,6 +246,7 @@ import type * as lib_changesProseModel from "../lib/changesProseModel.js";
 import type * as lib_charterBudget from "../lib/charterBudget.js";
 import type * as lib_chatAttachment from "../lib/chatAttachment.js";
 import type * as lib_chatQuota from "../lib/chatQuota.js";
+import type * as lib_chatRoundValidator from "../lib/chatRoundValidator.js";
 import type * as lib_chatRows from "../lib/chatRows.js";
 import type * as lib_chatWakeIds from "../lib/chatWakeIds.js";
 import type * as lib_ciRunRead from "../lib/ciRunRead.js";
@@ -673,6 +676,7 @@ import type * as workTimeline from "../workTimeline.js";
 import type * as workerSettle from "../workerSettle.js";
 import type * as workflow_runs from "../workflow_runs.js";
 import type * as workflows from "../workflows.js";
+import type * as zzOrgHealthProfile from "../zzOrgHealthProfile.js";
 
 import type {
   ApiFromModules,
@@ -757,6 +761,8 @@ declare const fullApi: ApiFromModules<{
   chat: typeof chat;
   chatAccess: typeof chatAccess;
   chatAgents: typeof chatAgents;
+  chatExcerpt: typeof chatExcerpt;
+  chatRounds: typeof chatRounds;
   chatSessionReplies: typeof chatSessionReplies;
   chatText: typeof chatText;
   chatTyping: typeof chatTyping;
@@ -917,6 +923,7 @@ declare const fullApi: ApiFromModules<{
   "lib/charterBudget": typeof lib_charterBudget;
   "lib/chatAttachment": typeof lib_chatAttachment;
   "lib/chatQuota": typeof lib_chatQuota;
+  "lib/chatRoundValidator": typeof lib_chatRoundValidator;
   "lib/chatRows": typeof lib_chatRows;
   "lib/chatWakeIds": typeof lib_chatWakeIds;
   "lib/ciRunRead": typeof lib_ciRunRead;
@@ -1346,6 +1353,7 @@ declare const fullApi: ApiFromModules<{
   workerSettle: typeof workerSettle;
   workflow_runs: typeof workflow_runs;
   workflows: typeof workflows;
+  zzOrgHealthProfile: typeof zzOrgHealthProfile;
 }>;
 
 /**
