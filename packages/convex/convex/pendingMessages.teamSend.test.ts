@@ -6,6 +6,9 @@ import {
   markPendingDelivered,
   updatePendingMessageStatusForDaemon,
   healAndNotifyStuckMessages,
+  enqueuePendingMessage,
+  resetConversationPendingMessages,
+  retryPendingMessageForUser,
   planStuckMessageIds,
   planStuckSendNotify,
   STUCK_SEND_NOTIFY_DEADLINE_MS,
@@ -480,6 +483,67 @@ describe("settled recipient recovery end to end", () => {
       .toMatchObject({ content: msg.content, status: "pending", retry_count: 0 });
     await markPendingDelivered(ctx as any, msg);
     expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0 });
+    expect((await db.get("convBob"))?.has_pending_messages).toBe(false);
+  });
+
+  test("a send the agent took an Enter for and never echoed fails visibly, leaves Working, and retries only when a person asks", async () => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ now });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "The release is ready" });
+    const msg = tables.pending_messages[0];
+    await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob");
+    await updatePendingMessageStatusForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", { status: "injected", paste_verified_at: now - 9 * 60_000 });
+    await db.patch(msg._id, { created_at: now - 10 * 60_000 });
+    await db.patch("msBob", { agent_status: "idle" });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0, failedUnconfirmed: 1 });
+    expect(await db.get(msg._id)).toMatchObject({ status: "failed", delivery_disposition_reason: "unconfirmed" });
+    expect((await db.get("convBob"))?.has_pending_messages).toBe(false);
+    expect(await healAndNotifyStuckMessages(ctx as any, now + 60_000)).toMatchObject({ revived: 0, failedUnconfirmed: 0 });
+    expect(await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob")).toHaveLength(0);
+    // The sender's retry control puts it back in line.
+    expect(await retryPendingMessageForUser(ctx as any, "uAlice" as any, "convBob" as any, { messageId: msg._id })).toBe("pending");
+    expect((await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob")).map(row => row._id)).toEqual([msg._id]);
+  });
+
+  test("an unconfirmed send is not typed again by a resume, not merged into by a new trigger wake, and expires after a day", async () => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ now });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "The release is ready" });
+    const msg = tables.pending_messages[0];
+    await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob");
+    await updatePendingMessageStatusForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", { status: "injected", paste_verified_at: now - 5 * 60_000 });
+    await db.patch(msg._id, { created_at: now - 6 * 60_000 });
+    await db.patch("msBob", { agent_status: "idle" });
+    await healAndNotifyStuckMessages(ctx as any, now);
+    expect(await db.get(msg._id)).toMatchObject({ status: "failed", delivery_disposition_reason: "unconfirmed" });
+
+    expect(await resetConversationPendingMessages(ctx as any, "convBob" as any)).toBe(0);
+    expect((await db.get(msg._id))?.status).toBe("failed");
+
+    const conversation = await db.get("convBob");
+    const wake = "<scheduled-task>check CI</scheduled-task>";
+    const first = await enqueuePendingMessage(ctx as any, conversation, "uBob" as any, { content: wake, origin: "scheduler" });
+    await db.patch(first, { status: "failed", delivery_disposition_reason: "unconfirmed", paste_verified_at: now - 5 * 60_000 });
+    const second = await enqueuePendingMessage(ctx as any, await db.get("convBob"), "uBob" as any, { content: wake, origin: "scheduler" });
+    expect(second).not.toBe(first);
+
+    expect(await healAndNotifyStuckMessages(ctx as any, now + 25 * 60 * 60_000)).toMatchObject({ expiredUnconfirmed: 2 });
+    expect([(await db.get(msg._id))?.status, (await db.get(first))?.status]).toEqual(["cancelled", "cancelled"]);
+  });
+
+  test("a submitted send whose daemon went quiet waits for it to come back before failing", async () => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ now });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "The release is ready" });
+    const msg = tables.pending_messages[0];
+    await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob");
+    await updatePendingMessageStatusForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", { status: "injected", paste_verified_at: now - 5 * 60_000 });
+    await db.patch(msg._id, { created_at: now - 60 * 60_000 });
+    await db.patch("msBob", { last_heartbeat: now - 10 * 60_000 });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ failedUnconfirmed: 0 });
+    expect((await db.get(msg._id))?.status).toBe("injected");
+    await db.patch(msg._id, { paste_verified_at: now - 40 * 60_000 });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ failedUnconfirmed: 1 });
     expect((await db.get("convBob"))?.has_pending_messages).toBe(false);
   });
 
