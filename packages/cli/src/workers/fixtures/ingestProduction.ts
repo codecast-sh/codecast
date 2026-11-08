@@ -50,21 +50,17 @@ if (!enabled) {
   }) as typeof fs.promises.open;
 }
 let daemonFile = path.resolve(import.meta.dir,'../../daemon.ts');
-if (['mutant','custody-mutant','custody','retry-mutant','ack','ack-mutant','ack-restart','registration','task-review','scheduled-review','custody-review','disappearance-review','emission-review','sub-batch-review','core-review'].includes(process.argv[3])) {
+if (['mutant','custody-mutant','custody','retry-mutant','registration','task-review','scheduled-review','custody-review','disappearance-review','emission-review','sub-batch-review','core-review'].includes(process.argv[3])) {
   let source = fs.readFileSync(daemonFile,'utf8');
   const originalDaemon=daemonFile,originalDaemonSha256=createHash('sha256').update(source).digest('hex');
   const marker = '    let messages = ingest.messages;';
   assert.equal(source.split(marker).length,2);
-  if (['custody-review','disappearance-review','emission-review','sub-batch-review','core-review'].includes(process.argv[3])) { source += '\nexport const fixtureCustody={acceptedPending,acceptedPendingOwners,transcriptAckObserved,injectedMessageTs,geminiSyncedCounts,opencodeSyncedCounts,transcriptRetryOwners,reserveTranscriptReceipts,ingestStat,observeTranscriptAckWindow,receiptAccounting:()=>({count:acceptedPendingCount,bytes:acceptedPendingBytes,reserved:acceptedPendingReserved,reservedBytes:acceptedPendingReservedBytes})};\n';
+  if (['custody-review','disappearance-review','emission-review','sub-batch-review','core-review'].includes(process.argv[3])) { source += '\nexport const fixtureCustody={acceptedPending,acceptedPendingOwners,injectedMessageTs,geminiSyncedCounts,opencodeSyncedCounts,transcriptRetryOwners,reserveTranscriptReceipts,ingestStat,receiptAccounting:()=>({count:acceptedPendingCount,bytes:acceptedPendingBytes,reserved:acceptedPendingReserved,reservedBytes:acceptedPendingReservedBytes})};\n';
   if (process.argv[3] === 'core-review') source += '\nexport const fixtureCore={publishPendingTranscript,retainedPendingWeights,pruneAcceptedTranscript,saveDaemonState,handleAuthFailure,resetAuthFailureCount,piSyncedSigs};\n';
   }
   else if (process.argv[3] === 'scheduled-review') source += '\nexport const fixtureRetry={transcriptRetryOwners,saveDaemonState};\n';
   else if (process.argv[3] === 'task-review') source += '\nexport const fixtureReview={planModeTaskMap,permissionJustResolved,bakImageRecoveryDone};\n';
   else if (process.argv[3] === 'registration') source += '\nexport const fixtureThreads={appServerThreads,persistedAppServerThreads,pendingAppServerForkParents};\n';
-  else if (['ack','ack-mutant','ack-restart'].includes(process.argv[3])) {
-    source+='\nexport const fixtureAck={injectedMessageTs,transcriptAckObserved};\n';
-    if(process.argv[3]==='ack-mutant')source=source.replace('(ackEligible ? await ackEligible() : true) && messages.some','messages.some');
-  }
   else if (process.argv[3] === 'custody') source += '\nexport const fixtureReceipts={acceptedPending,pruneAcceptedTranscript};\n';
   else if (process.argv[3] === 'retry-mutant') {
     const retry = 'if (transcriptRetries.has(sessionId)) throw new TranscriptIngestRetry(`Transcript ${sessionId} retains unread data`);';
@@ -206,12 +202,6 @@ try {
     const {custody}=await import('./ingestCustody.js');
     const result=await custody({d,home,getPosition,claudeLine});
     console.log(JSON.stringify({enabled,custody:result,parentParses,workerPid:ingestWorkerHost()?.state.pid}));
-    await closeFixtureWorkers();process.exit(0);
-  }
-  if (['ack','ack-mutant','ack-restart'].includes(process.argv[3])) {
-    const {ackCustody,restartAckCustody}=await import('./ingestAck.js');
-    const ack=await (process.argv[3]==='ack-restart'?restartAckCustody:ackCustody)({d,home,getPosition,claudeLine,enabled});
-    console.log(JSON.stringify({ack,enabled}));process.exitCode=0;
     await closeFixtureWorkers();process.exit(0);
   }
   if (process.argv[3] === 'retry-mutant') {
