@@ -53,6 +53,7 @@ function harness() {
     hibernationInFlight, expectedHibernationExits, lastResumeAt: new Map<string, number>(),
     RESUME_IN_FLIGHT_TIMEOUT_MS: 60_000, SWITCH_CONTINUE_SPACING_MS: 1,
     swapHeld: (id: string) => state.swapping.has(id),
+    backendSwitchHeld: () => false,
     claudeSdkBackend: null,
     conversationForbidsResurrection: async () => state.forbidden,
     syncServiceRef: sync, deviceId: () => "local", isRemoteDevice: () => false,

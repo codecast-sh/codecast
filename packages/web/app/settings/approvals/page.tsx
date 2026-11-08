@@ -13,7 +13,7 @@ import { usePermissionRules, type PermissionRuleRow } from "../../../hooks/usePe
 import { formatRelativeTime } from "../../../lib/conversationFormat";
 
 /** `github.com/acme/app` reads as acme/app; a path as its last two parts. */
-export function projectLabel(project: string): string {
+function projectLabel(project: string): string {
   if (!project) return "No project";
   const parts = project.split("/").filter(Boolean);
   return parts.slice(-2).join("/");

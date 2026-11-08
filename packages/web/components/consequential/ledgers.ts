@@ -66,7 +66,7 @@ export function mergeRateLedger(r: { name: string; to: "rate" | "count"; bar: nu
     rows: [
       { k: "Merges", v: holds ? "While the rate holds" : "Paused until it holds", tone: holds ? "warn" : "ok" },
       { k: "Rate", v: `No fix in ${r.windowDays} days after live` },
-      { k: "Daily cap", v: r.limit === null ? "None" : `${r.limit} a day`, ...(r.limit === null ? { tone: "warn" as const } : {}) },
+      { k: "Daily limit", v: r.limit === null ? "None" : `${r.limit} a day`, ...(r.limit === null ? { tone: "warn" as const } : {}) },
       { k: "To undo", v: "Back to Count" },
     ],
     confirm: "Merge on the rate",
@@ -77,7 +77,7 @@ export function mergeRateLedger(r: { name: string; to: "rate" | "count"; bar: nu
     shift: ["Rate", "Count"],
     figures: [{ value: r.limit === null ? "∞" : String(r.limit), label: "merges a day, max", tone: "warn" }, { value: pct(r.rate), label: "rate now" }],
     rows: [
-      { k: "Merges", v: "Up to the daily cap", tone: "warn" },
+      { k: "Merges", v: "Up to the daily limit", tone: "warn" },
       { k: "Rate", v: "Shown, not gating" },
     ],
     confirm: "Merge on the count",

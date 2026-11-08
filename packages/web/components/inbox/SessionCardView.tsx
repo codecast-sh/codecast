@@ -91,7 +91,7 @@ export type SessionCardLiveness = {
 
 export type SessionCardViewProps = {
   session: InboxSession;
-  /** The project it works in (projects/SessionWorkProject workProjectSig). */
+  /** The project it works in (lib/workProjectSig). */
   workProject?: string;
   isActive: boolean;
   isParentActive?: boolean;
