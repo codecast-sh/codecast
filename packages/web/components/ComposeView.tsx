@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useSyncUserSkills, useUserSkills } from "../hooks/useSyncUserSkills";
 import { useInboxStore, isConvexId, resolveComposeProjectPath, bucketProjectPath } from "../store/inboxStore";
+import { savedDefaultProject } from "../lib/machinePicker";
 import { NewSessionFoot, NewSessionView } from "./conversation/sessionControls";
 import { MessageInput } from "./MessageInput";
 import type { ConversationData } from "./conversation/types";
@@ -137,6 +138,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       chipFilterExclude: store.chipFilterExclude,
       recentProjects: store.recentProjects,
       machineRoster: store.machineRoster,
+      defaultProject: savedDefaultProject(store.clientState.ui, store.machineRoster),
     });
     // A resumed draft keeps its agent; otherwise the caller's agent, then the
     // conversation on screen's, carries over, and the default

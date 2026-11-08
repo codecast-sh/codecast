@@ -87,7 +87,10 @@ import { callGuestsOnRecord, endGuestAdmissions, noteGuestAttendance } from "./l
 import { scheduleFaceJoin, scheduleFaceLeave } from "./callFace";
 import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { siteUrl } from "./lib/siteUrl";
+import { slackSend } from "./lib/slackSend";
 import { CHEAP_MODEL, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
+import { openaiFetch, openaiRefusal } from "./lib/openai";
+import { vendorRefusalFromDb } from "./lib/vendorGuard";
 
 export { asrTranscriptionSession };
 
@@ -1350,6 +1353,7 @@ export const getForSummary = internalQuery({
     return {
       title: t.title,
       room_key: t.room_key,
+      team_id: t.team_id,
       status: t.status,
       started_at: t.started_at,
       ended_at: t.ended_at,
@@ -1569,6 +1573,7 @@ export const generateSummary = internalAction({
     try {
       const response = await postMessages(
         callSummaryRequest(source, { kind, started_at: t.started_at, ended_at: t.ended_at, rolling }),
+        { gate: { ctx, scope: { workspace: `team:${t.team_id}` } } },
       );
       if (!response) throw new Error("ANTHROPIC_API_KEY not configured");
       if (!response.ok) throw new Error(`Anthropic ${response.status}: ${(await response.text()).slice(0, 300)}`);
@@ -1763,8 +1768,11 @@ export const transcribeRecording = internalAction({
         transcript_id: args.transcript_id,
       });
       if (!row?.storage_id) throw new Error("no audio attached");
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
+      if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not set");
+      // A regulated team's recording reaches OpenAI only once it has a BAA (lib/vendorGuard).
+      const gate = { ctx, scope: { row: { table: "transcripts", id: args.transcript_id } } };
+      const refusal = await openaiRefusal(gate);
+      if (refusal) throw new Error(refusal);
       const audio = await ctx.storage.get(row.storage_id);
       if (!audio) throw new Error("audio missing from storage");
       // The recorder stops before it can make a file this big (see
@@ -1784,11 +1792,8 @@ export const transcribeRecording = internalAction({
       form.append("file", audio, `recording.${ext}`);
       form.append("model", RECORDING_TRANSCRIBE_MODEL);
       form.append("response_format", "verbose_json");
-      const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}` },
-        body: form,
-      });
+      const resp = await openaiFetch(gate, "/v1/audio/transcriptions", { method: "POST", body: form });
+      if (!resp) throw new Error("OPENAI_API_KEY is not set");
       if (!resp.ok) {
         throw new Error(`OpenAI ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
       }
@@ -2547,8 +2552,8 @@ export const mintAsrToken = action({
       room_key: args.room_key,
     });
     if (!grant) return { error: "Not authorized for this room" };
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return { error: "Transcription is not configured" };
+    if (grant.refusal) return { error: grant.refusal };
+    if (!process.env.OPENAI_API_KEY) return { error: "Transcription is not configured" };
     let model = LIVE_TRANSCRIBE_MODEL;
     let languages = unionTranscribeLanguages(args.languages, grant.languages);
     // GA realtime API: client secrets are minted at /v1/realtime/client_secrets
@@ -2556,14 +2561,12 @@ export const mintAsrToken = action({
     const mint = async (
       session: ReturnType<typeof asrTranscriptionSession>,
     ): Promise<{ error: string } | { client_secret: string }> => {
-      const resp = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
+      const resp = await openaiFetch({ ctx, scope: { workspace: grant.workspace } }, "/v1/realtime/client_secrets", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session }),
       });
+      if (!resp) return { error: "Transcription is not configured" };
       if (!resp.ok) {
         const body = (await resp.text()).slice(0, 300);
         console.error("[transcripts] mint failed", resp.status, body);
@@ -2619,7 +2622,9 @@ export const authForAsr = internalQuery({
     const languages = unionTranscribeLanguages(
       ...liveMembers(rows, Date.now()).map((m) => m.languages),
     );
-    return { user_id: String(userId), languages };
+    // Live transcription streams the room's audio to OpenAI: a regulated team's only once it has a BAA.
+    const refusal = await vendorRefusalFromDb(ctx, { workspace: `team:${auth.teamId}` }, "openai");
+    return { user_id: String(userId), languages, refusal, workspace: `team:${auth.teamId}` };
   },
 });
 
@@ -2929,19 +2934,14 @@ export const deliverRoutes = internalAction({
             team_id: transcript.team_id,
           });
           if (!token) throw new Error("Slack channel not linked");
-          const resp = await fetch("https://slack.com/api/chat.postMessage", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json; charset=utf-8",
-              Authorization: `Bearer ${token}`,
-            },
+          const out = await slackSend(ctx, {
+            team_id: transcript.team_id,
+            open_url: `${siteUrl()}/calls/${transcript.short_id ?? transcript._id}`,
+          }, token, "chat.postMessage", {
+            channel: route.target,
             // Slack renders *bold* with single asterisks.
-            body: JSON.stringify({
-              channel: route.target,
-              text: chunk.replace(/\*\*/g, "*"),
-            }),
+            text: chunk.replace(/\*\*/g, "*"),
           });
-          const out = (await resp.json()) as { ok: boolean; error?: string };
           if (!out.ok) throw new Error(`slack: ${out.error}`);
         }
         await ctx.runMutation(internal.transcripts.markRouteSent, {

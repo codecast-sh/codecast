@@ -9,7 +9,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useTrackedStore } from "../../store/inboxStore";
 import { HoverCard } from "../ui/HoverCard";
 import { compactDuration, presenceLine } from "../presence/memberPresence";
-import { composeDocId } from "../../lib/composerPresence";
+import { composeDocId, typingRows } from "../../lib/composerPresence";
 import { PresenceAvatar } from "../PresenceFacepile";
 
 // Where each other person is reading this transcript: "look at this" without
@@ -43,7 +43,8 @@ function ReaderCard({ row, now }: { row: PresenceRow; now: number }) {
   const st = useTrackedStore([(s) => s.teamMembers]);
   const member = (st.teamMembers as any[] | undefined)?.find((m) => String(m._id) === row.user_id);
   const moved = row.anchor_at ? now - row.anchor_at : 0;
-  const draft = row.draft_text?.trim();
+  // The same rule as the typing strip: a side question being typed is its author's own.
+  const draft = typingRows([row])[0]?.draft_text?.trim();
   return (
     <div className="flex flex-col gap-1.5 p-3 text-xs" data-reader-card>
       <div className="flex items-center gap-2">

@@ -43,7 +43,7 @@ async function verify() {
   const { useInboxStore } = await import("../../../store/inboxStore");
   const record = (fn: string, args: any, answer: any = {}) => { calls.push({ fn, args }); return answer; };
   useInboxStore.setState({
-    setOrgLineMerge: async (role_id: string, on: boolean, per_day?: number) => record("setLineMerge", { role_id, on, ...(per_day !== undefined ? { per_day } : {}) }),
+    setOrgLineMerge: async (role_id: string, on: boolean, per_day?: number, rate?: { bar: number; min: number } | null) => record("setLineMerge", { role_id, on, ...(per_day !== undefined ? { per_day } : {}), ...(rate !== undefined ? { rate } : {}) }),
     settleOrgHandoff: async (role_id: string, how: "run" | "close") => record("settle", { role_id, how }),
     splitOrgRole: async (args: any) => record("split", { role_id: args.role_id, halves: args.halves, standing_session: args.standing_session }, { roles: [{ handle: args.halves[0].handle }, { handle: args.halves[1].handle }], handoff: { deadline: Date.now() + 86_400_000 } }),
   } as any);
@@ -80,6 +80,27 @@ async function verify() {
   assert.equal(q("[data-merge-step]")!.getAttribute("data-merge-step"), "on");
   await act(async () => { q<HTMLButtonElement>("[role=switch]")!.click(); });
   assert.deepEqual(calls.pop(), { fn: "setLineMerge", args: { role_id: growth._id, on: false } });
+
+  // ── how the merge step decides (regret.md R7): the rate sits beside it; Rate takes a bar and goes through the review ──
+  const measured = { settled: 30, regretted: 3, partial: 5, rate: 0.9 };
+  await render(React.createElement(MergeStepSwitch, { role: { ...growth, line_merge: true }, canEdit: true, merge: { on: true, allowed: true, reason: null, used: 0, limit: 3, mode: "count", bar: null, measured } }));
+  assert.equal(q("[data-merge-mode=count]")!.getAttribute("aria-pressed"), "true");
+  assert.match(q("[data-merge-measured]")!.textContent!, /90%regret-free30 finished · 3 fixed · 5 open/);
+  await render(React.createElement(MergeStepSwitch, { role: { ...growth, line_merge: true }, canEdit: true, merge: { on: true, allowed: true, reason: null, used: 0, limit: 3, mode: "count", bar: null, measured: { settled: 0, regretted: 0, partial: 4, rate: null } } }));
+  assert.match(q("[data-merge-measured]")!.textContent!, /no rate yet ·0 finished · 4 open/);
+  await render(React.createElement(MergeStepSwitch, { role: { ...growth, line_merge: true }, canEdit: true, merge: { on: true, allowed: true, reason: null, used: 0, limit: 3, mode: "count", bar: null, measured } }));
+  await act(async () => { q<HTMLButtonElement>("[data-merge-mode=rate]")!.click(); });
+  assert.ok(q("[data-merge-rate-form]"), "Rate asks for its bar first");
+  await act(async () => { q<HTMLButtonElement>("[data-merge-rate-form] button[type=submit]")!.click(); });
+  assert.equal(calls.length, 0, "the bar alone changes nothing");
+  assert.equal(q('[data-switch-figure="bar"]')!.textContent, "90%");
+  await act(async () => { q<HTMLButtonElement>("[data-switch-confirm]")!.click(); });
+  assert.deepEqual(calls.pop(), { fn: "setLineMerge", args: { role_id: growth._id, on: true, rate: { bar: 0.9, min: 20 } } });
+  await render(React.createElement(MergeStepSwitch, { role: { ...growth, line_merge: true }, canEdit: true, merge: { on: true, allowed: false, reason: "x", used: 0, limit: 3, mode: "rate", bar: { bar: 0.95, min: 20 }, measured } }));
+  assert.match(q("[data-merge-bar]")!.textContent!, /bar 95% · min 20/);
+  await act(async () => { q<HTMLButtonElement>("[data-merge-mode=count]")!.click(); });
+  await act(async () => { q<HTMLButtonElement>("[data-switch-confirm]")!.click(); });
+  assert.deepEqual(calls.pop(), { fn: "setLineMerge", args: { role_id: growth._id, on: true, rate: null } });
 
   // ── the handoff banner: receivers, their state, the deadline, and the two acts ──
   const project = growth.scope_names.projects[0];

@@ -2689,19 +2689,6 @@ export const listConversations = query({
     const allTeamUsers = [...teamUsers, ...additionalUsers.filter((u): u is NonNullable<typeof u> => u !== null)];
     const teamUserMap = new Map(allTeamUsers.map(u => [u._id.toString(), u]));
 
-    const normalizeToRoot = (path: string): string => {
-      const parts = path.split('/');
-      const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
-      if (srcIndex >= 0 && srcIndex < parts.length - 1) {
-        return parts.slice(0, srcIndex + 2).join('/');
-      }
-      return path;
-    };
-    const deriveGitRoot = (c: { git_root?: string; project_path?: string }): string | null => {
-      const rawPath = c.git_root || c.project_path;
-      if (!rawPath) return null;
-      return normalizeToRoot(rawPath);
-    };
 
     const now = Date.now();
     const fiveMinutesAgo = now - 5 * 60 * 1000;
@@ -2718,7 +2705,9 @@ export const listConversations = query({
         if (args.subagentFilter === "main" && isSub) return false;
       }
       if (args.directoryFilter) {
-        const root = deriveGitRoot(c);
+        // Matched by the folder's name anywhere in the session's path, as the
+        // web feed does (ActivityFeed), so a subfolder or a teammate's copy counts.
+        const root = c.git_root || c.project_path;
         if (!root) return false;
         const filterName = args.directoryFilter.split('/').filter(Boolean).pop();
         const rootParts = root.split('/').filter(Boolean);
@@ -5016,6 +5005,12 @@ async function foldChangesPayload(ctx: QueryCtx, conversationId: Id<"conversatio
 export async function readableConversation(ctx: QueryCtx, apiToken: string, ref: string) {
   const authUserId = await getAuthenticatedUserIdReadOnly(ctx, apiToken);
   if (!authUserId) return { error: "Unauthorized" as const };
+  return readableConversationAs(ctx, authUserId, ref);
+}
+
+/** readableConversation for a caller already identified (a scheduled action
+ *  acting for the person who asked): the same access rule, no token. */
+export async function readableConversationAs(ctx: QueryCtx, authUserId: Id<"users">, ref: string) {
   const user = await ctx.db.get(authUserId);
   if (!user) return { error: "User not found" as const };
   const conv = await resolveConversationRef(ctx, ref, authUserId);
@@ -8907,6 +8902,9 @@ async function enrichInboxSessionRow(
     // teammate/spawned session to its parent WITHOUT the subagent
     // nesting/hiding that parent_conversation_id implies.
     spawned_by_conversation_id: conv.spawned_by_conversation_id?.toString() || null,
+    // The project a person put this session in; workers derive theirs from
+    // the links above (shared/contracts/sessionProject).
+    project_id: conv.project_id?.toString() || null,
     // Handoff link (see schema): the card reads handed_off_from the way it
     // reads spawned_by, since a handoff run from a human shell has no spawner.
     handed_off_from_conversation_id: conv.handed_off_from_conversation_id?.toString() || null,
@@ -13049,6 +13047,10 @@ export const updateSessionId = mutation({
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
     git_remote_url: v.optional(v.string()),
+    // The daemon found the session's cwd outside any git repo, so a git_root
+    // the stub guessed from the chosen folder is cleared. Absent from older
+    // daemons, which leave the stored value as it was.
+    not_a_repo: v.optional(v.boolean()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -13064,6 +13066,10 @@ export const updateSessionId = mutation({
     if (args.project_path) patch.project_path = args.project_path;
     if (args.git_root) patch.git_root = args.git_root;
     if (args.git_remote_url) patch.git_remote_url = args.git_remote_url;
+    if (args.not_a_repo && !args.git_root) {
+      patch.git_root = undefined;
+      if (!args.git_remote_url) patch.git_remote_url = undefined;
+    }
 
     // Stubs are created before their real path exists, so their team/privacy
     // resolved against nothing (→ private, teamless). Re-resolve against the

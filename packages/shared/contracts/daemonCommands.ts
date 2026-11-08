@@ -84,6 +84,12 @@ export const DAEMON_COMMANDS = [
   // target_path }. Old daemons: "Unknown command" (the chip stays "merging
   // back"; the worktree keeps the work).
   "merge_back",
+  // A person pressed Run on a `cast decide --run` card (commandRun.ts):
+  // run that cast command here, outside the asking session, and report its
+  // exit and output (sessionDecisions.reportCommandRun). Targeted at the
+  // asking session's machine. args: { decision_id, argv, cwd? }. Old daemons:
+  // "Unknown command", and the card says the run did not start.
+  "run_cast",
   // Swap the machine's active Claude Code account to a saved profile, tear down
   // the listed blocked sessions (parked on a limit, auth, or dropped-connection
   // banner), and enqueue "continue" to each so the delivery rail resumes them
@@ -213,6 +219,12 @@ export const DAEMON_COMMANDS = [
   // and answers at once; the run reports to the deploy row. Old daemons:
   // "Unknown command" (the deploy stays requested until someone runs it).
   "line_deploy",
+  // The nightly fix trace (regret.md R2), queued by convex landedChanges.nightly
+  // at each machine that publishes a team's line profile. args: { team_id,
+  // roots }. Runs `cast line fixloop --record` detached, which reads main from
+  // this machine's own mirror of origin and answers at once. Old daemons:
+  // "Unknown command" (that night goes unrecorded; the next run backfills).
+  "line_fixloop",
   // The setup card under a `cast browser`/`cast computer` command that failed
   // for want of the Chrome extension or the macOS grants (agentToolSetup.ts).
   // Targeted at the session's device. args: AgentToolSetupArgs — check answers

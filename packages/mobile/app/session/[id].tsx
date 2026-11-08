@@ -100,6 +100,8 @@ import { BashModeBlock, FoldedPromptRow, SessionHandoffCard } from '@/components
 import { classifyUserRows, pairCommandExpansions } from '@codecast/web/lib/userRowKinds';
 import { parseJointMessage } from '@codecast/shared/contracts/jointMessage';
 import { parseCommandInvocation, cleanCommandExpansion, parseCastCommand, parseApiErrorContent, stripSystemTags as stripTagsShared } from '@codecast/web/components/conversation/classify';
+import { sayTextOf } from '@codecast/web/components/castCommand';
+import { useRecordConversationOpen } from '@/lib/accessLogOpen';
 import type { ParsedApiError } from '@codecast/web/components/conversation/types';
 import { compactionProgressMessage, type CompactionProgress } from '@codecast/web/lib/compactionProgress';
 import { CastCommandBlock } from '@/components/session/CastCommandBlock';
@@ -2609,6 +2611,11 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             // A `cast …` command reads as what it did (a message sent, a
             // decision asked, a task made), with the shell line one tap away.
             const castCmd = !hostedAgent ? parseCastCommand(tc as any) : null;
+            // A `cast say` is the agent talking: its words, not a command row.
+            const said = sayTextOf(castCmd);
+            if (said) {
+              return <MarkdownContent key={tc.id} text={said} baseStyle={[styles.bubbleText, { fontSize: 15, lineHeight: 24 }, styles.assistantText]} isUser={false} />;
+            }
             if (castCmd) {
               return (
                 <CastCommandBlock
@@ -3240,6 +3247,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // Who this session is (its character, or its role): the header wears the
   // same face and name the inbox row does.
   const identityRow = useSessionIdentityRow(conversation?._id ? String(conversation._id) : null, conversation as any);
+  // A regulated team's audit log gets one entry per open (lib/accessLogOpen).
+  useRecordConversationOpen(conversation?._id && conversation._id !== DESIGN_MOCK_ID ? String(conversation._id) : null, conversation?.team_id ? String(conversation.team_id) : null);
   const seatIdentity = identityRow ? sessionIdentity(identityRow) : null;
   const boardHref = boardHrefProp ?? (seatIdentity?.kind === 'role' ? `/org/${seatIdentity.role.short_id}/board` : null);
   // A conversation with the hosted assistant runs on no machine: the header

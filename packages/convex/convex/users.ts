@@ -34,7 +34,7 @@ import { canSeeMemberSpend, fetchUserUsageDays } from "./lib/usageDaily";
 import { bucketPunchcardRows } from "./lib/activityPunchcard";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
-import { conversationProjectRoot, foldCheckoutsByRepository, pathWithinLocalRoots } from "./projectPaths";
+import { conversationProjectRoot, foldCheckoutsByRepository, knownCheckoutRoots, pathWithinLocalRoots } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
 import { activeEnrollmentTeam, heartbeatTeamPolicy } from "./lib/teamPolicyGuard";
@@ -965,6 +965,11 @@ export const reportCommandResult = mutation({
       ...(command.command === "set_provider_key" ? { args: undefined } : {}),
     });
     if (command.command === "start_session" && !args.error) await stampStartedWorktree(ctx, command.args, args.result);
+    // A `cast decide --run` the machine could not take fails its card and tells the session.
+    if (command.command === "run_cast" && args.error) {
+      const decision_id = (() => { try { return String(JSON.parse(command.args ?? "{}").decision_id ?? ""); } catch { return ""; } })();
+      if (decision_id) await ctx.scheduler.runAfter(0, internal.sessionDecisions.failCommandRun, { user_id: auth.userId, decision_id, error: args.error.slice(0, 500) });
+    }
 
     return { success: true };
   },
@@ -3606,8 +3611,9 @@ export async function performGetRecentProjectPaths(
     const localRoots = deviceRoots || onlineRoots.length > 0 ? onlineRoots : null;
 
     const pathCounts = new Map<string, { count: number; lastActive: number; repository?: string }>();
+    const checkouts = knownCheckoutRoots(conversations);
     for (const conv of conversations) {
-      const path = conversationProjectRoot(conv);
+      const path = conversationProjectRoot(conv, checkouts);
       if (!path) continue;
       if (localRoots && !pathWithinLocalRoots(path, localRoots)) continue;
       // Bucket to the minute as the value enters the tally, so both the ranking
@@ -4179,7 +4185,7 @@ export const sendConfigCommand = mutation({
 export async function enqueueConfigCommand(
   ctx: Pick<MutationCtx, "db">,
   userId: Id<"users">,
-  command: "config_list" | "config_read" | "config_write" | "config_create" | "config_delete" | "line_profile_edit" | "line_graph_edit" | "line_try" | "line_trial_reask" | "line_deploy",
+  command: "config_list" | "config_read" | "config_write" | "config_create" | "config_delete" | "line_profile_edit" | "line_graph_edit" | "line_try" | "line_trial_reask" | "line_deploy" | "line_fixloop",
   argsJson: string | undefined,
   targetDeviceId?: string,
   requestId?: string,

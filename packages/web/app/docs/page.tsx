@@ -13,6 +13,7 @@ import { DocMenuItems } from "../../components/menus/ObjectContextMenus";
 import { docOriginClass, isOnHumanShelf, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
 import { DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
+import { knownCheckoutRoots } from "@codecast/convex/convex/projectPaths";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { docSearchText } from "../../lib/liveEntities";
@@ -202,13 +203,20 @@ export function DocListContent() {
     return docsList.filter((d) => !isOnHumanShelf(d)).length;
   }, [docsList, isShelfView]);
 
+  // The checkouts the viewer's sessions name, read once per filter change: a
+  // doc's folder is matched to its repository through them (docFilters).
+  const checkouts = useMemo(
+    () => (projectFilter ? knownCheckoutRoots(Object.values(useInboxStore.getState().sessions)) : []),
+    [projectFilter],
+  );
+
   const filteredDocs = useMemo(() => {
     let list = sourceFilteredDocs;
     if (docType) list = list.filter((d) => d.doc_type === docType);
     if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
-    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter));
+    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter, checkouts));
     return list;
-  }, [sourceFilteredDocs, docType, labelFilter, projectFilter]);
+  }, [sourceFilteredDocs, docType, labelFilter, projectFilter, checkouts]);
 
   // Search corpus that ignores the active type TAB (but keeps explicit source/
   // project/label scope), so typing a query finds a doc whose type isn't the
@@ -217,9 +225,9 @@ export function DocListContent() {
   const searchScopeDocs = useMemo(() => {
     let list = sourceFilteredDocs;
     if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
-    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter));
+    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter, checkouts));
     return [...list].sort((a, b) => b.updated_at - a.updated_at);
-  }, [sourceFilteredDocs, labelFilter, projectFilter]);
+  }, [sourceFilteredDocs, labelFilter, projectFilter, checkouts]);
 
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {};

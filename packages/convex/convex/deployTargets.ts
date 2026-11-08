@@ -29,7 +29,7 @@ import { workspaceGrantsAccess } from "./lib/accessKeys";
 import { normalizeRepository } from "./lib/gitRefs";
 import { nextShortId } from "./counters";
 import { enqueueConfigCommand } from "./users";
-import { deployTeamFor } from "./changesDeploy";
+import { deployTeamFor, findDeployTeam } from "./changesDeploy";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { lineDeployTargets, recordDeployMarker } from "./deploys";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
@@ -42,7 +42,7 @@ import {
   type DeployLiveReader,
 } from "@codecast/shared/contracts/deployTargets";
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
-import { commitBySha, deployCommitsOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
+import { commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
 
 /** Commits kept on one deploy's record. */
 const COMMITS_MAX = 200;
@@ -167,7 +167,10 @@ export const view = query({
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
     if (!args.team_id && !args.repository) throw new Error("Name a team or a repository");
-    const teamId = args.team_id ?? (await teamFor(ctx, userId, repositoryArg(args.repository!)));
+    // A repository none of the caller's teams works on has no targets they can see; a
+    // flow's deploy wait polls this, so an empty answer lets it pass instead of retrying a throw.
+    const teamId = args.team_id ?? (await findDeployTeam(ctx, userId, repositoryArg(args.repository!)));
+    if (!teamId) return { targets: [] };
     const workspace = teamKey(teamId);
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return { targets: [] };
     const rows = (await targetRows(ctx, workspace, args.repository ? repositoryArg(args.repository) : undefined)).filter((r) => !args.target || r.name === args.target);
@@ -191,7 +194,8 @@ export const shipPasses = query({
 // ── what a deploy carried, from main's order ─────────────────────────────────
 
 /**
- * A live deploy's range on main: its previous sha (the deploy before it on the
+ * A live deploy's range on main: its sha's place in main's order (cut_at, what
+ * a merge is held against), its previous sha (the deploy before it on the
  * target, when it did not say) and the commits between, touching the target's
  * paths. Called once a deploy goes live.
  */
@@ -205,6 +209,10 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
     const repos = [...new Set((await targetRows(ctx, d.workspace)).filter((r) => r.name === d.target).map((r) => r.repository))];
     if (repos.length !== 1) return;
     d.repository = patch.repository = repos[0];
+  }
+  if (d.cut_at == null) {
+    const cut = await mainAtOf(ctx, d.repository, d.sha);
+    if (cut != null) patch.cut_at = cut;
   }
   let previous = d.previous_sha ?? null;
   if (!previous) {

@@ -1,6 +1,7 @@
 import { query } from "./functions";
 import { memberHandle } from "@codecast/shared/chat";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
+import { sessionProjectId } from "@codecast/shared/contracts/sessionProject";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -749,11 +750,23 @@ export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: nu
   const taskIds = new Set([...resolved.tasks.map((t) => t._id.toString()), ...(resolved.ephemeral_task_ids ?? [])]);
   const planIds = new Set(resolved.plans.map((p) => p._id.toString()));
   const roleId = resolved.role?._id?.toString();
+  // A session in a scope project (shared/contracts/sessionProject), its
+  // workers included, resolved over the scan so a parent costs no read.
+  const projectIds = new Set(resolved.projects.map((p) => p._id.toString()));
+  const taskProject = new Map(resolved.tasks.map((t) => [t._id.toString(), t.project_id?.toString() ?? null]));
+  const planProject = new Map(resolved.plans.map((p) => [p._id.toString(), p.project_id?.toString() ?? null]));
+  const projectLookup = {
+    session: (id: string) => scan.sessions.get(id)?.raw,
+    taskProject: (id: string) => taskProject.get(id),
+    planProject: (id: string) => planProject.get(id),
+  };
   const out: Array<{ session: OrgSession; raw: any }> = [];
   for (const entry of scan.sessions.values()) {
     const c = entry.raw;
+    const project = projectIds.size ? sessionProjectId(c, projectLookup) : null;
     const inScope =
       (roleId && c.org_role_id?.toString() === roleId) ||
+      (project && projectIds.has(project)) ||
       (c.active_task_id && taskIds.has(c.active_task_id.toString())) ||
       (c.active_plan_id && planIds.has(c.active_plan_id.toString())) ||
       (c.plan_ids ?? []).some((id: any) => planIds.has(id.toString()));

@@ -897,7 +897,9 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   retireOrgRole: org((ctx) => `Retired ${roleName(ctx.before, ctx.args[0] as string)}`),
   splitOrgRole: org((ctx) => `Split ${roleName(ctx.before, (ctx.args[0] as { role_id: string }).role_id)} into two leads`),
   settleOrgHandoff: org((ctx) => `${ctx.args[1] === "close" ? "Closed" : "Ran"} the handoff of ${roleName(ctx.before, ctx.args[0] as string)}`),
-  setOrgLineMerge: org((ctx) => `Turned the merge step ${ctx.args[1] ? "on" : "off"} for ${roleName(ctx.before, ctx.args[0] as string)}`),
+  setOrgLineMerge: org((ctx) => ctx.args[3] !== undefined
+    ? `Set ${roleName(ctx.before, ctx.args[0] as string)}'s merge step to ${ctx.args[3] ? "the measured rate" : "the daily count"}`
+    : `Turned the merge step ${ctx.args[1] ? "on" : "off"} for ${roleName(ctx.before, ctx.args[0] as string)}`),
   markOrgTemplateSetup: org((ctx) => `Marked a setup item ${String(ctx.args[2])}`),
   answerOrgTemplateInput: org(() => "Answered a template role's setup question"),
   activateOrgTemplateRoutine: org(() => "Turned on a template role's routine"),

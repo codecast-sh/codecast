@@ -15,6 +15,7 @@ import type { AreaAssignment } from "@codecast/shared/contracts/decisionAreas";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { askCore as askDecisionCore, commentCore, deleteCore as deleteDecisionCommentCore, editCore as editDecisionCommentCore, resolveCore as resolveDecisionThreadCore } from "./decisionThread";
 import { sendLineChatCore } from "./lineChat";
+import { askCore as askSideQuestionCore } from "./sideAnswers";
 import { clearHoldCore, moveLiveFlowCore, setOnCore, startLiveFlowCore } from "./liveFlows";
 import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
@@ -27,7 +28,7 @@ import type { DeviceSnippetChange, ProviderKeyCommand } from "@codecast/shared/c
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
-import { resolveTeamForPath, buildShareUpdate } from "./privacy";
+import { resolveTeamForPath, buildShareUpdate, isTeamMember } from "./privacy";
 import { applyMembershipVisibilityChange } from "./teams";
 import { isTeamVisibilityLevel } from "./teamVisibility";
 import { resumeConversationSession } from "./daemonCommandUtils";
@@ -87,6 +88,8 @@ import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { dismissGuestSuggestionFor, sendGuestSuggestionFor, writeGuestSuggestions } from "./guestSuggestions";
 import { answerPresence, charterWire, deepMergeField, isServerId, linkConversationToObject, liveSecretWrite, opsRowId, type HandlerCtx } from "./dispatchHelpers";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
+import { claimProjectDefaultSession, readableProject } from "./sessionProjects";
+import { insertProject } from "./projects";
 
 type TableConfig =
   | {
@@ -517,6 +520,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // The name bundles from before the thread send under.
   discussDecision: async (ctx, userId, [decisionId, text, clientId]: [string, string, string]) =>
     commentCore(ctx, userId, { decision: decisionId, text, client_id: clientId }),
+  // `/btw` in a conversation's composer (sideAnswers.ts): a pending row the cheap model answers, never sent to the agent.
+  askSideQuestion: async (ctx, userId, [conversationId, question, clientId]: [string, string, string]) =>
+    askSideQuestionCore(ctx as any, userId, { conversation_id: conversationId, question, client_id: clientId }),
   // A person's words to the session that answers a project's line (lineChat.ts),
   // refused the same way: returned, never thrown.
   sendLineChat: async (ctx, userId, [projectId, text, clientId, graph, focus]: [string, string, string, string | null, string | null]) =>
@@ -713,8 +719,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   settleOrgHandoff: async (ctx, _userId, [roleId, how]: [string, "run" | "close"]) => {
     return await ctx.runMutation!((api as any).orgHandoff.settle, { role_id: roleId, how });
   },
-  setOrgLineMerge: async (ctx, _userId, [roleId, on, perDay]: [string, boolean, number | undefined]) => {
-    return await ctx.runMutation!((api as any).orgLineMerge.setLineMerge, { role_id: roleId, on, ...(perDay !== undefined ? { per_day: perDay } : {}) });
+  setOrgLineMerge: async (ctx, _userId, [roleId, on, perDay, rate]: [string, boolean, number | undefined, { bar: number; min: number } | null | undefined]) => {
+    return await ctx.runMutation!((api as any).orgLineMerge.setLineMerge, { role_id: roleId, on, ...(perDay !== undefined && perDay !== null ? { per_day: perDay } : {}), ...(rate !== undefined ? { rate } : {}) });
   },
   resetOrg: async (ctx, _userId, [teamId]: [string | undefined]) => {
     return await ctx.runMutation!((api as any).orgRoles.reset, teamId ? { team_id: teamId } : {});
@@ -936,7 +942,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key?: string; team_id?: string } }]) => {
     // A hosted conversation (the simple lane's assistant) runs in this
     // backend: no device, no daemon command. Its start queues the first
     // message in the same transaction, idempotent on session_id like below.
@@ -1055,10 +1061,25 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         : undefined);
     const parentConversationId = await resolveWorkerParentConversation(ctx, userId, workerPlanId);
 
+    // Born in the project its composer named (session-projects.md SP1). A
+    // team project routes the session to its team when the folder names none;
+    // who may read it still follows the folder (is_private below).
+    // Started as a new project (the composer's Project toggle): the project is
+    // made here, in the session's own transaction, in the workspace the
+    // composer was in, and this session is its canonical one.
+    const newProjectTeam = opts.new_project?.team_id && (await isTeamMember(ctx as any, userId, opts.new_project.team_id as Id<"teams">))
+      ? (opts.new_project.team_id as Id<"teams">) : undefined;
+    const newProjectId = opts.new_project?.title?.trim()
+      ? await insertProject(ctx, userId, { title: opts.new_project.title.trim().slice(0, 120), client_key: opts.new_project.client_key, ...(newProjectTeam ? { team_id: newProjectTeam } : {}) })
+      : null;
+    const project = newProjectId ? await ctx.db.get(newProjectId) : await readableProject(ctx, userId, opts.project_id);
+    const projectId = project?._id ?? null;
+    if (project?.team_id && !resolvedTeamId && (await isTeamMember(ctx as any, userId, project.team_id))) resolvedTeamId = project.team_id;
     const conversationId = await ctx.db.insert("conversations", {
       user_id: runnerUserId,
       ...(runnerUserId !== userId ? { author_user_id: userId } : {}),
       team_id: resolvedTeamId,
+      ...(projectId ? { project_id: projectId } : {}),
       agent_type: agentType,
       session_id: sessionId,
       project_path: resolvedProjectPath,
@@ -1091,6 +1112,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
     await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
+    if (projectId && (opts.project_default || newProjectId)) await claimProjectDefaultSession(ctx, projectId, conversationId);
     // A session born bound to a task or plan a lead owns is the lead's (S35).
     if (linkedTask || workerPlanId) await (ctx as any).scheduler?.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conversationId });
 
@@ -2073,8 +2095,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // canonical users.active_team_id when it named the team; the ui mirror
   // already moved to the client's fallback, so re-stamp it with the server's
   // answer in the same transaction. Both apply the oldest-membership rule.
-  dispatchDeleteTeam: async (ctx, userId, [teamId, confirmName]: [string, string, string | undefined]) => {
-    const result = await (ctx as any).runMutation(api.teams.deleteTeam, {
+  // `permanent`: a regulated team's data destroyed for good (regulatedDeletion.destroyTeam).
+  dispatchDeleteTeam: async (ctx, userId, [teamId, confirmName, , permanent]: [string, string, string | undefined, boolean?]) => {
+    const result = await (ctx as any).runMutation(permanent ? api.regulatedDeletion.destroyTeam : api.teams.deleteTeam, {
       team_id: teamId,
       confirm_name: confirmName,
     });
@@ -2143,6 +2166,22 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(opts?.message ? { message: opts.message } : {}),
       ...(opts?.remember ? { remember: true } : {}),
     });
+  },
+  // The client already shows the stub (store addPermissionRule).
+  addPermissionRule: async (ctx, _userId, [rule]: [{ project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny" }]) => {
+    await (ctx as any).runMutation(api.permissionRules.add, {
+      project: rule.project, scope: rule.scope, permission: rule.permission, pattern: rule.pattern, action: rule.action,
+    });
+  },
+  // The client already removed the row (store removePermissionRule).
+  // A stub's add rides the outbox ahead of this, so its row exists by now and
+  // is found by its fields.
+  removePermissionRule: async (ctx, _userId, [ruleId, rule]: [string, { project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny" }?]) => {
+    if (isServerId(ruleId)) {
+      await (ctx as any).runMutation(api.permissionRules.remove, { rule_id: ruleId as Id<"permission_rules"> });
+    } else if (rule) {
+      await (ctx as any).runMutation(api.permissionRules.remove, { match: { project: rule.project, scope: rule.scope, permission: rule.permission, pattern: rule.pattern, action: rule.action } });
+    }
   },
   // The client already shows the run as running (store respondToGate).
   respondToGate: async (ctx, _userId, [runId, response]: [string, string]) => {
@@ -2966,6 +3005,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // again. A run already gone (deleted from another window, or a call this
   // caller can no longer read) is acknowledged: the rows the client dropped
   // are gone either way, and putting them back would show dead files.
+  // A regulated team's call deleted for good by a team admin (store deleteCall).
+  deleteCall: async (ctx, _userId, [transcriptId]: [string]) => {
+    return await ctx.runMutation!(api.regulatedDeletion.deleteCall, { transcript_id: transcriptId as Id<"transcripts"> });
+  },
   deleteCallRecording: async (ctx, userId, [recordingId]: [string], result) => {
     if (!hasReceiptCommandId(result)) {
       return await ctx.runMutation!(api.callRecordings.deleteRecording, { recording_id: recordingId });

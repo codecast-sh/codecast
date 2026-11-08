@@ -31,8 +31,10 @@ export type TurnReason = (typeof TURN_REASONS)[number];
  *  address before the Free allowance serves them, and the turn picks up by
  *  itself once they enter it. `limit` is a Free turn refused for a reason
  *  that is not the person's month (their address's Free allowance is in use
- *  on another account, or Free turns are paused for the day). */
-export const NOTICE_KINDS = ["error", "unavailable", "budget", "time", "safety", "verify", "limit"] as const;
+ *  on another account, or Free turns are paused for the day). `vendor` is a
+ *  regulated team's turn refused because the model's vendor has no BAA with
+ *  Codecast yet (contracts/vendorCoverage); nobody in the team can lift it. */
+export const NOTICE_KINDS = ["error", "unavailable", "budget", "time", "safety", "verify", "limit", "vendor"] as const;
 export type NoticeKind = (typeof NOTICE_KINDS)[number];
 const NOTICE_SUBTYPE_PREFIX = "hosted_notice:";
 

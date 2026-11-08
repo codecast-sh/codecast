@@ -65,7 +65,8 @@ import { messageValidator } from "../messages";
 import { ALLOW_SCOPES, toolsFor, type ToolsForOptions } from "./tools";
 import { normalizeTimezone } from "../lib/teamDay";
 import { decisionAnswerOf, pendingInput, turnsIn, type Input, type Turn } from "./input";
-import { closeProviderIncident, noteProviderFault } from "./incidents";
+import { closeProviderIncident, noteProviderFault, providerOf } from "./incidents";
+import { vendorAllowedFor, vendorRefusalFor, type VendorScope } from "../lib/vendorGuard";
 import { freeTurnRefusal, noteFreeSpend, offerEmailCode, type FreeRefusal } from "./freeGate";
 import { titleAfterHostedAnswer } from "../titleGeneration";
 import { earlierHistory, historyState, type LongHistory } from "./longHistory";
@@ -222,6 +223,13 @@ export async function leaseTurn(
     turnId = await ctx.db.insert("assistant_turns", { conversation_id: conversationId, user_id: userId, cost_reserved_usd: 0, ...fields });
   }
 
+  // A regulated team's conversation reaches a model only on a BAA-covered vendor.
+  const vendorRefusal = await vendorRefusalFor(ctx, turnScope(conversation), modelVendor(model));
+  if (vendorRefusal) {
+    await refuseTurn(ctx, (await ctx.db.get(turnId))!, input, { kind: "vendor", line: vendorRefusal });
+    return "blocked";
+  }
+
   // The Free plan serves a proven person, one Free month per mailbox, within
   // the day's ceiling (freeGate.ts); a turn a card pays for always passes.
   const refusal = await freeTurnRefusal(ctx, userId, now);
@@ -249,6 +257,12 @@ export async function leaseTurn(
   await ctx.scheduler.runAfter(turnDeps.deadlineMs + turnDeps.leaseMarginMs, internal.assistant.turns.expire, { turn_id: turnId });
   return "started";
 }
+
+/** The vendor a hosted model id runs on (`openai/...` is OpenAI, a bare id is Claude). */
+const modelVendor = (model: string) => (providerOf(model) === "openai" ? "openai" : "anthropic");
+
+/** Whose content a conversation's turns send (lib/vendorGuard reads its team). */
+const turnScope = (conversation: Doc<"conversations">): VendorScope => ({ conversationId: conversation._id });
 
 /** True while a conversation has never had a turn run: its first request. */
 async function isFirstTurn(ctx: MutationCtx, conversationId: Id<"conversations">): Promise<boolean> {
@@ -680,6 +694,8 @@ export interface Begun {
   window_start: WindowStart | null;
   /** Only a routine's firing started this turn (no word from the person). */
   by_routine: boolean;
+  /** Whose content the run sends (lib/vendorGuard): its model calls and its fallback ask here. */
+  scope: VendorScope;
 }
 
 /** Starts a leased turn's run: takes the queued input, resolves an answered
@@ -772,6 +788,7 @@ export const begin = internalMutation({
       window_start: window.start,
       // A routine's run is news the person did not just ask for.
       by_routine: routineOnly(input.typed),
+      scope: turnScope(conversation),
     };
   },
 });
@@ -923,7 +940,8 @@ export async function runTurn(ctx: ActionCtx, turnId: Id<"assistant_turns">): Pr
     // tier), so the turn row and the incident name its provider.
     let model = ready.model;
     let fellBack: { model: string; error: string } | undefined;
-    const fallback = turnDeps.fallbackModel(ready.model);
+    const fallbackModel = turnDeps.fallbackModel(ready.model);
+    const fallback = fallbackModel && (await vendorAllowedFor(ctx, ready.scope, modelVendor(fallbackModel))) ? fallbackModel : undefined;
     const said = result.messages.some((row) => row.role === "assistant" && isStorableRow(row));
     if (result.reason === "error" && fallback && providerFault(result.error) && !said && !controller.signal.aborted) {
       console.warn(`[assistant] ${ready.model} failed (${result.error?.slice(0, 200)}), moving turn ${turnId} to ${fallback}`);

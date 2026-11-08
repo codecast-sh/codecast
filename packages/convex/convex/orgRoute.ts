@@ -189,7 +189,7 @@ export const route = action({
       choices = p.landing.choices.map((r: any) => ({ handle: r.handle, reason: `names its ${p.anchor.plan_id ? "plan" : "project"}` }));
     } else if (!owner) {
       const roster = p.roster!;
-      const reply = await callModel({ ...routerRequest(roster, request), label: "Route request" });
+      const reply = await callModel({ ...routerRequest(roster, request), label: "Route request", gate: { ctx, scope: { workspace: p.boundary.team_id ? `team:${p.boundary.team_id}` : null, apiToken: args.api_token } } });
       const decision = routerDecision(reply ? parseRouterReply(reply.text, roster) : null);
       confidence = decision.confidence;
       why = `${decision.reason || why}`;

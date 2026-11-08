@@ -1,6 +1,6 @@
 import type { Device } from "../components/DeviceBadge";
-import { cloudHostManaged, cloudHostRetired, cloudPlacementFor, deviceDisplayName, platformCanOpenPath, type CloudHostReport, type CloudStartFrom } from "@codecast/shared/contracts";
-import { defaultMachineId, deviceSeesPath, type MachineCandidate } from "./machinePicker";
+import { cloudHostManaged, cloudHostRetired, cloudPlacementFor, deviceDisplayName, type CloudHostReport, type CloudStartFrom } from "@codecast/shared/contracts";
+import { defaultMachineId, intendedMachineId, type MachineCandidate } from "./machinePicker";
 import { compactAge } from "./threadState";
 
 export type SessionMachine = Device & { bot_name?: string | null; runner_name?: string | null };
@@ -60,23 +60,23 @@ type SelectionOpts = Parameters<typeof defaultMachineId>[1];
  * nothing. Cloud mode itself is derived from whichever machine wins here
  * (`isCloudHost(selected)`), never stored beside it.
  *
- * Ladder: owner if (online || cloud host) → the machine this client runs on
- * → last pick if (online || cloud host) → the checkout holder → any online
- * local → the usual remote rungs. The local machine sits above the standing
- * pick on purpose: a session started from a laptop runs on that laptop, and
- * neither a remembered choice nor a stale roster row may re-home it.
+ * Ladder: owner if (online || cloud host) → your saved default → your last
+ * hand pick (both if online || cloud host, and able to open the folder) →
+ * the machine this client runs on → the checkout holder → any online local →
+ * the usual remote rungs (sd-2611: a remembered choice outranks "the machine
+ * I'm on", so the Studio you picked stays picked from the laptop).
  * No toggle rung: memory above the owner rung is what let an eagerly-created
  * laptop-owned row render as "Cloud Linux" without ever being parked.
  */
 export function defaultSessionMachineId(devices: Candidate[], opts: SelectionOpts) {
   const own = devices.filter((d) => d.bot_name === undefined);
-  const asleep = (d: Candidate) => sleepingCloudHost(d, devices);
-  const wakeOk = (d: MachineCandidate) => asleep(d as Candidate);
-  const intended = devices.find((d) => d.device_id === opts?.ownerDeviceId && (d.online || isCloudHost(d)))
-    ?? own.find((d) => d.device_id === opts?.localDeviceId)
-    ?? devices.find((d) => d.device_id === opts?.lastPicked && (d.online || asleep(d))
-      && (!opts.projectPath || asleep(d) || deviceSeesPath(d, opts.projectPath) || platformCanOpenPath(d.platform, opts.projectPath)));
-  return intended?.device_id ?? defaultMachineId(own.length ? own : devices, { ...opts, wakeOk });
+  const wakeOk = (d: MachineCandidate) => sleepingCloudHost(d as Candidate, devices);
+  const owner = devices.find((d) => d.device_id === opts?.ownerDeviceId && (d.online || isCloudHost(d)));
+  // The machine you sit at is one of yours, never a team box.
+  const localDeviceId = own.some((d) => d.device_id === opts?.localDeviceId) ? opts?.localDeviceId : null;
+  return owner?.device_id
+    ?? intendedMachineId(devices, { ...opts, localDeviceId, wakeOk })
+    ?? defaultMachineId(own.length ? own : devices, { ...opts, wakeOk });
 }
 
 export type MachineSelection = { pickedDeviceId: string | null; cloudMode: boolean };

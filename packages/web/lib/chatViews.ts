@@ -17,7 +17,7 @@ import type { IdentityRow } from "./sessionIdentity";
 import { attachmentKind, type ChatAuthor, type ChatChannelView, type ChatMessageView, type ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
 import { chatRoomKey } from "@codecast/shared/contracts";
-import { dmOtherIds, isClosedAgentPlaceholder, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
+import { dmOtherIds, isClosedAgentPlaceholder, isSessionPartyId, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
 import { isPerson } from "@codecast/shared/team/memberKind";
 
 export type ChatMember = {
@@ -47,6 +47,9 @@ export function channelDisplayName(
   if (ids.length === 0) return "Direct message";
   const byId = new Map((members ?? []).map((m) => [String(m._id), m]));
   const names = ids.map((id) => {
+    // A session's own room with people carries the session's title as its
+    // name; the session is the party the other side is talking to.
+    if (isSessionPartyId(String(id))) return view.name || "Session";
     const m = byId.get(String(id)) ?? knownAgentMember(String(id));
     // First name only past a 1:1 — three full names don't fit a rail row.
     const full = memberName(m);

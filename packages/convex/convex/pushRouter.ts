@@ -34,6 +34,7 @@ import {
 } from "./presencePolicy";
 import { canAccessConversation, workspaceGrantsAccess, workspaceKey } from "./lib/access";
 import type { Id } from "./_generated/dataModel";
+import { PUSH_TYPE_LABELS } from "./lib/pushPrivacy";
 
 // Client heartbeats every ~30s while visible; background browser tabs get
 // throttled to ~1/min, so "fresh" tolerates two missed beats. Sleeping the
@@ -107,41 +108,6 @@ export async function readPresence(
 }
 
 // Aggregate body for a multi-row flush, grouped by notification type.
-const TYPE_LABELS: Record<string, [string, string]> = {
-  session_idle: ["session waiting for input", "sessions waiting for input"],
-  sessions_need_input: ["session waiting for input", "sessions waiting for input"],
-  permission_request: ["permission request", "permission requests"],
-  session_error: ["session error", "session errors"],
-  session_assigned: ["session ownership update", "session ownership updates"],
-  task_completed: ["task completed", "tasks completed"],
-  task_failed: ["task failed", "tasks failed"],
-  task_unblocked: ["task unblocked", "tasks unblocked"],
-  team_session_start: ["teammate session", "teammate sessions"],
-  chat_mention: ["chat mention", "chat mentions"],
-  chat_reply: ["thread reply", "thread replies"],
-  chat_here: ["channel announcement", "channel announcements"],
-  chat_dm: ["direct message", "direct messages"],
-  chat_added: ["channel invite", "channel invites"],
-  chat_post: ["channel message", "channel messages"],
-  daemon_overloaded: ["overloaded daemon", "overloaded daemons"],
-  machine_overloaded: ["overloaded machine", "overloaded machines"],
-  goal_stall: ["stalled focus item", "stalled focus items"],
-  device_shared: ["shared machine", "shared machines"],
-  card_waiting: ["change card waiting", "change cards waiting"],
-  change_shipped: ["change shipped", "changes shipped"],
-  cause_reopened: ["problem came back", "problems came back"],
-  decision_answered_for_you: ["decision answered for you", "decisions answered for you"],
-  decision_passed: ["decision passed to you", "decisions passed to you"],
-  decision_escalated: ["decision escalated to you", "decisions escalated to you"],
-  decision_assigned: ["decision in your areas", "decisions in your areas"],
-  decision_comment: ["comment on a decision", "comments on decisions"],
-  team_join_request: ["request to join", "requests to join"],
-  team_join_approved: ["team you joined", "teams you joined"],
-  passkey_changed: ["passkey change", "passkey changes"],
-  weekly_card: ["weekly card", "weekly cards"],
-  metric_alert: ["metric alert", "metric alerts"],
-};
-
 export function summarizePushBatch(
   rows: Array<{ type?: string; title: string; body: string; data?: any }>,
 ): { title: string; body: string; data: any } {
@@ -151,13 +117,13 @@ export function summarizePushBatch(
   }
   const counts = new Map<string, number>();
   for (const r of rows) {
-    const key = r.type && TYPE_LABELS[r.type] ? r.type : "other";
+    const key = r.type && PUSH_TYPE_LABELS[r.type] ? r.type : "other";
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   const parts: string[] = [];
   for (const [key, n] of counts) {
     if (key === "other") continue;
-    const [one, many] = TYPE_LABELS[key];
+    const [one, many] = PUSH_TYPE_LABELS[key];
     parts.push(`${n} ${n === 1 ? one : many}`);
   }
   const otherCount = counts.get("other") ?? 0;

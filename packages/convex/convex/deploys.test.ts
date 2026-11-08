@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { autoDeployCore, DEPLOY_SETTLE_MS, recordDeployMarker, report, request, stage } from "./deploys";
+import { autoDeployCore, carriesForMarker, DEPLOY_SETTLE_MS, recordDeployMarker, report, request, stage } from "./deploys";
+import schema from "./schema";
+import { schemaIndexes } from "./testDb";
 import { backfill } from "./deploysBackfill";
 
 // Deploys as objects (docs/architecture/deploys.md): a marker records or
@@ -108,6 +110,42 @@ describe("a fix that landed outside a run's merge step", () => {
     await recordDeployMarker(ctx, marker());
     expect(t.deploys[0].carries).toEqual([expect.objectContaining({ task_id: "task_a", how: "deployed after the merge", merge_sha: "1111111aaaa" })]);
     expect(t.deploys[0].carries[0]).not.toHaveProperty("run_id");
+  });
+});
+
+describe("a deploy carries what its range on main names", () => {
+  // Union's ct-60410: it landed on Oct 17 (in dp-57's code) and again on Oct 22, and tasks.landed keeps only the newest.
+  // The commits table keeps both landings, each placed on main, so each deploy carries the landing its range holds.
+  const REPO = "acme/app";
+  const at = (h: number) => NOW - 10 * DAY + h * 60 * 60 * 1000;
+  const live = (id: string, sha: string, cut: number) => ({
+    _id: id, short_id: id, workspace: WS, team_id: TEAM, target: "production", status: "live", trigger: "outside", source: "acme-api",
+    event_ids: [], repository: REPO, sha, cut_at: cut, carries: [], created_at: cut + 30 * 60_000, live_at: cut + 60 * 60_000, updated_at: cut,
+  });
+  const commit = (sha: string, mainAt: number, task_ids: string[] = [], message = sha) => ({ _id: `c_${sha}`, sha, repository: REPO, team_id: TEAM, message, author_name: "a", author_email: "a@x", timestamp: mainAt, files_changed: 1, insertions: 0, deletions: 0, main_at: mainAt, task_ids });
+
+  test("each landing goes with the deploy whose range holds it, a run merge keeps its run, and a branch-only link carries nothing", async () => {
+    const t = await seed({
+      deploys: [live("dp-1", "d1d1d1d1d1", at(0)), live("dp-2", "d2d2d2d2d2", at(10)), live("dp-3", "d3d3d3d3d3", at(30))],
+      commits: [
+        commit("d1d1d1d1d1", at(0)),
+        commit("e1e1e1e1e1", at(5), ["task_a"], "Fix totals (ct-1)"),   // the first landing, in dp-2's range
+        // Linked to task_a only by the fix branch it was first pushed on; its message names no problem.
+        commit("f1f1f1f1f1", at(7), ["task_a"], "Unrelated refactor"),
+        commit("bbbbbbb2222", at(6), ["task_b"]),           // run_b's merge
+        commit("d2d2d2d2d2", at(10)),
+        commit("e3e3e3e3e3", at(20), ["task_a"], "Totals again (ct-1)"), // the second landing, in dp-3's range
+        commit("f3f3f3f3f3", at(25), ["task_b"], "Unrelated, pushed on a fix branch"),
+        commit("d3d3d3d3d3", at(30)),
+      ],
+    });
+    t.workflow_runs = [{ ...t.workflow_runs[1], merge: { sha: "bbbbbbb2222", branch: "fix/b", into: "main", at: at(6) + 60_000 } }];
+    t.tasks[0].landed = { sha: "e3e3e3e3e3", at: at(20), branch: "main" };
+    const ctx = { db: makeFakeDb(t, { indexes: schemaIndexes(schema as any) }) } as any;
+    const [, dp2, dp3] = t.deploys;
+    const two = await carriesForMarker(ctx, dp2, NOW);
+    expect(two.map((c) => [c.task_id, c.merge_sha, c.run_id ?? null])).toEqual([["task_a", "e1e1e1e1e1", null], ["task_b", "bbbbbbb2222", "run_b"]]);
+    expect((await carriesForMarker(ctx, dp3, NOW)).map((c) => [c.task_id, c.merge_sha])).toEqual([["task_a", "e3e3e3e3e3"]]);
   });
 });
 

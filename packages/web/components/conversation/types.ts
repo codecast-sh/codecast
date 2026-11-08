@@ -282,10 +282,11 @@ export type ConversationViewProps = {
   /** The density this view opens in when the person has not picked one for
    *  the conversation (a proposal's thread reads as a conversation, S19). */
   initialDensity?: ConversationDensity;
-  /** Fold mode (scopes-and-feed.md F4.1): the conversation as the agent
-   *  talking to the person: the prompts a machine sent (wake frames,
-   *  interrupts, polls, notices) render nothing. Every reply the agent wrote
-   *  stays; pair it with the condensed density so tools fold into receipts. */
+  /** Clean mode (scopes-and-feed.md F4.1): the conversation as a chat
+   *  between the agent and the person, drawn as bubbles. The prompts a
+   *  machine sent render nothing; the agent's side is what it said with
+   *  `cast say` plus the cards that wait on the person (lib/cleanThread.ts).
+   *  Its thinking, tools and working prose stay in the full session view. */
   foldWorkingTurns?: boolean;
   /** Open at the top of what is loaded and do not follow the live tail: the
    *  host's lead is what the reader came for (a proposal's letter, S19). The
@@ -294,6 +295,10 @@ export type ConversationViewProps = {
   /** The composer's placeholder when the host owns the send ("Reply to the
    *  author"); the workflow gate's line otherwise reads in its place. */
   composerPlaceholder?: string;
+  /** Whether the conversation docks its comment rail at its own right edge
+   *  (default). A host that puts panes beside the conversation (the diff
+   *  panel) docks the rail at its outer edge instead and passes false. */
+  hostsCommentRail?: boolean;
 };
 
 export interface ConversationViewHandle {

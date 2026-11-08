@@ -2,7 +2,7 @@ import { isWorkflowRunLog } from "./lib/runLog";
 import { formatIdle, formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
 import { noteWriteCause } from "./lifecycleEvents";
 import type { RegisteredMutation } from "convex/server";
-import { mutation, query, internalMutation, internalQuery } from "./functions";
+import { mutation, query, internalMutation, internalQuery, internalAction } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -1914,12 +1914,20 @@ export function planDeadSessionRevive(
 // apart from "offline" (no live daemon); both keep the message queued.
 async function liveAndReadyConversationIds(
   ctx: { db: any },
-  now: number
+  now: number,
+  conversationIds?: Id<"conversations">[],
 ): Promise<{ ready: Set<string>; live: Set<string> }> {
-  const sessions = await ctx.db
-    .query("managed_sessions")
-    .withIndex("by_heartbeat", (q: any) => q.gt("last_heartbeat", now - HEARTBEAT_ALIVE_MS))
-    .collect();
+  // Named conversations read only their own sessions: the range over every
+  // live heartbeat changes each second, and a mutation holding it never commits.
+  const sessions = conversationIds
+    ? (await Promise.all([...new Set(conversationIds.map(String))].map((id) => ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", id))
+      .collect()))).flat().filter((s: any) => (s.last_heartbeat ?? 0) > now - HEARTBEAT_ALIVE_MS)
+    : await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_heartbeat", (q: any) => q.gt("last_heartbeat", now - HEARTBEAT_ALIVE_MS))
+      .collect();
   const ready = new Set<string>();
   const live = new Set<string>();
   for (const s of sessions) {
@@ -2006,22 +2014,83 @@ async function notifyStuckSend(
   if (giveUp) await patchPendingMessageStatus(ctx, msg, { status: "cancelled" as const });
 }
 
-export const retryStuckMessages: RegisteredMutation<"internal", Record<string, never>, Promise<void>> = internalMutation({
-  handler: async (ctx) => {
+// The cron's pass, in two halves. A query reads the whole backlog (every
+// non-terminal row and every live session) and names the rows a pass would
+// act on; short mutations then re-decide and act on just those. One
+// mutation doing both read ranges that heartbeats and status writes change
+// every second, so it failed OCC on every retry and never committed: the
+// backstop was off and the cron re-ran back to back (2026-11-07).
+// Each conversation applies in its own mutation, and one that fails waits for
+// the next pass without stopping the rest. Batches of 50 rows across many
+// conversations held the rows daemons were retrying and every one of their
+// sessions' heartbeats, so the first batch failed every pass and the action
+// threw before reaching the others (61 of 61 passes, 2026-11-07 16:00 UTC).
+export const retryStuckMessages = internalAction({
+  args: {},
+  handler: async (ctx): Promise<void> => {
+    const groups: Id<"pending_messages">[][] = await ctx.runQuery(internal.pendingMessages.planStuckMessages, { now: Date.now() });
+    let failed = 0;
+    let firstError: unknown;
+    for (const ids of groups) {
+      try {
+        await ctx.runMutation(internal.pendingMessages.applyStuckMessages, { ids });
+      } catch (error) {
+        failed++;
+        firstError ??= error;
+      }
+    }
+    if (failed) {
+      console.warn(`retryStuckMessages: ${failed} of ${groups.length} conversation(s) left for the next pass: ${String(firstError).slice(0, 300)}`);
+    }
+  },
+});
+
+export const planStuckMessages = internalQuery({
+  args: { now: v.number() },
+  handler: async (ctx, args): Promise<Id<"pending_messages">[][]> => planStuckMessageIds(ctx, args.now),
+});
+
+/** The rows a full pass would act on, one group per conversation, from a run against a db that drops every write. */
+export async function planStuckMessageIds(ctx: { db: any }, now: number): Promise<Id<"pending_messages">[][]> {
+    const dryDb = {
+      get: (...a: any[]) => ctx.db.get(...a),
+      query: (...a: any[]) => ctx.db.query(...a),
+      normalizeId: (...a: any[]) => ctx.db.normalizeId?.(...a),
+      system: ctx.db.system,
+      insert: async () => "dry" as any,
+      patch: async () => {},
+      replace: async () => {},
+      delete: async () => {},
+    };
+    const dryScheduler = { runAfter: async () => "dry" as any, runAt: async () => "dry" as any };
+    const result = await healAndNotifyStuckMessages({ db: dryDb, scheduler: dryScheduler as any }, now);
+    const byConversation = new Map<string, Id<"pending_messages">[]>();
+    for (const id of result.acted) {
+      const key = String((await ctx.db.get(id))?.conversation_id);
+      byConversation.set(key, [...(byConversation.get(key) ?? []), id]);
+    }
+    return [...byConversation.values()];
+}
+
+export const applyStuckMessages: RegisteredMutation<"internal", { ids: Id<"pending_messages">[] }, Promise<void>> = internalMutation({
+  args: { ids: v.array(v.id("pending_messages")) },
+  handler: async (ctx, args) => {
     noteWriteCause(ctx, "cron:retryStuckMessages");
-    await healAndNotifyStuckMessages(ctx, Date.now());
+    await healAndNotifyStuckMessages(ctx, Date.now(), args.ids);
   },
 });
 
 // The cron's work, extracted so it can be driven deterministically in tests with a fixed `now`.
 // Two jobs: (1) revive stranded messages once their session is idle (the never-drop backstop),
 // and (2) tell the sending session when a cross-user message is stuck past the deadline.
-export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: WakeScheduler }, now: number): Promise<{
+export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: WakeScheduler }, now: number, only?: Id<"pending_messages">[]): Promise<{
   revived: number;
   controlsAcked: number;
   notified: number;
   waiting: number;
   rewoken: number;
+  /** The rows this pass wrote something for (planStuckMessages). */
+  acted: Id<"pending_messages">[];
 }> {
   {
     // Scan every non-terminal state. `delivered`/`cancelled` are terminal so they're skipped.
@@ -2035,16 +2104,25 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
     // dependency on the whole table that OCC-conflicted with every addMessages
     // pending-write — a self-amplifying stampede that timed out syncs and let the
     // backlog (and thus the scan cost) grow without bound.
+    // `only` narrows the pass to named rows (applyStuckMessages), read by id.
     const candidates: any[] = [];
-    for (const status of ["pending", "injected", "failed", "undeliverable"] as const) {
-      const rows = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_status", (q: any) => q.eq("status", status))
-        .collect();
-      candidates.push(...rows);
+    if (only) {
+      for (const id of only) {
+        const row = await ctx.db.get(id);
+        if (row && (NON_TERMINAL_STATUSES as readonly string[]).includes(row.status)) candidates.push(row);
+      }
+    } else {
+      for (const status of NON_TERMINAL_STATUSES) {
+        const rows = await ctx.db
+          .query("pending_messages")
+          .withIndex("by_status", (q: any) => q.eq("status", status))
+          .collect();
+        candidates.push(...rows);
+      }
     }
 
-    const { ready, live } = await liveAndReadyConversationIds(ctx, now);
+    const { ready, live } = await liveAndReadyConversationIds(ctx, now, only ? candidates.map((m) => m.conversation_id) : undefined);
+    const acted = new Set<Id<"pending_messages">>();
 
     let revived = 0;
     let controlsAcked = 0;
@@ -2090,6 +2168,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
             waiting++;
           } else {
             rewoken.add(conversationId);
+            acted.add(msg._id);
             await wakeHostedConversation(ctx, hostedConversation, "continue");
           }
         }
@@ -2103,6 +2182,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
         : "offline";
       const senderNotify = planStuckSendNotify(msg, reach, now);
       if (senderNotify.kind === "notify") {
+        acted.add(msg._id);
         await notifyStuckSend(ctx, msg, senderNotify.reach);
         notified++;
         if (senderNotify.reach === "gone") continue; // cancelled — nothing more to do with this row
@@ -2112,6 +2192,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
       // human answer" about a terminal that is gone (jx78gaw, three days, 2026-10-13). Drop
       // the hold so the row reads as what it is: queued for a session that is offline.
       if (msg.delivery_hold_screen && !live.has(conversationId)) {
+        acted.add(msg._id);
         await ctx.db.patch(msg._id, { delivery_disposition_reason: undefined, delivery_hold_screen: undefined });
       }
       // Session not ready to receive (busy / blocked / stopped / gone): leave the message
@@ -2126,6 +2207,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
           continue;
         }
         deadRevived.add(conversationId);
+        acted.add(msg._id);
         if (await rependPendingMessage(ctx, msg, 0)) {
           await ctx.db.patch(msg._id, { dead_session_revived_at: now });
           reflag.add(msg.conversation_id);
@@ -2135,6 +2217,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
       }
       const action = planStuckMessageHeal(msg, now);
       if (action.kind === "skip") continue;
+      acted.add(msg._id);
       if (action.kind === "deliver_control") {
         await markPendingDelivered(ctx, msg);
         controlsAcked++;
@@ -2152,7 +2235,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
     if (revived > 0 || controlsAcked > 0 || notified > 0 || rewoken.size > 0) {
       console.log(`retryStuckMessages: revived ${revived} for idle sessions, acked ${controlsAcked} control msg(s), notified ${notified} stuck cross-user send(s), rewoke ${rewoken.size} hosted conversation(s), ${waiting} waiting on a busy/offline session`);
     }
-    return { revived, controlsAcked, notified, waiting, rewoken: rewoken.size };
+    return { revived, controlsAcked, notified, waiting, rewoken: rewoken.size, acted: [...acted] };
   }
 }
 

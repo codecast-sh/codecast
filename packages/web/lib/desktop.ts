@@ -1,12 +1,12 @@
 import { conversationIdFromPath } from "./desktopHandoff";
 import { useSyncExternalStore } from "react";
 import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
-import { BrowserBannerGate } from "./notificationGate";
+import { BrowserBannerGate, bannerEntity } from "./notificationGate";
 import { PANE_EMBED } from "./browserPane";
 import type { DesktopMenuKeys } from "@codecast/shared/contracts/keyBindings";
 import { extractDeepLinkIntent, parseDesktopDeepLinkPath } from "./desktopHandoff";
 import { cmpVersions, parseShellVersion } from "./desktopFloor";
-import { agentAlertsSuppressed, deliverAlert } from "./notificationDelivery";
+import { agentAlertsSuppressed, deliverAlert, focusedViewChanged, focusedWindowShows, installFocusHold } from "./notificationDelivery";
 import type { GuestMedia } from "./calls/callMedia";
 import type { MeetingDetectConfig, MeetingDetectMode, MeetingOffer } from "./desktopMeetings";
 
@@ -1287,18 +1287,23 @@ const browserBanners = new BrowserBannerGate();
 // banner is about, when the conversation banner already fired inside the burst
 // window, or, on desktop, when another window showed the same banner (the shell
 // dedupes by `data.key`).
+//
+// `due` names a banner about a request (a session waiting on the person): it
+// is asked again at the moment the banner would go up, so one the person
+// answered meanwhile never shows.
 export async function notifyNative(
   title: string,
   body: string,
   data?: NotifyNativeData,
+  { due }: { due?: () => boolean } = {},
 ): Promise<boolean> {
   const key = data?.key ?? Array.from(new Uint8Array(await crypto.subtle.digest(
     "SHA-256", new TextEncoder().encode(JSON.stringify([title, body, data?.route, data?.conversationId])),
   )), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  return deliverAlert(`banner:${key}`, () => deliverNative(title, body, data));
+  return deliverAlert(`banner:${key}`, () => deliverNative(title, body, data, due), { due });
 }
 
-async function deliverNative(title: string, body: string, data?: NotifyNativeData): Promise<boolean> {
+async function deliverNative(title: string, body: string, data?: NotifyNativeData, due?: () => boolean): Promise<boolean> {
   // One click target per banner: an explicit route (chat, tasks, docs) wins,
   // else the conversation. Electron receives both and applies the same rule.
   const route = data?.route ?? (data?.conversationId ? `/conversation/${data.conversationId}` : undefined);
@@ -1309,13 +1314,19 @@ async function deliverNative(title: string, body: string, data?: NotifyNativeDat
     // Older shells resolve void: they showed it.
     return res ? res.shown : true;
   }
-  // A browser tab is the whole app, so it applies the same rules to itself.
+  // A browser tab applies the shell's rules itself. The shell sees every
+  // window; a tab learns what the other tabs show through the focus lock, so
+  // a banner about the thing a focused tab shows stays quiet whichever tab
+  // won the claim to show it.
+  const entity = bannerEntity(route);
+  if (!data?.force && entity && await focusedWindowShows(entity)) return false;
   const focused = typeof document !== "undefined" && document.hasFocus();
   const verdict = await browserBanners.admit(
     { focused, active: reportedWindowState?.active ?? null },
     { ...data, route },
   );
-  if (!verdict.shown) return false;
+  // The gate can hold a banner through a short grace; ask again after it.
+  if (!verdict.shown || (due && !due())) return false;
   if (hasBrowserNotificationPermission()) {
     const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId ?? route, silent: true });
     if (route) {
@@ -1407,6 +1418,14 @@ let reportedWindowState: DesktopWindowState | null = null;
 export function reportDesktopWindowState(state: DesktopWindowState): void {
   reportedWindowState = state;
   bridge("reportWindowState")?.(state);
+  focusedViewChanged();
+}
+
+/** In a browser tab, tell the other tabs what this one shows while it has
+ *  focus (notifyNative reads it). Returns the uninstall. */
+export function installBrowserFocusHold(): () => void {
+  if (isElectron()) return () => {};
+  return installFocusHold(() => bannerEntity(reportedWindowState?.active));
 }
 
 export async function updateBadge(count: number) {

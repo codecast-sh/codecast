@@ -34,6 +34,8 @@ import { DEFAULT_MDM_VENDOR, MDM_VENDORS, type MdmVendorId } from "@codecast/con
 const MDM_PKG_URL = "https://dl.codecast.sh/desktop/mdm/Codecast.pkg";
 
 const RESTRICTIONS = MANAGED_POLICY.filter((d) => d.team && d.kind === "restriction");
+// The switches that turn something off (they name a subject); regulated-data switches change handling, not access.
+const BLOCKS = RESTRICTIONS.filter((d) => d.subject);
 const AUTO_UPDATE = MANAGED_POLICY.find((d) => d.key === "auto_update")!;
 const EXCLUDED = MANAGED_POLICY.find((d) => d.key === "excluded_paths")!;
 const AUTO_UPDATE_OPTIONS: Array<{ value: "on" | "off" | undefined; label: string }> = [
@@ -78,7 +80,7 @@ export function ManagedDevicesPanel({ teamId, teamName }: { teamId: Id<"teams">;
   const overview = useManagedDevicesOverview(String(teamId));
   const [mdm, setMdm] = useState<MdmVendorId>(DEFAULT_MDM_VENDOR);
   const setPolicy = (next: TeamPolicy) => useInboxStore.getState().setTeamPolicy(String(teamId), parseTeamPolicy(next) as Record<string, unknown>);
-  const restrictionsOn = RESTRICTIONS.filter((d) => (policy as any)[d.key] === true).length;
+  const restrictionsOn = BLOCKS.filter((d) => (policy as any)[d.key] === true).length;
   const devices = overview?.devices ?? [];
   const enrolled = devices.filter((d) => d.status === "active").length;
   const liveTokens = (overview?.tokens ?? []).filter((t) => !t.revoked_at).length;
@@ -115,7 +117,7 @@ export function ManagedDevicesPanel({ teamId, teamName }: { teamId: Id<"teams">;
       </SettingsSection>
 
       <SettingsSection title="Policy" icon={SlidersHorizontal}>
-        {RESTRICTIONS.map((d) => (
+        {RESTRICTIONS.filter((d) => !d.requires || (policy as any)[d.requires] === true).map((d) => (
           <SettingsRow key={d.key} label={d.name}>
             <Switch
               checked={(policy as any)[d.key] === true}
@@ -318,7 +320,7 @@ export function ManagedDevicesLink({ teamId }: { teamId: string }) {
   const overview = useManagedDevicesOverview(teamId);
   const enrolled = (overview?.devices ?? []).filter((d) => d.status === "active").length;
   const policy = parseTeamPolicy(team?.policy);
-  const restrictions = RESTRICTIONS.filter((d) => (policy as any)[d.key] === true).length;
+  const restrictions = BLOCKS.filter((d) => (policy as any)[d.key] === true).length;
   const value = [
     `${enrolled} ${enrolled === 1 ? "Mac" : "Macs"}`,
     ...(restrictions ? [`${restrictions} ${restrictions === 1 ? "restriction" : "restrictions"}`] : []),

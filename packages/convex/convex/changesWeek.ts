@@ -548,7 +548,7 @@ export const rebuildWeek = internalAction({
     if (!hasModelKey()) return "held";
 
     const req = weekRequest(load.input);
-    const reply = await callModel({ ...req, label: "Changes week", timeout_ms: WEEK_TIMEOUT_MS });
+    const reply = await callModel({ ...req, label: "Changes week", timeout_ms: WEEK_TIMEOUT_MS, gate: { ctx, scope: { workspace: `team:${args.team_id}` } } });
     if (!reply) {
       await write({ status: "failed" });
       return "failed";

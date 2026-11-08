@@ -24,6 +24,7 @@ import { makeSyncAckCollector, type SyncAckPosition } from "./syncLog";
 import { attachSyncOutbox } from "./syncOutboxWriter";
 import { makeLifecycleEventDb } from "./lifecycleEvents";
 import { makeSessionStartsDb } from "./lib/sessionStarts";
+import { makeWellFormedDb } from "./lib/wellFormed";
 
 const SYNC_ACK = Symbol.for("codecast.syncAckCollector");
 
@@ -37,7 +38,8 @@ function withChangeLog(ctx: any): any {
   // as the mutation asked for it, and records through the raw db.
   const tracked = makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db, collector));
   // session_starts follows conversation writes beneath it (lib/sessionStarts.ts).
-  const wrapped: any = { ...ctx, db: makeLifecycleEventDb(makeSessionStartsDb(tracked, ctx.db), ctx.db) };
+  // Outermost of all: every layer beneath sees only well-formed strings (lib/wellFormed.ts).
+  const wrapped: any = { ...ctx, db: makeWellFormedDb(makeLifecycleEventDb(makeSessionStartsDb(tracked, ctx.db), ctx.db)) };
   wrapped[SYNC_ACK] = collector;
   return wrapped;
 }

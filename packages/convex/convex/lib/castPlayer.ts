@@ -12,7 +12,8 @@
 // Skin with --cast-accent, --cast-fg, --cast-bg, --cast-panel, --cast-track,
 // --cast-radius, --cast-font, --cast-aspect, or ::part(controls | scrubber |
 // chapters | play-button). Events: "ready", "chapterchange" ({ index, title }),
-// "timeupdate"; properties currentTime, duration, chapters, chapterIndex;
+// "timeupdate"; properties currentTime, duration, chapters, chapterIndex,
+// paused, playbackRate;
 // methods play(), pause(), seek(seconds), goTo(index), setMarkers(list).
 //
 // The page timeline: unless a motion page already provides one, the player the
@@ -122,7 +123,7 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     ":host([data-error]) .err{display:grid}",
     // A tap leaves :hover stuck on touch screens, so hover looks only apply where a pointer hovers.
     "@media (hover:hover){.big:hover{transform:scale(1.07);background:var(--accent)}.scrub:hover .seg{height:6px}.scrub:hover .knob{transform:scale(1)}.scrub:hover .tip{opacity:1}button.ic:hover{background:rgba(255,255,255,.14)}.menu button:hover{background:rgba(255,255,255,.1)}}",
-    "@media (max-width:600px){.title{font-size:13px}.time{font-size:12px;margin:0 4px}button.rate,button.skip,.volwrap{display:none}.big{width:72px;height:72px;margin:-36px 0 0 -36px}}",
+    "@media (max-width:600px){.title{font-size:13px}.time{font-size:12px;margin:0 4px}button.skip,.volwrap{display:none}.big{width:72px;height:72px;margin:-36px 0 0 -36px}}",
     "@media (prefers-reduced-motion:reduce){*{transition:none!important;animation-duration:2s!important}}"
   ].join("");
 
@@ -217,9 +218,7 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     $(".vol").addEventListener("input", function (e) { self._setVolume(parseFloat(e.target.value)); });
     $(".rate").addEventListener("click", function () {
       var rates = [1, 1.25, 1.5, 1.75, 2, 0.75];
-      self.rate = rates[(rates.indexOf(self.rate) + 1) % rates.length];
-      self.v.playbackRate = self.w.playbackRate = self.rate;
-      $(".rate").textContent = self.rate + "x";
+      self.playbackRate = rates[(rates.indexOf(self.rate) + 1) % rates.length];
     });
     $(".fs").addEventListener("click", function () { self.toggleFullscreen(); });
     document.addEventListener("fullscreenchange", function () { self._fsIcon(); });
@@ -258,6 +257,10 @@ const DEFINE_CAST_PLAYER = String.raw`function (opts) {
     set: function (t) { this.seek(t); }
   });
   Object.defineProperty(P, "paused", { get: function () { return this.v.paused; } });
+  Object.defineProperty(P, "playbackRate", {
+    get: function () { return this.rate || 1; },
+    set: function (r) { this.rate = r; this.v.playbackRate = this.w.playbackRate = r; this.$(".rate").textContent = r + "x"; }
+  });
 
   // Lengths come from the chapter attributes when given, else from each file's
   // metadata, all fetched at once (a few kilobytes each for a faststart mp4).

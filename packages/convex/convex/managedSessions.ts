@@ -1328,19 +1328,34 @@ export const getConversationBySessionId = query({
 // > cutoff), so the deletes never collide with heartbeat writes. Everything in range
 // is dead by definition. WINDOW only needs to exceed the gap between cron runs so a
 // death is always caught before it ages out — 6h gives the 10-min cron wide margin.
+//
+// One pass reads at most REAP_PAGE_SIZE rows and hands the rest to a scheduled
+// continuation that resumes after the last heartbeat it read. Collecting the whole
+// window in one mutation timed out on every run (6 an hour, none committed, on
+// 2026-11-07): ~330 dead rows plus the superseded heartbeat entries between them,
+// and a timed-out pass deletes nothing, so the backlog only grew.
 const REAP_WINDOW_MS = 6 * 60 * 60 * 1000;
+export const REAP_PAGE_SIZE = 50;
 export const reapStaleManagedSessions = internalMutation({
-  args: { cutoffMs: v.optional(v.number()) },
+  args: {
+    cutoffMs: v.optional(v.number()),
+    // Set by a continuation: the pass's fixed cutoff, and the last heartbeat read.
+    cutoff: v.optional(v.number()),
+    after: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     noteWriteCause(ctx, "cron:reapStaleManagedSessions");
-    const cutoff = Date.now() - (args.cutoffMs ?? 60 * 60 * 1000); // dead = no beat in 1h
+    const cutoff = args.cutoff ?? Date.now() - (args.cutoffMs ?? 60 * 60 * 1000); // dead = no beat in 1h
     const readStart = Date.now();
     const dead = await ctx.db
       .query("managed_sessions")
-      .withIndex("by_heartbeat", (q: any) =>
-        q.gte("last_heartbeat", cutoff - REAP_WINDOW_MS).lt("last_heartbeat", cutoff)
-      )
-      .collect();
+      .withIndex("by_heartbeat", (q: any) => {
+        const lower = args.after === undefined
+          ? q.gte("last_heartbeat", cutoff - REAP_WINDOW_MS)
+          : q.gt("last_heartbeat", args.after);
+        return lower.lt("last_heartbeat", cutoff);
+      })
+      .take(REAP_PAGE_SIZE);
     const readMs = Date.now() - readStart;
 
     // A parked pane and a hosted conversation's status row are not dead rows:
@@ -1349,11 +1364,18 @@ export const reapStaleManagedSessions = internalMutation({
     const reapable = dead.filter(s => s.agent_status !== "hibernated" && isDaemonManagedRow(s));
     for (const s of reapable) await ctx.db.delete(s._id);
 
+    const more = dead.length === REAP_PAGE_SIZE;
+    if (more) {
+      await ctx.scheduler.runAfter(0, internal.managedSessions.reapStaleManagedSessions, {
+        cutoff,
+        after: dead[dead.length - 1].last_heartbeat,
+      });
+    }
     if (reapable.length > 0) {
       console.log(
-        `reapStaleManagedSessions: deleted ${reapable.length} dead session(s) (scan ${readMs}ms)`
+        `reapStaleManagedSessions: deleted ${reapable.length} dead session(s) (scan ${readMs}ms${more ? ", continuing" : ""})`
       );
     }
-    return { deleted: reapable.length };
+    return { deleted: reapable.length, more };
   },
 });

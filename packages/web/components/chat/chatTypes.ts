@@ -136,6 +136,13 @@ export type ChatMessageView = {
   failReason?: string;
 };
 
+/** The thread a message opens: its root when it is itself a reply (a broadcast
+ *  in the channel timeline), else the message. Threads are flat, so the server
+ *  refuses a reply whose root is a reply. */
+export function threadRootOf(message: { id: string; threadRootId?: string }): string {
+  return message.threadRootId ?? message.id;
+}
+
 /** A role or session inside a room (convex chat.ts ChannelAgentRef). */
 export type ChatChannelAgentRef =
   | { kind: "role"; role_id: string; short_id: string }

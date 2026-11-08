@@ -19,6 +19,7 @@ import { verifyApiToken } from "./apiTokens";
 import { createWorkContext } from "./data";
 import { placeSignal, scopeProject } from "./lib/signalPlacement";
 import { embedText, embeddingWorstCase } from "./lib/embeddings";
+import { vendorAllowedFor } from "./lib/vendorGuard";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { runModelCall, withinBudget, type CallScope } from "./modelCalls";
 import { attachJudgeRequest, parseAttachJudgeReply } from "./lib/attachJudge";
@@ -369,9 +370,12 @@ export async function groupingVerdict(
 ): Promise<{ judged: Id<"tasks"> | null; similar: boolean; vector?: number[]; refused: boolean }> {
   const near = await similarCandidates(ctx, filer, signal, scope);
   if (!near.vector) {
-    // With no embedding key or no budget, grouping by meaning is off, not refused: the finding groups by its key, as
-    // before. With both, a missing embedding means the cap had no room or the call failed, and the finding waits.
-    const on = !!process.env.OPENAI_API_KEY && !!near.scope && (await ctx.runQuery(internal.modelCalls.budgetSet, { workspace: near.scope.workspace }));
+    // With no embedding key, no budget, or a regulated team while OpenAI has no BAA, grouping by meaning is off, not
+    // refused: the finding groups by its key, as before. Otherwise a missing embedding means the cap had no room or
+    // the call failed, and the finding waits.
+    const on = !!process.env.OPENAI_API_KEY && !!near.scope
+      && (await ctx.runQuery(internal.modelCalls.budgetSet, { workspace: near.scope.workspace }))
+      && (await vendorAllowedFor(ctx, { workspace: near.scope.workspace }, "openai"));
     return { judged: null, similar: false, refused: on };
   }
   const none = { judged: null, similar: false, vector: near.vector, refused: false };
@@ -386,9 +390,9 @@ export async function groupingVerdict(
 }
 
 /** Embed a finding's words inside the team's grouping budget; null when there is no room or the embedding fails. */
-export async function embedFinding(ctx: { runMutation: any; scheduler: any }, scope: CallScope, text: string) {
+export async function embedFinding(ctx: { runQuery: any; runMutation: any; scheduler: any }, scope: CallScope, text: string) {
   const spent = await withinBudget(ctx, scope, "grouping", embeddingWorstCase(text), async (charge) => {
-    const result = await embedText(text);
+    const result = await embedText({ ctx, scope: { workspace: scope.workspace } }, text);
     charge(result?.cost_usd ?? 0);
     return result;
   });
@@ -400,7 +404,7 @@ export async function embedFinding(ctx: { runMutation: any; scheduler: any }, sc
  * against by those words from now on: its kept embedding is replaced. Its
  * problem stays. False when the budget had no room or the embedding failed.
  */
-export async function reembedFinding(ctx: { runMutation: any; scheduler: any }, scope: CallScope, finding: { signal_id: Id<"signals">; subject: string; text: string }): Promise<boolean> {
+export async function reembedFinding(ctx: { runQuery: any; runMutation: any; scheduler: any }, scope: CallScope, finding: { signal_id: Id<"signals">; subject: string; text: string }): Promise<boolean> {
   const embedded = await embedFinding(ctx, scope, finding.text);
   if (!embedded) return false;
   await ctx.runMutation(internal.findingGroups.replaceVector, { workspace: scope.workspace, subject: finding.subject, signal_id: finding.signal_id, embedding: embedded.vector });
