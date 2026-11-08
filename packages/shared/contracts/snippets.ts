@@ -501,7 +501,7 @@ Pin a short state on this session saying where the work stands. The human sees i
 
 **End every turn by declaring who acts next** with \`--status\`. It decides where the session files in the human's inbox, and it is how you keep from becoming noise:
 
-- \`blocked\`: a human must act first (answer, grant, decide). Files under **Needs Input** and claims their eyes, so declare it only when true.
+- \`blocked\`: a human must act first (answer, grant, decide). Files under **Needs You** and claims their eyes, so declare it only when true.
 - \`done\`: delivered, nothing stalled; read at leisure.
 - \`dormant\`: a machine wakes you (a trigger you armed, a background task, another session's reply, a blocker on the task you hold: a PR, a decision, a time). Only when you can **name the wake** in the text; if you can't say what resumes you, you are \`blocked\`.
 - \`working\` (the default): still moving.
@@ -1141,7 +1141,7 @@ EOF
 
 **The card is the whole message, written for someone who was not here.** The person answering knows the product and its people but did not follow this session: they read the card once, in their queue or on their phone, with nothing else open, and answer without opening the session. Name things the way they would. The names this work coined, its shorthand, and ids or references only the session explains (a task, a trigger, a script, "the rule from earlier") mean nothing to them, and neither does a pointer back to something said earlier in the session, their own words included: say what the thing is instead. The question is the choice as they would put it to themselves. Each option says what happens to the product or the people it reaches, then \`::\` and the fact that sizes it. The context opens on what you would pick and why, then gives only what the choice turns on: the finding that forces it, what cuts against your pick, and what you do meanwhile. It reads in a minute, under about 150 words; how you got there and the supporting detail go in \`--report report.html\`, and a side-by-side comparison in a \`cast-canvas\` after the opening. Every number and claim on it is one the session established; an estimate says it is one. Before posting, read the card as that person: whatever they would have to ask you about, rewrite. After posting, don't repeat the options in your reply; if it would only repeat the card, end your turn.
 
-**A step only the person may take** (a grant, a spend) goes on the card as \`--run "cast …"\`, a Run button that executes it as theirs, never a command to type.
+**A step only the person may take** (a grant, a spend) is a permission ask, never a command to type: \`cast decide "<what will happen, in plain words>?" --run "cast …"\`, and their Yes runs it as theirs.
 
 **Blocking is the default**: post, then end your turn; the answer arrives as a user message. \`--advisory --default <n>\` keeps you working on option n, but only when that default is cheap to undo. When facts change, \`cast decide edit\` rewrites your open decision in place and \`cast decide cancel\` withdraws one the work has moved past. \`cast guide decide\` has the rest.
 ${DECIDE_SNIPPET_END}
@@ -1159,7 +1159,7 @@ A withdraw arrives after the human has read the ask, so get it right before post
 
 \`cast decide edit\` and \`cast decide cancel\` act on this session's open decision and keep its spot in the queue. An answered decision cannot be edited; act on the answer. Before ending a long turn and whenever you post, cancel open asks the work has moved past: an answer to a question that stopped mattering costs attention and earns nothing. Answers often land an hour later and disagree, and everything built on an advisory default is then work to unwind; if reversing would cost more than waiting, block.
 
-\`--run\` takes one cast command, exactly as you would have pasted it, for an act its help calls a person's: the card shows it with Run and Don't run, Run asks them for Touch ID and executes it on this machine outside your session, and the answer arrives with its exit and output. Never run it yourself after posting; end your turn.
+\`--run\` takes one cast command, exactly as you would have pasted it, for an act its help calls a person's. The card shows only your question, inline in the conversation, with Yes and Not now, so the question says what Yes will do in their terms (who gets what, how much). Yes asks them for Touch ID and runs the command on this machine outside your session, and the answer arrives with its exit and output. Never run it yourself after posting; end your turn.
 
 A decision is your human's to answer. When they tell you in this conversation to answer one ("approve sd-494", "go with option 2 on both"), \`cast decide answer sd-N <n> --for-human\` records it as their answer, carried by this session. Do it only on their explicit word or their explicit agreement to a choice you named, never on your own reading of what they would want, and never for a question you asked yourself.
 `;
