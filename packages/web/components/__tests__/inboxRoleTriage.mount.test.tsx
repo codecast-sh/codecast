@@ -7,10 +7,10 @@
 // The cases, one mount each:
 //   count      a session that reports to a role is never a row in the inbox
 //              (org-staffing.md S23.3): the role's card carries a count that
-//              opens the role's page, and Needs Input does not count it
+//              opens the role's page, and Needs You does not count it
 //   raised     a role that needs the person says so in its OWN thread: its
 //              standing session declares blocked, and the ROLE's card is the
-//              one in Needs Input, like any session that needs input; its
+//              one in Needs You, like any session that needs input; its
 //              sessions stay rows under it with no gesture of their own
 //   quiet      a role that is quietly dormant files in Dormant, however many
 //              of its sessions wait on it
@@ -160,7 +160,7 @@ const cardOf = (host: HTMLElement, sessionId: string) => host.querySelector(`[da
 
 beforeEach(() => { document.body.innerHTML = ""; });
 
-test("a role's sessions are subagent rows under the role's card, with a count on the card, and Needs Input does not count them", async () => {
+test("a role's sessions are subagent rows under the role's card, with a count on the card, and Needs You does not count them", async () => {
   seed([standing(), hand(WAITING, "Pricing page copy"), hand(WORKING, "Cold email rewrite", { agent_status: "working", is_idle: false }), row(MINE, { title: "My own session" })]);
   const m = await mountInbox();
 
@@ -193,7 +193,7 @@ test("a role's sessions are subagent rows under the role's card, with a count on
   await hidden.unmount();
 });
 
-test("a role that needs the person raises it in its own thread: the role's card files in Needs Input, its sessions ride it with no gesture", async () => {
+test("a role that needs the person raises it in its own thread: the role's card files in Needs You, its sessions ride it with no gesture", async () => {
   seed([
     standing({ agent_status: "idle", thread_state_status: "blocked", thread_state: "Which lawyer signs the third market: ours is slow, theirs is dear" }),
     hand(WAITING, "Pricing page copy"),
@@ -201,7 +201,7 @@ test("a role that needs the person raises it in its own thread: the role's card 
   ]);
   const m = await mountInbox();
 
-  // The role's own declaration puts its card in Needs Input, and it is the
+  // The role's own declaration puts its card in Needs You, and it is the
   // ONE card counted there.
   expect(sectionOf(m.host, STANDING)).toBe("needs_input");
   expect(headerCount(m.host, "needs_input")).toBe("1");
@@ -235,7 +235,7 @@ test("a quietly dormant role files in Dormant, however many of its sessions wait
 // A sub-lead's standing session carries its parent role in org_role_id
 // (org-staffing.md S28): blocked, it is a sub row under the parent lead's
 // card, never a card of its own; the parent is the card that needs input.
-test("a blocked sub-lead is a sub row under its parent lead, which is the card in Needs Input", async () => {
+test("a blocked sub-lead is a sub row under its parent lead, which is the card in Needs You", async () => {
   const SUB_ROLE_ID = id("orgrolescalling");
   const SUB_ROLE = { _id: SUB_ROLE_ID, short_id: "or-9", name: "Calling lead", handle: "calling", avatar: "fox", status: "active", tenure_kind: "standing" as const };
   const SUB = id("substanding");

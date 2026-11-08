@@ -11,7 +11,7 @@ import {
 import { useCoarseNow } from "./useCoarseNow";
 import { hostedStopsSig, splitHostedStops } from "../lib/hostedNotice";
 
-// The user's personal attention count: the inbox's QUESTIONS + NEEDS INPUT
+// The user's personal attention count: the inbox's QUESTIONS + NEEDS YOU
 // buckets, mine-scoped, over the shared working-set selection. One source —
 // the placement chokepoint (placeInboxRows, sync-convergence C5) — for every
 // surface that claims to mirror the inbox (the sidebar count badge and the
