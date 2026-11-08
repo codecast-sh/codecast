@@ -44,17 +44,26 @@ export function colorReportCommands(paneId: string, colors: unknown): string[] {
 export interface ControlClientEvents {
   onOutput(data: Buffer): void;
   onExit(reason?: string): void;
-  /** Attach mode: the pane's geometry changed under us (another client
-   *  resized it, the daemon refreshed it). Carries a fresh full-screen seed
-   *  so the viewer can reset + repaint at the new size — without this, xterm
-   *  keeps stale columns and every later repaint wraps wrong, splicing
-   *  fragments of different frames into the same row. */
-  onReseed?(info: { cols: number; rows: number; seed: Buffer }): void;
+  /** The pane's geometry changed (a client resized it, the daemon refreshed
+   *  it). Debounced, since tmux fires layout-change repeatedly during a drag.
+   *  The caller decides whether viewers need a fresh capture at the new size:
+   *  without one, xterm keeps stale columns and every later repaint wraps
+   *  wrong, splicing fragments of different frames into the same row. */
+  onLayoutChange?(): void;
 }
 
 export type ControlClientMode =
   | { kind: "create"; sessionName: string; cwd?: string; fresh?: boolean }
-  | { kind: "attach"; target: string; readOnly: boolean };
+  | { kind: "attach"; target: string };
+
+/** A screen capture: the pane's geometry and the bytes that repaint it. */
+export interface PaneCapture {
+  cols: number;
+  rows: number;
+  seed: Buffer;
+}
+
+type Reply = { ok: boolean; lines: string[] };
 
 /**
  * A tmux control-mode (`tmux -C`) client: full PTY semantics (streamed output,
@@ -63,9 +72,15 @@ export type ControlClientMode =
  *
  * One client drives one pane. `create` mode makes/reattaches a standalone
  * terminal session (the web panel's shells); `attach` mode joins an existing
- * session — an agent's pane — with `ignore-size` so a viewer never resizes the
- * pane out from under the agent (the daemon screen-scrapes those panes at a
- * known width), and `read-only` unless interaction was explicitly requested.
+ * session — an agent's pane — with `ignore-size`, so it never resizes the pane
+ * out from under the agent (the daemon screen-scrapes those panes at a known
+ * width) until setSizing(true) hands it the pane's size.
+ *
+ * There is no tmux `read-only` flag on the attach: tmux cannot clear it once
+ * set (so a watched pane could never be handed to a controller without a new
+ * client and a full repaint), and it never gated the commands a control client
+ * writes itself, `send-keys` included (checked against tmux 3.6). Input is
+ * gated where it always really was: the caller only forwards the controller's.
  */
 // Pane state a screen capture cannot carry. capture-pane hands back cells;
 // the modes the program set (cursor visibility, alternate screen, mouse
@@ -150,13 +165,21 @@ export function buildSeed(captured: string[], paneRows: number, state: SeedState
 export class TmuxControlClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private parser = new ControlModeParser();
-  private pending: Array<{ resolve: (r: { ok: boolean; lines: string[] }) => void; timer: NodeJS.Timeout | null }> = [];
+  // A command that timed out keeps its place: its reply may still come, and
+  // must be consumed by it rather than by the next command (every later
+  // reply would pair off-by-one, and capture() splices by reply order).
+  private pending: Array<{ resolve: (r: Reply) => void; timer: NodeJS.Timeout | null; onReply?: (r: Reply) => void; expired?: boolean }> = [];
+  /** The caller asked for output to stop (a backed-up viewer). */
+  private outputHeld = false;
   private paneId: string | null = null;
-  private seeded = false;
+  private started = false;
   private closed = false;
-  private reseedTimer: NodeJS.Timeout | null = null;
-  /** Interactive attach only: the window's size before this viewer reshaped
-   *  it, put back on detach (see close). */
+  private layoutTimer: NodeJS.Timeout | null = null;
+  /** Attach only: whether this client sizes the pane (setSizing). */
+  private sizing = false;
+  private sizingChain: Promise<void> = Promise.resolve();
+  /** Attach while sizing: the window's size before this client reshaped it,
+   *  put back when sizing ends or on detach (see close). */
   private restoreSize: string | null = null;
   private colorReportSupport: Promise<boolean> | null = null;
 
@@ -174,18 +197,12 @@ export class TmuxControlClient {
     return this.restoreSize;
   }
 
-  get isReadOnly(): boolean {
-    return this.mode.kind === "attach" && this.mode.readOnly;
-  }
-
   /**
-   * Spawn the client and seed the screen. Returns pane geometry so the caller
-   * can size xterm before any bytes render. Live `%output` received before the
-   * capture-pane reply is discarded — it is already reflected in the capture
-   * (the stdout stream is chronological), which is what makes the seed
-   * duplicate-free.
+   * Spawn the client. Returns pane geometry so the caller can size xterm
+   * before any bytes render. Output streams from here on; a viewer that needs
+   * the screen as it stands asks capture() for it.
    */
-  async start(cols: number, rows: number, colors?: unknown): Promise<{ cols: number; rows: number; seed: Buffer; sessionName: string }> {
+  async start(cols: number, rows: number, colors?: unknown): Promise<{ cols: number; rows: number; sessionName: string }> {
     const args = ["-u", "-C"]; // -u: force UTF-8 regardless of client locale
     if (this.mode.kind === "create") {
       args.push("new-session", "-A", "-s", shellSafe(this.mode.sessionName), "-x", String(cols), "-y", String(rows));
@@ -195,14 +212,10 @@ export class TmuxControlClient {
       // started by the launchd daemon has no locale at all — every multibyte
       // program in the shell then misbehaves (vim E1511, broken box drawing).
       args.push("-e", `LANG=${process.env.LC_ALL || process.env.LANG || "en_US.UTF-8"}`);
-    } else if (this.mode.readOnly) {
-      // A watcher must never reshape the pane out from under the agent.
-      args.push("attach-session", "-t", this.mode.target, "-f", "ignore-size,read-only");
     } else {
-      // Interactive attach is a REAL attach: it sizes the pane to the viewer,
-      // exactly like `tmux attach` from iTerm — the sanctioned manual flow,
-      // which the daemon's screen-scraping already tolerates daily.
-      args.push("attach-session", "-t", this.mode.target);
+      // A watcher must never reshape the pane out from under the agent;
+      // setSizing lifts ignore-size once someone takes control.
+      args.push("attach-session", "-t", this.mode.target, "-f", "ignore-size");
     }
 
     const env: Record<string, string | undefined> = { ...process.env, PATH: ENRICHED_PATH };
@@ -241,31 +254,11 @@ export class TmuxControlClient {
       throw new Error(startup.lines.join(" ").trim() || "tmux did not respond — the tmux server may be hung");
     }
 
-    // A brand-new session has no history to seed, so stream from the very
-    // first byte instead of capture-seeding. Waiting for the capture would
-    // DROP the shell's initial prompt: it usually prints after capture-pane
-    // runs but before the seeded flag flips, leaving the terminal blank until
-    // the user's first Enter forces a new prompt.
-    if (this.mode.kind === "create" && this.mode.fresh) this.seeded = true;
-
     if (this.mode.kind === "create") {
       // No status line for panel terminals: control clients never render it,
       // and without this the window reserves a row for a bar nobody sees.
       await this.command(`set-option -q -t ${shellSafe(this.mode.sessionName)} status off`);
       await this.command(`refresh-client -C ${cols}x${rows}`);
-    } else if (!this.mode.readOnly) {
-      // Interactive attach reshapes the agent's real pane, like any terminal
-      // client would — but the daemon-owned pane usually has NO other client,
-      // so with `window-size largest` whatever size we leave behind STICKS
-      // after we detach (a 6x11 pane was found this way: the hello carried a
-      // pre-layout guess). Two rules follow. Never resize from the hello: the
-      // viewer sends a real size once its container is laid out, and the
-      // seed captured at the pane's own size renders correctly meanwhile
-      // (the web adopts that size until then). And remember the size we
-      // found so close() can put it back.
-      const size = await this.command("display-message -p -F '#{window_width}x#{window_height}'");
-      const found = (size.lines[0] ?? "").trim();
-      if (/^\d+x\d+$/.test(found)) this.restoreSize = found;
     }
 
     // NB: separator must be printable — tmux sanitizes control chars (tabs
@@ -285,40 +278,100 @@ export class TmuxControlClient {
     const paneRows = parseInt(parts[2] ?? "", 10) || rows;
     const sessionName = parts[3] || (this.mode.kind === "create" ? this.mode.sessionName : this.mode.target);
 
-    const seed = this.seeded ? Buffer.alloc(0) : await this.captureSeed(paneRows);
-    this.seeded = true;
-    return { cols: paneCols, rows: paneRows, seed, sessionName };
+    this.started = true;
+    return { cols: paneCols, rows: paneRows, sessionName };
   }
 
-  /** Screen + scrollback snapshot, plus a cursor-restore tail. */
-  private async captureSeed(paneRows: number): Promise<Buffer> {
-    if (!this.paneId) return Buffer.alloc(0);
-    const target = this.paneId;
+  /**
+   * Interactive attach: whether this client sizes the agent's real pane, like
+   * `tmux attach` from iTerm (the sanctioned manual flow, which the daemon's
+   * screen-scraping already tolerates daily). The daemon-owned pane usually
+   * has NO other client, so with `window-size largest` whatever size we leave
+   * behind STICKS (a 6x11 pane was found this way: the hello carried a
+   * pre-layout guess). So: never resize on taking the size, only on the
+   * viewer's laid-out resize; and remember the size found so giving it up,
+   * or detaching, puts it back.
+   */
+  setSizing(on: boolean): Promise<void> {
+    // One at a time: a release that overtook a pending take would leave tmux
+    // sizing the pane with nobody in control (the sticky-size bug class).
+    const run = this.sizingChain.then(() => this.applySizing(on));
+    this.sizingChain = run.catch(() => {});
+    return run;
+  }
+
+  private async applySizing(on: boolean): Promise<void> {
+    if (this.mode.kind !== "attach" || this.closed || on === this.sizing) return;
+    this.sizing = on;
+    if (on) {
+      const size = await this.command("display-message -p -F '#{window_width}x#{window_height}'");
+      const found = (size.lines[0] ?? "").trim();
+      if (/^\d+x\d+$/.test(found)) this.restoreSize = found;
+      await this.command("refresh-client -f !ignore-size");
+      return;
+    }
+    const restore = this.restoreSize;
+    this.restoreSize = null;
+    if (restore) await this.command(`refresh-client -C ${restore}`);
+    await this.command("refresh-client -f ignore-size");
+  }
+
+  /**
+   * Screen + scrollback snapshot of the client's pane, plus the modes and
+   * cursor a capture cannot carry. `onCaptured` runs synchronously at the
+   * capture's own point in the output stream: every `%output` before it is
+   * already in the picture and every one after is not, which is what lets a
+   * caller splice the seed into a byte stream without a duplicate or a gap.
+   * Resolves false when the capture failed (onCaptured never ran).
+   */
+  async capture(onCaptured: (capture: PaneCapture) => void): Promise<boolean> {
+    // The state is read just before the capture; both target the client's
+    // current pane, so a pane swapped under us is followed.
+    let meta: Reply | null = null;
+    let delivered = false;
+    const metaReply = this.enqueue(
+      `display-message -p -F '#{pane_id}|#{pane_width}|#{pane_height}|${SEED_STATE_FIELDS.map((f) => `#{${f}}`).join("|")}'`,
+      (r) => { meta = r; },
+    );
     // `-S -` = from the very start of the pane's history: the pane's own
     // history-limit is the real cap, and xterm's scrollback holds the rest.
-    const cap = await this.command(`capture-pane -peqJ -t ${target} -S -`);
-    const cur = await this.command(
-      `display-message -p -t ${target} -F '${SEED_STATE_FIELDS.map((f) => `#{${f}}`).join("|")}'`,
-    );
-    if (!cap.ok) return Buffer.alloc(0);
-    return Buffer.from(buildSeed(cap.lines, paneRows, parseSeedState(cur.lines[0] ?? "")), "utf8");
+    const capReply = this.enqueue("capture-pane -peqJ -S -", (cap) => {
+      const m = meta as Reply | null;
+      if (!m?.ok || !cap.ok) return;
+      const [pane, w, h, ...state] = (m.lines[0] ?? "").split("|");
+      const cols = parseInt(w ?? "", 10);
+      const rows = parseInt(h ?? "", 10);
+      if (!cols || !rows) return;
+      if (pane) this.paneId = pane;
+      delivered = true;
+      onCaptured({ cols, rows, seed: Buffer.from(buildSeed(cap.lines, rows, parseSeedState(state.join("|"))), "utf8") });
+    });
+    await Promise.all([metaReply, capReply]);
+    return delivered;
   }
 
   private handleEvent(ev: ControlEvent): void {
     switch (ev.type) {
       case "output":
-        // Pre-seed output is folded into the capture; other panes' output
-        // (splits, other windows) is out of scope for a single-pane view.
-        // paneId is still null in the fresh-create stream-from-start window —
-        // a single-pane session has nothing else that could be emitting.
-        if (this.seeded && (!this.paneId || ev.paneId === this.paneId)) this.events.onOutput(ev.data);
+        // Other panes' output (splits, other windows) is out of scope for a
+        // single-pane view. A brand-new session streams from its very first
+        // byte, before its pane id is known: a single-pane session has nothing
+        // else that could be emitting, and waiting would DROP the shell's
+        // first prompt. Anything else that early belongs to no viewer yet.
+        if (this.paneId ? ev.paneId === this.paneId : this.mode.kind === "create" && !!this.mode.fresh) {
+          this.events.onOutput(ev.data);
+        }
         break;
       case "reply": {
         const p = this.pending.shift();
-        if (p) {
+        if (p && !p.expired) {
           if (p.timer) clearTimeout(p.timer);
-          p.resolve({ ok: ev.ok, lines: ev.lines });
+          const reply = { ok: ev.ok, lines: ev.lines };
+          // Synchronous, in stream order: see capture().
+          p.onReply?.(reply);
+          p.resolve(reply);
         }
+        this.applyOutputHold();
         break;
       }
       case "exit":
@@ -330,20 +383,13 @@ export class TmuxControlClient {
         }
         break;
       case "notification":
-        // Pane geometry changed (another client resized, daemon refresh).
-        // Debounced: tmux fires layout-change repeatedly during a drag.
-        if (
-          ev.name === "layout-change" &&
-          this.mode.kind === "attach" &&
-          this.seeded &&
-          this.events.onReseed
-        ) {
-          if (this.reseedTimer) clearTimeout(this.reseedTimer);
-          this.reseedTimer = setTimeout(() => {
-            this.reseedTimer = null;
-            void this.reseed();
+        if (ev.name === "layout-change" && this.started && this.events.onLayoutChange) {
+          if (this.layoutTimer) clearTimeout(this.layoutTimer);
+          this.layoutTimer = setTimeout(() => {
+            this.layoutTimer = null;
+            if (!this.closed) this.events.onLayoutChange?.();
           }, 300);
-          this.reseedTimer.unref?.();
+          this.layoutTimer.unref?.();
         }
         break;
       default:
@@ -351,25 +397,11 @@ export class TmuxControlClient {
     }
   }
 
-  /** Re-measure the pane and hand the caller a fresh full-screen seed. */
-  private async reseed(): Promise<void> {
-    if (this.closed || !this.events.onReseed) return;
-    const info = await this.command(
-      "display-message -p -F '#{pane_id}|#{pane_width}|#{pane_height}'",
-    );
-    const parts = (info.lines[0] ?? "").split("|");
-    this.paneId = parts[0] || this.paneId;
-    const cols = parseInt(parts[1] ?? "", 10);
-    const rows = parseInt(parts[2] ?? "", 10);
-    if (!cols || !rows) return;
-    const seed = await this.captureSeed(rows);
-    if (this.closed) return;
-    this.events.onReseed({ cols, rows, seed });
-  }
-
-  /** Write raw input bytes to the pane (hex-encoded send-keys, binary-safe). */
+  /** Write raw input bytes to the pane (hex-encoded send-keys, binary-safe).
+   *  The caller decides whose input this is; this client writes whatever it
+   *  is given. */
   sendInput(data: Buffer): void {
-    if (this.closed || !this.paneId || this.isReadOnly) return;
+    if (this.closed || !this.paneId) return;
     for (let i = 0; i < data.length; i += INPUT_CHUNK_BYTES) {
       const chunk = data.subarray(i, i + INPUT_CHUNK_BYTES);
       void this.command(`send-keys -t ${this.paneId} -H ${toSendKeysHex(chunk).join(" ")}`);
@@ -409,19 +441,34 @@ export class TmuxControlClient {
   }
 
   resize(cols: number, rows: number): void {
-    // Only read-only viewers are barred from reshaping the pane; interactive
-    // clients (created shells AND real attaches) size it like any terminal.
-    if (this.closed || this.isReadOnly) return;
+    // A created shell is sized like any terminal; an attach only while it
+    // holds the pane's size (setSizing).
+    if (this.closed || (this.mode.kind === "attach" && !this.sizing)) return;
     void this.command(`refresh-client -C ${Math.max(2, cols)}x${Math.max(2, rows)}`);
   }
 
   /** Backpressure: stop reading tmux output while the websocket is congested. */
   pauseOutput(): void {
-    this.child?.stdout.pause();
+    this.outputHeld = true;
+    this.applyOutputHold();
   }
 
   resumeOutput(): void {
-    this.child?.stdout.resume();
+    this.outputHeld = false;
+    this.applyOutputHold();
+  }
+
+  /**
+   * Command replies arrive on the same stdout as pane output, so a held
+   * stdout would starve every command issued meanwhile (a joiner's capture,
+   * a takeover's sizing, send-keys). Read while any reply is owed; stop only
+   * once nothing is.
+   */
+  private applyOutputHold(): void {
+    const out = this.child?.stdout;
+    if (!out) return;
+    if (this.outputHeld && this.pending.length === 0) out.pause();
+    else out.resume();
   }
 
   /** Kill the underlying tmux session (create-mode terminals only). */
@@ -545,24 +592,25 @@ export class TmuxControlClient {
   }
 
   /** Wait for the next reply block without writing a command (startup guard). */
-  private expectReply(): Promise<{ ok: boolean; lines: string[] }> {
+  private expectReply(): Promise<Reply> {
     return this.enqueue(null);
   }
 
-  private command(cmd: string): Promise<{ ok: boolean; lines: string[] }> {
+  private command(cmd: string): Promise<Reply> {
     return this.enqueue(cmd);
   }
 
-  private enqueue(cmd: string | null): Promise<{ ok: boolean; lines: string[] }> {
+  private enqueue(cmd: string | null, onReply?: (r: Reply) => void): Promise<Reply> {
     if (!this.child || this.closed) return Promise.resolve({ ok: false, lines: [] });
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
-        const idx = this.pending.findIndex((p) => p.timer === timer);
-        if (idx >= 0) this.pending.splice(idx, 1);
+        const entry = this.pending.find((p) => p.timer === timer);
+        if (entry) entry.expired = true;
         resolve({ ok: false, lines: [] });
       }, COMMAND_TIMEOUT_MS);
       timer.unref?.();
-      this.pending.push({ resolve, timer });
+      this.pending.push({ resolve, timer, onReply });
+      this.applyOutputHold();
       if (cmd !== null) {
         try {
           this.child!.stdin.write(cmd + "\n");
