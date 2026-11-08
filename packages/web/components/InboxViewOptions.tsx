@@ -11,7 +11,8 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 
-export type CardBarsMode = "strip" | "full" | "hidden";
+import type { CardBarsMode } from "../lib/uiPrefDefaults";
+export type { CardBarsMode };
 
 const CARD_BARS: { value: CardBarsMode; label: string }[] = [
   { value: "strip", label: "Folded" },

@@ -485,7 +485,7 @@ html, body {
   --cc-panel-motion: 180ms cubic-bezier(0.23, 1, 0.32, 1);
   --radius: 0.75rem;
   /* Your own messages. ThemeProvider writes the hue (lib/bubbleColor.ts). */
-  --cc-user-bubble-hue: #2f7df6;
+  --cc-user-bubble-hue: #e58a00;
 }
 
 /* The fill is mixed from the hue against the page, so one choice serves light
@@ -7096,3 +7096,13 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 .role-tile-glyph { display: block; }
 .role-tile-glyph > svg { display: block; width: 100%; height: 100%; }
 .role-tile-letter { font-weight: 600; letter-spacing: -0.02em; }
+
+/* ---- Dormant section ------------------------------------------------------
+   Parked sessions need nothing from the person until their wake lands, so the
+   section reads quieter than the ones above it: compact one-line rows (the
+   wrapper carries .inbox-compact) at reduced contrast, back to full on hover
+   or when open. The wake line under each row keeps its own color, so a
+   session with nothing scheduled still shows its warning. */
+[data-dormant-section] [data-session-id]:not([data-active="true"]):not(:hover) {
+  opacity: 0.62;
+}

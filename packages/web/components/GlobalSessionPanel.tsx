@@ -1,4 +1,3 @@
-import { HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { cliNeverConnected } from "../lib/cliConnected";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -38,7 +37,7 @@ import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, res
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
 import { fallbackProfiles, rankByHeadroom, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
-import { agentStatusAt, sessionLiveAt } from "../lib/liveness";
+import { sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -51,6 +50,7 @@ import { rowScrollDelta, scrollMarginTopOf } from "../lib/rowScroll";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { TriggerRowItem, TriggerHomeHeader, SchedChildArrow, SchedHealthDot, SchedFireBadge } from "./TriggerRow";
+import { dormantWakeOf } from "./inbox/dormantWake";
 import { WAKE_BADGE, RUNNING_BADGE_TONE } from "../lib/triggerBadges";
 import { schedAccent, type SchedAccent } from "../lib/triggerAccent";
 // Who is speaking on each row (docs/architecture/session-characters.md S3).
@@ -73,6 +73,7 @@ import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsRight, ChevronRight, ChevronDown, Star, Workflow, Play, Pause, Settings2, ArrowUpRight, Zap, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { InboxViewPicker } from "./InboxViewPicker";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
+import { resolveCardBars } from "../lib/uiPrefDefaults";
 import { inboxViewModes } from "../store/inboxViewModes";
 import { SessionCard } from "./inbox/SessionCard";
 import { SectionHeader } from "./inbox/SectionHeader";
@@ -1434,88 +1435,103 @@ export function MonitorBars({ session, isActive }: {
   );
 }
 
-// -- Dormant reason row --
-// A card in DORMANT is parked on a machine wake, and the wake must be visible
-// as a ↳ child row: the trigger bar for an armed schedule, the workflow bar
-// for a run in flight, a Background/Monitor bar for an open watch. When none
-// of those has anything to draw — the messages that would show the watch are
-// not loaded and no daemon report exists, the agent declared dormancy on a
-// wake outside this session (another session's reply, an external job), or
-// the user parked the card — this row states the reason from what the row
-// itself carries, so a Dormant card never sits there unexplained.
+// -- Wake rows --
+// DormantWakeRow: every card in the DORMANT section carries one line saying
+// what wakes it and when (dormantWakeOf), whatever the card-bar mode, because
+// a parked card is only safe to ignore when its wake is visible. Nothing
+// verifiable scheduled reads as a claim with the time it returns to the person.
 //
-// variant "claim" is the honest inverse, for a card filed under NEEDS YOU
-// whose pinned state still declares dormant: the agent SAYS a machine wakes
-// it, but the system can verify no armed trigger, watch, loop or run — either
-// the wake already landed and the agent never re-declared, the wake lives
-// outside anything the daemon can see (a tmux job, another machine), or the
-// bare claim simply outlived its trust (DORMANT_CLAIM_TTL_MS of quiet with no
-// verifiable wake — the classifier promotes it here so a wake that never
-// comes cannot strand a session in Dormant). Without this row the card reads
-// as a contradiction: a "Dormant" chip sitting in Needs You with nothing
-// under it. The row names the claim and marks it unverified, so the reader
-// knows why the card still asks for them.
-function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: {
+// DormantClaimRow is the inverse, for a card filed under NEEDS INPUT whose
+// pinned state still declares dormant: the agent SAYS a machine wakes it, but
+// the system can verify no armed trigger, watch, loop or run (the wake already
+// landed and the agent never re-declared, the wake lives somewhere the daemon
+// cannot see, or the bare claim outlived DORMANT_CLAIM_TTL_MS). The row names
+// the claim and marks it unverified, so the card explains why it still asks.
+function DormantWakeRow({ session, rows, isActive, onOpen, onOpenSchedule }: {
+  session: InboxSession;
+  rows: TriggerRow[];
+  isActive: boolean;
+  onOpen: (session: InboxSession) => void;
+  onOpenSchedule: (row: TriggerRow) => void;
+}) {
+  const now = useCoarseNow(30_000);
+  const watches = useLiveWatchRows(session, now);
+  const wake = dormantWakeOf(session, rows, watches, now);
+  let what: string;
+  let when: React.ReactNode;
+  let warn = false;
+  switch (wake.kind) {
+    case "trigger":
+      what = taskDisplayTitle(wake.row.task) + (wake.others > 0 ? ` +${wake.others}` : "");
+      when = <SchedFireBadge task={wake.row.task} />;
+      break;
+    case "trigger_unloaded":
+      what = "a trigger fires into it";
+      when = "armed";
+      break;
+    case "workflow":
+      what = `workflow: ${wake.name}`;
+      when = "when it finishes";
+      break;
+    case "background":
+      what = `${wake.count > 1 ? `${wake.count} background tasks` : "background task"}${wake.what ? `: ${wake.what}` : ""}`;
+      when = "when it finishes";
+      break;
+    case "workers":
+      what = "its subagents are still working";
+      when = "when they finish";
+      break;
+    case "snoozed":
+      what = "snoozed";
+      when = fmtClock(wake.at, now);
+      break;
+    case "parked":
+      what = "parked by you";
+      when = "on next activity";
+      break;
+    case "claim":
+      warn = true;
+      what = wake.what ? `nothing scheduled · ${wake.what}` : "nothing scheduled";
+      when = wake.back > now ? `yours in ${fmtDuration(wake.back - now)}` : "yours now";
+      break;
+  }
+  return (
+    <div data-cc-tech data-card-bar data-dormant-wake={wake.kind} className={`relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
+      <button
+        className="w-full flex items-center gap-1.5 text-left cursor-pointer pl-2 pr-3 py-[3px] hover:bg-sol-blue/[0.05] transition-colors"
+        onClick={() => (wake.kind === "trigger" ? onOpenSchedule(wake.row) : onOpen(session))}
+        title={wake.kind === "claim" ? "The agent named a wake nothing here can see. It returns to Needs Input if nothing happens." : "Open"}
+      >
+        <SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" />
+        <span className={`text-[11px] truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
+        <span className={`ml-auto shrink-0 whitespace-nowrap text-[10px] tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{when}</span>
+      </button>
+    </div>
+  );
+}
+
+function DormantClaimRow({ session, isActive, hasOtherRows, onOpen }: {
   session: InboxSession;
   isActive: boolean;
   hasOtherRows: boolean;
-  variant: "parked" | "claim";
   onOpen: (session: InboxSession) => void;
 }) {
   const now = useCoarseNow(30_000);
   const watchRows = useLiveWatchRows(session, now).length;
   if (hasOtherRows || watchRows > 0) return null;
   const ts = threadStateView(session, session.message_count ?? 0, now);
-  if (variant === "claim") {
-    // Only a state that still DECLARES dormant earns the row; a stale state
-    // reads as absent (threadStateView returns null), and any other declared
-    // status means no wake was claimed.
-    if (ts?.status !== "dormant") return null;
-    return (
-      <WakeReasonRowShell
-        isActive={isActive}
-        family="Wake"
-        title="state claims a machine wake"
-        detail={`no armed trigger, watch, or loop · ${ts.provenance}`}
-        badge="unverified"
-        badgeClass="bg-sol-yellow/10 text-sol-yellow border-sol-yellow/30"
-        onClick={() => onOpen(session)}
-      />
-    );
-  }
-  let family: string;
-  let title: string;
-  let detail: string;
-  const status = agentStatusAt(session, now);
-  if (status === "hibernated") {
-    family = "Hibernated";
-    title = HIBERNATED_COPY;
-    detail = "";
-  } else if (status === "waiting") {
-    family = "Background";
-    title = "waiting on background work";
-    detail = "the turn ended on an open task — the agent resumes when it finishes";
-  } else if (status === "dormant") {
-    // The card above already shows the declared state, so the row adds only
-    // where the declaration came from.
-    family = "Dormant";
-    title = ts ? "" : "parked on a machine wake";
-    detail = ts?.provenance ? `declared by the agent · ${ts.provenance}` : "declared by the agent";
-  } else if (session.user_rest === "dormant") {
-    family = "Parked";
-    title = "parked by you";
-    detail = "the next activity un-parks it; drag it to another section to re-file it";
-  } else {
-    family = "Dormant";
-    title = ts ? "" : "waiting on a machine wake";
-    detail = ts?.provenance || "";
-  }
+  // Only a state that still DECLARES dormant earns the row; a stale state
+  // reads as absent (threadStateView returns null), and any other declared
+  // status means no wake was claimed.
+  if (ts?.status !== "dormant") return null;
   return (
     <WakeReasonRowShell
       isActive={isActive}
-      family={family}
-      title={title}
-      detail={detail}
+      family="Wake"
+      title="state claims a machine wake"
+      detail={`no armed trigger, watch, or loop · ${ts.provenance}`}
+      badge="unverified"
+      badgeClass="bg-sol-yellow/10 text-sol-yellow border-sol-yellow/30"
       onClick={() => onOpen(session)}
     />
   );
@@ -1628,8 +1644,8 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
   mode: CardBarsMode;
   scheduleRows: TriggerRow[];
   activeSessionId?: string | null;
-  // "parked": the card sits in the Dormant bucket — its wake MUST show, so the
-  // reason row is the fallback when no trigger/workflow/watch bar draws.
+  // "parked": the card sits in the Dormant bucket, so it wears one wake line
+  // (DormantWakeRow) in place of every other bar, in every mode.
   // "claim": the card sits in Needs You while its pinned state declares
   // dormant — the row renders the claimed wake as unverified so the
   // contradiction explains itself.
@@ -1637,15 +1653,18 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
   onOpen: (session: InboxSession) => void;
   onOpenSchedule: (row: TriggerRow) => void;
 }) {
-  if (mode === "hidden") return null;
   const isActive = session._id === activeSessionId;
   const bound = scheduleRows.map((r) => ({ ...r, openId: session._id }));
-  const dormantRow = wake ? (
-    <DormantReasonRow
+  // A parked card always says what wakes it, in one line, whatever the mode.
+  if (wake === "parked") {
+    return <DormantWakeRow session={session} rows={bound} isActive={isActive} onOpen={onOpen} onOpenSchedule={onOpenSchedule} />;
+  }
+  if (mode === "hidden") return null;
+  const dormantRow = wake === "claim" ? (
+    <DormantClaimRow
       session={session}
       isActive={isActive}
       hasOtherRows={bound.length > 0 || workflowBarVisible(session)}
-      variant={wake}
       onOpen={onOpen}
     />
   ) : null;
@@ -2559,10 +2578,10 @@ function SessionListPanelImpl({
   }, [filterByChip, stashedList]);
 
   // The bars under a card, in whichever form the ⚡ pill toggle asks for:
-  // folded to one strip (default), one full row per bar, or hidden entirely.
+  // folded to one strip, one full row per bar, or hidden entirely (default).
   // The legacy show_triggers boolean seeds the default so an existing
   // "expanded" choice survives the upgrade to the three-way mode.
-  const cardBars: CardBarsMode = s.clientState.ui?.card_bars ?? ((s.clientState.ui?.show_triggers ?? false) ? "full" : "strip");
+  const cardBars: CardBarsMode = resolveCardBars(s.clientState.ui);
   // "By trigger" lens — the roster's rows promoted to first-class rows, each
   // with the sessions it drives as sub rows beneath (home conversation /
   // runs), the rest falling to project groups. Grouped over the UNabsorbed
@@ -3468,13 +3487,12 @@ function SessionListPanelImpl({
                     active). The trigger view skips the schedule rows: there
                     every armed trigger is already a first-class group header,
                     so a bar under a card would repeat the header just above
-                    it. The dormant fallback keeps its invariant inside
-                    CardBars: a parked card explains its wake unless the mode
-                    is an explicit "hidden". */}
+                    it. A Dormant card always gets its rows, because its one
+                    wake line (inside CardBars) reads the soonest of them. */}
                 <CardBars
                   session={session}
                   mode={cardBars}
-                  scheduleRows={viewMode !== "trigger" ? scheduleBarRowsFor(session) : []}
+                  scheduleRows={viewMode !== "trigger" || key === "dormant" ? scheduleBarRowsFor(session) : []}
                   activeSessionId={activeSessionId}
                   wake={key === "dormant" ? "parked" : key === "needs_input" ? "claim" : undefined}
                   onOpen={handleSelect}
@@ -3842,7 +3860,14 @@ function SessionListPanelImpl({
             machine event (Dormant). Nothing below Dormant is anyone's move. */}
         {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { count: countOf(statusDone, done, placed.counts.done), onDropSession: dropSessionOnRest.done })}
         {renderSection("Working", statusWorking, "text-sol-green", "working", undefined, { count: countOf(statusWorking, working, placed.counts.working) })}
-        {renderSection("Dormant", statusDormant, "text-sol-blue", undefined, undefined, { key: "dormant", count: countOf(statusDormant, dormant, placed.counts.dormant), onDropSession: dropSessionOnRest.dormant })}
+        {/* Dormant is the section nobody needs to watch: one quiet line per
+            session (the compact list's layout, whatever the person's own
+            setting) plus the line saying what wakes it and when. */}
+        <div className="inbox-compact" data-dormant-section>
+          <div data-sv-rail>
+            {renderSection("Dormant", statusDormant, "text-sol-text-dim", undefined, undefined, { key: "dormant", count: countOf(statusDormant, dormant, placed.counts.dormant), onDropSession: dropSessionOnRest.dormant })}
+          </div>
+        </div>
         </>
         )}
         {sortedSessions.length === 0 && (

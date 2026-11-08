@@ -38,6 +38,7 @@ import { useFeedCardTriage } from "../hooks/useFeedCardTriage";
 import { useTeamFeed, inboxSessionToConv } from "../hooks/useTeamFeed";
 import { settingsDataKey } from "../lib/settingsData";
 import { LivePulseDot } from "./SessionActivityLine";
+import { resolveImageThumbs } from "../lib/uiPrefDefaults";
 import { extractWorkspace, formatDate, formatMsgCount, relTime, shortDuration, heatTier, cardSummary, hashIndex, HEAT_COLOR, MSG_BREAKS, DUR_MIN_BREAKS, AVATAR_BG, AVATAR_RING, PROJECT_PALETTE } from "./feed/activityFeedFormat";
 // Activity feed. Two sources, one rendering (FeedBody):
 //   • personal mode → a VIEW over store.sessions (the liberal delta cache that the
@@ -102,7 +103,7 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor, shareTeamI
   // Row thumbnail for sessions that contain images — same pref as the inbox
   // session list (inbox_image_thumbs). Clicking it zooms the image, not the
   // session.
-  const showImageThumb = useInboxStore((st) => st.clientState?.ui?.inbox_image_thumbs === true);
+  const showImageThumb = useInboxStore((st) => resolveImageThumbs(st.clientState?.ui));
   const [thumbZoom, setThumbZoom] = useState(false);
   // Broken preview image → drop the slot entirely, otherwise the invisible
   // img reserves width and wraps the text early.

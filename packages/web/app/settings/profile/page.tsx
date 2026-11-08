@@ -16,6 +16,7 @@ import { useInboxStore, resolveSimpleView, resolveInboxCompact, resolveVisualSty
 import { BUBBLE_HUE_VAR, BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubbleHue } from "../../../lib/bubbleColor";
 import { useTheme, type VisualStyle } from "../../../components/ThemeProvider";
 import { ThemePicker } from "../../../components/theme/ThemePicker";
+import { resolveCommentsEnabled, resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../../lib/uiPrefDefaults";
 import {
   SettingsField, SettingsLinkRow, SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection,
 } from "../../../components/settings/ui";
@@ -234,14 +235,14 @@ const INTERFACE_TOGGLES: Array<{
 }> = [
   { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, locked: (ui) => (resolveVisualStyle(ui) === "minimal" && resolveSimpleView(ui) ? { on: true, why: "Always on in the Minimal style" } : undefined) },
   { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact },
-  { prefKey: "inbox_image_thumbs", label: "Image thumbnails", desc: "Show a small thumbnail on inbox session rows when a session contains images" },
+  { prefKey: "inbox_image_thumbs", label: "Image thumbnails", desc: "Show a small thumbnail on inbox session rows when a session contains images", resolve: resolveImageThumbs },
   { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", defaultOn: true },
-  { prefKey: "show_characters", label: "Characters", desc: "Roles wear an animal face and a name. Off, each role shows an icon of what it looks after and its title, and no session wears a character", defaultOn: true },
-  { prefKey: "personify_sessions", label: "Personify every session", desc: "Give every session an animal face and a name, not just the ones you name yourself. Roles always have one", defaultOn: false, locked: (ui) => (ui?.show_characters === false ? { on: false, why: "Off while Characters is off" } : undefined) },
+  { prefKey: "show_characters", label: "Characters", desc: "Roles wear an animal face and a name. Off, each role shows an icon of what it looks after and its title, and no session wears a character", resolve: resolveShowCharacters },
+  { prefKey: "personify_sessions", label: "Personify every session", desc: "Give every session an animal face and a name, not just the ones you name yourself. Roles always have one", defaultOn: false, locked: (ui) => (!resolveShowCharacters(ui) ? { on: false, why: "Off while Characters is off" } : undefined) },
   { prefKey: "show_model_badge", label: "Model badge", desc: "Show each session's model in the inbox session list" },
   { prefKey: "show_device_icon", label: "Machine icon", desc: "Mark inbox sessions that run somewhere else: a cloud icon for a cloud machine, a small device icon for another of your machines", defaultOn: true },
-  { prefKey: "show_branch_pill", label: "Branch pill", desc: "Show a pill on inbox cards when a session sits off the default branch: its branch, or the short commit when its checkout is detached", defaultOn: true },
-  { prefKey: "comments_enabled", label: "Comments", desc: "Show the tools to leave comments on conversations. You can always read and reply to comments others leave, even with this off." },
+  { prefKey: "show_branch_pill", label: "Branch pill", desc: "Show a pill on inbox cards when a session sits off the default branch: its branch, or the short commit when its checkout is detached", resolve: resolveShowBranchPill },
+  { prefKey: "comments_enabled", label: "Comments", desc: "Show the tools to leave comments on conversations. You can always read and reply to comments others leave, even with this off.", resolve: resolveCommentsEnabled },
   { prefKey: "auto_open_browser_panes", label: "Open agent pane offers", desc: "When an agent offers a page (cast browser pane), open it beside the conversation you are reading instead of waiting for a click" },
   { prefKey: "composer_suggestions", label: "Suggested replies", desc: "One-tap reply suggestions above the composer when a session waits on you, predicted from the session and how you usually reply" },
 ];

@@ -130,6 +130,7 @@ import { GlobalCloseGuardDialog } from "./CloseGuardDialog";
 import { useLocalAuth } from "../lib/localAuth";
 import { ModRuntimes } from "./mods/ModRuntimes";
 import { useSyncMods } from "../lib/mods/useMods";
+import { resolveCommentsEnabled } from "../lib/uiPrefDefaults";
 
 const CommandPalette = lazy(() =>
   import("./CommandPalette").then((module) => ({ default: module.CommandPalette })),
@@ -487,7 +488,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.currentSessionId,
     s => s.viewingDismissedId,
     s => selectCommentRailOpen(s),
-    s => s.clientState.ui?.comments_enabled ?? false,
+    s => resolveCommentsEnabled(s.clientState.ui),
     s => resolveSimpleView(s.clientState.ui),
     s => resolveInboxCompact(s.clientState.ui),
     s => resolveVisualStyle(s.clientState.ui),
@@ -640,7 +641,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const commentRailOpen = selectCommentRailOpen(s);
   // The comment tools are opt-in (off by default), but a conversation that already
   // has comments still surfaces the toggle so you can open it to read + reply.
-  const commentsEnabled = s.clientState.ui?.comments_enabled ?? false;
+  const commentsEnabled = resolveCommentsEnabled(s.clientState.ui);
   const viewedConvIds = [s.currentSessionId, s.viewingDismissedId].filter(Boolean) as string[];
   // Conversation ids that carry at least one comment, indexed once per comments-map
   // change (not per render) so the toggle check below is an O(1) Set lookup.

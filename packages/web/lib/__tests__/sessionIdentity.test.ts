@@ -150,8 +150,9 @@ describe("characters off (show_characters: false)", () => {
 
   test("the stored settings map to one shared prefs object each", () => {
     expect(identityPrefsOf(undefined)).toBe(identityPrefsOf({}));
+    expect(identityPrefsOf(undefined)).toBe(NO_CHARACTER_PREFS);
     expect(identityPrefsOf({ show_characters: false, personify_sessions: true })).toBe(NO_CHARACTER_PREFS);
-    expect(identityPrefsOf({ personify_sessions: true })).toBe(PERSONIFY_ALL_PREFS);
+    expect(identityPrefsOf({ show_characters: true, personify_sessions: true })).toBe(PERSONIFY_ALL_PREFS);
     expect(NO_CHARACTER_PREFS.personifyAll).toBe(false);
   });
 

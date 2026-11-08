@@ -14,6 +14,7 @@ import { CommentThread } from "./CommentThread";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
+import { resolveCommentsEnabled } from "../../lib/uiPrefDefaults";
 // The conversation's GLOBAL comment thread as a right-docked, full-height rail —
 // like the sidebar, on the other side. It slides away to nothing when closed (no
 // minimized stub) and is reopened from the header's comments toggle, mirroring
@@ -84,7 +85,7 @@ function CommentRailImpl({ conversationId, onJumpToMessage }: { conversationId: 
   const open = useInboxStore(selectCommentRailOpen);
   const setOpen = useInboxStore((s) => s.setCommentRailOpen);
   const setWidth = useInboxStore((s) => s.setCommentRailWidth);
-  const commentsEnabled = useInboxStore((s) => s.clientState.ui?.comments_enabled ?? false);
+  const commentsEnabled = useInboxStore((s) => resolveCommentsEnabled(s.clientState.ui));
   // The rail is opt-in, but a conversation that already has comments keeps it
   // available so you can read + reply to what teammates left.
   const railEnabled = commentsEnabled || comments.totalCount > 0;

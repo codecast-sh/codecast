@@ -8,6 +8,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { resolveImageThumbs, resolveShowCharacters } from '@codecast/web/lib/uiPrefDefaults';
 import { useSettingsData } from '@codecast/web/hooks/useSyncSettings';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
 import { PlanPage } from '@/components/hosted/PlanPage';
@@ -325,8 +326,8 @@ export function useThemePicker() {
 function AppearancePage() {
   const Theme = useTheme();
   const { theme, pick } = useThemePicker();
-  const inboxImageThumbs = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
-  const showCharacters = useInboxStore((s) => s.clientState?.ui?.show_characters !== false);
+  const inboxImageThumbs = useInboxStore((s) => resolveImageThumbs(s.clientState?.ui));
+  const showCharacters = useInboxStore((s) => resolveShowCharacters(s.clientState?.ui));
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   return (
     <SettingsScroll>

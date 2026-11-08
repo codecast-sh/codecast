@@ -4,7 +4,7 @@
 // personified keeps the mark the surface drew before, a viewer with
 // characters off sees a role's icon tile and title and no animal anywhere,
 // and none of it brings a native library outside the baseline into the bundle.
-import { beforeAll, expect, mock, test } from 'bun:test';
+import { beforeAll, beforeEach, expect, mock, test } from 'bun:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import React from 'react';
@@ -55,6 +55,7 @@ function setUI(patch: Record<string, unknown>) {
 }
 const setPersonifyAll = (on: boolean) => setUI({ personify_sessions: on });
 const setCharacters = (on: boolean) => setUI({ show_characters: on });
+beforeEach(() => setCharacters(true));
 
 test('every avatar key draws its own file', () => {
   const sources = new Set<unknown>();

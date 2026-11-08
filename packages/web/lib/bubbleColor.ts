@@ -16,7 +16,7 @@ export const BUBBLE_PRESETS: BubblePreset[] = [
   { id: "graphite", label: "Graphite", hue: "#5b6068" },
 ];
 
-export const DEFAULT_BUBBLE_PRESET = "blue";
+export const DEFAULT_BUBBLE_PRESET = "amber";
 
 const HEX = /^#[0-9a-f]{6}$/i;
 

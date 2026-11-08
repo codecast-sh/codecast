@@ -60,6 +60,7 @@ test("RoleFace draws the animal with characters on and the role's tile from view
     viewerRoles: { r1: { _id: "r1", short_id: "or-1", handle: "infra", name: "Infrastructure lead", icon: ICON } },
     orgTree: { roles: [{ _id: "r1", handle: "infra" }], anchors: [], workspace: { kind: "user", id: "me" } },
   } as never);
+  useInboxStore.setState((s: any) => ({ clientState: { ...s.clientState, ui: { ...s.clientState?.ui, show_characters: true } } }));
   const face = React.createElement(RoleFace, { role: { handle: "infra", avatar: "owl" }, size: 20 });
 
   await render(face);

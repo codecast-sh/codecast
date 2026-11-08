@@ -15,6 +15,8 @@ import { MemoryRouter } from "react-router";
 import { mockInboxStore } from "../__tests__/mockInboxStore";
 import type { InboxSession } from "../../store/inboxStore";
 import { offlineConvexClient } from "../../test-helpers/offlineConvex";
+import { IdentityPrefsOverride } from "../../hooks/useIdentityPrefs";
+import { identityPrefsOf } from "../../lib/sessionIdentity";
 
 process.env.TZ = "UTC";
 const NOW = Date.UTC(2026, 8, 30, 18, 0);
@@ -22,7 +24,7 @@ Date.now = () => NOW;
 const MIN = 60_000;
 
 let LOCAL: { viewer: string; deviceId: string } | null = { viewer: "me", deviceId: "laptop-here" };
-const UI = { show_model_badge: true, show_agent_icon: true, show_branch_pill: true, personify_sessions: false } as Record<string, unknown>;
+const UI = { show_model_badge: true, show_agent_icon: true, show_branch_pill: true, personify_sessions: false, show_characters: true, inbox_image_thumbs: false } as Record<string, unknown>;
 
 const readState = mockInboxStore(() => ({
   machineRoster: [
@@ -85,6 +87,7 @@ function render(overrides: Partial<InboxSession>, props: Props = {}) {
   return portable(renderToStaticMarkup(
     <MemoryRouter>
     <ConvexProvider client={convex}>
+    <IdentityPrefsOverride.Provider value={identityPrefsOf(UI)}>
       <SessionCard
         session={{ ...base, ...overrides } as InboxSession}
         isActive={false}
@@ -97,6 +100,7 @@ function render(overrides: Partial<InboxSession>, props: Props = {}) {
         isFavorite={false}
         {...props}
       />
+    </IdentityPrefsOverride.Provider>
     </ConvexProvider>
     </MemoryRouter>,
   ));

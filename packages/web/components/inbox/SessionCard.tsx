@@ -31,6 +31,7 @@ import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { useInboxSelection } from "../../lib/inboxSelection";
 import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipState";
+import { resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../lib/uiPrefDefaults";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -41,7 +42,7 @@ import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipSt
 /** The card-chrome toggles the row draws, as one string. */
 function cardChromeSig(clientState: any): string {
   const ui = clientState?.ui;
-  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}${ui?.show_device_icon !== false ? 1 : 0}${ui?.show_characters === false ? 0 : 1}`;
+  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${resolveImageThumbs(ui) ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${resolveShowBranchPill(ui) ? 1 : 0}${ui?.show_device_icon !== false ? 1 : 0}${resolveShowCharacters(ui) ? 1 : 0}`;
 }
 
 /** Visible-child parent link: the parent's title, so the card wakes on that

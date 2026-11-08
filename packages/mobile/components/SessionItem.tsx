@@ -5,6 +5,7 @@ import { createContext, memo, useContext, useRef, useCallback, useEffect, useMem
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
 import { showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
 import { apiErrorBadge } from '@codecast/web/lib/apiErrorBadge';
+import { resolveImageThumbs } from '@codecast/web/lib/uiPrefDefaults';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
 import { threadStateView } from '@codecast/web/lib/threadState';
 import { agentStatusAt } from '@codecast/web/lib/liveness';
@@ -134,7 +135,7 @@ const InboxRowEnvContext = createContext<InboxRowEnv | null>(null);
 /** Wraps a list of session rows (SwipeableSessionItem). */
 export function InboxRowEnvProvider({ children }: { children: ReactNode }) {
   const projectFilter = useInboxStore((s) => s.activeProjectFilter);
-  const showImageThumb = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
+  const showImageThumb = useInboxStore((s) => resolveImageThumbs(s.clientState?.ui));
   // The faces and identity lines read this instead of each subscribing.
   const prefs = useIdentityPrefs();
   const env = useMemo(

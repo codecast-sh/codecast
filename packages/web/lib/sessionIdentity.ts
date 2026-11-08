@@ -21,6 +21,7 @@ import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import { isRoleIcon, pickRoleIconAccent, roleMonogram, type RoleIcon, type RoleIconAccent } from "@codecast/shared/contracts/roleIcon";
 import type { SessionRoleSnapshot } from "../store/inboxStore";
 import { assistantLabel } from "./conversationBlockStyles";
+import { resolveShowCharacters } from "./uiPrefDefaults";
 
 export type IdentityRow = {
   _id: string;
@@ -59,7 +60,7 @@ export const NO_CHARACTER_PREFS: IdentityPrefs = PREFS.off;
 /** The prefs from the viewer's stored settings. Returns one of three shared
  *  objects, so a store subscription can compare by reference. */
 export function identityPrefsOf(ui: { show_characters?: boolean; personify_sessions?: boolean } | null | undefined): IdentityPrefs {
-  if (ui?.show_characters === false) return PREFS.off;
+  if (!resolveShowCharacters(ui)) return PREFS.off;
   return ui?.personify_sessions === true ? PREFS.all : PREFS.on;
 }
 
