@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extensionProfiles, matchProfile, pickBridgeProfile } from "./chromeProfiles";
+import { extensionProfiles, installedPairing, matchProfile, pickBridgeProfile } from "./chromeProfiles";
 import { BRIDGE_EXTENSION_ID } from "./protocol";
 
 const roots: string[] = [];
@@ -78,5 +78,37 @@ describe("the Chrome profile the bridge uses", () => {
     expect(matchProfile(found.all, "A@WORK.COM")?.dir).toBe("Profile 2");
     expect(matchProfile(found.all, "profile 2")?.dir).toBe("Profile 2");
     expect(matchProfile(found.all, "nope")).toBeNull();
+  });
+});
+
+describe("whether the installed extension takes a one-time code", () => {
+  /** A profile whose preferences point at an installed copy with this options.js. */
+  function installed(options: string, opts: { webStore: boolean; version?: string }): string {
+    const root = mkdtempSync(join(tmpdir(), "cast-chrome-installed-"));
+    roots.push(root);
+    const rel = `${BRIDGE_EXTENSION_ID}/${opts.version ?? "0.1.5"}_0`;
+    const dir = opts.webStore ? join(root, "Default", "Extensions", rel) : join(root, "unpacked");
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(join(root, "Default"), { recursive: true });
+    writeFileSync(join(dir, "options.js"), options);
+    const entry = opts.webStore ? { location: 7, path: rel } : { location: 8, path: dir };
+    writeFileSync(join(root, "Default", "Secure Preferences"), JSON.stringify({ extensions: { settings: { [BRIDGE_EXTENSION_ID]: entry } } }));
+    return root;
+  }
+  const OLD = `const token = (frag.get("token") || "").trim();`;
+  const NEW = `const code = normalizePairingCode(frag.get("code") || "");`;
+
+  // The Web Store's 0.1.5 reads only #token=, so setup's #code= pairs nothing (rig, 2026-11-07).
+  test("the Web Store's 0.1.5 does not", () => {
+    expect(installedPairing("Default", installed(OLD, { webStore: true }))).toEqual({ code: false, version: "0.1.5" });
+  });
+  test("a build with codes does, from the Web Store or unpacked", () => {
+    expect(installedPairing("Default", installed(NEW, { webStore: true, version: "0.1.6" }))).toEqual({ code: true, version: "0.1.6" });
+    expect(installedPairing("Default", installed(NEW, { webStore: false }))?.code).toBe(true);
+  });
+  test("unknown when nothing is installed", () => {
+    const root = mkdtempSync(join(tmpdir(), "cast-chrome-installed-"));
+    roots.push(root);
+    expect(installedPairing("Default", root)).toBeNull();
   });
 });

@@ -3,8 +3,9 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { CdpConnection } from "./cdp.js";
 import {
-  ensurePinnedTab, pickReclaimableTab, pinnedTabBrowser, readBoundTarget, sessionDaemonPid,
+  ensurePinnedTab, pickReclaimableTab, pinnedTabBrowser, readBoundTarget, recoverGoneTab, sessionDaemonPid,
   tabHolderIsSelf, targetLiveness, writeBoundTarget, type CastTab,
 } from "./pinnedTab.js";
 import { writeBridgeState } from "./bridge/host.js";
@@ -177,6 +178,35 @@ describe("page creation", () => {
       expect(extension.tabs.map((tab) => tab.url)).toEqual([url]);
       expect(JSON.parse(fs.readFileSync(path.join(dir, `${session}.target`), "utf8")).url).toBe(url);
     } finally {
+      extension.ws.close();
+      await host.close();
+    }
+  }, 15_000);
+  // `open --new-tab` moves the binding to the second tab; `tab close` of it
+  // left the binding on the closed tab, and the next verb said "this
+  // session's tab is gone" while its first tab was still open (soak, ct-87421).
+  test("a gone binding moves to the session's other live tab, and says the verb can run again", async () => {
+    const host = await testBridgeHost();
+    const extension = await new FakeExtension([]).connect(host.port);
+    const session = "env-twotabs-real";
+    const conn = await CdpConnection.fromPort({ port: host.port, token: host.token, session });
+    try {
+      expect(await ensurePinnedTab(session, "https://example.com/first")).toBe(true);
+      const first = readBoundTarget(session)!;
+      const { targetId: second } = await conn.send<{ targetId: string }>("Target.createTarget", { url: "https://example.com/second", background: true });
+      writeBoundTarget(session, second, dir, "https://example.com/second");
+      await conn.send("Target.closeTarget", { targetId: second });
+      expect(await recoverGoneTab(session)).toBe(true);
+      expect(readBoundTarget(session)).toBe(first);
+      expect(extension.seen.filter((m) => m.op === "tabs.create")).toHaveLength(2);
+
+      // With no tab of its own left and no page asked for, nothing is created and the verb is not retried.
+      await conn.send("Target.closeTarget", { targetId: first });
+      expect(await recoverGoneTab(session)).toBe(false);
+      expect(readBoundTarget(session)).toBeNull();
+      expect(extension.seen.filter((m) => m.op === "tabs.create")).toHaveLength(2);
+    } finally {
+      conn.close();
       extension.ws.close();
       await host.close();
     }

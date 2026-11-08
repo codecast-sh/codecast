@@ -44,6 +44,37 @@ function extensionEnabledIn(profileDir: string): boolean {
   return false;
 }
 
+/**
+ * Can the extension installed in this profile take a one-time pairing code?
+ * Builds before codes (the Chrome Web Store's 0.1.5) read only a shared token
+ * from the options page's fragment, so a code there pairs nothing. Read from
+ * the installed copy's own options.js: `path` in the profile's preferences is
+ * relative to the profile's Extensions directory for a Web Store install and
+ * absolute for an unpacked one. Null when it cannot be read.
+ */
+export function installedPairing(profile: string, root: string | null = chromeUserDataRoot()): { code: boolean; version: string | null } | null {
+  if (!root) return null;
+  const profileDir = path.join(root, profile);
+  for (const file of ["Secure Preferences", "Preferences"]) {
+    let entry: any;
+    try {
+      entry = JSON.parse(fs.readFileSync(path.join(profileDir, file), "utf-8"))?.extensions?.settings?.[BRIDGE_EXTENSION_ID];
+    } catch {
+      continue;
+    }
+    if (typeof entry?.path !== "string") continue;
+    const dir = path.isAbsolute(entry.path) ? entry.path : path.join(profileDir, "Extensions", entry.path);
+    try {
+      const options = fs.readFileSync(path.join(dir, "options.js"), "utf-8");
+      const version = entry.manifest?.version ?? /^(\d+(?:\.\d+)*)_\d+$/.exec(path.basename(dir))?.[1] ?? null;
+      return { code: /frag\.get\("code"\)/.test(options), version };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 export function extensionProfiles(root: string | null = chromeUserDataRoot()): ExtensionProfiles {
   const all = root ? listRealProfiles("chrome", root) : [];
   if (!root || all.length === 0) return { known: false, all: [], withExtension: [] };
