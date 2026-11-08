@@ -1694,6 +1694,20 @@ export const cancel = mutation({
   },
 });
 
+// `cast workflow cancel <ct-N|run>` through /cli/workflow-runs/cancel: the
+// same stop a person makes from the run's page.
+export const cancelFromCli = mutation({
+  args: { api_token: v.string(), run_id: v.id("workflow_runs") },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const run = await ctx.db.get(args.run_id);
+    const was = run?.status;
+    await cancelRunByPerson(ctx, auth.userId, args.run_id);
+    return { run_id: args.run_id, was, cancelled: was !== "completed" && was !== "failed" };
+  },
+});
+
 /** A person stops a run: the run ends, and its task says so, as when a run
  *  fails, instead of reading in progress with nothing running and nothing to
  *  restart it. */
@@ -1708,7 +1722,7 @@ export async function cancelRunByPerson(ctx: Ctx, userId: Id<"users">, runId: Id
 
 // ── the-line.md L8: the one run list ─────────────────────────────────────────
 
-type ListRunsArgs = { team_id?: Id<"teams">; task_id?: string; plan_id?: string; status?: string; limit?: number };
+type ListRunsArgs = { team_id?: Id<"teams">; task_id?: string; plan_id?: string; run_id?: string; status?: string; limit?: number; slim?: boolean };
 
 async function findByRef(ctx: Ctx, table: "tasks" | "plans", ref: string): Promise<any | null> {
   const byShort = await ctx.db.query(table).withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
@@ -1732,7 +1746,11 @@ export async function listRunsCore(ctx: Ctx, userId: Id<"users">, args: ListRuns
   const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
 
   let rows: any[] = [];
-  if (args.task_id || args.plan_id) {
+  if (args.run_id) {
+    const id = ctx.db.normalizeId("workflow_runs", args.run_id);
+    const run = id ? await ctx.db.get(id) : null;
+    if (run && (await canReadRun(ctx, userId, run))) rows.push(run);
+  } else if (args.task_id || args.plan_id) {
     const item = args.task_id ? await findByRef(ctx, "tasks", args.task_id) : await findByRef(ctx, "plans", args.plan_id!);
     if (!item) return [];
     const allowed = args.task_id ? await canAccessTask(ctx, userId, item) : await canAccessPlan(ctx, userId, item);
@@ -1770,7 +1788,9 @@ export async function listRunsCore(ctx: Ctx, userId: Id<"users">, args: ListRuns
   // 200 run page bounded, newest runs claiming lookups first.
   const budget = { reads: 300 };
   const shaped = [];
-  for (const run of out.slice(0, limit)) shaped.push(await enrichRun(ctx, await withAgentSessions(ctx, run, budget), workflows));
+  // `slim` (the CLI's list) leaves the station sessions out: each carries its
+  // report and handoff, and 200 runs of them outgrew the call's time limit.
+  for (const run of out.slice(0, limit)) shaped.push(await enrichRun(ctx, args.slim ? run : await withAgentSessions(ctx, run, budget), workflows));
   return shaped;
 }
 
@@ -1842,8 +1862,10 @@ export const listRunsFromCli = query({
     team_id: v.optional(v.id("teams")),
     task_id: v.optional(v.string()),
     plan_id: v.optional(v.string()),
+    run_id: v.optional(v.string()),
     status: v.optional(v.string()),
     limit: v.optional(v.number()),
+    slim: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
