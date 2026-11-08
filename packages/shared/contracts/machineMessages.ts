@@ -44,6 +44,12 @@ export function stripPastedContent(text: string): string {
     .replace(/(?:\r?\n)?<\/pasted_content(?=[\s>]|$)[^>]*(?:>|$)/g, "");
 }
 
+/** A session title as one line a person reads in a list: paste markers left
+ *  out, newlines and runs of spaces folded, empty when nothing is left. */
+export function titleLine(title: string | null | undefined): string {
+  return stripPastedContent(title ?? "").replace(/\s+/g, " ").trim();
+}
+
 // An `@[Title id]` mention in a sent message carries the entity's context
 // (a task's description, a plan's body, a doc's content) for the agent. The
 // composer appends it after the mention inside this tag, so every display
