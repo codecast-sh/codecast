@@ -56,7 +56,8 @@ describe("cancelTasksBoundToConversation", () => {
   test("completes armed inject schedules and stamps canceled_on_kill_at", async () => {
     const loop = taskRow({ _id: "loop" });
     const paused = taskRow({ _id: "paused", status: "paused" });
-    const conv = home();
+    // The scheduled loop armed the home; the paused one never counts as a wake.
+    const conv = { ...home(), armed_trigger_kind: "standing" };
     const ctx = fakeDb([loop, paused, conv]);
 
     const n = await cancelTasksBoundToConversation(ctx as any, USER as any, CONV as any);

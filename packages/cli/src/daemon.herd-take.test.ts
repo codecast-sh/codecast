@@ -168,7 +168,7 @@ describe("a take launches on the keychain login", () => {
     const expected = launchAccountPrefix(undefined);
     expect(tmux.resumeAccountPrefix).toBe(expected.prefix);
     expect(tmux.resumeAccount).toBe(expected.account);
-    expect(functionBlock(source, "autoResumeSessionInner").text).toContain("buildClaudeResumeCommand({ sessionId, cwd, jsonlPath, jsonlContent, config, conversationId })");
+    expect(functionBlock(source, "autoResumeSessionInner").text).toContain("buildClaudeResumeCommand({ sessionId, cwd, jsonlPath, jsonlContent, config, conversationId, permissionMode: opts?.permissionMode })");
     expect(functionBlock(source, "resumeLaunchLine").text).toContain("`${a.resumeAccountPrefix}${providerKeySourcePrefix(a.agentType, CONFIG_DIR)}${disclaimPrefix()}${env} ${a.resumeCmd}`");
   });
 

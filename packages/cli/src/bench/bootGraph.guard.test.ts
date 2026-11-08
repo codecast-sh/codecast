@@ -342,7 +342,11 @@ describe("command groups stay off the boot graph", () => {
     // 4520 later on 2026-11-08: growth in files already here, no new leaf
     // (index.ts +0.6 for the help text overhaul, tmux.ts +0.2,
     // contracts/inboxFields.ts and contracts/snippets.ts +0.2 each).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4520);
+    // 4522 on 2026-11-08: `cast sessions -w --until` in index.ts (+1.4, the
+    // option, its help line and the exit check in the watch loop; its parser,
+    // sessionsUntil.ts, loads lazily) and contracts/inboxProjection.ts (+0.6,
+    // hibernated rows file by their verdict instead of as dormant).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4522);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
