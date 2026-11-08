@@ -41,6 +41,8 @@ import {
 import { apiPost, apiUpload, missingRouteError, type PublishDeps } from "./castApi.js";
 import { CAST_PLAYER_GUIDE, describePageAnchor, pageEmbedUrl, pageIsMotion, pageUsesPlayer, parsePageAnchor } from "@codecast/shared/contracts";
 import { commandGroup } from "./commandGroups.js";
+import { addVerbHelp, type VerbHelpSpec } from "./verbHelp.js";
+import { verbTypoNextStep } from "./commandSuggestion.js";
 import { readPageData, runPublishData } from "./publishData.js";
 import { PAGE_DATA_FILE } from "@codecast/shared/contracts/pageData";
 import { captureMotionThumb, renderMotion, splitMotionOutputs, staleRenderNote } from "./publishMotion.js";
@@ -232,6 +234,13 @@ export function describeEvidence(evidence?: { task?: string | null; plan?: strin
   return `attached to ${target}${evidence.task && evidence.station ? ` at ${evidence.station}` : ""}`;
 }
 
+/** The owner's manage link prints once, when the page is first published; a
+ *  republish to the same URL leaves it out (`cast publish links <slug>` shows it
+ *  again), so the private link is not repeated into every transcript. */
+export function showsManageLink(result: { url: string; updated?: boolean; manage_url?: string }): boolean {
+  return !!result.manage_url && result.manage_url !== result.url && !result.updated;
+}
+
 export function printPublishResult(
   result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null; evidence?: { task?: string | null; plan?: string | null; station?: string | null }; data?: { workspace: string; queries: number } },
   title: string,
@@ -242,8 +251,8 @@ export function printPublishResult(
   console.log(`  ${fmt.accent(result.url)}`);
   const attached = describeEvidence(result.evidence);
   if (attached) console.log(`  ${fmt.label("evidence:")} ${attached}`);
-  if (result.manage_url && result.manage_url !== result.url) {
-    console.log(`  ${fmt.label("manage (owner link — keep private):")} ${result.manage_url}`);
+  if (showsManageLink(result)) {
+    console.log(`  ${fmt.label("manage (owner link, keep private):")} ${result.manage_url}`);
   }
   if (result.edit_url) {
     console.log(`  ${fmt.label("edit:")} ${result.edit_url}`);
@@ -440,7 +449,7 @@ async function runSet(deps: PublishDeps, target: string, options: PublishOptions
     set.expires_in_ms = parsed.ms;
   }
   if (!Object.keys(set).length) {
-    console.error(fmt.error("Nothing to set — pass e.g. --password X, --no-password, --email-gate, --expires 7d, --edit-mode team, --no-session, --title T"));
+    console.error(fmt.error("Nothing to set. Pass one or more of: --password-stdin, --no-password, --email-gate, --no-email-gate, --expires 7d|never, --edit-mode owner|link|team, --no-session, --no-comments, --comments, --title T"));
     process.exit(1);
   }
   const result = await callManage(deps, row, { set });
@@ -557,6 +566,8 @@ interface PublishOptions {
   title?: string;
   new?: boolean;
   json?: boolean;
+  /** Print only the page URL. */
+  url?: boolean;
   watch?: boolean;
   password?: string | boolean;
   passwordValue?: string;
@@ -707,7 +718,9 @@ async function warmEdge(deps: PublishDeps, result: any, access: Record<string, u
 async function runPublish(deps: PublishDeps, target: string, options: PublishOptions): Promise<void> {
   const absPath = path.resolve(target);
   if (!fs.existsSync(absPath)) {
-    console.error(fmt.error(`No such file or directory: ${target}`));
+    // A bare word that is not on disk and sits near a verb is a typo of the verb.
+    const next = /^[a-z]+$/.test(target) ? verbTypoNextStep(["publish"], PUBLISH_VERBS, target) : null;
+    console.error(fmt.error(next ? `No file "${target}" and no subcommand by that name. ${next}` : `No such file or directory: ${target}`));
     process.exit(1);
   }
   const access = accessFromOptions(options);
@@ -754,6 +767,8 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
 
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
+  } else if (options.url) {
+    console.log(result.url);
   } else {
     printPublishResult(result, title, access, showsVideo);
   }
@@ -820,22 +835,42 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
 
 // ── registration ─────────────────────────────────────────────────────────────
 
+const PUBLISH_VERBS = ["ls", "rm", "rollback", "open", "versions", "comments", "viewers", "links", "set", "data", "video"];
+const PUBLISH_USAGE = "Usage: cast publish <file.html|file.md|dir> [--title T] [--task ct-N]; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | video (each takes <slug|path>; cast publish --help)";
+
+const GATE_FLAGS = ["--password", "--password-stdin", "--no-password", "--email-gate", "--no-email-gate", "--expires", "--edit-mode", "--session", "--no-session", "--comments", "--no-comments"];
+
+/** What `cast publish <verb> --help` prints: each verb's usage and only the flags it reads. */
+export const PUBLISH_VERB_HELP: Record<string, VerbHelpSpec> = {
+  ls: { usage: "cast publish ls [--json]", summary: "Your published pages, newest first", flags: ["--json"] },
+  rm: { usage: "cast publish rm <slug|path> [--json]", summary: "Unpublish a page: its URL stops answering", flags: ["--json"] },
+  rollback: { usage: "cast publish rollback <slug|path> <version> [--json]", summary: "Publish an earlier version again as the newest one", flags: ["--json"] },
+  open: { usage: "cast publish open <slug|path> [--json]", summary: "Print a page's URL (--json for its whole row)", flags: ["--json"] },
+  versions: { usage: "cast publish versions <slug|path> [--json]", summary: "A page's version history, with how to restore and compare", flags: ["--json"] },
+  comments: { usage: "cast publish comments <slug|path> [--resolve <id> | --resolve-all] [--json]", summary: "Viewer comments on a page; revise, republish, then resolve them", flags: ["--resolve", "--resolve-all", "--json"] },
+  viewers: { usage: "cast publish viewers <slug|path> [--json]", summary: "How often a page was viewed, and by which addresses behind an email gate", flags: ["--json"] },
+  links: { usage: "cast publish links <slug|path> [--json]", summary: "A page's share, manage (owner, keep private), edit, source and live links", flags: ["--json"] },
+  set: { usage: "cast publish set <slug|path> [gates]", summary: "Change a page's gates and settings without republishing", flags: [...GATE_FLAGS, "--json"] },
+  data: { usage: "cast publish data <slug|path> [query-id] [--refresh] [--json]", summary: "A page's live queries and their latest rows", flags: ["--refresh", "--json"] },
+  video: { usage: "cast publish video", summary: "How a page plays video in the cast player: chapters, styling, and hosting", note: "Run it bare to print the guide. A page with a <video> or <cast-player> publishes like any other." },
+};
+
 export function registerPublishCommand(program: Command, deps: PublishDeps): void {
-  program
-    .command("publish")
+  addVerbHelp(program.command("publish"), PUBLISH_VERB_HELP)
     .description(commandGroup("publish").description)
-    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | video")
+    .argument("[target]", "file.html, file.md, or a directory; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | video")
     .argument("[args...]", "subcommand arguments")
     .option("--title <title>", stdinText("Override the page title (default: <title> tag / first heading / filename)"))
     .option("--new", "Publish under a fresh URL even if this path was published before")
     .option("--json", "Emit the raw JSON response")
+    .option("--url", "Print only the page URL, one line (for scripts and $(...))")
     .option("--watch", "Keep watching the file/directory and republish on change")
-    .option("--password <password>", "Require a password to view (visible in ps — prefer --password-stdin)")
+    .option("--password <password>", "Require a password to view (visible in ps; prefer --password-stdin)")
     .option("--password-stdin", "Read the view password from stdin (keeps it out of the process list)")
     .option("--no-password", "Clear the password gate")
     .option("--email-gate", "Require an email address to view")
     .option("--no-email-gate", "Clear the email gate")
-    .option("--expires <duration>", "Expire the link after e.g. 30m, 24h, 7d — or never")
+    .option("--expires <duration>", "Expire the link after a duration (30m, 24h, 7d) or never")
     .option("--edit-mode <mode>", "Who can edit in the browser: owner | link | team")
     .option("--session", "Show the link to the publishing session on the page (default)")
     .option("--no-session", "Hide the publishing-session link from the page")
@@ -852,7 +887,7 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
     .action(async (target: string | undefined, args: string[], options: PublishOptions) => {
       const json = !!options.json;
       if (!target) {
-        console.error(fmt.error("Usage: cast publish <file.html|file.md|dir> — or: ls | rm <target> | rollback <target> <version> | open <target>"));
+        console.error(fmt.error(PUBLISH_USAGE));
         process.exit(1);
       }
       if (target === "ls") return runLs(deps, json);

@@ -212,13 +212,25 @@ async function shareVideo(deps: PublishDeps, target: string, alt?: string): Prom
   };
 }
 
+/** One line per shared file for `--url` / `--markdown`, in argument order, so a
+ *  script reads the value without filtering the human-facing lines. */
+export function singleValueLines(images: Pick<SharedImage, "url" | "markdown">[], mode: "url" | "markdown"): string[] {
+  return images.map((img) => (mode === "url" ? img.url : img.markdown));
+}
+
 export function registerImageCommand(program: Command, deps: PublishDeps): void {
   program
     .command("image <target...>")
     .description(commandGroup("image").description)
     .option("--alt <text>", "Alt text for the printed markdown (defaults to the file name)")
-    .option("--json", "Machine-readable output")
-    .action(async (targets: string[], options: { alt?: string; json?: boolean }) => {
+    .option("--json", 'Machine-readable output: {"images": [{source, url, markdown, mediaType, bytes}], "failures": [{source, error}]}')
+    .option("--url", "Print only the URL, one line per file")
+    .option("--markdown", "Print only the markdown line, one per file")
+    .action(async (targets: string[], options: { alt?: string; json?: boolean; url?: boolean; markdown?: boolean }) => {
+      if ([options.json, options.url, options.markdown].filter(Boolean).length > 1) {
+        console.error(fmt.error("Pick one of --json, --url and --markdown."));
+        process.exit(1);
+      }
       const shared: SharedImage[] = [];
       const failures: { source: string; error: string }[] = [];
       for (const target of targets) {
@@ -230,12 +242,15 @@ export function registerImageCommand(program: Command, deps: PublishDeps): void 
       }
       if (options.json) {
         console.log(JSON.stringify({ images: shared, failures }, null, 2));
+      } else if (options.url || options.markdown) {
+        for (const line of singleValueLines(shared, options.url ? "url" : "markdown")) console.log(line);
+        for (const failure of failures) console.error(`${fmt.error(icons.cross)} ${failure.source}: ${failure.error}`);
       } else {
         for (const img of shared) {
           const notes = [
             `${img.mediaType}, ${img.bytes >= 1e6 ? `${(img.bytes / 1e6).toFixed(1)}MB` : `${(img.bytes / 1000).toFixed(0)}KB`}`,
             ...(img.downscaledFrom ? [`downscaled from ${(img.downscaledFrom / 1e6).toFixed(1)}MB`] : []),
-            ...(img.deduped ? ["already uploaded — same link"] : []),
+            ...(img.deduped ? ["already uploaded, same link"] : []),
           ];
           console.log(`${fmt.success(icons.check)} ${fmt.highlight(img.source)} ${fmt.muted(`(${notes.join(", ")})`)}`);
           console.log(`  ${img.url}`);

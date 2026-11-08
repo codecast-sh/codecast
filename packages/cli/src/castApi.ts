@@ -29,12 +29,45 @@ export function missingRouteError(urlPath: string, status: number): string | nul
     : null;
 }
 
+/**
+ * What to print when the backend answered with something other than JSON. A
+ * 5xx here is the gateway in front of the backend speaking (an empty body or
+ * an HTML page), which used to print as a bare "API error (502):".
+ */
+export function nonJsonError(urlPath: string, status: number, text: string, opts: { read?: boolean } = {}): string {
+  const missing = missingRouteError(urlPath, status);
+  if (missing) return missing;
+  if (status === 502 || status === 503) {
+    return `The codecast backend is not answering (HTTP ${status} from its gateway): it did not take the request, so most likely nothing ${opts.read ? "was read" : "was saved"}. Retry in a minute; cast status shows the connection.`;
+  }
+  if (status === 504) {
+    return opts.read
+      ? "The codecast backend took too long to answer (HTTP 504). Retry in a minute."
+      : "The codecast backend took too long to answer (HTTP 504). The change may still have landed: read it back before sending it again.";
+  }
+  const body = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+  return `API error (${status})${body ? `: ${body}` : ", with an empty answer"}${status >= 500 ? ". Retry in a minute." : ""}`;
+}
+
+/**
+ * Whether a server error is its argument validator refusing what this CLI
+ * sent: the sign of a backend older than the CLI (an extra field it does not
+ * know, or a value it types differently). With `field`, only a refusal that
+ * names that field. Callers retry without the new argument.
+ */
+export function isOlderBackendRefusal(err: unknown, field?: string): boolean {
+  const text = String((err as any)?.message ?? err ?? "");
+  if (!/ArgumentValidationError|extra field|validator/i.test(text)) return false;
+  return field === undefined || text.includes(`.${field}`) || text.includes(`\`${field}\``);
+}
+
 export async function apiPost(
   deps: PublishDeps,
   urlPath: string,
   body: Record<string, unknown>,
-  /** `describeError` turns a refusal code into words before it is shown. */
-  opts: { read?: boolean; exitOnError?: boolean; describeError?: (error: string) => string } = {},
+  /** `describeError` turns a refusal code into words before it is shown.
+   *  `retries` re-sends a write that is safe to repeat (setting a value, not creating one) on a timeout or 5xx. */
+  opts: { read?: boolean; exitOnError?: boolean; describeError?: (error: string) => string; retries?: number } = {},
 ): Promise<any> {
   const { siteUrl, apiToken } = deps.getCliEndpoint();
   const doFetch = opts.read ? cliFetchRead : cliFetch;
@@ -42,7 +75,7 @@ export async function apiPost(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: apiToken, ...body }),
-  });
+  }, opts.retries !== undefined ? { retries: opts.retries } : {});
   return readApiResult(response, urlPath, opts);
 }
 
@@ -68,15 +101,14 @@ export async function apiUpload(
 async function readApiResult(
   response: Response,
   urlPath: string,
-  opts: { exitOnError?: boolean; describeError?: (error: string) => string },
+  opts: { read?: boolean; exitOnError?: boolean; describeError?: (error: string) => string },
 ): Promise<any> {
   const text = await response.text();
   let result: any;
   try {
     result = JSON.parse(text);
   } catch {
-    const message = missingRouteError(urlPath, response.status)
-      ?? `API error (${response.status}): ${text.slice(0, 200)}`;
+    const message = nonJsonError(urlPath, response.status, text, opts);
     if (opts.exitOnError === false) throw new Error(message);
     console.error(message);
     process.exit(1);
