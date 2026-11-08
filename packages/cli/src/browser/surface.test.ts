@@ -48,7 +48,7 @@ const KNOWN_GAPS: Record<string, { flags?: string[]; verb?: boolean; why: string
   find: { flags: ["--tab"], why: "an engine session drives one tab of its own" },
   close: { verb: true, why: "engine restoration pending in jx76a64's rebase" },
   shot: {
-    flags: ["--jpeg", "--out", "--ref", "--tab", "--viewports"],
+    flags: ["--jpeg", "--out", "--tab", "--viewports"],
     why: "engine's shot predates the fleet's flags; restoration pending in jx76a64's rebase",
   },
   start: {

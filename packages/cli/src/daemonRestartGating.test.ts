@@ -153,7 +153,7 @@ describe("daemon restart gating", () => {
     const body = functionBody(index, "bounceDaemonIfBuildChanged");
     expect(body).toContain("if (daemonBuildUnchanged(runningBuild, installedBuild)) return false;");
     expect(body).toContain("stopDaemon();");
-    expect(body).toContain("startDaemon();");
+    expect(body).toContain("startDaemon({ afterStop: true });");
   });
 
   test("ordinary CLI use and automatic updates both respect the configured installation", () => {
