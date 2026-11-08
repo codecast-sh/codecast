@@ -20,12 +20,13 @@ export const FUNNEL_DAYS = 30;
 export const FUNNEL_ITEM_CAP = 40;
 
 /** Why a problem stopped at a step: its run closed it there (already fixed, not needed), a person dropped it, its run
- *  failed or was cancelled, it stands there now, it waits on a person's card, it is ready and over the flow's bar
- *  with no run yet (unstarted), it is held back (not ready, or under the bar), it is under watch, or it came back after
+ *  failed or was cancelled, it stands there now, it waits on a person's card; ready and over the flow's bar with no
+ *  run, no active role owns its project (unowned), the flow does not take its source (offsource), or nothing keeps it
+ *  from the live queue but a free hand (unstarted); it is held back (not ready, or under the bar), it is under watch, or it came back after
  *  it shipped. */
-export type FunnelReason = "closed" | "dropped" | "failed" | "cancelled" | "here" | "waiting" | "unstarted" | "held" | "watching" | "regressed" | "other";
+export type FunnelReason = "closed" | "dropped" | "failed" | "cancelled" | "here" | "waiting" | "unowned" | "offsource" | "unstarted" | "held" | "watching" | "regressed" | "other";
 /** Display order: what ended first, what still moves after. */
-export const FUNNEL_REASONS: readonly FunnelReason[] = ["closed", "dropped", "failed", "cancelled", "regressed", "other", "here", "waiting", "unstarted", "held", "watching"];
+export const FUNNEL_REASONS: readonly FunnelReason[] = ["closed", "dropped", "failed", "cancelled", "regressed", "other", "here", "waiting", "unowned", "offsource", "unstarted", "held", "watching"];
 
 /** A station step of the funnel: one or more graph nodes a run passes as one (a fan-out and its branches, Push with
  *  Merge and Ready to land). */
@@ -149,6 +150,8 @@ export type FunnelTask = Parameters<typeof clearsBar>[0] & {
   status: string;
   created_at: number;
   readiness?: string | null;
+  /** The goal grounding named (orgLine.isReadyCause): a ready problem without one never reaches the live queue. */
+  goal_ref?: string | null;
   waiting_since?: number | null;
   watch_until?: number | null;
   resolved_at?: number | null;
@@ -176,6 +179,10 @@ export function funnelItem(o: {
   waiting?: boolean;
   /** The live flow's bar: a ready problem with no run under it is held back, over it not started. */
   bar?: Pick<FlowBar, "score" | "findings"> | null;
+  /** For a problem with no run, what the live queue asks besides the bar (liveFlows.liveFlowCandidates): an active
+   *  role owns it (orgLine.lineOwnerOf), and the flow takes its source. Unknown counts as yes. */
+  owned?: boolean;
+  sourceTaken?: boolean;
   now: number;
 }): FunnelItem | null {
   const { task, run, stations, now } = o;
@@ -206,7 +213,7 @@ export function funnelItem(o: {
   }
   const live = !!run && LIVE.has(run.status);
   const waiting = live && (run!.status === "paused" || !!o.waiting || !!task.waiting_since);
-  const why = level === merged + 2 ? null : reasonOf({ task, run, level, merged, live, waiting, bar: o.bar, now });
+  const why = level === merged + 2 ? null : reasonOf({ task, run, level, merged, live, waiting, bar: o.bar, owned: o.owned, sourceTaken: o.sourceTaken, now });
 
   // Where it stands: the station it is at, else the last it reached before its exit.
   const at = live ? run!.current_node_id : [...nodes].filter((n) => n.status !== "pending" && n.node_id !== "exit").sort((a, b) => (a.completed_at ?? a.started_at ?? 0) - (b.completed_at ?? b.started_at ?? 0)).pop()?.node_id;
@@ -218,9 +225,15 @@ export function funnelItem(o: {
   };
 }
 
-function reasonOf(o: { task: FunnelTask; run: FunnelRun | null | undefined; level: number; merged: number; live: boolean; waiting: boolean; bar?: Pick<FlowBar, "score" | "findings"> | null; now: number }): FunnelReason {
+function reasonOf(o: { task: FunnelTask; run: FunnelRun | null | undefined; level: number; merged: number; live: boolean; waiting: boolean; bar?: Pick<FlowBar, "score" | "findings"> | null; owned?: boolean; sourceTaken?: boolean; now: number }): FunnelReason {
   const { task, run } = o;
-  if (!run) return task.status === "dropped" ? "dropped" : task.status === "done" ? "closed" : task.readiness === "ready" && clearsBar(task, o.bar) ? "unstarted" : "held";
+  if (!run) {
+    if (task.status === "dropped") return "dropped";
+    if (task.status === "done") return "closed";
+    if (task.readiness !== "ready" || !task.goal_ref?.trim() || !clearsBar(task, o.bar)) return "held";
+    if (o.sourceTaken === false) return "offsource";
+    return o.owned === false ? "unowned" : "unstarted";
+  }
   if (o.live) return o.waiting ? "waiting" : "here";
   const end = runEnd(run);
   if (end?.kind === "dissolved") return "closed";

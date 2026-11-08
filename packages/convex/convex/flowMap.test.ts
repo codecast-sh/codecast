@@ -297,7 +297,8 @@ describe("rollup then forTeam", () => {
     expect(w30.signals).toBe(9);
     expect(w7.steps.map((s) => s.label)).toEqual(["Problems opened", "Runs started", "Investigate", "Rebase", "Build", "Decide", "Merged", "Live in production", "Closed clean"]);
     // Opened in the window: ar1, ar2, ar3, p1, p2, e1, w1, jr (ar4 merged into ar3; p3, ar5, old are 40 days old).
-    expect(w7.steps[0]).toMatchObject({ n: 8, drops: { unstarted: 2, closed: 1 } });
+    // ar3 and jr are ready with no goal named yet: the live queue skips them.
+    expect(w7.steps[0]).toMatchObject({ n: 8, drops: { held: 2, closed: 1 } });
     // Runs: ar1, ar2 at Build; p1 waiting at Decide; p2 on a person's line at Rebase; e1 shipped and reopened.
     expect(w7.steps[1].n).toBe(5);
     const at = (key: string) => w7.steps.find((s) => s.key === key)!;
@@ -310,6 +311,18 @@ describe("rollup then forTeam", () => {
     const e1 = f.items.find((x) => x.ref === "ct-e1")!;
     expect(e1).toMatchObject({ run: "workflow_runs_5", why: "regressed", node: "Watch", status: "completed" });
     expect(f.items.find((x) => x.ref === "ct-p1")).toMatchObject({ why: "waiting", node: "Decide", status: "paused" });
+  });
+
+  test("the Volume chart: a ready problem with no run, by what keeps it from the live queue", async () => {
+    const map = (await rolledMap(VIEWER, async (db) => {
+      const lead = await db.insert("org_roles", { team_id: TEAM, status: "active", title: "Lead", created_at: 1 });
+      await db.patch("projects_1", { owner_role_id: lead });
+      // Owned by the project's lead: eligible. No project: nobody owns it.
+      await db.patch("tasks_ar3", { goal_ref: "in-1", project_id: "projects_1" });
+      await db.patch("tasks_jr", { goal_ref: "in-1" });
+    }))!;
+    expect(map.funnel!.windows[0].steps[0].drops).toEqual({ closed: 1, unowned: 1, unstarted: 1 });
+    expect(map.funnel!.items.find((x) => x.ref === "ct-jr")!.why).toBe("unowned");
   });
 
   test("a finder's declaration names its row", async () => {

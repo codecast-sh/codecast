@@ -18,8 +18,20 @@ import "./flowVolume.css";
 
 const REASON_WORDS: Record<FunnelReason, string> = {
   closed: "not needed", dropped: "dropped", failed: "failed", cancelled: "cancelled", regressed: "came back", other: "other",
-  here: "here now", waiting: "on a person", unstarted: "not started", held: "held back", watching: "watching",
+  here: "here now", waiting: "on a person", unowned: "no owner", offsource: "source not taken", unstarted: "eligible, no run",
+  held: "held back", watching: "watching",
 };
+
+/** A count's height on the chart's one scale: decades of `dec`, so 15,000 signals and 5 merges both read. */
+const logF = (n: number, dec: number) => (n > 0 ? Math.max(Math.log10(n), 0) / dec : 0);
+const AXIS = ["10", "100", "1k", "10k", "100k", "1M"];
+/** The share of the step before that made it to this one; under 1% keeps a decimal so a near-total drop never reads 0. */
+function passShare(n: number, prev: number): { text: string; tone?: "warn" | "bad" } | null {
+  if (!prev) return null;
+  const r = n / prev;
+  const text = r > 0 && r < 0.01 ? `${(r * 100).toFixed(1)}%` : `${Math.round(r * 100)}%`;
+  return { text, tone: r < 0.5 ? "bad" : r < 0.9 ? "warn" : undefined };
+}
 
 /** What the list under the chart shows: the signals by source, everyone who reached a step, or those who stopped there for one reason. */
 type Pick = { kind: "signals" } | { kind: "step"; level: number; why?: FunnelReason } | null;
@@ -33,9 +45,8 @@ export function FlowVolume({ map, href, select, now }: { map: FlowMap; href: Lin
   const f = map.funnel;
   if (!f) return <section className="fv" data-flow-volume=""><p className="fv-none">No rollup yet</p></section>;
   const w = f.windows.find((x) => x.days === days) ?? f.windows[0];
-  // Signals and problems each fill their own column (thousands of findings, most problems never started); from the
-  // runs on, every bar and share is against the runs started.
-  const runs = Math.max(1, w.steps[1]?.n ?? 0);
+  // One logarithmic scale for every column, in whole decades from 1 to the largest count.
+  const dec = Math.max(1, Math.ceil(Math.log10(Math.max(10, w.signals, ...w.steps.map((s) => s.n)))));
   const label = new Map(map.sources.map((s) => [s.key, s.label]));
   const present = FUNNEL_REASONS.filter((r) => w.steps.some((s) => s.drops[r]));
 
@@ -56,14 +67,18 @@ export function FlowVolume({ map, href, select, now }: { map: FlowMap; href: Lin
         {present.map((r) => <li key={r} data-why={r}><i aria-hidden />{REASON_WORDS[r]}</li>)}
       </ul>
 
-      <ol className="fv-chart" style={{ ["--fv-n" as string]: w.steps.length + 1 }}>
-        {/* The signals: their own scale, many findings to a problem. */}
+      <ol className="fv-chart" style={{ ["--fv-n" as string]: w.steps.length + 1, ["--fv-dec" as string]: dec }}>
+        {/* The scale's decades, so nobody reads the bars as linear. */}
+        <li className="fv-col fv-axis" aria-hidden>
+          <span className="fv-track">{AXIS.slice(0, dec - 1).map((t, k) => <span key={t} className="fv-tick lw-num" style={{ ["--at" as string]: (k + 1) / dec }}>{t}</span>)}</span>
+        </li>
+        {/* The signals: many findings to a problem, so no share. */}
         <li className="fv-col" data-step="signals">
           <span className="fv-name">Signals in</span>
           <button type="button" className="fv-count" aria-pressed={pick?.kind === "signals"} onClick={() => toggle({ kind: "signals" })} data-flow-volume-count="signals">
             <b className="lw-num">{w.signals.toLocaleString()}</b>
           </button>
-          <span className="fv-track"><span className="fv-bar" data-signals="" style={{ ["--f" as string]: w.signals ? 1 : 0 }} /></span>
+          <span className="fv-track"><span className="fv-bar" data-signals="" style={{ ["--f" as string]: logF(w.signals, dec) }} /></span>
           <ul className="fv-drops">
             {w.sources.slice(0, 3).map((s) => <li key={s.key} className="fv-src"><span>{label.get(s.key) ?? s.key}</span><b className="lw-num">{s.n.toLocaleString()}</b></li>)}
             {w.sources.length > 3 ? <li className="fv-src" data-more=""><button type="button" onClick={() => setPick({ kind: "signals" })}>+{w.sources.length - 3} sources</button></li> : null}
@@ -73,16 +88,16 @@ export function FlowVolume({ map, href, select, now }: { map: FlowMap; href: Lin
           // The ones that went on to the next step; at the last, all of them made it.
           const on = i === w.steps.length - 1 ? s.n : w.steps[i + 1].n;
           const reasons = FUNNEL_REASONS.filter((r) => s.drops[r]);
-          const share = s.n && i > 1 ? Math.round((s.n / runs) * 100) : null;
+          const share = i > 0 ? passShare(s.n, w.steps[i - 1].n) : null;
           return (
-            <li key={s.key} className="fv-col" data-step={s.key} data-own={i === 0 ? "" : undefined}>
+            <li key={s.key} className="fv-col" data-step={s.key}>
               <span className="fv-name">{s.label}</span>
               <button type="button" className="fv-count" aria-pressed={same(pick, { kind: "step", level: i })} disabled={!s.n} onClick={() => toggle({ kind: "step", level: i })} data-flow-volume-count={s.key}>
                 <b className="lw-num">{s.n.toLocaleString()}</b>
-                {share != null ? <span className="fv-share lw-num">{share}%</span> : null}
+                {share ? <span className="fv-share lw-num" data-tone={share.tone} title={`of ${w.steps[i - 1].label}`}>{share.text}</span> : null}
               </button>
               <span className="fv-track">
-                <span className="fv-bar" style={{ ["--f" as string]: i === 0 ? (s.n ? 1 : 0) : s.n / runs }}>
+                <span className="fv-bar" data-some={s.n ? "" : undefined} style={{ ["--f" as string]: logF(s.n, dec) }}>
                   {/* The ones that went on, then the ones that stopped here, by why. */}
                   {on ? <span className="fv-seg" data-why="on" style={{ flexGrow: on }} /> : null}
                   {reasons.map((r) => (

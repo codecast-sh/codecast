@@ -18,6 +18,8 @@
 .fv [data-why="here"] { --why: var(--lw-live); }
 .fv [data-why="waiting"] { --why: var(--lw-person); }
 .fv [data-why="unstarted"] { --why: color-mix(in srgb, var(--lw-warn) 70%, var(--lw-paper)); }
+.fv [data-why="unowned"] { --why: color-mix(in srgb, var(--lw-plum) 45%, var(--lw-warn)); }
+.fv [data-why="offsource"] { --why: color-mix(in srgb, var(--lw-ink-3) 55%, var(--lw-warn)); }
 .fv [data-why="held"] { --why: color-mix(in srgb, var(--lw-warn) 30%, var(--lw-paper)); }
 .fv [data-why="watching"] { --why: var(--lw-ok); }
 
@@ -27,19 +29,30 @@
 /* Under ~100px a column, a chip is its mark and number; the key names the color. */
 @container fv (max-width: 1400px) { .fv-chart .fv-drop-w { display: none; } }
 
-.fv-chart { --fv-h: 180px; display: grid; grid-template-columns: repeat(var(--fv-n), minmax(0, 1fr)); gap: 0 6px; margin: 0; padding: 0; list-style: none; }
-.fv-col { display: grid; grid-template-rows: 2.6em auto var(--fv-h) auto; row-gap: 6px; min-width: 0; }
-.fv-col + .fv-col { border-left: 1px dashed var(--lw-rule-2); padding-left: 6px; }
+.fv-chart { --fv-h: 200px; display: grid; grid-template-columns: 2.4em repeat(var(--fv-n), minmax(0, 1fr)); gap: 0 6px; margin: 0; padding: 0; list-style: none; }
+/* Fixed rows, so every column's track (the axis's too) starts at the same height. */
+.fv-col { display: grid; grid-template-rows: 2.6em 3.2em var(--fv-h) auto; row-gap: 6px; min-width: 0; }
+.fv-col:not(.fv-axis) + .fv-col { border-left: 1px dashed var(--lw-rule-2); padding-left: 6px; }
 .fv-name { align-self: end; font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-2); line-height: 1.25; overflow-wrap: anywhere; }
 .fv-col[data-step="signals"] .fv-name { color: var(--lw-ink); }
-.fv-count { display: inline-flex; align-items: baseline; gap: 5px; justify-self: start; padding: 2px 6px; margin-left: -6px; border: 1px solid transparent; border-radius: 6px; background: none; font: inherit; color: var(--lw-ink); cursor: pointer; }
+.fv-count { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0; justify-self: start; padding: 2px 6px; margin-left: -6px; border: 1px solid transparent; border-radius: 6px; background: none; font: inherit; color: var(--lw-ink); cursor: pointer; }
 .fv-count b { font-size: var(--lw-fs-xl); font-weight: 650; }
 .fv-count:hover:not(:disabled) { border-color: var(--lw-rule); }
 .fv-count[aria-pressed="true"] { border-color: var(--lw-ink-3); background: var(--lw-card); }
 .fv-count:disabled { cursor: default; color: var(--lw-ink-3); }
-.fv-share { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fv-share { font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-3); }
+.fv-share[data-tone="warn"] { color: var(--lw-warn); }
+.fv-share[data-tone="bad"] { color: var(--lw-bad); }
 
-.fv-track { position: relative; display: flex; align-items: flex-end; border-bottom: 1px solid var(--lw-rule); }
+/* Light gridlines at each decade (10, 100, 1k, 10k) on every track: the scale is logarithmic. */
+.fv-track {
+  position: relative; display: flex; align-items: flex-end; border-bottom: 1px solid var(--lw-rule);
+  background: repeating-linear-gradient(to top, transparent 0 calc(100% / var(--fv-dec) - 1px), var(--lw-rule) calc(100% / var(--fv-dec) - 1px) calc(100% / var(--fv-dec)));
+}
+.fv-axis { grid-row: auto; }
+.fv-axis .fv-track { grid-row: 3; background: none; border-bottom: 0; }
+.fv-tick { position: absolute; right: 2px; bottom: calc(var(--at) * 100%); transform: translateY(50%); font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.fv-bar[data-some] { min-height: 2px; }
 .fv-bar { display: flex; flex-direction: column-reverse; width: 100%; height: calc(var(--f) * 100%); min-height: 0; border-radius: 4px 4px 0 0; overflow: hidden; }
 .fv-bar[data-signals] { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--lw-ink-3) 38%, var(--lw-paper)) 0 6px, color-mix(in srgb, var(--lw-ink-3) 20%, var(--lw-paper)) 6px 12px); }
 .fv-seg { flex: 1 1 0; min-height: 2px; min-width: 2px; border: 0; padding: 0; background: var(--why); }
@@ -57,7 +70,7 @@ button.fv-drop:hover { border-color: var(--lw-rule-2); }
 .fv-drop b { color: var(--lw-ink); font-weight: 650; }
 .fv-drop-w { min-width: 0; }
 /* A column on its own scale (signals, problems): the runs and everything after share one scale, set apart by a heavier rule. */
-.fv-col[data-step="runs"] { border-left: 2px solid var(--lw-rule); }
+
 .fv-src { display: flex; gap: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); min-width: 0; }
 .fv-src span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fv-src b { margin-left: auto; color: var(--lw-ink-2); font-weight: 600; }
@@ -94,12 +107,16 @@ a.fv-row { grid-template-columns: minmax(0, 1fr) auto; }
 /* Narrow: a row per step, the bar running across. */
 @container fv (max-width: 760px) {
   .fv-chart { grid-template-columns: 1fr; gap: 0; }
+  .fv-axis { grid-template-rows: 1.2em; padding: 0; }
+  .fv-axis .fv-track { grid-row: 1; grid-column: 3; height: 1.2em; }
+  .fv-tick { right: auto; bottom: 0; left: calc(var(--at) * 100%); transform: translateX(-50%); }
   .fv-col { grid-template-columns: minmax(72px, 9em) 5.5em minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 8px; row-gap: 2px; padding: 6px 0; align-items: center; }
-  .fv-col + .fv-col { border-left: 0; border-top: 1px dashed var(--lw-rule-2); padding-left: 0; }
+  .fv-col + .fv-col, .fv-col:not(.fv-axis) + .fv-col { border-left: 0; border-top: 1px dashed var(--lw-rule-2); padding-left: 0; }
   .fv-name { align-self: center; }
   .fv-count b { font-size: var(--lw-fs-md); }
-  .fv-share { display: none; }
-  .fv-track { height: 12px; border-bottom: 0; align-items: stretch; }
+  .fv-count { flex-direction: row; align-items: baseline; gap: 6px; }
+  .fv-track { height: 12px; border-bottom: 0; align-items: stretch; border-left: 1px solid var(--lw-rule);
+    background: repeating-linear-gradient(to right, transparent 0 calc(100% / var(--fv-dec) - 1px), var(--lw-rule) calc(100% / var(--fv-dec) - 1px) calc(100% / var(--fv-dec))); }
   .fv-bar { flex-direction: row; height: auto; width: calc(var(--f) * 100%); border-radius: 0 3px 3px 0; }
   .fv-seg + .fv-seg { box-shadow: inset 1px 0 0 var(--lw-paper); }
   .fv-drops { grid-column: 3; flex-direction: row; flex-wrap: wrap; gap: 0 10px; }

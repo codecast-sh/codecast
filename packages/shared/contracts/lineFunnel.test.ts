@@ -103,16 +103,26 @@ describe("funnelItem", () => {
     expect(item(task({ status: "dropped" }), run({ nodes: ["bind", "triage", "build", "dropped", "exit"] }))).toMatchObject({ level: level("build"), why: "dropped" });
   });
 
+  test("ready and over the bar with no run: no owner, source not taken, or eligible", () => {
+    const ready = task({ readiness: "ready", goal_ref: "in-1" });
+    const why = (o: { owned?: boolean; sourceTaken?: boolean }) => funnelItem({ task: ready, run: null, stations, labels, now: NOW, ...o })!.why;
+    expect(why({ owned: false })).toBe("unowned");
+    expect(why({ owned: false, sourceTaken: false })).toBe("offsource");
+    expect(why({ owned: true, sourceTaken: true })).toBe("unstarted");
+  });
+
   test("a closed problem reads closed though its close station was interrupted and the run failed", () => {
     const r = run({ status: "failed", current_node_id: "closed_at_build", node_statuses: [...done("bind", "triage", "harm", "queue", "build"), { node_id: "closed_at_build", status: "failed", started_at: 2000 }] });
     expect(item(task({ status: "done" }), r)).toMatchObject({ level: level("build"), why: "closed", node: "Closed", status: "failed" });
   });
 
   test("no run: not started when ready and over the bar, held back when not ready or under it; merged into another problem counts nowhere", () => {
-    expect(item(task({ readiness: "ready" }), null)).toMatchObject({ level: 0, why: "unstarted", run: null, status: null });
+    expect(item(task({ readiness: "ready", goal_ref: "in-1" }), null)).toMatchObject({ level: 0, why: "unstarted", run: null, status: null });
+    // No goal named yet: the live queue skips it.
+    expect(item(task({ readiness: "ready" }), null)!.why).toBe("held");
     expect(item(task({ readiness: "not_ready" }), null)!.why).toBe("held");
     const bar = { score: 60, findings: 3 };
-    const at = (t: FunnelTask) => funnelItem({ task: t, run: null, stations, labels, bar, now: NOW })!.why;
+    const at = (t: FunnelTask) => funnelItem({ task: { goal_ref: "in-1", ...t }, run: null, stations, labels, bar, now: NOW })!.why;
     expect(at(task({ readiness: "ready", cause: { scored: { score: 40 }, signal_count: 1 } }))).toBe("held");
     expect(at(task({ readiness: "ready", cause: { scored: { score: 40 }, signal_count: 3 } }))).toBe("unstarted");
     expect(at(task({ readiness: "ready", cause: { scored: { score: 80 }, signal_count: 1 } }))).toBe("unstarted");
