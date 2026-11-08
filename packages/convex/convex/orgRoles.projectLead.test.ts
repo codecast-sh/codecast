@@ -148,7 +148,7 @@ describe("naming a lead takes over the project's sessions, with the person's one
     const billing = await role(db, "billing", [Q]);
     const out = await performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: String(billing._id) });
     expect(out.scope).toBe("added");
-    expect(out.took_over).toContain("2 sessions now report to @billing and leave your needs input");
+    expect(out.took_over).toContain("2 sessions now report to @billing and leave Needs You");
     expect(roleOfSession(db, 1)).toBe(billing._id);
   });
 
