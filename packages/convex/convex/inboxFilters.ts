@@ -394,54 +394,9 @@ export function subagentIsProducing(input: {
 // on every surface. Re-exported for existing importers.
 export { userRestOf, userRestStampOf, isSettleVerdictCurrent } from "@codecast/shared/contracts";
 
-// Accepted `--state` filter values for CLI discovery, normalized to a canonical
-// token. "pinned" and "live" are orthogonal to work_state (they filter the
-// is_pinned / is_live flags), so callers handle them specially. Returns null for
-// "all"/unset/garbage so an unrecognized value transparently means "no filter".
-export type WorkStateFilter = WorkState | "pinned" | "live" | "hibernated";
-
-export function normalizeWorkStateFilter(raw: string | undefined | null): WorkStateFilter | null {
-  const v = (raw || "").trim().toLowerCase().replace(/[\s_]+/g, "-");
-  switch (v) {
-    case "working":
-    case "active":
-    case "busy":
-      return "working";
-    case "needs-input":
-    case "needs-you":
-    case "needs":
-    case "needsinput":
-    case "blocked":
-    case "input":
-    case "attention":
-      return "needs_input";
-    case "done":
-    case "complete":
-    case "completed":
-    case "delivered":
-      return "done";
-    // "waiting" is the agent_status of a finished turn parked on live background
-    // work — a settle verdict, so the filter alias follows it to dormant.
-    case "dormant":
-    case "waiting":
-    case "parked":
-    case "asleep":
-      return "dormant";
-    case "idle":
-    case "blank":
-      return "idle";
-    case "hibernated":
-      return "hibernated";
-    case "pinned":
-    case "pin":
-      return "pinned";
-    case "live":
-    case "running":
-      return "live";
-    default:
-      return null;
-  }
-}
+// The `--state` filter vocabulary lives in shared/contracts/workState.ts so the
+// CLI rejects a value the server would ignore. Re-exported for existing importers.
+export { normalizeWorkStateFilter, WORK_STATE_FILTERS, type WorkStateFilter } from "@codecast/shared/contracts";
 
 // The "waiting" flavor behind a needs_input verdict — the server mirror of the
 // web's waitingSoundKey kind (useSyncInboxSessions), so the needs-input push

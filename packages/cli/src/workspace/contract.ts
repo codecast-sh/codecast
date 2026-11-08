@@ -92,6 +92,22 @@ export function readState(repoRoot: string, name: string): PersistedWorkspaceSta
   }
 }
 
+/**
+ * Where a workspace named `name` lives, looking in each checkout root in order
+ * (the cwd's own first, then the repository's other worktrees): a workspace is
+ * recorded under the root it was acquired from, so one acquired from a linked
+ * worktree is invisible from the main checkout. The tracked path wins over the
+ * default layout; a path that no longer exists is skipped.
+ */
+export function locateWorkspace(roots: string[], name: string): { path: string; root: string } | null {
+  for (const root of roots) {
+    const candidates = [readState(root, name)?.path, path.join(root, ".codecast/worktrees", name)];
+    const hit = candidates.find((p): p is string => !!p && fs.existsSync(p));
+    if (hit) return { path: hit, root };
+  }
+  return null;
+}
+
 export function writeState(repoRoot: string, state: PersistedWorkspaceState): void {
   const p = stateFilePath(repoRoot, state.name);
   fs.mkdirSync(path.dirname(p), { recursive: true });

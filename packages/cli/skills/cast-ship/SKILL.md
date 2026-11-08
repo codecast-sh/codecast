@@ -21,9 +21,12 @@ uncommitted, not just this session's, use `cast ship checkout` rather than
 committing by hand. `cast ship checkout --dry-run --json` freezes the tree and
 groups the changed files by the session that wrote them, with each session's
 state and last words. Judge every group before it goes: hold one whose session
-is mid-change or says it is not finished, split a group that holds two
-changes, rewrite messages to say what changed. `cast ship checkout --plan`
-then ships exactly the frozen tree. When it stops (a check failing in a
+is mid-change or says it is not finished (`--hold <group>`), rewrite messages
+to say what changed (`--message <group>=<text>`), and split a group that holds
+two changes by moving paths between groups in the plan file.
+`cast ship checkout --plan` with those flags then ships exactly the frozen
+tree; `--commits-only` re-pushes the checkout's own commits and holds every
+group. When it stops (a check failing in a
 shipped file, a shipped file importing a held one, a conflict), fix the cause
 and plan again. The repo's `[ship]` table in `.codecast/workspace.toml` says
 whether it pushes the default branch or opens a pull request, and what

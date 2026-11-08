@@ -32,10 +32,15 @@ import { bringsByDefault } from "@codecast/shared/contracts/moveRehearsal";
 import { humanizeConvexError } from "@codecast/shared/contracts/convexErrors";
 import { createRunnerIo } from "./io.js";
 import { hostResolver } from "./hosts.js";
-import { pickDevice } from "./pickDevice.js";
+import { pickOwnDevice } from "./pickDevice.js";
 import { exitIfPolicyBlocks } from "../config/managedPolicy.js";
 import { formatBytes, rehearseMove, unreachableRehearsal } from "./rehearse.js";
 import { awaitCommand, runBatch } from "./runner.js";
+import { exitNotFound, wrongKindIdError } from "../argChecks.js";
+
+
+/** The team's machines, read only when a --to/--from names none of yours. */
+const teamMachines = (client: any, api: any, token: string) => () => client.query(api.devices.listAgentBoxes, { api_token: token });
 
 function ago(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -81,14 +86,22 @@ export function printRehearsal(r: MoveRehearsal, title: string): void {
 }
 
 export function registerMigrateCommand(program: Command): void {
+  // A batch id is checked before any call: a session short id or a typo would
+  // otherwise come back as the server's validator error.
+  const requireBatchId = (batchId: string) => {
+    if (/^mg-[a-z0-9]{4,32}$/.test(batchId)) return;
+    console.error(wrongKindIdError(batchId, { kind: "migration batch", example: "mg-xxxx", find: "cast migrate ls lists them" }));
+    process.exit(1);
+  };
   const migrate = program
     .command("migrate")
     .description(commandGroup("migrate").description);
 
   migrate
     .command("start [sessions...]")
-    .description("Migrate sessions to a device as one batch — by short id, or by selector (--label, --from, --project, --all)")
-    .requiredOption("--to <device>", "Destination: a device id (prefix) or label substring")
+    .description("Migrate sessions to a device as one batch: by short id, or by selector (--label, --from, --project, --all)")
+    .addHelpText("after", "\nExamples:\n  cast migrate start --to linux --label rollout --dry-run   # preview: what moves, what is skipped and why\n  cast migrate start --to linux jx7c6zk jx7dhfh\n  cast migrate start --to macbook --from linux               # everything on the cloud host back to the laptop\n\nWatch it with cast migrate show <batch id> (cast migrate ls lists batches).")
+    .requiredOption("--to <device>", "Destination: a device id (prefix) or label substring (cast remote hosts lists the cloud hosts)")
     .option("--label <name>", "Every session filed under this label")
     .option("--from <device>", "Every session running on this device (id prefix or label substring)")
     .option("--project <path|name>", "Sessions in this project (a path, or a substring of the repo name)")
@@ -101,9 +114,9 @@ export function registerMigrateCommand(program: Command): void {
     .action(async (sessions: string[], opts: { to: string; label?: string; from?: string; project?: string; all?: boolean; dryRun?: boolean; wait: string; concurrency: string; bring?: string[]; json?: boolean }) => {
       const { client, token, api } = await convexClient();
       const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
-      const to = pickDevice(devices, opts.to, "--to");
+      const to = await pickOwnDevice(devices, opts.to, "--to", teamMachines(client, api, token));
       if (to.is_remote) exitIfPolicyBlocks("cloud_hosts_disabled");
-      const from = opts.from ? pickDevice(devices, opts.from, "--from") : undefined;
+      const from = opts.from ? await pickOwnDevice(devices, opts.from, "--from", teamMachines(client, api, token)) : undefined;
       const selector = (opts.label || from || opts.project || opts.all)
         ? { ...(opts.label ? { label: opts.label } : {}), ...(from ? { from_device_id: from.device_id } : {}), ...(opts.project ? { project: opts.project } : {}), ...(opts.all ? { all: true } : {}) }
         : undefined;
@@ -150,13 +163,13 @@ export function registerMigrateCommand(program: Command): void {
   migrate
     .command("move <session>")
     .description("Re-home one session onto another of your laptops and resume it there in its checkout of the same repo (the web's Run on this device). Interrupts a turn in progress; for a cloud host use `start`")
-    .requiredOption("--to <device>", "Destination: a device id (prefix) or label substring")
+    .requiredOption("--to <device>", "Destination: a device id (prefix) or label substring (cast remote hosts lists the cloud hosts)")
     .option("--take", "Also move a session another account runs, or onto a team machine: it then runs and bills under the destination's account")
     .option("--json", "Machine-readable")
     .action(async (session: string, opts: { to: string; take?: boolean; json?: boolean }) => {
       const { client, token, api } = await convexClient();
       const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
-      const to = pickDevice(devices, opts.to, "--to");
+      const to = await pickOwnDevice(devices, opts.to, "--to", teamMachines(client, api, token));
       if (to.is_remote) exitIfPolicyBlocks("cloud_hosts_disabled");
       const name = deviceName(devices, to.device_id);
       if (to.is_remote) {
@@ -212,13 +225,14 @@ export function registerMigrateCommand(program: Command): void {
 
   migrate
     .command("show <batchId>")
-    .description("One batch, row by row")
+    .description("One batch, row by row (batch ids look like mg-xxxx: cast migrate ls)")
     .option("--json", "Machine-readable")
     .action(async (batchId: string, opts: { json?: boolean }) => {
+      requireBatchId(batchId);
       const { client, token, api } = await convexClient();
       const batches: any[] = (await client.query(api.sessionMigrations.listBatches, { api_token: token })) ?? [];
       const b = batches.find((x) => x.batch_id === batchId);
-      if (!b) { console.error(`no batch ${batchId} among your recent batches`); process.exit(1); }
+      if (!b) exitNotFound("migration batch", batchId, "cast migrate ls");
       if (opts.json) { console.log(JSON.stringify(b, null, 2)); return; }
       const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
       printBatch(b, devices);
@@ -228,6 +242,7 @@ export function registerMigrateCommand(program: Command): void {
     .command("cancel <batchId>")
     .description("Cancel a batch's queued rows (rows already transferring finish)")
     .action(async (batchId: string) => {
+      requireBatchId(batchId);
       const { client, token, api } = await convexClient();
       const r = await client.mutation(api.sessionMigrations.cancelBatch, { api_token: token, batch_id: batchId });
       console.log(`cancelled ${r.cancelled} queued row(s)`);
@@ -237,6 +252,7 @@ export function registerMigrateCommand(program: Command): void {
     .command("retry <batchId>")
     .description("Re-queue a batch's failed rows (a batch from the offload review moves again as a new batch)")
     .action(async (batchId: string) => {
+      requireBatchId(batchId);
       const { client, token, api } = await convexClient();
       const batches: any[] = (await client.query(api.sessionMigrations.listBatches, { api_token: token })) ?? [];
       const b = batches.find((x) => x.batch_id === batchId);
@@ -262,7 +278,7 @@ export function registerMigrateCommand(program: Command): void {
   migrate
     .command("rehearse [sessions...]")
     .description("Dry-run moving sessions from this machine: what would fail, and what the host lacks that they use")
-    .option("--to <device>", "Destination: a device id (prefix) or label substring")
+    .option("--to <device>", "Destination: a device id (prefix) or label substring (cast remote hosts lists the cloud hosts)")
     .option("--bring <path...>", "Paths the move would bring (not reported missing)")
     .option("--request <id>", "Run the rows of an offload review's request and report them (the daemon starts this)")
     .option("--json", "Machine-readable")
@@ -290,7 +306,7 @@ export function registerMigrateCommand(program: Command): void {
       }
       if (!opts.to || !sessions.length) { console.error("name sessions and --to <device> (or --request <id>)"); process.exit(1); }
       const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
-      const to = pickDevice(devices, opts.to, "--to");
+      const to = await pickOwnDevice(devices, opts.to, "--to", teamMachines(client, api, token));
       if (to.is_remote) exitIfPolicyBlocks("cloud_hosts_disabled");
       const plan = await client.mutation(api.sessionMigrations.createBatch, { api_token: token, conversation_ids: sessions, to_device_id: to.device_id, dry_run: true });
       for (const s of plan.skipped) console.error(`skip ${s.conversation_id}: ${s.reason}`);

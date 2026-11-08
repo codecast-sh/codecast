@@ -149,10 +149,10 @@ You are one session among many. Past conversations hold the decisions, patterns 
 \`\`\`bash
 cast search "auth"                 # filters: file:<path> commit:<sha> pr:<n> label: author: after:7d; --mine, -g all teams
 cast read <id> --ask "<question>"  # one session's answer with line citations; no id = this session
-cast read <id> 15:25               # messages 15 to 25 (--full shows tool payloads)
+cast read <id> 15:25               # messages 15 to 25; -n 5 the last 5; --grep "<text>" finds lines
 cast context "implement auth"      # prior sessions relevant to a task
 cast feed                          # what the team is doing now
-cast sessions <id>… -w --until     # wait until they settle, then exit
+cast sessions <id>… --until        # wait until they settle
 cast diff <id> | summary <id> | blame <file>
 cast decisions list | add "title" --reason "why"
 \`\`\`
@@ -169,6 +169,8 @@ cast search "auth"                # --mine | -m samvit | -g (all teams) | -s 7d
 cast search "file:src/auth.ts"    # filters: file: commit:<sha> pr:<n|owner/repo#n> label: author: repo: after:7d before:; other words search within
 cast feed                         # team feed: --mine, -m <name>, --state needs-input, --label api
 cast read <id> 15:25              # messages 15-25; --full shows tool payloads (REQUIRED to see a StructuredOutput return)
+cast read <id> -n 5               # the last 5; on a long session lines count back from the end, and -1, -5:, -20:-10 read them back
+cast read <id> --grep "<text>"    # every message holding the text, with line numbers (300: --grep … looks from line 300)
 cast read '<share-url>#msg-<id>'  # a window around a linked message (-c N for its size)
 cast read <id> --ask "<question>"  # an answer from one session with line citations and later reversals; no id = this session
 cast link [id] [line]             # deep link to any object (session+line → message, ct-/pl-, --type doc); no args = this session
@@ -176,7 +178,8 @@ cast link [id] [line]             # deep link to any object (session+line → me
 # Sessions: which (ids, --label, --state, --team, -m) × what (state | --messages) × live (-w)
 cast sessions                     # state snapshot, most actionable first
 cast sessions -w [--json]         # one line per work-state change; JSON: {"event":"new"|"transition"|"gone","id","from","to",…}
-cast sessions <id> [<id>…] -w     # watch a set (ids also narrow the snapshot); --label fleet -w watches a label
+cast sessions <id> [<id>…] -w     # watch a set (ids also narrow the snapshot); --label fleet -w watches a label; never exits
+cast sessions <id> [<id>…] --until  # block until each settles (--timeout 5m: exit 2 after)
 cast sessions --state needs-input # one state; with -w, new/gone fire as sessions enter/leave it
 cast sessions --labels            # my labels + counts in this project (--by-label groups, -g all projects)
 cast sessions [<id>] --messages -w  # follow messages across my live sessions, or in one
@@ -217,13 +220,13 @@ The prompt is the run's whole briefing, and people read it in the dashboard as m
 
 **Where a run happens.** A follow-up that continues this work and fires once or a few times runs here, the default: each firing arrives as a new turn with the full history. A standing duty that repeats (a monitor, a digest, a sweep) gets \`--spawn\`, a fresh session per run, because an inline repeat reloads this whole history every time and buries the thread. A fresh run knows only its prompt plus the previous run's summary, so write everything it needs into the prompt.
 
-**Where results go.** \`--spawn\` runs nest under the session that armed them. A once trigger posts its result here without waking you; a repeating one posts nothing on a clean run. You are woken if a run fails, dies without reporting, or completes \`--needs-attention\`. A fired run ends with \`cast trigger complete <id> --summary "..."\`: the summary is what the human reads, so state the outcome, and add \`--needs-attention\` only when they must read or act.
+**Where results go.** \`--spawn\` runs nest under the session that armed them. A once trigger posts its result here without waking you; a repeating one posts nothing on a clean run. You are woken if a run fails, dies without reporting, or completes \`--needs-attention\`. A fired run ends with \`cast trigger complete <id> --summary -\` (stdin): the summary is what the human reads, so state the outcome, and add \`--needs-attention\` only when they must read or act.
 
 \`\`\`bash
 cast trigger add "Check if CI is green on main" --in 30m
 cast trigger add "Respond to new PR review comments" --on pr_comment
 cast trigger add "Review open PRs and summarize findings" --every 4h --spawn
-cast trigger ls | update | pause | run | cancel | log <tr-id>
+cast trigger ls | show | update | pause | run | cancel | log <tr-id>
 \`\`\`
 
 \`--safe\` makes a spawned run read-only. \`--precheck "<cmd>"\` gates each scheduled firing on a shell check and spends nothing unless it exits 0. \`cast trigger add --help\` lists every event and option, and \`cast guide triggers\` has the rest.
@@ -247,9 +250,12 @@ Audit budget allocation across markets.
 Escalate only strategic decisions to the founder.
 EOF
 
-cast trigger complete tr-42 --summary "what was done"   # inside a triggered run
-cast trigger ls [--all]               # active (--all adds completed/failed)
-cast trigger update tr-42 --every 8h  # edit in place (--prompt/--title/--in/--every/--on); versioned + audited
+cast trigger add "Post the overnight digest" --every 1d --at "06:00 UTC" --spawn   # --at: 06:00, 6pm, an ISO time; --in takes 4h40m
+cast trigger complete tr-42 --summary - <<'EOF'        # inside a triggered run: the summary on stdin, then EOF
+cast trigger complete tr-42 --again-in 30m ...         # end this run and fire once more in 30m (a recheck)
+cast trigger ls [--all] [-l]          # armed ones; --all adds finished and cancelled, -l each one's gist and last run
+cast trigger show tr-42               # when it fires next, where runs go, the full prompt
+cast trigger update tr-42 --every 8h  # edit in place (--prompt/--title/--in/--at/--every/--on); versioned + audited
 cast trigger history tr-42            # every version: who changed what, from where
 cast trigger pause|run|cancel tr-42   # run = fire now
 cast trigger log tr-42                # the last run's conversation
@@ -258,10 +264,11 @@ cast trigger log tr-42                # the last run's conversation
 \`--wake\` (with \`--spawn\` on a once trigger) also wakes you for a clean report, at the cost of a turn over this whole context. \`--thread\` posts every run's result here; keep it for results the human reads in this thread. A run that hits a usage limit parks and resumes at the window reset.
 
 Options:
-- \`--in <duration>\` delay (30m, 2h, 1d) · \`--every <duration>\` repeat · \`--on <event>\` webhook: pr_comment, pr_opened, pr_merged, push, issue_opened, issue_assigned, issue_labeled, issue_closed, issue_commented (\`issue_*\` covers Linear and GitHub alike), or a product event a source reports: error_new, error_regressed, error_spike, job_failed, check_failed, check_recovered, metric_alert, metric_recovered, deploy (\`--source <name>\` narrows it to one source)
+- \`--in <duration>\` delay (30m, 2h, 1d) · \`--every <duration>\` repeat; both together make \`--in\` the first run, which sets the time of day (\`--every 1d --in 9h\`)
+- \`--on <event>\`: a pull request moving (\`pr_opened\`, \`pr_comment\`, \`pr_review\`, \`pr_check_failed\`, \`pr_checks_green\`, \`pr_merged\` and more; \`--pr <n>\` and \`--repo <owner/name>\` narrow it), \`push\`, an issue (\`issue_*\`, Linear and GitHub alike), a call ending (\`call_ended\`), or a product event a source reports (\`error_new\`, \`job_failed\`, \`check_failed\`, \`metric_alert\`, \`deploy\` and more; \`--source <name>\` narrows it). \`cast trigger add --help\` lists every event.
 - \`--for <session>\`: bind runs to a specific session from any shell (default: the one you're in)
 - \`--safe\`: read-only spawned run, write tools removed and state-changing commands blocked. Without it a run can act; a run injecting into an existing session inherits that session's rules.
-- \`--project <path>\`: working directory (default: current)
+- \`--project <path>\`: working directory (default: current) · \`--device <name>\`: the machine that runs it (default: this one)
 - \`--max-runtime <duration>\`: kill cap (default 10m); set it past any wait or retry window the prompt asks for
 - \`--precheck <command>\`: shell gate run in the project directory before each scheduled or recurring firing. Exit 0 runs it; anything else records a skip and spends no session. Use it when the run should act only if something changed ("has main moved?", "is the queue non-empty?"). Event triggers ignore it.
 - \`--precheck-mode changes\`: the firing runs only when the command's output differs from the last firing's, and that output is handed to the run. The first firing records a baseline and skips, so it needs \`--every\`. Suits a command that prints the thing to watch (\`gh pr list --json number\`, \`git rev-parse origin/main\`).
@@ -309,7 +316,7 @@ A human tracks your work through a dashboard: report status through tasks and pl
 If bound to a plan, post progress and directional decisions there (\`cast plan comment <plan_id> "…"\`, \`-d -r "why"\` for a decision). If blocked, say so: **BLOCKED: <reason>** (needs a human), **NEEDS_CONTEXT: <what>** (escalates to the user), **DONE_WITH_CONCERNS: <concern>** (finished, flagged for review). After compaction, reground with \`cast task context --current\` / \`cast plan context --current\`, not memory.
 
 \`\`\`bash
-cast task create "Title" -p high               # --plan <id>, --parent <id>, --project "<name>", --human
+cast task create "Title" -p high               # --blocked-by "#42", --parent, --plan, --project, --human
 cast task start <id> | done <id> -m "what you verified"
 cast task comment <id> "…" -t progress
 cast task update <id> -t "…" -d "…" -s <status>
@@ -337,11 +344,12 @@ cast task dep <id> --blocked-by <refs>      # <id> waits on what it needs; --rem
 cast task supersede <old> --with <new>      # drops <old>; what waited on it now waits on <new>
 cast task relate <a> <b>                    # see-also link that never blocks (--remove)
 cast task ls -q "<topic>"                   # search active tasks (filters above)
+cast task show ct-1 --only comments --last 3   # just those sections (also runs, graph, evidence…)
 cast task show ct-1 ct-2 --json             # several ids; .sessions = linked sessions (short id + title)
 cast task context <id>                      # full context (--current for this session's task)
 cast task start|done|comment <id>           # lifecycle
 cast task start <id> --spawn                # claim it AND hand it to a fresh agent session
-cast task create "Title" -t task -p high    # also --human, --plan <plan_id>, --parent <task_id>, --project "<name>", --from-meeting
+cast task create "Title" -t bug -p high     # -t task|feature|bug|chore; also --blocked-by <refs>, --human, --plan, --parent, --project, --from-meeting
 cast task create "Title" --from-call cl-42  # decided on that call: links the task to it, so it shows on the call's page
 cast task create --parent <task_id> - <<'EOF'   # bulk subtasks, one per line
 First step
@@ -399,7 +407,7 @@ export const VISUAL_REFERENCE = `
 Full CSS and SVG work: grid/flex, gradients, \`<defs>\`+\`<use>\`, animations, hover states, \`<details>\`. \`data-canvas-size="wide"\` on the root uses the full screen width. \`data:\` URIs work in a canvas but bloat the message.
 
 \`\`\`bash
-cast image shot.png            # or a URL; prints a stable https URL + ready markdown (--alt "30-day overview" sets the caption)
+cast image shot.png            # or a URL; prints a stable https URL + ready markdown (--alt "30-day overview" sets the caption; --url or --markdown prints just that line)
 \`\`\`
 
 That URL renders everywhere: \`![alt](url)\` in a reply or message, \`<img src="url">\` in a canvas. The alt text is the caption, so write a real one. An image shows small and folds past a short height, which suits most screenshots; when its detail is the point, add a title: \`![alt](url "wide")\` spans the column and shows the whole image, \`"small"\` makes a thumbnail. Images in one paragraph sit side by side, so \`![before](u1) ![after](u2)\` reads as a comparison.
@@ -432,7 +440,7 @@ cast switch --agent codex                        # continue THIS session on anot
 
 Multi-line prompts go through \`-\` and a heredoc, never \`"$(cat file)"\`, which mangles formatting. Every launch starts at once and knows only what you give it, so seed each with a sharp, self-contained brief, and tell the human in one line what runs where.
 
-**Workers** are full sessions: \`cast send <id>\` for follow-ups, \`cast read <id>\` for results. A worker that settles wakes you with a message naming it, so after delegating you can end your turn; in a shell, \`cast sessions <id>… -w --until\` waits until they settle (bare \`-w\` never exits). Report the combined result yourself.
+**Workers** are full sessions: \`cast send <id>\` for follow-ups, \`cast read <id>\` for results. A worker that settles wakes you with a message naming it, so after delegating you can end your turn; to wait here, \`cast sessions <id>… --until\` returns once each has settled. Report the combined result yourself.
 
 **Forks** branch this conversation just before the latest user message. With several directions you take the first in place and each other becomes a branch, so issue one \`cast fork\` with all of them and carry on with the first. When forking is your own idea, pass \`--tip\`. A branch receives its direction as its human's next message and reports to nobody: never message, monitor or coordinate branches.
 
@@ -542,7 +550,7 @@ cast state clear                     # remove it
 cast state show <session_id>         # read another session's state
 \`\`\`
 
-A state is most valuable on long threads, parked ones, and ones shared across sessions. Every settle you leave undeclared is a card the human must open to learn it needed nothing. To keep the first line short, cut references and detail, never meaning; rewrite it when the work moves on. Write for someone who has been away: what is happening, what it waits on, what comes next, and whether anything is theirs to decide. A \`Next:\` with no real step or a \`Blocked:\` saying "nothing" is padding.
+A state is most valuable on long threads, parked ones, and ones shared across sessions. Every settle you leave undeclared is a card the human must open to learn it needed nothing. To keep the first line short, cut references and detail, never meaning; rewrite it when the work moves on. Write for someone who has been away: what is happening, what it waits on, what comes next, and whether anything is theirs to decide. A \`Next:\` with no real step or a \`You:\` that asks nothing is padding.
 
 Update it when the answer changes: a phase ends, you get blocked, you hand off, you go quiet. A send from another session or a trigger wake leaves the pin standing. Clear it only when it stops being true or useful: a state waiting on something that already arrived is worse than none, and one you stopped maintaining reads as abandoned. Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. Even on a short thread, a one-line \`--status done\` at the end files it where it belongs.
 `;
@@ -611,7 +619,7 @@ cast publish ls | rm <target> | open <target>
 
 \`[caption](url)\` adds your own caption to an embedded page. An embed opens 420px tall, or shorter when the page is, and the reader can expand or drag it; when the page needs a set height to read (a dashboard that should show whole), declare it in the page's head: \`<meta name="codecast:height" content="640">\`. Video and audio in a bundle upload to media hosting and keep their relative paths; \`<video controls>\` plays in the styled cast player (\`cast publish video\` covers chapters and skinning).
 
-Versions are viewable (\`?v=N\`), diffable (\`?diff=A..B\`), restorable. \`--new\` mints a separate URL, \`--title\` overrides the title, and every command takes \`--json\`. Everything the page's owner panel does is also a command, so you need neither the file nor a browser (\`<target>\` is a slug or a path):
+Versions are viewable (\`?v=N\`), diffable (\`?diff=A..B\`), restorable. \`--new\` mints a separate URL, \`--title\` overrides the title, \`--url\` prints only the page URL, and every command takes \`--json\`. The manage URL prints on the first publish only; \`cast publish links\` reprints it. Everything the page's owner panel does is also a command, so you need neither the file nor a browser (\`<target>\` is a slug or a path):
 
 \`\`\`bash
 cast publish versions <target>              # history + rollback/diff hints
@@ -678,7 +686,7 @@ cast browser read | shot | eval "<js>"     # text, a screenshot into the thread,
 cast browser do "find Sign in" click "wait --text Welcome"   # several steps, one process
 \`\`\`
 
-Snapshot, then act on a ref; when you can name the target, \`find\` it instead. Batch steps you can see ahead into one \`do\`, since each command costs seconds of startup. Evidence (console errors, failed requests, screenshots) lands in the thread; never link local file paths. Act only on your own tab, never the human's or another session's. Close tabs you opened when done (\`cast browser stop\`), unless the human still needs them. \`cast browser show\` brings your tab to the front only when the human asked to see it or must act in it, once. \`cast browser --help\` lists every verb, and \`cast guide browser\` covers tabs, recovery and sign-in.
+Snapshot, then act on a ref; when you can name the target, \`find\` it instead. Batch steps you can see ahead into one \`do\`: each command costs seconds of startup. Evidence lands in the thread; never link local file paths. Close tabs you opened when done (\`cast browser stop\`) unless the human still needs them; touch no others. Hand a step only the human can do (a sign-in) to \`cast browser handoff "<step>"\` and end your turn. \`show\` raises your tab only when asked. Subagents sharing a session each pass \`--tab <name>\`. \`cast browser --help\` lists every verb, and \`cast guide browser\` covers tabs, recovery and sign-in.
 ${BROWSER_SNIPPET_END}
 `;
 
@@ -686,6 +694,8 @@ ${BROWSER_SNIPPET_END}
 export const BROWSER_REFERENCE = `
 \`\`\`bash
 cast browser eval "await fetch('/api/x').then(r => r.status)"   # JS in the page, promises awaited (--stdin heredoc, --file <p>)
+cast browser viewport 390x844      # or a preset (mobile, desktop) or a width; before open, the next open applies it
+cast browser shot --full -o /tmp/page.png   # whole scroll height, to a path of your choosing
 cast browser do - <<'EOF'     # long flows: one step per line
 open https://example.com
 find "Sign in"
@@ -698,13 +708,14 @@ EOF
 A flow stops at the first failing step and reports what ran and what never did (\`--keep-going\` continues past it). Scope reads on big apps (\`snapshot -i -s\`, \`get text <sel>\`, \`text <sel>\`); \`diff snapshot\` prints only what changed since your last one. \`cast browser help <cmd>\` prints a verb's flags.
 
 - **Evidence flows to the thread.** A failing step prints console errors, failed requests and a screenshot. \`shot\` puts a capture in the conversation (\`--annotate\` numbers elements with their refs, \`--share\` uploads a pasteable link, \`-s <sel>\` captures one element). \`cast browser shots on\` adds a small capture after page-changing commands (off by default for agents; a \`do\` flow captures once, at the end).
-- **One Chrome, many agents.** Each session owns one background tab in the \`Cast\` tab group, created only when you open a URL; \`open\` reuses it, or an abandoned Cast tab already on that URL. Connection checks and tab lists create nothing; page actions need an existing page, and \`about:blank\` is never setup or a connection test. \`tabs\` lists yours, \`tabs --all\` every agent's. \`--new-tab\` only for a second page. \`tab switch <id>\` deliberately shares another agent's tab. Read a session with \`cast read\`, never by opening its conversation page. Modal dialogs are dismissed automatically.
+- **One Chrome, many agents.** Each session owns one background tab in the \`Cast\` tab group, created only when you open a URL; \`open\` reuses it, or an abandoned Cast tab already on that URL. Subagents inherit their parent's session, so parallel workers each pass \`--tab <name>\` (or set \`CAST_BROWSER_TAB\`) and get a tab of their own; without it they drive one tab and navigate each other's pages. Connection checks and tab lists create nothing; page actions need an existing page, and \`about:blank\` is never setup or a connection test. \`tabs\` lists yours, \`tabs --all\` every agent's. \`--new-tab\` only for a second page. \`tab switch <id>\` deliberately shares another agent's tab. Read a session with \`cast read\`, never by opening its conversation page. Modal dialogs are dismissed automatically.
 - **Closing tabs.** \`cast browser tabs\`, \`cast browser tab close <id>\` for extras, then \`cast browser stop\` for this session's tab. Leave nothing for a later session to clean up. Never \`stop --all\` for routine cleanup. On the desktop app's pane, \`stop\` releases control and leaves their pane open.
-- **Connection recovery.** \`cast browser target\` reports the browser without checking the connection; \`cast browser extension status\` checks the bridge. Commands start the bridge host if needed and wait for reconnection, and old session selections cannot move ordinary commands off the human's Chrome. If the extension is not installed, give the human its [Chrome Web Store listing](${BROWSER_EXTENSION_STORE_URL}): they install it in their chosen Chrome profile, run \`cast browser extension setup\` in a terminal on the same computer, and click Pair in Chrome. Still disconnected: check Chrome is running and the extension enabled. A missing pairing, failed command or unavailable verb is not permission to launch another browser.
+- **Connection recovery.** Every verb gives up after 90 seconds (\`--deadline <s>\` to change), naming the stage it was waiting on; never wrap it in \`timeout\`. \`cast browser target\` reports the browser without checking the connection; \`cast browser extension status\` checks the bridge. Commands start the bridge host if needed and wait for reconnection, and old session selections cannot move ordinary commands off the human's Chrome. If the extension is not installed, give the human its [Chrome Web Store listing](${BROWSER_EXTENSION_STORE_URL}): they install it in their chosen Chrome profile, run \`cast browser extension setup\` in a terminal on the same computer, and click Pair in Chrome. Still disconnected: check Chrome is running and the extension enabled. A missing pairing, failed command or unavailable verb is not permission to launch another browser.
 - **Pages Chrome walls off from extensions** cannot be driven: \`chrome://\`, \`chrome-extension://\`, and the Chrome Web Store and its developer dashboard (\`chrome.google.com/webstore/...\`, \`chromewebstore.google.com\`); \`cast browser open\` says so before trying. Hand the human the URL and exact steps and carry on with everything around them. Don't move to the agent browser for these unless the human asks.
-- **Showing the human a page.** \`cast browser show\` (like the web's "open tab" link, which is theirs to click) brings this session's tab to the front of their screen, in whichever browser holds it. Run it only when they asked to see the page or must act in it (a sign-in, a permission prompt) and you have told them what to do there: never to check your own work, never on a loop, never while they type elsewhere. One raise, then wait.
-- **Sign-in pages.** If the page needs a login in the human's Chrome, ask them to sign in and continue in the same tab; never copy profiles, sync cookies or launch another browser. A cloud host has no Chrome of theirs: there \`cast browser sync <site>\` carries the login over from the laptop via SSH (Google excepted), and its datacenter IP may get Google and DuckDuckGo bot-blocked anyway; Bing works.
-- **Web-app surfaces.** \`eval\` awaits promises and takes top-level \`await\`; multi-line scripts come from \`--stdin\` or \`--file\`. Camera, microphone and clipboard prompts are the human's to approve. \`find\` ranks visible elements above hidden ones, namesakes are numbered (\`find "Delete (3rd)"\` picks the third visible match), and stale refs are re-found at the same position after a refresh.
+- **Showing the human a page.** \`cast browser show\` (like the web's "open tab" link, which is theirs to click) brings this session's tab to the front of their screen, in whichever browser holds it. Run it only when they asked to see the page: never to check your own work, never on a loop, never while they type elsewhere. One raise, then wait.
+- **A step only the human can do.** \`cast browser handoff "<step>"\` (a sign-in, a code, a captcha, a permission prompt) puts a card with Continue on this session's tab and wakes this session when they press it; \`--show\` also raises the tab. \`cast browser subscribe --signed-in\` wakes it when the tab leaves its sign-in page. Both return at once: end your turn and let the wake resume you.
+- **Sign-in pages.** If the page needs a login in the human's Chrome, hand them the sign-in with \`handoff\` and continue in the same tab when it wakes you; never copy profiles, sync cookies or launch another browser. A cloud host has no Chrome of theirs: there \`cast browser sync <site>\` carries the login over from the laptop via SSH (Google excepted), and its datacenter IP may get Google and DuckDuckGo bot-blocked anyway; Bing works.
+- **Web-app surfaces.** \`eval\` awaits promises and takes top-level \`await\`; multi-line scripts come from \`--stdin\` or \`--file\`. A string result prints as itself (no \`JSON.stringify\` needed); \`--json\` gives the exact encoding. Camera, microphone and clipboard prompts are the human's to approve. \`find\` ranks visible elements above hidden ones, namesakes are numbered (\`find "Delete (3rd)"\` picks the third visible match), and stale refs are re-found at the same position after a refresh.
 `;
 
 export const BROWSER_SECTION: SectionSpec = {
@@ -726,6 +737,7 @@ Take credentials from the team's Vault; never ask a person to paste one. Hand a 
 
 \`\`\`bash
 cast vault ls                                    # what you can use, open requests first
+cast vault ls <word> [--kind login] [--ready]   # only names, vars, sites or notes containing it
 cast vault ls --stale                            # only what needs a look: expired, expiring, never used, stale
 cast vault run [names…] -- <cmd>                 # values in the command's env; what it prints is your output
 cast vault run --env-file .env.vault -- <cmd>    # KEY=vault://<name>[/<field>] lines filled from the Vault
@@ -741,7 +753,7 @@ cast vault restore <name> [n]                    # list the values rotate replac
 cast vault rm <name> --yes
 \`\`\`
 
-\`run\` maps each kind to the environment: a key to its \`--env\` names (or \`NAME_UPPER\`), a login to \`NAME_USERNAME\` and \`NAME_PASSWORD\` (never its 2FA code: read that with \`otp\`), a file to the path of a 0600 temp file, removed when the command exits, in its \`--env\` var (or \`NAME_UPPER_FILE\`). \`ls\` and \`show\` name each secret's vars. The exit code is the command's. A value is never an argument, since \`ps\` shows a command's arguments to every local user: \`add\`, \`rotate\` and \`fill\` read it from a hidden prompt, stdin, \`--file\` or \`--from-env\`, and \`get\` feeds a pipe or a command's stdin (\`< <(cast vault get <name>)\`), never \`$(…)\` in its arguments. A login's 2FA setup key comes from \`--totp-from-env VAR\`, or with \`--totp\` as the stdin line after the password: \`printf '%s\\n%s\\n' "$PW" "$SEED" | cast vault add gh-bot --kind login --username bot --totp\`; a rotate keeps a field left blank, so \`printf '\\n%s\\n' "$SEED" | cast vault rotate gh-bot --totp\` adds only the seed. Writes go to the repo profile's team, else the active team, else personal; \`--team\` names another.
+\`run\` maps each kind to the environment: a key to its \`--env\` names (or \`NAME_UPPER\`), a login to \`NAME_USERNAME\` and \`NAME_PASSWORD\` (never its 2FA code: read that with \`otp\`), a file to the path of a 0600 temp file, removed when the command exits, in its \`--env\` var (or \`NAME_UPPER_FILE\`). \`ls\` and \`show\` name each secret's vars. The exit code is the command's. A value is never an argument, since \`ps\` shows a command's arguments to every local user: \`add\`, \`rotate\` and \`fill\` read it from a hidden prompt, stdin, \`--file\` or \`--from-env\`, and \`get\` feeds a pipe or a command's stdin (\`< <(cast vault get <name>)\`), never \`$(…)\` in its arguments. A login's 2FA setup key comes from \`--totp-from-env VAR\`, or with \`--totp\` as the stdin line after the password: \`printf '%s\\n%s\\n' "$PW" "$SEED" | cast vault add gh-bot --kind login --username bot --totp\`; a rotate keeps a field left blank, so \`printf '\\n%s\\n' "$SEED" | cast vault rotate gh-bot --totp\` adds only the seed. Writes go to the repo profile's team, else the active team, else personal; \`--team\` names another. When one name is in two workspaces, \`--team <name>\` or \`--personal\` on \`ls\`, \`show\`, \`get\`, \`otp\`, \`rotate\`, \`restore\` and \`rm\` picks one.
 
 A \`[vault]\` line in \`.codecast/workspace.toml\` is \`ENV_VAR = "secret-name"\`, or \`{ secret = "secret-name", required = true }\` when \`cast dev\` must not start without it; \`run\` with no names injects that map. A login maps its password and a file its temp path; for the username, use an env file line \`USER=vault://<name>/username\`. \`cast vault ls\` marks the secrets this repo maps and names the \`cast vault request\` for each one the Vault lacks. An env file of \`vault://\` lines names secrets without holding them, so it is safe to commit; \`vault://<name>\` is a key's value, a login's password or a file's temp path, and \`/<field>\` picks username, password, value or content. Only \`run --env-file\` fills them: a dev server that reads \`.env\` itself sees the literal string.
 
@@ -864,27 +876,30 @@ cast sim tap --label "Sign in"          # or -x/-y in points; type, swipe and bu
 cast sim release                        # give it back when done
 \`\`\`
 
-The lock belongs to this session, so every verb targets your simulator without a UDID. Never boot, shut down or erase a simulator you do not hold, and don't count on one staying booted across a long gap. \`cast guide sim\` covers coordinates, other axe verbs and cloud Macs.
+The lock belongs to this session, so every verb targets your simulator without a UDID. Never boot, shut down or erase a simulator you do not hold, and don't count on one staying booted across a long gap. \`cast guide sim\` covers coordinates, status bar, permissions, video and cloud Macs.
 ${SIM_SNIPPET_END}
 `;
 
 /** What `cast guide sim` prints after the body: the detail an install leaves out of CLAUDE.md. */
 export const SIM_REFERENCE = `
 \`\`\`bash
-cast sim launch <bundle-id>             # (re)start an installed app; cast sim open <url> for a deep link
+cast sim launch <bundle-id> -demo       # (re)start an installed app, arguments after the id go to it; cast sim open <url> for a deep link
 cast sim uninstall <bundle-id>          # remove it and its data, to start again from the first screen
 cast sim shot --share                   # prints a ![alt](url) for anywhere else
 cast sim ui --find "text"               # narrow the tree
 cast sim tap --label "Sign in" --shot   # captures the result
 cast sim type "hello"                   # into the focused field (- reads stdin)
-cast sim swipe --direction up           # or --start-x/--start-y/--end-x/--end-y
+cast sim scroll down                    # or swipe --direction <finger direction> / --start-x...
 cast sim button home                    # home, lock, side-button, siri
+cast sim statusbar                      # 9:41, full bars and battery for screenshots (--time, --battery; clear restores it)
+cast sim grant <bundle-id> photos location   # no permission prompt (--revoke, --reset; all for every service)
+cast sim record start                   # video in the background; record stop prints the file (or --seconds <n>)
 cast sim list                           # the pool: who holds what, what is booted
 \`\`\`
 
 The lock frees itself when the session ends; \`--udid\` addresses another simulator only when you were told to. The machine shuts down simulators nobody holds after ten idle minutes.
 
-**Coordinates are points.** \`cast sim shot\` scales the image to the screen's points, so a position read off it is the coordinate \`tap\` takes. Prefer \`--label\` over coordinates when the element has one; when several match, the command lists them and \`--nth\` picks one. \`cast sim axe <verb> …\` reaches any other axe verb (key, gesture, record-video) on your simulator.
+**Coordinates are points.** \`cast sim shot\` scales the image to the screen's points, so a position read off it is the coordinate \`tap\` takes. Prefer \`--label\` over coordinates when the element has one; when several match, the command lists them and \`--nth\` picks one. \`cast sim axe <verb> …\` reaches any other axe verb (key, gesture) on your simulator.
 
 **A cloud Mac runs the same commands.** A session moved to a cloud host keeps working there unchanged: the host has its own pool, and its screenshots land in this thread the same way. \`cast sim doctor\` says what a machine is missing; Xcode, the runtime and axe on a host come from \`cast hosts setup\`, never from installing them yourself.
 `;
@@ -1051,7 +1066,7 @@ Team huddles are transcribed by speaker, and each call gets a title, summary and
 \`\`\`bash
 cast calls                        # team call history, live calls first
 cast call <id>                    # one call: summary + action items, and which lines were filmed
-cast call <id> --transcript       # full who-said-what transcript, each line labeled cl-42:15
+cast call <id> --transcript       # full transcript, lines labeled cl-42:15 (cl-42:15-25 reads a range)
 cast call snap cl-42:15           # the call's screen when line 15 was said, as a PNG
 \`\`\`
 
@@ -1062,7 +1077,6 @@ ${CALLS_SNIPPET_END}
 /** What `cast guide calls` prints after the body: the detail an install leaves out of CLAUDE.md. */
 export const CALLS_REFERENCE = `
 \`\`\`bash
-cast call <id> 15:25              # just lines 15 to 25
 cast call <id> --json             # machine-readable, segments too
 cast call hold 3m|off             # hold the room's words while you work
 cast call cl-42@12:34             # the lines being said at 12m34s
@@ -1151,7 +1165,7 @@ ${DECIDE_SNIPPET_END}
 export const DECIDE_REFERENCE = `
 \`\`\`bash
 cast decide "<q>" -o … -o … --option-page 2=alt.html   # an option with its own page (a file, a slug, or a url)
-cast decide ls                                          # every decision you posted: id, answer, age, messages since
+cast decide ls                                          # this session's decisions: id, answer, age, messages since (--mine: every pending one you hold)
 cast stack remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N --due tomorrow   # tend a stack; overdue sorts first
 \`\`\`
 
@@ -1182,7 +1196,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     desc: "Cross-session recall (cast search / context / feed)",
     detail:
       "Adds `cast search`, `cast context`, and `cast feed` so agents can find prior " +
-      "conversations relevant to their current task. Nothing runs automatically — agents " +
+      "conversations relevant to their current task. Nothing runs automatically: agents " +
       "call these when they need context.",
     writesTo: "CLAUDE.md — a ## Memory section with the command reference",
     shipped: "2026-06-18",
@@ -1260,7 +1274,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     detail:
       "For delegated implementers, reviewers and audits that report back to you, use " +
       "`cast spawn --subagent -- \"<task>\"`: workers nest under this session on any agent backend. " +
-      "Each settling worker wakes you; `cast sessions <id> -w --until` waits for them. Plain `cast spawn` and " +
+      "Each settling worker wakes you; `cast sessions <id> --until` waits for them. Plain `cast spawn` and " +
       "`cast fork` create independent inbox threads: use them only when the human asks for " +
       "threads they will steer separately. A label or plan binding does not nest a worker. " +
       "`cast exec` is print mode for every harness: run a prompt, print the result, exit. " +
@@ -1282,7 +1296,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     category: "work",
     desc: "Work tracking for agents (cast task / plan)",
     detail:
-      "Gives agents `cast task` and `cast plan` to track what they're working on — they " +
+      "Gives agents `cast task` and `cast plan` to track what they're working on: they " +
       "create tasks, log progress, and mark work done, and you see it on the dashboard. " +
       "Use it for substantial work, coordination, handoffs, or follow-up beyond the session. " +
       "Simple work you can and intend to finish in this session does not need filing.",
@@ -1312,7 +1326,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     desc: "Delayed, recurring, and event-driven agent runs (cast trigger)",
     detail:
       "Adds `cast trigger` so agents can queue follow-up work. For example, an agent " +
-      "finishes a PR and sets a trigger to \"check CI in 30m\" — the follow-up runs " +
+      "finishes a PR and sets a trigger to \"check CI in 30m\", and the follow-up runs " +
       "later in the same session, or in a fresh linked session with --spawn. Agents " +
       "only set triggers when they have a reason to.",
     writesTo: "CLAUDE.md — a ## Triggers section with trigger commands",
@@ -1337,7 +1351,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     category: "work",
     desc: "Execution graphs with approval gates (cast workflow)",
     detail:
-      "Adds `cast workflow` for running .cast files — directed graphs in DOT syntax where " +
+      "Adds `cast workflow` for running .cast files: directed graphs in DOT syntax where " +
       "each node is an agent session, a shell command, or a human approval gate. Workflows " +
       "only run when you explicitly invoke them.",
     writesTo: "CLAUDE.md — a ## Workflows section with the syntax reference",
@@ -1357,10 +1371,10 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     category: "show",
     desc: "Inline HTML visuals from agents (cast-canvas)",
     detail:
-      "Teaches agents to render rich visuals inline with a `cast-canvas` HTML block — " +
+      "Teaches agents to render rich visuals inline with a `cast-canvas` HTML block: " +
       "charts, reports, mockups, diagrams, and small widgets render sandboxed in the " +
       "conversation, expandable to fullscreen, instead of ASCII art. Agents only reach for " +
-      "it when a visual beats prose; the default stays markdown. Also teaches `cast image` — " +
+      "it when a visual beats prose; the default stays markdown. Also teaches `cast image`: " +
       "upload a screenshot or image and get a stable link that renders inline in messages and canvases.",
     writesTo: "CLAUDE.md — a ## Visual Canvas section with the format",
     shipped: "2026-06-18",
@@ -1378,8 +1392,8 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     category: "show",
     desc: "Shareable published pages (cast publish)",
     detail:
-      "Adds `cast publish <file.html>` so agents can publish HTML deliverables — reports, " +
-      "dashboards, mockups — to a stable codecast.sh/a/<id> URL you can open and share. " +
+      "Adds `cast publish <file.html>` so agents can publish HTML deliverables (reports, " +
+      "dashboards, mockups) to a stable codecast.sh/a/<id> URL you can open and share. " +
       "A page URL on its own line in a reply embeds the live page in the conversation. " +
       "Re-publishing the same file keeps the same link; links are unlisted but viewable " +
       "by anyone who has them.",
@@ -1398,7 +1412,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     detail:
       "Adds `cast state \"…\"` so an agent keeps a short pinned state on its session: what it " +
       "is working on, whether that work is in progress, blocked on you, or done, and the detail " +
-      "behind it. It shows above the composer and on the inbox card — the status colors the row, " +
+      "behind it. It shows above the composer and on the inbox card, and the status colors the row, " +
       "so blocked and finished sessions stand out in the list. The agent rewrites it as the work " +
       "moves; the dashboard shows how far the thread has run since it was last written, so a " +
       "neglected one reads as stale rather than current.",
@@ -1556,8 +1570,8 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     category: "together",
     desc: "Hand your human one well-formed decision (cast decide)",
     detail:
-      "Adds `cast decide` so an agent that hits a real fork — a tradeoff, an irreversible " +
-      "step, a judgment call — posts ONE explicit question with options and enough context " +
+      "Adds `cast decide` so an agent that hits a real fork (a tradeoff, an irreversible " +
+      "step, a judgment call) posts ONE explicit question with options and enough context " +
       "to answer without opening the session. Decisions land in the web decision queue, " +
       "where you clear the stack one at a time with the keyboard; the chosen option arrives " +
       "back in the asking session as a normal message.",
@@ -1574,10 +1588,10 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     category: "hands",
     desc: "Keep working through usage limits (codecast recovers parked sessions)",
     detail:
-      "Tells agents that a usage limit is a pause, not a stop: codecast resumes limit-parked " +
-      "sessions when the window resets and, with auto-switch on, hops this machine to the " +
-      "saved account with the most headroom — so an agent should finish its step and keep " +
-      "working rather than wind down when Claude Code warns that a limit is near. Adds " +
+      "Tells agents that a usage limit is a pause, not a stop: with recovery turned on, codecast " +
+      "continues limit-parked sessions itself, either when the window resets or, with auto-switch, " +
+      "on the saved account with the most headroom. So an agent finishes its step and keeps " +
+      "working rather than winding down when Claude Code warns that a limit is near. Adds " +
       "`cast usage` for the account's windows and reset times. Turned on automatically once " +
       "a machine has more than one saved Claude account.",
     writesTo: "CLAUDE.md — a ## Usage limits section",

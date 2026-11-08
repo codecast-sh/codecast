@@ -405,12 +405,15 @@ export const hostSessions = query({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return [];
+    // Only the device's active rows: reading every row it ever owned and
+    // dropping the completed ones in JS hit the 64 MB read cap on hosts with a
+    // long history (`cast land scan --hosts`, `cast hosts ls`).
     const owned = await ctx.db
       .query("conversations")
-      .withIndex("by_owner_device", (q: any) => q.eq("user_id", userId).eq("owner_device_id", args.device_id))
+      .withIndex("by_owner_device_status", (q: any) => q.eq("user_id", userId).eq("owner_device_id", args.device_id).eq("status", "active"))
       .collect();
     return owned
-      .filter((c: any) => !c.inbox_killed_at && c.status !== "completed")
+      .filter((c: any) => !c.inbox_killed_at)
       .map((c: any) => ({
         conversation_id: c._id,
         short_id: c.short_id ?? c._id.toString().slice(0, 7),

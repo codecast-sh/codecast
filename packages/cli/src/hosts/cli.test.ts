@@ -127,7 +127,7 @@ describe("parseRemoteWorkspaceList", () => {
 describe("REMOTE_WORKSPACE_LIST_SCRIPT", () => {
   test("only enters checkouts that codecast actually manages", () => {
     expect(REMOTE_WORKSPACE_LIST_SCRIPT).toContain(".codecast/workspace.toml");
-    expect(REMOTE_WORKSPACE_LIST_SCRIPT).toContain("cast ws ls");
+    expect(REMOTE_WORKSPACE_LIST_SCRIPT).toContain('"$CAST" ws ls');
     // The `## ` marker is what ties each table back to its checkout.
     expect(REMOTE_WORKSPACE_LIST_SCRIPT).toContain('echo "## $d"');
   });
@@ -192,6 +192,30 @@ describe("live worktree git state over the host probe", () => {
     const detached = readRemoteWorktrees({ address: "host.invalid", user: "ubuntu", keyPath: path.join(dir, "key"), remoteBaseDir: dir }, 30_000);
     expect(worktreeGitLabel(detached[0].live!)).toBe(`detached HEAD@${wtHead.slice(0, 7)}, uncommitted changes`);
     expect(worktreeGitLabel({ branch: "main", head: "", dirty: false })).toBe("main, no commits");
+  });
+
+  test("finds the host's cast off PATH (a non-interactive ssh shell reads no profile), and a failed ssh says why in one line", () => {
+    const home = path.join(dir, "home");
+    const app = path.join(home, "work", "app");
+    fs.mkdirSync(path.join(app, ".codecast"), { recursive: true });
+    Object.assign(process.env, { HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1" });
+    git(app, "init", "-q", "-b", "main");
+    fs.writeFileSync(path.join(app, ".codecast", "workspace.toml"), "");
+    git(app, "add", ".");
+    commitAll(app, "init");
+    const local = path.join(home, ".local", "bin");
+    fs.mkdirSync(local, { recursive: true });
+    fs.writeFileSync(path.join(local, "cast"), `#!/bin/sh\nprintf 'NAME  STATE  BRANCH  PATH\\nw1  ready  ws/w1  /p/w1\\n'\n`, { mode: 0o755 });
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    // PATH holds the stand-in ssh and the system tools, never a cast.
+    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\nfor a; do last="$a"; done\nexec /bin/bash -c "$last"\n`, { mode: 0o755 });
+    process.env.PATH = `${bin}:/usr/bin:/bin`;
+    const host = { address: "host.invalid", user: "ubuntu", keyPath: path.join(dir, "key"), remoteBaseDir: dir };
+    expect(readRemoteWorktrees(host, 30_000).map((r) => r.name)).toEqual(["w1", "shared-checkout"]);
+
+    fs.writeFileSync(path.join(bin, "ssh"), `#!/bin/sh\necho "ssh: connect to host 1.2.3.4 port 22: Operation timed out" >&2\nexit 255\n`, { mode: 0o755 });
+    expect(() => readRemoteWorktrees(host, 30_000)).toThrow(/^ssh: connect to host 1\.2\.3\.4 port 22: Operation timed out$/);
   });
 
   test("a shared-checkout record already naming the main checkout is not listed twice", () => {

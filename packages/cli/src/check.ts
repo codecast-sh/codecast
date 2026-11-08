@@ -121,8 +121,22 @@ export function resolveProjects(root: string, names: string[], cwd = process.cwd
   return names.map((name) => {
     const hit = configured?.find((p) => p.name === name);
     if (hit) return hit;
-    const abs = path.resolve(cwd, name);
-    const file = /tsconfig[^/]*\.json$/.test(abs) ? abs : path.join(abs, "tsconfig.json");
+    // A path reads from the caller's directory first, then from the tree root,
+    // the way the config and the docs write paths (`outreach/backend` from inside outreach/backend).
+    const bases = [path.resolve(cwd, name), path.resolve(root, name)];
+    const isFile = /tsconfig[^/]*\.json$/.test(name);
+    // A directory a configured project lives in is that project, whatever its
+    // tsconfig is called (cli's is tsconfig.typecheck.json; the folder's plain
+    // tsconfig.json is a different program with errors of its own).
+    if (!isFile) {
+      for (const abs of bases) {
+        const relDir = path.relative(root, abs) || ".";
+        const owners = fs.existsSync(abs) ? (configured ?? []).filter((p) => path.dirname(path.normalize(p.tsconfig)) === relDir) : [];
+        if (owners.length === 1) return owners[0];
+      }
+    }
+    const candidates = bases.map((abs) => (isFile ? abs : path.join(abs, "tsconfig.json")));
+    const file = candidates.find((f) => fs.existsSync(f)) ?? candidates[0];
     // Inside by path, not by string prefix: a sibling worktree (`repo-wt/`) starts with the tree's own path.
     const rel = path.relative(root, file);
     if (fs.existsSync(file) && !rel.startsWith("..") && !path.isAbsolute(rel)) {
@@ -420,7 +434,53 @@ export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" 
  * full pass reached ~4.1 GB and its incremental passes aborted at 6 GB
  * (2026-11-05). The cap only bites when tsc would otherwise crash.
  */
-export const TSC_NODE_OPTIONS = "--max-old-space-size=8192";
+export const TSC_HEAP_MB = 8192;
+/**
+ * Carries an asker's larger heap cap to the watcher: a launchd job keeps only
+ * CAST_* and a few other variables (launchdJob.ts), never NODE_OPTIONS.
+ */
+export const CHECK_HEAP_ENV = "CAST_CHECK_HEAP_MB";
+const HEAP_FLAG = /^--max[-_]old[-_]space[-_]size=(\d+)$/;
+
+/** The heap cap, in MB, a NODE_OPTIONS string sets; undefined when it sets none. */
+export function heapCapMb(nodeOptions: string | undefined): number | undefined {
+  let cap: number | undefined;
+  for (const tok of (nodeOptions ?? "").split(/\s+/)) {
+    const n = Number(tok.match(HEAP_FLAG)?.[1]);
+    if (n > 0) cap = n;
+  }
+  return cap;
+}
+
+/**
+ * NODE_OPTIONS for tsc: the caller's own flags, with a heap cap no lower than
+ * TSC_HEAP_MB. An agent's `NODE_OPTIONS=--max-old-space-size=7168` once
+ * replaced the default outright and lowered the cap the program needs.
+ */
+export function tscNodeOptions(inherited: string | undefined, extraMb?: string | number): string {
+  const cap = Math.max(TSC_HEAP_MB, heapCapMb(inherited) ?? 0, Number(extraMb) || 0);
+  const rest = (inherited ?? "").split(/\s+/).filter((t) => t && !HEAP_FLAG.test(t));
+  return [...rest, `--max-old-space-size=${cap}`].join(" ");
+}
+
+/** A line of a native stack trace (`55: 0x1039d4ef0 Builtins_...`), which V8 prints after a fatal error. */
+export const isNativeFrame = (line: string): boolean => /^\s*\d+: 0x[0-9a-f]+ /.test(line);
+/** V8's own line for a heap exhaustion: `FATAL ERROR: ... JavaScript heap out of memory`. */
+export const isHeapFatal = (line: string): boolean => /heap out of memory|heap limit|FATAL ERROR: .*Allocation failed/i.test(line);
+
+/**
+ * The line a watcher ends its log with when tsc died of a full heap, or
+ * undefined when it died some other way. An asker reads it as the reason.
+ */
+export function heapDeath(opts: { project: string; signal: string | null; fatal: string | null; nodeOptions: string; totalBytes?: number }): string | undefined {
+  if (!opts.fatal || (opts.signal && opts.signal !== "SIGABRT" && opts.signal !== "SIGTRAP")) return undefined;
+  const capMb = heapCapMb(opts.nodeOptions) ?? TSC_HEAP_MB;
+  const gb = (mb: number): string => String(Math.round((mb / 1024) * 10) / 10);
+  const total = Math.round(((opts.totalBytes ?? os.totalmem()) / 2 ** 30) * 10) / 10;
+  return `tsc ran out of memory on ${opts.project} at its ${gb(capMb)} GB heap cap (${opts.fatal.trim()}). ` +
+    `Asking again starts a new watcher from the last finished pass; if it hits the cap again, raise it for this project: ` +
+    `NODE_OPTIONS=--max-old-space-size=${capMb + 4096} cast check --fresh ${opts.project} (this machine has ${total} GB)`;
+}
 /**
  * How long a pass that did not check the tree on disk may wait for tsc to
  * start one that does, before the watcher counts as having lost track of it.
@@ -647,20 +707,26 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   // directory's watch; one reached only by import is not (ct-62781: Union's
   // mobile program reaches ../backend, and an Implement round looped on
   // exports present on disk).
+  const nodeOptions = tscNodeOptions(process.env.NODE_OPTIONS, process.env[CHECK_HEAP_ENV]);
   const child = spawn(own ?? "tsc", ["--noEmit", "--watch", "--watchFile", "useFsEventsOnParentDirectory", "--preserveWatchOutput", "--pretty", "false", "--incremental", "--tsBuildInfoFile", buildInfoPath(dir), "-p", path.join(root, tsconfig)], {
     cwd: path.dirname(path.join(root, tsconfig)),
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS || TSC_NODE_OPTIONS },
+    env: { ...process.env, NODE_OPTIONS: nodeOptions },
   });
   let rest = "";
   // The last lines tsc printed, so a tsc that dies (out of heap, killed) says why in watch.log.
+  // Native stack frames stay out of it: V8 prints dozens after a fatal error,
+  // and they pushed out the one line that said why (a full heap).
   const tail: string[] = [];
+  let fatal: string | null = null;
   const onData = (chunk: Buffer | string): void => {
     rest += String(chunk);
     const lines = rest.split("\n");
     rest = lines.pop() ?? "";
     for (const line of lines) {
       reduce(line);
+      if (isHeapFatal(line)) fatal = line;
+      if (isNativeFrame(line)) continue;
       tail.push(line);
       if (tail.length > 20) tail.shift();
     }
@@ -686,10 +752,11 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   process.on("SIGINT", stop);
   await new Promise<void>((resolve) => {
     child.on("exit", (code, signal) => {
-      console.log(`tsc exited (${signal ?? `code ${code}`}); its last lines:\n${[...tail, rest].filter(Boolean).join("\n")}`);
+      console.log(`tsc exited (${signal ?? `code ${code}`}); its last lines:\n${[...tail, rest].filter((l) => l && !isNativeFrame(l)).join("\n")}`);
       // The last line is what an asker reads: a memory kill says so, with the machine's numbers.
       const killed = memoryDeath({ what: `the ${project} typecheck (tsc)`, killed: signal === "SIGKILL", oomBefore, oomAfter: oomKillCount(), repoRoot: root });
-      if (killed) console.log(killed);
+      const heap = heapDeath({ project, signal, fatal, nodeOptions });
+      if (killed ?? heap) console.log(killed ?? heap);
       resolve();
     });
     // A tsc that never starts (none in the tree and none on PATH) emits only
@@ -737,6 +804,9 @@ export const startDetachedWatcher: WatcherStarter = (root, { name, tsconfig }) =
   const viaRuntime = base.includes("bun") || base.includes("node");
   const args = viaRuntime ? [process.argv[1], "check-watch", root, name, tsconfig] : ["check-watch", root, name, tsconfig];
   const label = `sh.codecast.check.${path.basename(path.dirname(dir))}.${name}`.replace(/[^A-Za-z0-9._-]/g, "_");
+  // A cap the asker raised in NODE_OPTIONS reaches the watcher under launchd only by this name.
+  const asked = heapCapMb(process.env.NODE_OPTIONS);
+  if (asked && asked > TSC_HEAP_MB) process.env[CHECK_HEAP_ENV] = String(asked);
   if (startLaunchdJob({ label, argv: [process.execPath, ...args], plistPath: path.join(dir, "watcher.plist"), logPath: logPath(dir) })) return;
   const log = fs.openSync(logPath(dir), "a");
   try {
@@ -847,16 +917,21 @@ export async function checkProject(
     if (Date.now() > deadline) throw new Error(`the ${project} typecheck is still running after ${Math.round(budget / 60_000)} min; the machine is loaded. Ask again, or read ${logPath(dir)}`);
     if (!noted && Date.now() - askedAt > 5_000) {
       noted = true;
-      note(`waiting for the ${project} typecheck pass to finish…`);
+      note(`waiting for the ${project} typecheck pass to finish… (a first pass on a big program takes minutes; if this call is cut off, the pass keeps running and the next ask picks it up)`);
     }
     await sleep(300);
   }
 }
 
-/** The last thing a watcher wrote to its log, which names why it stopped. */
-function lastLogLine(dir: string): string | null {
+/**
+ * The last thing a watcher wrote to its log, which names why it stopped.
+ * Native stack frames are skipped: a log from an older watcher ends in dozens
+ * of them after V8 aborts, and the last one (a dyld frame) said nothing.
+ */
+export function lastLogLine(dir: string): string | null {
   try {
-    return fs.readFileSync(logPath(dir), "utf-8").trim().split("\n").filter(Boolean).pop() ?? null;
+    const line = fs.readFileSync(logPath(dir), "utf-8").trim().split("\n").filter((l) => l.trim() && !isNativeFrame(l)).pop();
+    return line?.replace(/; its last lines:$/, "") ?? null;
   } catch {
     return null;
   }

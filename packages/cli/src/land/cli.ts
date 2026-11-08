@@ -123,20 +123,38 @@ async function scanLocal(opts: ScanOpts): Promise<LandScan> {
 }
 
 /** Run a `cast land` subcommand on every registered cloud host and parse its JSON. */
+/** How long one host's scan may take before it is reported as not answering. */
+const HOST_SCAN_BUDGET_MS = 5 * 60_000;
+
 async function onHosts(args: string): Promise<HostScan[]> {
   const { readHosts, toRemoteHost } = await import("../browser/cloudHost.js");
-  const { ssh } = await import("../remote/session-move.js");
+  const { sshBase } = await import("../remote/session-move.js");
+  // Asynchronous ssh, so the hosts scan side by side: a synchronous one ran
+  // them in turn, each allowed 15 minutes, and a caller's timeout killed the
+  // whole scan before anything printed.
   return Promise.all(readHosts().map(async (h) => {
     const label = `${h.user}@${h.address ?? "?"}`;
+    if (!h.address) return { id: h.id, label, error: "no address (asleep?): cast hosts wake it first" };
+    const remote = toRemoteHost(h);
     try {
-      const out = ssh(toRemoteHost(h), `bash -lc 'cast land ${args} --json'`, 15 * 60_000);
+      const { stdout } = await execFileAsync("ssh", [...sshBase(remote), `${remote.user}@${remote.address}`, `bash -lc 'cast land ${args} --json'`], { encoding: "utf-8", timeout: HOST_SCAN_BUDGET_MS, maxBuffer: 256 * 1024 * 1024, env: process.env });
+      const out = String(stdout);
       return { id: h.id, label, result: JSON.parse(out.slice(out.indexOf("{"))) as LandScan };
     } catch (err: any) {
       const text = String(err?.stderr || err?.message || err);
-      const reason = /unknown command|no command group named "land"/.test(text) ? "the host's cast has no `land` yet (update its CLI)" : text.split("\n").filter(Boolean).pop() ?? "ssh failed";
+      const reason = err?.killed || err?.signal === "SIGTERM" ? `no answer in ${HOST_SCAN_BUDGET_MS / 60_000} min`
+        : /unknown command|no command group named "land"/.test(text) ? "the host's cast has no `land` yet (update its CLI)"
+          : text.split("\n").filter(Boolean).pop() ?? "ssh failed";
       return { id: h.id, label, error: reason.slice(0, 200) };
     }
   }));
+}
+
+/** The scan with only these verdicts' trees, here and on every host. */
+export function keepVerdicts(scan: LandScan, verdicts: Set<string>): LandScan {
+  const repos = scan.repos.map((r) => ({ ...r, trees: r.trees.filter((t) => verdicts.has(t.verdict)) }));
+  const hosts = scan.hosts?.map((h) => (h.result ? { ...h, result: keepVerdicts(h.result, verdicts) } : h));
+  return { ...scan, repos, ...(hosts ? { hosts } : {}) };
 }
 
 const ORDER: TreeVerdict[] = ["ready", "review", "held", "run", "stale", "landed", "empty", "live", "primary"];
@@ -197,7 +215,7 @@ export function pruneTargets(scan: LandScan): { go: TreeReport[]; held: Array<{ 
 async function heldTarget(tree: string | undefined): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", path.resolve(tree ?? "."), "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).catch(() => ({ stdout: "" }));
   const dir = String(stdout).trim();
-  if (!dir) { console.error(`not a git worktree: ${path.resolve(tree ?? ".")}`); process.exit(1); }
+  if (!dir) { console.error(`not a git worktree: ${path.resolve(tree ?? ".")}. Pass a worktree's path; cast land scan -v lists them`); process.exit(1); }
   if (await repoRootOf(dir) === dir) { console.error(`${dir} is the repo's main checkout, where landing goes; hold a worktree instead`); process.exit(1); }
   return dir;
 }
@@ -245,11 +263,36 @@ branch as refs/codecast/land-archive/<branch>.`);
 
   addScanOptions(land.command("scan").description("Classify every worktree's own work against main"))
     .option("-v, --verbose", "list every tree, not just ready, review and held")
-    .action(async (opts: ScanOpts) => {
-      const scan = await scanLocal(opts);
-      if (opts.hosts) scan.hosts = await onHosts(`scan --all-repos${opts.fetch === false ? " --no-fetch" : ""}`);
+    .option("--verdict <verdicts>", `only trees with these verdicts, comma-separated (${ORDER.join(", ")})`)
+    .addHelpText("after", `
+--json prints { scannedAt, machine, roster, repos[], hosts[] }:
+  roster   "ok", "ok (inbox listing; ...)", or why the session roster could not be read
+  repos[]  { repo, root, origin, mainRef, errors[], trees[] }
+  trees[]  { path, branch, head, base, primary, verdict, reason, inUse, lastActivity (ms),
+             owner: { short_id, title, work_state } | null,
+             counts: { only, both, same, absorbed }, files[]: { path, verdict, status } }
+  hosts[]  with --hosts: { id, label, result (the same shape) | error }
+A scan that cannot run prints { "error": "..." } on stdout and exits 1.
+
+  cast land scan --verdict ready,review --json`)
+    .action(async (opts: ScanOpts & { verdict?: string }) => {
+      const verdicts = opts.verdict ? new Set(opts.verdict.split(",").map((v) => v.trim()).filter(Boolean)) : null;
+      const unknown = [...(verdicts ?? [])].filter((v) => !ORDER.includes(v as TreeVerdict));
+      if (unknown.length) { console.error(`--verdict takes ${ORDER.join(", ")} (got ${unknown.join(", ")})`); process.exit(1); }
+      let scan: LandScan;
+      try {
+        scan = await scanLocal(opts);
+        if (opts.hosts) scan.hosts = await onHosts(`scan --all-repos${opts.fetch === false ? " --no-fetch" : ""}`);
+      } catch (err) {
+        // stdout carries the answer under --json, a failure included, so a caller never reads an empty file.
+        const message = String((err as Error)?.message ?? err).split("\n")[0];
+        if (opts.json) console.log(JSON.stringify({ error: message }));
+        else console.error(`land scan failed: ${message}`);
+        process.exit(1);
+      }
+      if (verdicts) scan = keepVerdicts(scan, verdicts);
       if (opts.json) { console.log(JSON.stringify(scan, null, 2)); return; }
-      printScan(scan, !!opts.verbose);
+      printScan(scan, !!opts.verbose || !!verdicts);
       for (const h of scan.hosts ?? []) {
         console.log(`\n${fmt.highlight(h.label)} ${fmt.muted(h.id)}`);
         if (h.error) console.log(`  ${fmt.error(h.error)}`);
@@ -258,22 +301,25 @@ branch as refs/codecast/land-archive/<branch>.`);
     });
 
   land
-    .command("diff <tree>")
+    .command("diff")
+    .argument("<tree>", "the worktree's path, as cast land scan prints it")
     .description("Print a tree's own change as a patch against its base")
     .option("--only", "just the files only this tree changed (they apply cleanly to main)")
     .option("--both", "just the files main also changed")
     .action(async (tree: string, opts: { only?: boolean; both?: boolean }) => {
       const dir = path.resolve(tree);
+      if (!fs.existsSync(dir)) { console.error(`no worktree at ${dir}. Pass a worktree's path; cast land scan -v lists every tree with its path`); process.exit(1); }
       const scan = await scanRepo(await repoRootOf(dir), { roster: null, processCwds: [], fetch: false, only: [dir] });
       const report = scan.trees.find((t) => t.path === dir);
-      if (!report) { console.error(`no worktree at ${dir}`); process.exit(1); }
+      if (!report) { console.error(`no worktree at ${dir}. Pass a worktree's path; cast land scan -v lists every tree with its path`); process.exit(1); }
       if (report.verdict === "run" || report.verdict === "held") { console.error(`not landed by hand: ${dir} is ${report.reason}`); process.exit(1); }
       const only: FileVerdict[] | undefined = opts.only || opts.both ? [...(opts.only ? ["only" as const] : []), ...(opts.both ? ["both" as const] : [])] : undefined;
       process.stdout.write(await treePatch(report, only));
     });
 
   land
-    .command("hold [tree]")
+    .command("hold")
+    .argument("[tree]", "the worktree's path (default: the one holding this directory)")
     .description("Mark a worktree held: cast land and /deploy report it and never land or prune it")
     .requiredOption("-r, --reason <why>", "why it stays on its branch, shown wherever it is listed")
     .action(async (tree: string | undefined, opts: { reason: string }) => {
@@ -284,7 +330,8 @@ branch as refs/codecast/land-archive/<branch>.`);
     });
 
   land
-    .command("release [tree]")
+    .command("release")
+    .argument("[tree]", "the worktree's path (default: the one holding this directory)")
     .description("Lift a worktree's hold so it can land again")
     .action(async (tree: string | undefined) => {
       const dir = await heldTarget(tree);
@@ -321,7 +368,7 @@ branch as refs/codecast/land-archive/<branch>.`);
       }
     });
 
-  addScanOptions(land.command("prune [trees...]").description("Archive and release the stale, landed and empty trees (or just the named ones)"))
+  addScanOptions(land.command("prune").argument("[trees...]", "worktree paths to prune (default: every stale, landed and empty tree)").description("Archive and release the stale, landed and empty trees (or just the named ones)"))
     .option("--yes", "do it (without it, prune lists what it would remove)")
     .action(async (trees: string[], opts: ScanOpts & { yes?: boolean }) => {
       const named = new Set(trees.map((t) => path.resolve(t)));

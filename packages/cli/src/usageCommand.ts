@@ -215,3 +215,65 @@ export function renderUsageReport(r: UsageReport, c: Record<string, string>): st
   lines.push(describeRecovery(r));
   return lines.join("\n");
 }
+
+/** One saved account's row in `cast usage --all`. */
+export interface AccountUsageRow {
+  name: string;
+  email?: string;
+  active: boolean;
+  /** What decides whether a session can land on it now, most binding first. */
+  status: "active" | "reserved" | "login expired" | "access refused" | "exhausted" | "no data" | "headroom";
+  /** Whether auto-switch would pick it (fallbackProfiles), the same set `cast usage` counts. */
+  switch_target: boolean;
+  worst: number | null;
+  windows: UsageWindowLine[];
+  fetched_at?: number;
+  reserved_for?: string;
+}
+
+/** Every saved account with its windows, from the daemon's cache: what `cast usage` says for the active one, for all of them. */
+export function buildAccountUsage(profiles: UsageProfile[], now: number): AccountUsageRow[] {
+  const activeEmail = profiles.find((p) => p.active)?.email;
+  const targets = new Set(fallbackProfiles(profiles, activeEmail, now).map((p) => p.name));
+  return profiles.map((p) => {
+    const tokenLive = !!p.setup_token && p.setup_token.expires_at > now;
+    const status: AccountUsageRow["status"] = p.active ? "active"
+      : p.reserved_for ? "reserved"
+        : p.access_refused_at ? "access refused"
+          : p.login_expired_at && !tokenLive ? "login expired"
+            : !p.usage ? "no data"
+              : isUsageExhausted(p.usage, now) ? "exhausted"
+                : "headroom";
+    return {
+      name: p.name,
+      email: p.email,
+      active: !!p.active,
+      status,
+      switch_target: targets.has(p.name),
+      worst: worstUsagePercent(p.usage, now),
+      windows: (p.usage ? labeledUsageWindows(p.usage) : []).map((w) => ({ label: w.label, percent: livePercent(w, now), resets_at: w.resets_at, rolled: isWindowRolled(w, now) })),
+      fetched_at: p.usage?.fetched_at,
+      ...(p.reserved_for ? { reserved_for: p.reserved_for } : {}),
+    };
+  });
+}
+
+/** One line per account: name, each window's percent and reset, then its status. */
+export function renderAccountUsage(rows: AccountUsageRow[], now: number, c: Record<string, string>): string {
+  if (!rows.length) return `${c.dim}No saved profiles. Save the current login with:${c.reset} cast accounts save <name>`;
+  const width = Math.max(...rows.map((r) => r.name.length)) + 1;
+  const lines = rows.map((r) => {
+    const windows = r.windows.map((w) => {
+      const tone = w.percent >= 100 ? c.red : w.percent >= USAGE_WARN_PERCENT ? c.yellow : c.green;
+      const pct = w.rolled ? `${c.dim}reset${c.reset}` : `${tone}${Math.round(w.percent)}%${c.reset}`;
+      const reset = !w.rolled && w.resets_at && w.resets_at > now ? ` ${c.dim}${formatCountdown(w.resets_at - now)}${c.reset}` : "";
+      return `${w.label} ${pct}${reset}`;
+    }).join(`${c.dim} · ${c.reset}`) || `${c.dim}no windows${c.reset}`;
+    const tone = r.status === "active" ? c.cyan : r.status === "headroom" ? c.green : r.status === "exhausted" || r.status === "login expired" || r.status === "access refused" ? c.red : c.dim;
+    const age = r.fetched_at ? ` ${c.dim}${formatAgo(now - r.fetched_at)}${c.reset}` : "";
+    return `${r.active ? "●" : "○"} ${pad(r.name, width)} ${windows}  ${tone}${r.status}${c.reset}${age}`;
+  });
+  const targets = rows.filter((r) => r.switch_target).length;
+  lines.push(`${c.dim}${targets} of ${rows.length} accounts are auto-switch targets now (headroom, reachable, not reserved)${c.reset}`);
+  return lines.join("\n");
+}

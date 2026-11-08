@@ -35,18 +35,21 @@ import { RUN_OPTIONS, commandLine, parseRunCommand } from "@codecast/shared/cont
 import * as fs from "fs";
 import * as http from "http";
 import * as path from "path";
-import type { Command } from "commander";
-import { apiPost, type PublishDeps } from "./castApi.js";
+import { Option, type Command } from "commander";
+import { apiPost, nonJsonError, type PublishDeps } from "./castApi.js";
 import { buildPublishPayload } from "./publish.js";
 import { commentOnDecision } from "./decideComment.js";
 import { stdinText } from "./sendBody.js";
 import { DECISION_KIT_GUIDE, DECISION_KIT_LINE, previewDecisionPage, usesDecisionKit } from "./decisionKit.js";
 // What a decision put to a person is, on any line: the brief a presenting station reads first.
 import presenterBrief from "./workflow/presenter.md" with { type: "text" };
-import { cliFetch } from "./cliHttp.js";
+import { cliFetch, cliFetchRead } from "./cliHttp.js";
 import { loadWorkspaceRoster, resolveWorkspaceForRead } from "./resolveWorkspace.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
+import { addVerbHelp, type VerbHelpSpec } from "./verbHelp.js";
+import { verbTypoNextStep } from "./commandSuggestion.js";
+import { boundedCountOption, unknownVerbError, wrongKindIdError } from "./argChecks.js";
 import { readTaskPulseFor } from "./taskPulse.js";
 import { readCardFile } from "./cardFile.js";
 import { CARD_DECISION_OPTIONS, cardVerdictIndexes, verdictOfOption, type ChangeCard, type ChangeVerdict } from "@codecast/shared/contracts/changeCard";
@@ -311,6 +314,8 @@ const DECIDE_SUBCOMMANDS = new Set(["edit", "cancel", "rm", "withdraw", "ls", "l
 // An `sd-N` short id, or a raw Convex id (opaque lowercase alphanumerics of
 // 20+ chars); nothing else an agent types here (a question, a subcommand)
 // looks like either.
+const DECISION_ID = { kind: "decision", example: "sd-123", find: "cast decide ls lists this session's, cast decide ls --mine every one you hold" };
+
 export function looksLikeDecisionId(value: string | undefined): boolean {
   return !!value && (/^sd-\d+$/.test(value) || /^[a-z0-9]{20,}$/i.test(value));
 }
@@ -334,7 +339,7 @@ export function pickDecisionTarget(
     const last = rows[0];
     return {
       error: last
-        ? `No open decision in this session. The latest one is ${describeResolution(last)} — run \`cast decide ls\`.`
+        ? `No open decision in this session. The latest one is ${describeResolution(last)}; run \`cast decide ls\`.`
         : "No open decision in this session. Post one with `cast decide \"<question>\" -o … -o … --context …`.",
     };
   }
@@ -366,7 +371,7 @@ export function formatDecisionList(rows: DecisionRow[], now: number = Date.now()
       const head = `${r.status === "pending" ? "●" : "○"} ${decisionHandle(r)}  ${r.question}${r.kind && r.kind !== "single" ? `  [${r.kind}]` : ""}${r.category ? `  (${r.category})` : ""}`;
       const age =
         r.status === "pending"
-          ? ` — asked ${formatAge(now - r.created_at)}${r.messages_since !== undefined ? `, ${r.messages_since} message${r.messages_since === 1 ? "" : "s"} since` : ""}`
+          ? `, asked ${formatAge(now - r.created_at)}${r.messages_since !== undefined ? `, ${r.messages_since} message${r.messages_since === 1 ? "" : "s"} since` : ""}`
           : "";
       const lines = [head, `    ${describeResolution(r)}${age}${r.blocking ? "" : "  (advisory)"}`];
       if (r.holder?.kind === "role") lines.push(`    held by role ${r.holder.id}`);
@@ -374,7 +379,7 @@ export function formatDecisionList(rows: DecisionRow[], now: number = Date.now()
       r.options.forEach((o, i) => {
         const mark = picked.has(i) ? "✓" : r.default_option === i && r.status === "pending" ? "→" : " ";
         const recs = (r.hops ?? []).filter((h) => h.recommendation === i).length;
-        lines.push(`    ${mark} ${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}${recs ? `  (${recs} recommend${recs === 1 ? "s" : ""})` : ""}`);
+        lines.push(`    ${mark} ${i + 1}. ${o.label}${o.description ? `: ${o.description}` : ""}${recs ? `  (${recs} recommend${recs === 1 ? "s" : ""})` : ""}`);
         if (o.page_url ?? o.page_slug) lines.push(`         page: ${o.page_url ?? o.page_slug}`);
       });
       return lines.join("\n");
@@ -385,7 +390,7 @@ export function formatDecisionList(rows: DecisionRow[], now: number = Date.now()
   return (
     body +
     `\n\nThe work has likely moved past ${stale.length === 1 ? "an open decision" : `${stale.length} open decisions`}. ` +
-    `Withdraw the ones that no longer apply (cast decide cancel <id>), or bring them up to date (cast decide edit <id>) — ` +
+    `Withdraw the ones that no longer apply (cast decide cancel <id>), or bring them up to date (cast decide edit <id>), ` +
     `a stale question in your human's queue costs attention and earns nothing.`
   );
 }
@@ -433,7 +438,7 @@ export function formatAnsweredList(rows: AnsweredRow[]): string {
   if (rows.length === 0) return "No cards answered in that window.";
   return rows
     .map((r) => {
-      const answer = [r.answer_label, r.answer_text].filter(Boolean).join(" — ");
+      const answer = [r.answer_label, r.answer_text].filter(Boolean).join(": ");
       const by = r.answered_by?.name ? ` (${r.answered_by.name})` : "";
       return `${new Date(r.resolved_at ?? 0).toISOString()}  ${r.short_id ?? r.id}  ${r.question}\n    → ${answer || "(answered)"}${by}\n    ${r.task.short_id}  ${r.task.title}${r.task.project ? `  [${r.task.project}]` : ""}`;
     })
@@ -493,8 +498,7 @@ async function listAnsweredSince(deps: PublishDeps, options: any): Promise<void>
   const roster = await loadWorkspaceRoster(() => decideApi(deps, {}, "/cli/teams"));
   const ws = resolveWorkspaceForRead(roster, typeof options.team === "string" ? options.team : undefined);
   if (ws.kind !== "team") fail("--answered-since reads a team's cards: pass --team <name|id>.");
-  const limit = options.limit !== undefined ? Number(options.limit) : undefined;
-  if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) fail("--limit must be a positive whole number.");
+  const limit: number | undefined = options.limit;
   if (options.calibration) {
     // Every answer in the window, page by page on the reply's cursor.
     const rows: AnsweredRow[] = [];
@@ -537,7 +541,9 @@ async function decideApi(deps: PublishDeps, body: Record<string, unknown>, route
   // exitOnError false so a resolved row's summary (rides along with `error`)
   // is readable here; apiPost throws only the message.
   const { siteUrl, apiToken } = deps.getCliEndpoint();
-  const response = await cliFetch(`${siteUrl}${route}`, {
+  // show is a read: one retry on a timeout or 5xx, and a deadline short enough to say so instead of hanging.
+  const read = route === "/cli/decide/show";
+  const response = await (read ? cliFetchRead : cliFetch)(`${siteUrl}${route}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: apiToken, ...body }),
@@ -547,7 +553,7 @@ async function decideApi(deps: PublishDeps, body: Record<string, unknown>, route
   try {
     result = JSON.parse(text);
   } catch {
-    fail(`API error (${response.status}): ${text.slice(0, 200)}`);
+    fail(nonJsonError(route, response.status, text, { read }));
   }
   if (result?.error) explainResolved(new Error(String(result.error)), result);
   return result;
@@ -580,7 +586,7 @@ function printPreview(question: string, optionList: DecideOption[], defaultOptio
     const opt = optionList[i];
     const marker = defaultOption === i ? "  (your default)" : "";
     const extras = [opt.cost ? `cost: ${opt.cost}` : "", opt.risk ? `risk: ${opt.risk}` : "", opt.body_md ? `${opt.body_md.length} chars body` : "", opt.evidence?.length ? `${opt.evidence.length} evidence` : ""].filter(Boolean);
-    console.log(fmt.muted(`  ${i + 1}. ${opt.label}${opt.description ? ` — ${opt.description}` : ""}${marker}${extras.length ? `  [${extras.join(", ")}]` : ""}`));
+    console.log(fmt.muted(`  ${i + 1}. ${opt.label}${opt.description ? `: ${opt.description}` : ""}${marker}${extras.length ? `  [${extras.join(", ")}]` : ""}`));
     if (pageUrls[i] ?? opt.page_slug) console.log(fmt.muted(`     page: ${pageUrls[i] ?? opt.page_slug}`));
   }
   if (reportUrl) console.log(fmt.muted(`  report: ${reportUrl}`));
@@ -597,7 +603,7 @@ function printPreview(question: string, optionList: DecideOption[], defaultOptio
   if (!reportSlug && contextChars < 200) {
     console.log(
       fmt.muted(
-        `\n  Note: ${contextChars} characters of context. They will probably have to open the session to answer this.\n  Open with what you would pick and why, in words someone who never saw this session follows, then the finding that forces the choice — or attach --report.`
+        `\n  Note: ${contextChars} characters of context. They will probably have to open the session to answer this.\n  Open with what you would pick and why, in words someone who never saw this session follows, then the finding that forces the choice, or attach --report.`
       )
     );
   }
@@ -641,12 +647,26 @@ function runDecisionKit(args: string[], serve = false): void {
   console.log(target);
 }
 
+/** What `cast decide <verb> --help` prints: each verb's usage and only the flags it reads. */
+export const DECIDE_VERB_HELP: Record<string, VerbHelpSpec> = {
+  ls: { usage: "cast decide ls [--mine | --stack <ds-N> | --answered-since <time>] [--json]", summary: "This session's decisions with their answers; --mine every pending one you hold; --answered-since a team's answered cards", flags: ["--mine", "--stack", "--answered-since", "--team", "--limit", "--calibration", "--session", "--json"] },
+  show: { usage: "cast decide show <sd-N> [--json]", summary: "One decision with its document, ladder and answer", flags: ["--json"] },
+  edit: { usage: "cast decide edit [sd-N] [--question …] [--context …] [-o … ]", summary: "Rewrite this session's open decision in place, keeping its spot in the queue (default: the open one)", flags: ["--question", "--context", "--option", "--option-body", "--option-page", "--report", "--doc", "--category", "--kind", "--advisory", "--default", "--blocking", "--session", "--json"] },
+  cancel: { usage: "cast decide cancel [sd-N]", summary: "Withdraw this session's open decision when it no longer applies (default: the open one)", flags: ["--session", "--json"] },
+  answer: { usage: 'cast decide answer <sd-N> <n | "1,3" | "2>1>3"> [--note -] [--form k=v]', summary: "Answer a decision: as a person at a plain shell, as the holder role under a grant, or for your human at their explicit word", flags: ["--note", "--form", "--for-human", "--json"] },
+  recommend: { usage: "cast decide recommend <sd-N> <n> [--note -]", summary: "As a role on the decision's ladder, recommend an option to the people who decide", flags: ["--note", "--session", "--json"] },
+  pass: { usage: "cast decide pass <sd-N> [--to <person>] [--note -]", summary: "Pass a decision up the ladder, or to a named teammate", flags: ["--to", "--note", "--session", "--json"] },
+  escalate: { usage: "cast decide escalate <sd-N> --note -", summary: "Hand a decision up to the owner's manager, saying why", flags: ["--note", "--json"] },
+  comment: { usage: 'cast decide comment <sd-N> "<words>"', summary: "Comment in a decision's team thread (- reads the words from stdin)", flags: ["--session"] },
+  kit: { usage: "cast decide kit [page.html [out.html]] [--serve]", summary: "The decision page kit: its guide, or a page rendered the way the card serves it", flags: ["--serve"] },
+  brief: { usage: "cast decide brief", summary: "The presenter brief: how to write a decision a person answers without opening the session" },
+};
+
 export function registerDecideCommand(program: Command, deps: PublishDeps): void {
-  program
-    .command("decide")
+  addVerbHelp(program.command("decide"), DECIDE_VERB_HELP)
     .description(commandGroup("decide").description)
-    .argument("[question]", "The decision, phrased as one question — or a subcommand: ls | edit | cancel")
-    .argument("[args...]", "subcommand arguments (edit/cancel take an optional decision id)")
+    .argument("[question]", "The decision, phrased as one question; or a subcommand: ls | show | edit | cancel | answer | recommend | pass | brief | kit")
+    .argument("[args...]", "subcommand arguments: a decision id (sd-N) for show, answer, recommend and pass; optional for edit and cancel")
     .option(
       "-o, --option <label>",
       'An option; repeat 1-9 times (one option is a single course the person takes or answers in their own words). "Label :: what happens if chosen" adds a description',
@@ -659,7 +679,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--proposal <xp-N>", "The expectations proposal this decision settles: an answer opening with Apply lands it, one opening with Keep closes it, any other course leaves it open for you")
     .option("--run <command>", "Ask permission for a step only your person may take (a grant, a spend, a publish): the question says in plain words what will happen, the card asks Yes or Not now and never shows the command, and Yes runs this cast command on this machine as theirs; its output comes back as the answer")
     .option("--card <card.json>", "A change card (cast card build) the decision is about; the queue draws it natively. Without -o the options are Ship, Revise, Drop")
-    .option("--advisory", "Don't block: proceed with --default. Only when the default is cheap to undo — the answer often lands an hour later and may override you")
+    .option("--advisory", "Don't block: proceed with --default. Only when the default is cheap to undo: the answer often lands an hour later and may override you")
     .option("--default <n>", "1-based option you proceed with when --advisory (required with it)")
     .option("--blocking", "edit: turn an advisory decision into a blocking one (clears the default)")
     .option("--session <id>", "Session to attribute the decision to (default: detect current)")
@@ -688,14 +708,19 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--mine", "ls: every pending decision you hold, across sessions")
     .option("--answered-since <time>", "ls: the cards answered on a team's tasks after a time (epoch ms, ISO time, or 30m/24h/7d ago), oldest first; no session needed")
     .option("--team <name|id>", "ls --answered-since: the team (default: the active one)")
-    .option("-n, --limit <n>", "ls --answered-since: rows per page (default 50, at most 100)")
+    .option("-n, --limit <n>", "ls --answered-since: rows per page (default 50, at most 100)", boundedCountOption(100))
     .option("--calibration", "ls --answered-since: whether the cards' confidence holds, every answer in the window grouped by the confidence its card gave")
-    .option("--note <text>", stdinText("recommend / pass / escalate: one or two plain sentences the person needs that the card does not already say; never retell the card, never cite ids (escalate needs one)"))
+    .option("--note <text>", stdinText("recommend / pass / escalate: one or two plain sentences the person needs that the card does not already say; never retell the card, never cite ids (escalate needs one). answer: your words with the pick, delivered with it"))
+    .addOption(new Option("--reason <text>", stdinText("same as --note")).hideHelp())
     .option("--form <k=v>", "answer: a form field value (repeatable)", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--for-human", "answer: from a session, answer as your human. Only when they explicitly told you in this conversation to answer this decision, or agreed to this choice; never on your own judgment")
-    .option("--json", "Machine-readable output")
+    .option("--json", "Machine-readable output. ls: {decisions: [...], cursor?} (every ls); show: {decision, doc, task, ladder, ...}; ask, edit, answer: the row as the server returns it")
     .option("--serve", "kit: serve the page as it will be published on a local http address, until stopped")
     .action(async (question: string | undefined, rest: string[], options: any) => {
+      if (options.reason !== undefined) {
+        if (options.note !== undefined) fail("--reason is the same as --note; give one");
+        options.note = options.reason;
+      }
       // `answer` is the one verb a person runs from a plain shell: without a
       // session the server treats the caller as the person; with one, only
       // the holder role under a grant may answer, or the session's human at
@@ -704,6 +729,17 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       if (question === "kit") return runDecisionKit(rest, !!options.serve);
       if (question === "brief") return void console.log(presenterBrief.trim());
       if ((question === "ls" || question === "list") && options.answeredSince !== undefined) return listAnsweredSince(deps, options);
+      // A one-word lowercase "question" near a verb is a typo of the verb
+      // (`cast decide shwo sd-1`), never a question a person could answer.
+      if (question && !DECIDE_SUBCOMMANDS.has(question) && /^[a-z]+$/.test(question) && (options.option as string[]).length === 0) {
+        const verbs = [...DECIDE_SUBCOMMANDS, "kit", "brief"];
+        if (verbTypoNextStep(["decide"], verbs, question)) {
+          fail(unknownVerbError("decide", question, verbs, {
+            shown: ["ls", "edit", "cancel", "show", "recommend", "pass", "escalate", "answer", "comment", "kit", "brief"],
+            bare: "or a question in quotes to ask one",
+          }));
+        }
+      }
       const sessionId: string | null = options.session || deps.detectCurrentSessionId();
       // A person hands a decision on from a plain shell too: pass --to and escalate need no session.
       const handoff = question === "escalate" || question === "comment" || (question === "pass" && (options.to as string[]).length > 0);
@@ -749,7 +785,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       if (sub === "ls" || sub === "list") {
         const result = await decideApi(deps, { action: "ls", session_id: sessionId, stack: options.stack, task: typeof options.task === "string" ? options.task : undefined, mine: options.mine ? true : undefined });
         const rows: DecisionRow[] = result.decisions ?? [];
-        if (options.json) console.log(JSON.stringify(rows, null, 2));
+        // The same envelope as ls --answered-since, so a script reads .decisions whichever ls it ran.
+        if (options.json) console.log(JSON.stringify({ decisions: rows }, null, 2));
         else console.log(formatDecisionList(rows, Date.now(), options.mine ? "No pending decisions held by you." : undefined));
         return;
       }
@@ -757,6 +794,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       // ── show / recommend / answer: the race verbs, by sd-N ──
       if (sub === "show" || sub === "recommend" || sub === "pass" || sub === "escalate" || sub === "answer" || sub === "comment") {
         const target = rest[0];
+        if (target && !looksLikeDecisionId(target)) fail(wrongKindIdError(target, DECISION_ID));
         if (!looksLikeDecisionId(target)) fail(`Usage: cast decide ${sub} <sd-N> ${sub === "recommend" ? "<n> [--note -]" : sub === "pass" ? "[--to <person>] [--note -]" : sub === "escalate" ? "--note -" : sub === "answer" ? '<n | "1,3" | "2>1>3" | --form k=v>' : sub === "comment" ? '"<words>"' : ""}`.trim());
         if (handoff) return sub === "comment" ? commentOnDecision((body, route) => decideApi(deps, body, route), target, rest.slice(1), options, sessionId) : handOff(deps, sub as "pass" | "escalate", target, options);
         if (sub === "show") {
@@ -772,7 +810,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
           if (result.holder_role) console.log(fmt.muted(`  holder: role ${result.holder_role.name} (@${result.holder_role.handle}) under a grant`));
           for (const hop of result.ladder ?? []) {
             const who = hop.role ? `${hop.role.name} (@${hop.role.handle})` : hop.role_id;
-            const note = hop.note ? ` — ${hop.note}` : "";
+            const note = hop.note ? `: ${hop.note}` : "";
             const what = hop.recommendation !== undefined ? `recommends ${hop.recommendation + 1}${note}` : hop.passed_at ? `passed it up${note}` : hop.note ?? "no recommendation yet";
             console.log(fmt.muted(`  ladder: ${who}: ${what}`));
           }
@@ -821,7 +859,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         // No session means a person at a plain shell: omit the key rather
         // than send null, which the route's validator refuses.
         if (options.forHuman && !sessionId) fail("--for-human answers from a session for its human; at a plain shell you are the person, so drop it.");
-        const result = await decideApi(deps, { decision_id: target, ...(sessionId ? { session_id: sessionId } : {}), ...(options.forHuman ? { for_human: true } : {}), ...parsed }, "/cli/decide/answer");
+        const words = options.note?.trim();
+        const result = await decideApi(deps, { decision_id: target, ...(sessionId ? { session_id: sessionId } : {}), ...(options.forHuman ? { for_human: true } : {}), ...parsed, ...(words ? { answer_text: words } : {}) }, "/cli/decide/answer");
         if (options.json) console.log(JSON.stringify(result, null, 2));
         else if (result.already_resolved) console.log(fmt.muted(`${decisionHandle(result)} was already resolved; the first answer stands.`));
         else {
@@ -839,7 +878,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       if (sub) {
         const explicitId = rest[0];
         if (explicitId && !looksLikeDecisionId(explicitId)) {
-          fail(`"${explicitId}" is not a decision id. Ids are printed by \`cast decide\` and \`cast decide ls\`.`);
+          fail(wrongKindIdError(explicitId, DECISION_ID));
         }
         let target = explicitId;
         if (!target) {
@@ -913,7 +952,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
 
       // ── ask ──
       question = question ?? spec?.question ?? card?.cause.title;
-      if (!question) fail('Usage: cast decide "<question>" -o … -o … --context … — or: ls | show | edit [id] | cancel [id] | recommend | answer');
+      if (!question) fail('Usage: cast decide "<question>" -o … -o … --context …, or: ls | show | edit [id] | cancel [id] | recommend | answer');
       if (!optionList) fail("Provide 1-9 options (-o), they map to keys 1-9 in the queue.");
       const docMd: string | undefined = options.doc ? bodyFromArg(options.doc, "--doc") : spec?.doc_md;
       if (!contextMd && !options.report && !docMd && !card && runLine === undefined) {
@@ -973,7 +1012,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       console.log(`${fmt.success(result.updated ? "Decision updated:" : "Decision posted:")} ${question}`);
       // The short id is the handle for edit/cancel/answer; the web renders
       // the row as a card keyed by the id, so both appear in the transcript.
-      console.log(fmt.muted(`  id: ${result.short_id ?? result.id}${result.short_id ? `  (${result.id})` : ""}`));
+      console.log(fmt.muted(`  id: ${decisionHandle(result)}`));
       if (result.category) {
         console.log(fmt.muted(`  category: ${result.category}${result.category_pinned ? " (pinned by the server: a person answers this)" : category && category !== result.category ? ` (proposed ${category})` : ""}`));
       }
@@ -993,7 +1032,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         return;
       }
       console.log(fmt.muted("\nThis renders as a card in the conversation and in their queue. Do not repeat the question, options, or reasoning in prose."));
-      console.log(fmt.muted("If the facts change: cast decide edit — never a second decision. If it no longer applies: cast decide cancel."));
+      console.log(fmt.muted("If the facts change: cast decide edit, never a second decision. If it no longer applies: cast decide cancel."));
 
       // Earlier asks still open in this session: only the poster can tell
       // which ones the work has moved past, so say them here, at the moment

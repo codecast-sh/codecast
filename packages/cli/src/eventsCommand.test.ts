@@ -59,6 +59,16 @@ describe("lines", () => {
   });
 });
 
+describe("repeated samples", () => {
+  test("a stack an earlier sample showed prints once", () => {
+    const stack = (id: string) => `Error: boom ${id}\n    at f (a.ts:1)\n    at g (b.ts:2)`;
+    const samples = [{ at: 60_000, message: "boom 1", stack: stack("1") }, { at: 60_000, message: "boom 2", stack: stack("2") }];
+    const text = formatGroupDetail({ group, samples, source: { name: "web", provider: "sdk" } }, 120_000);
+    expect(text.match(/at f \(a.ts:1\)/g)).toHaveLength(1);
+    expect(text).toContain("boom 2\n  same stack as above");
+  });
+});
+
 describe("the commit join", () => {
   test("a group built from a known commit names it and the session that wrote it", () => {
     const text = formatGroupDetail({ group, samples: [], source: { name: "web", provider: "sdk" }, commit: { sha: "a1b2c3d4e5f6a7b8", message: "Fix checkout totals", session: "jx7abcd" } }, 120_000);
@@ -160,6 +170,21 @@ describe("cast events on the wire", () => {
       { path: "/cli/events/group", body: { group: "eg-4", ...SCOPE, ...TEAM } },
       { path: "/cli/events/set-status", body: { group: "eg-4", status: "ignored", ...SCOPE, ...TEAM } },
     ]);
+  });
+
+  test("a bare number reads as eg-N, and a missing group names the command that lists them", async () => {
+    h.answer = () => new Response(JSON.stringify({ error: "Group eg-99 not found" }), { status: 404 });
+    await expect(h.run("show", "99")).rejects.toThrow(/exit 1/);
+    expect(h.calls[0]).toEqual({ path: "/cli/events/group", body: { group: "eg-99" } });
+    expect(h.out()).toContain("No group eg-99 that you can see. Find it with: cast events groups");
+  });
+
+  test("a source that is not found lists the workspace's sources by name", async () => {
+    h.answer = (path) => (path === "/cli/sources/list"
+      ? [{ name: "codecast-posthog", provider: "posthog" }, { name: "codecast-web", provider: "sdk" }]
+      : new Response(JSON.stringify({ error: "Source PostHog not found" }), { status: 404 }));
+    await expect(h.run("ls", "--source", "PostHog")).rejects.toThrow(/exit 1/);
+    expect(h.out()).toContain("Source PostHog not found. Sources in this workspace: codecast-posthog (posthog), codecast-web (sdk).");
   });
 
   test("a group outside the --team workspace is refused in one line and nothing is written", async () => {

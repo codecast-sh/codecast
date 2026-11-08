@@ -10,7 +10,7 @@
 //   cast line budget [--set <usd>] [--json]
 import fs from "node:fs";
 import path from "node:path";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { JUDGES_DIR, MOMENTS_DIR, fileVersion, judgeHere, noteHostRoot, shadowDir, tickMoments } from "./momentsHost.js";
@@ -107,9 +107,9 @@ export async function readPublishSet(root: string): Promise<PublishSet> {
 const age = (ms: number) => `${durationWords(Math.max(0, Date.now() - ms))} ago`;
 
 export function registerMomentsCommands(line: Command, deps: PublishDeps): void {
-  const scope = async () => {
+  const scope = async (team?: string) => {
     const { scopeFor } = await import("./lineScope.js");
-    const s: Record<string, unknown> = { ...(await scopeFor(deps, undefined, true)) };
+    const s: Record<string, unknown> = { ...(await scopeFor(deps, team, true)) };
     delete s.project;
     return s;
   };
@@ -200,8 +200,10 @@ export function registerMomentsCommands(line: Command, deps: PublishDeps): void 
     .command("show <moment>")
     .description("One moment and what each judge found in it")
     .option("--body", "Print the moment itself: from codecast when it keeps it, else from this machine")
+    .addOption(new Option("--full", "Same as --body").hideHelp())
     .option("--json", "Machine-readable output")
-    .action(async (ref: string, options: { body?: boolean; json?: boolean }) => {
+    .action(async (ref: string, options: { body?: boolean; full?: boolean; json?: boolean }) => {
+      if (options.full) options.body = true;
       const result = await apiPost(deps, "/cli/moments/show", { ...(await scope()), moment: ref }, { read: true });
       let body: unknown = null;
       if (options.body) {
@@ -274,11 +276,12 @@ export function registerMomentsCommands(line: Command, deps: PublishDeps): void 
     .command("budget")
     .description("The team's monthly model budget that judging, grouping and graph calls draw from; a team admin sets it (0 is off)")
     .option("--set <usd>", "The monthly cap in dollars")
+    .option("--team <name>", "The team whose budget it is (default: the workspace this directory reads)")
     .option("--json", "Machine-readable output")
-    .action(async (options: { set?: string; json?: boolean }) => {
+    .action(async (options: { set?: string; team?: string; json?: boolean }) => {
       const set = options.set === undefined ? undefined : Number(options.set.replace(/^\$/, ""));
       if (set !== undefined && !(Number.isFinite(set) && set >= 0)) fail(`--set takes dollars, not "${options.set}"`);
-      const result: BudgetSummary = await apiPost(deps, "/cli/model/budget", { ...(await scope()), ...(set !== undefined ? { set_usd: set } : {}) });
+      const result: BudgetSummary = await apiPost(deps, "/cli/model/budget", { ...(await scope(options.team)), ...(set !== undefined ? { set_usd: set } : {}) });
       if (options.json) return console.log(JSON.stringify(result, null, 2));
       console.log(budgetWords(result));
     });

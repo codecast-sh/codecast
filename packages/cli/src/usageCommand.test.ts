@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildAccountUsage,
   buildUsageReport,
+  renderAccountUsage,
   describeRecovery,
   renderUsageReport,
   USAGE_WARN_PERCENT,
@@ -181,5 +183,31 @@ describe("auto-switch ranking vs extra spend", () => {
     expect(out).toContain("Extra spend");
     expect(out).toContain("$72,740 / $70,000");
     expect(out).toContain("cap reached");
+  });
+});
+
+describe("cast usage --all", () => {
+  test("one row per saved account with its windows, its status, and whether auto-switch could land there", () => {
+    const usage = (session: number, weekly: number) => ({ fetched_at: now - 60_000, session: { percent: session, resets_at: now + 2 * H }, weekly: { percent: weekly, resets_at: now + 30 * H } });
+    const rows = buildAccountUsage([
+      { name: "work", email: "w@x.com", active: true, usage: usage(70, 34) },
+      { name: "spare", email: "s@x.com", usage: usage(0, 20) },
+      { name: "pegged", email: "p@x.com", usage: usage(100, 31) },
+      { name: "dead", email: "d@x.com", usage: usage(0, 10), login_expired_at: now - H },
+      { name: "kept", email: "k@x.com", usage: usage(0, 5), reserved_for: "reviews" },
+      { name: "new", email: "n@x.com" },
+    ], now);
+    expect(rows.map((r) => [r.name, r.status, r.switch_target])).toEqual([
+      ["work", "active", false],
+      ["spare", "headroom", true],
+      ["pegged", "exhausted", false],
+      ["dead", "login expired", false],
+      ["kept", "reserved", false],
+      ["new", "no data", true],
+    ]);
+    expect(rows[0]!.windows.map((w) => [w.label, Math.round(w.percent)])).toEqual([["Session (5h)", 70], ["Week (7d)", 34]]);
+    const text = renderAccountUsage(rows, now, c);
+    expect(text.split("\n")[0]).toContain("Session (5h) 70% 2h");
+    expect(text).toContain("2 of 6 accounts are auto-switch targets");
   });
 });

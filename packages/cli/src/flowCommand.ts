@@ -17,6 +17,26 @@ import { graphExtends, parseWorkflowSource } from "./workflow/parser.js";
 import { describeFlow, flowLine, poolFlows, type PoolFlow, type PushedPoolRow } from "./workflow/flowPool.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
 import type { Workspace } from "./resolveWorkspace.js";
+import { choiceOption, notFoundLine } from "./argChecks.js";
+
+/**
+ * Why `cast ws acquire --json` left no worktree to run in, in words. A
+ * worktree whose contract failed prints its JSON and exits 2: the failed
+ * checks are the reason, and the worktree stays, broken, until it is healed.
+ */
+export function acquireFailureLine(worktree: string, out: string, err: string): string {
+  const last = out.trim().split("\n").pop() ?? "";
+  let ws: { state?: string; contract?: { failures?: Array<{ name: string; reason?: string }>; warnings?: Array<{ name: string; reason?: string }> } | null } | null = null;
+  try {
+    ws = last.startsWith("{") ? JSON.parse(last) : null;
+  } catch {}
+  if (ws?.state === "broken") {
+    const checks = ws.contract?.failures?.length ? ws.contract.failures : ws.contract?.warnings ?? [];
+    const why = checks.map((c) => `${c.name}${c.reason ? `: ${c.reason}` : ""}`).join("; ");
+    return `The worktree ${worktree} for the change is broken${why ? ` (${why})` : ""}. Repair it with cast ws heal ${worktree}, or remove it with cast ws destroy ${worktree}, then run this again.`;
+  }
+  return `Could not make the worktree for the change: ${(err || out).trim().split("\n").pop()}`;
+}
 
 export interface FlowDeps {
   cliPost: (urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number; throwOnError?: boolean }) => Promise<any>;
@@ -91,7 +111,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
   flow
     .command("ls")
     .description("The library as a tree (the spine, whole flows with their variants, segments) and the team's live flows")
-    .option("--kind <kind>", "Only whole flows or only segments (line, segment)")
+    .option("--kind <kind>", "Only whole flows (line) or only segments (segment)", choiceOption(["line", "segment"]))
     .option("--team <name>", "Read this team's library (default: the workspace this directory reads)")
     .option("--json", "Print { library, live } as JSON")
     .action(async (opts: { kind?: string; json?: boolean; team?: string }) => {
@@ -349,8 +369,10 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         }
       }
       if (change) {
+        // The workspace's setup (its install) runs here, before the run starts: it can take minutes.
+        if (!opts.json) console.error(dim(`  making worktree ${worktree} on ${change.branch} (its setup can take a few minutes)`));
         const ws = await cast(["ws", "acquire", worktree, "--branch", change.branch, "--skip-pool", "--json"], top);
-        if (ws.code !== 0) { console.error(`Could not make the worktree for the change: ${(ws.err || ws.out).trim().split("\n").pop()}`); process.exit(1); }
+        if (ws.code !== 0) { console.error(acquireFailureLine(worktree, ws.out, ws.err)); process.exit(1); }
         // A rerun moved the branch under the worktree an earlier run made: its files follow the new tip.
         if (earlier) spawnSync("git", ["-C", earlier, "reset", "--quiet", "--hard", change.tip]);
         writeFrozenChange(runDir, change);
@@ -677,7 +699,7 @@ async function findFlow(slug: string, deps: FlowDeps, pool?: PoolFlow[]): Promis
   }
   const f = (pool ?? (await readPool(deps))).find((p) => p.slug === slug.replace(/\.cast$/, ""));
   if (!f) {
-    console.error(`No flow "${slug}" in the pool. cast flow ls lists them.`);
+    console.error(notFoundLine("flow", slug, "cast flow ls"));
     process.exit(1);
   }
   return { ...f, source: f.file ? fs.readFileSync(f.file, "utf-8") : BUILTIN_WORKFLOW_TEMPLATES[f.slug] };

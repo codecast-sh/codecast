@@ -492,8 +492,19 @@ const k = (n?: number | null) => n == null ? "?" : n >= 1000 ? `${Math.round(n /
 
 export async function health(deps: OrgInitDeps, options: any): Promise<void> {
   const { ws, args } = await membership(deps, options);
-  const h = await deps.cliPost("/cli/org/health", args);
-  if (!h) fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
+  let h: any;
+  try {
+    h = await deps.cliPost("/cli/org/health", args, { throwOnError: true });
+  } catch (err) {
+    // Under --json the answer goes to stdout, a failure included, so `> file` never leaves an empty file.
+    const message = String((err as Error)?.message ?? err).split("\n")[0];
+    if (options.json) { console.log(JSON.stringify({ error: message })); process.exit(1); }
+    fail(`org health failed: ${message}`);
+  }
+  if (!h) {
+    if (options.json) { console.log(JSON.stringify({ error: `not a member of ${deps.workspaceLabel(ws)}` })); process.exit(1); }
+    fail(`You are not a member of ${deps.workspaceLabel(ws)}.`);
+  }
   if (options.json) { console.log(JSON.stringify(h, null, 2)); return; }
   const now = Date.now();
   const roles: any[] = h.roles ?? [];

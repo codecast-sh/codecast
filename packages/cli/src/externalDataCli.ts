@@ -7,6 +7,8 @@ import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { formatAge, formatSpan } from "./decideCommand.js";
 import { scopeFor } from "./lineScope.js";
+import { notFoundLine } from "./argChecks.js";
+import { elsewhereHint, loadWorkspaceRoster, otherWorkspacesWith, workspaceScope, type Workspace } from "./resolveWorkspace.js";
 
 export { formatAge, formatSpan };
 
@@ -22,12 +24,81 @@ export function emit(json: boolean | undefined, data: unknown, text: () => strin
 
 /** POST a read with the workspace scope folded in: --team, else the repo profile's, else the session's (signalCommand.scopeFor). */
 export async function scopedRead(deps: PublishDeps, path: string, body: Record<string, unknown>, team?: string): Promise<any> {
-  return await apiPost(deps, path, { ...body, ...(await scopeFor(deps, team, false)) }, { read: true });
+  const scope = await scopeFor(deps, team, false);
+  return await postOrFail(deps, path, { ...body, ...scope }, { read: true, scope });
 }
 
 /** POST a write with the workspace scope folded in. */
 export async function scopedWrite(deps: PublishDeps, path: string, body: Record<string, unknown>, team?: string): Promise<any> {
-  return await apiPost(deps, path, { ...body, ...(await scopeFor(deps, team, true)) });
+  const scope = await scopeFor(deps, team, true);
+  return await postOrFail(deps, path, { ...body, ...scope }, { scope });
+}
+
+/**
+ * apiPost that exits on a refusal with the refusal and its next step: a
+ * "not found" names the command that lists the valid ids, and a source that
+ * is not found lists the workspace's sources by name.
+ */
+export async function postOrFail(
+  deps: PublishDeps,
+  path: string,
+  body: Record<string, unknown>,
+  opts: { read?: boolean; scope?: Record<string, unknown> } = {},
+): Promise<any> {
+  try {
+    return await apiPost(deps, path, body, { read: opts.read, exitOnError: false });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    fail(await explainRefusal(deps, message, opts.scope));
+  }
+}
+
+/** eg-12 for a bare 12: a short id typed without its prefix. */
+export function shortRef(prefix: "eg" | "mw" | "rp", ref: string): string {
+  const t = ref.trim();
+  return /^\d+$/.test(t) ? `${prefix}-${t}` : t;
+}
+
+/** The command that lists the ids each kind of "not found" refusal names. */
+const LISTERS: [RegExp, string][] = [
+  [/^Group /, "cast events groups"],
+  [/^Metric watch /, "cast metrics ls"],
+  [/^Replay /, "cast replay ls"],
+  [/^Source /, "cast sources ls"],
+];
+
+/** A "not found" refusal ("Group eg-9 not found.") as the CLI's one not-found line, with the
+ *  command that lists what exists; any other refusal as it came. */
+export function describeLookupError(error: string): string {
+  const hit = LISTERS.find(([re]) => re.test(error));
+  const parts = /^(.+?) (\S+) not found\.?$/.exec(error);
+  return hit && parts ? notFoundLine(parts[1]!.toLowerCase(), parts[2]!, hit[1]) : error;
+}
+
+async function explainRefusal(deps: PublishDeps, message: string, scope: Record<string, unknown> | undefined): Promise<string> {
+  if (!/^Source .*not found/.test(message)) return describeLookupError(message);
+  const elsewhere = await sourceElsewhere(deps, /^Source (.+?) not found/.exec(message)?.[1] ?? "", scope);
+  if (elsewhere) return `${message}. ${elsewhere}.`;
+  const rows: { name: string; provider: string }[] | null = await apiPost(deps, "/cli/sources/list", { ...(scope ?? {}) }, { read: true, exitOnError: false }).catch(() => null);
+  if (!rows?.length) return `${message}. This workspace has no sources yet: cast sources add <provider> <name>.`;
+  return `${message}. Sources in this workspace: ${rows.map((s) => `${s.name} (${s.provider})`).join(", ")}.`;
+}
+
+/** Where a source this workspace lacks lives among the caller's other
+ *  workspaces, as the hint to rerun with; null when nowhere. Without --team
+ *  the server chose the workspace, so every one is probed: the one that
+ *  missed cannot match. */
+async function sourceElsewhere(deps: PublishDeps, ref: string, scope: Record<string, unknown> | undefined): Promise<string | null> {
+  if (!ref) return null;
+  const list = (body: Record<string, unknown>) => apiPost(deps, "/cli/sources/list", body, { read: true, exitOnError: false });
+  const roster = await loadWorkspaceRoster(() => apiPost(deps, "/cli/teams", {}, { read: true, exitOnError: false })).catch(() => null);
+  if (!roster) return null;
+  const { normalizeSourceName } = await import("@codecast/shared/contracts/ingest");
+  const current: Workspace = scope?.workspace === "personal" ? { kind: "personal" } : { kind: "team", teamId: String(scope?.team_id ?? "") };
+  const name = normalizeSourceName(ref);
+  const hits = await otherWorkspacesWith(roster, current, async (ws) =>
+    ((await list(workspaceScope(ws))) as { name: string; short_id?: string }[]).some((s) => s.short_id === ref || normalizeSourceName(s.name) === name));
+  return elsewhereHint(`Source ${ref}`, hits);
 }
 
 /** "a, b , c" as a list, blanks dropped. */

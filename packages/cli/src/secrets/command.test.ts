@@ -102,6 +102,48 @@ describe("cast vault on the wire", () => {
     expect(h.out()).toContain("Nothing needs a look");
   });
 
+  test("ls takes a query over name, vars, sites and note, plus --kind, --ready and --team, and says when nothing matches", async () => {
+    const rows = [
+      meta(),
+      meta({ short_id: "sec-5", name: "openrouter", env: ["OPENROUTER_API_KEY"], workspace: "user:u1", team_id: undefined }),
+      meta({ short_id: "sec-6", name: "gh", kind: "login", note: "Anthropic console login", env: undefined }),
+      meta({ short_id: "sec-7", name: "asked", status: "requested", env: undefined, note: "anthropic billing" }),
+    ];
+    h.answer = (p) => (p === "/cli/teams" ? { ...TEAMS, user_id: "u1" } : rows);
+    const ids = () => h.out().split("\n").map((l) => /sec-\d/.exec(l)?.[0]).filter(Boolean);
+    await h.run("ls", "ANTHROPIC");
+    expect(ids()).toEqual(["sec-6", "sec-7"]);
+    h.logs.length = 0;
+    await h.run("ls", "anthropic", "--ready");
+    expect(ids()).toEqual(["sec-6"]);
+    h.logs.length = 0;
+    await h.run("ls", "--kind", "login");
+    expect(ids()).toEqual(["sec-6"]);
+    h.logs.length = 0;
+    await h.run("ls", "--personal");
+    expect(ids()).toEqual(["sec-5"]);
+    h.logs.length = 0;
+    await h.run("ls", "--team", "Acme", "--json");
+    expect(JSON.parse(h.out()).map((r: SecretMeta) => r.short_id)).toEqual(["sec-4", "sec-6", "sec-7"]);
+    h.logs.length = 0;
+    await h.run("ls", "mailgun");
+    expect(h.out()).toContain('No secret matches "mailgun" (of 4)');
+    expect(h.out()).toContain("cast vault request mailgun");
+    await expect(h.run("ls", "--kind", "token")).rejects.toThrow("exit 1");
+  });
+
+  test("--team and --personal pin a name two workspaces share to that workspace's secret", async () => {
+    const rows = [meta(), meta({ short_id: "sec-9", workspace: "user:u1", team_id: undefined })];
+    h.answer = (p) => (p === "/cli/teams" ? { ...TEAMS, user_id: "u1" } : p === "/cli/vault/list" ? rows : p === "/cli/vault/show" ? meta({ short_id: "sec-9", workspace: "user:u1" }) : { removed: true, short_id: "sec-9", name: "stripe-test" });
+    await h.run("rm", "stripe-test", "--personal", "--yes");
+    expect(h.calls.find((c) => c.path === "/cli/vault/show")?.body).toEqual({ ref: "sec-9" });
+    expect(h.calls.at(-1)).toEqual({ path: "/cli/vault/rm", body: { ref: "sec-9" } });
+    h.calls.length = 0;
+    await expect(h.run("show", "nope", "--team", "Acme")).rejects.toThrow("exit 1");
+    expect(h.out()).toContain("No secret nope in Acme: cast vault ls --team Acme");
+    expect(h.calls.map((c) => c.path)).not.toContain("/cli/vault/show");
+  });
+
   test("every verb's --json reaches the verb, and bare cast vault --json still lists as JSON", async () => {
     h.answer = () => [meta()];
     await h.run("ls", "--json");
@@ -165,13 +207,17 @@ describe("cast vault on the wire", () => {
     expect(h.out()).toMatch(/env\s+GCP_SA_FILE\s+from its name/);
   });
 
-  test("--team personal stores it personally", async () => {
-    process.env.VAULT_TEST_VALUE = VALUE;
-    h.answer = (p) => (p === "/cli/teams" ? TEAMS : { short_id: "sec-5", name: "mine" });
-    await h.run("add", "mine", "--from-env", "VAULT_TEST_VALUE", "--team", "personal");
-    delete process.env.VAULT_TEST_VALUE;
-    expect(h.calls[1]!.body.personal).toBe(true);
-    expect(h.calls[1]!.body.team_id).toBeUndefined();
+  test("--team personal and --personal store it personally", async () => {
+    for (const flags of [["--team", "personal"], ["--personal"]]) {
+      clearWorkspaceCache();
+      h.calls.length = 0;
+      process.env.VAULT_TEST_VALUE = VALUE;
+      h.answer = (p) => (p === "/cli/teams" ? TEAMS : { short_id: "sec-5", name: "mine" });
+      await h.run("add", "mine", "--from-env", "VAULT_TEST_VALUE", ...flags);
+      delete process.env.VAULT_TEST_VALUE;
+      expect(h.calls[1]!.body.personal).toBe(true);
+      expect(h.calls[1]!.body.team_id).toBeUndefined();
+    }
   });
 
   test("a refusal prints the server's sentence and never the value", async () => {

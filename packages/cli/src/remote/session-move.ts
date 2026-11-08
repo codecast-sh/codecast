@@ -176,16 +176,30 @@ export function sshBase(host: RemoteHost): string[] {
   ];
 }
 
-export function ssh(host: RemoteHost, command: string, timeoutMs?: number): string {
-  return execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, command], {
-    encoding: "utf-8",
-    // Hand the child the environment we hold now. bun otherwise resolves the
-    // binary against the PATH it snapshotted at startup, so a PATH set after
-    // launch (a test's stand-in ssh, a tool added to the path) is not seen.
-    env: process.env,
-    maxBuffer: 64 * 1024 * 1024,
-    ...(timeoutMs ? { timeout: timeoutMs } : {}),
-  });
+/**
+ * Run `command` on the host and return its stdout. With `quiet`, the remote
+ * stderr is kept rather than printed (a report that reads several hosts must
+ * not interleave their warnings), and a failure throws its last stderr line,
+ * which names the cause, instead of the whole ssh command line.
+ */
+export function ssh(host: RemoteHost, command: string, timeoutMs?: number, opts: { quiet?: boolean } = {}): string {
+  try {
+    return execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, command], {
+      encoding: "utf-8",
+      // Hand the child the environment we hold now. bun otherwise resolves the
+      // binary against the PATH it snapshotted at startup, so a PATH set after
+      // launch (a test's stand-in ssh, a tool added to the path) is not seen.
+      env: process.env,
+      maxBuffer: 64 * 1024 * 1024,
+      ...(opts.quiet ? { stdio: ["ignore", "pipe", "pipe"] as const } : {}),
+      ...(timeoutMs ? { timeout: timeoutMs } : {}),
+    });
+  } catch (err) {
+    if (!opts.quiet) throw err;
+    const e = err as { stderr?: string | Buffer; signal?: string; message?: string };
+    const last = String(e.stderr ?? "").split("\n").map((l) => l.trim()).filter(Boolean).pop();
+    throw new Error(e.signal === "SIGTERM" && timeoutMs ? `no answer in ${Math.round(timeoutMs / 1000)}s` : last ?? e.message ?? "ssh failed");
+  }
 }
 
 const FOLDER_EXCLUDES = ["node_modules", ".git", ".conductor", "dist", ".next", ".DS_Store"].flatMap((p) => ["--exclude", p]);

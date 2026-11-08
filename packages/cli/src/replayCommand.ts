@@ -36,7 +36,7 @@ import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
-import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, scopedRead, scopedWrite } from "./externalDataCli.js";
+import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, postOrFail, scopedRead, scopedWrite, shortRef } from "./externalDataCli.js";
 import { fenceProductText } from "@codecast/shared/contracts";
 import { INGEST_SHORT_ID_PREFIX } from "@codecast/shared/contracts/ingest";
 import { REPLAY_BACKFILL_WINDOWS, isReplayBackfillWindow, needsVendorImport, replayBackfillLine, replayBackfillState, type ReplayBackfill, type ReplayEvent } from "@codecast/shared/contracts/replay";
@@ -82,6 +82,35 @@ export interface RecordingRow {
   errors: number | null;
   replay: string | null;
   imported: boolean;
+}
+
+/** The keys every `cast replay ls --json` row carries, whether the rows are imported replays or a PostHog source's recordings. */
+export type ReplayListJsonRow = {
+  short_id: string | null;
+  external_id: string;
+  provider: string;
+  url: string | null;
+  user: { id?: string; email?: string } | null;
+  started_at: number | null;
+  duration_ms: number | null;
+  counts: { clicks?: number; errors?: number; failed_requests?: number };
+  imported: boolean;
+};
+
+/** A PostHog recording under the replay row's keys: short_id is its replay once imported, else null. */
+export function recordingJsonRow(r: RecordingRow): ReplayListJsonRow & { recording: RecordingRow } {
+  return {
+    short_id: r.replay,
+    external_id: r.id,
+    provider: "posthog",
+    url: r.url,
+    user: r.email || r.distinct_id ? { ...(r.distinct_id ? { id: r.distinct_id } : {}), ...(r.email ? { email: r.email } : {}) } : null,
+    started_at: r.started_at,
+    duration_ms: r.duration_ms,
+    counts: r.errors !== null ? { errors: r.errors } : {},
+    imported: r.imported,
+    recording: r,
+  };
 }
 
 const isReplayShortId = (ref: string) => ref.startsWith(`${INGEST_SHORT_ID_PREFIX.replay}-`);
@@ -273,12 +302,12 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
 
   /** The replay's detail, importing a PostHog or Sentry recording the first time it is read. */
   const detailFor = async (ref: string, source: string | undefined, team: string | undefined): Promise<ReplayDetail> => {
-    let id = ref.trim();
+    let id = source ? ref.trim() : shortRef("rp", ref);
     if (source && !isReplayShortId(id)) {
       const imported = await scopedRead(deps, "/cli/replays/import", { source, recording: id }, team);
       id = imported.short_id;
     }
-    let detail: ReplayDetail = await apiPost(deps, "/cli/replays/get", { replay: id }, { read: true });
+    let detail: ReplayDetail = await postOrFail(deps, "/cli/replays/get", { replay: id }, { read: true });
     if (needsVendorImport(detail)) {
       await apiPost(deps, "/cli/replays/import-linked", { replay: detail.short_id }, { read: true });
       detail = await apiPost(deps, "/cli/replays/get", { replay: detail.short_id }, { read: true });
@@ -294,20 +323,20 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
     .option("--group <eg>", "Only the recordings linked to this group")
     .option("-n, --limit <n>", "How many", (v: string) => parseInt(v, 10))
     .option(...TEAM_OPTION)
-    .option(...JSON_OPTION)
+    .option("--json", "Machine-readable output: [{short_id (null until imported), external_id, provider, url, user, started_at, duration_ms, counts, imported}]")
     .action(async (o: { source?: string; group?: string; limit?: number; team?: string; json?: boolean }) => {
       if (o.source) {
         const source = await scopedRead(deps, "/cli/sources/get", { source: o.source }, o.team);
         if (source.provider === "posthog") {
           const res = await scopedRead(deps, "/cli/replays/recordings", { source: o.source, limit: o.limit }, o.team);
-          emit(o.json, res.recordings, () => formatRecordingList(res.recordings));
+          emit(o.json, (res.recordings as RecordingRow[]).map(recordingJsonRow), () => formatRecordingList(res.recordings));
           return;
         }
       }
       let groupId: string | undefined;
-      if (o.group) groupId = (await apiPost(deps, "/cli/events/group", { group: o.group }, { read: true })).group._id;
+      if (o.group) groupId = (await postOrFail(deps, "/cli/events/group", { group: shortRef("eg", o.group) }, { read: true })).group._id;
       const res = await scopedRead(deps, "/cli/replays/list", { source: o.source, limit: o.limit, ...(groupId ? { group_id: groupId } : {}) }, o.team);
-      emit(o.json, res.replays, () => formatReplayList(res.replays));
+      emit(o.json, (res.replays as ReplayRow[]).map((r) => ({ ...r, imported: true })), () => formatReplayList(res.replays));
     });
 
   replay
@@ -320,6 +349,7 @@ export function registerReplayCommand(program: Command, deps: PublishDeps): void
     .option(...JSON_OPTION)
     .action(async (ref: string, o: { source?: string; at?: string; team?: string; json?: boolean }) => {
       const parsed = parseReplayRef(ref);
+      if (!parsed && ref.includes("@")) fail(`"${ref}" names no moment. Write rp-12@1:23 (minutes:seconds), or rp-12 with --at 83s`);
       if (o.at !== undefined || parsed?.at_ms !== undefined) {
         const atMs = o.at !== undefined ? parseCallTime(o.at) : parsed!.at_ms!;
         if (atMs === null) fail("--at takes a time into the replay: 1:23, 83s, 1:02:03");

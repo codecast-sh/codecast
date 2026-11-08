@@ -141,7 +141,8 @@ export function defaultMessage(title: string | null, paths: string[]): string {
   const allTests = paths.every((p) => /\.(test|spec)\.[jt]sx?$/.test(p) || p.includes("__fixtures__") || p.includes("__golden__"));
   const subject = (title ?? "").trim().replace(/\s+/g, " ").replace(/[.!]+$/, "");
   const type = allDocs ? "docs" : allTests ? "test" : /\b(fix|bug|broken|crash|error|regress|leak)/i.test(subject) ? "fix" : "feat";
-  const text = subject ? subject[0].toLowerCase() + subject.slice(1) : `changes in ${scope}`;
+  // Lowercase a capitalized word ("Fix the..." -> "fix the..."), never an acronym ("CI", "API").
+  const text = subject ? (/^[A-Z][^A-Z]/.test(subject) ? subject[0].toLowerCase() + subject.slice(1) : subject) : `changes in ${scope}`;
   return `${type}(${scope}): ${text.length > 72 ? `${text.slice(0, 69).trimEnd()}...` : text}`;
 }
 

@@ -13,10 +13,10 @@
 //
 // Routes: /cli/metrics/* in http.ts (metrics.ts, sources/posthog.ts).
 import type { Command } from "commander";
-import { apiPost, type PublishDeps } from "./castApi.js";
+import type { PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
-import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, scopedRead, scopedWrite, sparkline } from "./externalDataCli.js";
+import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, postOrFail, scopedRead, scopedWrite, shortRef, sparkline } from "./externalDataCli.js";
 import { stdinText } from "./sendBody.js";
 import { formatDuration, parseDuration } from "@codecast/shared/time";
 import type { WatchDirection, WatchKind } from "@codecast/shared/contracts/ingest";
@@ -56,7 +56,7 @@ export interface MetricAddOptions {
 
 /** The wire body for `cast metrics add`, or the one line that says what is wrong. */
 export function metricAddBody(name: string, o: MetricAddOptions): Record<string, unknown> {
-  if (!o.source?.trim()) throw new Error("cast metrics add needs --source <name>");
+  if (!o.source?.trim()) throw new Error("cast metrics add needs --source <name>: a posthog or app source from cast sources ls");
   if ([o.hogql, o.insight, o.reader].filter(Boolean).length !== 1) throw new Error("Pass exactly one of --hogql \"<query>\", --insight <id> or --reader <name>");
   if (o.args && !o.reader) throw new Error("--args goes with --reader");
   if (o.above !== undefined && o.below !== undefined) throw new Error("Pass at most one of --above <n> or --below <n>");
@@ -141,9 +141,10 @@ export function registerMetricsCommand(program: Command, deps: PublishDeps): voi
 
   metrics
     .command("add")
+    .alias("watch")
     .description("Watch a number: crossing its line is a metric_alert, coming back a metric_recovered; with no line it is a series a goal can read")
     .argument("<name>", "What the number is")
-    .option("--source <name>", "The source that answers it (PostHog, or an app)")
+    .option("--source <name>", "The source that answers it: a posthog or app source's name from cast sources ls")
     .option("--hogql <query>", stdinText("A HogQL query whose first cell is the number"))
     .option("--insight <id>", "A saved insight id")
     .option("--reader <name>", "An app's metric reader, answering { value, unit?, points? }")
@@ -171,7 +172,7 @@ export function registerMetricsCommand(program: Command, deps: PublishDeps): voi
     .argument("<watch>", "mw-N")
     .option(...JSON_OPTION)
     .action(async (ref: string, o: { json?: boolean }) => {
-      const res = await apiPost(deps, "/cli/metrics/get", { watch: ref }, { read: true });
+      const res = await postOrFail(deps, "/cli/metrics/get", { watch: shortRef("mw", ref) }, { read: true });
       emit(o.json, res, () => {
         const w: WatchRow = res.watch;
         const lines = [formatWatchLine(w), fmt.muted(`  ${w.query_kind}: ${w.query}`), fmt.muted(`  every ${formatDuration(w.interval_ms)}`)];
@@ -190,7 +191,7 @@ export function registerMetricsCommand(program: Command, deps: PublishDeps): voi
     .argument("<watch>", "mw-N")
     .option(...JSON_OPTION)
     .action(async (ref: string, o: { json?: boolean }) => {
-      const res = await apiPost(deps, "/cli/metrics/remove", { watch: ref });
+      const res = await postOrFail(deps, "/cli/metrics/remove", { watch: shortRef("mw", ref) });
       emit(o.json, res, () => `${fmt.success("removed")} ${res.removed}`);
     });
 
@@ -204,8 +205,8 @@ export function registerMetricsCommand(program: Command, deps: PublishDeps): voi
     .option(...JSON_OPTION)
     .action(async (ref: string | undefined, o: { source?: string; days?: string; team?: string; json?: boolean }) => {
       const days = o.days === undefined ? undefined : Number(o.days);
-      if (days !== undefined && !(days > 0)) throw new Error("--days takes a positive number");
-      const res = await scopedWrite(deps, "/cli/metrics/backfill", { ...(ref ? { watch: ref } : {}), ...(o.source ? { source: o.source } : {}), ...(days !== undefined ? { days } : {}) }, o.team);
+      if (days !== undefined && !(days > 0)) fail("--days takes a positive number of days, like --days 30");
+      const res = await scopedWrite(deps, "/cli/metrics/backfill", { ...(ref ? { watch: shortRef("mw", ref) } : {}), ...(o.source ? { source: o.source } : {}), ...(days !== undefined ? { days } : {}) }, o.team);
       emit(o.json, res, () => formatHistoryStart(res));
     });
 
@@ -213,11 +214,11 @@ export function registerMetricsCommand(program: Command, deps: PublishDeps): voi
     .command("query")
     .description("Run a HogQL query against a PostHog source and print the rows; nothing is stored")
     .argument("<hogql>", stdinText("The query"))
-    .option("--source <name>", "The PostHog source")
+    .option("--source <name>", "The posthog source's name, from cast sources ls")
     .option(...TEAM_OPTION)
     .option(...JSON_OPTION)
     .action(async (hogql: string, o: { source?: string; team?: string; json?: boolean }) => {
-      if (!o.source?.trim()) fail("cast metrics query needs --source <posthog source>");
+      if (!o.source?.trim()) fail("cast metrics query needs --source <name>: a posthog source from cast sources ls");
       const res = await scopedRead(deps, "/cli/metrics/query", { source: o.source, query: hogql }, o.team);
       emit(o.json, res, () => formatQueryResult(res));
     });

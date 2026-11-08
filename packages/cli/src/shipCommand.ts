@@ -117,6 +117,10 @@ export function registerShipCommand(program: Command, deps: PublishDeps & { chec
     .description("Ship everything uncommitted in this shared checkout: commit by session, replay onto upstream in memory, level, check, deploy, push")
     .option("--dry-run", "Freeze, attribute and write the plan; ship nothing")
     .option("--plan [file]", "Run a plan written by --dry-run (default: the checkout's .git/codecast/ship-plan.json), as edited")
+    .option("--only <groups>", "Ship only these groups (comma-separated ids, like s:jx7abc1,unattributed); hold the rest")
+    .option("--hold <groups>", "Hold these groups: their files stay uncommitted for a later ship")
+    .option("--commits-only", "Hold every group: push only the checkout's own unpushed commits (after a rejected push)")
+    .option("--message <group=text>", "Set a group's commit message (repeatable)", (v: string, acc: string[] = []) => [...acc, v])
     .option("--no-check", "Skip the check and tests (CI still runs)")
     .option("--no-push", "Commit, replay and level, but push and deploy nothing")
     .option("--no-deploy", "Push without running [ship.deploy] steps")
@@ -138,8 +142,23 @@ Configure it in .codecast/workspace.toml:
   stage = "before_push"    # or "after_push"
 
 The flow for an agent: --dry-run --json, read each group (who wrote it, is it
-mid-turn, what it last said), hold what is half done, fix the messages, then
---plan. What ships is the tree frozen at --dry-run, whatever changed since.`)
+mid-turn, what it last said), then --plan with --hold for what is half done and
+--message for each message to fix. What ships is the tree frozen at --dry-run,
+whatever changed since. --hold, --only, --commits-only and --message work on
+--dry-run, --plan and a direct run alike, and are written into the plan file.
+
+  cast ship checkout --plan --hold s:jx7abc1 --message s:jx7def2="fix(cli): keep acronyms"
+  cast ship checkout --commits-only        # re-push local commits, hold every group
+
+The plan file (.git/codecast/ship-plan.json, and --dry-run --json prints the
+same object plus plan_file and ship) holds groups[], each with:
+  id        s:<session>, unattributed, or credentials (held: a likely secret)
+  session   who wrote it: id, title, state, mid_turn, last_text; null when unattributed
+  message   the commit message
+  paths     its files; move one to another group to split or regroup
+  ship      false holds it
+  note, stat, last_edit   why it is held, its size, its newest edit
+A push that upstream rejected because it moved is replayed and retried on its own.`)
     .action(async (options: import("./land/shipCheckoutCli.js").CheckoutOptions) => {
       const { runCheckoutCommand } = await import("./land/shipCheckoutCli.js");
       try {

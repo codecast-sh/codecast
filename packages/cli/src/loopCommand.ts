@@ -33,7 +33,7 @@ export function goalLines(shortId: string, goal: SessionGoal | null): string[] {
  */
 async function confirmAtTerminal(what: string, objective: string): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    console.error(`cast loop ${what} starts agent turns with no person in each round, so it runs only in a person's terminal. In the app, use /goal in the session's composer.`);
+    console.error(`cast loop ${what} starts agent turns with no person in each round, so it runs only in a person's terminal. Ask the person to set it with /goal in the session's composer; cast loop show reads it.`);
     process.exit(1);
   }
   console.log(`${c.bold}${what === "set" ? "Start goal" : "Resume goal"}${c.reset}  ${objective.split("\n")[0]}`);
@@ -65,7 +65,7 @@ export function registerLoopCommand(program: Command, deps: PublishDeps): void {
   loop
     .command("set")
     .argument("[objective...]", stdinText("the objective"))
-    .description("Give the session a goal: after every turn a review reads what the tools showed and either sends the next step or stops")
+    .description("Give the session a goal: after every turn a review reads what the tools showed and either sends the next step or stops. A person's terminal only; an agent asks the person to use /goal")
     .option("--for <session>", "Target another session (default: the current one)")
     .option("--json", "Machine-readable output")
     .action(async (words: string[], opts: { for?: string; json?: boolean }) => {
@@ -91,7 +91,7 @@ export function registerLoopCommand(program: Command, deps: PublishDeps): void {
 
   for (const [op, about] of [
     ["pause", "Stop the loop; the goal stays and resume restarts it"],
-    ["resume", "Restart a paused or blocked goal with a fresh round budget"],
+    ["resume", "Restart a paused or blocked goal with a fresh round budget (a person's terminal only)"],
     ["clear", "Remove the session's goal"],
   ] as const) {
     loop

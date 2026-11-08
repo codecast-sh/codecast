@@ -19,7 +19,7 @@ import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
-import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, scopedRead, scopedWrite, sparkline } from "./externalDataCli.js";
+import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, postOrFail, scopedRead, scopedWrite, shortRef, sparkline } from "./externalDataCli.js";
 import { scopeFor } from "./lineScope.js";
 import { GROUP_KINDS, GROUP_STATUSES, bucketSeries } from "@codecast/shared/contracts/ingest";
 import { fenceProductText } from "@codecast/shared/contracts";
@@ -134,10 +134,20 @@ export function formatGroupDetail(
       if (x.stack) product.push(x.stack);
     }
   }
+  // A stack whose frames an earlier sample already showed prints once: five
+  // samples of one error are usually one stack with different request ids.
+  const shownFrames = new Set<string>();
   for (const s of res.samples.slice(0, 5)) {
     product.push("", `${ago(s.at, now)}  ${s.message ?? ""}${s.release ? `  (${s.release})` : ""}`);
     if (s.url) product.push(`  ${s.url}`);
-    if (s.stack) product.push(s.stack.split("\n").slice(0, 12).join("\n"));
+    if (!s.stack) continue;
+    const frames = s.stack.split("\n").filter((l: string) => /^\s+at /.test(l)).join("\n");
+    if (frames && shownFrames.has(frames)) {
+      product.push("  same stack as above");
+      continue;
+    }
+    if (frames) shownFrames.add(frames);
+    product.push(s.stack.split("\n").slice(0, 12).join("\n"));
   }
   if (product.length) lines.push("", fenceProductText(product.join("\n").replace(/^\n/, ""), `${res.source?.provider ?? "product"} ${g.short_id}`));
   if (event && res.issue.replay_id) lines.push(fmt.muted(`  recorded in replay ${res.issue.replay_id}: cast replay ls --source ${res.source?.name ?? "<source>"}`));
@@ -202,9 +212,9 @@ export function groupScopeProblem(group: Pick<GroupRow, "short_id" | "workspace"
 
 /** One group read, held to the workspace `--team` named when it names one. */
 async function readGroup(deps: PublishDeps, ref: string, team: string | undefined): Promise<any> {
-  if (!team) return await apiPost(deps, "/cli/events/group", { group: ref }, { read: true });
+  if (!team) return await postOrFail(deps, "/cli/events/group", { group: ref }, { read: true });
   const scope = await scopeFor(deps, team, false);
-  const res = await apiPost(deps, "/cli/events/group", { group: ref, ...scope }, { read: true });
+  const res = await postOrFail(deps, "/cli/events/group", { group: ref, ...scope }, { read: true, scope });
   const problem = res?.group ? groupScopeProblem(res.group, scope, team) : null;
   if (problem) fail(problem);
   return res;
@@ -265,11 +275,13 @@ export function registerEventsCommand(program: Command, deps: PublishDeps): void
 
   events
     .command("show")
+    .alias("group")
     .description("One group: its facts, recent samples, and for a Sentry group the latest event read live")
     .argument("<group>", "eg-N")
     .option(...GROUP_TEAM_OPTION)
     .option(...JSON_OPTION)
-    .action(async (ref: string, o: { team?: string; json?: boolean }) => {
+    .action(async (raw: string, o: { team?: string; json?: boolean }) => {
+      const ref = shortRef("eg", raw);
       const res = await readGroup(deps, ref, o.team);
       if (res.group?.external?.provider === "sentry") res.issue = await apiPost(deps, "/cli/events/issue", { group: ref }, { read: true });
       emit(o.json, res, () => formatGroupDetail(res));
@@ -284,7 +296,8 @@ export function registerEventsCommand(program: Command, deps: PublishDeps): void
       .option(...JSON_OPTION);
 
   // Checked before the write, so a mismatched --team changes nothing.
-  const writeGroup = async (ref: string, team: string | undefined, body: Record<string, unknown>) => {
+  const writeGroup = async (raw: string, team: string | undefined, body: Record<string, unknown>) => {
+    const ref = shortRef("eg", raw);
     if (team) await readGroup(deps, ref, team);
     return await scopedWrite(deps, "/cli/events/set-status", { group: ref, ...body }, team);
   };

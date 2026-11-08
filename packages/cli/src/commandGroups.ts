@@ -83,8 +83,13 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
   },
   {
     token: "workspace",
-    aliases: ["ws"],
-    description: `Manage isolated git worktrees for parallel agent work`,
+    aliases: ["ws", "worktree"],
+    description: `Manage isolated git worktrees for parallel agent work
+
+  cast ws acquire fix-auth        create it, or attach to it: prints its path, branch and ports
+  cd "$(cast ws path fix-auth)"   its absolute path
+  cast ws ls                      every tracked workspace
+  cast ws destroy fix-auth        run its teardown and remove the worktree`,
     load: () => import("./workspace/cli.js").then((m) => m.registerWorkspaceCommand),
   },
   {
@@ -251,7 +256,7 @@ Examples:
     token: "signal",
     description: `Findings: file what a finder saw; each joins one problem
 
-  cast signal add --source <finder> --kind <kind> --fingerprint <key> --title "<one line>" [--detail -] [--url <url>] [--subject <ref>] [--goal-hint <metric>]
+  cast signal add --source <finder> --kind <kind> --title "<one line>" [--fingerprint <key>] [--detail -] [--url <url>] [--subject <ref>] [--goal-hint <metric>]
   cast signal ls [--task ct-N] [--source <finder>]
   cast signal show sg-N`,
     load: () => import("./signalCommand.js").then((m) => m.registerSignalCommand),
@@ -284,11 +289,11 @@ mod's folder (cast mod types rewrites it).`,
   {
     token: "obj",
     aliases: ["objects"],
-    description: `Objects of the kinds mods declare (bug-14, inc-3): file them, list them, move them along
+    description: `Bugs, incidents and the other objects your mods declare (bug-14, inc-3): file them, list them, move them along
 
   cast obj kinds                         every kind, its statuses and fields
   cast obj ls <prefix> [--status s] [--all]
-  cast obj create <prefix> "<title>" [--set field=value] [--body -]
+  cast obj create <prefix> "<title>" [--set field=value]... [--body -]
   cast obj show <id> | set <id> [--status s] [--set field=value] | done <id> | archive <id>
 
 Short ids render as live pills wherever codecast shows prose.`,
@@ -327,9 +332,11 @@ is grounded against: its own project's, else its workspace's.`,
   },
   {
     token: "expectations",
+    aliases: ["expectation", "expect"],
     description: `Expectations: how a project should behave, each line with its sources, versioned and changed only through proposals
 
   cast expectations show [--project <ref>] [--at <version>] [--brief] [--json]
+  cast expectations show <ex-id | xp-N>          one line or proposal; the id names its project
   cast expectations propose <file|-> [--project <ref>] [--hold]
   cast expectations apply|drop <xp-N>
   cast expectations routine [--project <ref>]
@@ -362,7 +369,7 @@ writes card.json and card.html. --publish attaches the page to the task as evide
     token: "state",
     args: ["[args...]"],
     hasOptions: true,
-    description: `Pin the current state of this thread — the standing answer to "where does this stand?"
+    description: `Pin the current state of this thread: the standing answer to "where does this stand?"
 
 The text renders pinned above the composer in the dashboard and on the inbox
 card, so the human sees the situation the moment they open the session instead
@@ -382,18 +389,22 @@ files in the inbox when your turn ends:
   working   still moving (default)
   blocked   a human must act to unblock you            → Needs You
   done      delivered; nothing stalled, review at leisure → Done
-  dormant   a machine wakes you — name the wake in the text → Dormant
+  dormant   a machine wakes you; name the wake in the text → Dormant
 done and dormant cover exactly the turn that declares them: after the next
 wake, declare again or the session returns to Needs You.
 
+A goal the session keeps working toward across turns is cast loop, set by
+the person with /goal in the composer; the state only says where things stand.
+
 Examples:
-  cast state --status dormant "Waiting on CI run 8841 — tr-42 re-checks at 3pm"
+  cast state --status dormant "Waiting on CI run 8841; tr-42 re-checks at 3pm"
   cast state --status blocked - <<'EOF'
-  Migrating the sync layer to wake signatures
-  Status: rewrite done, tests green
-  Blocked: needs a prod key before the last check
+  Migration to wake signatures waits on a prod key
+  Done: rewrite · tests green
+  You: add the key to the repo secrets
+  Next: the last check, once the key is in
   EOF
-  cast state --status done "Shipped — all four fixes verified in the browser"
+  cast state --status done "Shipped: all four fixes verified in the browser"
   cast state clear               # the state no longer holds`,
     load: () => import("./stateCommand.js").then((m) => m.registerStateCommand),
   },
@@ -412,7 +423,11 @@ the same goal. (cast goal is the company's goals; this is one session's.)
 
   cast loop set "Make bun test packages/billing pass"
   cast loop show                 # state, round, the review's last finding
-  cast loop pause | resume | clear`,
+  cast loop pause | resume | clear
+
+set and resume start unattended turns, so they run only in a person's
+terminal. An agent asks the person to set the goal (/goal in the composer);
+show, pause and clear work from an agent's shell.`,
     load: () => import("./loopCommand.js").then((m) => m.registerLoopCommand),
   },
   {
@@ -453,6 +468,7 @@ are standing on.
 
 Subcommands:
   cast pr ls                     Open pull requests, newest change first
+  cast pr create -t "title"      Open one with gh (-b body, --draft, --base)
   cast pr show [ref]             Everything known about one
   cast pr events [ref]           Its timeline
   cast pr watch [ref]            Live state changes, one line each
@@ -461,11 +477,18 @@ Subcommands:
   cast pr comment [ref] "text"   Comment on GitHub from here
   cast pr threads [ref]          Its review threads, open ones first
   cast pr resolve <thread> [ref] Settle a thread (unresolve reopens it)
+  cast pr notes [ref]            The line notes held for your review
   cast pr review [ref] --approve Approve, request changes, or just comment
   cast pr merge [ref]            Merge it (--squash by default; --admin bypasses protection)
   cast pr auto-merge [ref]       Merge once checks pass (--off to cancel)
   cast pr update-branch [ref]    Merge the base branch into it
-  cast pr close [ref]            Close it without merging`,
+  cast pr close [ref]            Close it without merging
+
+A review with line notes is one batch: hold each note, then send them with
+the verdict. --request-changes and --comment need a body.
+
+  cast pr comment 123 --hold --file src/x.ts --line 42 "this leaks"
+  cast pr review 123 --request-changes -b "two problems, notes inline"`,
     load: () => import("./prCommand.js").then((m) => m.registerPrCommand),
   },
   {
@@ -537,11 +560,14 @@ host and token: cast integrations connect <provider>`,
     token: "metrics",
     description: `Metrics: watched numbers that alert when they cross a line, and HogQL passthrough
 
+  cast sources ls                                    the source names --source takes
   cast metrics ls
-  cast metrics add <name> --source s --hogql "<q>" --above <n> [--every 1h]
+  cast metrics add <name> --source <source> --hogql "<q>" --above|--below <n> [--every 1h]
   cast metrics show|rm mw-N
-  cast metrics history [mw-N] [--source s]   past values from PostHog, now
-  cast metrics query "<hogql>" --source s`,
+  cast metrics backfill [mw-N] [--source <source>]   fill a chart with past values now
+  cast metrics query "<hogql>" --source <source>
+
+--source is a posthog or app source's name as cast sources ls prints it, not the provider.`,
     load: () => import("./metricsCommand.js").then((m) => m.registerMetricsCommand),
   },
   {
@@ -561,9 +587,10 @@ host and token: cast integrations connect <provider>`,
     description: `The team's keys, logins, files and saved sign-ins, for agents. Values never go in argv, chat or your own output
 
   cast vault [ls --stale]                     every secret, open requests first (--json)
-  cast vault run stripe-test -- npm test      the command gets STRIPE_TEST (or the secret's --env names)
+  cast vault run stripe-test -- npm test      the command gets STRIPE_TEST (or the vars cast vault show names)
   cast vault run -- npm test                  every var this repo's [vault] in .codecast/workspace.toml maps
   cast vault run --env-file .env.vault -- …   an env file's vault://<name> values filled in
+  cast vault run --env-file <(echo STRIPE_KEY=vault://stripe-test) -- npm test   a var name of your choosing
   cast vault get stripe-test                  the raw value on stdout, for a pipe or < <(…), never $(…)
   eval "$(cast vault env stripe-test)"        export lines
   cast vault otp github-bot                   a login's current 2FA code
@@ -597,6 +624,7 @@ Examples:
   {
     token: "browser",
     aliases: ["br"],
+    hasOptions: true,
     description: `Drive a real Chrome: snapshot pages, click, type, screenshot, read console`,
     load: () => import("./browser/cli.js").then((m) => m.registerBrowserCommand),
     policy: { key: "browser_control_disabled" },
@@ -764,6 +792,8 @@ export async function activateGroup(program: Command, token: string | undefined,
   register(program, deps);
   const registered = commands.pop();
   if (registered) commands.splice(at, 0, registered);
+  // The group's aliases answer once it is real too, without each module repeating them.
+  for (const alias of registered ? group.aliases ?? [] : []) if (!registered!.aliases().includes(alias)) registered!.alias(alias);
   if (registered && group.policy) guardWithPolicy(registered, group.policy);
   return true;
 }

@@ -9,7 +9,7 @@
 import { execSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import {
   acquireRootCheckout,
   acquireWorkspace,
@@ -23,7 +23,7 @@ import {
 import { detectProject } from "./detect.js";
 import { MANIFEST_REL_PATH } from "./resolver.js";
 import { readVerifyCommand, runVerifyCommand } from "./verify.js";
-import { readState, recordWorkspaceSession } from "./contract.js";
+import { locateWorkspace, readState, recordWorkspaceSession } from "./contract.js";
 import { publishWorktrees } from "../worktreeMirror.js";
 import { sessionIdFromEnv } from "../sessionIdentity.js";
 import {
@@ -63,10 +63,24 @@ function findRepoRoot(): string {
   }
 }
 
+/** The repository's other checkouts (git worktree list), main one first; none outside a repository. */
+function linkedCheckouts(repoRoot: string): string[] {
+  try {
+    const self = fs.realpathSync(repoRoot);
+    return execSync("git worktree list --porcelain", { cwd: repoRoot, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] })
+      .split("\n")
+      .filter((l) => l.startsWith("worktree "))
+      .map((l) => l.slice("worktree ".length))
+      .filter((t) => fs.existsSync(t) && fs.realpathSync(t) !== self);
+  } catch {
+    return [];
+  }
+}
+
 export function registerWorkspaceCommand(program: Command): void {
   const ws = program
     .command("workspace")
-    .alias("ws")
+    .aliases(["ws", "worktree"])
     .description(commandGroup("workspace").description);
 
   // -----------------------------------------------------------------------
@@ -103,7 +117,7 @@ export function registerWorkspaceCommand(program: Command): void {
     .option("--skip-setup", "Skip install/generate/migrate commands")
     .option("--skip-hooks", "Skip before-create/after-create hooks")
     .option("--no-ports", "Allocate no ports for a worker that runs no dev server")
-    .option("--skip-pool", "Bypass warm pool — force fresh setup")
+    .option("--skip-pool", "Bypass the warm pool and set up from scratch")
     .option("--trust", "Approve this repo's hook scripts and setup commands as they are now")
     .option("--json", "Print the workspace as one JSON line (what `cast spawn --cloud` reads over SSH)")
     .action(
@@ -280,19 +294,21 @@ export function registerWorkspaceCommand(program: Command): void {
     });
 
   ws.command("path <name>")
-    .description("Print a workspace's absolute worktree path (for `cd \"$(cast ws path <name>)\"`)")
-    .action((name: string) => {
-      const repoRoot = findRepoRoot();
-      // Prefer the tracked path (handles pool-claimed slots whose layout may
-      // differ from the default), then fall back to the deterministic location.
-      const tracked = readState(repoRoot, name)?.path;
-      const fallback = path.join(repoRoot, ".codecast/worktrees", name);
-      const resolved = tracked ?? fallback;
-      if (!fs.existsSync(resolved)) {
-        console.error(`Workspace '${name}' not found (run: cast workspace acquire ${name})`);
+    .description("Print a workspace's absolute worktree path (for `cd \"$(cast ws path <name>)\"`); looks in every worktree of this repository")
+    .option("--repo <path>", "Look in this repository instead of the one the current directory is in")
+    .action((name: string, opts: { repo?: string }) => {
+      const repoRoot = opts.repo ? path.resolve(opts.repo) : findRepoRoot();
+      // A workspace is recorded under the checkout it was acquired from, so
+      // one acquired from a linked worktree is found by looking in each.
+      const roots = [repoRoot, ...linkedCheckouts(repoRoot)];
+      const hit = locateWorkspace(roots, name);
+      if (!hit) {
+        const searched = roots.length > 1 ? ` in ${roots.length} checkouts of ${repoRoot}` : ` in ${repoRoot}`;
+        console.error(`Workspace '${name}' not found${searched}. cast ws ls shows a checkout's workspaces; --repo <path> looks in another repository; cast ws acquire ${name} makes one`);
         process.exit(1);
       }
-      console.log(resolved);
+      if (hit.root !== repoRoot) console.error(`(acquired from ${hit.root})`);
+      console.log(hit.path);
     });
 
   // -----------------------------------------------------------------------
@@ -333,8 +349,10 @@ export function registerWorkspaceCommand(program: Command): void {
   ws.command("trust [target...]")
     .description("Approve the hook scripts and setup commands acquire runs (no target = all)")
     .option("--list", "Show what is approved and what changed, approving nothing")
+    .addOption(new Option("--dry-run", "same as --list").hideHelp())
     .option("--revoke", "Forget every approval for this repo")
-    .action((targets: string[], opts: { list?: boolean; revoke?: boolean }) => {
+    .action((targets: string[], opts: { list?: boolean; dryRun?: boolean; revoke?: boolean }) => {
+      if (opts.dryRun) opts.list = true;
       const repoRoot = findRepoRoot();
       const all = collectTrustTargets({ hooksRoot: repoRoot });
       if (opts.revoke) {

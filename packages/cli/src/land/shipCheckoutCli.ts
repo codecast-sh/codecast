@@ -7,7 +7,7 @@ import { fmt } from "../colors.js";
 import { formatAgeShort } from "../publishCommand.js";
 import { git } from "../wipSnapshot.js";
 import { inboxRoster } from "./cli.js";
-import { makePlan, planPath, runPlan, shipSpec, type ShipOutcome, type ShipPlan } from "./shipCheckout.js";
+import { makePlan, planPath, runPlan, shipSpec, type ShipGroup, type ShipOutcome, type ShipPlan } from "./shipCheckout.js";
 
 export interface CheckoutOptions {
   plan?: string | boolean;
@@ -17,6 +17,53 @@ export interface CheckoutOptions {
   push?: boolean;
   deploy?: boolean;
   fetch?: boolean;
+  /** Comma-separated groups to ship; every other group is held. */
+  only?: string;
+  /** Comma-separated groups to hold. */
+  hold?: string;
+  /** Hold every group: ship only the checkout's own unpushed commits. */
+  commitsOnly?: boolean;
+  /** `<group>=<message>`, repeatable. */
+  message?: string[];
+}
+
+/** The group a name means: its id, a session's short id without the `s:`, or a unique prefix of either. */
+function groupNamed(plan: ShipPlan, name: string): ShipGroup {
+  const want = name.trim();
+  const exact = plan.groups.find((g) => g.id === want || g.id === `s:${want}`);
+  if (exact) return exact;
+  const prefixed = plan.groups.filter((g) => g.id.startsWith(want) || g.id.startsWith(`s:${want}`));
+  if (prefixed.length === 1) return prefixed[0];
+  const ids = plan.groups.map((g) => g.id).join(", ") || "none";
+  throw new Error(prefixed.length ? `"${want}" names ${prefixed.length} groups (${prefixed.map((g) => g.id).join(", ")}): give more of it` : `No group "${want}" in the plan; its groups: ${ids}`);
+}
+
+const names = (list?: string) => (list ?? "").split(",").map((n) => n.trim()).filter(Boolean);
+
+/**
+ * The plan as the flags steer it: which groups ship, and their messages. Each
+ * flag is what an agent otherwise did by rewriting ship-plan.json by hand.
+ * Returns whether anything changed, so the file is rewritten only then.
+ */
+export function steerPlan(plan: ShipPlan, o: Pick<CheckoutOptions, "only" | "hold" | "commitsOnly" | "message">): boolean {
+  if (o.commitsOnly && o.only) throw new Error("--commits-only holds every group, so it takes no --only");
+  let changed = false;
+  const set = (g: ShipGroup, ship: boolean) => { if (g.ship !== ship) { g.ship = ship; changed = true; } };
+  if (o.only !== undefined) {
+    const keep = new Set(names(o.only).map((n) => groupNamed(plan, n)));
+    if (!keep.size) throw new Error("--only takes group names: --only s:jx7abc1,unattributed");
+    for (const g of plan.groups) set(g, keep.has(g));
+  }
+  if (o.commitsOnly) for (const g of plan.groups) set(g, false);
+  for (const n of names(o.hold)) set(groupNamed(plan, n), false);
+  for (const spec of o.message ?? []) {
+    const at = spec.indexOf("=");
+    if (at <= 0 || !spec.slice(at + 1).trim()) throw new Error(`--message takes <group>=<message>, like s:jx7abc1="fix(cli): keep acronyms" (got "${spec}")`);
+    const g = groupNamed(plan, spec.slice(0, at));
+    const text = spec.slice(at + 1).trim();
+    if (g.message !== text) { g.message = text; changed = true; }
+  }
+  return changed;
 }
 
 const log = (line: string) => console.error(fmt.muted(`· ${line}`));
@@ -47,7 +94,7 @@ export function formatPlan(plan: ShipPlan, file: string): string {
     out.push(`       ${fmt.muted(shown.join(", ") + (g.paths.length > shown.length ? `, +${g.paths.length - shown.length} more` : ""))}`);
   }
   out.push("");
-  out.push(fmt.muted(`Plan written to ${file}. Edit messages, set "ship": false to hold a group, move paths between groups, then: cast ship checkout --plan`));
+  out.push(fmt.muted(`Plan written to ${file}. Steer it with --hold <group>, --only <group>, --commits-only or --message <group>=<text> (on --plan too); move paths between groups in the file; then: cast ship checkout --plan`));
   return out.join("\n");
 }
 
@@ -97,17 +144,25 @@ export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: 
   const file = typeof opts.plan === "string" ? path.resolve(opts.plan) : planPath(gitDir);
 
   let plan: ShipPlan;
+  let write: boolean;
   if (opts.plan !== undefined) {
     if (!fs.existsSync(file)) throw new Error(`No plan at ${file}: run cast ship checkout --dry-run first`);
     plan = JSON.parse(fs.readFileSync(file, "utf-8"));
+    write = steerPlan(plan, opts);
   } else {
     plan = await makePlan(root, { roster: (ids) => inboxRoster(ids), fetch: opts.fetch, log });
+    steerPlan(plan, opts);
+    write = true;
+  }
+  // The file says what ran, steering included, so a later --plan picks it up.
+  if (write) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(plan, null, 2));
   }
 
   if (opts.dryRun) {
-    console.log(opts.json ? JSON.stringify({ plan, plan_file: file, ship: shipSpec(root) }, null, 2) : formatPlan(plan, file));
+    // The plan file's own object, so what is read here is what is edited there; plan_file and ship ride beside it.
+    console.log(opts.json ? JSON.stringify({ ...plan, plan_file: file, ship: shipSpec(root) }, null, 2) : formatPlan(plan, file));
     return;
   }
 

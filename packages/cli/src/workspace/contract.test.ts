@@ -6,6 +6,7 @@ import * as path from "node:path";
 import {
   deleteState,
   listStates,
+  locateWorkspace,
   PersistedWorkspaceState,
   readState,
   setState,
@@ -285,5 +286,20 @@ describe("validateContract", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe("locateWorkspace", () => {
+  test("finds a workspace recorded under another checkout of the repository, tracked path first", () => {
+    const main = fs.mkdtempSync(path.join(os.tmpdir(), "ws-main-"));
+    const linked = fs.mkdtempSync(path.join(os.tmpdir(), "ws-linked-"));
+    const slot = fs.mkdtempSync(path.join(os.tmpdir(), "ws-slot-"));
+    writeState(linked, { name: "fix", path: slot, branch: "b", state: "ready", ports: {}, updatedAt: "" } as unknown as PersistedWorkspaceState);
+    expect(locateWorkspace([main], "fix")).toBeNull();
+    expect(locateWorkspace([main, linked], "fix")).toEqual({ path: slot, root: linked });
+    // The default layout counts when nothing tracks it; a missing path never does.
+    fs.mkdirSync(path.join(main, ".codecast/worktrees/fix"), { recursive: true });
+    expect(locateWorkspace([main, linked], "fix")).toEqual({ path: path.join(main, ".codecast/worktrees/fix"), root: main });
+    expect(locateWorkspace([main, linked], "gone")).toBeNull();
   });
 });

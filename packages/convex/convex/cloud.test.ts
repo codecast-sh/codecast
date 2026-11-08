@@ -359,7 +359,7 @@ describe("where a cloud session starts: cloud_start_from, cloud_seed, the prepar
   const laptop = (over: Record<string, any> = {}) => ({ _id: "dev_laptop", user_id: user, device_id: "laptop", label: "mac", platform: "darwin", is_remote: false, last_seen: live, local_project_roots: ["/Users/me/app"], ...over });
   const parked = (over: Record<string, any> = {}) => ({
     _id: "conv_1", user_id: user, session_id: "sess", agent_type: "claude_code", short_id: "conv001", project_path: "/Users/me/app", git_root: "/Users/me/app",
-    git_remote_url: "git@github.com:me/app.git", owner_device_id: "box", cloud_placement: "pending", cloud_placement_token: "tok", cloud_start_from: "checkout", ...over,
+    git_remote_url: "git@github.com:me/app.git", owner_device_id: "box", status: "active", cloud_placement: "pending", cloud_placement_token: "tok", cloud_start_from: "checkout", ...over,
   });
   const wt = "/home/ubuntu/work/app/.codecast/worktrees/cloud-1";
   const seed = { source: "checkout" as const, base, branch: "feat/x", dirty: true, laptop_root: "/Users/me/app", device_id: "laptop" };
@@ -390,6 +390,18 @@ describe("where a cloud session starts: cloud_start_from, cloud_seed, the prepar
     const rows2 = await (hostSessions as any)._handler(ctx(plain), { device_id: "box" });
     expect(rows2[0].cloud_seed).toBeNull();
     expect((await (placementTarget as any)._handler(ctx(plain), { conversation_id: "conv_1" })).cloud_start_from).toBeNull();
+  });
+
+  test("hostSessions returns the device's active rows only: completed and killed ones are left out", async () => {
+    const db = fixture([
+      parked(),
+      parked({ _id: "conv_2", short_id: "conv002", status: "completed" }),
+      parked({ _id: "conv_3", short_id: "conv003", inbox_killed_at: Date.now() }),
+      parked({ _id: "conv_4", short_id: "conv004", owner_device_id: "other" }),
+    ], [laptop()]);
+    const { hostSessions } = await import("./cloud");
+    const rows = await (hostSessions as any)._handler(ctx(db), { device_id: "box" });
+    expect(rows.map((r: any) => r.short_id)).toEqual(["conv001"]);
   });
 
   test("enqueueCloudSpawn prefers the online local whose roots hold the row's repo over a more recently seen one, else last_seen; the args carry start_from", async () => {

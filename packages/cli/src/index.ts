@@ -8,7 +8,7 @@ import { headForward, isSeatedAnchor } from "./anchorAlias.js";
 import { planProgressLabel } from "./planProgress.js";
 import { registerSessionSendCommand, printSendResult } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
-import { Command, Help, Option } from "commander";
+import { Command, Help, InvalidArgumentError, Option } from "commander";
 import { randomUUID } from "node:crypto";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
 import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
@@ -16,7 +16,7 @@ import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
 import { CODECAST_HOOK_SCRIPTS, CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } from "./codecastOwned.js";
-import { missingRouteError } from "./castApi.js";
+import { isOlderBackendRefusal, missingRouteError } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
 import { READY_LIST_LIMIT, buildTaskClaimBody, buildTaskStartBody, foldStaleTasks, groupTasksByAssignee, readyCountLine, startedLines, taskHintBody, unclaimedLine } from "./taskClaim.js";
@@ -36,8 +36,8 @@ import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 import { matchProject, looksLikeConvexId } from "./projectRef.js";
 import { groundUpdateBody } from "@codecast/shared/contracts/goalsBrief";
-import { SOURCE_NEEDED, answerWrite, healthText, initiativeLine, initiativeShowLines, liveSeries, metricRecordLine, milestoneWrite, parseInitiativeHealth, parseInitiativeStatus, pickRecordEntry, readDayArg, readMilestoneArg, readMomentArg, readSourceArg, recordVerb, recordWriteLines, removeWrite, saidWrite, scopeSentence, sourceFillIn, sourceWrite, unread, type Read, type RecordWrite } from "./initiativeCommand.js";
-import { INITIATIVE_RECORD_LISTS, metricReadings, metricTrends, parseMetricSpec, type IntentSource } from "@codecast/shared/contracts/initiative";
+import { SOURCE_NEEDED, answerWrite, healthText, initiativeLine, initiativeShowLines, liveSeries, metricRecordLine, milestoneWrite, parseInitiativeHealth, pickRecordEntry, readDayArg, readMilestoneArg, readMomentArg, readSourceArg, recordVerb, recordWriteLines, removeWrite, saidWrite, scopeSentence, sourceFillIn, sourceWrite, unread, type Read, type RecordWrite } from "./initiativeCommand.js";
+import { INITIATIVE_RECORD_LISTS, INITIATIVE_STATUSES, metricReadings, metricTrends, parseMetricSpec, type IntentSource } from "@codecast/shared/contracts/initiative";
 import { ORG_CONTEXT_GUIDANCE, orgWhereLines } from "@codecast/shared/contracts/orgWhere";
 import { targetDayStamp } from "@codecast/shared/time";
 import {
@@ -96,9 +96,10 @@ import {
   READY_MEANS,
   STALE_TASK_DAYS,
   STALE_TASK_WORDS,
+  TASK_PRIORITIES,
 } from "@codecast/shared/tasks";
 import { buildEventFilter, narrowingWithoutOn } from "./triggerEventFilter.js";
-import { describeDates, describeDatesFull, formatDateSmart, parseDuration as parseSharedDuration, parseEndDate, parseRelativeDate, wasEdited } from "@codecast/shared/time";
+import { describeDates, describeDatesFull, formatDateSmart, parseClockTime, parseDuration as parseSharedDuration, parseEndDate, parseRelativeDate, wasEdited } from "@codecast/shared/time";
 import { SESSION_QUERY_OPERATORS } from "@codecast/shared/search";
 import { describeShareSpan, formatDateRange, formatSessionCount, summarizeShareImpact, type PathShareSummary } from "@codecast/shared/team";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
@@ -116,12 +117,14 @@ import {
   workspaceLabel,
   workspaceHasFeature,
   WorkspaceUnresolved,
+  otherWorkspacesWith,
+  elsewhereHint,
   type Workspace,
 } from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { setReserved } from "./ccProfileFlags.js";
-import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
-import { recoveryModeOf, type RecoveryMode } from "@codecast/shared/contracts";
+import { buildAccountUsage, buildUsageReport, loadLocalUsageProfiles, renderAccountUsage, renderUsageReport } from "./usageCommand.js";
+import { recoveryModeOf, titleLine, type RecoveryMode } from "@codecast/shared/contracts";
 import { TRIGGER_PRECHECK_MODES, triggerPrecheckMode, type TriggerPrecheckMode } from "@codecast/shared/contracts";
 import { agentDisplayName, CHEAP_MODEL, normalizeSubagentCaps } from "@codecast/shared/contracts";
 /** Parallel agents for plan orchestrate and autopilot when no --max is given and no subagent cap is configured (0 = no limit is not a wave size). */
@@ -138,6 +141,7 @@ import { listedBlockers, listedReady } from "./listedReadiness.js";
 import { checkoutWords } from "./checkoutWords.js";
 import { applyBlockers, BLOCKER_REFS_HELP, createPlanSteps, planStepBase, planTemplate, offFrontierLines, registerTaskGraphCommands, routeBlockerRef, splitRefs, stepsFromText, stepsFromTitles, supersededLine, taskGraphSections, waitAddedLine, waitScope, writerOf, type GraphDeps } from "./taskGraphCommands.js";
 import type { PlanStep } from "@codecast/shared/tasks";
+import { TASK_STATUS_CATEGORIES } from "@codecast/shared/tasks";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
@@ -153,7 +157,8 @@ import { findAgentAncestor, ownDaemonPids, snapshotProcessTable } from "./proces
 import { autostartDisabledByEnv, findSystemDaemonUnit, isTemplateInstance, setDaemonWanted, unitUsesWantedFlag } from "./systemdDaemonUnit.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
 import { registerDocDraftingCommands } from "./docDraftingCommand.js";
-import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
+import { commandTree, didYouMean, listDescription, nearMatches, unknownCommandNextStep } from "./commandSuggestion.js";
+import { boundedCountOption, choiceOption, countOption, exitNotFound, idKindOf, nonNegativeCountOption, notFoundLine, stateOption, unknownActionError, wrongKindIdError, withSessionIdHint, SESSION_ID_HINT, DATE_FORMS } from "./argChecks.js";
 import { requireDestructiveConfirm } from "./destructiveCommands.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
@@ -1252,6 +1257,12 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
   if (options.json) {
     console.log(JSON.stringify({
       version: getVersion(),
+      auth: {
+        signed_in: !!config?.auth_token && !state?.authExpired,
+        expired: !!state?.authExpired,
+        removed_by: state?.removedBy ?? null,
+        user_id: config?.user_id ?? null,
+      },
       daemon: { pid, connection, stateUpdatedAt: state?.timestamp ?? null, lastHeartbeatAt: state?.lastHeartbeatTick ?? null },
       sync: {
         lastSyncAt: state?.lastSyncTime ?? null,
@@ -1284,10 +1295,7 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
     row("Auth", fmt.warning("expired"));
     console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast auth")} ${fmt.muted("to re-authenticate")}`);
   } else if (config?.auth_token) {
-    row("Auth", fmt.value("token saved"));
-    if (config.user_id) {
-      row("User", fmt.id(config.user_id));
-    }
+    row("Auth", fmt.value("signed in"));
   } else {
     row("Auth", fmt.muted(icons.cross + " not authenticated"));
     console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast auth")} ${fmt.muted("to authenticate")}`);
@@ -1597,11 +1605,16 @@ function bounceDaemonIfBuildChanged(daemonWasRunning: boolean): boolean {
   if (daemonBuildUnchanged(runningBuild, installedBuild)) return false;
 
   stopDaemon();
-  startDaemon();
+  startDaemon({ afterStop: true });
   return true;
 }
 
-function startDaemon(): void {
+/**
+ * `afterStop`: the caller just stopped the daemon, so a daemon found running
+ * now came up after that stop (another cast command's auto-start, or launchd)
+ * and is the restarted one, not the old one still running.
+ */
+function startDaemon(opts: { afterStop?: boolean } = {}): void {
   if (!daemonSupportedOnPlatform()) {
     console.error(WINDOWS_DAEMON_UNSUPPORTED_MESSAGE);
     return;
@@ -1614,7 +1627,7 @@ function startDaemon(): void {
 
   const existingPid = getDaemonPid();
   if (existingPid) {
-    console.log(`Daemon is already running (PID: ${existingPid})`);
+    console.log(opts.afterStop ? `Daemon restarted (PID: ${existingPid})` : `Daemon is already running (PID: ${existingPid})`);
     return;
   }
   if (systemdDaemon("start")) {
@@ -2836,11 +2849,13 @@ function failUnknownCommand(operands: string[]): never {
 
 // `cast <unknown> --help` never reaches the root action: commander answers the
 // help flag first, with the whole root help (a thousand lines) and exit 0, so
-// an agent guessing at a command reads that instead of "no such command".
+// an agent guessing at a command reads that instead of "no such command". Any
+// other flag after the unknown word fails first too, as "unknown option": `cast
+// spwan --subagent "x"` said `unknown option '--subagent'`, never naming spawn.
 function failUnknownCommandBeforeHelp(argv: string[]): void {
   const first = argv[2];
   if (!first || first.startsWith("-") || first === "help") return;
-  if (!argv.slice(3).some((a) => a === "--help" || a === "-h")) return;
+  if (!argv.slice(3).some((a) => a.startsWith("-"))) return;
   if (commandTree(program).some((node) => node.name === first || node.aliases?.includes(first))) return;
   failUnknownCommand([first]);
 }
@@ -2859,17 +2874,52 @@ function failUnknownCommandBeforeHelp(argv: string[]): void {
     const groupPath: string[] = [];
     for (let cmd: Command | null = this; cmd?.parent; cmd = cmd.parent) groupPath.unshift(cmd.name());
     const nextStep = unknownCommandNextStep(commandTree(program), [...groupPath, typed]);
-    this.error(`error: unknown command '${typed}'${nextStep ? `\n${nextStep}` : ""}`);
+    // A group that prints its own help after an error has already listed its commands.
+    const listsItself = (this as Command & { _showHelpAfterError?: unknown })._showHelpAfterError;
+    const pointer = listsItself ? "" : `\nRun 'cast ${groupPath.join(" ")} --help' for its commands.`;
+    this.error(`error: unknown command '${typed}'${nextStep ? `\n${nextStep}` : ""}${pointer}`);
   };
+
+// A command list (root or group) shows each command's lead line, never its
+// whole multi-paragraph description (listDescription in commandSuggestion.ts).
+Help.prototype.subcommandDescription = function subcommandDescription(cmd: Command): string {
+  return cmd.summary() || listDescription(cmd.description());
+};
+
+// A missing argument or required option: commander's one line names the
+// argument but not the shape, so the command's usage line follows, with where
+// the examples are. Groups that print their whole help after an error keep it.
+type CommanderInternals = Command & { _showHelpAfterError?: unknown; missingArgument(name: string): void; missingMandatoryOptionValue(option: { flags: string }): void };
+function commandPathOf(cmd: Command): string {
+  const names: string[] = [];
+  for (let at: Command | null = cmd; at; at = at.parent) names.unshift(at.name());
+  return names.join(" ");
+}
+function usageHint(cmd: Command): string {
+  if ((cmd as CommanderInternals)._showHelpAfterError) return "";
+  const path = commandPathOf(cmd);
+  return `\nUsage: ${path} ${cmd.usage()}\nRun '${path} --help' for the arguments and examples.`;
+}
+(Command.prototype as CommanderInternals).missingArgument = function missingArgument(this: Command, name: string): void {
+  this.error(`error: missing required argument '${name}'${usageHint(this)}`, { code: "commander.missingArgument" });
+};
+(Command.prototype as CommanderInternals).missingMandatoryOptionValue = function missingMandatoryOptionValue(this: Command, option: { flags: string }): void {
+  this.error(`error: required option '${option.flags}' not specified${usageHint(this)}`, { code: "commander.missingMandatoryOptionValue" });
+};
 
 program
   .name("cast")
   .description(
-    "Sync coding agent conversations to a shared Convex database\n\n" +
-    "Quick Start:\n" +
-    "  1. cast auth          # Authenticate with your account\n" +
-    "  2. cast start         # Start background sync daemon\n" +
-    "  3. cast status        # Check sync status"
+    "Sync your coding agent sessions to codecast and coordinate the work around them:\n" +
+    "sessions, tasks, plans, messages, triggers and decisions.\n\n" +
+    "Set up this machine:\n" +
+    "  cast auth                  sign in through the browser (no browser: cast login -)\n" +
+    "  cast start                 start the background sync daemon\n" +
+    "  cast status                check sign-in, daemon and connection\n\n" +
+    "Find a command:\n" +
+    "  cast <command> --help      one command's arguments, flags and examples\n" +
+    "  cast guide [topic]         how to use a capability (tasks, triggers, browser, ...)\n" +
+    "  cast agent-context --json  every command with its flags and arguments, as JSON"
   )
   .version(getVersion())
   .action(() => {
@@ -2907,10 +2957,15 @@ function groupDeps(): GroupDeps {
 
 program
   .command("auth")
-  .description("Authenticate with cast using browser OAuth flow")
+  .description("Sign this machine in through the browser; cast auth status checks without signing in")
   // Commander accepts excess arguments, so `cast auth status` (a natural guess
   // by agents) used to open the browser sign-in page instead of reporting.
-  .argument("[action]", "status: show auth state without signing in")
+  .argument("[action]", "status: show whether this machine is signed in, without opening the browser")
+  .addHelpText("after",
+    "\nExamples:\n" +
+    "  cast auth                # open the browser sign-in page and link this machine\n" +
+    "  cast auth status         # signed in or not, and the daemon's state\n" +
+    "  cast login -             # no browser here: paste a setup token from codecast.sh/cli")
   .action(async (action?: string) => {
     if (action === "status") return showStatus({ network: false });
     if (action) {
@@ -2981,8 +3036,9 @@ mdm
 program
   .command("login")
   .description(
-    "Link this device using a setup token (alternative to browser OAuth)\n\n" +
-    "Get your token from: codecast.sh/cli"
+    "Sign this machine in with a setup token, where there is no browser (else: cast auth)\n\n" +
+    "Get a token at codecast.sh/cli, then run cast login - and paste it: that keeps " +
+    "it out of the process list and shell history."
   )
   .argument("<token>", "Setup token from the web dashboard, or - to read it from stdin (keeps it out of the process list)")
   .action(async (token: string) => {
@@ -2991,8 +3047,15 @@ program
 
 registerSessionSendCommand(program, {
   currentSession: () => ownSessionId(getRealCwd()),
-  post: cliPost,
+  post: (urlPath, body) => cliPost(urlPath, body, { throwOnError: true }),
   print: text => console.log(text),
+  hold: (target, body) => {
+    const dir = path.join(CONFIG_DIR, "held-sends");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${target.replace(/[^A-Za-z0-9_-]/g, "")}-${Date.now()}.txt`);
+    fs.writeFileSync(file, body);
+    return file;
+  },
 });
 
 // ── cast stash / restore / kill (dismiss/undismiss = legacy aliases) ─────────
@@ -3008,11 +3071,11 @@ program
   // stays as a hidden alias so old snippets and muscle memory keep working.
   .alias("dismiss")
   .description(
-    "Stash a session — out of the inbox, the agent keeps running\n\n" +
+    "Stash a session: out of the inbox, the agent keeps running\n\n" +
     "Moves the session to the Stashed bucket: out of the active inbox, agent\n" +
     "alive and resumable. Use it to tidy finished or parked workers out of the\n" +
     "human's view without killing them. A stashed session returns to the inbox\n" +
-    "when a trigger fires into it (something happened — show it), when a settle\n" +
+    "when a trigger fires into it (something happened, so show it), when a settle\n" +
     "is declared --status blocked, a run completes --needs-attention, or it\n" +
     "stalls (permission prompt, open question, dead process). Pass --hide to\n" +
     "keep it out of sight through trigger wakes: only the asks bring it back.\n" +
@@ -3028,7 +3091,7 @@ program
   .action(async (session: string | undefined, opts: { hide?: boolean }) => {
     const target = session || detectCurrentSessionId();
     if (!target) {
-      console.error("No session given and none detected — pass a short ID (e.g. cast stash jx7c6zk)");
+      console.error("No session given and none detected: pass a short ID (e.g. cast stash jx7c6zk)");
       process.exit(1);
     }
     const result = await cliPost("/cli/sessions/dismiss", { session: target, ...(opts.hide ? { hidden: true } : {}) });
@@ -3038,12 +3101,12 @@ program
     const wake = opts.hide ? "stays hidden through trigger wakes" : "returns on the next trigger wake";
     if (result.outcome === "viewer_hide") {
       // A teammate's session: out of YOUR board only; the runner still sees it.
-      console.log(`${c.green}ok${c.reset} hid ${c.cyan}${result.short_id}${c.reset} ${c.dim}— a teammate's session, hidden from your team board only; their inbox and the agent are untouched (cast restore ${result.short_id} to bring back)${c.reset}`);
+      console.log(`${c.green}ok${c.reset} hid ${c.cyan}${result.short_id}${c.reset}${c.dim}: a teammate's session, hidden from your team board only; their inbox and the agent are untouched (cast restore ${result.short_id} to bring back)${c.reset}`);
       return;
     }
     const note = result.outcome === "reap"
-      ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
-      : ` ${c.dim}— hidden from inbox${grouped}, agent still alive, ${wake} (cast restore ${result.short_id} to bring back)${c.reset}`;
+      ? ` ${c.dim}(empty session, cleaned up entirely)${c.reset}`
+      : `${c.dim}: hidden from inbox${grouped}, agent still alive, ${wake} (cast restore ${result.short_id} to bring back)${c.reset}`;
     console.log(`${c.green}ok${c.reset} ${opts.hide ? "stashed and hid" : "stashed"} ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
 
@@ -3054,7 +3117,7 @@ program
   .description(
     "Bring a stashed or killed session back into the inbox\n\n" +
     "Clears the hide flags so the session shows in the active inbox again. A\n" +
-    "killed session comes back as a card the human can restart — this does not\n" +
+    "killed session comes back as a card the human can restart; this does not\n" +
     "relaunch the agent by itself.\n\n" +
     "Examples:\n" +
     "  cast restore jx7c6zk\n" +
@@ -3064,13 +3127,13 @@ program
   .action(async (session: string | undefined) => {
     const target = session || detectCurrentSessionId();
     if (!target) {
-      console.error("No session given and none detected — pass a short ID (e.g. cast restore jx7c6zk)");
+      console.error("No session given and none detected: pass a short ID (e.g. cast restore jx7c6zk)");
       process.exit(1);
     }
     const result = await cliPost("/cli/sessions/undismiss", { session: target });
     if (result.outcome === "viewer_hide") {
       console.log(result.was_hidden
-        ? `${c.green}ok${c.reset} restored ${c.cyan}${result.short_id}${c.reset} ${c.dim}— a teammate's session, back on your team board${c.reset}`
+        ? `${c.green}ok${c.reset} restored ${c.cyan}${result.short_id}${c.reset}${c.dim}: a teammate's session, back on your team board${c.reset}`
         : `${c.dim}${result.short_id} was not hidden from your team board${c.reset}`);
       return;
     }
@@ -3078,7 +3141,7 @@ program
       const rearmed = result.rearmed_schedules
         ? `, re-armed ${result.rearmed_schedules} trigger${result.rearmed_schedules === 1 ? "" : "s"} its kill canceled`
         : "";
-      console.log(`${c.green}ok${c.reset} restored ${c.cyan}${result.short_id}${c.reset} ${c.dim}— back in the inbox${rearmed}${c.reset}`);
+      console.log(`${c.green}ok${c.reset} restored ${c.cyan}${result.short_id}${c.reset}${c.dim}: back in the inbox${rearmed}${c.reset}`);
     } else {
       console.log(`${c.dim}${result.short_id} was already visible in the inbox${c.reset}`);
     }
@@ -3090,7 +3153,7 @@ program
     "Kill a session's agent and retire it from the inbox\n\n" +
     "Tears the agent down, marks the session completed, cancels triggers bound\n" +
     "to it, and files it under the Killed bucket. The transcript stays readable\n" +
-    "and the session stays restartable. Deliberate action — the session ID is\n" +
+    "and the session stays restartable. Deliberate action: the session ID is\n" +
     "required (killing your OWN session cuts you off mid-turn).\n\n" +
     "Example:\n" +
     "  cast kill jx7c6zk"
@@ -3100,7 +3163,7 @@ program
     const result = await cliPost("/cli/sessions/kill", { session });
     if (result.outcome === "viewer_hide") {
       // Not the runner or an owner: nothing to tear down, only the caller's view changes.
-      console.log(`${c.green}ok${c.reset} hid ${c.cyan}${result.short_id}${c.reset} ${c.dim}— a teammate's session: hidden from your team board only, the agent was not touched (cast restore ${result.short_id} to bring back)${c.reset}`);
+      console.log(`${c.green}ok${c.reset} hid ${c.cyan}${result.short_id}${c.reset}${c.dim}: a teammate's session, hidden from your team board only; the agent was not touched (cast restore ${result.short_id} to bring back)${c.reset}`);
       return;
     }
     const canceled = result.canceled_schedules
@@ -3118,10 +3181,10 @@ program
     // teardown re-enqueued (the server forces past the hide-flag transition), so
     // say what happened instead of the old "nothing to tear down" dead end.
     const note = result.outcome === "reap"
-      ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
+      ? ` ${c.dim}(empty session, cleaned up entirely)${c.reset}`
       : result.was_hidden
-        ? ` ${c.dim}— ${result.teardown_enqueued ? "teardown re-enqueued" : "teardown already queued for the daemon"}${grouped}${canceled}${dropped}${c.reset}`
-        : ` ${c.dim}— agent torn down${grouped}${canceled}${dropped} (cast restore ${result.short_id} to resurface)${c.reset}`;
+        ? `${c.dim}: ${result.teardown_enqueued ? "teardown re-enqueued" : "teardown already queued for the daemon"}${grouped}${canceled}${dropped}${c.reset}`
+        : `${c.dim}: agent torn down${grouped}${canceled}${dropped} (cast restore ${result.short_id} to resurface)${c.reset}`;
     const verb = result.was_hidden && result.outcome !== "reap" ? "re-killed" : "killed";
     console.log(`${c.green}ok${c.reset} ${verb} ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
@@ -4195,6 +4258,10 @@ program
   .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
   .action(async (sessionId: string) => {
     const result = await cliPost("/cli/sessions/owners", { session_id: sessionId });
+    if (!result) {
+      console.error(notFoundLine("session", sessionId, SESSION_ID_HINT));
+      process.exit(1);
+    }
     console.log(
       `${c.cyan}${result.short_id || sessionId}${c.reset} ` +
       `${c.dim}owners:${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}`
@@ -4230,20 +4297,32 @@ program
 const accountsCmd = program
   .command("accounts")
   .description(
-    "Manage Claude Code account profiles\n\n" +
-    "Log into each account ONCE (claude /login), save it as a profile, then\n" +
-    "switch between them instantly — no browser. Switching swaps the machine's\n" +
-    "global CC credential; running sessions keep their old account until\n" +
-    "restarted (use --continue to restart the limit-blocked ones)."
+    "Claude Code logins on this machine, saved as profiles you switch between\n\n" +
+    "Log into each account once (claude /login) and save it as a profile; switching\n" +
+    "then takes no browser. A switch swaps this machine's Claude Code login. Running\n" +
+    "sessions keep their old account until restarted, and --continue on use restarts\n" +
+    "the ones blocked on a usage limit.\n\n" +
+    "Examples:\n" +
+    "  cast accounts ls                  # the saved profiles, ● where sessions run\n" +
+    "  cast accounts save work           # save the account logged in now as \"work\"\n" +
+    "  cast accounts use personal        # switch this machine to the \"personal\" profile\n" +
+    "  cast accounts use personal --continue   # ...and restart the limit-blocked sessions on it\n" +
+    "  cast usage                        # the active account's limit windows"
   );
 
 accountsCmd
   .command("ls")
   .alias("list")
-  .description("List saved account profiles")
-  .action(() => {
+  .description("List saved account profiles (usage per account: cast usage --all)")
+  .option("--json", "The profiles as JSON (name, email, plan, active; no credentials)")
+  .action((options: { json?: boolean }) => {
     try {
       const profiles = listProfiles();
+      if (options.json) {
+        const launch = launchProfileName();
+        console.log(JSON.stringify(profiles.map((p) => ({ ...p, active: launch ? p.name === launch : p.active })), null, 2));
+        return;
+      }
       if (profiles.length === 0) {
         console.log(`${c.dim}No saved profiles. Save the current login with:${c.reset} cast accounts save <name>`);
         return;
@@ -4452,6 +4531,7 @@ const REVIVE_CONFIRM_THRESHOLD = 10;
 
 accountsCmd
   .command("use <name>")
+  .alias("switch")
   .description("Switch the active Claude Code account to a saved profile")
   .option(
     "--continue",
@@ -4532,8 +4612,14 @@ accountsCmd
 // call), plus what a limit hit would mean for sessions on this machine.
 // Registered as a top-level command so an agent mid-run can ask "how much
 // room do I have and when does it reset" before a long stretch.
-async function runUsageCommand(options: { json?: boolean }): Promise<void> {
+async function runUsageCommand(options: { json?: boolean; all?: boolean }): Promise<void> {
   const profiles = loadLocalUsageProfiles();
+  if (options.all) {
+    const now = Date.now();
+    const rows = buildAccountUsage(profiles, now);
+    console.log(options.json ? JSON.stringify(rows, null, 2) : renderAccountUsage(rows, now, c));
+    return;
+  }
   // The recovery flags live on the device row; best-effort — a report without
   // them is still a report.
   let recovery: { auto_switch: boolean; auto_continue: boolean; mode?: RecoveryMode } | null = null;
@@ -4565,8 +4651,9 @@ async function runUsageCommand(options: { json?: boolean }): Promise<void> {
 
 program
   .command("usage")
-  .description("Show the active Claude account's usage-limit windows (5h session, 7d) and what a limit hit means for sessions here")
-  .option("--json", "machine-readable report")
+  .description("Show the active Claude account's usage-limit windows (5h session, 7d) and what a limit hit means for sessions here; --all for every saved account")
+  .option("--all", "One row per saved account: each window's percent and reset, and whether auto-switch could land there")
+  .option("--json", "machine-readable report (with --all, one object per account)")
   .action(runUsageCommand);
 
 accountsCmd
@@ -4622,6 +4709,7 @@ accountsCmd
 accountsCmd
   .command("usage")
   .description("Alias of `cast usage`")
+  .option("--all", "One row per saved account: each window's percent and reset, and whether auto-switch could land there")
   .option("--json", "machine-readable report")
   .action(runUsageCommand);
 
@@ -4742,8 +4830,8 @@ codexAccountsCmd
 
 program
   .command("start")
-  .description("Start the background daemon to automatically watch and sync conversations")
-  .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
+  .description("Start the background daemon that watches and syncs agent sessions (cast restart restarts it)")
+  .option("--wait", "Block until the daemon is running and connected (exit 1 if not)")
   .option("--timeout <seconds>", "How long --wait polls before giving up", "45")
   .action(async (options: any) => {
     const startedAt = Date.now();
@@ -4947,26 +5035,22 @@ async function restartSessionAgent(
 
 program
   .command("restart")
-  .description(
-    "Restart the background daemon, or a session's agent\n\n" +
-    "With no argument, restarts the daemon (updating it first if an update is\n" +
-    "available). With a session ID, restarts that session's AGENT the same way\n" +
-    "the web header's \"Restart session\" does: the daemon stops it, then resumes\n" +
-    "the transcript in a fresh pane. The pair to `cast kill <session>`.\n\n" +
-    "This DISCARDS the running agent. To attach to a session without disturbing\n" +
-    "it, use `cast resume <session> --tmux` instead.\n\n" +
-    "--tmux attaches you to the new pane. It is the same pane the web session is\n" +
-    "attached to, so what you type and what the browser shows are one terminal.\n\n" +
-    "Examples:\n" +
-    "  cast restart                  # restart the daemon\n" +
-    "  cast restart jx7c6zk          # restart that session's agent\n" +
-    "  cast restart jx7c6zk --tmux   # ...and attach to the pane it comes up in"
-  )
-  .argument("[session]", "Session short ID (e.g. jx7c6zk) — omit to restart the daemon")
-  .option("--tmux", "Attach to the tmux pane the session comes back up in (session form only)")
-  .option("--repair", "Rebuild the transcript from the server copy instead of resuming the local one")
-  .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
+  .description("Restart the background daemon, or one session's agent")
+  .argument("[session]", "Session short ID (e.g. jx7c6zk); omit to restart the daemon")
+  .option("--wait", "Block until the daemon is running and connected again (exit 1 if not)")
   .option("--timeout <seconds>", "How long --wait (or --tmux) polls before giving up", "45")
+  .option("--tmux", "Session form: attach to the tmux pane the agent comes back up in")
+  .option("--repair", "Session form: rebuild the transcript from the server copy instead of resuming the local one")
+  .addHelpText("after",
+    "\nExamples:\n" +
+    "  cast restart --wait           # restart the daemon (updating it first), wait until connected\n" +
+    "  cast restart jx7c6zk          # restart that session's agent\n" +
+    "  cast restart jx7c6zk --tmux   # ...and attach to the pane it comes up in\n\n" +
+    "With a session ID this does what the web header's \"Restart session\" does: the\n" +
+    "daemon stops the agent, DISCARDING what it was doing, then resumes the transcript\n" +
+    "in a fresh pane (the pair to cast kill <session>). To attach without disturbing\n" +
+    "it, use cast resume <session> --tmux. The pane --tmux attaches to is the one the\n" +
+    "web session shows, so what you type and what the browser shows are one terminal.")
   .action(async (session: string | undefined, options: any) => {
     if (session) {
       await restartSessionAgent(session, options);
@@ -4981,16 +5065,19 @@ program
     const available = await checkForUpdates(true);
     if (available) {
       console.log(`Update available: v${getVersion()} -> v${available}, updating...`);
-      const { success } = await performUpdate();
+      const { success, error } = await performUpdate();
       if (success) {
         const config = readConfig() || {};
         await refreshEnabledSnippets(config);
         console.log(`Updated to v${available}`);
+        // A daemon started while the update ran (another cast command's
+        // auto-start) runs the old code: stop it so the new one starts.
+        if (getDaemonPid()) stopDaemon();
       } else {
-        console.log("Update failed, restarting with current version");
+        console.log(`Update failed${error ? ` (${error})` : ""}, restarting with current version`);
       }
     }
-    startDaemon();
+    startDaemon({ afterStop: true });
     ensureAutostart();
     if (options.wait) {
       await finishWithHealthWait(startedAt, Number.parseInt(options.timeout, 10) || 45);
@@ -4999,24 +5086,23 @@ program
 
 const daemonCmd = program
   .command("daemon")
-  .description("Manage the background daemon's local identity");
+  .description("The background daemon's local terminal token (start, stop and restart are top-level: cast restart)");
 
 daemonCmd
   .command("rotate-token")
-  .description(
-    "Replace the terminal token the daemon keeps in ~/.codecast/loopback-identity.json\n\n" +
-    "The token authorizes the loopback WebSocket that the web's integrated terminal\n" +
+  .description("Replace the terminal token the daemon keeps in ~/.codecast/loopback-identity.json, and restart the daemon")
+  .addHelpText("after",
+    "\nThe token authorizes the loopback WebSocket that the web's integrated terminal\n" +
     "and the browser watch panel connect to. It survives restarts, so rotate it if a\n" +
-    "copy of that file may have leaked. The daemon restarts to pick the new one up;\n" +
-    "open terminal panels reconnect on their next probe."
-  )
+    "copy of that file may have leaked. Open terminal panels reconnect on their next probe.\n" +
+    "Start, stop and restart the daemon itself with cast start, cast stop and cast restart.")
   .action(async () => {
     // Imported lazily: no other cast command should pay for this module.
     const { rotateIdentityToken, identityFile } = await import("./loopbackIdentity.js");
     const rotated = rotateIdentityToken(CONFIG_DIR);
     console.log(`New terminal token ${rotated.token.slice(0, 8)}... written to ${identityFile(CONFIG_DIR)}`);
     stopDaemon();
-    startDaemon();
+    startDaemon({ afterStop: true });
     if (process.exitCode) return;
     console.log("Daemon restarted. Open terminal panels reconnect on their next probe.");
   });
@@ -5053,8 +5139,8 @@ program
 
 program
   .command("gc")
-  .description("Kill tmux sessions idle for more than the specified threshold")
-  .option("-m, --mins <minutes>", "Idle threshold in minutes (default: 60)")
+  .description("Kill tmux sessions idle longer than --mins (default 60); --dry-run lists them first")
+  .option("-m, --mins <minutes>", "Idle threshold in whole minutes (default: 60)")
   .option("--dry-run", "Show what would be killed without actually killing")
   .action(async (options) => {
     const { runGcCommand } = await import("./herdCommand.js");
@@ -5253,7 +5339,7 @@ program
 
 program
   .command("health")
-  .description("Show detailed sync health information including dropped operations and pending files")
+  .description("Show the sync's health in detail: dropped operations and files still waiting to upload")
   .option("--clear-dropped", "Clear the dropped operations log")
   .option("--reconcile", "Run reconciliation against backend to find discrepancies")
   .action(async (options) => {
@@ -5526,12 +5612,20 @@ program
 
 program
   .command("check [projects...]")
-  .description(
-    "Typecheck this tree through one shared tsc watcher per project. One watcher serves every\n" +
-    "session on the tree and re-checks only what changed, so an ask takes seconds instead of a\n" +
-    `full tsc run per session. Use this instead of \`tsc --noEmit\`. Projects come from the tree's\n` +
-    `${CHECK_CONFIG_REL_PATH} ([projects] name = "path/tsconfig.json"; default: all of them), or,\n` +
-    "without one, the tsconfig nearest your directory. A project is also any directory or tsconfig path."
+  .description("Typecheck this tree through one shared tsc watcher per project. Use this instead of `tsc --noEmit`.")
+  .addHelpText(
+    "after",
+    `
+Projects are named in the tree's ${CHECK_CONFIG_REL_PATH} ([projects] name = "path/tsconfig.json");
+with no project given, all of them. Without that file, the tsconfig nearest this directory.
+A project can also be a directory or a tsconfig path. One watcher serves every session on the
+tree and re-checks only what changed, so an answer takes seconds.
+
+  cast check                            every project
+  cast check cli web                    two projects by name
+  cast check cli --fresh                restart the watcher first (it reports errors not on disk)
+  cast check --changed-since origin/main
+  cast check-status                     the watchers running on this machine`,
   )
   .option("--fresh", "Restart the watcher before asking (the escape hatch for a watcher that lost track)")
   .option("--changed-since <ref>", "Only the projects whose program holds a file changed since <ref> (committed or not)")
@@ -5620,10 +5714,11 @@ program
 program
   .command("doctor")
   .description(
-    "Verify codecast works end-to-end: daemon health, Convex connection, and a live\n" +
-    "sync round-trip (transcript → server → message delivery → tmux inject → echo back).\n" +
-    "The round-trip uses a throwaway stand-in agent — no Claude tokens, no browser —\n" +
-    "and cleans up after itself. Exit code 0 means the full loop is proven working."
+    "Prove codecast works on this machine: daemon health, the backend connection, and a live sync round-trip\n\n" +
+    "The round-trip goes transcript, server, message delivery, tmux inject and echo back, " +
+    "with a throwaway stand-in agent (no Claude tokens, no browser), and cleans up after " +
+    "itself. Exit code 0 means the whole loop worked. For a quick look without the " +
+    "round-trip: cast status, or cast doctor --no-e2e."
   )
   .option("--no-e2e", "Only run the passive health checks, skip the live round-trip")
   .option("--json", "Machine-readable report")
@@ -5768,18 +5863,29 @@ program
 
 const syncCommand = program
   .command("sync")
-  .description("Sync a cloud session's folder with the laptop (status, pull, push, diff, start, stop, keep); bare, upload unsynced conversations")
+  .description("Bare: upload this machine's unsynced conversations now. With a verb: keep a cloud session's folder in step with the laptop")
   // An unknown verb (`cast sync ls`) is an error, never the bare upload.
-  .allowExcessArguments(false)
-  .action(async () => {
+  .action(async (_options: unknown, cmd: Command) => {
+    const stray = cmd.args[0];
+    if (stray) {
+      const next = unknownCommandNextStep(commandTree(program), ["sync", stray]);
+      console.error(`error: unknown command '${stray}'${next ? `\n${next}` : ""}\nRun 'cast sync --help' for its commands; bare cast sync uploads unsynced conversations.`);
+      process.exit(1);
+    }
     await runSync();
   });
 registerSyncVerbs(syncCommand);
 
+// Every key `cast config` reads and writes: the plain settable ones, then the
+// ones with their own setter below. The help and the unknown-key error both
+// read this list, so they cannot disagree.
+const CONFIG_SETTABLE_KEYS = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"] as const;
+const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "interactive_jobs.per_machine", "agent"];
+
 program
   .command("config")
   .description(
-    "View or modify configuration settings\n\n" +
+    "View or set this machine's CLI settings\n\n" +
     "Examples:\n" +
     "  cast config                    # View all configuration\n" +
     "  cast config excluded_paths     # View specific setting\n" +
@@ -5789,7 +5895,7 @@ program
     "  cast config set check.per_machine 8       # typecheck watchers this machine keeps (default: one per 12 GB of RAM)\n" +
     "  cast config set interactive_jobs.per_machine 4  # commands run as Interactive jobs at once (default 8)"
   )
-  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include, sync_always, sync_never, session_trailer, tmux_server_per_session, level_checkouts_enabled, claude_backend, subagents.per_session, subagents.per_machine, check.per_machine, interactive_jobs.per_machine)")
+  .argument("[key]", `Configuration key (${CONFIG_ALL_KEYS.join(", ")}); "set" or "get" before it is optional`)
   .argument("[value]", "Value to set for the key")
   .allowUnknownOption()
   .allowExcessArguments()
@@ -6007,15 +6113,18 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"] as const;
+    const settableKeys = CONFIG_SETTABLE_KEYS;
     const sensitiveKeys = ["auth_token"];
     // Keys stored as booleans: the setter takes true/false/1/0 and rejects the rest.
     const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"]);
     type SettableKey = (typeof settableKeys)[number];
 
     if (!settableKeys.includes(key as SettableKey)) {
+      // A nested key's parent (`hooks` for hooks.enabled) names its children too.
+      const near = [...new Set([...nearMatches(key, CONFIG_ALL_KEYS), ...CONFIG_ALL_KEYS.filter((k) => k.startsWith(`${key}.`))])];
       console.error(`Unknown config key: ${key}`);
-      console.log(`Valid keys: ${settableKeys.join(", ")}, claude_backend, agent`);
+      if (near.length) console.error(didYouMean(near));
+      console.error(`Valid keys: ${CONFIG_ALL_KEYS.join(", ")}`);
       process.exit(1);
     }
 
@@ -6209,7 +6318,9 @@ function getRelativeTime(timestamp: number): string {
 program
   .command("sync-settings")
   .description(
-    "View or modify sync and team sharing settings\n\n" +
+    "Pick, in an interactive menu, which projects sync and which team each shares with\n\n" +
+    "It needs a terminal to answer it. From a script or an agent use cast sharing,\n" +
+    "which does the same with arguments: cast sharing share <folder> --team <team>\n\n" +
     "Examples:\n" +
     "  cast sync-settings           # Interactive project and team configuration\n" +
     "  cast sync-settings --all     # Sync all projects\n" +
@@ -6503,12 +6614,32 @@ program
     "  cast teams lock <path>          # Never share: no rule can share the folder\n" +
     "  cast teams unmap <path>         # Remove a directory mapping or a lock"
   )
-  .argument("[action]", "Action: members, focus, mappings, map, lock, unmap")
+  .argument("[action]", "members, focus, mappings, map, lock or unmap; omit to list your teams")
   .argument("[path]", "Directory path (for map/lock/unmap), the team (for members), or who covers what (for focus)")
   .argument("[team]", "Team ID or name (for map and focus)")
   .option("--include-past", "Share every session already in the directory (no prompt)")
   .option("--new-only", "Share only sessions started from now on (no prompt)").option("--dry-run", "focus: show the map the words make, change nothing")
-  .action(async (action, pathArg, teamArg, options: { includePast?: boolean; newOnly?: boolean; dryRun?: boolean }) => {
+  .option("--team <name|id>", "The team, as a flag the way other commands take it (members, focus, map)")
+  .option("--json", "Bare: [{id, name, role, active}]. members: {team: {id, name}, people: [{handle, name, role, is_you, ...}]}. mappings: {mappings: [{path, team_name, private}]}")
+  .action(async (action, pathArg, teamArg, options: { includePast?: boolean; newOnly?: boolean; dryRun?: boolean; json?: boolean; team?: string }) => {
+    if (options.json && action && !["members", "people", "mappings"].includes(action)) {
+      console.error(`cast teams ${action} has no --json output; it prints what it changed. --json reads: cast teams, cast teams members, cast teams mappings`);
+      process.exit(1);
+    }
+    // --team stands in for the positional team, so `teams members --team X` works like the other team reads.
+    if (options.team) {
+      if (action === "members" || action === "people") pathArg ??= options.team;
+      else if (action === "focus" || action === "map") teamArg ??= options.team;
+    }
+    const TEAM_ACTIONS = ["members", "people", "focus", "mappings", "map", "lock", "unmap"];
+    const unknownAction = unknownActionError("teams", action, TEAM_ACTIONS, {
+      shown: ["members", "focus", "mappings", "map", "lock", "unmap"],
+      bare: "omit it to list your teams; cast sharing is the fuller sharing view",
+    });
+    if (unknownAction) {
+      console.error(unknownAction);
+      process.exit(1);
+    }
     const config = readConfig();
     if (!config?.auth_token) {
       console.error("Not authenticated. Run: cast auth");
@@ -6518,6 +6649,12 @@ program
     const teams = await fetchTeams(config);
 
     if (!action) {
+      if (options.json) {
+        const ws = await readWorkspace();
+        const activeId = ws.kind === "team" ? ws.teamId : null;
+        console.log(JSON.stringify(teams.map((t) => ({ id: t._id, name: t.name, role: t.role, active: t._id === activeId })), null, 2));
+        return;
+      }
       if (teams.length === 0) {
         console.log("\nYou are not a member of any teams.");
         console.log(`\n${fmt.muted("Create or join a team at")} ${fmt.accent("codecast.sh/settings/team")}`);
@@ -6534,12 +6671,12 @@ program
       for (const team of teams) {
         const roleLabel = team.role === "admin" ? fmt.accent("admin") : fmt.muted("member");
         const marker = team._id === activeId ? fmt.accent(" ← active") : "";
-        console.log(`  ${fmt.value(team.name.padEnd(20))} ${roleLabel.padEnd(12)} ${fmt.muted(team._id)}${marker}`);
+        console.log(`  ${fmt.value(team.name.padEnd(20))} ${roleLabel}${marker}`);
       }
       if (!activeId) {
         console.log(`\n${fmt.muted("No active team — team-scoped commands need --team, and new work is personal.")}`);
       }
-      console.log(`\n${fmt.muted("Run 'cast teams mappings' to see which projects share with which teams.")}`);
+      console.log(`\n${fmt.muted("A team is named by its name wherever --team is taken. People: cast teams members <team>. Folders: cast sharing.")}`);
       return;
     }
 
@@ -6551,6 +6688,10 @@ program
         process.exit(1);
       }
       const { people } = await cliPost("/cli/chat/people", workspaceArgs(ws));
+      if (options.json) {
+        console.log(JSON.stringify({ team: { id: ws.teamId, name: workspaceLabel(ws) }, people }, null, 2));
+        return;
+      }
       console.log(`\n${c.bold}${workspaceLabel(ws)}${c.reset}\n`);
       for (const p of people) {
         const handle = p.handle ? `@${p.handle}` : fmt.muted("(no handle)");
@@ -6563,6 +6704,10 @@ program
 
     if (action === "mappings") {
       const projects = await fetchProjectsWithTeams(config);
+      if (options.json) {
+        console.log(JSON.stringify({ mappings: projects.map((p) => ({ path: p.path, team_name: p.team_name ?? null, private: !!p.private })) }, null, 2));
+        return;
+      }
 
       if (projects.length === 0) {
         console.log("\nNo projects found.");
@@ -6670,35 +6815,36 @@ program
       return;
     }
 
-    console.error(`Unknown action: ${action}`);
-    console.error("Available actions: members, mappings, map, lock, unmap");
-    process.exit(1);
   });
 
 program
   .command("logs")
-  .description(
-    "View daemon logs for troubleshooting\n\n" +
-    "Examples:\n" +
-    "  cast logs              # View all logs\n" +
-    "  cast logs -n 50        # View last 50 lines\n" +
-    "  cast logs -f           # Follow logs in real-time"
-  )
-  .option("-n, --lines <number>", "Number of lines to show (default: all)")
-  .option("-f, --follow", "Follow log output in real-time (Ctrl+C to stop)")
+  .description("Show the background daemon's log, newest last (the last 200 lines unless -n says otherwise)")
+  .option("-n, --lines <number|all>", "How many of the last lines to show, or all (default: 200)")
+  .option("-f, --follow", "Keep printing new lines as they are written (Ctrl+C to stop)")
+  .addHelpText("after",
+    "\nExamples:\n" +
+    "  cast logs                     # the last 200 lines\n" +
+    "  cast logs -n 50               # the last 50\n" +
+    "  cast logs -n all | grep ERROR # the whole file, filtered\n" +
+    "  cast logs -f                  # follow it live")
   .action((options) => {
     const logFile = path.join(CONFIG_DIR, "daemon.log");
+    const raw = options.lines === undefined ? "200" : String(options.lines);
+    const lines = raw === "all" ? Infinity : Number(raw);
+    if (lines !== Infinity && (!Number.isInteger(lines) || lines < 1)) {
+      console.error(`-n takes a whole number of lines or all (got "${raw}"). Example: cast logs -n 100`);
+      process.exit(1);
+    }
 
     if (!fs.existsSync(logFile)) {
-      console.log("No log file found. Daemon may not have been started yet.");
-      console.log(`Expected at: ${logFile}`);
-      return;
+      console.error(`No daemon log at ${logFile}: the daemon has not run on this machine. Start it with cast start.`);
+      process.exit(1);
     }
 
     if (options.follow) {
-      const followLines = options.lines || "50";
       console.log(`Following ${logFile} (Ctrl+C to stop)\n`);
-      const tail = spawn("tail", ["-f", "-n", followLines, logFile], {
+      const tail = spawn("tail", ["-f", "-n", options.lines === undefined ? "50" : lines === Infinity ? "+1" : String(lines), logFile], {
         stdio: "inherit",
       });
 
@@ -6707,15 +6853,11 @@ program
         process.exit(0);
       });
     } else {
-      const content = fs.readFileSync(logFile, "utf-8");
-      const allLines = content.trim().split("\n");
-
-      if (options.lines) {
-        const lines = parseInt(options.lines, 10);
-        const lastLines = allLines.slice(-lines);
-        console.log(lastLines.join("\n"));
-      } else {
-        console.log(allLines.join("\n"));
+      const allLines = fs.readFileSync(logFile, "utf-8").trim().split("\n");
+      const shown = lines === Infinity ? allLines : allLines.slice(-lines);
+      console.log(shown.join("\n"));
+      if (shown.length < allLines.length) {
+        console.error(`(last ${shown.length} of ${allLines.length} lines in ${logFile}; -n all for the whole file)`);
       }
     }
   });
@@ -6744,7 +6886,10 @@ program
     "  cast search auth --label api     # only sessions I filed under a label\n" +
     "  cast search file:src/auth.ts     # which sessions edited this file\n" +
     "  cast search commit:3f2a91c       # the session behind a commit\n" +
-    "  cast search \"pr:482 retry after:7d\"  # text inside a pull request's sessions"
+    "  cast search \"pr:482 retry after:7d\"  # text inside a pull request's sessions\n" +
+    "  cast search auth -l              # one line per session, with its match count\n\n" +
+    "Each match shows its message, not its line: cast read <id> --grep \"<text>\" lists every\n" +
+    "message in that session holding the text, with the line numbers a range reads."
   )
   .argument("<query>", "Search text and operators (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
@@ -6756,11 +6901,13 @@ program
   .option("--semantic", "Use semantic-only search (no keyword matching)")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
   .option("-e, --end <date>", "End date/time")
-  .option("-n, --limit <n>", "Results per page", "10")
-  .option("-p, --page <n>", "Page number", "1")
-  .option("-A, --after <n>", "Show N messages after each match", "0")
-  .option("-B, --before <n>", "Show N messages before each match", "0")
-  .option("-C, --context <n>", "Show N messages before and after each match")
+  .option("-n, --limit <n>", "Results per page", countOption, 10)
+  .option("-p, --page <n>", "Page number", countOption, 1)
+  .option("-A, --after <n>", "Show N messages after each match", nonNegativeCountOption, 0)
+  .option("-B, --before <n>", "Show N messages before each match", nonNegativeCountOption, 0)
+  .option("-C, --context <n>", "Show N messages before and after each match", nonNegativeCountOption)
+  .option("-l, --sessions", "One line per session: its id, how many messages matched, title, age, project")
+  .option("--json", "Machine-readable output: {total_matches, conversations: [{id, title, message_count, updated_at, project_path, matches: [{role, content, message_id}]}]}")
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -6768,10 +6915,10 @@ program
       process.exit(1);
     }
 
-    const contextBefore = options.context ? parseInt(options.context) : parseInt(options.before);
-    const contextAfter = options.context ? parseInt(options.context) : parseInt(options.after);
-    const limit = parseInt(options.limit);
-    const page = parseInt(options.page);
+    const contextBefore: number = options.context ?? options.before;
+    const contextAfter: number = options.context ?? options.after;
+    const limit: number = options.limit;
+    const page: number = options.page;
     const offset = (page - 1) * limit;
     const projectPath = options.global ? undefined : getRealCwd();
     const userOnly = options.userOnly ?? false;
@@ -6782,14 +6929,14 @@ program
     if (options.start) {
       startTime = parseRelativeDate(options.start) ?? undefined;
       if (!startTime) {
-        console.error(`Invalid start date: ${options.start}`);
+        console.error(`Invalid start date: ${options.start}. ${DATE_FORMS}`);
         process.exit(1);
       }
     }
     if (options.end) {
       endTime = parseEndDate(options.end) ?? undefined;
       if (!endTime) {
-        console.error(`Invalid end date: ${options.end}`);
+        console.error(`Invalid end date: ${options.end}. ${DATE_FORMS}`);
         process.exit(1);
       }
     }
@@ -6830,8 +6977,11 @@ program
         process.exit(1);
       }
 
-      const { formatSearchResults } = await import("./formatter.js");
-      console.log(formatSearchResults(result, { projectPath }));
+      if (options.json) { console.log(JSON.stringify(result)); return; }
+      const { formatSearchResults, formatSearchSessions } = await import("./formatter.js");
+      const { parseSessionQuery } = await import("@codecast/shared/search");
+      const text = parseSessionQuery(query).text;
+      console.log(options.sessions ? formatSearchSessions(result, { projectPath, text }) : formatSearchResults(result, { projectPath, text }));
     } catch (error) {
       console.error("Search failed:", error instanceof Error ? error.message : error);
       process.exit(1);
@@ -6856,6 +7006,7 @@ program
     "  cast feed -q auth            # filter by keyword\n" +
     "  cast feed --state working    # only sessions the agent is working\n" +
     "  cast feed --state needs-input # only sessions waiting on a human\n" +
+    "  cast feed --mine -n 5 --json   # my 5 latest, machine-readable\n" +
     "  cast feed --label api        # only sessions I filed under a label"
   )
   .option("-g, --global", "Show all sessions (not just current team)")
@@ -6863,12 +7014,13 @@ program
   .option("-q, --query <text>", "Filter by keyword (keeps recency order)")
   .option("-m, --member <name>", "Filter by team member name or email")
   .option("--label <name>", "Filter to sessions filed under one of my labels")
-  .option("--state <state>", "Filter by work state: working | needs-input | idle | pinned | live")
-  .option("-n, --limit <n>", "Number of conversations per page", "10")
-  .option("-p, --page <n>", "Page number (1-indexed)", "1")
+  .option("--state <state>", "Filter by work state: needs-input | done | working | dormant | hibernated | idle | pinned | live | all", stateOption)
+  .option("-n, --limit <n>", "Number of conversations per page", countOption, 10)
+  .option("-p, --page <n>", "Page number (1-indexed)", countOption, 1)
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday, 2024-01-15)")
   .option("-e, --end <date>", "End date/time")
   .option("-l, --live", "Show only live sessions (currently running)")
+  .option("--json", "Output the raw feed as JSON")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -6876,8 +7028,8 @@ program
       process.exit(1);
     }
 
-    const limit = parseInt(options.limit);
-    const page = parseInt(options.page);
+    const limit: number = options.limit;
+    const page: number = options.page;
     const offset = (page - 1) * limit;
     const projectPath = options.global ? undefined : getRealCwd();
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -6888,14 +7040,14 @@ program
     if (options.start) {
       startTime = parseRelativeDate(options.start) ?? undefined;
       if (!startTime) {
-        console.error(`Invalid start date: ${options.start}`);
+        console.error(`Invalid start date: ${options.start}. ${DATE_FORMS}`);
         process.exit(1);
       }
     }
     if (options.end) {
       endTime = parseEndDate(options.end) ?? undefined;
       if (!endTime) {
-        console.error(`Invalid end date: ${options.end}`);
+        console.error(`Invalid end date: ${options.end}. ${DATE_FORMS}`);
         process.exit(1);
       }
     }
@@ -6927,6 +7079,10 @@ program
         process.exit(1);
       }
 
+      if (options.json) {
+        console.log(JSON.stringify(result));
+        return;
+      }
       const { formatFeedResults } = await import("./formatter.js");
       console.log(formatFeedResults(result, { projectPath, page }));
     } catch (error) {
@@ -6949,9 +7105,19 @@ program
     "DONE = the agent delivered (`cast state --status done`); review at leisure. WORKING = the\n" +
     "agent is producing now. DORMANT = a machine wakes it (a declared `cast state --status\n" +
     "dormant`, an open background task/Monitor, or an armed trigger into it) — nothing is yours\n" +
-    "until then. IDLE = blank sessions. --json swaps any view to JSON.\n\n" +
-    "Watch mode (-w) is the monitoring primitive: it prints NOTHING until something changes,\n" +
-    "then one line per change — safe to run in the background and wake on output. With --json\n" +
+    "until then. IDLE = blank sessions. Sessions you name are listed whatever their state.\n\n" +
+    "--json prints {counts, sessions: [{id, short_id, work_state, title, message_count, updated_at,\n" +
+    "thread_state, thread_state_status, is_live, is_pinned, …}]}: the rows sit under .sessions,\n" +
+    "even for one id, and work_state is the field to read.\n\n" +
+    "Waiting for workers: --until exits once every named session (or every one under --label)\n" +
+    "reaches one of the states (default settled: anything but working), printing one line as\n" +
+    "each does; it gives up after --timeout (default 9m, exit 2). With -w it streams changes and\n" +
+    "exits at the same point, with no timeout, for waiting from a background shell. A worker\n" +
+    "that settles also wakes the session that spawned it, so after delegating you can end\n" +
+    "your turn instead of waiting.\n\n" +
+    "Watch mode (-w) streams changes and never exits on its own (unless --until): it prints NOTHING until\n" +
+    "something changes, then one line per change. Run it in the background and wake on output;\n" +
+    "piped to tail or head in the foreground it hangs until killed. With --json\n" +
     "each line is one NDJSON event:\n" +
     '  {"ts":…,"event":"new"|"transition"|"gone","id":…,"title":…,"from":…,"to":…,"label":…}\n' +
     "new = session entered the watched set · transition = work_state changed · gone = left\n" +
@@ -6964,6 +7130,9 @@ program
     '  cast read <id>  /  cast send <id> "next step"\n\n' +
     "Examples:\n" +
     "  cast sessions                  # state snapshot of your sessions\n" +
+    "  cast sessions jx7abc           # one session's state, pinned line and message count\n" +
+    "  cast sessions jx7abc jx7def --until          # block until both have settled (anything but working)\n" +
+    "  cast sessions --label fleet --until done --timeout 5m   # …a label's sessions, until done\n" +
     "  cast sessions -w               # stream state changes live\n" +
     "  cast sessions jx7abc jx7def -w # watch an explicit set of sessions\n" +
     "  cast sessions jx7abc jx7def -w --until   # exit once both have settled (wait from a background shell)\n" +
@@ -6977,8 +7146,10 @@ program
     "  cast sessions --labels -g      # …across all projects\n" +
     "  cast sessions --by-label -a    # group all sessions by label"
   )
-  .option("-w, --watch", "Stream changes live instead of a one-shot snapshot (state transitions, or messages with -M); silent until something changes")
-  .option("--state <state>", "Filter: needs-input | done | working | dormant | hibernated | idle | pinned | live (with -w: new/gone events fire as sessions enter/leave the filter)")
+  .option("-w, --watch", "Stream changes live instead of a one-shot snapshot (state transitions, or messages with -M); silent until something changes, and never exits on its own")
+  .option("--until [states]", "Wait until every named session (or every one under --label) is in one of these states, then exit 0 (default settled: anything but working). With -w the change stream runs and exits at that point, with no timeout")
+  .option("--timeout <duration>", "With --until (no -w): give up after this long and exit 2 (default 9m)")
+  .option("--state <state>", "Filter: needs-input | done | working | dormant | hibernated | idle | pinned | live | all (with -w: new/gone events fire as sessions enter/leave the filter)", stateOption)
   .option("-t, --team [name|id|personal]", "Show a team's sessions (default: the active team; personal = just yours)")
   .option("-g, --global", "All teams (implies --team)")
   .option("-m, --member <name>", "Filter by team member (implies --team)")
@@ -6987,10 +7158,9 @@ program
   .option("--labels", "List my labels with session counts (current project; -g for all)")
   .option("--by-label", "Group the snapshot by label (current project; -g for all)")
   .option("-a, --all", "Include idle / dismissed sessions")
-  .option("-n, --limit <n>", "Max sessions to show", "200")
+  .option("-n, --limit <n>", "Max sessions to show", countOption, 200)
   .option("-M, --messages", "Show conversation messages instead of work state (live with -w)")
   .option("--json", "Output as JSON (with -w: NDJSON, one event object per line)")
-  .option("--until [states]", "With -w: exit once every watched session is in one of these states (comma list; default settled = anything but working), printing each one's final state. Use it to wait on workers from a background shell")
   .action(async (sessionIds, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -7000,9 +7170,9 @@ program
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     let untilStates: Set<string> | null = null;
     let untilReached: typeof import("./sessionsUntil.js").untilReached = () => false;
-    if (options.until !== undefined) {
-      if (!options.watch || options.messages) {
-        console.error("--until works with -w on work states (not with --messages).");
+    if (options.until !== undefined && options.watch) {
+      if (options.messages) {
+        console.error("Error: --until waits on work states; it cannot be combined with --messages");
         process.exit(1);
       }
       try {
@@ -7021,7 +7191,8 @@ program
     // it was dismissed from the inbox. They also go to the server (session_ids)
     // so a named row is hydrated past the recency window and a subagent row —
     // hidden from the top-level monitor — still answers when asked for by id.
-    const ids: string[] = (sessionIds || []).map((x: string) => x.trim()).filter(Boolean);
+    // `cast sessions show <id>` / `ls`: the verb is the command itself, never a session id.
+    const ids: string[] = (sessionIds || []).map((x: string) => x.trim()).filter((x: string, i: number) => x && !(i === 0 && (x === "show" || x === "ls" || x === "list")));
     const matchesId = (s: any) =>
       ids.length === 0 || ids.some((x) => s.id === x || (s.id || "").startsWith(x) || s.session_id === x);
     const showAll = options.all || ids.length > 0 || undefined;
@@ -7242,8 +7413,68 @@ program
       if (ids.length > 0 && result && !result.error && Array.isArray(result.sessions)) {
         result = { ...result, sessions: result.sessions.filter(matchesId) };
       }
+      // Every row carries the short id other commands take.
+      if (result && !result.error && Array.isArray(result.sessions)) {
+        result = { ...result, sessions: result.sessions.map((s: any) => ({ ...s, short_id: s.short_id ?? String(s.id ?? "").slice(0, 7) })) };
+      }
       return result;
     };
+
+    if (options.until !== undefined && !options.watch) {
+      if (options.messages || options.labels || options.byLabel) {
+        console.error("Error: --until waits on work states; it cannot be combined with --messages, --labels or --by-label");
+        process.exit(1);
+      }
+      if (ids.length === 0 && !options.label) {
+        console.error("Error: --until waits on named sessions: pass their ids, or --label <name>");
+        process.exit(1);
+      }
+      const { parseUntilStates, settleRows } = await import("./sessionsUntil.js");
+      let wanted: Set<string>;
+      let timeoutMs = 9 * 60_000;
+      try {
+        wanted = parseUntilStates(options.until);
+        if (options.timeout) timeoutMs = parseSharedDuration(options.timeout);
+      } catch (e) {
+        console.error(`Error: ${(e as Error).message}`);
+        process.exit(1);
+      }
+      const first = await fetchSnapshot();
+      if (first?.error) {
+        console.error(`Error: ${cliErrorMessage(first.error)}`);
+        process.exit(1);
+      }
+      const missing = ids.filter((x) => !(first.sessions ?? []).some((r: any) => r.id === x || String(r.id ?? "").startsWith(x) || r.session_id === x));
+      if (missing.length > 0) {
+        console.error(notFoundLine("session", missing.join(", "), SESSION_ID_HINT));
+        process.exit(1);
+      }
+      const watched = new Set<string>((first.sessions ?? []).map((r: any) => r.id));
+      if (watched.size === 0) {
+        console.error(`No sessions under --label ${options.label}`);
+        process.exit(1);
+      }
+      const settled = new Set<string>();
+      const report = (rows: any[]) => {
+        for (const ev of settleRows(rows, watched, settled, wanted)) {
+          if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), event: "settled", ...ev }));
+          else console.log(`${ev.short_id}  ${ev.to.replace("_", " ")}  ${ev.title ?? ""}${ev.thread_state ? `  ${c.dim}${ev.thread_state}${c.reset}` : ""}`);
+        }
+        if (settled.size === watched.size) process.exit(0);
+      };
+      report(first.sessions ?? []);
+      setTimeout(async () => {
+        const last = await fetchSnapshot().catch(() => null);
+        const pending = (last?.sessions ?? []).filter((r: any) => watched.has(r.id) && !settled.has(r.id));
+        console.error(`Still waiting after ${options.timeout ?? "9m"}: ${pending.map((r: any) => `${r.short_id} (${String(r.work_state).replace("_", " ")})`).join(", ") || [...watched].filter((x) => !settled.has(x)).map((x) => x.slice(0, 7)).join(", ")}`);
+        process.exit(2);
+      }, timeoutMs);
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 10_000));
+        const next = await fetchSnapshot().catch(() => null);
+        if (next && !next.error) report(next.sessions ?? []);
+      }
+    }
 
     const { formatMonitor, formatSessionChangeLine, formatLabelsList } = await import("./formatter.js");
 
@@ -7258,6 +7489,23 @@ program
           console.error(`Error: ${cliErrorMessage(result.error)}`);
           process.exit(1);
         }
+        // A named id that matches nothing is a typo or a session out of reach,
+        // never an empty inbox. That holds only when nothing else narrowed the
+        // set: under --state/--label a real session may just not be in that
+        // state, and team mode filters ids within the --limit window, so those
+        // report the miss and exit 0 with what matched.
+        if (ids.length > 0 && Array.isArray(result.sessions)) {
+          const missing = ids.filter((x) => !result.sessions.some((s: any) => s.id === x || (s.id || "").startsWith(x) || s.session_id === x));
+          const narrowed = [options.state && `--state ${options.state}`, options.label && `--label ${options.label}`].filter(Boolean);
+          if (missing.length === ids.length && !teamMode && narrowed.length === 0) {
+            console.error(notFoundLine("session", missing.join(", "), SESSION_ID_HINT));
+            process.exit(1);
+          }
+          if (missing.length > 0) {
+            const why = narrowed.length > 0 ? `under ${narrowed.join(" ")}` : `among the ${limit} latest team sessions`;
+            console.error(`${c.yellow}No session matches ${missing.join(", ")} ${why}${missing.length < ids.length ? "; showing the rest" : ""}.${c.reset}`);
+          }
+        }
         if (options.labels) {
           console.log(options.json
             ? JSON.stringify({ labels: result.labels ?? [], counts: result.counts, project: labelProjectPath ?? null })
@@ -7266,7 +7514,8 @@ program
         }
         console.log(options.json
           ? JSON.stringify(result)
-          : formatMonitor(result, { state: options.state, all: options.all, groupByLabel: options.byLabel, scopeLabel, command: "cast sessions" }));
+          // A session named by id is shown whatever its state, idle included.
+          : formatMonitor(result, { state: options.state, all: options.all || ids.length > 0, groupByLabel: options.byLabel, scopeLabel, command: "cast sessions" }));
       } catch (error) {
         console.error("sessions failed:", error instanceof Error ? error.message : error);
         process.exit(1);
@@ -7584,7 +7833,7 @@ program
   )
   .argument("[query...]", "Search terms (AND-ed, use quotes for exact phrase)")
   .option("-g, --global", "Search all sessions (not just current project)")
-  .option("-n, --limit <n>", "Max results to show (use -n 10 for more)", "4")
+  .option("-n, --limit <n>", "Max results to show (use -n 10 for more)", countOption, 4)
   .option("--dry-run", "Show matches without opening Claude")
   .option("--here", "Open session in current directory (don't switch to session's project)")
   .option("--tmux", "Resume in the session's tmux pane (the one the web session is attached to) and attach")
@@ -8410,13 +8659,20 @@ program
   .description(
     "Read messages from a conversation\n\n" +
     "Examples:\n" +
-    "  cast read jx70ntf                   # Read the first 20 messages\n" +
+    "  cast read jx70ntf                   # Read the first 20 messages; the last line names the total\n" +
+    "                                      #  and the commands for the next page and the latest messages\n" +
     "  cast read jx70ntf 12:20             # Read messages 12-20\n" +
     "  cast read jx70ntf -n 5              # Read the last 5 messages (fast on any session;\n" +
     "                                      #  on a long one, lines count back from the end: -1 is the last)\n" +
+    "  cast read jx70ntf -1                # Read the last message; -5: the last five, -20:-10 a stretch\n" +
+    "                                      #  of them (every label -n prints reads back, up to -500)\n" +
     "  cast read jx70ntf 12:               # Read from message 12 to end\n" +
     "  cast read jx70ntf :20               # Read first 20 messages\n" +
     "  cast read jx70ntf 15                # Read single message 15\n" +
+    "  cast read jx70ntf 15 -c 3           # …with 3 messages each side (12-18)\n" +
+    "  cast read jx70ntf --grep \"retry cap\" # Every message holding the text (its words, tool calls or\n" +
+    "                                      #  results), with the line numbers a range reads; 300: --grep …\n" +
+    "                                      #  looks from line 300 on\n" +
     "  cast read jx70ntf 10:15 --full      # Show full tool call/result content\n" +
     "                                      # (required for StructuredOutput payloads —\n" +
     "                                      #  without it they collapse to a one-line summary)\n" +
@@ -8433,29 +8689,43 @@ program
     "                                      # …about THIS session, past its own compactions"
   )
   .argument("[conversation-id]", "Conversation ID, or a share URL (a #msg-<id> anchor reads around that message); with --ask, omit it or pass `self` for this session")
-  .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
+  .argument("[range]", "Message range: 12:20, 12:, :20, 15, or counted from the end: -1, -5:, -20:-10")
   .option("-f, --full", "Show full tool call and tool result content (the only way to see a StructuredOutput payload)")
-  .option("-c, --context <n>", "Messages to show on each side of a #msg-<id> anchor (default 10)")
-  .option("-n, --tail <n>", "Read the last n messages (at most 500)")
+  .option("-c, --context <n>", "Messages to show on each side of a single line, or of a #msg-<id> anchor (default 10)", nonNegativeCountOption)
+  .option("--grep <text>", "Only the messages holding this text (\"quoted phrase\" or words), with their line numbers")
+  .option("-n, --tail <n>", "Read the last n messages (at most 500)", countOption)
   .option("--ack", "Also mark the session read: clears its unread dot in the web and mobile inbox")
   .option("--ask <question>", "Answer a question from this session, with line citations, checking whether later messages changed the answer")
-  .option("--json", "With --ask: machine-readable output")
-  .action(async (conversationId, range, options) => {
+  .option("--json", "Machine-readable output (the messages, or with --ask the answer and its citations)")
+  .option("--team <name|id>", "Not needed: a session id already names its workspace (taken and ignored)")
+  .allowUnknownOption()
+  .action(async (conversationId, range, options, command) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
+    if (options.team) console.error(`${c.dim}--team is not needed: a session id names its own workspace${c.reset}`);
 
     if (options.ask !== undefined) {
-      if (range || options.tail !== undefined || options.context !== undefined || options.full || options.ack) {
-        console.error("Error: --ask reads the whole session; it takes no range, -n, -c, --full or --ack");
+      if (range || options.tail !== undefined || options.context !== undefined || options.full || options.ack || options.grep !== undefined || command.args.length > 1) {
+        console.error("Error: --ask reads the whole session; it takes no range, -n, -c, --grep, --full or --ack");
         process.exit(1);
       }
       const ref = conversationId === undefined || conversationId === "self"
         ? await resolveConversationFullId(config, undefined)
         : parseConversationRef(conversationId).conversationId;
-      const result = await cliPost("/cli/read/ask", { conversation_id: ref, question: options.ask }, { timeoutMs: 300_000 });
+      const { explainAskFailure } = await import("@codecast/shared/contracts");
+      // A long session takes minutes to read whole; say so before the wait, so
+      // a caller's own timeout does not kill the answer it is waiting for.
+      const size = await tryCliPost("/cli/read", { conversation_id: ref, tail: 1 });
+      const rows: number = size?.conversation?.message_count ?? 0;
+      if (rows > ASK_SLOW_ROWS) console.error(`${c.dim}Asking a ${rows}-message session: this can take a few minutes, so allow a 300 s timeout${c.reset}`);
+      const result = await cliPost("/cli/read/ask", { conversation_id: ref, question: options.ask }, { timeoutMs: 300_000, throwOnError: true })
+        .catch((e: Error) => {
+          console.error(`Error: ${explainAskFailure(e.message, ref.length > 12 ? ref.slice(0, 7) : ref)}`);
+          process.exit(1);
+        });
       const { formatAskResult } = await import("./formatter.js");
       console.log(options.json ? JSON.stringify(result, null, 2) : formatAskResult(result));
       return;
@@ -8467,56 +8737,99 @@ program
 
     const { conversationId: parsedId, messageId } = parseConversationRef(conversationId);
 
-    let startLine: number | undefined;
-    let endLine: number | undefined;
-
-    if (range) {
-      if (range.includes(":")) {
-        const [start, end] = range.split(":");
-        if (start) startLine = parseInt(start);
-        if (end) endLine = parseInt(end);
-      } else {
-        startLine = parseInt(range);
-        endLine = parseInt(range);
-      }
-    }
-
-    // An explicit range wins over the anchor's window, but the anchor is still
-    // sent so the linked message gets highlighted.
-    const contextN = options.context !== undefined ? parseInt(options.context, 10) : undefined;
-    const tailN = options.tail !== undefined ? parseInt(options.tail, 10) : undefined;
-    if (tailN !== undefined && (!Number.isFinite(tailN) || tailN < 1)) {
-      console.error("Error: --tail takes a positive number of messages");
+    // Lines counted from the end (-1, -5:, -20:-10) look like options to the
+    // parser, so unknown options are let through and checked here.
+    const stray = [conversationId, ...command.args.slice(2)].find((a: string) => a?.startsWith("-"))
+      ?? (range && /^-(?!\d)/.test(range) ? range : undefined);
+    if (stray || command.args.length > 2) {
+      console.error(stray ? `error: unknown option '${stray}'` : `error: too many arguments: ${command.args.slice(2).join(" ")}`);
       process.exit(1);
     }
-    if (tailN !== undefined && (range || messageId)) {
+    const { parseReadRange, sliceBackRange } = await import("./readRange.js");
+    const contextN: number | undefined = options.context;
+    let parsedRange: import("./readRange.js").ReadRange | undefined;
+    try {
+      // -c widens a plain line; with a #msg link it sizes the anchor's window.
+      parsedRange = range ? parseReadRange(range, messageId ? undefined : contextN) : undefined;
+    } catch (e) {
+      console.error(`Error: ${(e as Error).message}`);
+      process.exit(1);
+    }
+    const back = parsedRange?.kind === "back" ? parsedRange : undefined;
+    const startLine = parsedRange?.kind === "forward" ? parsedRange.start : undefined;
+    const endLine = parsedRange?.kind === "forward" ? parsedRange.end : undefined;
+
+    const tailN: number | undefined = back ? back.from : options.tail;
+    if (options.tail !== undefined && (range || messageId)) {
       console.error("Error: --tail reads the last messages; it cannot be combined with a range or a #msg link");
       process.exit(1);
     }
+    const grep: string | undefined = options.grep;
+    if (grep !== undefined && (!grep.trim() || tailN !== undefined || messageId)) {
+      console.error(grep.trim()
+        ? "Error: --grep searches from the start (a range like 300: narrows it); it cannot be combined with -n, a range from the end or a #msg link"
+        : "Error: --grep needs some text to find");
+      process.exit(1);
+    }
 
+    if (startLine !== undefined && startLine > READ_SLOW_START && grep === undefined) {
+      console.error(`${c.dim}Line numbers are counted from the start, so reading from line ${startLine} scans every line before it; recent messages are faster from the end (cast read ${parsedId.slice(0, 7)} -50: or -n 50)${c.reset}`);
+    }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-
-    try {
+    const readPage = async (body: Record<string, unknown>) => {
       const response = await cliFetchRead(`${siteUrl}/cli/read`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_token: config.auth_token,
-          conversation_id: parsedId,
-          start_line: startLine,
-          end_line: endLine,
-          full_content: options.full || undefined,
-          around_message_id: messageId,
-          context: Number.isFinite(contextN) ? contextN : undefined,
-          tail: tailN,
-        }),
+        body: JSON.stringify({ api_token: config.auth_token, conversation_id: parsedId, full_content: options.full || undefined, ...body }),
       });
-
       const result = await response.json();
-
       if (result.error) {
         const msg = result.details ? `${result.error}: ${result.details}` : result.error;
-        console.error(`Error: ${msg}`);
+        console.error(`Error: ${withSessionIdHint(msg)}`);
+        process.exit(1);
+      }
+      return result;
+    };
+
+    try {
+      let result = await readPage({
+        start_line: startLine,
+        end_line: endLine,
+        around_message_id: messageId,
+        context: messageId ? contextN : undefined,
+        tail: tailN,
+        grep,
+      });
+      const id = String(result.conversation?.id ?? parsedId).slice(0, 7);
+      const count: number = result.conversation?.message_count ?? 0;
+
+      if (grep !== undefined && !result.grep) {
+        // A server from before --grep ignores it and answers with a plain page:
+        // search the session here when it is short enough to read in one go.
+        if (count > GREP_LOCAL_MAX_LINES) {
+          console.error(`Error: this server cannot search inside a session this long yet (${count} lines). Ask it instead: cast read ${id} --ask "where did we discuss ${grep.replace(/"/g, "")}?"`);
+          process.exit(1);
+        }
+        const whole = await readPage({ start_line: startLine ?? 1, end_line: endLine });
+        const { countMatches, parseSearchTerms } = await import("@codecast/shared/search");
+        const terms = parseSearchTerms(grep);
+        const has = (t: unknown) => typeof t === "string" && countMatches(t, terms) > 0;
+        const hits = (whole.messages ?? []).filter((m: any) =>
+          has(m.content) || m.tool_calls?.some((tc: any) => has(tc.input)) || m.tool_results?.some((tr: any) => has(tr.content)));
+        result = { ...whole, messages: hits.slice(0, GREP_LOCAL_MAX_MATCHES), grep: { matches: Math.min(hits.length, GREP_LOCAL_MAX_MATCHES), searched: whole.messages?.length ?? 0, more: hits.length > GREP_LOCAL_MAX_MATCHES } };
+      }
+
+      if (back) {
+        const kept = sliceBackRange(result.messages ?? [], back);
+        if (!kept) {
+          console.error(`Error: line -${back.to} is before the start: this session has ${(result.messages ?? []).length} lines (cast read ${id} 1:20 reads its start)`);
+          process.exit(1);
+        }
+        result = { ...result, messages: kept };
+      } else if (grep === undefined && startLine !== undefined && !messageId && (result.messages ?? []).length === 0 && startLine > count) {
+        console.error(count === 0
+          ? "Error: this session has no messages yet"
+          : `Error: line ${startLine} is past the end: this session has ${count} lines (the latest: cast read ${id} -n 10)`);
         process.exit(1);
       }
 
@@ -8524,10 +8837,15 @@ program
         console.error(`Note: message ${messageId} not found in this conversation — showing the start instead.`);
       }
 
+      if (options.json) {
+        console.log(JSON.stringify(result));
+        if (options.ack) await cliPost("/cli/session/ack", { conversation_id: parsedId });
+        return;
+      }
       const { formatReadResult, READ_PAGE_CHARS } = await import("./formatter.js");
       // A person at a terminal scrolls; an agent's shell tool cuts long output to a preview.
       const maxChars = process.stdout.isTTY ? undefined : READ_PAGE_CHARS;
-      console.log(formatReadResult(result, { full: options.full, targetLine: result.target_line, maxChars }));
+      console.log(formatReadResult(result, { full: options.full, targetLine: result.target_line, maxChars, grep }));
 
       // Opt-in, never automatic: reading a session from the CLI is often a
       // glance at someone else's work, and silently clearing their unread dot
@@ -8541,6 +8859,13 @@ program
       process.exit(1);
     }
   });
+
+// `cast read --grep` against a server that predates it reads the session here.
+const GREP_LOCAL_MAX_LINES = 3000;
+// Past these, a read or an ask on a session is slow enough to say so first.
+const READ_SLOW_START = 5000;
+const ASK_SLOW_ROWS = 5000;
+const GREP_LOCAL_MAX_MATCHES = 30;
 
 program
   .command("unread")
@@ -8614,7 +8939,7 @@ async function resolveConversationFullId(
   });
   const result = await response.json();
   if (result.error) {
-    console.error(`Error: ${result.details ? `${result.error}: ${result.details}` : result.error}`);
+    console.error(`Error: ${withSessionIdHint(result.details ? `${result.error}: ${result.details}` : result.error)}`);
     process.exit(1);
   }
   return result.conversation?.id ?? ref;
@@ -9282,7 +9607,7 @@ function setupWindows(disable: boolean): void {
 program
   .command("setup")
   .description(
-    "Configure daemon to start automatically on login\n\n" +
+    "Start the sync daemon automatically at login (cast auth sets this up already)\n\n" +
     "Supported platforms:\n" +
     "  - macOS: LaunchAgent\n" +
     "  - Linux: systemd user service\n" +
@@ -9296,7 +9621,7 @@ program
     // "setup" reads like "set up codecast" — catch the user who hasn't
     // authenticated yet before configuring autostart for a daemon that can't run.
     if (!options.disable && !readConfig()?.auth_token) {
-      console.log(`Not signed in yet. Run ${fmt.cmd("cast auth")} first — it configures auto-start too.`);
+      console.error(`Not signed in yet. Run ${fmt.cmd("cast auth")} first; it sets up auto-start too.`);
       process.exit(1);
     }
     switch (process.platform) {
@@ -9310,17 +9635,16 @@ program
         setupWindows(options.disable);
         break;
       default:
-        console.error(`Unsupported platform: ${process.platform}`);
-        console.log("Supported: macOS, Linux, Windows");
+        console.error(`Auto-start is not supported on ${process.platform}. Supported: macOS, Linux, Windows (inside WSL).`);
         process.exit(1);
     }
   });
 
 program
   .command("uninstall")
-  .description("Completely remove cast from this machine")
-  .option("--keep-config", "Keep ~/.codecast config directory")
-  .option("-y, --yes", "Skip confirmation prompt")
+  .description("Remove codecast from this machine: stop the daemon, remove auto-start, hooks, snippets and the binary")
+  .option("--keep-config", "Keep the ~/.codecast directory (sign-in and settings)")
+  .option("-y, --yes", "Skip the confirmation prompt")
   .action(async (options) => {
     await requireDestructiveConfirm(["uninstall"], { yes: options.yes });
 
@@ -9488,13 +9812,15 @@ program
   .command("links")
   .description(
     "Get dashboard and share URLs for the current session\n\n" +
+    "For another session by its short id, use `cast link <id>` (the URL) or\n" +
+    "`cast share <id>` (a share link).\n\n" +
     "Examples:\n" +
     "  cast links              # Get links for current project\n" +
     "  cast links --json       # Output as JSON\n" +
-    "  cast links -s abc123    # Specific session ID"
+    "  cast links -s 6f81d21a-19c9-4fa4-bb76-8c50e746a09b   # by agent session UUID"
   )
   .option("--json", "Output as JSON")
-  .option("-s, --session <id>", "Specific session ID (default: most recent)")
+  .option("-s, --session <uuid>", "The agent's own session UUID (default: the session running this command)")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -9503,6 +9829,11 @@ program
     }
 
     let sessionId = options.session;
+    // A codecast id (jx7c6zk, or its 32-character form) is not an agent session UUID.
+    if (sessionId && /^([a-z0-9]{7}|[a-z0-9]{31,32})$/.test(sessionId) && /[g-z]/.test(sessionId)) {
+      console.error(`Error: -s takes the agent's session UUID. For a codecast id like ${sessionId}, run \`cast link ${sessionId}\` or \`cast share ${sessionId}\`.`);
+      process.exit(1);
+    }
 
     // Find git root - Claude Code stores sessions at the git root level
     let projectRoot = process.cwd();
@@ -9677,7 +10008,9 @@ program
     "  cast diff --today          # aggregate today's sessions\n" +
     "  cast diff --week           # this week's changes\n" +
     "  cast diff --full           # include full file diffs\n" +
-    "  cast diff --patch          # show only the patch (no stats)"
+    "  cast diff --patch          # show only the patch (no stats)\n" +
+    "  cast diff <session-id> --turns            # the session's turns, numbered\n" +
+    "  cast diff <session-id> --turn last --stat # files and line counts of its newest turn"
   )
   .argument("[session-id]", "Session ID to analyze")
   .option("--today", "Aggregate changes from today's sessions")
@@ -9696,6 +10029,10 @@ program
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     const projectPath = process.cwd();
+    if (options.stat && !options.turn) {
+      console.error("Error: --stat goes with --turn <n|last>. For the whole session's file list run `cast diff <session-id>` alone.");
+      process.exit(1);
+    }
     if ((options.turns || options.turn) && (options.today || options.week)) {
       console.error("--turns and --turn read one session; drop --today/--week");
       process.exit(1);
@@ -9791,8 +10128,7 @@ program
         }
 
         if (!sessionId) {
-          console.error("No session ID provided and could not detect current session");
-          console.error("Usage: cast diff <session-id>");
+          console.error(`Error: no session id given, and this directory has no recent session. Pass one: cast diff <session-id>. ${SESSION_ID_HINT}`);
           process.exit(1);
         }
       }
@@ -9800,7 +10136,7 @@ program
       const needFullContent = options.full || options.patch;
       const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId, 500, needFullContent, true);
       if ("error" in result) {
-        console.error(`Error: ${cliErrorMessage(result.error)}`);
+        console.error(`Error: ${withSessionIdHint(cliErrorMessage(result.error))}`);
         process.exit(1);
       }
 
@@ -10092,6 +10428,7 @@ program
     "  cast calls --video           # Only calls with video (video+screen: a share has its own file)\n" +
     "  cast call <id>               # One call: summary + action items\n" +
     "  cast call <id> --transcript  # Full attributed transcript\n" +
+    "  cast call cl-42:15-25        # Only lines 15 to 25\n" +
     "  cast call snap cl-42:15      # A frame of a recorded call's video, as a PNG"
   )
   .option("-n, --limit <n>", "How many calls to list", "20")
@@ -10183,11 +10520,11 @@ function snapHelp(cmd: Command, helper: Help): string {
 
 program
   .command("call")
-  .description(
-    "Show one call: title, participants, summary, action items, frames of its\n" +
-    "video (cast call snap), and the full speaker-attributed transcript with\n" +
-    "--transcript. Each transcript line is labeled with the reference that cites\n" +
-    "it, so a message can name the exact words:\n" +
+  .description("Show one call: title, participants, summary and action items; --transcript for every line, snap for a video frame")
+  // After the options, and not under `cast call snap --help`, which prints its own page (snapHelp).
+  .addHelpText("after", (context) => context.command.args[0] === "snap" ? "" :
+    "\nEach transcript line is labeled with the reference that cites it, so a message\n" +
+    "can name the exact words:\n" +
     "  cl-42           # in a message: the call, as a live pill (a card alone on its line)\n" +
     "  cl-42:15-25     # in a message: lines 15 to 25, embedded alone on a line\n" +
     "  cast call cl-42 15:25   # print just those lines\n" +
@@ -10201,8 +10538,7 @@ program
     "A recorded call has video, and snap pulls a frame of it as a PNG you can open\n" +
     "(`cast call snap --help` for this part alone):\n" +
     CALL_SNAP_EXAMPLES +
-    CALL_SNAP_ABOUT
-  )
+    CALL_SNAP_ABOUT)
   .argument("<id>", "Call short id (cl-42), id or unique prefix from `cast calls`; or the verb `hold` or `snap`")
   .argument("[arg]", "Lines to print (15:25, 15-25 or 15); after `hold`: 3m, 90s, 1h or `off`; after `snap`: the moment (cl-42:15, cl-42@12:34, cl-42 15)")
   .option("--transcript", "Print the full attributed transcript")
@@ -10546,7 +10882,7 @@ program
         );
       }
     } else if (allSegs.length > 0) {
-      console.log(`\n${c.dim}${allSegs.length} transcript ${allSegs.length === 1 ? "line" : "lines"}; add --transcript to print ${allSegs.length === 1 ? "it" : "them"}${c.reset}`);
+      console.log(`\n${c.dim}${allSegs.length} transcript ${allSegs.length === 1 ? "line" : "lines"}; add --transcript to print ${allSegs.length === 1 ? "it" : "them"}${allSegs.length > 1 ? `, or ${callRefId(handle, { from_seq: allSegs[0].seq, to_seq: allSegs[Math.min(9, allSegs.length - 1)].seq })} for a range` : ""}${c.reset}`);
     }
   });
 
@@ -10568,7 +10904,7 @@ program
     }
 
     if (!sessionId && !options.today) {
-      console.error("Provide a session-id or use --today");
+      console.error(`Error: pass a session id (cast summary <session-id>) or --today. ${SESSION_ID_HINT}`);
       process.exit(1);
     }
 
@@ -10607,7 +10943,7 @@ program
       const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId);
 
       if ("error" in result) {
-        console.error(`Error: ${cliErrorMessage(result.error)}`);
+        console.error(`Error: ${withSessionIdHint(cliErrorMessage(result.error))}`);
         process.exit(1);
       }
 
@@ -10621,8 +10957,17 @@ program
 
 const memoryCommand = program
   .command("memory")
-  .description("Install or update the agent memory component")
-  .option("--disable", "Disable memory (remove snippet and save preference)")
+  .description(
+    "Install or update the memory snippet in your agent instructions\n\n" +
+    "Writes the section that teaches agents to search past sessions (cast search,\n" +
+    "cast read --ask, cast context) into the agent instruction files on this\n" +
+    "machine. It does not search anything itself: for that run `cast search <words>`,\n" +
+    "and `cast guide memory` prints the full command reference.\n\n" +
+    "Examples:\n" +
+    "  cast memory              # install or refresh the snippet\n" +
+    "  cast memory --disable    # remove it and keep it off"
+  )
+  .option("--disable", "Remove the snippet from this machine and keep it off")
   .action(async (options) => {
     const config = readConfig() || {};
 
@@ -10894,19 +11239,20 @@ program
   .description(
     "Bookmark a specific message in a conversation\n\n" +
     "Examples:\n" +
-    "  cast bookmark abc123 42                     # bookmark message 42\n" +
-    "  cast bookmark abc123 42 --name auth-fix    # with a name\n" +
-    "  cast bookmark abc123 42 --note \"key insight\"  # with a note\n" +
+    "  cast bookmark jx7c6zk 42                    # bookmark message 42\n" +
+    "  cast bookmark jx7c6zk 42 --name auth-fix    # with a name\n" +
+    "  cast bookmark jx7c6zk 42 --note \"key insight\" # with a note\n" +
     "  cast bookmark --list                        # list all bookmarks\n" +
     "  cast bookmark --delete auth-fix             # delete by name"
   )
-  .argument("[session-id]", "Session ID of the conversation")
-  .argument("[message-index]", "Message number to bookmark (1-indexed)")
+  .argument("[session-id]", "Session short id (e.g. jx7c6zk)")
+  .argument("[message-index]", "Message number to bookmark, as `cast read` numbers them (1-indexed)")
   .option("--name <name>", "Name for the bookmark (must be unique)")
   .option("--note <note>", "Optional note for the bookmark")
   .option("--list", "List all bookmarks")
   .option("--delete <name>", "Delete bookmark by name")
-  .option("-n, --limit <n>", "Number of bookmarks to list", "20")
+  .option("-n, --limit <n>", "Number of bookmarks to list", countOption, 20)
+  .option("--json", "With --list: machine-readable output (the bookmark rows)")
   .action(async (sessionId, messageIndex, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -10923,7 +11269,7 @@ program
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             api_token: config.auth_token,
-            limit: parseInt(options.limit),
+            limit: options.limit,
           }),
         });
 
@@ -10933,6 +11279,7 @@ program
           console.error(`Error: ${cliErrorMessage(result.error)}`);
           process.exit(1);
         }
+        if (options.json) { printJson(result.bookmarks ?? []); return; }
 
         if (!result.bookmarks || result.bookmarks.length === 0) {
           console.log("\nNo bookmarks found.");
@@ -10940,17 +11287,15 @@ program
           return;
         }
 
-        console.log(`\nBookmarks (${result.count}):\n`);
+        console.log(`Bookmarks (${result.count}):\n`);
         for (const bm of result.bookmarks) {
           const name = bm.name ? `[${bm.name}]` : "[unnamed]";
-          console.log(`  ${name}`);
-          console.log(`    Session: ${bm.session_id} message ${bm.message_index}`);
+          // The conversation's short id is what `cast read` takes; session_id is the agent's uuid.
+          const where = bm.conversation_id ? `${String(bm.conversation_id).slice(0, 7)} msg ${bm.message_index}` : `msg ${bm.message_index}`;
+          console.log(`  ${name} ${where} · ${bm.conversation_title} · ${new Date(bm.created_at).toLocaleDateString()}`);
           console.log(`    ${bm.message_role}: ${bm.message_preview}...`);
-          if (bm.note) {
-            console.log(`    Note: ${bm.note}`);
-          }
-          console.log(`    URL: ${bm.url}`);
-          console.log(`    Created: ${new Date(bm.created_at).toLocaleDateString()}`);
+          if (bm.note) console.log(`    Note: ${bm.note}`);
+          console.log(`    ${bm.url}`);
           console.log();
         }
       } catch (error) {
@@ -10978,7 +11323,7 @@ program
           process.exit(1);
         }
 
-        console.log(`Deleted bookmark: ${options.delete}`);
+        console.log(`Deleted bookmark ${options.delete}`);
       } catch (error) {
         console.error("Delete failed:", error instanceof Error ? error.message : error);
         process.exit(1);
@@ -10987,14 +11332,14 @@ program
     }
 
     if (!sessionId || !messageIndex) {
-      console.error("Usage: cast bookmark <session-id> <message-index>");
-      console.error("Or use --list to view bookmarks, --delete <name> to remove one");
+      console.error("Error: pass a session id and a message number: cast bookmark <session-id> <message-index> [--name <name>] [--note <text>].");
+      console.error("--list shows your bookmarks; --delete <name> removes one.");
       process.exit(1);
     }
 
     const msgIdx = parseInt(messageIndex);
     if (isNaN(msgIdx) || msgIdx < 1) {
-      console.error("message-index must be a positive integer");
+      console.error(`Error: message-index '${messageIndex}' is not a message number. Pass the number \`cast read ${sessionId}\` shows beside the message (1 or more).`);
       process.exit(1);
     }
 
@@ -11019,9 +11364,9 @@ program
       }
 
       const displayName = result.name || "unnamed";
-      console.log(`\nBookmark created: ${displayName}`);
-      console.log(`Session: ${result.session_id} message ${result.message_index}`);
-      console.log(`URL: ${result.url}\n`);
+      const short = result.conversation_id ? String(result.conversation_id).slice(0, 7) : sessionId;
+      console.log(`Bookmark created: ${displayName} (${short} msg ${result.message_index})`);
+      console.log(result.url);
     } catch (error) {
       console.error("Bookmark failed:", error instanceof Error ? error.message : error);
       process.exit(1);
@@ -11039,16 +11384,18 @@ program
     "  cast decisions --tags db,arch             # filter by tags\n" +
     "  cast decisions add \"Use Convex\" --reason \"Better TypeScript\"  # add decision\n" +
     "  cast decisions add \"Cursor pagination\" --reason \"Better for realtime\" --tags api,perf\n" +
-    "  cast decisions delete <id>                # delete a decision"
+    "  cast decisions delete qd7c4py             # delete one by the id the list prints as [decision qd7c4py]\n\n" +
+    "These are recorded architecture decisions. They are not cast decide's sd-N cards, which are questions put to a person."
   )
   .argument("[action]", "Action: add, delete, or omit to list")
-  .argument("[title-or-id]", "Title for add, ID for delete")
+  .argument("[title-or-id]", "Title for add; for delete, the id the list prints as [decision <id>]")
   .option("--project <path>", "Filter by project path (use . for current)")
   .option("--search <query>", "Search decisions by title")
-  .option("--tags <tags>", "Filter by tags (comma-separated)")
+  .option("--tags <tags>", "Comma-separated tags: filters the list, or tags a decision with add")
   .option("--reason <text>", stdinText("Rationale for the decision (required for add)"))
-  .option("-n, --limit <n>", "Number of results", "20")
-  .option("-p, --page <n>", "Page number", "1")
+  .option("-n, --limit <n>", "Number of results", countOption, 20)
+  .option("-p, --page <n>", "Page number", countOption, 1)
+  .option("--json", "Listing: machine-readable output (the raw result)")
   .action(async (action, titleOrId, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -11057,6 +11404,11 @@ program
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const unknown = unknownActionError("decisions", action, ["add", "delete"]);
+    if (unknown) {
+      console.error(unknown);
+      process.exit(1);
+    }
 
     if (action === "add") {
       if (!titleOrId) {
@@ -11064,7 +11416,7 @@ program
         process.exit(1);
       }
       if (!options.reason) {
-        console.error("--reason is required when adding a decision");
+        console.error("Error: --reason is required: cast decisions add \"Title\" --reason \"Why\" [--tags a,b]");
         process.exit(1);
       }
 
@@ -11090,7 +11442,7 @@ program
           process.exit(1);
         }
 
-        console.log(`Decision recorded: ${titleOrId}`);
+        console.log(`Decision recorded: ${titleOrId}${result.id ? ` [decision ${String(result.id).slice(0, 7)}]` : ""}`);
         if (tags) {
           console.log(`Tags: ${tags.join(", ")}`);
         }
@@ -11108,12 +11460,29 @@ program
       }
 
       try {
+        // The list prints a 7-character id; the server deletes by the full one.
+        let decisionId: string = titleOrId;
+        if (decisionId.length < 32) {
+          const listed = await (await cliFetchRead(`${siteUrl}/cli/decisions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_token: config.auth_token, limit: 200, offset: 0 }),
+          })).json();
+          const hits = (listed.decisions ?? []).filter((d: any) => String(d.id).startsWith(decisionId));
+          if (hits.length !== 1) {
+            console.error(hits.length
+              ? `Error: ${decisionId} matches ${hits.length} decisions; pass more of the id.`
+              : `Error: no decision ${decisionId} among your latest 200. \`cast decisions --search "<words>"\` lists ids.`);
+            process.exit(1);
+          }
+          decisionId = String(hits[0].id);
+        }
         const response = await cliFetch(`${siteUrl}/cli/decisions/delete`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             api_token: config.auth_token,
-            decision_id: titleOrId,
+            decision_id: decisionId,
           }),
         });
 
@@ -11132,8 +11501,8 @@ program
       return;
     }
 
-    const limit = parseInt(options.limit);
-    const page = parseInt(options.page);
+    const limit: number = options.limit;
+    const page: number = options.page;
     const offset = (page - 1) * limit;
     const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
     const projectPath = options.project === "." ? process.cwd() : options.project;
@@ -11159,6 +11528,7 @@ program
         process.exit(1);
       }
 
+      if (options.json) { console.log(JSON.stringify(result)); return; }
       const { formatDecisionsResults } = await import("./formatter.js");
       console.log(formatDecisionsResults(result));
     } catch (error) {
@@ -11185,7 +11555,7 @@ program
   .option("--tags <tags>", "Tags (comma-separated)")
   .option("--session <id>", "Source session ID")
   .option("--range <range>", "Source message range (e.g., 15:25)")
-  .option("-n, --limit <n>", "Number of results", "20")
+  .option("-n, --limit <n>", "Number of results", countOption, 20)
   .action(async (action, nameOrQuery, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -11194,6 +11564,11 @@ program
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const unknown = unknownActionError("learn", action, ["add", "show", "search", "delete"]);
+    if (unknown) {
+      console.error(unknown);
+      process.exit(1);
+    }
 
     if (action === "add") {
       if (!nameOrQuery) {
@@ -11201,11 +11576,11 @@ program
         process.exit(1);
       }
       if (!options.description) {
-        console.error("--description is required when adding a pattern");
+        console.error("Error: --description is required: cast learn add \"name\" --description \"...\" --content \"...\"");
         process.exit(1);
       }
       if (!options.content) {
-        console.error("--content is required when adding a pattern");
+        console.error("Error: --content is required: cast learn add \"name\" --description \"...\" --content - <<'EOF' (code on stdin)");
         process.exit(1);
       }
 
@@ -11377,7 +11752,7 @@ program
   )
   .option("-f, --file <path>", "Find sessions that touched this file")
   .option("-s, --session <id>", "Find sessions similar to this one")
-  .option("-n, --limit <n>", "Number of results", "10")
+  .option("-n, --limit <n>", "Number of results", countOption, 10)
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -11452,7 +11827,7 @@ program
   .option("--quickfix", "With --log: emit tab-separated rows for the vim :Gslog quickfix list")
   .option("--open", "Resolve <file>:<line> to its session and open the conversation in the browser")
   .option("--install-fugitive", "Install the vim-fugitive git shim so :Gblame shows sessions")
-  .option("-n, --limit <n>", "Number of results (--touches mode)", "20")
+  .option("-n, --limit <n>", "Number of results (--touches mode)", countOption, 20)
   .action(async (file, options) => {
     if (options.installFugitive) {
       const { installFugitiveShim } = await import("./blame.js");
@@ -11629,7 +12004,7 @@ program
   .option("--label <name>", "File each branch under this label instead of the parent's (created if new; branches inherit the parent label by default)")
   .option("--all-branches", "Make every direction a branch and keep this thread out of the fan-out (default with two or more directions: this thread takes the first)")
   .option("--cloud [host]", "Run each branch in its own worktree on the cloud host (seeded forks only); [host] = a registered instance id. This thread's own direction stays here unless --all-branches")
-  .option("--start-from <source>", "With --cloud: what each worktree starts from — checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
+  .option("--start-from <source>", "With --cloud: what each worktree starts from: checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
   .option("--json", "Machine-readable output")
   .option("--resume", "Open forked conversation in Claude/Codex after creating (single, unseeded fork only)")
   .option("--as <agent>", "Agent to resume with (claude or codex)")
@@ -12033,11 +12408,13 @@ program
     "  EOF\n\n" +
     "To run a prompt, wait, and print the result (no inbox card), use `cast exec`."
   )
-  .argument("<prompts...>", stdinText("One task per session", { many: true }))
+  // Optional to commander so a prompt that a bare --subagent swallowed as its
+  // parent can be handed back (below); the action still requires one task.
+  .argument("[prompts...]", stdinText("One task per session", { many: true }))
   .option("-C, --dir <path>", "Working directory (default: current project)")
-    .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi, grok")
+  .option("--agent <type>", `Agent: ${Object.keys(LOCAL_AGENT_CLIENTS).join(", ")} (default: claude)`)
   .option("--as <definition>", "Run as a named agent definition (cast agent ls): its client, model, effort, tools and prompt; explicit flags override it")
-  .option("--subagent [parent]", "Nest under a parent session as a subagent row (default parent: the session running this command)")
+  .option("--subagent [parent]", "Nest under a parent session as a subagent row (default parent: the session running this command; a value names another session's short ID)")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
   .option("--effort <level>", "Reasoning effort (claude: low|medium|high|xhigh|max; varies by agent)")
   .option("--account <name>", "Claude account profile to run on, without switching the machine's login (needs: cast accounts token <name>)")
@@ -12048,7 +12425,7 @@ program
   .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
   .option("--cloud [host]", "Run each task in its own worktree on the cloud host (wakes it, syncs the repo + gitignored files over SSH); [host] = a registered instance id")
   .option("--shared", "With --cloud: run in the host's main checkout instead of a fresh worktree (one task only; refused when that checkout is dirty or already used by a live session)")
-  .option("--from <source>", "With --cloud: what each worktree starts from — checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
+  .option("--from <source>", "With --cloud: what each worktree starts from: checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
   .option("--label <name>", "File each spawned session under a label (created if new)")
   .option("--local", "Start on this machine even when the load governor would send unattended work to the cloud host")
   .option("--unattended", "Run as an unattended principal: reversible actions proceed, protected decisions go through cast decide, no inline questions (the briefing every line hand gets)")
@@ -12061,11 +12438,24 @@ program
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
+    // A task a bare --subagent read as its parent goes back to the prompts (spawnArgs.ts).
+    const { recoverSwallowedPrompt } = await import("./spawnArgs.js");
+    try {
+      ({ prompts: rawPrompts, subagent: options.subagent } = recoverSwallowedPrompt(rawPrompts, options.subagent));
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
     const { applyUnattended } = await import("./unattended.js");
     const prompts = (rawPrompts ?? []).map((p) => p.trim()).filter(Boolean)
       .map((p) => (options.unattended ? applyUnattended(p) : p));
     if (prompts.length === 0) {
-      console.error("Give at least one task: cast spawn \"<task>\"");
+      console.error("Give at least one task: cast spawn --subagent -- \"<task>\" [\"<task>\" ...] (see cast spawn --help)");
+      process.exit(1);
+    }
+    const knownAgents = Object.keys(LOCAL_AGENT_CLIENTS);
+    if (options.agent && !knownAgents.includes(String(options.agent).toLowerCase().replace(/^claude[_-]code$/, "claude"))) {
+      console.error(`Unknown agent "${options.agent}". Use one of: ${knownAgents.join(", ")}`);
       process.exit(1);
     }
 
@@ -12260,7 +12650,7 @@ program
           await cc.client.mutation(cc.api.conversations.setSessionError, { api_token: cc.token, conversation_id: row.conversation_id, error: text });
         } catch {}
         console.error(`Spawn failed for "${promptGist(prompt)}": ${text}`);
-        console.error(`row ${row.short_id} kept with the error — retry: cast cloud start ${row.conversation_id} --workspace shared, or cast kill ${row.short_id}`);
+        console.error(`row ${row.short_id} kept with the error; retry: cast cloud start ${row.conversation_id} --workspace shared, or cast kill ${row.short_id}`);
         process.exit(1);
       };
       const checkInterrupted = async () => {
@@ -12360,7 +12750,7 @@ program
       });
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-        console.error(`Spawn failed for "${prompt}": ${body.error || resp.statusText}`);
+        console.error(`Spawn failed for "${promptGist(prompt)}": ${body.error || resp.statusText}`);
         process.exit(1);
       }
       const result = await resp.json() as any;
@@ -12407,7 +12797,10 @@ program
       console.log(`  ${c.dim}${waiting} waiting for a slot (${fleetCaps.per_session} per session, ${fleetCaps.per_machine} per machine): each starts when a running worker ends done, blocked or killed. cast queue shows the queue; cast config subagents.per_session <n> changes the limit${c.reset}`);
     }
     if (labelResult?.failures) {
-      console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} session${labelResult.failures === 1 ? "" : "s"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
+      console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} session${labelResult.failures === 1 ? "" : "s"} not filed: retry with cast label set ${options.label} <id>${c.reset}`);
+    }
+    if (roster[0]?.parent_short_id) {
+      console.log(`  ${c.dim}each wakes you when it settles; to wait here: cast sessions ${roster.map((s) => s.short_id).join(" ")} --until${c.reset}`);
     }
   });
 
@@ -12648,6 +13041,10 @@ program
   .command("ask")
   .description(
     "Natural language query over conversation history\n\n" +
+    "Finds the most relevant sessions, then answers from them with a model call made\n" +
+    "on this machine, so it needs ANTHROPIC_API_KEY in the environment. To question one\n" +
+    "session you already know, `cast read <id> --ask \"<question>\"` answers on the server\n" +
+    "with line citations and needs no key.\n\n" +
     "Examples:\n" +
     "  cast ask \"when did we last refactor the feed?\"\n" +
     "  cast ask \"what's the pattern for adding CLI commands?\"\n" +
@@ -12657,7 +13054,7 @@ program
   )
   .argument("<query>", "Natural language question")
   .option("-g, --global", "Search all sessions (not just current project)")
-  .option("-n, --limit <n>", "Number of sessions to analyze", "3")
+  .option("-n, --limit <n>", "Number of sessions to analyze", countOption, 3)
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
   .option("-e, --end <date>", "End date/time")
   .option("-d, --debug", "Show context sent to LLM")
@@ -12670,7 +13067,7 @@ program
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
-      console.error("ANTHROPIC_API_KEY not set. Export it to use RAG-powered answers.");
+      console.error("Error: cast ask needs ANTHROPIC_API_KEY in the environment. Without one, find the sessions with `cast search \"<words>\"`, then `cast read <id> --ask \"<question>\"` answers from one of them on the server.");
       process.exit(1);
     }
 
@@ -12948,7 +13345,7 @@ program
   .option("-g, --global", "Search all sessions (not just current team)")
   .option("--mine", "Show only my sessions")
   .option("-m, --member <name>", "Filter by team member name or email")
-  .option("-n, --limit <n>", "Maximum results", "10")
+  .option("-n, --limit <n>", "Maximum results", countOption, 10)
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -13186,8 +13583,44 @@ function parseDuration(input: string): number | undefined {
   }
 }
 
+/** A duration flag's value in ms; exits naming the shape it takes. */
+function parseDurationFlag(flag: string, value: string): number {
+  const ms = parseDuration(value);
+  if (!ms) {
+    console.error(`${flag} "${value}" is not a duration. Use numbers and units: 30m, 2h, 4h40m, 1d.`);
+    process.exit(1);
+  }
+  return ms;
+}
+
+/** A time flag's value (--at): the next 06:00, a zone, or an ISO moment; exits naming the shapes. */
+function parseAtFlag(flag: string, value: string): number {
+  const at = parseClockTime(value);
+  if (at === null) {
+    console.error(`${flag} "${value}" is not a time. Use 06:00, 6pm, "06:00 UTC", "09:00 America/New_York" or 2026-10-17T06:00:00Z.`);
+    process.exit(1);
+  }
+  if (at <= Date.now()) {
+    console.error(`${flag} "${value}" is in the past.`);
+    process.exit(1);
+  }
+  return at;
+}
+
+/** Why --in/--every/--on cannot go together as passed, or null. --in with
+ *  --every is allowed: it sets the first run, which sets the time of day. */
+function triggerScheduleConflict(opts: { in?: string; at?: string; every?: string; on?: string }): string | null {
+  if (opts.on && (opts.in || opts.at || opts.every)) {
+    return `--on fires on an event, so it takes no --in, --at or --every (got --on with ${opts.in ? "--in" : opts.at ? "--at" : "--every"}). Arm a second trigger for the timed run.`;
+  }
+  if (opts.in && opts.at) return "--in and --at both name the first run. Pass one.";
+  return null;
+}
+
 // The `--on` filter and its narrowing flags: triggerEventFilter.ts.
 const EVENT_NAMES = TRIGGER_EVENT_NAMES.join(", ");
+/** The `<id>` every trigger verb takes. */
+const TRIGGER_ID_ARG = "Trigger id: tr-42 (cast trigger ls lists them)";
 type TriggerFilter = TriggerScopeFilter;
 
 // ── The workspace's agent ────────────────────────────────────────────────────
@@ -13206,10 +13639,25 @@ const anchor = program
   .showHelpAfterError(true)
   .hook("preAction", requireOrgFeatureHook);
 
+/** Which workspace's agent a verb means. A bare --team is the active team; a
+ *  value is a team name or id, resolved the way every other --team is (a raw
+ *  name sent as team_id matched no agent). No --team is the personal one. */
+async function anchorScope(team: string | boolean | undefined): Promise<{ scopeType: "team" | "user"; teamId?: string }> {
+  if (!team) return { scopeType: "user" };
+  const teamId = workspaceArgs(await readWorkspace(typeof team === "string" ? team : undefined)).team_id;
+  if (!teamId) {
+    console.error(typeof team === "string"
+      ? `No team matches "${team}": pass --team <name|id> (cast teams lists them)`
+      : "No team named and the active workspace is personal: pass --team <name|id> (cast teams lists them)");
+    process.exit(1);
+  }
+  return { scopeType: "team", teamId };
+}
+
 anchor
   .command("create")
   .description("Seat the workspace's agent: its root role, Head of People by default (same as cast org staff)")
-  .option("--team [id]", "Seat the team's agent (default: your active team)")
+  .option("--team [name|id]", "The team's agent: a team name or id, bare for the active team (default: your personal workspace's)")
   .option("-C, --dir <path>", "Project the agent lives and works in (default: current)")
   .option("--json", "Machine-readable output")
   .action(async (options: any) => {
@@ -13227,12 +13675,7 @@ anchor
     // The team is named outright on this write (CLAUDE.md: writes must be
     // explicit): a bare --team resolves through the same resolver every
     // other write uses, and the server refuses a team scope with no team.
-    const scopeType = options.team ? "team" : "user";
-    const teamId = scopeType === "team" ? workspaceArgs(await readWorkspace(typeof options.team === "string" ? options.team : undefined)).team_id : undefined;
-    if (scopeType === "team" && !teamId) {
-      console.error("No team named: pass --team <name|id> or make a team the active workspace");
-      process.exit(1);
-    }
+    const { scopeType, teamId } = await anchorScope(options.team);
 
     const resp = await cliFetch(`${siteUrl}/cli/anchor/create`, {
       method: "POST",
@@ -13313,7 +13756,7 @@ anchor
   .command("wake")
   .description("Send a message to the workspace's agent (auto-resumes it if dormant)")
   .argument("<message>", stdinText("What to tell it"))
-  .option("--team [id]", "The team's agent (default: your personal workspace's)")
+  .option("--team [name|id]", "The team's agent: a team name or id, bare for the active team (default: your personal workspace's)")
   .action(async (message: string, options: any) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -13321,8 +13764,7 @@ anchor
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const scopeType = options.team ? "team" : "user";
-    const teamId = typeof options.team === "string" ? options.team : undefined;
+    const { scopeType, teamId } = await anchorScope(options.team);
 
     const resolveResp = await cliFetch(`${siteUrl}/cli/anchor/resolve`, {
       method: "POST",
@@ -13358,10 +13800,9 @@ anchor
 anchor
   .command("brief")
   .description("Re-send the workspace's agent its standing briefing (who it is, its routines, how it reaches people)")
-  .option("--team [id]", "The team's agent (default: your personal workspace's)")
+  .option("--team [name|id]", "The team's agent: a team name or id, bare for the active team (default: your personal workspace's)")
   .action(async (options: any) => {
-    const scopeType = options.team ? "team" : "user";
-    const teamId = typeof options.team === "string" ? options.team : undefined;
+    const { scopeType, teamId } = await anchorScope(options.team);
     const anchorRow = await cliPost("/cli/anchor/resolve", { scope_type: scopeType, team_id: teamId });
     if (!anchorRow?._id) {
       console.error(`${noAgentLine(scopeType)}`);
@@ -13382,7 +13823,7 @@ anchor
   .command("rm")
   .alias("decommission")
   .description("Retire the workspace's agent: stop it being persistent and drop its Slack mappings")
-  .option("--team [id]", "The team's agent (default: your personal workspace's)")
+  .option("--team [name|id]", "The team's agent: a team name or id, bare for the active team (default: your personal workspace's)")
   .action(async (options: any) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -13390,8 +13831,7 @@ anchor
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const scopeType = options.team ? "team" : "user";
-    const teamId = typeof options.team === "string" ? options.team : undefined;
+    const { scopeType, teamId } = await anchorScope(options.team);
     const resolveResp = await cliFetch(`${siteUrl}/cli/anchor/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -13426,7 +13866,7 @@ anchor
   .command("link-channel")
   .description("Map a Slack channel to the workspace's agent so @mentions there wake it")
   .argument("<channel>", "Slack channel id (e.g. C0123ABCD)")
-  .option("--team [id]", "Link to the team's agent (default: your personal workspace's)")
+  .option("--team [name|id]", "The team's agent: a team name or id, bare for the active team (default: your personal workspace's)")
   .option("-C, --dir <path>", "Project cwd for work from this channel")
   .action(async (channel: string, options: any) => {
     const config = readConfig();
@@ -13435,14 +13875,15 @@ anchor
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const scope = await anchorScope(options.team);
     const resp = await cliFetch(`${siteUrl}/cli/anchor/link-channel`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_token: config.auth_token,
         channel,
-        team: !!options.team,
-        team_id: typeof options.team === "string" ? options.team : undefined,
+        team: scope.scopeType === "team",
+        team_id: scope.teamId,
         project_path: options.dir ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~")) : undefined,
       }),
     });
@@ -13543,6 +13984,7 @@ anchor
 // verbs join it either way.
 const roleGroup = program.commands.find((cmd) => cmd.name() === "role")
   ?? program.command("role").description("Org roles: named seats in the reporting structure").hook("preAction", requireOrgFeatureHook);
+roleGroup.addHelpText("after", "\nExamples:\n  cast role ls                                  # every role here, with its @handle\n  cast role show @infra                         # its session, limits, sessions under it\n  cast role wake @infra \"the migration is done\"  # message its standing session\n  cast role pause @infra");
 
 async function roleFollowAction(path: "/cli/role/follow" | "/cli/role/unfollow", handle: string, channel: string, options: any) {
   const result = await cliPost(path, { role: handle, channel });
@@ -13927,7 +14369,7 @@ roleGroup
   });
 
 for (const verb of ["pause", "resume", "retire", "restart"] as const) {
-  roleGroup
+  const cmd = roleGroup
     .command(verb)
     .description({
       pause: "Pause a role: its triggers pause, and the sessions under it stop at a safe point",
@@ -13936,10 +14378,16 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
       restart: "Restart the role's standing session",
     }[verb])
     .argument("<handle>", "@handle, or-N, or id")
-    .option("--team <name|id>", "Team workspace")
-    .option("--standing <keep|retire>", "retire only: keep the standing session running as a plain agent (default for the head of people) or retire it with the role")
+    .option("--team <name|id>", "Team workspace");
+  // The standing session's fate is a question only retiring asks.
+  if (verb === "retire") cmd.option("--standing <keep|retire>", "Keep the standing session running as a plain agent (default for the head of people) or retire it with the role");
+  cmd
     .option("--json", "Machine-readable output")
     .action(async (handle: string, options: any) => {
+      if (options.standing !== undefined && options.standing !== "keep" && options.standing !== "retire") {
+        console.error(`--standing takes keep or retire, not "${options.standing}"`);
+        process.exit(1);
+      }
       const role_id = await resolveRoleId(handle, options.team);
       const result = await cliPost(verb === "retire" ? "/cli/org/retire" : `/cli/role/${verb}`, verb === "retire" ? { role_id, standing_session: options.standing, from_session: callingSession() } : { role_id });
       if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
@@ -14098,6 +14546,7 @@ const briefCmd = program
   .command("brief")
   .description("A role's brief: live facts about its scope plus the narrative it keeps")
   .argument("[handle]", "@handle, or-N, or id (default: the role this session speaks for)")
+  .option("--narrative", "Print only the narrative, raw and unindented: the text brief edit writes")
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
   .action(async (handle: string | undefined, options: any) => {
@@ -14113,17 +14562,27 @@ const briefCmd = program
     const brief = await cliPost("/cli/brief/get", { role_id, from_session: callingSession() });
     if (!brief) { console.error("Role not found"); process.exit(1); }
     if (options.json) { console.log(JSON.stringify(brief, null, 2)); return; }
+    if (options.narrative) { process.stdout.write(String(brief.narrative ?? "").replace(/\s*$/, "\n")); return; }
     for (const line of briefTextLines(brief, Date.now())) console.log(line);
   });
 
 briefCmd
   .command("edit")
-  .description("Write the brief's narrative (stdin); its first line becomes the standing session's state")
-  .argument("<text>", stdinText("The narrative: state line, then Status:/Next:/Blocked:, then paragraphs"))
+  .description("Write the brief's narrative: the whole text (stdin), or one change with --old/--new; its first line becomes the standing session's state")
+  .argument("[text]", stdinText("The whole narrative: state line, then Status:/Next:/Blocked:, then paragraphs"))
+  .option("--old <text>", stdinText("Exact text to find in the narrative (must match once, or pass --all)"))
+  .option("--new <text>", stdinText("Replacement text (empty to delete)"))
+  .option("--all", "With --old/--new, replace every occurrence")
   .option("--for <handle>", "The role (default: the role this session speaks for; a parent may name one)")
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
-  .action(async (text: string, options: any) => {
+  .addHelpText("after", "\nExamples:\n  cast brief edit - < brief.md                                 # replace the whole narrative\n  cast brief edit --old \"- Old rule (2026-10-01)\" --new \"\"       # drop one line\n  cast brief --narrative > brief.md                            # the narrative as stored, to edit in a file")
+  .action(async (text: string | undefined, options: any) => {
+    const patching = options.old !== undefined || options.new !== undefined;
+    if (patching && (options.old === undefined || options.new === undefined)) { console.error("--old and --new go together: --old \"text to find\" --new \"replacement\""); process.exit(1); }
+    if (patching && text !== undefined) { console.error("Pass the whole narrative or --old/--new, not both"); process.exit(1); }
+    if (options.all && !patching) { console.error("--all replaces every occurrence of --old; pass --old \"text\" --new \"replacement\" with it"); process.exit(1); }
+    if (!patching && text === undefined) { console.error("Pass the narrative (cast brief edit - < brief.md) or one change (--old \"text\" --new \"replacement\")"); process.exit(1); }
     let role_id: string;
     if (options.for) role_id = await resolveRoleId(options.for, options.team);
     else {
@@ -14131,9 +14590,31 @@ briefCmd
       if (!self) { console.error("Not inside a role's session: name the role with --for @handle"); process.exit(1); }
       role_id = self.role_id;
     }
-    const result = await cliPost("/cli/brief/edit", { role_id, content: text, from_session: callingSession() });
-    if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-    console.log(`${c.green}ok${c.reset} brief updated${result.mirrored ? ` ${c.dim}(state line mirrored onto the standing session)${c.reset}` : ""}`);
+    const { briefBudget, briefBudgetWords, briefOverBudgetMessage } = await import("@codecast/shared/contracts/rolePlaybook");
+    let content = text ?? "";
+    let replaced = 0;
+    if (patching) {
+      // Patched over the narrative as stored, then saved whole: the save is
+      // the one write path, so the budget and the state mirror apply as ever.
+      const brief = await cliPost("/cli/brief/get", { role_id });
+      if (!brief) { console.error("Role not found"); process.exit(1); }
+      const { patchBriefNarrative } = await import("./briefLines.js");
+      const patched = patchBriefNarrative(String(brief.narrative ?? ""), options.old, options.new, !!options.all);
+      if ("error" in patched) { console.error(patched.error); process.exit(1); }
+      ({ content, replaced } = patched);
+    }
+    const budget = briefBudget(content);
+    let result: any;
+    try {
+      result = await cliPost("/cli/brief/edit", { role_id, content, from_session: callingSession() }, { throwOnError: true });
+    } catch (err) {
+      const message = (err as Error).message;
+      // The refusal states the exact size, whatever wording the backend has.
+      console.error(`Error: ${/over its budget/.test(message) ? briefOverBudgetMessage(budget) : message}`);
+      process.exit(1);
+    }
+    if (options.json) { console.log(JSON.stringify({ ...result, replaced: patching ? replaced : undefined, chars: budget.chars, budget: budget.budget }, null, 2)); return; }
+    console.log(`${c.green}ok${c.reset} brief updated${patching ? ` (${replaced} replacement${replaced === 1 ? "" : "s"})` : ""} ${c.dim}· ${briefBudgetWords(budget)}${result.mirrored ? " · state line mirrored onto the standing session" : ""}${c.reset}`);
   });
 
 // ── Org roles ────────────────────────────────────────────────────────────────
@@ -14143,6 +14624,7 @@ briefCmd
 const org = program
   .command("org")
   .description("The workspace's reporting structure: people, roles, and the sessions under them")
+  .addHelpText("after", "\nOne role (message it, pause it, change its scope or limits): cast role --help\n  cast role wake @handle \"<message>\"   # tell a role's standing session something\n  cast route --dry \"<request>\"         # where a request would land, filing nothing")
   .showHelpAfterError(true)
   .hook("preAction", requireOrgFeatureHook);
 
@@ -14160,14 +14642,44 @@ function orgStandingLine(s: { state?: string | null; state_status?: string | nul
   return `${word ? ` · ${word}` : ""}${s.state_line ? ` · ${s.state_line}` : ""}`;
 }
 function orgSessionLine(s: any): string {
-  return `      ${c.dim}${s.short_id ?? String(s._id).slice(0, 7)}${c.reset} ${s.title || "(untitled)"} ${c.dim}· ${s.state}${s.subagent_count ? ` · ${s.subagent_count} subagents` : ""}${c.reset}`;
+  return `      ${c.dim}${s.short_id ?? String(s._id).slice(0, 7)}${c.reset} ${titleLine(s.title) || "(untitled)"} ${c.dim}· ${s.state}${s.subagent_count ? ` · ${s.subagent_count} subagents` : ""}${c.reset}`;
 }
 async function resolveOrgTarget(ref: string, ws: Workspace): Promise<OrgTarget> {
   // Loaded inside the org verbs that resolve a target (boot graph guard).
   const { matchOrgTarget } = await import("./orgTarget.js");
-  const target = matchOrgTarget(await cliPost("/cli/org/tree", workspaceArgs(ws)), ref);
+  const tree = await cliPost("/cli/org/tree", workspaceArgs(ws));
+  const target = matchOrgTarget(tree, ref);
   if (target) return target;
-  console.error(`No role or person matches "${ref}" in ${workspaceLabel(ws)}.`);
+  failNoRole(`No role or person matches "${ref}" in ${workspaceLabel(ws)}.`, tree, ref, await roleElsewhere(ref, ws));
+}
+/** Where a role or person this workspace lacks lives among the caller's other
+ *  workspaces, as the hint to rerun with; null when nowhere. Reads only the
+ *  roles and seats (org.roles), falling back to the full tree on a backend
+ *  without that route. */
+async function roleElsewhere(ref: string, ws: Workspace): Promise<string | null> {
+  const { matchOrgTarget } = await import("./orgTarget.js");
+  const hits = await otherWorkspacesWith(await workspaceRoster(), ws, async (other) => {
+    const roles = (await tryCliPost("/cli/org/roles", workspaceArgs(other))) ?? (await tryCliPost("/cli/org/tree", workspaceArgs(other)));
+    return !!roles && !!matchOrgTarget(roles, ref);
+  });
+  return elsewhereHint(`"${ref}"`, hits);
+}
+/** A role reference that matched nothing: say so, then where it lives when
+ *  another of the caller's workspaces has it, else the roles that do exist
+ *  here, so the next try needs no listing call. Exits 1. */
+function failNoRole(headline: string, tree: any, ref = "", elsewhere: string | null = null): never {
+  console.error(headline);
+  if (elsewhere) { console.error(elsewhere); process.exit(1); }
+  const handles = ((tree?.roles ?? []) as any[]).filter((r) => r?.handle).map((r) => `@${r.handle}`);
+  const words = ref.replace(/^@/, "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+  const near = handles.filter((h) => words.some((w) => h.includes(w)));
+  if (near.length) {
+    console.error(`Close matches: ${near.slice(0, 6).join(", ")}. Every role: cast role ls`);
+    process.exit(1);
+  }
+  console.error(handles.length
+    ? `Roles here: ${handles.slice(0, 12).join(", ")}${handles.length > 12 ? ` (+${handles.length - 12} more: cast role ls)` : ""}. None of your other workspaces has it either.`
+    : "This workspace has no roles yet (cast org ls), and none of your other workspaces has it either.");
   process.exit(1);
 }
 
@@ -14186,7 +14698,8 @@ org
 org
   .command("ls")
   .alias("list")
-  .description("Show the org tree for the active workspace")
+  .description("Show the org tree for the active workspace: people and roles with their session counts")
+  .option("--sessions", "Also list the sessions under each person and role")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (options: any) => {
@@ -14194,11 +14707,17 @@ org
     const tree = await cliPost("/cli/org/tree", workspaceArgs(ws));
     if (options.json) { console.log(JSON.stringify(tree, null, 2)); return; }
     if (!tree) { console.error(`You are not a member of ${workspaceLabel(ws)}.`); process.exit(1); }
-    console.log(`${c.bold}${tree.workspace.name || workspaceLabel(ws)}${c.reset}${tree.truncated ? ` ${c.yellow}(truncated at the row cap)${c.reset}` : ""}`);
+    // Sessions are many and change by the minute; the structure is the
+    // listing, and one seat's sessions are `cast org show`.
+    const sessionLines = (seat: { sessions: any[]; total: number }) => {
+      if (!options.sessions) return;
+      for (const s of seat.sessions) console.log(orgSessionLine(s));
+      if (seat.total > seat.sessions.length) console.log(`      ${c.dim}+${seat.total - seat.sessions.length} more${c.reset}`);
+    };
+    console.log(`${c.bold}${tree.workspace.name || workspaceLabel(ws)}${c.reset}${tree.truncated ? ` ${c.yellow}(counts cover the newest sessions only: the scan hit its row cap)${c.reset}` : ""}`);
     for (const p of tree.people) {
       console.log(`  ${c.cyan}${p.name}${c.reset}${p.is_me ? " (you)" : ""} ${c.dim}· ${p.role} · ${p.presence ?? "offline"} · ${orgTally(p.counts)}${c.reset}`);
-      for (const s of p.sessions) console.log(orgSessionLine(s));
-      if (p.total > p.sessions.length) console.log(`      ${c.dim}+${p.total - p.sessions.length} more${c.reset}`);
+      sessionLines(p);
     }
     for (const r of tree.roles) {
       const parent = r.reports_to.kind === "role"
@@ -14206,14 +14725,14 @@ org
         : (tree.people.find((x: any) => x.user_id === r.reports_to.user_id)?.name ?? "a person");
       console.log(`  ${c.magenta}${r.name}${c.reset} ${c.dim}@${r.handle} · ${r.short_id} · ${r.status} · reports to ${parent} · ${orgTally(r.counts)}${c.reset}`);
       if (r.standing) console.log(`      ${c.dim}standing:${orgStandingLine(r.standing)}${c.reset}`);
-      for (const s of r.sessions) console.log(orgSessionLine(s));
-      if (r.total > r.sessions.length) console.log(`      ${c.dim}+${r.total - r.sessions.length} more${c.reset}`);
+      sessionLines(r);
     }
     // A role's standing agent is drawn once, on its role's line; only the
     // workspace anchor that is nobody's seat stands on its own.
     for (const a of tree.anchors.filter((x: any) => !x.org_role_id)) {
       console.log(`  ${c.green}${a.name}${c.reset} ${c.dim}· workspace agent · ${a.status}${orgStandingLine(a)}${c.reset}`);
     }
+    if (!options.sessions) console.log(`${c.dim}Sessions under each: cast org ls --sessions · one role's: cast org show @handle${c.reset}`);
   });
 
 org
@@ -14227,7 +14746,7 @@ org
     const tree = await cliPost("/cli/org/tree", workspaceArgs(ws));
     const handle = ref.replace(/^@/, "").toLowerCase();
     const role = (tree?.roles ?? []).find((r: any) => r.short_id === ref || r._id === ref || r.handle === handle);
-    if (!role) { console.error(`No role "${ref}" in ${workspaceLabel(ws)}.`); process.exit(1); }
+    if (!role) failNoRole(`No role "${ref}" in ${workspaceLabel(ws)}.`, tree, ref, await roleElsewhere(ref, ws));
     const page = await cliPost("/cli/org/sessions-under", { ...workspaceArgs(ws), parent: { kind: "role", role_id: role._id }, limit: 200 });
     if (options.json) { console.log(JSON.stringify({ ...role, sessions: page.sessions }, null, 2)); return; }
     console.log(`${c.bold}${role.name}${c.reset} ${c.dim}@${role.handle} · ${role.short_id} · ${role.status}${c.reset}`);
@@ -14519,14 +15038,28 @@ chat
 
 chat
   .command("read")
-  .description("Read a channel or a direct message, newest last")
-  .requiredOption("--channel <ref>", "#name, @person for a direct message, or a channel id")
+  .description("Read a channel or a direct message, newest last; --thread for one thread")
+  .option("--channel <ref>", "#name, @person for a direct message, or a channel id (required unless --thread)")
+  .option("--thread <root_id>", "One thread, its root and replies (the same as cast chat thread <root_id>)")
   .option("--team <name|id>", "Team whose #names and people resolve (default: your active team)")
   .option("-n, --limit <n>", "How many messages (default 30)")
   .option("--cursor <cursor>", "Page further back, from a previous next_cursor")
   .option("--since <ts|duration>", "Only lines after this: a ms timestamp, an ISO date, or an age like 2h (compact, one line each)")
-  .option("--json", "Machine-readable output")
+  .option("--json", "Machine-readable output, the same with or without --since: {messages: [{id, text, author_name, is_agent, created_at, thread_root_id?}], next_cursor?, has_more?, truncated?}")
   .action(async (options: any) => {
+    // A thread's root id names it in every channel, so --channel adds nothing.
+    if (options.thread) {
+      if (options.since) {
+        console.error("--since reads a channel; a thread is read whole: cast chat thread <root_id>");
+        process.exit(1);
+      }
+      await readChatThread(options.thread, options);
+      return;
+    }
+    if (!options.channel) {
+      console.error("Name what to read: cast chat read --channel <#name|@person|id>, or cast chat read --thread <root_id> for one thread");
+      process.exit(1);
+    }
     options.channel = await resolveChatChannelId(options.channel, workspaceArgs(await readWorkspace(options.team)).team_id);
     // The compact view a role's wake frame embeds: threads and replies alike,
     // oldest first, text cut to one short line.
@@ -14545,7 +15078,7 @@ chat
         limit: options.limit ? parseInt(options.limit, 10) : 20,
       });
       if (options.json) {
-        console.log(JSON.stringify(result, null, 2));
+        console.log(JSON.stringify((await import("./chatJson.js")).chatLinesJson(result), null, 2));
         return;
       }
       if (!result.lines?.length) {
@@ -14559,6 +15092,8 @@ chat
         console.log(`  ${c.dim}${when}${c.reset} ${who} ${where} ${line.text}`);
       }
       if (result.truncated) console.log(`${c.dim}  (older lines cut — raise -n or narrow --since)${c.reset}`);
+      const root = result.lines.find((l: any) => !l.is_root)?.thread_root_id ?? result.lines.find((l: any) => l.is_root)?.message_id;
+      if (root) console.log(`${c.dim}  a whole thread: cast chat thread ${String(root).slice(0, 7)}${c.reset}`);
       return;
     }
     const result = await cliPost("/cli/chat/read", {
@@ -14567,7 +15102,7 @@ chat
       cursor: options.cursor,
     });
     if (options.json) {
-      console.log(JSON.stringify(result, null, 2));
+      console.log(JSON.stringify((await import("./chatJson.js")).chatReadJson(result), null, 2));
       return;
     }
     const authors = new Map<string, any>(
@@ -14585,31 +15120,36 @@ chat
   .description("Read one thread: its root and its replies")
   .argument("<root_id>", "Thread root message id")
   .option("--cursor <cursor>", "Page further back, from a previous next_cursor")
+  // A root id names one thread in any team; --team is taken so the flags
+  // that work on the other chat reads work here too.
+  .option("--team <name|id>", "Accepted for parity with the other chat reads; a root id already names its team")
   .option("--json", "Machine-readable output")
-  .action(async (rootId: string, options: any) => {
-    const result = await cliPost("/cli/chat/thread", {
-      root_id: rootId, cursor: options.cursor,
-    });
-    if (options.json) {
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
-    if (!result.root) {
-      console.error("Thread not found");
-      process.exit(1);
-    }
-    const authors = new Map<string, any>(
-      (result.authors ?? []).map((a: any) => [String(a._id), a]),
-    );
-    printChatMessage(result.root, authors);
-    for (const row of result.replies ?? []) printChatMessage(row, authors);
+  .action((rootId: string, options: any) => readChatThread(rootId, options));
+
+async function readChatThread(rootId: string, options: { cursor?: string; json?: boolean }) {
+  const result = await cliPost("/cli/chat/thread", {
+    root_id: rootId, cursor: options.cursor,
   });
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  if (!result.root) {
+    console.error(`No thread with root ${rootId}. A thread is named by its first message's id, which cast chat read --channel <name> prints beside each line.`);
+    process.exit(1);
+  }
+  const authors = new Map<string, any>(
+    (result.authors ?? []).map((a: any) => [String(a._id), a]),
+  );
+  printChatMessage(result.root, authors);
+  for (const row of result.replies ?? []) printChatMessage(row, authors);
+}
 
 // Post one line and say what it reached: the mentions it woke, the session a
 // thread reply went back into, the workspace agent. `send` and `dm` both end here.
 async function sendChatLine(channelId: string, content: string, options: { thread?: string; json?: boolean }) {
   if (!content.trim()) {
-    console.error("Message text is empty");
+    console.error("The message text is empty. Pass it as an argument: cast chat send --channel <name> \"<text>\"");
     process.exit(1);
   }
   const result = await cliPost("/cli/chat/send", {
@@ -15291,16 +15831,18 @@ const trigger = program
 
 trigger
   .command("add")
-  .description("Set a new trigger")
+  .description("Arm a trigger: --in runs it once after a delay, --at once at a time, --every on an interval, --on when an event happens; with none of them it runs once, now")
   .argument("<prompt>", stdinText("Instruction for the agent when the trigger fires"))
-  .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d); with --every, the first run, which sets the time of day")
+  .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 4h40m, 1d); with --every, the first run, which sets the time of day")
+  .option("--at <time>", "Run at a time: 06:00, 6pm, \"06:00 UTC\", \"09:00 America/New_York\" (the next time the clock reads it) or 2026-10-17T06:00:00Z; with --every, the first run")
   .option("--every <duration>", "Run on interval (e.g., 4h, 1d)")
   .option("--on <event>", `Run on event (${EVENT_NAMES})`)
   .option("--repo <owner/name>", "Only fire for this repository (pull request events default to the checkout's origin; pass \"\" for every repository)")
   .option("--pr <number>", "Only fire for this pull request")
   .option("--source <name|src-N>", "Only fire for this source (with --on and an event a source reports: error_new, job_failed, check_failed, ...; see cast sources ls). Checked when saved")
   .option("--title <title>", stdinText("Short title (defaults to first 60 chars of prompt)"))
-  .option("--context <mode>", "Context capture: 'current' to grab running session")
+  // Accepted so old snippets still parse; it captures nothing.
+  .addOption(new Option("--context <mode>").hideHelp())
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked. A run that continues an existing session inherits that session's rules instead.")
   .option("--mode <mode>", "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
@@ -15315,10 +15857,60 @@ trigger
   .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Every run nests under this session and is read there rather than as an inbox card, and this session is woken if a run fails, dies, or asks for attention. A trigger that fires once also posts its clean result back here; a repeating one does not, since a line per firing would bury the thread.")
   .option("--thread", "Post each run's result into the current conversation as a message, without waking it. Works with --spawn; a --spawn trigger that fires once does this on its own.")
   .option("--wake", "With --spawn on a trigger that fires once: wake this session with the run's report even when it completes cleanly, so this session acts on it. Costs a turn over this session's whole context; without it a clean report is posted here without a wake.")
+  .addHelpText("after", `
+Examples:
+  cast trigger add "Check if CI is green on main" --in 30m                 # once, into this session
+  cast trigger add "Summarize open PRs" --every 1d --at "06:00 UTC" --spawn --safe  # daily at 06:00 UTC, a fresh read-only session
+  cast trigger add "Answer the new review comment" --on pr_comment --pr 42
+  cast trigger add "Review PRs" --every 6h --spawn --precheck "gh pr list --json number" --precheck-mode changes`)
   .action(async (prompt, options) => {
     prompt = prompt.trim();
     if (!prompt) {
-      console.error("Empty prompt");
+      console.error("Empty prompt: pass the instruction, or '-' to read it from stdin");
+      process.exit(1);
+    }
+    // Every check that needs no network runs first, so a wrong flag is
+    // answered at once and never after a device or session lookup.
+    const triggerConflict = triggerScheduleConflict(options);
+    if (triggerConflict) {
+      console.error(triggerConflict);
+      process.exit(1);
+    }
+    const delay = options.in !== undefined ? parseDurationFlag("--in", options.in) : undefined;
+    const firstAt = options.at !== undefined ? parseAtFlag("--at", options.at) : delay !== undefined ? Date.now() + delay : undefined;
+    const everyMs = options.every !== undefined ? parseDurationFlag("--every", options.every) : undefined;
+    const maxRuntimeMs = options.maxRuntime ? parseDurationFlag("--max-runtime", options.maxRuntime) : undefined;
+    if (options.mode !== undefined && !["apply", "propose"].includes(options.mode)) {
+      console.error(`--mode must be apply or propose, not "${options.mode}" (--safe is the same as --mode propose)`);
+      process.exit(1);
+    }
+    if (options.precheckMode !== undefined && !options.precheck) {
+      console.error("--precheck-mode reads a --precheck command; pass one.");
+      process.exit(1);
+    }
+    const precheckMode = options.precheckMode !== undefined ? parsePrecheckMode(options.precheckMode) : undefined;
+    if (options.precheck && options.on) {
+      console.error("--precheck gates scheduled runs (--in, --every); an --on trigger fires on its event and never runs it. Drop one of them.");
+      process.exit(1);
+    }
+    if (precheckMode === "changes" && !options.every) {
+      console.error("--precheck-mode changes compares one firing's output with the last one's, so it needs --every.");
+      process.exit(1);
+    }
+    // --spawn: fresh session per run. Binding a session is what makes runs
+    // inject, so the two are mutually exclusive. --thread is NOT a binding: it
+    // only names where each result is posted, so a fresh run can report into
+    // the thread that armed it.
+    if (options.spawn && options.for) {
+      console.error("--spawn conflicts with --for: a --spawn run starts a fresh session, a --for run injects into that session. Pick one.");
+      process.exit(1);
+    }
+    // --repo, --pr and --source narrow an event filter, so they mean nothing
+    // without one. Silently ignoring them would arm a trigger far wider than
+    // the caller asked.
+    const strayNarrowing = narrowingWithoutOn(options);
+    if (strayNarrowing) {
+      console.error(`${strayNarrowing} narrows an event trigger. Add --on <event>, or drop it.`);
       process.exit(1);
     }
     const config = readConfig();
@@ -15334,11 +15926,11 @@ trigger
     let runDeviceId = deviceId();
     if (options.device || options.spawn) {
       const { convexClient } = await import("./remote/cli.js");
-      const { pickDevice } = await import("./migrate/pickDevice.js");
+      const { pickOwnDevice } = await import("./migrate/pickDevice.js");
       const { client, token, api } = await convexClient();
       if (options.device) {
         const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
-        runDeviceId = pickDevice(devices, options.device, "--device").device_id;
+        runDeviceId = (await pickOwnDevice(devices, options.device, "--device", () => client.query(api.devices.listAgentBoxes, { api_token: token }))).device_id;
       } else {
         // A backend without the query answers an error: keep this machine.
         const saved = await client.query(api.newSessionDefaults.defaultDevice, { api_token: token, project_path: options.project || getRealCwd() }).catch(() => null);
@@ -15350,28 +15942,19 @@ trigger
     let run_at: number | undefined;
     let interval_ms: number | undefined;
     let event_filter: TriggerFilter | undefined;
-    const delay = options.in ? parseDuration(options.in) : undefined;
-    if (options.in && !delay) {
-      console.error(`Invalid duration: ${options.in}`);
-      process.exit(1);
-    }
 
-    if (options.every) {
+    if (everyMs) {
       schedule_type = "recurring";
-      interval_ms = parseDuration(options.every);
-      if (!interval_ms) {
-        console.error(`Invalid duration: ${options.every}`);
-        process.exit(1);
-      }
+      interval_ms = everyMs;
       // --in sets the first run, and the first run anchors the cadence: every
       // later run lands on that grid (nextArmingAfterRun), so `--in 6h --every
       // 24h` is a daily run at that time of day.
-      run_at = Date.now() + (delay ?? interval_ms);
+      run_at = firstAt ?? Date.now() + interval_ms;
     } else if (options.on) {
       schedule_type = "event";
       event_filter = await buildEventFilter(options.on, options);
-    } else if (delay) {
-      run_at = Date.now() + delay;
+    } else if (firstAt) {
+      run_at = firstAt;
     } else {
       run_at = Date.now();
     }
@@ -15384,34 +15967,10 @@ trigger
         .map((l: string) => l.replace(/^[#>*\-\s]+/, "").trim())
         .find(Boolean) ?? prompt;
     const title = options.title || firstLine.slice(0, 60);
-    const maxRuntimeMs = options.maxRuntime ? parseDuration(options.maxRuntime) : undefined;
-    if (options.precheckMode !== undefined && !options.precheck) {
-      console.error("--precheck-mode reads a --precheck command; pass one.");
-      process.exit(1);
-    }
-    const precheckMode = options.precheckMode !== undefined ? parsePrecheckMode(options.precheckMode) : undefined;
 
     let context_summary: string | undefined;
     let originating_conversation_id: string | undefined;
     let target_conversation_id: string | undefined;
-
-    // --spawn: fresh session per run. Binding a session is what makes runs
-    // inject, so the two are mutually exclusive. --thread is NOT a binding: it
-    // only names where each result is posted, so a fresh run can report into
-    // the thread that armed it.
-    if (options.spawn && options.for) {
-      console.error("--spawn conflicts with --for: spawn runs don't bind to a session");
-      process.exit(1);
-    }
-
-    // --repo, --pr and --source narrow an event filter, so they mean nothing
-    // without one. Silently ignoring them would arm a trigger far wider than
-    // the caller asked.
-    const strayNarrowing = narrowingWithoutOn(options);
-    if (strayNarrowing) {
-      console.error(`${strayNarrowing} narrows an event trigger. Add --on <event>, or drop it.`);
-      process.exit(1);
-    }
 
     // The current session is captured for two separate purposes:
     //   • creatorSessionUuid — pure attribution (created_by_conversation_id):
@@ -15468,12 +16027,12 @@ trigger
       // so — the run's page can't link home, and nothing else will surface it.
       if (!creatorSessionUuid) {
         console.error(
-          "warning: could not detect the session creating this trigger — runs will not link back to it. Run `cast trigger add` from the agent's own shell, not through tmux."
+          "warning: could not detect the session creating this trigger, so runs will not link back to it. Run `cast trigger add` from the agent's own shell, not through tmux."
         );
       }
     } else if (!originating_conversation_id && !options.for) {
       console.error(
-        "note: could not link this trigger to a session — runs will spawn fresh agents in " +
+        "note: could not link this trigger to a session, so runs will spawn fresh agents in " +
           (options.project || getRealCwd()) +
           " (use --for <session> to bind one, or pass --spawn to make this explicit)"
       );
@@ -15540,11 +16099,29 @@ trigger
     }
   });
 
+const TRIGGER_STATUSES = ["scheduled", "running", "paused", "completed", "failed", "cancelled"];
+
+/** When a trigger fires next, as ls and show print it. */
+function triggerScheduleText(t: any): string {
+  if (t.schedule_type === "event") return t.event_filter ? describeEventScope(t.event_filter) : "on event";
+  // A paused trigger has no next run until it is resumed.
+  const next = t.run_at && t.status === "scheduled" ? formatRunAt(t.run_at) : "";
+  if (t.schedule_type === "recurring") return `every ${formatMs(t.interval_ms)}${next ? `, next ${next}` : ""}`;
+  return next;
+}
+
+/** Where a trigger's runs go: into its bound session, or a fresh agent on its model. */
+function triggerRunsIn(t: any): string {
+  return t.originating_conversation_id ? "inline" : `${t.agent_type || "claude"}/${t.model || "default"}`;
+}
+
 trigger
   .command("ls")
-  .description("List triggers")
-  .option("-s, --status <status>", "Filter by status (scheduled, running, completed, failed, paused)")
-  .option("-a, --all", "Show all statuses including completed")
+  .description("List triggers: armed ones (scheduled, running, paused) unless --status or --all")
+  .option("-s, --status <status>", `Only this status (${TRIGGER_STATUSES.join(", ")})`, choiceOption(TRIGGER_STATUSES))
+  .option("-a, --all", "Include completed, failed and cancelled triggers")
+  .option("-q, --query <text>", "Only triggers whose title or prompt contains this text")
+  .option("-l, --long", "Add each trigger's gist and its last run's summary")
   .option("--json", "Machine-readable output (full trigger rows)")
   .action(async (options) => {
     const config = readConfig();
@@ -15566,19 +16143,21 @@ trigger
 
       const tasks = await response.json();
       if (tasks.error) {
-        console.error(`Error: ${tasks.error}`);
+        console.error(`Error: ${cliErrorMessage(tasks.error)}`);
         process.exit(1);
       }
 
       if (!Array.isArray(tasks) || tasks.length === 0) {
-        console.log(fmt.muted("No triggers found."));
+        console.log(fmt.muted(options.status ? `No ${options.status} triggers.` : "No triggers yet. Arm one: cast trigger add \"<prompt>\" --in 30m"));
         return;
       }
 
-      // Filter out completed/failed by default unless --all
-      const filtered = options.all || options.status
-        ? tasks
-        : tasks.filter((t: any) => !["completed", "failed"].includes(t.status));
+      // Finished triggers (completed, failed, cancelled) are history: shown
+      // with --all or when asked for by --status.
+      const query = typeof options.query === "string" ? options.query.toLowerCase() : "";
+      const filtered = tasks
+        .filter((t: any) => options.all || options.status || !["completed", "failed", "cancelled"].includes(t.status))
+        .filter((t: any) => !query || [t.title, t.display_title, t.prompt].some((v) => typeof v === "string" && v.toLowerCase().includes(query)));
 
       if (options.json) {
         console.log(JSON.stringify(filtered, null, 2));
@@ -15586,7 +16165,7 @@ trigger
       }
 
       if (filtered.length === 0) {
-        console.log(fmt.muted("No active triggers. Use --all to see completed ones."));
+        console.log(fmt.muted(query ? `No trigger matches "${options.query}"${options.all ? "" : "; --all includes finished ones"}.` : "No armed triggers. --all includes finished ones."));
         return;
       }
 
@@ -15602,31 +16181,15 @@ trigger
         const shortId = t.short_id || t._id.slice(-8);
         const color = statusColorMap[t.status] || "";
         const statusStr = `${color}${t.status.padEnd(10)}${c.reset}`;
-        const scheduleInfo = t.schedule_type === "recurring"
-          ? fmt.muted(`every ${formatMs(t.interval_ms)}`)
-          : t.schedule_type === "event"
-            ? fmt.muted(t.event_filter ? describeEventScope(t.event_filter) : "on event")
-            : t.run_at
-              ? fmt.muted(formatRunAt(t.run_at))
-              : "";
-
-        // Prefer the haiku-distilled name/gist (display_title/display_summary,
-        // generated server-side) — the stored title is usually prompt.slice(0,60).
-        // Where a run goes: into its bound session (that session's model), or a
-        // fresh agent on the pinned model (or the agent's saved default).
-        const runsIn = t.originating_conversation_id
-          ? "inline"
-          : `${t.agent_type || "claude"}/${t.model || "default"}`;
-        console.log(`  ${c.cyan}${shortId}${c.reset}  ${statusStr}  ${t.display_title?.trim() || t.title}  ${scheduleInfo}  ${fmt.muted(runsIn)}`);
-        if (t.display_summary) {
-          console.log(`           ${fmt.muted(t.display_summary.slice(0, 100))}`);
-        }
-        if (t.last_run_summary) {
-          console.log(`           ${fmt.muted(`last: ${t.last_run_summary.slice(0, 80)}`)}`);
-        }
+        // Prefer the haiku-distilled name (display_title, generated
+        // server-side): the stored title is usually prompt.slice(0,60).
+        console.log(`  ${c.cyan}${shortId.padEnd(8)}${c.reset}  ${statusStr}  ${t.display_title?.trim() || t.title}  ${fmt.muted(triggerScheduleText(t))}  ${fmt.muted(triggerRunsIn(t))}`);
+        if (!options.long) continue;
+        if (t.display_summary) console.log(`            ${fmt.muted(t.display_summary.slice(0, 100))}`);
+        if (t.last_run_summary) console.log(`            ${fmt.muted(`last: ${t.last_run_summary.slice(0, 80)}`)}`);
       }
 
-      console.log(fmt.muted(`\n${filtered.length} trigger(s)`));
+      console.log(fmt.muted(`\n${filtered.length} trigger(s). cast trigger show <id> for one in full`));
     } catch (error) {
       console.error("Failed to list triggers:", error instanceof Error ? error.message : error);
       process.exit(1);
@@ -15634,12 +16197,55 @@ trigger
   });
 
 trigger
+  .command("show")
+  .description("One trigger in full: its prompt, schedule, where runs go, precheck, and its last run")
+  .argument("<id>", TRIGGER_ID_ARG)
+  .option("--json", "Machine-readable output (the trigger row)")
+  .action(async (id, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const t = await fetchTrigger(config, siteUrl, id);
+    if (options.json) {
+      console.log(JSON.stringify(t, null, 2));
+      return;
+    }
+    const shortId = t.short_id || t._id.slice(-8);
+    const schedule = triggerScheduleText(t) || (t.schedule_type === "once" ? "once" : t.schedule_type);
+    console.log(`${c.cyan}${shortId}${c.reset}  ${t.status}  ${c.bold}${t.display_title?.trim() || t.title}${c.reset}`);
+    console.log(`  ${fmt.muted("when")}      ${schedule}`);
+    const runs = t.originating_conversation_id
+      ? `into ${String(t.originating_conversation_id).slice(0, 7)}${t.originating_conversation_title ? ` (${t.originating_conversation_title})` : ""}`
+      : `a fresh ${triggerRunsIn(t)} session per run${t.mode === "propose" ? ", read-only" : ""}`;
+    console.log(`  ${fmt.muted("runs")}      ${runs}`);
+    if (t.project_path) console.log(`  ${fmt.muted("project")}   ${t.project_path.replace(process.env.HOME || "~", "~")}`);
+    if (t.precheck) console.log(`  ${fmt.muted("precheck")}  ${t.precheck}${t.precheck_mode && t.precheck_mode !== "exit" ? ` (${t.precheck_mode})` : ""}`);
+    if (t.last_run_at) {
+      const conv = t.last_run_conversation_id ? `, cast read ${String(t.last_run_conversation_id).slice(0, 7)}` : "";
+      console.log(`  ${fmt.muted("last run")}  ${formatMs(Date.now() - t.last_run_at)} ago${t.last_run_failed ? `, ${c.red}failed${c.reset}` : ""}${conv}`);
+      if (t.last_run_summary) console.log(`            ${t.last_run_summary}`);
+    }
+    console.log(`  ${fmt.muted("prompt")}`);
+    for (const line of String(t.prompt ?? "").split("\n")) console.log(`    ${line}`);
+  });
+
+trigger
   .command("complete")
-  .description("Mark a running trigger as completed (called by the agent)")
-  .argument("<id>", "Trigger ID (full or last 8 chars)")
+  .description("End the trigger run you are in: the summary is what the person reads, --needs-attention when they must act")
+  .argument("<id>", TRIGGER_ID_ARG)
   .option("--summary <text>", stdinText("Summary of what was done"))
   .option("--needs-attention", "Flag the run for the user: it stays in the inbox instead of folding into the trigger's history, and a stashed/killed session is pulled back into the queue")
+  .option("--again-in <duration>", "Fire this trigger once more after a delay (30m, 2h, 4h40m), whatever its schedule: a recheck booked from inside the run. A repeating trigger returns to its cadence after it")
+  .option("--again-at <time>", "Like --again-in, at a time: 06:00, \"06:00 UTC\", 2026-10-17T06:00:00Z")
   .action(async (id, options) => {
+    if (options.againIn && options.againAt) {
+      console.error("--again-in and --again-at both book the recheck. Pass one.");
+      process.exit(1);
+    }
+    const rearmAt = options.againAt ? parseAtFlag("--again-at", options.againAt) : options.againIn ? Date.now() + parseDurationFlag("--again-in", options.againIn) : undefined;
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
@@ -15667,6 +16273,7 @@ trigger
           summary: options.summary,
           run_session_uuid: runSessionUuid,
           ...(options.needsAttention ? { needs_attention: true } : {}),
+          ...(rearmAt ? { rearm_at: rearmAt } : {}),
         }),
       });
       const result = await response.json();
@@ -15685,8 +16292,15 @@ trigger
           writeThreadStatePulse(spawnedRun, options.needsAttention ? "blocked" : "done");
         }
         console.log(`${c.green}ok${c.reset} Trigger completed: ${c.cyan}${id}${c.reset}`);
+        if (rearmAt && result.rearm_at) {
+          console.log(fmt.muted(`fires again ${new Date(rearmAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`));
+        } else if (rearmAt) {
+          // A backend from before the recheck drops the field it does not know.
+          console.error(`The backend took the completion but not the recheck. Arm it now: cast trigger add - ${options.againAt ? `--at "${options.againAt}"` : `--in ${options.againIn}`}`);
+          process.exit(1);
+        }
       } else {
-        console.error("Failed to complete trigger (may not be in running state)");
+        console.error(`Could not complete ${id}: only a running trigger completes. cast trigger show ${id} says its status.`);
         process.exit(1);
       }
     } catch (error) {
@@ -15698,7 +16312,7 @@ trigger
 trigger
   .command("cancel")
   .description("Cancel a trigger")
-  .argument("<id>", "Trigger ID (full or last 8 chars)")
+  .argument("<id>", TRIGGER_ID_ARG)
   .action(async (id) => {
     await taskAction("cancel", id, "Cancelled");
   });
@@ -15706,7 +16320,7 @@ trigger
 trigger
   .command("pause")
   .description("Pause a trigger")
-  .argument("<id>", "Trigger ID (full or last 8 chars)")
+  .argument("<id>", TRIGGER_ID_ARG)
   .action(async (id) => {
     await taskAction("pause", id, "Paused");
   });
@@ -15714,15 +16328,15 @@ trigger
 trigger
   .command("resume")
   .description("Resume a paused trigger")
-  .argument("<id>", "Trigger ID (full or last 8 chars)")
+  .argument("<id>", TRIGGER_ID_ARG)
   .action(async (id) => {
     await taskAction("resume", id, "Resumed");
   });
 
 trigger
   .command("run")
-  .description("Fire a trigger immediately")
-  .argument("<id>", "Trigger ID (full or last 8 chars)")
+  .description("Fire a trigger now, outside its schedule (its precheck does not run)")
+  .argument("<id>", TRIGGER_ID_ARG)
   .option("--focus <focus>", "For a Head of People review: what this run is about (goal_tree)")
   .action(async (id, opts: { focus?: string }) => {
     await taskAction("run", id, opts.focus ? `Queued for immediate run, focused on ${opts.focus}` : "Queued for immediate run", opts.focus ? { focus: opts.focus } : undefined);
@@ -15731,11 +16345,12 @@ trigger
 trigger
   .command("update")
   .alias("edit")
-  .description("Edit a trigger in place. Every effective edit is versioned and audited — see 'cast trigger history'.")
-  .argument("<id>", "Trigger ID (tr-42, full id, or last 8 chars)")
+  .description("Edit a scheduled or paused trigger in place, passing only what changes; every edit is kept (cast trigger history). A running trigger takes --prompt, --title, --every and --precheck; to look again after this run, end it with cast trigger complete <id> --again-in 30m")
+  .argument("<id>", TRIGGER_ID_ARG)
   .option("--prompt <prompt>", stdinText("New prompt"))
   .option("--title <title>", stdinText("New title"))
-  .option("--in <duration>", "Reschedule as a one-shot after delay (e.g., 30m, 2h, 1d)")
+  .option("--in <duration>", "Reschedule as a one-shot after delay (e.g., 30m, 2h, 4h40m, 1d); with --every, the first run")
+  .option("--at <time>", "Reschedule as a one-shot at a time (06:00, \"06:00 UTC\", 2026-10-17T06:00:00Z); with --every, the first run")
   .option("--every <duration>", "Reschedule on an interval (e.g., 4h, 1d)")
   .option("--on <event>", `Reschedule on an event (${EVENT_NAMES})`)
   .option("--repo <owner/name>", "Only fire for this repository (with --on; pull request events default to the checkout's origin)")
@@ -15765,13 +16380,13 @@ trigger
     // Same rule as `cast trigger add`: a binding is what makes runs inject,
     // so asking for both at once has no coherent answer.
     if (options.spawn && options.for) {
-      console.error("--spawn conflicts with --for: spawn runs don't bind to a session");
+      console.error("--spawn conflicts with --for: --spawn unbinds the trigger, --for binds it to a session. Pick one.");
       process.exit(1);
     }
 
-    const scheduleFlags = ["in", "every", "on"].filter((f) => options[f]);
-    if (scheduleFlags.length > 1) {
-      console.error(`Pass only one of --in/--every/--on (got --${scheduleFlags.join(", --")})`);
+    const scheduleConflict = triggerScheduleConflict(options);
+    if (scheduleConflict) {
+      console.error(scheduleConflict);
       process.exit(1);
     }
     // The filter is rebuilt from --on, so narrowing without it would be dropped.
@@ -15793,39 +16408,28 @@ trigger
       body.prompt = prompt;
     }
     if (options.title !== undefined) body.title = options.title;
+    if (options.mode !== undefined && !["apply", "propose"].includes(options.mode)) {
+      console.error(`--mode must be apply or propose, not "${options.mode}" (--safe is the same as --mode propose)`);
+      process.exit(1);
+    }
+    const firstAt = options.at ? parseAtFlag("--at", options.at) : options.in ? Date.now() + parseDurationFlag("--in", options.in) : undefined;
     if (options.every) {
-      const interval = parseDuration(options.every);
-      if (!interval) {
-        console.error(`Invalid duration: ${options.every}`);
-        process.exit(1);
-      }
       body.schedule_type = "recurring";
-      body.interval_ms = interval;
+      body.interval_ms = parseDurationFlag("--every", options.every);
+      if (firstAt) body.run_at = firstAt;
     } else if (options.on) {
       body.schedule_type = "event";
       body.event_filter = await buildEventFilter(options.on, options);
-    } else if (options.in) {
-      const delay = parseDuration(options.in);
-      if (!delay) {
-        console.error(`Invalid duration: ${options.in}`);
-        process.exit(1);
-      }
+    } else if (firstAt) {
       body.schedule_type = "once";
-      body.run_at = Date.now() + delay;
+      body.run_at = firstAt;
     }
     if (options.safe) body.mode = "propose";
     else if (options.mode !== undefined) body.mode = options.mode;
     if (options.project !== undefined) body.project_path = options.project;
     if (options.agent !== undefined) body.agent_type = options.agent;
     if (options.model !== undefined) body.model = options.model;
-    if (options.maxRuntime !== undefined) {
-      const ms = parseDuration(options.maxRuntime);
-      if (!ms) {
-        console.error(`Invalid duration: ${options.maxRuntime}`);
-        process.exit(1);
-      }
-      body.max_runtime_ms = ms;
-    }
+    if (options.maxRuntime !== undefined) body.max_runtime_ms = parseDurationFlag("--max-runtime", options.maxRuntime);
     if (options.precheck !== undefined) body.precheck = options.precheck;
     if (options.precheckMode !== undefined) body.precheck_mode = parsePrecheckMode(options.precheckMode);
     // Routing. --spawn clears the binding (null, not absent — absent means
@@ -15841,7 +16445,7 @@ trigger
     if (options.wake !== undefined) body.wake_creator = options.wake;
 
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime/--precheck/--precheck-mode/--for/--spawn/--thread/--wake.");
+      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--at/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime/--precheck/--precheck-mode/--for/--spawn/--thread/--wake.");
       process.exit(1);
     }
 
@@ -15861,7 +16465,7 @@ trigger
         process.exit(1);
       }
       if (!result.success) {
-        console.error("Update failed: only scheduled or paused triggers are editable");
+        console.error(`${id} was not updated: only a scheduled or paused trigger takes this edit, and a running one takes --prompt, --title, --every and --precheck alone (cast trigger show ${id} says which it is). To look again after the run you are in: cast trigger complete ${id} --again-in 30m`);
         process.exit(1);
       }
       if (!result.changed?.length) {
@@ -15878,7 +16482,7 @@ trigger
 trigger
   .command("history")
   .description("Show a trigger's edit history: every version, who changed what, from where")
-  .argument("<id>", "Trigger ID (tr-42, full id, or last 8 chars)")
+  .argument("<id>", TRIGGER_ID_ARG)
   .action(async (id) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -15897,7 +16501,7 @@ trigger
       });
       const history = await response.json();
       if (history?.error) {
-        console.error(`Error: ${history.error}`);
+        console.error(`Error: ${cliErrorMessage(history.error)}`);
         process.exit(1);
       }
       if (!history) {
@@ -15909,7 +16513,7 @@ trigger
       const revisions: any[] = history.revisions ?? [];
       console.log(`${c.cyan}${shortId}${c.reset} ${c.bold}${history.title}${c.reset} ${fmt.muted(`v${revisions.length + 1}, ${revisions.length} edit(s)`)}`);
       if (revisions.length === 0) {
-        console.log(fmt.muted("Never edited — still the version it was created with."));
+        console.log(fmt.muted("Never edited: still the version it was created with."));
         return;
       }
 
@@ -15958,9 +16562,10 @@ trigger
 
 trigger
   .command("log")
-  .description("Show last run conversation for a trigger")
-  .argument("<id>", "Trigger ID (full or last 8 chars)")
-  .action(async (id) => {
+  .description("A trigger's last run: its session (cast read <id> opens it), its summary, and any firing its precheck skipped")
+  .argument("<id>", TRIGGER_ID_ARG)
+  .option("--json", "Machine-readable output: the last run's session, summary and precheck fields")
+  .action(async (id, options: { json?: boolean }) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
@@ -15968,25 +16573,25 @@ trigger
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    const taskId = await resolveTaskId(config, siteUrl, id);
-    if (!taskId) return;
-
-    // Get task details to find last_run_conversation_id
-    const response = await cliFetchRead(`${siteUrl}/cli/tasks/list`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_token: config.auth_token }),
-    });
-    const tasks = await response.json();
-    const t = Array.isArray(tasks) ? tasks.find((x: any) => x._id === taskId) : null;
-
-    if (!t) {
-      console.error("Trigger not found");
-      process.exit(1);
+    const t = await fetchTrigger(config, siteUrl, id);
+    if (options.json) {
+      printJson({
+        id: t.short_id ?? id,
+        last_run_session: t.last_run_conversation_id ? String(t.last_run_conversation_id).slice(0, 7) : null,
+        last_run_title: t.last_run_conversation_title ?? null,
+        last_run_at: t.last_run_at ?? null,
+        last_run_source: t.last_run_source ?? null,
+        last_run_summary: t.last_run_summary ?? null,
+        precheck: t.precheck ?? null,
+        precheck_mode: t.precheck ? triggerPrecheckMode(t.precheck_mode) : null,
+        last_precheck_skip_at: t.last_precheck_skip_at ?? null,
+        last_precheck_skip_reason: t.last_precheck_skip_reason ?? null,
+      });
+      return;
     }
 
     // The gate that decides whether a firing spends a session at all, and the
-    // last firing it refused — a skipped run leaves no conversation to read,
+    // last firing it refused: a skipped run leaves no conversation to read,
     // so this line is the only record of it here.
     if (t.precheck) {
       const precheckMode = triggerPrecheckMode(t.precheck_mode);
@@ -15994,7 +16599,7 @@ trigger
       if (t.last_run_source === "manual") console.log(fmt.muted("The last run was manual, so the precheck did not run."));
       if (t.last_precheck_skip_at) {
         console.log(
-          `${c.yellow}skipped${c.reset} ${formatMs(Date.now() - t.last_precheck_skip_at)} ago — ` +
+          `${c.yellow}skipped${c.reset} ${formatMs(Date.now() - t.last_precheck_skip_at)} ago: ` +
             `${t.last_precheck_skip_reason || "the precheck refused the run"}`,
         );
       }
@@ -16004,21 +16609,22 @@ trigger
       if (t.last_run_at) {
         // The task has run but its conversation can't be resolved (yet) —
         // distinct from never having run at all.
-        console.log(fmt.muted(`Last run ${formatMs(Date.now() - t.last_run_at)} ago — run conversation not synced yet.`));
+        console.log(fmt.muted(`Last run ${formatMs(Date.now() - t.last_run_at)} ago; its session has not synced yet.`));
         if (t.last_run_summary) console.log(t.last_run_summary);
       } else if (t.last_precheck_skip_at) {
-        console.log(fmt.muted("No agent has run yet — every firing so far was skipped by the precheck."));
+        console.log(fmt.muted("No agent has run yet: the precheck skipped every firing so far."));
       } else {
         console.log(fmt.muted("No run history yet."));
       }
       return;
     }
 
+    const runShortId = String(t.last_run_conversation_id).slice(0, 7);
     const title = t.last_run_conversation_title ? ` ${fmt.muted(`(${t.last_run_conversation_title})`)}` : "";
-    console.log(`Last run conversation: ${c.cyan}${t.last_run_conversation_id}${c.reset}${title}`);
-    if (t.last_run_at) console.log(fmt.muted(`Ran ${formatMs(Date.now() - t.last_run_at)} ago`));
+    const ago = t.last_run_at ? fmt.muted(`, ran ${formatMs(Date.now() - t.last_run_at)} ago`) : "";
+    console.log(`Last run: ${c.cyan}${runShortId}${c.reset}${title}${ago}`);
     if (t.last_run_summary) console.log(t.last_run_summary);
-    console.log(fmt.muted(`Use: cast read ${t.last_run_conversation_id}`));
+    console.log(fmt.muted(`Read it: cast read ${runShortId}`));
   });
 
 trigger
@@ -16077,7 +16683,8 @@ async function taskAction(action: string, id: string, successMsg: string, extra?
     if (result.success) {
       console.log(`${c.green}ok${c.reset} ${successMsg}: ${c.cyan}${id}${c.reset}`);
     } else {
-      console.error("Action failed (task may not be in the right state)");
+      const needs: Record<string, string> = { pause: "a scheduled", resume: "a paused", cancel: "an armed", run: "an armed" };
+      console.error(`Could not ${action} ${id}: only ${needs[action] ?? "an armed"} trigger can be. cast trigger show ${id} says its status.`);
       process.exit(1);
     }
   } catch (error) {
@@ -16092,9 +16699,23 @@ async function taskAction(action: string, id: string, successMsg: string, extra?
  * quote), a full Convex id, or a trailing chunk of one (the pre-short-id
  * handle, still in old prompts and scrollback).
  */
-async function resolveTaskId(config: any, siteUrl: string, idInput: string): Promise<string | null> {
+async function resolveTaskId(config: any, siteUrl: string, idInput: string): Promise<string> {
   const input = idInput.trim();
-  // A full Convex id needs no lookup — but a short id is short, so check that
+  // Every failure here ends the command with exit 1: a caller that went on
+  // with no id would report success for a trigger it never touched.
+  const LIST_TRIGGERS = "cast trigger ls --all";
+  const notFound = (why: string): never => {
+    console.error(`${why}. Find it with: ${LIST_TRIGGERS}`);
+    process.exit(1);
+  };
+  // Another kind's short id (ct-42 is a task, pl-7 a plan, sd-3 a decision):
+  // name the mix-up rather than searching for it.
+  const otherKind = idKindOf(input);
+  if (otherKind && otherKind !== "trigger") {
+    console.error(wrongKindIdError(input, { kind: "trigger", example: "tr-42", find: "cast trigger ls lists them" }));
+    process.exit(1);
+  }
+  // A full Convex id needs no lookup, but a short id is short, so check that
   // shape first rather than by length alone.
   const isShortId = /^tr-\w+$/i.test(input);
   if (!isShortId && input.length > 16) return input;
@@ -16107,15 +16728,14 @@ async function resolveTaskId(config: any, siteUrl: string, idInput: string): Pro
     });
     const tasks = await response.json();
     if (!Array.isArray(tasks)) {
-      console.error("Failed to fetch tasks");
-      return null;
+      return notFound(`Could not list triggers to resolve ${input}${tasks?.error ? `: ${cliErrorMessage(tasks.error)}` : ""}`);
     }
     const exact = tasks.find((t: any) => t.short_id && t.short_id.toLowerCase() === input.toLowerCase());
     if (exact) return exact._id;
     if (isShortId) {
       // Not in the own-only list: a trigger armed under another account (a
       // team bot on a remote daemon) is still manageable when this user can
-      // view its conversation — resolve it through that rule.
+      // view its conversation; resolve it through that rule.
       const shared = await cliFetchRead(`${siteUrl}/cli/tasks/resolve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -16124,23 +16744,34 @@ async function resolveTaskId(config: any, siteUrl: string, idInput: string): Pro
         .then((r) => r.json())
         .catch(() => null);
       if (shared && typeof shared === "object" && shared._id) return shared._id;
-      console.error(`No trigger found matching: ${input}`);
-      return null;
+      return exitNotFound("trigger", input, LIST_TRIGGERS);
     }
     const matches = tasks.filter((t: any) => t._id.endsWith(input));
-    if (matches.length === 0) {
-      console.error(`No task found matching: ${input}`);
-      return null;
-    }
+    if (matches.length === 0) return exitNotFound("trigger", input, LIST_TRIGGERS);
     if (matches.length > 1) {
-      console.error(`Ambiguous ID, ${matches.length} matches. Use a longer suffix.`);
-      return null;
+      return notFound(`${input} matches ${matches.length} triggers (${matches.slice(0, 3).map((t: any) => t.short_id || t._id.slice(-8)).join(", ")}); pass its tr- id`);
     }
     return matches[0]._id;
-  } catch {
-    console.error("Failed to resolve task ID");
-    return null;
+  } catch (error) {
+    return notFound(`Could not resolve ${input}: ${error instanceof Error ? error.message : error}`);
   }
+}
+
+/** One trigger's full row, by any id resolveTaskId takes; exits when there is none. */
+async function fetchTrigger(config: any, siteUrl: string, id: string): Promise<any> {
+  const taskId = await resolveTaskId(config, siteUrl, id);
+  const response = await cliFetchRead(`${siteUrl}/cli/tasks/list`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: config.auth_token }),
+  });
+  const tasks = await response.json();
+  const row = Array.isArray(tasks) ? tasks.find((x: any) => x._id === taskId) : null;
+  if (!row) {
+    console.error(`${id} is not among your own triggers, so it cannot be read here. List yours with: cast trigger ls --all`);
+    process.exit(1);
+  }
+  return row;
 }
 
 function formatMs(ms: number): string {
@@ -16280,10 +16911,8 @@ async function cliPost(urlPath: string, body: Record<string, any>, opts?: { time
   try {
     result = JSON.parse(text);
   } catch {
-    const { missingRouteError } = await import("./castApi.js");
-    const missing = missingRouteError(urlPath, response.status);
-    if (missing) fail(missing);
-    fail(`API error (${response.status}): ${text.slice(0, 200)}`, "");
+    const { nonJsonError } = await import("./castApi.js");
+    fail(nonJsonError(urlPath, response.status, text), "");
   }
   if (result?.error) fail(cliErrorMessage(result.error));
   return result;
@@ -16439,7 +17068,7 @@ program
   .alias("ov")
   .description("Top-down view of all plans and tasks")
   .option("--plain", "Plain text output (no colors, for injection into agent context)")
-  .option("--all", "Include completed plans/tasks (last 14d)")
+  .option("--all", "Include completed plans and tasks (last 14d), stale plans, and every unplanned task (default: the first 30)")
   .action(async (options: any) => {
     const o = options.plain ? { bold: "", reset: "", dim: "", cyan: "", green: "", yellow: "", red: "", blue: "", magenta: "" } : c;
 
@@ -16598,8 +17227,10 @@ program
 
     // Unplanned tasks
     if (unplannedTasks.length > 0) {
-      const sorted = sortTasks(unplannedTasks);
-      lines.push(`${o.bold}UNPLANNED TASKS${o.reset}`);
+      // A long backlog is read with cast task ls; the overview keeps its head.
+      const allSorted = sortTasks(unplannedTasks);
+      const sorted = options.all ? allSorted : allSorted.slice(0, OVERVIEW_UNPLANNED_CAP);
+      lines.push(`${o.bold}UNPLANNED TASKS${o.reset}${allSorted.length > sorted.length ? ` ${o.dim}(first ${sorted.length} of ${allSorted.length}; cast task ls lists them all)${o.reset}` : ""}`);
       for (const t of sorted) {
         const icon = taskIcon(t);
         const pri = t.priority && t.priority !== "none" && t.priority !== "medium" ? `  ${t.priority}` : "";
@@ -16656,6 +17287,20 @@ program
     console.log(lines.join("\n"));
   });
 
+const OVERVIEW_UNPLANNED_CAP = 30;
+
+// Option parsers for the work commands. Each refuses a bad value before any
+// call, in commander's own error line, so a typo never reaches the server's
+// validator (whose refusal names a field path, not the flag).
+// Projects, plans and goals rank p0 to p3; a task takes the same words too.
+const TASK_PRIORITY_FROM_P: Record<string, string> = { p0: "urgent", p1: "high", p2: "medium", p3: "low" };
+function taskPriorityArg(value: string): string {
+  const v = value.trim().toLowerCase();
+  const priority = TASK_PRIORITY_FROM_P[v] ?? v;
+  if (!(TASK_PRIORITIES as readonly string[]).includes(priority)) throw new InvalidArgumentError(`Use one of: ${TASK_PRIORITIES.join(", ")} (p0 to p3 also work).`);
+  return priority;
+}
+
 function formatAge(ms: number): string {
   const mins = Math.floor(ms / 60000);
   if (mins < 60) return `${mins}m ago`;
@@ -16677,8 +17322,8 @@ work
   .argument("<title>", stdinText("Task title, or one title per line for a bulk decomposition"))
   .option("--team <name|id|personal>", "Workspace to file it in: a team, or personal (default: the session's team, else the directory's mapping)")
   .option("-d, --description <text>", stdinText("Description"))
-  .option("-t, --type <type>", "Type: task, feature, bug, chore", "task")
-  .option("-p, --priority <level>", "Priority: urgent, high, medium, low", "medium")
+  .option("-t, --type <type>", "Type: task, feature, bug, chore", choiceOption(["task", "feature", "bug", "chore"]), "task")
+  .option("-p, --priority <level>", "Priority: urgent, high, medium, low, none (p0 to p3 map to urgent to low)", taskPriorityArg, "medium")
   .option("--project <ref>", "Project ID, short ID, or title substring")
   .option("--blocked-by <refs>", BLOCKER_REFS_HELP)
   .option("--found-during <task_id>", "The task this was found while working on (default: the task this session is bound to); none to leave it unlinked")
@@ -16784,7 +17429,7 @@ work
   .option("-r, --ready", `Show only ready items: ${READY_MEANS}`)
   .option("-a, --all", "Include done/dropped tasks")
   .option("-d, --derived", "Include derived/mined tasks (hidden by default)")
-  .option("-n, --limit <n>", "Max results", "50")
+  .option("-n, --limit <n>", "Max results", countOption, 50)
   .option("-q, --query <text>", "Filter by title/description (case-insensitive)")
   .option("--assignee <name>", "Filter by assignee: a person (username, 'me', or user ID) or a role (@handle)")
   .option("--chain <person>", "Everything in a person's reporting chain: their tasks and the tasks of every role under them ('me', a name, or a handle)")
@@ -16794,7 +17439,7 @@ work
   .option("-v, --verbose", "Show descriptions")
   .option("--json", "Output as JSON (an array of task rows; every field, no colours)")
   .action(async (options: any) => {
-    const body: Record<string, any> = { limit: parseInt(options.limit) };
+    const body: Record<string, any> = { limit: options.limit };
     if (options.ephemeral) body.include_ephemeral = true;
     if (options.team) Object.assign(body, workspaceScope(await readWorkspace(options.team)));
     if (options.initiative) body.initiative = options.initiative;
@@ -16810,14 +17455,18 @@ work
     if (options.plan) body.plan_id = options.plan;
     body.project_path = getRealCwd();
 
-    const whole = body.include_done && !body.status && !body.ready && !body.assignee && !body.chain && !body.project_id && !body.initiative;
-    const tasks = whole ? await (await import("./taskPages.js")).wholeBoard((b) => cliPost("/cli/work/page", b), body) : await cliPost("/cli/work/list", body);
+    const tasks = await (await import("./taskPages.js")).listTasks(cliPost, body)
+      .catch((err: Error) => { console.error(`Error: ${err.message}`); process.exit(1); });
     if (options.json) {
       printJson(Array.isArray(tasks) ? tasks : []);
       return;
     }
     if (!Array.isArray(tasks) || tasks.length === 0) {
-      console.log(fmt.muted("No tasks found."));
+      // A status that is no category and no team status matches nothing: say which words work.
+      const statusNote = options.status && !(TASK_STATUS_CATEGORIES as readonly string[]).includes(options.status)
+        ? ` with status "${options.status}" (a status is a category: ${TASK_STATUS_CATEGORIES.join(", ")}, or one of your team's statuses by name)`
+        : "";
+      console.log(fmt.muted(`No tasks found${statusNote}.`));
       return;
     }
     // Nest subtasks under their parents (shared with the web list so the two
@@ -16842,16 +17491,21 @@ work
   .description("Show task details (several ids at once is fine)")
   .argument("<short_ids...>", "Task short IDs (e.g., ct-a1b2 ct-c3d4)")
   .option("-c, --comments", "Show all comments")
+  .option("--last <n>", "Show the last n comments (default 5)", countOption)
+  .option("--only <sections>", "Print only these sections, comma separated, after the title line: description, criteria, steps, subtasks, details, graph, sessions, history, comments, decisions, runs, evidence")
   .option("--json", "Output as JSON (one object for a single id, an array for several)")
   .option("--fields <names>", "With --json, only these fields, comma separated (short_id always rides along): a caller that reads a title and a status need not carry every comment")
   .action(async (shortIds: string[], options: any) => {
+    try {
+      options.sections = (await import("./taskShow.js")).parseShowSections(options.only);
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      process.exit(1);
+    }
     const rows: any[] = [];
     for (const shortId of shortIds) {
       const result = await cliPost("/cli/work/get", { short_id: shortId });
-      if (!result) {
-        console.error(`Task not found: ${shortId}`);
-        process.exit(1);
-      }
+      if (!result) exitNotFound("task", shortId, `cast task ls -q "<words from its title>"`);
       rows.push(result);
     }
     // The line's three objects (the-line.md L10) ride along in both shapes:
@@ -16886,6 +17540,8 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   const icon = STATUS_ICONS[t.status] || "?";
   const pcolor = PRIORITY_COLORS[t.priority] || "";
   const pri = pcolor ? `${pcolor}${t.priority}${c.reset}` : t.priority;
+  const sections: Set<string> | undefined = options.sections;
+  const want = (name: import("./taskShow.js").TaskShowSection) => !sections || sections.has(name);
   console.log(`\n  ${icon} ${c.bold}${t.title}${c.reset}`);
   console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status_name ?? t.status} | ${pri} | ${t.task_type}`);
   const superseded = supersededLine(t.links);
@@ -16896,43 +17552,43 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   if (t.execution_status && t.execution_status !== t.status) {
     console.log(`  ${c.dim}Execution: ${t.execution_status}${c.reset}`);
   }
-  if (t.project_id) {
+  if (t.project_id && want("details")) {
     const proj = await tryCliPost("/cli/projects/get", { id: t.project_id });
-    const projLabel = proj?.title ? `${proj.title} ${c.dim}(${t.project_id})${c.reset}` : t.project_id;
+    const projLabel = proj?.title ? `${proj.title} ${c.dim}(${proj.short_id ?? t.project_id})${c.reset}` : t.project_id;
     console.log(`  ${c.dim}Project:${c.reset} ${projLabel}`);
   }
-  if (t.plan) console.log(`  ${c.dim}Plan:${c.reset} ${c.cyan}${t.plan.short_id}${c.reset} ${c.dim}${t.plan.title}${c.reset}`);
-  if (t.external?.identifier) {
+  if (t.plan && want("details")) console.log(`  ${c.dim}Plan:${c.reset} ${c.cyan}${t.plan.short_id}${c.reset} ${c.dim}${t.plan.title}${c.reset}`);
+  if (t.external?.identifier && want("details")) {
     const synced = t.external.synced_at ? ` ${c.dim}synced ${formatRelativeTime(t.external.synced_at)}${c.reset}` : "";
     console.log(`  ${c.dim}Issue:${c.reset} ${c.cyan}${t.external.identifier}${c.reset} ${c.dim}${t.external.url || ""}${c.reset}${synced}`);
     if (t.external.last_error) console.log(`  ${c.yellow}sync error: ${t.external.last_error}${c.reset}`);
   }
-  if (t.description) console.log(`\n  ${t.description}`);
-  if (t.acceptance_criteria?.length) {
+  if (t.description && want("description")) console.log(`\n  ${t.description}`);
+  if (t.acceptance_criteria?.length && want("criteria")) {
     console.log(`\n  ${c.bold}Acceptance Criteria${c.reset}`);
     for (const ac of t.acceptance_criteria) {
       console.log(`  ${c.dim}-${c.reset} ${ac}`);
     }
   }
-  if (t.steps?.length) {
+  if (t.steps?.length && want("steps")) {
     console.log(`\n  ${c.bold}Steps${c.reset}`);
     for (const s of t.steps) {
       const check = s.done ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
       console.log(`  ${check} ${s.title}`);
     }
   }
-  if (t.subtasks?.length) {
+  if (t.subtasks?.length && want("subtasks")) {
     console.log(`\n  ${c.bold}Subtasks (${t.subtasks.length})${c.reset}`);
     for (const st of t.subtasks) {
       const sIcon = STATUS_ICONS[st.status] || "?";
       console.log(`  ${sIcon} ${c.cyan}${st.short_id}${c.reset} ${st.title}`);
     }
   }
-  if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
-  if (t.assignee) console.log(`  ${c.dim}Assignee: ${t.assignee_name || t.assignee}${c.reset}`);
-  if (t.created_at) console.log(`  ${c.dim}Created: ${new Date(t.created_at).toLocaleString()}${t.creator_name ? ` by ${t.creator_name}` : ""}${c.reset}`);
+  if (t.labels?.length && want("details")) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
+  if (t.assignee && want("details")) console.log(`  ${c.dim}Assignee: ${t.assignee_name || t.assignee}${c.reset}`);
+  if (t.created_at && want("details")) console.log(`  ${c.dim}Created: ${new Date(t.created_at).toLocaleString()}${t.creator_name ? ` by ${t.creator_name}` : ""}${c.reset}`);
   // The graph in the web's order and words (task-graph.md TG12).
-  for (const s of taskGraphSections(t, t.links, { waitId: fmt.muted, ...checkoutWords(getRealCwd()) })) {
+  for (const s of want("graph") ? taskGraphSections(t, t.links, { waitId: fmt.muted, ...checkoutWords(getRealCwd()) }) : []) {
     const head = `  ${s.holds ? c.red : c.dim}${s.label}:${c.reset}`;
     if (s.items.length === 1) console.log(`${head} ${s.items[0]}`);
     else {
@@ -16940,22 +17596,20 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
       for (const item of s.items) console.log(`    ${item}`);
     }
   }
-  for (const l of offFrontierLines(t, t.not_ready)) console.log(`  ${c.dim}${l}${c.reset}`);
-  if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
+  for (const l of want("graph") ? offFrontierLines(t, t.not_ready) : []) console.log(`  ${c.dim}${l}${c.reset}`);
+  if (t.execution_concerns && want("details")) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
   const show = await import("./taskShow.js");
-  for (const l of show.formatTaskSessions(t.sessions ?? [])) console.log(l);
-  for (const l of show.formatTaskHistory(t.history ?? [])) console.log(l);
-  if (t.comments?.length) {
+  if (want("sessions")) for (const l of show.formatTaskSessions(t.sessions ?? [])) console.log(l);
+  if (want("history")) for (const l of show.formatTaskHistory(t.history ?? [])) console.log(l);
+  if (t.comments?.length && want("comments")) {
     const COMMENT_TYPE_ICONS: Record<string, string> = {
       progress: `${c.blue}↳${c.reset}`,
       blocker: `${c.red}!${c.reset}`,
       review: `${c.magenta}◇${c.reset}`,
       note: `${c.dim}·${c.reset}`,
     };
-    const showAll = options.comments;
-    const comments = showAll ? t.comments : t.comments.slice(-5);
-    const truncated = !showAll && t.comments.length > 5;
-    console.log(`\n  ${c.bold}Comments (${t.comments.length})${c.reset}${truncated ? ` ${c.dim}showing last 5, use -c for all${c.reset}` : ""}`);
+    const { shown: comments, note } = show.pickComments<any>(t.comments, { all: options.comments, last: options.last });
+    console.log(`\n  ${c.bold}Comments (${t.comments.length})${c.reset}${note ? ` ${c.dim}${note}${c.reset}` : ""}`);
     for (const cm of comments) {
       const ago = formatMs(Date.now() - cm.created_at);
       const typeIcon = COMMENT_TYPE_ICONS[cm.comment_type] || COMMENT_TYPE_ICONS.note;
@@ -16965,9 +17619,9 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   // The line (the-line.md L10): decisions, runs, evidence. Empty sections are skipped.
   if (line) {
     const now = Date.now();
-    for (const l of show.formatTaskDecisions(line.decisions, t, now)) console.log(l);
-    for (const l of show.formatTaskRuns(line.runs, now)) console.log(l);
-    for (const l of show.formatTaskEvidence(line.evidence, readConfig()?.web_url || WEB_URL)) console.log(l);
+    if (want("decisions")) for (const l of show.formatTaskDecisions(line.decisions, t, now)) console.log(l);
+    if (want("runs")) for (const l of show.formatTaskRuns(line.runs, now)) console.log(l);
+    if (want("evidence")) for (const l of show.formatTaskEvidence(line.evidence, readConfig()?.web_url || WEB_URL)) console.log(l);
   }
   console.log();
 }
@@ -17020,7 +17674,7 @@ work
 
 work
   .command("done")
-  .description("Mark a task as done")
+  .description("Mark a task as done, with no review (to send finished work for review, use cast task handoff)")
   .argument("<short_id>", "Task short ID")
   .option("-m, --message <text>", stdinText("Completion comment"))
   .option("--concerns <text>", stdinText("Mark done with concerns"))
@@ -17057,12 +17711,12 @@ work
   .command("handoff")
   .description("Hand a task over for review: record what was done and verified, move it to in_review")
   .argument("<short_id>", "Task short ID")
-  .requiredOption("--status <status>", "done | blocked | needs_context")
+  .requiredOption("--status <status>", "How the work ended: done (finished and verified), blocked or needs_context (stopped; --evidence says why). The task moves to in_review either way")
   .requiredOption("--evidence <text>", stdinText("What you verified and how (or why you stopped)"))
   .option("--files <paths>", "Comma-separated files changed")
   .option("--pr <url>", "Pull request URL")
   .option("--page <slug|url>", "Attach a published page as evidence (repeatable; the-line.md L6)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
-  .option("--guide <markdown>", stdinText("Change guide: a walkthrough of the change in reading order, one heading per step with its file:start-end on the heading line and the reason under it. With --evidence - too, stdin holds the evidence, a --- line, then the guide"))
+  .option("--guide <markdown>", stdinText("Change guide: a walkthrough of the change in reading order, one heading per step with its file:start-end on the heading line and the reason under it. With --evidence - too, stdin holds one section per '-' in the order the flags are written, split by a --- line"))
   .option("--guide-base <ref>", "Diff the guide's hunks against this ref (default: where HEAD branched from origin/main)")
   .action(async (shortId: string, options: any) => {
     const { buildTaskHandoffBody, handoffCommentText, parseFilesFlag, parseHandoffStatus } = await import("./taskClaim.js");
@@ -17078,10 +17732,22 @@ work
         return slug;
       });
       // The guide's hunks are captured now, so the review reads the code as it was handed off.
-      const guide = options.guide ? parseChangeGuide(String(options.guide), guideDiffReader(getRealCwd(), options.guideBase).diffFor) : undefined;
+      const reader = options.guide ? guideDiffReader(getRealCwd(), options.guideBase) : null;
+      const guide = reader ? (() => {
+        try {
+          // Each step names its file from the repository root, however the author wrote it.
+          const parsed = parseChangeGuide(String(options.guide), reader.diffFor);
+          return { ...parsed, steps: parsed.steps.map((step) => ({ ...step, file: reader.resolve(step.file) })) };
+        } catch (err) {
+          // Both read from stdin: a guide-shaped --evidence means the sections are the other way round.
+          const evidenceIsGuide = (() => { try { return parseChangeGuide(String(options.evidence ?? "")).steps.length > 0; } catch { return false; } })();
+          if (!evidenceIsGuide) throw err;
+          throw new Error(`the guide and the evidence look swapped: the text given as --evidence has the guide's headings. With both read from stdin, the sections follow the order the flags are written`);
+        }
+      })() : undefined;
       if (guide) {
         const bare = guide.steps.filter((s) => !s.hunk).map((s) => s.file);
-        if (bare.length) console.error(`${c.yellow}note${c.reset} no diff found for ${[...new Set(bare)].join(", ")}; those steps show text only`);
+        if (bare.length) console.error(`${c.yellow}note${c.reset} no diff found for ${[...new Set(bare)].join(", ")} against ${reader!.base.slice(0, 12)} in ${reader!.root}; those steps show text only (paths are read from the repository root or this directory)`);
       }
       input = { status: parseHandoffStatus(options.status), evidence: String(options.evidence ?? ""), files: parseFilesFlag(options.files), pr: options.pr, pages, guide };
       body = buildTaskHandoffBody(shortId, ownSessionId(getRealCwd()), input);
@@ -17092,11 +17758,29 @@ work
     // Pages attach at the station the task is leaving: the attach reads the
     // task's status, so it runs before the update moves it to in_review.
     for (const slug of input.pages ?? []) await cliPost("/cli/artifacts/attach", { slug, task: shortId });
-    await cliPost("/cli/work/update", body);
+    // A task held by a person's open decision stays where it is (the-line.md
+    // L5): the server records the evidence and says so in `held`. A server
+    // from before that refuses the move with "Held at …"; the evidence then
+    // still lands as the review comment below.
+    let held: { decision: string; station: string } | undefined;
+    try {
+      held = (await cliPost("/cli/work/update", body, { throwOnError: true }))?.held;
+    } catch (err) {
+      const m = /^Held at (\S+) by (\S+?)[,:]/.exec((err as Error).message);
+      if (!m) { console.error(`Error: ${(err as Error).message}`); process.exit(1); }
+      held = { station: m[1], decision: m[2] };
+    }
     const commentBody: Record<string, any> = { short_id: shortId, text: handoffCommentText(input), comment_type: "review" };
     if (body.conversation_id) commentBody.conversation_id = body.conversation_id;
     await cliPost("/cli/work/comment", commentBody);
-    console.log(`${c.green}ok${c.reset} Handed off ${c.cyan}${shortId}${c.reset} (${input.status}) → in_review${input.pages?.length ? ` · ${input.pages.length} page${input.pages.length === 1 ? "" : "s"} attached` : ""}${input.guide ? ` · guide, ${input.guide.steps.length} step${input.guide.steps.length === 1 ? "" : "s"}` : ""}`);
+    const extras = `${input.pages?.length ? ` · ${input.pages.length} page${input.pages.length === 1 ? "" : "s"} attached` : ""}${input.guide ? ` · guide, ${input.guide.steps.length} step${input.guide.steps.length === 1 ? "" : "s"}` : ""}`;
+    if (held) {
+      console.log(`${c.green}ok${c.reset} Evidence recorded on ${c.cyan}${shortId}${c.reset} (${input.status})${extras}; it stays at ${held.station}, held by ${c.cyan}${held.decision}${c.reset}`);
+      console.log(fmt.muted(`  ${held.decision} is a person's to answer, and their answer moves the task. To park until then: cast task dep ${shortId} --blocked-by ${held.decision}`));
+      await warnIfThreadStateStale();
+      return;
+    }
+    console.log(`${c.green}ok${c.reset} Handed off ${c.cyan}${shortId}${c.reset} (${input.status}) → in_review${extras}`);
     if (body.conversation_id) clearTaskPulseIfBound(body.conversation_id, shortId);
     await warnIfThreadStateStale();
   });
@@ -17133,16 +17817,25 @@ work
       const task = await cliPost("/cli/work/get", { short_id: shortId }).catch(() => null);
       const taskId = task?.task?._id ?? task?._id ?? task?.id;
       const gitRoot = (() => { try { return execSync("git rev-parse --show-toplevel", { cwd: getRealCwd(), stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch { return getRealCwd(); } })();
-      let filed = 0;
+      // The verdict above is already recorded: a finding that fails is
+      // reported on its own line and never turns the command into a failure.
+      const failed: string[] = [];
       for (const f of findings) {
+        const add = (session: boolean) => cliPost("/cli/review/add", { git_root: gitRoot, file_path: f.file_path, line_number: f.line_number, line_end: f.line_end, content: `[${f.severity}] ${f.content}`, severity: f.severity, task_id: taskId, ...(session ? { conversation_id: body.conversation_id } : {}), author_kind: "agent", disposition: f.disposition, owner: f.owner, due_at: f.due_at }, { throwOnError: true });
         try {
-          await cliPost("/cli/review/add", { git_root: gitRoot, file_path: f.file_path, line_number: f.line_number, line_end: f.line_end, content: `[${f.severity}] ${f.content}`, severity: f.severity, task_id: taskId, conversation_id: body.conversation_id, author_kind: "agent", disposition: f.disposition, owner: f.owner, due_at: f.due_at }, { throwOnError: true });
-          filed++;
+          // A server from before it resolved session ids takes only a
+          // conversation id; the finding is filed without the session there.
+          await add(true).catch((err: Error) => { if (isOlderBackendRefusal(err, "conversation_id")) return add(false); throw err; });
         } catch (err) {
-          console.error(`finding not recorded (${f.file_path}): ${(err as Error).message}`);
+          failed.push(`${f.file_path}${f.line_number ? `:${f.line_number}` : ""}: ${(err as Error).message}`);
         }
       }
+      const filed = findings.length - failed.length;
       console.log(`${c.dim}${filed}/${findings.length} findings recorded on ${shortId}${c.reset}`);
+      if (failed.length) {
+        console.error(`${c.yellow}note${c.reset} verdict recorded; ${failed.length} finding${failed.length === 1 ? "" : "s"} not filed:`);
+        for (const line of failed) console.error(`  ${line}`);
+      }
     }
     await warnIfThreadStateStale();
   });
@@ -17174,8 +17867,8 @@ work
   .command("update")
   .description("Update a task")
   .argument("<short_id>", "Task short ID")
-  .option("-s, --status <status>", "New status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today")
-  .option("-p, --priority <level>", "New priority")
+  .option("-s, --status <status>", "New status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today. cancelled means dropped; what a task waits on is cast task dep")
+  .option("-p, --priority <level>", "New priority: urgent, high, medium, low, none (p0 to p3 map to urgent to low)", taskPriorityArg)
   .option("-t, --title <title>", stdinText("New title"))
   .option("-d, --description <text>", stdinText("New description"))
   .option("--assignee <name>", "New assignee")
@@ -17234,7 +17927,21 @@ work
     if (options.projectPath !== undefined) body.project_path = options.projectPath;
     if (options.plan) body.plan_id = options.plan;
     if (options.fromCall !== undefined) body.from_call = await taskCallArg(options.fromCall);
-    await cliPost("/cli/work/update", body);
+    try {
+      await cliPost("/cli/work/update", body, { throwOnError: true });
+    } catch (err) {
+      // A server older than the status aliases refuses `cancelled` whole; send the category it means.
+      const message = err instanceof Error ? err.message : String(err);
+      const { taskStatusAlias, invalidTaskStatusMessage } = await import("@codecast/shared/tasks");
+      const refused = body.status && /Invalid task status/.test(message);
+      const alias = refused ? taskStatusAlias(body.status) : undefined;
+      if (!alias) {
+        console.error(`Error: ${refused ? invalidTaskStatusMessage(body.status, (message.split("Valid: ")[1] ?? "").split(", ").filter(Boolean)) : message}`);
+        process.exit(1);
+      }
+      console.error(`${c.yellow}note${c.reset} "${body.status}" is not a status; set ${alias}`);
+      await cliPost("/cli/work/update", { ...body, status: alias });
+    }
     console.log(`${c.green}ok${c.reset} Updated ${c.cyan}${shortId}${c.reset}`);
   });
 
@@ -17254,7 +17961,7 @@ work
   .description("Add a comment to a task")
   .argument("<short_id>", "Task short ID")
   .argument("<text>", stdinText("Comment text"))
-  .option("-t, --type <type>", "Comment type: note or progress (the board's record, reaches no inbox); blocker or review (reach the people following the task)", "note")
+  .option("-t, --type <type>", "Comment type: note or progress (the board's record, reaches no inbox); blocker or review (reach the people following the task)", choiceOption(["note", "progress", "blocker", "review"]), "note")
   .option("-a, --author <name>", "Ignored: the author is the identity behind your token (a role signs as the role); kept for older scripts")
   .action(async (shortId: string, text: string, options: any) => {
     const sessionId = detectCurrentSessionId();
@@ -17272,6 +17979,7 @@ work
 
 work
   .command("dep")
+  .summary("Add or remove what a task waits on: tasks, a PR, green CI, a decision or a time")
   .description("Add or remove what a task waits on: other tasks, a PR, green CI, a decision or a time. Name what the task needs: cast task dep ct-9 --blocked-by ct-5 means ct-9 needs ct-5. A task waiting on something is not ready; it clears by itself when the blocking task is done, the PR merges, the decision is answered or the time passes. A wait that fails (PR closed, decision dismissed) keeps blocking until you remove it")
   .argument("<short_id>", "The task: it waits on each --blocked-by ref; with --blocks, the other task waits on it")
   .option("--blocks <id>", "This task blocks one other task <id>, which then waits on it")
@@ -17344,10 +18052,7 @@ work
       shortId = pulse.task;
     }
     const result = await cliPost("/cli/work/context", { short_id: shortId });
-    if (!result) {
-      console.error("Task not found");
-      process.exit(1);
-    }
+    if (!result) exitNotFound("task", shortId!, `cast task ls -q "<words from its title>"`);
     if (options.json) {
       printJson(result);
       return;
@@ -17433,6 +18138,7 @@ work
 // line run on the cause is handed as $cause_history.
 work
   .command("history")
+  .summary("A problem's earlier attempts: what each found and shipped, and whether it came back")
   .description("A problem's earlier attempts: what each found, proposed and built, its card and answer, what shipped and when it went live, and whether the problem came back")
   .argument("[short_id]", "Problem task short ID (omit with --current)")
   .option("--current", "Use the task bound to the current session")
@@ -17447,10 +18153,7 @@ work
       shortId = pulse.task;
     }
     const result = await cliPost("/cli/work/history", { short_id: shortId });
-    if (!result) {
-      console.error("Task not found");
-      process.exit(1);
-    }
+    if (!result) exitNotFound("task", shortId!, `cast task ls -q "<words from its title>"`);
     if (options.json) {
       printJson(result);
       return;
@@ -17468,6 +18171,7 @@ work
 
 work
   .command("ready")
+  .summary("Tasks ready to start, highest priority first (--claim starts the first one)")
   .description(`Tasks ready to start: ${READY_MEANS}, highest priority first`)
   .option("--team <name|id|personal>", "Workspace to read: a team, or personal (default: the directory's mapping, else the active team)")
   .option("-p, --project <ref>", "Filter by project ID, short ID, or title substring")
@@ -17596,6 +18300,7 @@ const PROJECT_STATUS_ICONS: Record<string, string> = {
   paused: "◫",
   done: "●",
 };
+const PROJECT_STATUSES = Object.keys(PROJECT_STATUS_ICONS);
 
 // Resolve a project reference — a convex id, or a title substring / short_id of
 // a project visible to the caller (own or team workspace). Every --project flag
@@ -17614,8 +18319,8 @@ async function resolveProjectId(ref: string, team?: string): Promise<string> {
     console.error(`Run 'cast project ls' to see your projects.`);
     process.exit(1);
   }
-  console.error(`Ambiguous project "${ref}" — matches:`);
-  for (const p of result.matches) console.error(`  ${p._id}  ${p.title}`);
+  console.error(`"${ref}" matches ${result.matches.length} projects; pass one's short id or its exact title:`);
+  for (const p of result.matches) console.error(`  ${p.short_id ?? p._id}  ${p.title}`);
   process.exit(1);
 }
 
@@ -17632,7 +18337,7 @@ projectCmd
   .option("-d, --description <text>", stdinText("Description"))
   .option("--labels <labels>", "Comma-separated labels")
   .option("--path <dir>", "Project path used for workspace/team resolution (default: cwd)")
-  .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears) — drives the burndown deadline")
+  .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears); drives the burndown deadline")
   .action(async (title: string, options: any) => {
     // The server maps an absolute folder to its team; a relative --path never matches.
     const body: Record<string, any> = { title, project_path: options.path ? path.resolve(options.path) : getRealCwd() };
@@ -17643,10 +18348,10 @@ projectCmd
       if (deadline !== null) body.target_date = deadline;
     }
     const result = await cliPost("/cli/projects/create", body);
-    console.log(`${c.green}ok${c.reset} Created project ${c.cyan}${result.id}${c.reset}: ${title}`);
     const created = await tryCliPost("/cli/projects/get", { id: result.id });
+    console.log(`${c.green}ok${c.reset} Created project ${c.cyan}${result.short_id ?? created?.short_id ?? result.id}${c.reset}: ${title}`);
     if (created && !created.team_id) {
-      console.log(`${c.yellow}note${c.reset} Created in your personal workspace (path has no team mapping) — tasks in a team workspace cannot bind to it.`);
+      console.log(`${c.yellow}note${c.reset} Created in your personal workspace (path has no team mapping); tasks in a team workspace cannot bind to it.`);
     }
   });
 
@@ -17655,12 +18360,14 @@ projectCmd
   .alias("list")
   .description("List projects in your workspace")
   .option("--team <name|id|personal>", "Workspace to list: a team, or personal (default: every workspace you belong to)")
-  .option("-s, --status <status>", "Filter by status: planning, active, paused, done")
+  .option("-s, --status <status>", "Filter by status: planning, active, paused, done", choiceOption(PROJECT_STATUSES))
+  .option("--json", "Output as JSON (an array of project rows)")
   .action(async (options: any) => {
     const body: Record<string, any> = {};
     if (options.status) body.status = options.status;
     if (options.team) Object.assign(body, workspaceScope(await readWorkspace(options.team)));
     const projects = await cliPost("/cli/projects/list", body);
+    if (options.json) { printJson(Array.isArray(projects) ? projects : []); return; }
     if (!Array.isArray(projects) || projects.length === 0) {
       console.log(fmt.muted("No projects found."));
       return;
@@ -17669,7 +18376,7 @@ projectCmd
       const icon = PROJECT_STATUS_ICONS[p.status] || "?";
       const tc = p.task_counts || { total: 0, in_progress: 0, done: 0 };
       const counts = `${tc.done}/${tc.total} done${tc.in_progress ? `, ${tc.in_progress} in progress` : ""}`;
-      console.log(`  ${icon} ${c.cyan}${p._id}${c.reset} ${c.bold}${p.title}${c.reset} ${c.dim}${p.status} | ${counts}${c.reset}`);
+      console.log(`  ${icon} ${c.cyan}${p.short_id ?? p._id}${c.reset} ${c.bold}${p.title}${c.reset} ${c.dim}${p.status} | ${counts}${c.reset}`);
     }
     console.log(fmt.muted(`\n  ${projects.length} projects`));
   });
@@ -17677,18 +18384,17 @@ projectCmd
 projectCmd
   .command("show")
   .description("Show project details and its tasks")
-  .argument("<id>", "Project ID or title substring")
+  .argument("<id>", "Project short id (pj-...), id, or title substring")
   .option("--team <name|id|personal>", "Workspace the title is matched in: a team, or personal")
+  .option("--json", "Output as JSON (the project row with its tasks)")
   .action(async (ref: string, options: any) => {
     const id = await resolveProjectId(ref, options.team);
     const p = await cliPost("/cli/projects/get", { id });
-    if (!p) {
-      console.error("Project not found (or not visible to you)");
-      process.exit(1);
-    }
+    if (!p) exitNotFound("project", ref, "cast project ls");
+    if (options.json) { printJson(p); return; }
     const icon = PROJECT_STATUS_ICONS[p.status] || "?";
     console.log(`\n  ${icon} ${c.bold}${p.title}${c.reset}`);
-    console.log(`  ${c.cyan}${p._id}${c.reset} | ${p.status}`);
+    console.log(`  ${c.cyan}${p.short_id ?? p._id}${c.reset} | ${p.status}`);
     if (p.description) console.log(`\n  ${p.description}`);
     if (p.labels?.length) console.log(`  ${c.dim}Labels: ${p.labels.join(", ")}${c.reset}`);
     if (p.project_path) console.log(`  ${c.dim}Path: ${p.project_path}${c.reset}`);
@@ -17737,14 +18443,14 @@ function charterBody(options: any): Record<string, any> {
     if (NONE(options.budgetTokens)) body.budget = null;
     else {
       const n = Number(options.budgetTokens);
-      if (!Number.isFinite(n) || n < 0) { console.error(`Invalid --budget-tokens "${options.budgetTokens}" — a non-negative number`); process.exit(1); }
+      if (!Number.isFinite(n) || n < 0) { console.error(`Invalid --budget-tokens "${options.budgetTokens}": use a number, 0 or more, or none`); process.exit(1); }
       body.budget = { tokens_per_day: n };
     }
   }
   if (options.horizon !== undefined) {
     if (NONE(options.horizon)) body.horizon = null;
     else if (options.horizon === "ongoing" || options.horizon === "bounded") body.horizon = options.horizon;
-    else { console.error(`Invalid --horizon "${options.horizon}" — ongoing, bounded, or none`); process.exit(1); }
+    else { console.error(`Invalid --horizon "${options.horizon}": use ongoing, bounded, or none`); process.exit(1); }
   }
   return body;
 }
@@ -17752,12 +18458,12 @@ function charterBody(options: any): Record<string, any> {
 projectCmd
   .command("update")
   .description("Update a project")
-  .argument("<id>", "Project ID or title substring")
+  .argument("<id>", "Project short id (pj-...), id, or title substring")
   .option("--title <text>", stdinText("New title"))
   .option("--description <text>", stdinText("New description"))
-  .option("--status <status>", "New status: planning, active, paused, done")
+  .option("--status <status>", "New status: planning, active, paused, done", choiceOption(PROJECT_STATUSES))
   .option("--labels <labels>", "Comma-separated labels (replaces existing)")
-  .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears) — drives the burndown deadline")
+  .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears); drives the burndown deadline")
   .option("--path <dir>", "The project's folder, where its work lives ('none' clears it); it holds no session, so changing it moves nothing")
   .option("--number <name=target>", "A number the project is read by, with its target, live from a series with @mw-N: \"Dollars per intro=under $250 @mw-12\" (repeatable, replaces; 'none' clears)", collectRepeatable);
 charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true)
@@ -17771,11 +18477,11 @@ charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true
     if (options.path !== undefined) body.project_path = NONE(options.path) ? null : path.resolve(options.path);
     if (options.number?.length) body.metrics = initiativeMetricsArg(options.number, "--number");
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update — pass --title, --description, --status, --labels, --deadline, --path, --number, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens)");
+      console.error("Nothing to update: pass --title, --description, --status, --labels, --deadline, --path, --number, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens, --horizon)");
       process.exit(1);
     }
     await cliPost("/cli/projects/update", body);
-    console.log(`${c.green}ok${c.reset} Updated project ${c.cyan}${body.id}${c.reset}`);
+    console.log(`${c.green}ok${c.reset} Updated project ${c.cyan}${ref}${c.reset}`);
   });
 
 // A session in a project (docs/architecture/session-projects.md). Workers and
@@ -17815,7 +18521,7 @@ function parseDeadlineDate(text: string): number | null {
   if (text.trim().toLowerCase() === "none") return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text.trim());
   const fail = (): never => {
-    console.error(`Invalid deadline "${text}" — use YYYY-MM-DD, or "none" to clear`);
+    console.error(`Invalid deadline "${text}": use YYYY-MM-DD, or "none" to clear`);
     process.exit(1);
   };
   if (!m) return fail();
@@ -17831,7 +18537,7 @@ function parseDeadlineDate(text: string): number | null {
 function parseSinceWindow(text: string): number {
   const m = /^(\d+)([hdw])$/.exec(text.trim());
   if (!m) {
-    console.error(`Invalid --since "${text}" — use forms like 24h, 7d, 2w`);
+    console.error(`Invalid --since "${text}": use a window like 24h, 7d or 2w`);
     process.exit(1);
   }
   const unitMs = { h: 3_600_000, d: 86_400_000, w: 604_800_000 }[m[2] as "h" | "d" | "w"];
@@ -17843,7 +18549,7 @@ const UPDATE_KIND_BADGE: Record<string, string> = { digest: " [digest]", update:
 projectCmd
   .command("post")
   .description("Post an update to a project's Updates feed")
-  .argument("<id>", "Project ID or title substring")
+  .argument("<id>", "Project short id (pj-...), id, or title substring")
   .argument("[body]", stdinText("Update body (markdown)"))
   .option("-t, --title <text>", stdinText("Title for the update"))
   .option("--digest", "Mark this post as an automated digest (agent roll-up)")
@@ -17872,21 +18578,18 @@ projectCmd
 projectCmd
   .command("updates")
   .description("Read a project's Updates feed (posts + comments)")
-  .argument("<id>", "Project ID or title substring")
-  .option("-n, --limit <n>", "Max updates to show", "20")
+  .argument("<id>", "Project short id (pj-...), id, or title substring")
+  .option("-n, --limit <n>", "Max updates to show", countOption, 20)
   .option("--json", "Output as JSON")
   .action(async (ref: string, options: any) => {
     const id = await resolveProjectId(ref);
     const rows = await cliPost("/cli/projects/updates", { id });
-    if (!Array.isArray(rows)) {
-      console.error("Project not found");
-      process.exit(1);
-    }
+    if (!Array.isArray(rows)) exitNotFound("project", ref, "cast project ls");
     if (options.json) {
       printJson(rows);
       return;
     }
-    const shown = rows.slice(0, parseInt(options.limit, 10) || 20);
+    const shown = rows.slice(0, options.limit);
     if (shown.length === 0) {
       console.log(fmt.muted("No updates yet. Post one with: cast project post <id> <body>"));
       return;
@@ -17962,19 +18665,16 @@ function timelineEventLine(e: any): string {
 projectCmd
   .command("timeline")
   .description("A project's merged activity feed: updates, task changes, comments")
-  .argument("<id>", "Project ID or title substring")
-  .option("-n, --limit <n>", "Max events", "60")
+  .argument("<id>", "Project short id (pj-...), id, or title substring")
+  .option("-n, --limit <n>", "Max events", countOption, 60)
   .option("--since <window>", "Only events in this window (24h, 7d, 2w)")
   .option("--json", "Output as JSON")
   .action(async (ref: string, options: any) => {
     const id = await resolveProjectId(ref);
-    const body: Record<string, any> = { id, limit: parseInt(options.limit, 10) || 60 };
+    const body: Record<string, any> = { id, limit: options.limit };
     if (options.since) body.since = parseSinceWindow(options.since);
     const events = await cliPost("/cli/projects/timeline", body);
-    if (!Array.isArray(events)) {
-      console.error("Project not found");
-      process.exit(1);
-    }
+    if (!Array.isArray(events)) exitNotFound("project", ref, "cast project ls");
     if (options.json) {
       printJson(events);
       return;
@@ -18001,7 +18701,7 @@ projectCmd
 const initiativeCmd = program
   .command("goal")
   .aliases(["initiative", "in"])
-  .description("Manage goals (what the company is trying to reach, carried by projects, with an owner and a health)")
+  .description("Manage goals (what the company is trying to reach, carried by projects, with an owner and a health); one session's own goal is cast loop")
   .showHelpAfterError(true);
 
 // An argument read by the pure half (initiativeCommand.ts), or the exit that says why it could not be.
@@ -18089,9 +18789,9 @@ initiativeCmd
   .command("create")
   .description("Create a goal")
   .argument("<title>", stdinText("Goal title"))
-  .option("-d, --description <text>", stdinText("Purpose, scope and context ('-' reads stdin)"))
+  .option("-d, --description <text>", stdinText("Purpose, scope and context"))
   .option("--owner <who>", "Who drives it: me, @handle (a role first, then a person), or or-N")
-  .option("--status <status>", "proposed (default), planned, active, completed, cancelled")
+  .option("--status <status>", "proposed (default), planned, active, completed, cancelled", choiceOption(INITIATIVE_STATUSES))
   .option("--target <date>", "Target date (YYYY-MM-DD)")
   .option("--priority <p>", "p0, p1, p2, p3")
   .option("--project <ref>", "A project it carries (repeatable): id, short id or title substring", collectRepeatable)
@@ -18116,10 +18816,7 @@ initiativeCmd
     if (sources) body.sources = sources;
     if (options.description) body.description = options.description;
     if (options.owner) body.owner = options.owner;
-    if (options.status) {
-      body.status = parseInitiativeStatus(options.status);
-      if (!body.status) { console.error(`Invalid --status "${options.status}": proposed, planned, active, completed, or cancelled`); process.exit(1); }
-    }
+    if (options.status) body.status = options.status;
     if (options.target) body.target_date = initiativeTargetArg(options.target);
     if (options.priority) body.priority = options.priority;
     if (options.parent) body.parent_initiative_id = options.parent;
@@ -18135,14 +18832,11 @@ initiativeCmd
   .alias("list")
   .description("List goals by status, with owner, health, target and progress")
   .option("--team <name|id|personal>", "Workspace to list: a team, or personal (default: every workspace you belong to)")
-  .option("-s, --status <status>", "Filter by status: proposed, planned, active, completed, cancelled")
+  .option("-s, --status <status>", "Filter by status: proposed, planned, active, completed, cancelled", choiceOption(INITIATIVE_STATUSES))
   .option("--json", "Output as JSON")
   .action(async (options: any) => {
     const body: Record<string, any> = {};
-    if (options.status) {
-      body.status = parseInitiativeStatus(options.status);
-      if (!body.status) { console.error(`Invalid --status "${options.status}"`); process.exit(1); }
-    }
+    if (options.status) body.status = options.status;
     if (options.team) Object.assign(body, workspaceScope(await readWorkspace(options.team)));
     const rows = await cliPost("/cli/initiatives/list", body);
     if (options.json) { printJson(rows); return; }
@@ -18164,7 +18858,7 @@ initiativeCmd
   .option("--json", "Output as JSON")
   .action(async (ref: string, options: any) => {
     const row = await cliPost("/cli/initiatives/get", { id: ref });
-    if (!row) { console.error("Goal not found (or not visible to you)"); process.exit(1); }
+    if (!row) exitNotFound("goal", ref, "cast goal ls");
     if (options.json) { printJson(row); return; }
     for (const line of initiativeShowLines(c, row, { ago: formatRelativeTime, projectIcons: PROJECT_STATUS_ICONS })) console.log(line);
   });
@@ -18173,7 +18867,7 @@ initiativeCmd
   .command("update")
   .description("Post an update: how the goal is going, in the owner's words")
   .argument("<in-N>", "Goal short id or id")
-  .argument("[body]", stdinText("The update ('-' reads a heredoc)"))
+  .argument("[body]", stdinText("The update: how the goal is going"))
   .option("--health <h>", "on_track, at_risk, or off_track (default: as the last update said)")
   .action(async (ref: string, bodyArg: string | undefined, options: any) => {
     const text = bodyArg !== undefined ? bodyArg : process.stdin.isTTY ? "" : readStdinBody();
@@ -18214,7 +18908,7 @@ initiativeCmd
   .argument("<in-N>", "Goal short id or id")
   .option("--title <text>", stdinText("New title"))
   .option("-d, --description <text>", stdinText("New description ('none' clears)"))
-  .option("--status <status>", "proposed, planned, active, completed, cancelled")
+  .option("--status <status>", "proposed, planned, active, completed, cancelled", choiceOption(INITIATIVE_STATUSES))
   .option("--owner <who>", "me, @handle, or or-N ('none' clears)")
   .option("--target <date>", "Target date (YYYY-MM-DD; 'none' clears)")
   .option("--priority <p>", "p0, p1, p2, p3 ('none' clears)")
@@ -18230,10 +18924,7 @@ initiativeCmd
     if (options.doneWhen !== undefined) body.done_when = NONE(options.doneWhen) ? null : options.doneWhen;
     if (options.metric) body.metrics = initiativeMetricsArg(options.metric);
     if (options.description !== undefined) body.description = NONE(options.description) ? null : options.description;
-    if (options.status) {
-      body.status = parseInitiativeStatus(options.status);
-      if (!body.status) { console.error(`Invalid --status "${options.status}": proposed, planned, active, completed, or cancelled`); process.exit(1); }
-    }
+    if (options.status) body.status = options.status;
     if (options.owner !== undefined) body.owner = NONE(options.owner) ? null : options.owner;
     if (options.target) body.target_date = initiativeTargetArg(options.target);
     if (options.priority !== undefined) body.priority = NONE(options.priority) ? null : options.priority;
@@ -18251,8 +18942,10 @@ initiativeCmd
 // scoreboard (`cast org template report`): key=value pairs, one source a person
 // can open, the same recordScores path on the server.
 initiativeCmd
-  .command("report <in-N> <key=value...>")
+  .command("report")
   .description("Report a metric's current value, with its source (the owner, its role, or an admin)")
+  .argument("<in-N>", "Goal short id or id")
+  .argument("<key=value...>", "Each metric as key=value; the key is the metric's name in snake_case (\"Weekly active teams\" is weekly_active_teams=1040)")
   .requiredOption("--source <href>", "A link or codecast short id a person can open")
   .option("--observed-at <date>", "When the value was observed: YYYY-MM-DD, or YYYY-MM-DDTHH:MM for a time (default: now)")
   .action(async (ref: string, entries: string[], options: any) => {
@@ -18375,6 +19068,16 @@ const doc = program
   .description("Create and edit documents")
   .showHelpAfterError(true);
 
+// A document is addressed by its id, which references print as doc:<id>; both
+// spellings work. Anything else is refused before a call, with the reads that
+// find the id.
+const DOC_ID_HELP = "Document id (as cast doc ls or cast doc search prints it; doc:<id> works too)";
+function docIdArg(value: string): string {
+  const id = value.trim().replace(/^doc:/, "");
+  if (!looksLikeConvexId(id)) throw new InvalidArgumentError(`Not a document id. Find one with: cast doc search "<words from its title>" (or cast doc ls).`);
+  return id;
+}
+
 doc
   .command("create")
   .description("Create a new document. The title is the document's first heading: content that opens with one keeps it as the title.")
@@ -18414,16 +19117,18 @@ doc
 doc
   .command("ls")
   .description("List documents")
-  .option("-t, --type <type>", "Filter by type (note, plan, insight, decision, runbook)")
+  .option("-t, --type <type>", "Filter by type (note, plan, insight, decision, runbook, charter, brief)")
   .option("--project <ref>", "Filter by project ID, short ID, or title substring")
-  .option("-n, --limit <n>", "Max results", "20")
+  .option("-n, --limit <n>", "Max results", countOption, 20)
   .option("--starred", "Only starred documents")
+  .option("--json", "Output as JSON (the document rows)")
   .action(async (options: any) => {
-    const body: Record<string, any> = { limit: parseInt(options.limit) };
+    const body: Record<string, any> = { limit: options.limit };
     if (options.type) body.doc_type = options.type;
     if (options.project) body.project_id = await resolveProjectId(options.project);
     if (options.starred) body.pinned = true;
     let docs = await cliPost("/cli/docs/list", body);
+    if (options.json) { printJson(docs ?? []); return; }
     if (!docs?.length) { console.log(options.starred ? "No starred documents." : "No documents found."); return; }
     // Starred docs lead, as on the web list (a star means "keep this in reach").
     docs = [...docs].sort((a: any, b: any) => (!!a.pinned === !!b.pinned ? 0 : a.pinned ? -1 : 1));
@@ -18444,7 +19149,7 @@ for (const [verb, pinned] of [["star", true], ["unstar", false]] as const) {
     .description(pinned
       ? "Star a document: keep it on the shelf and at the top of the list"
       : "Remove a document's star")
-    .argument("<id>", "Document ID")
+    .argument("<id>", DOC_ID_HELP, docIdArg)
     .action(async (id: string) => {
       await cliPost("/cli/docs/update", { id, pinned });
       console.log(`${c.green}ok${c.reset} ${pinned ? "Starred" : "Unstarred"} doc ${c.cyan}${id}${c.reset}`);
@@ -18464,9 +19169,10 @@ doc
     "  cast doc show <id> :50         # the first 50 lines\n" +
     "  cast doc show <id> -L 500      # bigger page size\n" +
     "  cast doc show <id> -n          # with a line-number gutter\n" +
-    "  cast doc show <id> --full      # whole doc, no paging"
+    "  cast doc show <id> --full      # whole doc, no paging\n" +
+    "  cast doc show <id> -c          # every comment, without the content"
   )
-  .argument("<id>", "Document ID")
+  .argument("<id>", DOC_ID_HELP, docIdArg)
   .argument("[range]", "Line range (e.g. 100:250, 100:, :50, 42) — overrides --page")
   .option("-p, --page <n>", "Page number (1-based)", "1")
   .option("-L, --lines <n>", "Lines per page", "200")
@@ -18474,19 +19180,45 @@ doc
   .option("--full", "Print the entire document without paging")
   .option("--clean", "Without drafting markup: the versions showing, ghosts kept as plain text")
   .option("--final", "As it would publish: drafting markup removed and ghosted text left out")
+  .option("-c, --comments", "Print every comment, without the content (otherwise the last 10 show when the view reaches the end)")
+  .option("--json", "Output as JSON (the whole document row, comments in .entries; paging flags do not apply)")
   .action(async (id: string, range: string | undefined, options: any) => {
     const result = await cliPost("/cli/docs/get", { id });
-    if (!result) { console.error("Doc not found"); process.exit(1); }
+    if (!result) exitNotFound("doc", id, `cast doc search "<words from its title>"`);
     if (options.clean || options.final) {
       const { stripDrafting } = await import("@codecast/shared/docs/drafting");
       result.content = stripDrafting(result.content || "", { dropGhosts: !!options.final });
     }
+    if (options.json) { printJson(result); return; }
     const lines = (result.content || "").split("\n");
     const total = lines.length;
 
     console.log(`${c.bold}${result.title}${c.reset} ${c.dim}[${result.doc_type}] · ${total} lines${c.reset}`);
     if (result.created_at) console.log(`${c.dim}${describeDatesFull(result).replace("\n", " · ")}${c.reset}`);
     if (result.labels?.length) console.log(`Labels: ${result.labels.join(", ")}`);
+    const ENTRY_ICONS: Record<string, string> = {
+      progress: `${c.blue}↳${c.reset}`,
+      decision: `${c.yellow}◆${c.reset}`,
+      discovery: `${c.green}★${c.reset}`,
+      reference: `${c.cyan}→${c.reset}`,
+      blocker: `${c.red}!${c.reset}`,
+      note: `${c.dim}·${c.reset}`,
+    };
+    const printComments = (all: boolean) => {
+      const entries: any[] = result.entries ?? [];
+      const shown = all ? entries : entries.slice(-10);
+      const more = shown.length < entries.length ? ` ${c.dim}showing last ${shown.length}, -c for all${c.reset}` : "";
+      console.log(`\n  ${c.bold}Comments (${entries.length})${c.reset}${more}`);
+      for (const e of shown) {
+        const ago = formatMs(Date.now() - e.timestamp);
+        const icon = ENTRY_ICONS[e.type] || ENTRY_ICONS.note;
+        const who = e.author ? `${e.author} ` : "";
+        const extra = e.rationale ? ` ${c.dim}(${e.rationale})${c.reset}` : "";
+        const ref = e.path_or_url ? ` ${c.dim}→ ${e.path_or_url}${c.reset}` : "";
+        console.log(`  ${icon} ${c.dim}${who}${ago} ago:${c.reset} ${e.content}${extra}${ref}`);
+      }
+    };
+    if (options.comments) { printComments(true); return; }
 
     const { start, end, page, pages } = resolveLineRange(total, {
       range,
@@ -18529,32 +19261,15 @@ doc
     }
 
     // Comments only when the view reaches the end of the doc.
-    if (end >= total && result.entries?.length) {
-      const ENTRY_ICONS: Record<string, string> = {
-        progress: `${c.blue}↳${c.reset}`,
-        decision: `${c.yellow}◆${c.reset}`,
-        discovery: `${c.green}★${c.reset}`,
-        reference: `${c.cyan}→${c.reset}`,
-        blocker: `${c.red}!${c.reset}`,
-        note: `${c.dim}·${c.reset}`,
-      };
-      console.log(`\n  ${c.bold}Comments (${result.entries.length})${c.reset}`);
-      for (const e of result.entries.slice(-10)) {
-        const ago = formatMs(Date.now() - e.timestamp);
-        const icon = ENTRY_ICONS[e.type] || ENTRY_ICONS.note;
-        const extra = e.rationale ? ` ${c.dim}(${e.rationale})${c.reset}` : "";
-        const ref = e.path_or_url ? ` ${c.dim}→ ${e.path_or_url}${c.reset}` : "";
-        console.log(`  ${icon} ${c.dim}${ago} ago:${c.reset} ${e.content}${extra}${ref}`);
-      }
-    }
+    if (end >= total && result.entries?.length) printComments(false);
   });
 
 doc
   .command("comment")
   .description("Add a comment to a document")
-  .argument("<id>", "Document ID")
+  .argument("<id>", DOC_ID_HELP, docIdArg)
   .argument("<text>", stdinText("Comment text"))
-  .option("-t, --type <type>", "Comment type: note, progress, decision, discovery, reference, blocker", "note")
+  .option("-t, --type <type>", "Comment type: note, progress, decision, discovery, reference, blocker", choiceOption(["note", "progress", "decision", "discovery", "reference", "blocker"]), "note")
   .option("-a, --author <name>", "Ignored: the author is the identity behind your token; kept for older scripts")
   .action(async (id: string, text: string, options: any) => {
     const sessionId = detectCurrentSessionId();
@@ -18567,10 +19282,11 @@ doc
 
 doc
   .command("edit")
-  .description("Patch a document's content (find & replace)")
-  .argument("<id>", "Document ID")
-  .option("--old <text>", stdinText("Text to find in the document"))
+  .description("Patch a document's content: find and replace (--old/--new), or replace the whole content, title or type")
+  .argument("<id>", DOC_ID_HELP, docIdArg)
+  .option("--old <text>", stdinText("Exact text to find in the document (the first occurrence, or every one with --all)"))
   .option("--new <text>", stdinText("Replacement text"))
+  .option("--all", "With --old/--new, replace every occurrence rather than the first")
   .option("--content <text>", stdinText("Full content replacement"))
   .option("--content-file <path>", "Full content from file")
   .option("--title <text>", stdinText("Update title (rewrites the document's first heading)"))
@@ -18579,7 +19295,26 @@ doc
     // The charter guard (docs.ts) reads the calling session; stamped the way
     // `cast doc comment` stamps it.
     const sessionId = detectCurrentSessionId();
-    if (options.old && options.new !== undefined) {
+    if ((options.old !== undefined) !== (options.new !== undefined)) {
+      console.error("--old and --new go together: --old \"text to find\" --new \"replacement\"");
+      process.exit(1);
+    }
+    if (options.all && options.old === undefined) {
+      console.error("--all replaces every occurrence of --old; pass --old \"text to find\" --new \"replacement\" with it");
+      process.exit(1);
+    }
+    if (options.old && options.all) {
+      // Every occurrence, as one content write: patch replaces only the first.
+      const current = await cliPost("/cli/docs/get", { id });
+      if (!current) exitNotFound("doc", id, `cast doc search "<words from its title>"`);
+      const parts = String(current.content ?? "").split(options.old);
+      if (parts.length === 1) {
+        console.error(`"${options.old}" is not in the document. Check the exact text with: cast doc grep ${id} "${options.old}"`);
+        process.exit(1);
+      }
+      await cliPost("/cli/docs/update", { id, session_id: sessionId ?? undefined, content: parts.join(options.new) });
+      console.log(`${c.green}ok${c.reset} Replaced ${parts.length - 1} occurrence${parts.length === 2 ? "" : "s"} in doc ${c.cyan}${id}${c.reset}`);
+    } else if (options.old && options.new !== undefined) {
       const result = await cliPost("/cli/docs/patch", {
         session_id: sessionId ?? undefined,
         id, old_string: options.old, new_string: options.new,
@@ -18604,16 +19339,16 @@ doc
     }
   });
 
-registerDocDraftingCommands(doc, { post: cliPost, sessionId: detectCurrentSessionId });
+registerDocDraftingCommands(doc, { post: cliPost, sessionId: detectCurrentSessionId, docId: { help: DOC_ID_HELP, parse: docIdArg } });
 
 doc
   .command("search")
   .description("Search documents by title")
   .argument("<query>", "Search query")
-  .option("-t, --type <type>", "Filter by type")
-  .option("-n, --limit <n>", "Max results", "10")
+  .option("-t, --type <type>", "Filter by type (note, plan, insight, decision, runbook, charter, brief)")
+  .option("-n, --limit <n>", "Max results", countOption, 10)
   .action(async (query: string, options: any) => {
-    const body: Record<string, any> = { query, limit: parseInt(options.limit) };
+    const body: Record<string, any> = { query, limit: options.limit };
     if (options.type) body.doc_type = options.type;
     const docs = await cliPost("/cli/docs/search", body);
     if (!docs?.length) { console.log("No matches."); return; }
@@ -18634,19 +19369,19 @@ doc
     "  cast doc grep <id> markets -C 2     # 2 lines of context each side\n\n" +
     "Then jump to a hit with: cast doc show <id> <start>:<end>"
   )
-  .argument("<id>", "Document ID")
+  .argument("<id>", DOC_ID_HELP, docIdArg)
   .argument("<pattern>", "Text or regex to find")
   .option("-i, --ignore-case", "Case-insensitive match")
-  .option("-C, --context <n>", "Lines of context around each match", "0")
-  .option("-n, --limit <n>", "Max matches to show", "40")
+  .option("-C, --context <n>", "Lines of context around each match", nonNegativeCountOption, 0)
+  .option("-n, --limit <n>", "Max matches to show", countOption, 40)
   .action(async (id: string, pattern: string, options: any) => {
     const result = await cliPost("/cli/docs/get", { id });
-    if (!result) { console.error("Doc not found"); process.exit(1); }
+    if (!result) exitNotFound("doc", id, `cast doc search "<words from its title>"`);
     const lines = (result.content || "").split("\n");
 
     const matcher = buildMatcher(pattern, !!options.ignoreCase);
-    const ctxLines = Math.max(0, parseInt(options.context, 10) || 0);
-    const limit = Math.max(1, parseInt(options.limit, 10) || 40);
+    const ctxLines: number = options.context;
+    const limit: number = options.limit;
     const hits = matchingLines(lines, matcher);
 
     console.log(`${c.bold}${result.title}${c.reset} ${c.dim}— ${hits.length} line${hits.length === 1 ? "" : "s"} match /${pattern}/${options.ignoreCase ? "i" : ""}${c.reset}`);
@@ -18673,7 +19408,7 @@ doc
 doc
   .command("share")
   .description("Generate a public share link for a document")
-  .argument("<id>", "Document ID")
+  .argument("<id>", DOC_ID_HELP, docIdArg)
   .action(async (id: string) => {
     exitIfPolicyBlocks("public_sharing_disabled");
     const result = await cliPost("/cli/docs/share", { id });
@@ -18685,7 +19420,7 @@ doc
 doc
   .command("unshare")
   .description("Remove the public share link for a document")
-  .argument("<id>", "Document ID")
+  .argument("<id>", DOC_ID_HELP, docIdArg)
   .action(async (id: string) => {
     await cliPost("/cli/docs/unshare", { id });
     console.log(`${c.green}ok${c.reset} Share link removed`);
@@ -18694,7 +19429,7 @@ doc
 doc
   .command("delete")
   .description("Permanently delete a document you created")
-  .argument("<id>", "Document ID")
+  .argument("<id>", DOC_ID_HELP, docIdArg)
   .option("--yes", "Confirm deletion (required)")
   .action(async (id: string, options: any) => {
     await requireDestructiveConfirm(["doc", "delete"], { yes: options.yes, args: [id] });
@@ -18799,12 +19534,14 @@ plan
   .option("--draft", "Show draft plans")
   .option("--done", "Show done plans")
   .option("--all", "Show all statuses")
+  .option("-s, --status <status>", "Show one status: draft, active, paused, done, abandoned", choiceOption(Object.keys(PLAN_STATUS_ICONS)))
   .option("--project <ref>", "Filter by project ID, short ID, or title substring")
   .option("-q, --query <text>", "Filter by title/goal/description (case-insensitive)")
   .option("--json", "Output as JSON (an array of plan rows; every field, no colours)")
   .action(async (options: any) => {
     const body: Record<string, any> = {};
-    if (options.all) body.include_all = true;
+    if (options.status) body.status = options.status;
+    else if (options.all) body.include_all = true;
     else if (options.draft) body.status = "draft";
     else if (options.done) body.status = "done";
     else if (options.active) body.status = "active";
@@ -18825,7 +19562,7 @@ plan
     for (const p of plans) {
       console.log(formatPlanItem(p));
     }
-    const suffix = options.all || options.done || options.draft ? "" : fmt.muted(" (active only, use --all to see all)");
+    const suffix = options.all || options.done || options.draft || options.status ? "" : fmt.muted(" (active only, use --all to see all)");
     console.log(fmt.muted(`\n  ${plans.length} plans`) + suffix);
   });
 
@@ -18833,12 +19570,11 @@ plan
   .command("show")
   .description("Show plan details")
   .argument("<plan_id>", "Plan short ID")
-  .action(async (planId: string) => {
+  .option("--json", "Output as JSON (the plan row with its tasks)")
+  .action(async (planId: string, options: any) => {
     const result = await cliPost("/cli/plans/get", { short_id: planId });
-    if (!result) {
-      console.error("Plan not found");
-      process.exit(1);
-    }
+    if (!result) exitNotFound("plan", planId, "cast plan ls --all");
+    if (options.json) { printJson(result); return; }
     const p = result;
     const icon = PLAN_STATUS_ICONS[p.status] || "?";
     const progress = planProgressLabel(p);
@@ -18869,10 +19605,7 @@ plan
       planId = pulse.plan;
     }
     const result = await cliPost("/cli/plans/get", { short_id: planId });
-    if (!result) {
-      console.error("Plan not found");
-      process.exit(1);
-    }
+    if (!result) exitNotFound("plan", planId!, "cast plan ls --all");
     console.log(renderPlanContext(result));
   });
 
@@ -18993,7 +19726,7 @@ plan
   .description("Add a comment to a plan")
   .argument("<plan_id>", "Plan short ID")
   .argument("<text>", stdinText("Comment text"))
-  .option("-t, --type <type>", "Comment type: progress, decision, discovery, reference, blocker, note", "progress")
+  .option("-t, --type <type>", "Comment type: progress, decision, discovery, reference, blocker, note", choiceOption(["progress", "decision", "discovery", "reference", "blocker", "note"]), "progress")
   .option("-d, --decision", "Shorthand for --type decision")
   .option("-f, --finding", "Shorthand for --type discovery")
   .option("--ref <path_or_url>", "Add a reference pointer (sets type to reference)")
@@ -19038,7 +19771,7 @@ plan
   });
 
 // Legacy aliases
-plan.command("decide").argument("<plan_id>").argument("<decision>").option("--rationale <why>")
+plan.command("decide").argument("<plan_id>", "Plan short ID").argument("<decision>", "What was decided").option("-r, --rationale <why>", "Why")
   .action(async (planId: string, decision: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: planId, decision };
@@ -19048,7 +19781,7 @@ plan.command("decide").argument("<plan_id>").argument("<decision>").option("--ra
     console.log(`${c.green}ok${c.reset} Decision logged to ${c.cyan}${planId}${c.reset}`);
   }).description("(alias for: plan comment -d)");
 
-plan.command("discover").argument("<plan_id>").argument("<finding>")
+plan.command("discover").argument("<plan_id>", "Plan short ID").argument("<finding>", "What was found")
   .action(async (planId: string, finding: string) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: planId, finding };
@@ -19057,7 +19790,7 @@ plan.command("discover").argument("<plan_id>").argument("<finding>")
     console.log(`${c.green}ok${c.reset} Discovery logged to ${c.cyan}${planId}${c.reset}`);
   }).description("(alias for: plan comment -f)");
 
-plan.command("pointer").argument("<plan_id>").argument("<label>").argument("<path>")
+plan.command("pointer").argument("<plan_id>", "Plan short ID").argument("<label>", "What the reference is").argument("<path>", "A file path or URL")
   .action(async (planId: string, label: string, pathOrUrl: string) => {
     await cliPost("/cli/plans/pointer", { short_id: planId, label, path_or_url: pathOrUrl });
     console.log(`${c.green}ok${c.reset} Pointer added to ${c.cyan}${planId}${c.reset}`);
@@ -21380,24 +22113,77 @@ workflow
 // /routines Runs tab and the task page read (workflow_runs.listRuns, L8).
 workflow
   .command("runs")
-  .description("List workflow runs: age, status, workflow, task, current node, gate decision")
+  .description("List workflow runs, newest first: age, status, workflow, task, current node, gate decision, and a failed run's reason. One run in full: cast workflow show <ct-N>; stop one: cast workflow cancel <ct-N>")
   .option("--task <ct-N>", "Runs bound to one task")
   .option("--plan <pl-N>", "Runs bound to one plan")
-  .option("--status <status>", "running | paused | completed | failed | cancelled")
-  .option("-n, --limit <n>", "Rows to print", "50")
+  .option("--status <status>", "pending | running | paused | completed | failed (a cancelled run is failed)", choiceOption(["pending", "running", "paused", "completed", "failed"]))
+  .option("-n, --limit <n>", "Rows to print (at most 200)", countOption, 50)
+  .option("-l, --long", "Add each run's machine and run id")
   .option("--team <name|id>", "Team workspace (default: the active workspace; ignored with --task or --plan)")
-  .option("--json", "Machine-readable output (the run rows)")
+  .option("--sessions", "With --json: each station's session too (its report and handoff); large")
+  .option("--wait [status|station]", "With --task or --plan: block until its latest run moves (status or station changes), or reaches this status or station; prints the row, exits 0, or 1 if the run finished elsewhere")
+  .option("--timeout <duration>", "With --wait: give up after this long and exit 2 (default 9m)")
+  .option("--json", "Machine-readable output: an array of run rows (_id, status, fail_reason, runner_device, task_short_id, current_node_id, gate_decision_short_id, node_statuses [{node_id, status, outcome, session_id, started_at, completed_at}], created_at, updated_at)")
   .action(async (options: any) => {
-    const body: Record<string, any> = { limit: Number(options.limit) || 50 };
+    const body: Record<string, any> = { limit: options.limit };
     if (options.task) body.task_id = options.task;
     if (options.plan) body.plan_id = options.plan;
     if (options.status) body.status = options.status;
     if (!options.task && !options.plan) Object.assign(body, workspaceArgs(await readWorkspace(options.team)));
-    const result = await cliPost("/cli/workflow-runs/list", body);
-    const runs = Array.isArray(result?.runs) ? result.runs : [];
+    const { fetchRuns } = await import("./workflow/runsCli.js");
+    const runs = await fetchRuns({ getCliEndpoint, detectCurrentSessionId }, body, { sessions: options.sessions }).catch((e: Error) => {
+      console.error(`Error: ${e.message}`);
+      process.exit(1);
+    });
+    if (options.wait !== undefined) {
+      if (!options.task && !options.plan) {
+        console.error("Error: --wait follows one run: pass --task <ct-N> or --plan <pl-N>");
+        process.exit(1);
+      }
+      if (runs.length === 0) {
+        console.error(`Error: ${options.task ?? options.plan} has no run${options.status ? ` with status ${options.status}` : ""}`);
+        process.exit(1);
+      }
+      let timeoutMs = 9 * 60_000;
+      try { if (options.timeout) timeoutMs = parseSharedDuration(options.timeout); } catch (e) { console.error(`Error: ${(e as Error).message}`); process.exit(1); }
+      const { runWaitVerdict } = await import("./workflow/runsWait.js");
+      const { formatRunsTable } = await import("./taskShow.js");
+      const start = runs[0];
+      const deadline = Date.now() + timeoutMs;
+      for (let row = start; ; ) {
+        const verdict = runWaitVerdict(start, row, options.wait);
+        if (verdict.done || Date.now() >= deadline) {
+          if (options.json) printJson([row]); else console.log(formatRunsTable([row], Date.now(), { long: options.long }));
+          if (!verdict.done) console.error(`Still waiting after ${options.timeout ?? "9m"}`);
+          process.exit(verdict.done ? (verdict.met ? 0 : 1) : 2);
+        }
+        await new Promise((r) => setTimeout(r, Math.min(15_000, Math.max(0, deadline - Date.now()))));
+        // Without the --status filter: the run must stay visible once it leaves that status.
+        const { status: _status, ...pollBody } = body;
+        const next = await fetchRuns({ getCliEndpoint, detectCurrentSessionId }, { ...pollBody, limit: 5 }).catch(() => null);
+        row = next?.find((r) => r._id === start._id) ?? row;
+      }
+    }
     if (options.json) { printJson(runs); return; }
     const { formatRunsTable } = await import("./taskShow.js");
-    console.log(formatRunsTable(runs));
+    console.log(formatRunsTable(runs, Date.now(), { long: options.long }));
+  });
+
+workflow
+  .command("show <run>")
+  .description("One run in full: its status, fail reason, machine, gate, and each station with its session, time and outcome. <run> is the task (ct-N) or plan (pl-N) it is bound to, or a run id")
+  .option("--sessions", "With --json: each station's session too (its report and handoff)")
+  .option("--json", "Machine-readable output (the run row)")
+  .action(async (ref: string, options: { sessions?: boolean; json?: boolean }) => {
+    await (await import("./workflow/runsCli.js")).showRun({ getCliEndpoint, detectCurrentSessionId }, ref, options);
+  });
+
+workflow
+  .command("cancel <run>")
+  .description("Stop a run: it ends as failed (\"Cancelled by user\"), its open decision is withdrawn, its station sessions stop, and its task says so. <run> is the task (ct-N) or plan (pl-N) it is bound to, or a run id")
+  .option("--json", "Machine-readable output")
+  .action(async (ref: string, options: { json?: boolean }) => {
+    await (await import("./workflow/runsCli.js")).cancelRun({ getCliEndpoint, detectCurrentSessionId }, ref, options);
   });
 
 workflow
@@ -21415,15 +22201,16 @@ workflow
     await cliPost("/cli/workflow-runs/reask", { run_id: row._id, check: true });
     const { prepareReask } = await import("./workflow/reask.js");
     const plan = await prepareReask({ getCliEndpoint, detectCurrentSessionId }, row._id, task, options.at).catch((e: Error) => fail(e.message));
-    const r = await cliPost("/cli/workflow-runs/reask", { run_id: row._id, ...(options.at ? { at: options.at } : {}), ...(plan.asker ? { asker: plan.asker } : {}) });
+    const at = plan.at ?? options.at;
+    const r = await cliPost("/cli/workflow-runs/reask", { run_id: row._id, ...(at ? { at } : {}), ...(plan.asker ? { asker: plan.asker } : {}) });
     if (options.json) { printJson(r); return; }
     console.log(`${task}: asked again from ${r.resumed_at}${r.replaced ? `; ${r.replaced} is withdrawn` : ""} (run ${r.run_id}).`);
   });
 
 workflow
   .command("resume <task>")
-  .description("Try a failed line run again from a station of its graph, on its own branch, once what failed it is fixed; an approved run whose merge was left to a person resumes the same way, at its merge station. A resume is a new attempt: each station's visits count again. A trial problem resumes with cast line trial rerun <task> --at <station>")
-  .requiredOption("--at <station>", "The station to resume at (verify, to check and evaluate the branch again)")
+  .description("Try a failed line run again from a station of its graph, on its own branch, once what failed it is fixed; an approved run whose merge was left to a person resumes the same way, at its merge station. A resume is a new attempt: each station's visits count again. A trial problem resumes with cast line trial rerun <task> --at <station>. To stop a run instead: cast workflow cancel <task>")
+  .requiredOption("--at <station>", "The station to resume at, by id or label (verify, to check and evaluate the branch again; cast workflow show <task> lists them)")
   .option("--onto-main", "First put the run's branch on the default branch as the remote has it, by the graph's rebase (a conflict resumes at the station the graph sends it to, where a hand resolves it). Run it on the machine that holds the run")
   .option("--current-flow", "Move the run onto its flow's current library version first: a run reads the version it started on, so a fix saved since reaches it only this way")
   .option("--queue", "Wait for a free run slot on the run's own machine: the line's sweep resumes it there before it starts new problems")
@@ -21460,7 +22247,7 @@ workflow
 
     const resolved = resolveWorkflowSource(file);
     if (!resolved) {
-      console.error(`Workflow not found: ${file}`);
+      console.error(`Workflow not found: ${file} (not a file and not a shipped template; cast workflow list names them)`);
       process.exit(1);
     }
 
@@ -21520,7 +22307,8 @@ workflow
     for (const [name, source] of Object.entries(BUILTIN_WORKFLOW_TEMPLATES)) {
       try {
         const graph = parseWorkflowSource(source);
-        console.log(`  ${name.padEnd(24)} ${graph.goal || graph.name}`);
+        // A goal built from the run's task reads as a placeholder, not a variable.
+        console.log(`  ${name.padEnd(24)} ${(graph.goal || graph.name).replace(/\$task_title/g, "<the task's title>")}`);
         console.log(`  ${" ".repeat(24)} builtin (cast workflow run ${name})`);
       } catch {
         console.log(`  ${name} (parse error)`);
@@ -21679,15 +22467,17 @@ const messaging = program
 
 messaging
   .command("install")
-  .description("Install messaging snippet into agent config (CLAUDE.md, AGENTS.md)")
-  .option("--disable", "Remove messaging snippet and disable")
+  .description("Install the messaging snippet (how to use cast send) into agent instructions (CLAUDE.md, AGENTS.md)")
+  .option("--disable", "Remove the messaging snippet and stop refreshing it")
   .action(async (options: any) => {
     const config = readConfig() || {};
 
     if (options.disable) {
       config.messaging_enabled = false;
       writeConfig(config);
-      console.log("Messaging snippet disabled. Run 'cast messaging install' to re-enable.");
+      // Disabling takes the section back out of the instruction files too.
+      const removed = removeSnippetSection("messaging_enabled");
+      console.log(`Messaging snippet disabled${removed ? " and removed from your agent instructions" : ""}. Run 'cast messaging install' to re-enable.`);
       return;
     }
 

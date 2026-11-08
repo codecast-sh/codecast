@@ -32,6 +32,7 @@ import {
 import { commandGroup } from "./commandGroups.js";
 import { placementLabel, type AnchorPlacement, type CodeAnchorText } from "@codecast/shared/comments";
 import { captureLocalAnchor, placeComments, readFileLines } from "./codeAnchorLocal.js";
+import { choiceOption } from "./argChecks.js";
 
 // ── locating a pull request ──────────────────────────────────────────────────
 
@@ -613,7 +614,7 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
   pr.command("ls")
     .description("List pull requests across your teams, newest change first")
     .option("--repo <owner/name>", "Only this repository")
-    .option("--state <state>", "open (default) | merged | closed | all", "open")
+    .option("--state <state>", "open | merged | closed | all", choiceOption(["open", "merged", "closed", "all"]), "open")
     .option("--mine", "Only PRs you opened")
     .option("--shepherded", "Only PRs a session is shepherding")
     .option("-n, --limit <n>", "How many to show", "20")
@@ -715,7 +716,7 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
 
   // ── watch ──
   pr.command("watch")
-    .argument("[ref]", "PR reference (default: every PR you can see)")
+    .argument("[ref]", "PR reference (default: every open PR you can see, not this session's)")
     .description(
       "Stream state changes as they happen: one line per change, silent until something moves\n\n" +
       "Watches shepherd state, checks, review decision, merge state and open review\n" +
@@ -997,7 +998,7 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
     .option("--approve", "Approve it")
     .option("--request-changes", "Ask for changes")
     .option("--comment", "Comment without approving or blocking")
-    .option("-b, --body <text>", stdinText("What the review says"))
+    .option("-b, --body <text>", stdinText("What the review says (required with --request-changes and --comment)"))
     .option("--json", "Machine-readable output")
     .action(async (ref: string | undefined, options) => {
       const chosen = [

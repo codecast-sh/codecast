@@ -347,7 +347,22 @@ describe("command groups stay off the boot graph", () => {
     // sessionsUntil.ts, loads lazily) and contracts/inboxProjection.ts (+0.6,
     // hibernated rows file by their verdict instead of as dormant).
     // 4525 that evening: growth in files already on the graph (tmux.ts, daemon-adjacent leaves), no new file.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4525);
+    // 4570 on 2026-11-08, the CLI help and error pass: help text, examples and
+    // refusals written into index.ts's command declarations (+30), the
+    // snippets agents install (contracts/snippets.ts +1), commandSuggestion.ts
+    // (+6, the shared nearMatches ranking and listDescription, folded in from
+    // its own file to keep the file count at 346), the argChecks.ts leaf
+    // (+7: count, enum and --state parsers, the not-found and wrong-kind id
+    // lines) and the --state filter list moved into contracts/workState.ts
+    // (+2), and a few KB across the command modules already here. spawnArgs.ts
+    // loads lazily in the spawn action.
+    // 4635 after rebasing both passes onto main's 4525. The second pass of that work: index.ts grew by 30 KB
+    // more (help, examples and refusals across the trigger, task, workflow,
+    // session and read declarations), commandSuggestion.ts (+2), formatter.ts
+    // (+6, the read and search footers), usageCommand.ts (+3), shared/time
+    // (+3), castApi.ts (+2, isOlderBackendRefusal) and under 2 KB each across
+    // workState, sessionAsk, resolveWorkspace and the send and parking modules.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4635);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -509,7 +524,11 @@ describe("command groups stay off the boot graph", () => {
     // 577 later the same day: contracts/approvalAnswers.ts, the four-line
     // approval answer words commandRun.ts and assistant.ts share (e2056d25b).
     // 578 that evening: tmuxLiveness.ts, a leaf split out for unsticking a session whose pane is gone.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(578);
+    // 579 the same day: browser/deadline.ts, the one wall-clock budget for a
+    // `cast browser` verb (a leaf over colors.js). runEngine reads what is
+    // left of it synchronously before each engine run, so it cannot load
+    // behind import(); in the daemon no budget is armed and it costs nothing.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(579);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

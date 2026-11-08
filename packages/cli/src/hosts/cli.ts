@@ -18,7 +18,7 @@
  * are all ordinary states here, not failures.
  */
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -38,8 +38,11 @@ import { deviceId } from "../remote/device.js";
 import { ssh, type RemoteHost } from "../remote/session-move.js";
 import { ROOT_WORKSPACE_NAME, type AgentLoginsReport } from "../cloud/prepare.js";
 import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
+import { FIND_CAST_SH } from "../cloud/ghWrapper.js";
+import { resolveCastInvocation } from "../castInvocation.js";
 import { CLOUD_AUTOSCALE_DEFAULT_SIZE, CLOUD_AUTOSCALE_MAX_EXTRA_CHOICES, CLOUD_HOST_SIZES, cliErrorMessage, cloudSeedLabel } from "@codecast/shared/contracts";
 import { commandGroup } from "../commandGroups.js";
+import { commandTree, unknownCommandNextStep } from "../commandSuggestion.js";
 import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
 import { checkIdleMinutes, provisionArgv, registerHostCreateCommand } from "./create.js";
 import { registerHostResizeCommand } from "./resize.js";
@@ -215,9 +218,13 @@ export interface WorktreeGitState {
 // The same round trip reads each git worktree of the checkout (the main
 // checkout first) as a `@@<TAB>path<TAB>branch<TAB>head<TAB>dirty` line, so
 // the listing shows where every worktree is now, not where it started.
+// A non-interactive ssh shell reads no profile, so `cast` is often off its
+// PATH ("zsh:1: command not found: cast" once per checkout): FIND_CAST_SH
+// looks in the places a host install puts it.
 export const REMOTE_WORKSPACE_LIST_SCRIPT =
+  `${FIND_CAST_SH.replace(/\n/g, "; ")}; ` +
   'for d in ~/work/*/; do [ -f "$d/.codecast/workspace.toml" ] || continue; ' +
-  '(cd "$d" && echo "## $d" && cast ws ls); ' +
+  '(cd "$d" && echo "## $d" && { [ -n "$CAST" ] && "$CAST" ws ls; }); ' +
   'git -C "$d" worktree list --porcelain 2>/dev/null | sed -n "s/^worktree //p" | while IFS= read -r p; do ' +
   '[ -d "$p" ] || continue; ' +
   'b=$(git -C "$p" symbolic-ref --short -q HEAD 2>/dev/null); h=$(git -C "$p" rev-parse -q --verify HEAD 2>/dev/null); ' +
@@ -290,7 +297,7 @@ export function parseRemoteWorkspaceList(out: string): RemoteWorktree[] {
 
 /** Every managed worktree on the host with its live git state: one ssh round trip. */
 export function readRemoteWorktrees(host: RemoteHost, timeoutMs = 60_000): RemoteWorktree[] {
-  return parseRemoteWorkspaceList(ssh(host, REMOTE_WORKSPACE_LIST_SCRIPT, timeoutMs));
+  return parseRemoteWorkspaceList(ssh(host, REMOTE_WORKSPACE_LIST_SCRIPT, timeoutMs, { quiet: true }));
 }
 
 /** `feat/x@abc1234, uncommitted changes`: where a host worktree is now. */
@@ -587,6 +594,52 @@ async function guard<T>(fn: () => Promise<T> | T): Promise<{ value?: T; error?: 
 
 type Convex = { client: any; token: string; api: any } | null;
 
+/** How long `cast hosts ls` waits on one host before printing it as not answering. */
+export const HOST_REPORT_BUDGET_MS = 60_000;
+
+/** A host that did not report in time (or whose report could not be read): its row says why, and nothing else is guessed. */
+export function unansweredHostReport(host: CloudHost, why: string): HostReport {
+  return {
+    id: host.id, provider: host.provider, region: host.region, state: "unknown", address: host.address ?? null, stateError: why,
+    device: { id: host.deviceId ?? null, label: null, online: null, lastSeen: null },
+    sessions: [], sessionsError: why, worktrees: [], worktreesNote: why,
+    git: hostGitReport(host), reach: hostReachLines(host),
+    cost: { hourlyUsd: null, diskMonthlyUsd: null, line: `unknown (${why})`, instanceType: null, volumeGiB: null },
+  };
+}
+
+/**
+ * One host's report from a child `cast hosts _report <id>`. Every call inside
+ * collectHostReport (aws, ssh) is synchronous, so hosts read in one process
+ * run one after another: seven hosts once took over three minutes and printed
+ * nothing until the last answered. A child per host lets them overlap, and the
+ * budget caps the slowest.
+ */
+function childHostReport(host: CloudHost, budgetMs: number): Promise<HostReport> {
+  const { cmd, prefixArgs } = resolveCastInvocation();
+  return new Promise((resolve) => {
+    let out = "";
+    let err = "";
+    const child = spawn(cmd, [...prefixArgs, "hosts", "_report", host.id], { stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve(unansweredHostReport(host, `no answer in ${Math.round(budgetMs / 1000)}s`));
+    }, budgetMs);
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("error", (e) => { clearTimeout(timer); resolve(unansweredHostReport(host, e.message)); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      try {
+        resolve(JSON.parse(out) as HostReport);
+      } catch {
+        const last = err.split("\n").map((l) => l.trim()).filter(Boolean).pop();
+        resolve(unansweredHostReport(host, last ?? `report exited ${code}`));
+      }
+    });
+  });
+}
+
 /** One Convex client for the whole listing, or null when we cannot get one. */
 async function openConvex(): Promise<{ convex: Convex; error?: string }> {
   const { value, error } = await guard(async () => (await import("../remote/cli.js")).convexClient());
@@ -656,7 +709,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     worktrees = markOrphanWorktrees(listed.value ?? [], sessions);
     // Seed refs left behind by a failed acquire or a worktree removed by
     // hand: nothing frees them but `git update-ref -d`, so they are listed.
-    const seeds = await guard(() => parseDanglingSeeds(ssh(toRemoteHost(current), REMOTE_DANGLING_SEEDS_SCRIPT, 60_000)));
+    const seeds = await guard(() => parseDanglingSeeds(ssh(toRemoteHost(current), REMOTE_DANGLING_SEEDS_SCRIPT, 60_000, { quiet: true })));
     danglingSeeds = seeds.value ?? [];
   } else {
     // Asleep, so the host cannot be asked. Its sessions still remember which
@@ -683,7 +736,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     else mirror = stamp.value ?? null;
     // A short cap: a hung sshd must not stall the whole listing. One ssh for
     // both stamps, split on a marker line.
-    const stamps = await guard(() => ssh(toRemoteHost(current), "cat ~/.codecast/host-tools.json 2>/dev/null; echo; echo __CAST_MCP__; cat ~/.codecast/host-mcp-overrides.json 2>/dev/null; echo; echo __CAST_SETUP__; cat ~/.codecast/host-setup.json 2>/dev/null", 5_000));
+    const stamps = await guard(() => ssh(toRemoteHost(current), "cat ~/.codecast/host-tools.json 2>/dev/null; echo; echo __CAST_MCP__; cat ~/.codecast/host-mcp-overrides.json 2>/dev/null; echo; echo __CAST_SETUP__; cat ~/.codecast/host-setup.json 2>/dev/null", 5_000, { quiet: true }));
     if (stamps.error) toolsNote = stamps.error;
     else {
       const [toolsAndMcp, setupOut] = (stamps.value ?? "").split("__CAST_SETUP__\n");
@@ -806,7 +859,9 @@ function printHostReport(r: HostReport, opts: { verbose?: boolean } = {}): void 
 
   if (r.sessionsError) console.log(`  sessions   ${fmt.muted(`unknown (${r.sessionsError})`)}`);
   else if (!r.sessions.length) console.log(`  sessions   ${fmt.muted("none")}`);
-  else {
+  else if (!opts.verbose) {
+    console.log(`  sessions   ${r.sessions.length}  ${fmt.muted(`cast hosts ls ${r.id} --verbose lists them`)}`);
+  } else {
     console.log(`  sessions   ${r.sessions.length}`);
     for (const s of r.sessions) console.log(`    ${sessionLine(s)}`);
   }
@@ -937,29 +992,42 @@ export function buildHostsCommand(parent: Command): Command {
 
   hosts
     .command("ls", { isDefault: true })
-    .description("List remote hosts: state, device, sessions, worktrees and cost")
-    .option("--json", "Machine-readable report")
-    .option("--verbose", "Also list what the last tools check found missing or unsupported on each host")
-    .action(async (o: { json?: boolean; verbose?: boolean }) => {
-      const rows = readHosts();
+    .description("List remote hosts: state, device, sessions, worktrees and cost; read side by side, each printed as it answers")
+    .argument("[id]", "Only this host (its instance id, or a unique prefix)")
+    .option("--json", "Machine-readable report (one object per host, in registry order)")
+    .option("--verbose", "Also list each host's sessions, and what the last tools check found missing or unsupported")
+    .option("--timeout <seconds>", "How long to wait on one host before printing it as not answering", String(HOST_REPORT_BUDGET_MS / 1000))
+    .action(async (id: string | undefined, o: { json?: boolean; verbose?: boolean; timeout: string }) => {
+      const all = readHosts();
+      // `ls` is the default, so commander hands it any word `cast hosts` does
+      // not know (`cast hosts lss`): a host id lists that host, anything else
+      // is answered as the unknown verb it is.
+      const rows = id ? all.filter((h) => h.id === id || h.id.startsWith(id)) : all;
+      if (id && rows.length !== 1) {
+        if (rows.length > 1) die(`${id} names ${rows.length} hosts (${rows.map((h) => h.id).join(", ")}): give more of the id`);
+        const next = unknownCommandNextStep([{ name: "hosts", children: commandTree(hosts) }], ["hosts", id]);
+        console.error(`error: '${id}' is neither a host nor a hosts verb${next ? `\n${next}` : ""}\nHosts: ${all.map((h) => h.id).join(", ") || "none registered"}. Run 'cast hosts --help' for its commands.`);
+        process.exit(1);
+      }
       if (!rows.length) {
         if (o.json) console.log("[]");
         else console.log(fmt.muted("no remote hosts registered — `cast hosts add --help`"));
         return;
       }
-      // Each AWS call has been measured at tens of seconds on a slow route, so
-      // say what is happening. stderr keeps a piped `ls` clean.
-      if (!o.json) console.error(fmt.muted(`reading ${rows.length} host${rows.length === 1 ? "" : "s"}…`));
-      const { convex, error } = await openConvex();
-      const reports: HostReport[] = [];
-      for (const h of rows) reports.push(await collectHostReport(h, convex, error));
+      const budgetMs = Math.max(5, Number(o.timeout) || HOST_REPORT_BUDGET_MS / 1000) * 1000;
+      // stderr keeps a piped `ls` clean.
+      if (!o.json) console.error(fmt.muted(`reading ${rows.length} host${rows.length === 1 ? "" : "s"} (up to ${budgetMs / 1000}s each, side by side)…`));
+      const reports = await Promise.all(rows.map((h) =>
+        childHostReport(h, budgetMs).then((r) => {
+          if (!o.json) {
+            printHostReport(r, { verbose: o.verbose });
+            console.log("");
+          }
+          return r;
+        })));
       if (o.json) {
         console.log(JSON.stringify(reports, null, 2));
         return;
-      }
-      for (const r of reports) {
-        printHostReport(r, { verbose: o.verbose });
-        console.log("");
       }
       console.log(
         fmt.muted(
@@ -967,6 +1035,16 @@ export function buildHostsCommand(parent: Command): Command {
             "  AWS Macs use dedicated hosts with a 24-hour minimum; stopping the instance does not release the host.",
         ),
       );
+    });
+
+  // One host's report as JSON, for `ls` to run per host in parallel.
+  hosts
+    .command("_report <id>", { hidden: true })
+    .action(async (id: string) => {
+      const host = readHosts().find((h) => h.id === id);
+      if (!host) die(`no host ${id}`);
+      const { convex, error } = await openConvex();
+      console.log(JSON.stringify(await collectHostReport(host, convex, error)));
     });
 
   hosts

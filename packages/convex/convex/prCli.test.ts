@@ -182,6 +182,16 @@ describe("listing", () => {
     const result = await call(ls, await ctx(), { api_token: TOKEN, shepherded: true });
     expect(result.pull_requests).toEqual([]);
   });
+
+  test("a page is the newest matching changes, filtered as the rows stream", async () => {
+    const pr = (n: number, state: string, updated_at: number) => ({
+      _id: `pr_${n}`, team_id: TEAM, github_pr_id: 1000 + n, repository: "codecast-sh/codecast", number: n,
+      title: `PR ${n}`, body: "", state, linked_session_ids: [], created_at: 1, updated_at,
+    });
+    const rows = [pr(1, "merged", 10), pr(2, "open", 20), pr(3, "merged", 30), pr(4, "open", 40), pr(5, "open", 50)];
+    const result = await call(ls, await ctx({ pull_requests: rows }), { api_token: TOKEN, state: "open", limit: 2 });
+    expect(result.pull_requests.map((p: any) => p.number)).toEqual([5, 4]);
+  });
 });
 
 describe("show", () => {

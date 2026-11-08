@@ -40,7 +40,12 @@ describe("buildEventFilter", () => {
   test("a bad --pr and an unknown event are refused", async () => {
     await expect(buildEventFilter("pr_opened", { pr: "x" }, noCheckout)).rejects.toThrow(/exit 1/);
     await expect(buildEventFilter("nope", {}, noCheckout)).rejects.toThrow(/exit 1/);
-    expect(errors[1]).toContain("Unknown event: nope");
+    expect(errors[1]).toContain('Unknown event "nope"');
+  });
+
+  test("an event one typo away names the near match", async () => {
+    await expect(buildEventFilter("pr_commentz", {}, noCheckout)).rejects.toThrow(/exit 1/);
+    expect(errors[0]).toContain("Next step: did you mean pr_comment?");
   });
 });
 

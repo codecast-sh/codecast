@@ -7,6 +7,7 @@ import type { Command } from "commander";
 import type { PublishDeps } from "./castApi.js";
 import { JSON_OPTION, TEAM_OPTION, emit, fail, scopedRead } from "./externalDataCli.js";
 import { parseAnsweredSince } from "./decideCommand.js";
+import { boundedCountOption } from "./argChecks.js";
 
 export interface TimelineRow {
   id: string;
@@ -59,9 +60,12 @@ export function registerTimelineCommand(program: Command, deps: PublishDeps): vo
     .option("--after <cursor>", "Read tasks on from the cursor an earlier page returned (default: --since)")
     .option("--landed-after <cursor>", "Read landings on from the landed_cursor an earlier page returned (default: --since)")
     .option("--digest-since <time>", "Also the in-progress digest, counting problems opened after this time")
-    .option("-n, --limit <n>", "Tasks and landings read per page, each (1-150, default 60)", (v: string) => parseInt(v, 10))
+    .option("-n, --limit <n>", "Tasks and landings read per page, each (1-150, default 60)", boundedCountOption(150))
     .option(...TEAM_OPTION)
     .option(...JSON_OPTION)
+    .addHelpText("after", `
+  cast timeline --since 2d                              the last two days
+  cast timeline --since 2d --after <cursor> --landed-after <landed_cursor>   the next page, from the cursors a page ends with`)
     .action(async (o: { since: string; after?: string; landedAfter?: string; digestSince?: string; limit?: number; team?: string; json?: boolean }) => {
       const now = Date.now();
       const floor = when(o.since, "--since", now);

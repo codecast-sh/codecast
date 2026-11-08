@@ -88,7 +88,7 @@ describe("cast decide ls formatting", () => {
       row({ status: "answered", answer_index: 1, blocking: false, default_option: 0 }),
     ]);
     expect(text).toContain("answered: Path  (advisory)");
-    expect(text).toContain("✓ 2. Path — stable across edits");
+    expect(text).toContain("✓ 2. Path: stable across edits");
     expect(text).not.toContain("→ 1.");
   });
 
@@ -96,7 +96,7 @@ describe("cast decide ls formatting", () => {
     const now = 1 + 5 * 60_000;
     const text = formatDecisionList([row({ blocking: false, default_option: 0 })], now);
     expect(text).toContain("→ 1. Frontmatter");
-    expect(text).toContain("still open — asked 5m ago  (advisory)");
+    expect(text).toContain("still open, asked 5m ago  (advisory)");
   });
 
   it("describes a free-text answer and a withdrawal", () => {
@@ -107,7 +107,7 @@ describe("cast decide ls formatting", () => {
   it("shows how far the session has run past an open ask", () => {
     const now = 1 + 30 * 60_000;
     const text = formatDecisionList([row({ messages_since: 12 })], now);
-    expect(text).toContain("still open — asked 30m ago, 12 messages since");
+    expect(text).toContain("still open, asked 30m ago, 12 messages since");
     expect(text).not.toContain("moved past");
   });
 
@@ -356,7 +356,7 @@ describe("cast decide ls --answered-since", () => {
       { id: "x", short_id: "sd-9", question: "Raise the fee?", options: ["Yes", "No"], answer_label: "Yes", answer_text: "before the intro", answered_by: { kind: "user", name: "Cam" }, resolved_at: now, task: { short_id: "ct-1", title: "Fee", status: "done", project: "People & Deals" } },
     ]);
     expect(out).toContain("sd-9  Raise the fee?");
-    expect(out).toContain("→ Yes — before the intro (Cam)");
+    expect(out).toContain("→ Yes: before the intro (Cam)");
     expect(out).toContain("ct-1  Fee  [People & Deals]");
     expect(formatAnsweredList([])).toBe("No cards answered in that window.");
   });

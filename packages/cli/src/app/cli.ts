@@ -23,6 +23,7 @@ import { spawnSync } from "../proc.js";
 import { c, fmt } from "../colors.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { APP_SURFACES, findAppSurface, type AppSurface } from "@codecast/shared/contracts";
+import { didYouMean, nearMatches } from "../commandSuggestion.js";
 import { CdpConnection, listTargets, isCdpAlive, type CdpClient } from "../browser/cdp.js";
 import { engineSession, realSessionKey } from "../browser/engine.js";
 import { ownerKey } from "../browser/owner.js";
@@ -90,7 +91,10 @@ function portListening(port: number, timeoutMs = 1000): Promise<boolean> {
 }
 
 async function originFor(o: TargetOpts): Promise<string> {
-  if (o.origin) return o.origin.replace(/\/+$/, "");
+  if (o.origin) {
+    if (!/^https?:\/\/[^/\s]+/.test(o.origin)) die(`--origin takes a full origin like http://localhost:3200, not '${o.origin}'`);
+    return o.origin.replace(/\/+$/, "");
+  }
   if (process.env.CAST_APP_ORIGIN) return process.env.CAST_APP_ORIGIN.replace(/\/+$/, "");
   // The dev server `cast dev` runs for this checkout (a worktree, a cloud
   // host): the tree being edited, on whatever port it was given.
@@ -526,15 +530,24 @@ function surfaces(o: { json?: boolean; kind?: string }): void {
   for (const s of list) console.log(`  ${s.name.padEnd(22)} ${fmt.muted(s.kind.padEnd(11))} ${s.what}`);
 }
 
+/** The surfaces a mistyped name was reaching for, then where the full list is. */
+function notSurfaceHint(typed: string): string {
+  const near = didYouMean(nearMatches(typed, APP_SURFACES.map((s) => s.name)).map((name) => `'cast app goto ${name}'`));
+  return near ? `${near} cast app surfaces lists them all.` : "cast app surfaces lists them; or pass /path or a conversation id";
+}
+
 const SHORT_ID = /^[a-z0-9]{7,31}$/;
 const CONVEX_ID = /^[a-z0-9]{32}$/;
 
 /** Navigate by surface name, path, or conversation id; confirm where the app landed. */
 async function goto(what: string, o: TargetOpts & { timeout?: string; reload?: boolean; json?: boolean }, deps: PublishDeps): Promise<void> {
-  const target = await targetFor(o, deps);
   const timeoutMs = Number(o.timeout ?? 15_000);
+  if (!(timeoutMs > 0)) die(`--timeout takes milliseconds, like --timeout 30000, not '${o.timeout}'`);
   const surface = findAppSurface(what);
   const isId = SHORT_ID.test(what) || CONVEX_ID.test(what);
+  // Refused before attaching to any page, so a typo costs nothing.
+  if (!surface && !isId && !what.startsWith("/")) die(`"${what}" is not a surface, a path, or a conversation id`, notSurfaceHint(what));
+  const target = await targetFor(o, deps);
 
   const result = await withPage(target, async (at) => {
     const errs = collectErrors(at);
@@ -814,10 +827,10 @@ async function shot(pathArg: string | undefined, o: TargetOpts & { inline?: bool
 }
 
 /** Run a script on the app page and print its settled value (the desktop app has no other eval). */
-async function evalOnApp(script: string, o: TargetOpts & { timeout?: string }, deps: PublishDeps): Promise<void> {
+async function evalOnApp(script: string, o: TargetOpts & { timeout?: string; json?: boolean }, deps: PublishDeps): Promise<void> {
   const target = await targetFor(o, deps);
   const out = await withPage(target, (at) => evaluateOn(at.conn, at.sessionId, script, Number(o.timeout ?? 15_000)));
-  console.log(out.output);
+  console.log(o.json ? out.output : out.display ?? out.output);
   if (out.hint) console.log(fmt.muted(`  ${out.hint}`));
   process.exit(out.ok ? 0 : 1);
 }
@@ -898,9 +911,10 @@ A missing or disconnected extension never falls back to another browser; this is
   targetFlags(app.command("eval").description("Run JavaScript on the app page (promises awaited, top-level await allowed); the way to inspect the desktop app"))
     .argument("<script>", "the script")
     .option("--timeout <ms>", "settle timeout", "15000")
+    .option("--json", "the value JSON-encoded exactly (a string comes quoted)")
     .action((script, o) => evalOnApp(script, withTarget(o), deps));
 
-  targetFlags(app.command("shot").description("Screenshot the app page into the conversation (works for --desktop too)"))
+  targetFlags(app.command("shot").alias("screenshot").description("Screenshot the app page into the conversation (works for --desktop too)"))
     .argument("[path]", "where to write the png")
     .option("--no-inline", "do not show it in the conversation")
     .action((p, o) => shot(p, withTarget(o), deps));

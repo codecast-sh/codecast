@@ -14,6 +14,7 @@
 import { commandGroup } from "./commandGroups.js";
 import { execFileSync } from "./proc.js";
 import path from "path";
+import fs from "fs";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { readLocalGitContext } from "./prCommand.js";
@@ -82,7 +83,7 @@ export function resolveNoteRef(notes: ReviewNoteRow[], ref: string): ReviewNoteR
   if (index >= 1 && index <= notes.length) return notes[index - 1];
   const matches = notes.filter((n) => n._id === ref || n._id.startsWith(ref));
   if (matches.length === 1) return matches[0];
-  if (matches.length > 1) throw new Error(`${ref} matches ${matches.length} notes — use the number from cast review ls`);
+  if (matches.length > 1) throw new Error(`${ref} matches ${matches.length} notes. Use the number from cast review ls.`);
   throw new Error(`No review note matches ${ref}`);
 }
 
@@ -160,7 +161,7 @@ function realCwd(): string {
 function requireRepoRoot(cwd: string): string {
   const root = repoRootOf(cwd);
   if (!root) {
-    console.error("cast review works inside a git checkout — no repository here.");
+    console.error("cast review works inside a git checkout, and there is no repository here.");
     process.exit(1);
   }
   return root;
@@ -217,6 +218,14 @@ and editing one puts it back in the batch.
       const repoRoot = requireRepoRoot(cwd);
       const parsed = parseReviewTarget(target);
       const filePath = repoRelativePath(repoRoot, cwd, parsed.filePath);
+      // A suffix that is not a line, a range or `file` stays in the path; when
+      // no such file exists it was a mistyped place, not a path with a colon.
+      const colon = target.lastIndexOf(":");
+      if (parsed.filePath === target && colon > 0 && !fs.existsSync(path.join(repoRoot, filePath))) {
+        const head = target.slice(0, colon);
+        console.error(`"${target.slice(colon + 1)}" is not a line. Write ${head}:42, a range ${head}:10-20, or ${head}:file for the whole file.`);
+        process.exit(1);
+      }
       const noteRow = {
         file_path: filePath,
         line_number: parsed.lineNumber,

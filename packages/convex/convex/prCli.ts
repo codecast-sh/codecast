@@ -80,14 +80,30 @@ async function callerTeams(ctx: any, userId: Id<"users">): Promise<Id<"teams">[]
 }
 
 /** Every pull request in the caller's teams. */
-async function pullRequestsForCaller(ctx: any, teams: Id<"teams">[]): Promise<PR[]> {
+/**
+ * The caller's teams' pull requests that `keep` accepts, each team's newest
+ * change first, at most `take` per team. Rows stream through the index and
+ * only the kept ones are held: collecting every pull request a team ever had
+ * ran out of the function's 64 MB heap on a long-lived team (cast pr ls,
+ * 2026-11-08).
+ */
+async function pullRequestsForCaller(
+  ctx: any,
+  teams: Id<"teams">[],
+  keep: (pr: PR) => boolean = () => true,
+  take: number = Infinity,
+): Promise<PR[]> {
   const rows: PR[] = [];
   for (const team of teams) {
-    const teamRows = await ctx.db
+    let kept = 0;
+    for await (const pr of ctx.db
       .query("pull_requests")
-      .withIndex("by_team_id", (q: any) => q.eq("team_id", team))
-      .collect();
-    rows.push(...teamRows);
+      .withIndex("by_team_updated", (q: any) => q.eq("team_id", team))
+      .order("desc")) {
+      if (!keep(pr)) continue;
+      rows.push(pr);
+      if (++kept >= take) break;
+    }
   }
   return rows;
 }
@@ -132,7 +148,7 @@ export async function resolvePullRequest(
   }
 
   if (number != null) {
-    const matches = (await pullRequestsForCaller(ctx, teams)).filter((pr) => pr.number === number);
+    const matches = await pullRequestsForCaller(ctx, teams, (pr) => pr.number === number);
     return matches.sort(openFirst)[0] ?? null;
   }
 
@@ -302,21 +318,20 @@ export const ls = query({
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const user = await ctx.db.get(userId);
-    const rows = await pullRequestsForCaller(ctx, await callerTeams(ctx, userId));
-
-    const wanted = rows.filter((pr) => {
-      if (args.repository && pr.repository !== normalizeRepository(args.repository)) return false;
+    const limit = args.limit ?? LIST_LIMIT;
+    const repository = args.repository ? normalizeRepository(args.repository) : null;
+    const wanted = await pullRequestsForCaller(ctx, await callerTeams(ctx, userId), (pr) => {
+      if (repository && pr.repository !== repository) return false;
       if (args.state && pr.state !== args.state) return false;
       if (args.mine && pr.author_github_username !== user?.github_username) return false;
       if (args.shepherded && !pr.shepherd_conversation_id) return false;
       return true;
-    });
+    }, limit);
 
     wanted.sort(newestFirst);
-    const page = wanted.slice(0, args.limit ?? LIST_LIMIT);
+    const page = wanted.slice(0, limit);
     return {
       pull_requests: await Promise.all(page.map((pr) => compactRow(ctx, pr))),
-      total: wanted.length,
     };
   },
 });
@@ -429,10 +444,8 @@ export const watchPRs = query({
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
-    const rows = await pullRequestsForCaller(ctx, await callerTeams(ctx, userId));
     const wantedIds = args.pr_ids ? new Set(args.pr_ids) : null;
-
-    const watched = rows.filter((pr) => {
+    const watched = await pullRequestsForCaller(ctx, await callerTeams(ctx, userId), (pr) => {
       if (wantedIds) return wantedIds.has(String(pr._id));
       if (args.repository && pr.repository !== normalizeRepository(args.repository)) return false;
       // Without an explicit set, a closed pull request has nothing left to

@@ -16,6 +16,7 @@ import {
   isPrTriggerEvent,
   type TriggerScopeFilter,
 } from "@codecast/shared/contracts";
+import { didYouMean, nearMatches } from "./commandSuggestion.js";
 
 export interface EventFilterFlags {
   repo?: string;
@@ -43,7 +44,7 @@ export async function buildEventFilter(
     (await import("./prCommand.js")).readLocalGitContext().repository ?? undefined,
 ): Promise<TriggerScopeFilter> {
   const shorthand = TRIGGER_EVENT_SHORTHANDS[eventName];
-  if (!shorthand) refuse(`Unknown event: ${eventName}. Valid: ${TRIGGER_EVENT_NAMES.join(", ")}`);
+  if (!shorthand) refuse(unknownEventMessage(eventName));
 
   const filter: TriggerScopeFilter = { ...shorthand };
 
@@ -67,6 +68,12 @@ export async function buildEventFilter(
   if (repository) filter.repository = repository;
 
   return filter;
+}
+
+/** The refusal for an --on word that is no event: the near match first, then every event. */
+export function unknownEventMessage(eventName: string): string {
+  const near = didYouMean(nearMatches(eventName, TRIGGER_EVENT_NAMES));
+  return `Unknown event "${eventName}".${near ? ` ${near}` : ""} Events: ${TRIGGER_EVENT_NAMES.join(", ")}`;
 }
 
 /** The narrowing flag passed without --on, if any: it would be dropped. */

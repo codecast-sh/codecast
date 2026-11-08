@@ -99,7 +99,7 @@ export function tokenConfigFromOptions(
 function requireProvider<T extends string>(raw: string, allowed: readonly T[]): T {
   const value = raw.trim().toLowerCase();
   if (!(allowed as readonly string[]).includes(value)) {
-    fail(`Unknown provider "${raw}" — expected one of: ${allowed.join(", ")}`);
+    fail(`Unknown provider "${raw}". Use one of: ${allowed.join(", ")}`);
   }
   return value as T;
 }
@@ -109,7 +109,7 @@ function parseToggle(flag: string, raw: string): boolean {
   const value = raw.trim().toLowerCase();
   if (value === "on" || value === "true" || value === "yes") return true;
   if (value === "off" || value === "false" || value === "no") return false;
-  return fail(`Invalid ${flag} "${raw}" — pass on or off`);
+  return fail(`Invalid ${flag} "${raw}". Pass on or off.`);
 }
 
 function printSource(s: any): void {
@@ -313,7 +313,7 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
     .action(async (providerRaw: string, ref: string, options: any) => {
       const provider = requireProvider(providerRaw, ISSUE_PROVIDERS);
       if (options.kind && !(SOURCE_KINDS as readonly string[]).includes(options.kind)) {
-        fail(`Unknown --kind "${options.kind}" — expected one of: ${SOURCE_KINDS.join(", ")}`);
+        fail(`Unknown --kind "${options.kind}". Use one of: ${SOURCE_KINDS.join(", ")}`);
       }
       const result = await post("/cli/integrations/candidates", { provider });
       const pool: any[] = (Array.isArray(result) ? result : result?.candidates ?? []).filter((cand: any) => !options.kind || cand.kind === options.kind);
@@ -323,8 +323,9 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
         fail(`Run 'cast integrations candidates ${provider}' to see what is importable.`);
       }
       if (match.kind === "many") {
-        console.error(`Ambiguous "${ref}" — matches:`);
+        console.error(`"${ref}" matches more than one candidate:`);
         for (const cand of match.matches) console.error(`  ${cand.external_key || cand.external_id}  ${cand.name}`);
+        console.error(`Pass the key from the first column: cast integrations import ${provider} <key>`);
         process.exit(1);
       }
       const cand = match.candidate;
@@ -392,7 +393,7 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
       if (options.autoSpawn !== undefined) body.auto_spawn = parseToggle("--auto-spawn", options.autoSpawn);
       if (options.pushNewTasks !== undefined) body.push_new_tasks = parseToggle("--push-new-tasks", options.pushNewTasks);
       if (Object.keys(body).length === 1) {
-        fail("Nothing to set — pass --delegate-label, --delegate-assignee, --auto-spawn, or --push-new-tasks");
+        fail("Nothing to set. Pass --delegate-label, --delegate-assignee, --auto-spawn, or --push-new-tasks.");
       }
       await post("/cli/integrations/update-source", body);
       console.log(`${c.green}ok${c.reset} Updated ${c.cyan}${id}${c.reset}`);
