@@ -165,7 +165,7 @@ describe("classifyWorkState — the pending API error rule", () => {
 
 // A process that exits AFTER the agent declared the work delivered owes nobody
 // anything: every headless trigger run ends this way, and reading that exit as
-// a death filed each clean run under Needs Input.
+// a death filed each clean run under Needs You.
 describe("classifyWorkState — an exit after a declared done", () => {
   test("a stopped agent whose row says done files under done", () => {
     expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "done" }))).toBe("done");
@@ -316,7 +316,7 @@ describe("computeBucketStale", () => {
 
 // A live harness /loop asleep on a wakeup parks its session exactly like an
 // armed inject trigger — the machine owns the next move (2026-08-31: these
-// sessions filed under Needs Input with no visible wake).
+// sessions filed under Needs You with no visible wake).
 describe("classifyWorkState armedLoopHome", () => {
   test("a settled session with an armed loop rests dormant", () => {
     expect(classifyWorkState(input({ armedLoopHome: true }))).toBe("dormant");
