@@ -1916,7 +1916,7 @@ diffs-container {
   border-top-color: color-mix(in srgb, var(--sol-cyan) 30%, transparent);
 }
 
-/* Section headers (NEEDS INPUT / WORKING / PINNED): still flat — no bar —
+/* Section headers (NEEDS YOU / WORKING / PINNED): still flat — no bar —
    but legible: a readable letterspaced label above a rule, with clear air
    between sections so each group visibly starts. The rule takes the
    section's own accent (currentColor — renderSection puts the color class
