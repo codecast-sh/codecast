@@ -2122,7 +2122,7 @@ export class SyncService {
   async recordTreeSnapshots(rows: Array<{
     conversation_id: string; sha: string; tree_sha: string; base_sha: string; prev_sha?: string; branch?: string;
     depth: number; changed_paths: string[]; changed_count: number; dirty: boolean; checkout_key: string;
-    source: "turn" | "sweep"; taken_at: number; turn_completed_at?: number; took_ms?: number; shared_sessions?: number;
+    source: "turn" | "sweep" | "prompt"; taken_at: number; turn_completed_at?: number; took_ms?: number; shared_sessions?: number;
   }>): Promise<{ written: number } | null> {
     if (!this.apiToken || !rows.length) return null;
     try {
@@ -2130,6 +2130,39 @@ export class SyncService {
     } catch {
       return null;
     }
+  }
+
+  /** A conversation's turn snapshot rows, oldest first (treeSnapshots.listForConversation): what a rewind reads. */
+  async listTreeSnapshots(conversationId: string): Promise<Array<{ sha: string; base_sha: string; prev_sha?: string; taken_at: number; turn_completed_at?: number; checkout_key?: string; source?: "turn" | "sweep" | "prompt" }>> {
+    if (!this.apiToken) throw new Error("not signed in");
+    return await this.client.query("treeSnapshots:listForConversation" as any, { api_token: this.apiToken, conversation_id: conversationId });
+  }
+
+  /** Files a conversation's own tool calls changed after `after` (treeSnapshots.editedPaths); null on a backend without the query. */
+  async listEditedPaths(conversationId: string, after: number): Promise<{ edits: Array<{ path: string; at: number[] }>; complete: boolean; others: Array<{ path: string; at: number[] }>; synced_at: number } | null> {
+    if (!this.apiToken) return null;
+    try {
+      return await this.client.query("treeSnapshots:editedPaths" as any, { api_token: this.apiToken, conversation_id: conversationId, after });
+    } catch (e) {
+      // Only a backend without the query is "cannot say"; any other failure is the rewind's to report.
+      if (/Could not find public function/i.test(String((e as Error)?.message ?? e))) return null;
+      throw e;
+    }
+  }
+
+  /** The rewind staged in a session's checkout, or none (treeSnapshots.reportRewindStaged). */
+  async reportRewindStaged(conversationId: string, staged: { id: string; files: number; staged_at: number; at: number } | null, clearId?: string): Promise<boolean> {
+    if (!this.apiToken) return false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        // The device rides along: only the machine that holds a rewind may clear its mark.
+        await this.mutate("treeSnapshots:reportRewindStaged" as any, { api_token: this.apiToken, device_id: deviceId(), conversation_id: conversationId, staged, ...(clearId ? { clear_id: clearId } : {}) });
+        return true;
+      } catch {
+        await new Promise((r) => setTimeout(r, 1_000 * (attempt + 1)));
+      }
+    }
+    return false;
   }
 
   /** What a merge_back command did with a worker's worktree (subagentFleet.reportMergeBack). */

@@ -192,6 +192,12 @@ export const DAEMON_COMMANDS = [
   // as an unknown edit op. Result: LineProfileEditReply. Old daemons:
   // "Unknown command".
   "line_profile_edit",
+  // "Rewind to here" on a user message (cli/src/rewindTree.ts), targeted at
+  // the session's owning device. args: RewindFilesArgs (contracts/rewindFiles)
+  // — plan, diff, stage, put_back or keep a rewind of the session's checkout
+  // to just before that turn. Result: RewindFilesReply. Old daemons:
+  // "Unknown command" (the review says to update codecast there).
+  "rewind_files",
   // The app's edit of one step of a published graph (line-workspace.md LW4):
   // the prompt or script file a .cast names, in the checkout its origin
   // names (workflows.origin), targeted at the device that pushed it. args:
