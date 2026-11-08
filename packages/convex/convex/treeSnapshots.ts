@@ -8,9 +8,10 @@ import { v } from "convex/values";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { requireUserOrToken } from "./lib/auth";
 import { canAccessConversation } from "./lib/access";
+import { REWIND_ROWS_CAP } from "@codecast/shared/contracts";
 
 const CHANGED_PATHS_CAP = 200;
-const LIST_CAP = 500;
+const LIST_CAP = REWIND_ROWS_CAP;
 
 const snapshotRow = v.object({
   conversation_id: v.id("conversations"),
@@ -24,7 +25,8 @@ const snapshotRow = v.object({
   changed_count: v.number(),
   dirty: v.boolean(),
   checkout_key: v.string(),
-  source: v.union(v.literal("turn"), v.literal("sweep")),
+  // "prompt": the tree when a prompt was submitted, the start of its turn (a rewind's boundary).
+  source: v.union(v.literal("turn"), v.literal("sweep"), v.literal("prompt")),
   taken_at: v.number(),
   turn_completed_at: v.optional(v.number()),
   took_ms: v.optional(v.number()),
@@ -55,7 +57,11 @@ export const record = mutation({
         .query("tree_snapshots")
         .withIndex("by_conversation_sha", (q) => q.eq("conversation_id", row.conversation_id).eq("sha", row.sha))
         .collect();
-      if (existing.some((e) => (e.turn_completed_at ?? null) === (row.turn_completed_at ?? null))) continue;
+      // A prompt snapshot of an unchanged tree repeats the sha of the turn
+      // before it; each prompt still needs its own row, as a rewind's boundary.
+      const same = (e: { source: string; taken_at: number; turn_completed_at?: number }) =>
+        row.source === "prompt" ? e.source === "prompt" && e.taken_at === row.taken_at : e.source !== "prompt" && (e.turn_completed_at ?? null) === (row.turn_completed_at ?? null);
+      if (existing.some(same)) continue;
       await ctx.db.insert("tree_snapshots", {
         ...row,
         changed_paths: row.changed_paths.slice(0, CHANGED_PATHS_CAP),
@@ -83,5 +89,67 @@ export const listForConversation = query({
       .order("desc")
       .take(LIST_CAP);
     return rows.reverse();
+  },
+});
+
+const EDITED_SCAN_CAP = 20_000;
+const EDITED_PATHS_CAP = 5_000;
+
+/**
+ * The files a conversation's own tool calls wrote, edited or deleted after
+ * `after` (file_changes), newest first: what a rewind in a checkout shared
+ * with other sessions may count as this session's (cli/src/rewindTree.ts).
+ * Paths are as the tool calls named them, usually absolute. `complete` is
+ * false when the caps cut the list before it reached `after`: a rewind then
+ * refuses rather than leave the earliest turns' files behind.
+ */
+export const editedPaths = query({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    after: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) return { paths: [], complete: false };
+    const out = new Set<string>();
+    let scanned = 0;
+    // Newest first, and rows land in time order, so the walk ends at the first row older than `after`.
+    for await (const row of ctx.db
+      .query("file_changes")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .order("desc")) {
+      if (row.timestamp <= args.after) return { paths: [...out], complete: true };
+      if (++scanned > EDITED_SCAN_CAP) return { paths: [...out], complete: false };
+      if (row.change_type === "commit") continue;
+      out.add(row.file_path);
+      if (out.size > EDITED_PATHS_CAP) return { paths: [...out], complete: false };
+    }
+    return { paths: [...out], complete: true };
+  },
+});
+
+/**
+ * The daemon that holds a session's checkout says what rewind is staged there
+ * ("Rewind to here", cli/src/rewindTree.ts), or that none is. The row is the
+ * one home of that fact for every window's Put back chip. Only the session's
+ * runner may write it.
+ */
+export const reportRewindStaged = mutation({
+  args: {
+    api_token: v.string(),
+    conversation_id: v.id("conversations"),
+    staged: v.union(v.null(), v.object({ id: v.string(), files: v.number(), staged_at: v.number(), at: v.number() })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || conversation.user_id.toString() !== userId.toString()) return { written: false };
+    const prev = conversation.rewind_staged ?? null;
+    if (JSON.stringify(prev) === JSON.stringify(args.staged)) return { written: false };
+    await ctx.db.patch(args.conversation_id, { rewind_staged: args.staged });
+    return { written: true };
   },
 });
