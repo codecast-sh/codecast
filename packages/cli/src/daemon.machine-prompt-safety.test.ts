@@ -13,6 +13,8 @@ import { clearPromptHolds, holdConversationForPrompt, isForcedPastDialog, prompt
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
+import { DeliveryEchoLedger } from "./deliveryEchoLedger";
+import { parseTranscriptFor } from "./parser";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice, parseDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer";
 import { closeOwnCommandPanel, mayOpenPanel, paneDialogQuestion, rememberCommandPanel } from "./commandPanel";
@@ -28,6 +30,7 @@ import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
 import { planHandoffTarget } from "./planHandoff";
 import { waitForHandHost } from "./handHostGrace";
+
 
 // The fixture lifts delivery code out of daemon.ts by name; the pane classifiers
 // it calls live in tmuxPaneState.ts, so both files are read as one source.
@@ -142,6 +145,7 @@ function fixture(transport = "tmux", cached = true) {
   const lastEmittedSyntheticPrompt = new Map([["sid", "card-1"]]);
   const closed: unknown[][] = [];
   let journal: TmuxDeliveryJournal | undefined;
+  let echoes: DeliveryEchoLedger | undefined;
   const messages = new Map<string, any>();
   const statuses: Array<{ messageId: string; status: string }> = [];
   const holds: Array<{ id: string; holdReason?: string; holdScreen?: string }> = [];
@@ -257,6 +261,8 @@ function fixture(transport = "tmux", cached = true) {
     // The receipt journal the inject path opens when a delivery identity rides
     // along: a private one per fixture, so no test reads the machine's.
     tmuxDeliveryJournal: () => (journal ??= new TmuxDeliveryJournal(path.join(directory, "delivery.sqlite"))),
+    deliveryEchoLedger: () => (echoes ??= new DeliveryEchoLedger(path.join(directory, "echoes.sqlite"))),
+    parseTranscriptFor,
     selfHealIfTimersStalled: () => {}, assertLegacyDeliveryEnvelope: () => {},
     messagesInFlight: new Map(), conversationDeliveryActive: new Set(), injectedMessageTs,
     IN_FLIGHT_HARD_TTL_MS: 10000, compactionRedeliveryBypass: new Set(), injectionDedupWindowMs: () => 10000,
@@ -272,7 +278,7 @@ function fixture(transport = "tmux", cached = true) {
       "tmuxWatchablePrefix", "promptIsOwnText", "holdScreen", "surfaceHeldDialog", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
-      "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
+      "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "transcriptEchoes", "injectViaTmux", "injectViaTmuxInner",
       "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption",
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",

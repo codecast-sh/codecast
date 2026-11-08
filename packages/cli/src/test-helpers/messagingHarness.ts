@@ -769,6 +769,8 @@ export interface ClientPane {
   liveState(): TmuxLiveState;
   /** Every user message this pane's client recorded, oldest first. */
   userMessages(): string[];
+  /** Every turn this pane's client recorded, parsed as the daemon parses it. */
+  turns(): ReturnType<typeof parseTranscriptFor>;
   /** The client's session id, once it has minted one. */
   sessionId(): string | null;
   /** Kill the pane and bring the same session back through the registry's
@@ -832,11 +834,8 @@ export function spawnClientPane(client: MatrixClientId, opts: { endpointUrl: str
     },
     liveState: () => classifyLivePaneFor(client as AgentClientId, pane.capture()),
     sessionId: () => recipe.sessionId(ctx),
-    userMessages: () =>
-      recipe.transcripts(ctx)
-        .flatMap((content) => parseTranscriptFor(client as AgentClientId, content))
-        .filter((m) => m.role === "user")
-        .map((m) => m.content),
+    userMessages: () => pane.turns().filter((m) => m.role === "user").map((m) => m.content),
+    turns: () => recipe.transcripts(ctx).flatMap((content) => parseTranscriptFor(client as AgentClientId, content)),
     resume: () => {
       const command = recipe.resume(ctx, recipe.sessionId(ctx));
       if (!command) throw new Error(`${client}: no session id to resume yet`);
