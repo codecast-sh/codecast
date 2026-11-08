@@ -142,7 +142,9 @@ describe("settle request golden", () => {
     const actual: GoldenCase[] = [];
     for (const fx of settleFixtures) {
       const t = convexTest(schema, { "./_generated/server.ts": () => import("./_generated/server"),
-  "./syncOutbox.ts": () => import("./syncOutbox"), "./idleSummary.ts": () => import("./idleSummary") });
+  "./syncOutbox.ts": () => import("./syncOutbox"), "./idleSummary.ts": () => import("./idleSummary"),
+  // Every model call asks the vendor guard (lib/vendorGuard) through this query.
+  "./vendorCoverage.ts": () => import("./vendorCoverage") });
       const conversation_id = await t.run(async (ctx) => {
         const user_id = await ctx.db.insert("users", { name: "Fixture" } as any);
         const id = await ctx.db.insert("conversations", {

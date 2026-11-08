@@ -7,6 +7,7 @@ import {
   selectInsightContext,
 } from "./sessionInsights";
 import { makeFakeDb } from "./testDb";
+import { refusalFor } from "./vendorCoverage";
 import { captureFetch, goldenBody, recordGolden, type GoldenCase } from "./__golden__/golden.testkit";
 
 // The insight request as prod posts it, for synthetic sessions run end to end:
@@ -108,6 +109,8 @@ async function runInsight(fixture: InsightFixture, capture: ReturnType<typeof ca
         return (getConversationContextForInsight as any)._handler({ db }, args);
       }
       if (name === "sessionInsights:getExistingInsight") return null;
+      // Every model call asks the vendor guard (lib/vendorGuard); none of these fixtures is a regulated team's.
+      if (name === "vendorCoverage:refusalFor") return (refusalFor as any)._handler({ db }, args);
       throw new Error(`unexpected query ${name}`);
     },
     runMutation: async () => "insight1",
