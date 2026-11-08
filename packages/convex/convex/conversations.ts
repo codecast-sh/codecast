@@ -5005,6 +5005,12 @@ async function foldChangesPayload(ctx: QueryCtx, conversationId: Id<"conversatio
 export async function readableConversation(ctx: QueryCtx, apiToken: string, ref: string) {
   const authUserId = await getAuthenticatedUserIdReadOnly(ctx, apiToken);
   if (!authUserId) return { error: "Unauthorized" as const };
+  return readableConversationAs(ctx, authUserId, ref);
+}
+
+/** readableConversation for a caller already identified (a scheduled action
+ *  acting for the person who asked): the same access rule, no token. */
+export async function readableConversationAs(ctx: QueryCtx, authUserId: Id<"users">, ref: string) {
   const user = await ctx.db.get(authUserId);
   if (!user) return { error: "User not found" as const };
   const conv = await resolveConversationRef(ctx, ref, authUserId);
