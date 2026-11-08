@@ -15,6 +15,8 @@ export interface ReaskPlan {
   asker?: string;
   /** The station the graph's start leads to, where a run sent back to read its problem again begins. */
   entry?: string;
+  /** The station `at` named, by id, when it named one by its label. */
+  at?: string;
 }
 
 /**
@@ -34,13 +36,17 @@ export async function currentRunGraph(deps: PublishDeps, runId: string): Promise
 export async function prepareReask(deps: PublishDeps, runId: string, ref: string, at?: string): Promise<ReaskPlan> {
   const { got, graph } = await currentRunGraph(deps, runId);
   const gate: string | undefined = got?.run?.gate_node_id || (got?.run?.status === "failed" ? got.run.current_node_id : undefined) || undefined;
-  if (at && graph && !graph.nodes.has(at)) throw new Error(`The run's graph has no station ${at}`);
+  if (at && graph) {
+    const { stationOf } = await import("./resumeFailed.js");
+    at = stationOf(graph, at);
+  }
   if (!at && gate && graph && !graph.nodes.has(gate)) throw new Error(`${ref} waits at ${gate}, which its graph no longer has: pick it up with --at <station>`);
   // Stopped last, so a refusal above leaves the run waiting as it was.
   await stopRunner(runId, ref);
   const start = graph ? [...graph.nodes.values()].find((n) => n.type === "start") : undefined;
   return {
     run: got?.run ?? null,
+    ...(at ? { at } : {}),
     gate,
     asker: (gate && graph?.nodes.get(gate)?.asker) || undefined,
     entry: start ? graph!.edges.find((e) => e.from === start.id)?.to : undefined,

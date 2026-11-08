@@ -90,7 +90,9 @@ export interface SignalRow {
 export function signalAddBody(options: SignalAddOptions): Record<string, string | number | boolean> {
   if (options.issue?.trim() && options.fingerprint?.trim()) throw new Error("Give --issue or --fingerprint, not both: an issue's key is what groups its findings");
   const missing = (["source", "kind", "title"] as const).filter((k) => !options[k]?.trim());
-  if (missing.length) throw new Error(`cast signal add needs ${missing.map((k) => `--${k}`).join(", ")}`);
+  if (missing.length) {
+    throw new Error(`cast signal add needs ${missing.map((k) => `--${k}`).join(", ")}${missing.includes("kind") ? ` (kinds: ${SIGNAL_KINDS.join(", ")})` : ""}. Example: cast signal add --source person --kind bug --title "Login button overlaps the footer on Safari"`);
+  }
   const kind = options.kind!.trim().toLowerCase();
   if (!(SIGNAL_KINDS as readonly string[]).includes(kind)) {
     throw new Error(`Unknown kind "${options.kind}". Kinds: ${SIGNAL_KINDS.join(", ")}`);
@@ -130,8 +132,18 @@ const ATTACH_WORDS: Record<SignalRow["attach"], string> = {
 export function formatSignalList(rows: SignalRow[], now: number = Date.now()): string {
   if (rows.length === 0) return "No findings. File one: cast signal add --source person --kind bug --title \"...\"";
   return rows
-    .map((s) => `${s.short_id}  ${s.source}/${s.kind}  ${s.title}  → ${s.task_short_id ?? "no problem"} (${ATTACH_WORDS[s.attach]}${s.reopened ? ", reopened it" : ""}; ${formatAge(now - s.created_at)})`)
+    .map((s) => `${s.short_id}  ${s.source}/${s.kind}  ${s.title}  → ${s.task_short_id ?? "no problem"} (${ATTACH_WORDS[s.attach]}${s.reopened ? ", reopened it" : ""}; ${formatAge(now - s.created_at)})  key ${s.fingerprint}`)
     .join("\n");
+}
+
+/** The line under a list the limit cut, or null when it is whole. A backend
+ * from before `total`/`more` says neither, so a list exactly the size asked
+ * for is taken as cut. */
+export function signalListCutNote(shown: number, asked: number | undefined, result: { total?: number; more?: boolean }): string | null {
+  if (typeof result.total === "number") return result.total > shown ? `${shown} of ${result.total} shown: -n ${result.total} for all` : null;
+  if (result.more) return `the newest ${shown} shown; -n 500 for more`;
+  if (result.more === undefined && shown > 0 && shown === (asked ?? 50)) return `${shown} shown, the limit; there may be more (-n 500 for up to 500)`;
+  return null;
 }
 
 function fail(message: string): never {
@@ -190,7 +202,7 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
     .option("--source <name>", "Only findings from this finder")
     .option("-n, --limit <n>", "How many", (v: string) => parseInt(v, 10))
     .option("--team <name|id|personal>", "Workspace to read (default: the active one)")
-    .option("--json", "Machine-readable output")
+    .option("--json", "Machine-readable output: {signals: [{short_id, ...}], total?, more?}")
     .action(async (options: { task?: string; fingerprint?: string; project?: string; source?: string; limit?: number; team?: string; json?: boolean }) => {
       const result = await apiPost(deps, "/cli/signal/ls", {
         task: options.task,
@@ -200,29 +212,50 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
         ...(options.task ? {} : await scopeFor(deps, options.team, false, options.project)),
       }, { read: true });
       const rows: SignalRow[] = result.signals ?? [];
-      console.log(options.json ? JSON.stringify(rows, null, 2) : formatSignalList(rows));
+      // The server's envelope as it came, so whether the list was cut (total, more) is in the JSON too.
+      if (options.json) return void console.log(JSON.stringify({ signals: rows, ...(result.total !== undefined ? { total: result.total } : {}), ...(result.more !== undefined ? { more: result.more } : {}) }, null, 2));
+      console.log(formatSignalList(rows));
+      const cut = signalListCutNote(rows.length, options.limit, result);
+      if (cut) console.log(fmt.muted(cut));
     });
 
   signal
     .command("move")
-    .description("Move the findings under one key off a problem: to another problem, or to a new problem of their own")
-    .requiredOption("--fingerprint <key>", "The key whose findings move")
-    .requiredOption("--from <ct>", "The problem they are on now")
+    .description("Move findings off a problem, to another problem or to a new problem of their own. A finding moves with every finding under its key on that problem")
+    .argument("[signals...]", "The findings to move, sg-N (each one's key and problem are looked up); or name a key with --fingerprint and --from")
+    .option("--fingerprint <key>", "The key whose findings move (instead of sg-N)")
+    .option("--from <ct>", "The problem they are on now (with --fingerprint)")
     .option("--to <ct>", "The open problem they move to (default, or when it is closed: a new problem)")
     .option("--title <text>", "A new problem's title (default: the newest finding's)")
     .option("--project <ref>", "A new problem's project: id, short id or title")
     .option("--team <name|id|personal>", "Workspace (default: the active one)")
     .option("--json", "Machine-readable output")
-    .action(async (options: { fingerprint: string; from: string; to?: string; title?: string; project?: string; team?: string; json?: boolean }) => {
-      const result = await apiPost(deps, "/cli/signal/move", {
-        fingerprint: options.fingerprint,
-        from: options.from,
-        to: options.to,
-        title: options.title,
-        ...(await scopeFor(deps, options.team, true, options.project)),
-      });
-      if (options.json) console.log(JSON.stringify(result, null, 2));
-      else console.log(`${fmt.success(String(result.moved))} finding${result.moved === 1 ? "" : "s"} moved ${result.from} → ${result.to}${result.created ? " (new problem)" : ""}${result.refused ? `: ${result.refused.task} is ${result.refused.status} and takes no reports` : ""}`);
+    .addHelpText("after", `
+Examples:
+  cast signal move sg-12 sg-15 --to ct-9      # those findings, with their keys, onto ct-9
+  cast signal move sg-12 --title "Held cards dial outside hours"   # a new problem of their own
+  cast signal move --fingerprint union:cluster:c1 --from ct-7 --to ct-9`)
+    .action(async (refs: string[], options: { fingerprint?: string; from?: string; to?: string; title?: string; project?: string; team?: string; json?: boolean }) => {
+      if (refs.length && options.fingerprint) fail("Name the findings (sg-N) or a key (--fingerprint), not both");
+      if (!refs.length && !options.fingerprint) fail("Name the findings to move: cast signal move sg-12 [sg-15 ...] --to ct-9 (or --fingerprint <key> --from <ct>)");
+      if (options.fingerprint && !options.from) fail("--fingerprint needs --from <ct>, the problem the key is on");
+      const groups = refs.length ? await moveGroups(deps, refs) : [{ fingerprint: options.fingerprint!, from: options.from! }];
+      const scope = await scopeFor(deps, options.team, true, options.project);
+      // Without --to the first move opens the new problem, and the rest join it.
+      let to = options.to;
+      const results: Array<Record<string, any>> = [];
+      for (const g of groups) {
+        const result = await apiPost(deps, "/cli/signal/move", { fingerprint: g.fingerprint, from: g.from, to, title: to ? undefined : options.title, ...scope });
+        results.push(result);
+        if (!to && result.created) to = result.to;
+      }
+      if (options.json) {
+        console.log(JSON.stringify(results.length === 1 ? results[0] : results, null, 2));
+        return;
+      }
+      for (const result of results) {
+        console.log(`${fmt.success(String(result.moved))} finding${result.moved === 1 ? "" : "s"} moved ${result.from} → ${result.to}${result.created ? " (new problem)" : ""}${result.refused ? `: ${result.refused.task} is ${result.refused.status} and takes no reports` : ""}`);
+      }
     });
 
   signal
@@ -306,6 +339,16 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
     .argument("<file>", "The run's judge-defects.json: a list of {judge, finding, sentence, name}")
     .option("--run <id>", "The line run whose proof found them")
     .option("--json", "Machine-readable output")
+    .addHelpText("after", `
+Example judge-defects.json (finding: sg-N or the product's own finding id; sentence: what a correct
+judgment of the moment does; name: a short name for the moment):
+
+  [{"judge": "agent-review", "finding": "sg-4312",
+    "sentence": "The agent waited for the contact's reply as asked, so no follow-up was owed.",
+    "name": "waited as the contact asked"}]
+
+  cast signal judge-defects judge-defects.json --run <run id>
+Then record each one's diagnosis: cast signal diagnosis sg-4312 --answer misread --fact "..." --why "..."`)
     .action(async (file: string, options: { run?: string; json?: boolean }) => {
       let defects: unknown;
       try {
@@ -336,6 +379,11 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
     .option("--why <text>", "One or two sentences of evidence")
     .option("--result <json>", "The diagnosis as {answer, fact, why}, instead of the three flags")
     .option("--json", "Machine-readable output")
+    .addHelpText("after", `
+Example:
+  cast signal diagnosis sg-4312 --answer misread \\
+    --fact "The contact asked to be contacted after the 15th" \\
+    --why "The moment shows the ask on the 9th; the judge counted the quiet week as a missed follow-up."`)
     .action(async (ref: string, options: { answer?: string; fact?: string; why?: string; result?: string; json?: boolean }) => {
       const body = diagnosisBody(options);
       if (typeof body === "string") fail(body);
@@ -343,6 +391,17 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
       if (options.json) console.log(JSON.stringify(result, null, 2));
       else console.log(`${fmt.success(ref)} ${judgeReviewLine(result.review)}${result.case_short_id ? ` → ${result.case_short_id}${result.task_short_id ? ` on ${result.task_short_id}` : ""}` : ""}`);
     });
+}
+
+/** Each named finding's key and problem, one move per distinct pair. */
+async function moveGroups(deps: PublishDeps, refs: string[]): Promise<Array<{ fingerprint: string; from: string }>> {
+  const groups = new Map<string, { fingerprint: string; from: string }>();
+  for (const ref of refs) {
+    const { signal: s } = (await apiPost(deps, "/cli/signal/show", { signal: ref }, { read: true })) as { signal: SignalRow };
+    if (!s.task_short_id) fail(`${s.short_id ?? ref} is on no problem, so it has nothing to move off`);
+    groups.set(`${s.task_short_id}\u0000${s.fingerprint}`, { fingerprint: s.fingerprint, from: s.task_short_id });
+  }
+  return [...groups.values()];
 }
 
 /** A diagnosis from flags or a JSON result, or the one line that says what is wrong with it. */

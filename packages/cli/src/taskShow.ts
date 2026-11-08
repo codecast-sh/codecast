@@ -25,6 +25,7 @@ export interface RunRow {
   gate_decision_short_id?: string;
   gate_decision_status?: string;
   fail_reason?: string;
+  runner_device?: string;
   created_at?: number;
   updated_at: number;
 }
@@ -184,7 +185,8 @@ export function formatTaskHistory(history: any[]): string[] {
 }
 
 // `cast workflow runs`: one table across workflows.
-export function formatRunsTable(runs: RunRow[], now: number = Date.now()): string {
+/** `cast workflow runs`: one row a run, a failed run's reason under it; `long` adds the run id and its machine. */
+export function formatRunsTable(runs: RunRow[], now: number = Date.now(), opts: { long?: boolean } = {}): string {
   if (runs.length === 0) return "No runs.";
   const rows = runs.map((r) => [
     formatAge(now - r.updated_at),
@@ -193,11 +195,17 @@ export function formatRunsTable(runs: RunRow[], now: number = Date.now()): strin
     r.task_short_id ?? r.plan_short_id ?? "-",
     r.current_node_label ?? r.current_node_id ?? "-",
     r.gate_decision_short_id ?? "-",
+    ...(opts.long ? [r.runner_device?.slice(0, 12) ?? "-", r._id] : []),
   ]);
-  const header = ["age", "status", "workflow", "task", "node", "gate"];
+  const header = ["age", "status", "workflow", "task", "node", "gate", ...(opts.long ? ["machine", "run"] : [])];
   const widths = header.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i].length)));
   const line = (cols: string[]) => cols.map((col, i) => (i === cols.length - 1 ? col : col.padEnd(widths[i]))).join("  ");
-  return [`${c.dim}${line(header)}${c.reset}`, ...rows.map(line)].join("\n");
+  const out = [`${c.dim}${line(header)}${c.reset}`];
+  runs.forEach((r, i) => {
+    out.push(line(rows[i]));
+    if (r.status === "failed" && r.fail_reason) out.push(`  ${c.dim}${r.fail_reason.split("\n")[0].slice(0, 160)}${c.reset}`);
+  });
+  return out.join("\n");
 }
 
 // `cast org feed`: every kind prints the same shape. A run row's title is its
@@ -216,4 +224,33 @@ export function formatFeedRow(row: FeedRowLike, age: string, color: string): str
   const lines = [`${color}${row.kind.padEnd(8)}${c.reset} ${c.dim}${(row.short_id ?? "").padEnd(8)}${c.reset} ${row.title}${row.state ? ` ${c.dim}· ${row.state}${c.reset}` : ""}${who} ${c.dim}${age}${c.reset}`];
   if (row.preview) lines.push(`         ${c.dim}${row.preview}${c.reset}`);
   return lines;
+}
+
+/**
+ * The sections `cast task show --only` can pick, in the order they print. The
+ * title and status line always print, so a picked section is never orphaned.
+ */
+export const TASK_SHOW_SECTIONS = ["description", "criteria", "steps", "subtasks", "details", "graph", "sessions", "history", "comments", "decisions", "runs", "evidence"] as const;
+export type TaskShowSection = (typeof TASK_SHOW_SECTIONS)[number];
+
+/** `--only comments,runs` as a set; undefined shows every section. Throws on a name it does not know. */
+export function parseShowSections(raw: string | undefined): Set<TaskShowSection> | undefined {
+  if (raw === undefined) return undefined;
+  const names = raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const unknown = names.filter((n) => !(TASK_SHOW_SECTIONS as readonly string[]).includes(n));
+  if (unknown.length || !names.length) {
+    throw new Error(`--only takes section names, comma separated: ${TASK_SHOW_SECTIONS.join(", ")}${unknown.length ? ` (not ${unknown.join(", ")})` : ""}`);
+  }
+  return new Set(names as TaskShowSection[]);
+}
+
+/**
+ * The comments to print: the last `last` (default 5), all with `all`. The
+ * header says how many exist and how to see the rest.
+ */
+export function pickComments<T>(comments: T[], opts: { all?: boolean; last?: number }): { shown: T[]; note: string } {
+  const n = opts.all ? comments.length : Math.max(1, opts.last ?? 5);
+  const shown = comments.slice(-n);
+  const note = shown.length < comments.length ? `showing last ${shown.length}, -c for all or --last <n>` : "";
+  return { shown, note };
 }

@@ -267,7 +267,11 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
         if (!row) fail(`${task} has no trial run`);
         const { prepareReask, stopRunner } = await import("./workflow/reask.js");
         // A gate its station asks (`asker=`) is asked again by that station, on the graph as it is now.
-        if (opts.reask) ({ asker, entry } = await prepareReask(deps, row.run_id, task, opts.at).catch((e) => fail(e.message)));
+        if (opts.reask) {
+          const plan = await prepareReask(deps, row.run_id, task, opts.at).catch((e) => fail(e.message));
+          ({ asker, entry } = plan);
+          at = plan.at ?? at;
+        }
         else if (opts.fresh) await stopRunner(row.run_id, task).catch((e) => fail(e.message));
         else {
           // A failed run tried again at a station: checked against the graph it will read, its branch first put on main when asked.

@@ -100,6 +100,15 @@ describe("cast task show: runs", () => {
     expect(formatRunsTable([labelled], now)).toContain("Union fix flow for system findings");
     expect(formatRunsTable([labelled], now)).not.toContain("agentwatch_system");
   });
+
+  test("the runs table puts a failed run's reason under it, and --long adds its machine and run id", () => {
+    const failed = run({ _id: "run123", status: "failed", fail_reason: "verify exited 1\nstack", runner_device: "dev-abc", gate_decision_short_id: undefined });
+    const table = formatRunsTable([failed], now);
+    expect(table).toContain("  verify exited 1");
+    expect(table).not.toContain("stack");
+    expect(table).not.toContain("run123");
+    expect(formatRunsTable([failed], now, { long: true })).toMatch(/dev-abc\s+run123/);
+  });
 });
 
 describe("cast task show: evidence", () => {
@@ -154,5 +163,21 @@ describe("cast org feed", () => {
   test("a task row keeps its short id column", () => {
     const out = formatFeedRow({ kind: "task", short_id: "ct-51468", title: "CLI surfaces", state: "in_review" }, "1h ago", "");
     expect(out).toEqual(["task     ct-51468 CLI surfaces · in_review 1h ago"]);
+  });
+});
+
+describe("task show --only and --last", () => {
+  const { parseShowSections, pickComments } = require("./taskShow") as typeof import("./taskShow");
+  test("--only takes known section names and names the rest", () => {
+    expect([...parseShowSections("Comments, runs")!]).toEqual(["comments", "runs"]);
+    expect(parseShowSections(undefined)).toBeUndefined();
+    expect(() => parseShowSections("comments,activity")).toThrow(/not activity/);
+  });
+  test("comments default to the last five, --last picks the count, -c shows all", () => {
+    const all = Array.from({ length: 8 }, (_, i) => i);
+    expect(pickComments(all, {})).toEqual({ shown: [3, 4, 5, 6, 7], note: "showing last 5, -c for all or --last <n>" });
+    expect(pickComments(all, { last: 2 }).shown).toEqual([6, 7]);
+    expect(pickComments(all, { all: true })).toEqual({ shown: all, note: "" });
+    expect(pickComments([1, 2], {}).note).toBe("");
   });
 });

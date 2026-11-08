@@ -9,7 +9,7 @@ import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { checkProject, classifyWatchLine, filesNotAsChecked, tscFileVersion, unlistedChanges, eventsPath, projectsTouching, buildInfoPath, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { checkProject, heapCapMb, heapDeath, isNativeFrame, lastLogLine, logPath, tscNodeOptions, TSC_HEAP_MB, classifyWatchLine, filesNotAsChecked, tscFileVersion, unlistedChanges, eventsPath, projectsTouching, buildInfoPath, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
 beforeEach(() => {
@@ -254,6 +254,23 @@ describe("which programs a tree carries", () => {
     expect(resolveProjects(tree, ["packages/a"], tree)).toEqual([{ name: "a", tsconfig: "packages/a/tsconfig.json" }]);
     expect(resolveProjects(tree, ["tsconfig.json"], path.join(tree, "packages/a"))).toEqual([{ name: "a", tsconfig: "packages/a/tsconfig.json" }]);
     expect(resolveProjects(tree, ["packages/b"], tree)).toEqual([{ name: "packages-b", tsconfig: "packages/b/tsconfig.json" }]);
+  });
+
+  test("a tree-root-relative path works from a subdirectory", () => {
+    fs.mkdirSync(path.join(tree, ".codecast"));
+    fs.writeFileSync(path.join(tree, ".codecast/check.toml"), '[projects]\na = "packages/a/tsconfig.json"\n');
+    expect(resolveProjects(tree, ["packages/a"], path.join(tree, "packages/a"))).toEqual([{ name: "a", tsconfig: "packages/a/tsconfig.json" }]);
+    expect(resolveProjects(tree, ["packages/b"], path.join(tree, "packages/a"))).toEqual([{ name: "packages-b", tsconfig: "packages/b/tsconfig.json" }]);
+  });
+
+  test("a directory is the configured project that lives in it, whatever its tsconfig is called", () => {
+    fs.mkdirSync(path.join(tree, ".codecast"));
+    fs.writeFileSync(path.join(tree, "packages/b/tsconfig.typecheck.json"), "{}");
+    fs.writeFileSync(path.join(tree, ".codecast/check.toml"), '[projects]\ncli = "packages/b/tsconfig.typecheck.json"\n');
+    expect(resolveProjects(tree, ["packages/b"], path.join(tree, "packages/b"))).toEqual([{ name: "cli", tsconfig: "packages/b/tsconfig.typecheck.json" }]);
+    expect(resolveProjects(tree, ["."], path.join(tree, "packages/b"))).toEqual([{ name: "cli", tsconfig: "packages/b/tsconfig.typecheck.json" }]);
+    // The folder's own tsconfig.json, named as a file, is still that program.
+    expect(resolveProjects(tree, ["packages/b/tsconfig.json"], tree)).toEqual([{ name: "packages-b", tsconfig: "packages/b/tsconfig.json" }]);
   });
 
   test("a sibling directory whose name starts with the tree's is outside it", () => {
@@ -546,6 +563,37 @@ describe("projectsTouching", () => {
       expect(projectsTouching(wt, projects, ["outreach/backend/src/other.ts"]).map((p) => p.name)).toEqual(["backend"]);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+// union-mobile (Nov 8): `cast check landing` said only "watcher went away: 74: 0x181ad5d54 start [/usr/lib/dyld]".
+describe("a tsc that runs out of heap", () => {
+  test("an inherited NODE_OPTIONS can raise the heap cap but never lower it", () => {
+    expect(tscNodeOptions(undefined)).toBe(`--max-old-space-size=${TSC_HEAP_MB}`);
+    expect(tscNodeOptions("--max-old-space-size=7168")).toBe(`--max-old-space-size=${TSC_HEAP_MB}`);
+    expect(tscNodeOptions("--enable-source-maps --max-old-space-size=16384")).toBe("--enable-source-maps --max-old-space-size=16384");
+    expect(heapCapMb(tscNodeOptions("--max_old_space_size=4096", "12288"))).toBe(12288);
+  });
+
+  test("the watcher names the full heap, not a stack frame", () => {
+    const fatal = "FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory";
+    const line = heapDeath({ project: "landing", signal: "SIGABRT", fatal, nodeOptions: tscNodeOptions(undefined), totalBytes: 64 * 2 ** 30 });
+    expect(line).toStartWith("tsc ran out of memory on landing at its 8 GB heap cap");
+    expect(line).toContain("NODE_OPTIONS=--max-old-space-size=12288 cast check --fresh landing");
+    expect(heapDeath({ project: "landing", signal: "SIGABRT", fatal: null, nodeOptions: "" })).toBeUndefined();
+    expect(heapDeath({ project: "landing", signal: "SIGTERM", fatal, nodeOptions: "" })).toBeUndefined();
+    expect(isNativeFrame("74: 0x181ad5d54 start [/usr/lib/dyld]")).toBe(true);
+    expect(isNativeFrame("src/a.ts(1,2): error TS2322: no")).toBe(false);
+  });
+
+  test("an older watcher's log ending in stack frames still yields its exit line", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "check-log-"));
+    try {
+      fs.writeFileSync(logPath(dir), "seeded the first pass from /x\ntsc exited (SIGABRT); its last lines:\n55: 0x1039d4ef0 Builtins_InterpreterEntryTrampoline [/x/libnode.dylib]\n74: 0x181ad5d54 start [/usr/lib/dyld]\n");
+      expect(lastLogLine(dir)).toBe("tsc exited (SIGABRT)");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });
