@@ -21,7 +21,7 @@ import { browserHome } from "../profile.js";
 import { isPidAlive } from "../../workspace/chrome.js";
 import { withFileLockSync } from "../../lockFile.js";
 import { armRecorder } from "../observe.js";
-import { isRealSession, type EngineOptions } from "../engine.js";
+import { isRealSession, requestTabName, type EngineOptions } from "../engine.js";
 import { agentSetupLines } from "@codecast/shared/contracts";
 import { fmt } from "../../colors.js";
 import {
@@ -270,10 +270,20 @@ export function splitTargetFlags(args: string[]): TargetFlags & { args: string[]
   const clone = args.includes("--clone") || undefined;
   const pane = args.includes("--pane") || undefined;
   // `--browser <id>` picks the connected Chrome profile; it is cast's, never the engine's.
+  // `--tab <name>` (alias `--session`) picks a named tab of this agent's (engine.ts
+  // requestTabName); passed on, `--session` would point the engine at another agent's tab.
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--real" || a === "--clone" || a === "--pane") continue;
+    if ((a === "--tab" || a === "--session") && i + 1 < args.length) {
+      requestTabName(args[++i]);
+      continue;
+    }
+    if (a.startsWith("--tab=") || a.startsWith("--session=")) {
+      requestTabName(a.slice(a.indexOf("=") + 1));
+      continue;
+    }
     if (a === "--browser" && i + 1 < args.length) {
       requestBrowserProfile(args[++i]);
       continue;
