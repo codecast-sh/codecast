@@ -62,6 +62,12 @@ describe("shouldUseTabRouting", () => {
     expect(shouldUseTabRouting("/signup", "/")).toBe(false);
   });
 
+  // Regression: finishing the /start setup flow pushed /inbox through the tab
+  // shell, which rewrote the URL while the setup page stayed on screen.
+  it("does NOT intercept when leaving the setup flow for the inbox", () => {
+    expect(shouldUseTabRouting("/inbox", "/start")).toBe(false);
+  });
+
   it("does NOT intercept when leaving the shell for an auth route", () => {
     expect(shouldUseTabRouting("/login", "/inbox")).toBe(false);
   });

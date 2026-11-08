@@ -6,9 +6,15 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { injectViaTmux } from "./daemon.js";
 import { prepareTmuxDelivery, TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
+import { DeliveryEchoLedger } from "./deliveryEchoLedger.js";
 import { tmuxRun } from "./tmux.js";
 import { shellQuote, spawnHarness, waitFor } from "./test-helpers/messagingHarness.js";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
 
+// The delivery echo ledger these deliveries record into lives in CODECAST_DIR.
+const codecastDir = isolateCodecastDir();
+
+afterAll(() => codecastDir.restore());
 afterAll(killIsolatedTmuxServer);
 
 test.skipIf(!Bun.which("tmux"))("a process exit and repeated delivery timeouts resume one buffered paste", async () => {
@@ -21,7 +27,7 @@ test.skipIf(!Bun.which("tmux"))("a process exit and repeated delivery timeouts r
   const target = `${pane.tmuxSession}:0.0`;
   const path = join(cwd, "delivery.sqlite");
   let journal = new TmuxDeliveryJournal(path);
-  const delivery = { messageId: "same-pending-message", conversationId: "fixture" };
+  const delivery = { messageId: "same-pending-message", conversationId: "fixture-same-pending-message" };
   const state = () => JSON.parse(readFileSync(statePath, "utf8"));
   try {
     await waitFor(() => pane.capturePane().includes("shift+tab"));
@@ -68,7 +74,7 @@ test.skipIf(!Bun.which("tmux")).each(["exited", "buffered"] as const)("a %s deli
     ? `tmux set-option -p remain-on-exit on && exec bun ${shellQuote(failedFixture)}`
     : `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude", join(cwd, "release")].map(shellQuote).join(" ")}` });
   const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
-  const delivery = { messageId: "pending-after-exit", conversationId: "fixture" };
+  const delivery = { messageId: "pending-after-exit", conversationId: "fixture-pending-after-exit" };
   try {
     await waitFor(() => pane.capturePane().includes("shift+tab"));
     await expect(injectViaTmux(`${pane.tmuxSession}:0.0`, "continue", "claude", { delivery, journal, gateBudgetMs: 500 })).rejects.toThrow(mode === "exited" ? "SESSION_EXITED" : "AGENT_STDIN_NOT_READY");
@@ -101,7 +107,7 @@ test.skipIf(!Bun.which("tmux"))("a paste that never reached the prompt is pasted
     command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude"].map(shellQuote).join(" ")}` });
   const target = `${pane.tmuxSession}:0.0`;
   const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
-  const delivery = { messageId: "lost-paste", conversationId: "fixture" };
+  const delivery = { messageId: "lost-paste", conversationId: "fixture-lost-paste" };
   const next = { ...delivery, messageId: "next" };
   const state = () => JSON.parse(readFileSync(statePath, "utf8"));
   try {
@@ -140,7 +146,7 @@ test.skipIf(!Bun.which("tmux"))("a starved agent keeps the one write it was give
     command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude", release].map(shellQuote).join(" ")}` });
   const target = `${pane.tmuxSession}:0.0`;
   const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
-  const delivery = { messageId: "starved-pane", conversationId: "fixture" };
+  const delivery = { messageId: "starved-pane", conversationId: "fixture-starved-pane" };
   const state = () => JSON.parse(readFileSync(statePath, "utf8"));
   try {
     await waitFor(() => pane.capturePane().includes("shift+tab"));
@@ -178,7 +184,7 @@ test.skipIf(!Bun.which("tmux"))("a verification the server never acknowledged is
     command: `exec bun ${[fixture, statePath, finish, "claude"].map(shellQuote).join(" ")}` });
   const target = `${pane.tmuxSession}:0.0`;
   const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
-  const delivery = { messageId: "false-verify", conversationId: "fixture" };
+  const delivery = { messageId: "false-verify", conversationId: "fixture-false-verify" };
   const state = () => JSON.parse(readFileSync(statePath, "utf8"));
   try {
     await waitFor(() => pane.capturePane().includes("shift+tab"));
@@ -213,7 +219,7 @@ test.skipIf(!Bun.which("tmux")).each(["submit", "verified"] as const)("an idle p
   const target = `${pane.tmuxSession}:0.0`;
   const journalPath = join(cwd, "delivery.sqlite");
   let journal = new TmuxDeliveryJournal(journalPath);
-  const delivery = { messageId: "unsynced-message", conversationId: "fixture" };
+  const delivery = { messageId: `unsynced-message-${phase}`, conversationId: `fixture-unsynced-${phase}` };
   const state = () => JSON.parse(readFileSync(statePath, "utf8"));
   const readTranscript = async () => readFileSync(transcriptPath, "utf8");
   try {
@@ -232,15 +238,49 @@ test.skipIf(!Bun.which("tmux")).each(["submit", "verified"] as const)("an idle p
     await waitFor(() => !state().active);
     journal.close();
     journal = new TmuxDeliveryJournal(journalPath);
-    await expect(injectViaTmux(target, "continue", "claude", { delivery, journal, receiptSettleMs: 0,
+    // The daemon that reconciles has no ledger record of the send (it was
+    // upgraded, or another one typed it): the receipt alone must stop a repeat.
+    const echoes = new DeliveryEchoLedger(join(cwd, "fresh-echoes.sqlite"));
+    await expect(injectViaTmux(target, "continue", "claude", { delivery, journal, echoes, receiptSettleMs: 0,
       readTranscript: async () => { throw new Error("transcript unavailable"); } })).rejects.toThrow("cannot reconcile");
     for (let attempt = 0; attempt < 3; attempt++) {
-      await injectViaTmux(target, "continue", "claude", { delivery, journal, receiptSettleMs: 0, readTranscript });
+      await injectViaTmux(target, "continue", "claude", { delivery, journal, echoes, receiptSettleMs: 0, readTranscript });
     }
     expect(state().delivered).toEqual(["Existing worker report.", "continue"]);
     expect(journal.get(delivery.messageId)?.phase).toBe("verified");
-    await injectViaTmux(target, "continue", "claude", { delivery: { ...delivery, messageId: "intentional-repeat" }, journal });
+    await injectViaTmux(target, "continue", "claude", { delivery: { ...delivery, messageId: `intentional-repeat-${phase}` }, journal });
     expect(state().delivered).toEqual(["Existing worker report.", "continue", "continue"]);
+  } finally {
+    journal.close();
+    pane.tearDown();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 120_000);
+
+// 2026-11-06, jx751p3: on a starved client the message rendered in the
+// composer and every Enter was lost. The submit window closed, the delivery
+// reported success with the text still at the prompt, nothing retried it, and
+// its receipt refused the pane to every later message for 12 hours.
+test.skipIf(!Bun.which("tmux"))("a payload left in the composer after the submit window stays pending, and its retry submits it", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "codecast-deaf-enter-"));
+  const statePath = join(cwd, "state.json");
+  const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
+  const pane = spawnHarness({ cwd, jsonlPath: statePath,
+    command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude-deaf"].map(shellQuote).join(" ")}` });
+  const target = `${pane.tmuxSession}:0.0`;
+  const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
+  const payload = "deaf-enter check: carry on with the plan";
+  const delivery = { messageId: "unsubmitted", conversationId: "fixture-unsubmitted" };
+  const state = () => JSON.parse(readFileSync(statePath, "utf8"));
+  try {
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    await expect(injectViaTmux(target, payload, "claude", { delivery, journal })).rejects.toThrow("still in the composer");
+    expect(state().queued).toEqual(["Existing worker report."]);
+    await expect(injectViaTmux(target, "next message", "claude", { delivery: { ...delivery, messageId: "next" }, journal, gateBudgetMs: 500 })).rejects.toThrow("earlier message");
+    writeFileSync(`${statePath}.hear`, "");
+    await injectViaTmux(target, payload, "claude", { delivery, journal });
+    expect(state().queued).toEqual(["Existing worker report.", payload]);
+    expect(journal.get(delivery.messageId)?.phase).toBe("verified");
   } finally {
     journal.close();
     pane.tearDown();

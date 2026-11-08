@@ -8,6 +8,8 @@ const state = { active: true, interrupts: 0, queued: ["Existing worker report."]
 let composer = "";
 let input = "";
 let swallowEnter = layout === "claude-collapsed";
+// A starved client: the text renders, every Enter is lost until the file appears.
+const enterHeard = () => layout !== "claude-deaf" || existsSync(`${statePath}.hear`);
 
 function render() {
   writeFileSync(`${statePath}.tmp`, JSON.stringify(state));
@@ -44,7 +46,7 @@ process.stdin.on("data", (chunk: string) => {
         state.interrupts++;
         state.active = false;
       } else if (key === "\r" || key === "\n") {
-        if (composer && swallowEnter) {
+        if (composer && (swallowEnter || !enterHeard())) {
           swallowEnter = false;
           render();
           continue;

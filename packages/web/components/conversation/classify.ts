@@ -1,3 +1,4 @@
+import { parseGoalMessage } from "@codecast/shared/contracts/sessionGoal";
 import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage, isInterruptNotice } from "../../lib/conversationProcessor";
 import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload, parseWorkflowHarnessFrame } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, parseVaultReady, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
@@ -7,7 +8,7 @@ import { isCompactionSummaryMessage, stripMentionContext, stripPastedContent } f
 import { jointAuthors, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { parseLineChat } from "@codecast/shared/contracts/lineChat";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, parseTaskCommentMessage, parseDecisionDiscussion, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
-import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, isFlowObjectCastCommand, isVaultRequestCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
+import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, isFlowObjectCastCommand, isVaultRequestCastCommand, sayTextOf, type ParsedCastCommand, type DecideArgs } from "../castCommand";
 import { hasRichMarkdown } from "../../lib/richMarkdown";
 import { parseContextRecovery, parseSessionHandoff } from "../../lib/sessionHandoff";
 import type { Message, ParsedApiError, ParsedContextBlock, TeammateMessagePart, ToolCall, UserMessageKind } from "./types";
@@ -295,7 +296,7 @@ const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Y
 // unprompted), and a role's brief or a workflow agent's task, because each is
 // the context every reply after it answers to. Everything else on the user rail was sent by a machine (a poll
 // answer, an interrupt, a notice, a session's report).
-export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'vault_ready', 'session_handoff', 'context_recovery', 'scheduled_task', 'role_brief', 'workflow_frame']);
+export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'vault_ready', 'session_handoff', 'context_recovery', 'scheduled_task', 'goal_round', 'role_brief', 'workflow_frame']);
 
 // Dedup key for matching a still-pending message against its eventual JSONL echo.
 // The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control
@@ -341,6 +342,8 @@ export function classifyUserMessage(
   const recovery = parseContextRecovery(tNoReminders);
   if (recovery) return { kind: 'context_recovery', recovery };
   if (tNoReminders.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
+  const goalFrame = parseGoalMessage(tNoReminders);
+  if (goalFrame) return { kind: 'goal_round', frame: goalFrame };
   // The brief that seats or re-seats a standing agent: the session's context,
   // written by a machine, so it folds to one row that opens it.
   if (isBootstrapPrompt(tNoReminders)) return { kind: 'role_brief' };
@@ -586,12 +589,27 @@ export function isAlwaysVisibleToolCall(tc: ToolCall, result?: { content?: strin
   // authored twin of AskUserQuestion — the card is the ask, not a command.
   // A command whose output carries the setup marker holds a card the person
   // must act on (AgentToolSetupCard), so it stays out of the receipt too.
+// A `cast say` is the agent talking to the reader, so it reads as prose.
   // A `cast flow` command that draws a flow object (a run its card follows
   // live, a flow the session defined) stays visible like a running workflow.
   // A `cast vault request` card holds the field the person fills. A workflow
   // agent's StructuredOutput is what its whole session was run to produce.
   if (hasAgentSetupMarker(result?.content)) return true;
-  return isPlanWriteToolCall(tc) || tc.name === "StructuredOutput" || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc) || isDecideCastCommand(parseCastCommand(tc)) || isFlowObjectCastCommand(parseCastCommand(tc)) || isVaultRequestCastCommand(parseCastCommand(tc));
+  return isPlanWriteToolCall(tc) || tc.name === "StructuredOutput" || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc) || isDecideCastCommand(parseCastCommand(tc)) || isFlowObjectCastCommand(parseCastCommand(tc)) || isVaultRequestCastCommand(parseCastCommand(tc)) || isSayToolCall(tc);
+}
+
+/** A `cast say`: the agent's words to the person, carried by the command line. */
+export function isSayToolCall(tc: ToolCall): boolean {
+  return sayTextOf(parseCastCommand(tc)) !== null;
+}
+
+// What a clean thread keeps of an agent's tool calls beside its `cast say`s:
+// the ones addressed to the person or waiting on them (a question, a
+// decision, a field to fill, a delivered file, a setup card to act on).
+export function isCleanVisibleToolCall(tc: ToolCall, result?: { content?: string }): boolean {
+  if (hasAgentSetupMarker(result?.content)) return true;
+  const cast = parseCastCommand(tc);
+  return isAskTool(tc.name) || tc.name === "SendUserFile" || isDecideCastCommand(cast) || isVaultRequestCastCommand(cast);
 }
 
 // A row that is nothing but tool calls: one-line receipts, not prose. The

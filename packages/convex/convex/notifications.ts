@@ -1,4 +1,4 @@
-import { mutation, query, internalAction, internalMutation } from "./functions";
+import { mutation, query, internalAction, internalMutation, internalQuery } from "./functions";
 import { routeUpHears, routeUpWaitingSession } from "./agentTasks";
 import {
   openTasksVouchForWaiting,
@@ -33,6 +33,7 @@ import { loadArmedTriggerHomes, isArmedTriggerHome, isArmedLoopHome } from "./do
 import { displayNotificationActor, rewriteNotificationMessage } from "./lib/notificationActor";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { clearPushTokenIfCurrent, reportPushFailures } from "./pushReceipts";
+import { projectNameOf, pushesStrippedFor, stripPushContent, type PushContent } from "./lib/pushPrivacy";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -50,9 +51,10 @@ export const sendPushNotification = internalAction({
     interruption_level: v.optional(v.string()),
     // App icon badge — the bell's own unread count, so phone and app agree.
     badge: v.optional(v.number()),
-    // For receipt hygiene: whose token this is, so a DeviceNotRegistered
-    // ticket can clear it instead of eating every future push silently.
-    user_id: v.optional(v.id('users')),
+    // Whose token this is: decides what the push may say (pushPrivacy.ts),
+    // and lets a DeviceNotRegistered ticket clear it instead of eating every
+    // future push silently.
+    user_id: v.id('users'),
     // Bundled iOS sound file ("huddle-ring.caf" rings a closed app) — the
     // file must ship in the app binary's Resources for the name to resolve.
     sound: v.optional(v.string()),
@@ -63,7 +65,16 @@ export const sendPushNotification = internalAction({
     // (a ring for a 45s call must not land minutes later).
     ttl: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
+    // A regulated recipient's push says only what happened and where; the
+    // words stay on our servers (pushPrivacy.ts).
+    const privacy: { strip: boolean; project: string | null } = await ctx.runQuery(internal.notifications.pushPrivacyFor, {
+      user_id: args.user_id,
+      conversation_id: typeof args.data?.conversationId === 'string' ? args.data.conversationId : undefined,
+    });
+    const content: PushContent = privacy.strip
+      ? stripPushContent({ title: args.title, subtitle: args.subtitle, body: args.body, data: args.data }, privacy.project)
+      : { title: args.title, subtitle: args.subtitle, body: args.body, data: args.data };
     const message = {
       to: args.push_token,
       // 'default' until a native build ships the bundled chat sound; then the
@@ -72,10 +83,10 @@ export const sendPushNotification = internalAction({
       sound: args.sound ?? 'default',
       ...(args.category_id ? { categoryId: args.category_id } : {}),
       ...(args.ttl !== undefined ? { ttl: args.ttl } : {}),
-      title: args.title,
-      ...(args.subtitle ? { subtitle: args.subtitle } : {}),
-      body: args.body,
-      data: args.data || {},
+      title: content.title,
+      ...(content.subtitle ? { subtitle: content.subtitle } : {}),
+      body: content.body,
+      data: content.data || {},
       priority: 'high',
       ...(args.channel_id ? { channelId: args.channel_id } : {}),
       ...(args.interruption_level ? { interruptionLevel: args.interruption_level } : {}),
@@ -109,15 +120,13 @@ export const sendPushNotification = internalAction({
         await ctx.runMutation(internal.pushReceipts.recordTicket, {
           ticket_id: single.id,
           push_token: args.push_token,
-          ...(args.user_id ? { user_id: args.user_id } : {}),
+          user_id: args.user_id,
         });
       } else if (code === 'DeviceNotRegistered') {
-        if (args.user_id) {
-          await ctx.runMutation(internal.notifications.clearDeadPushToken, {
-            user_id: args.user_id,
-            push_token: args.push_token,
-          });
-        }
+        await ctx.runMutation(internal.notifications.clearDeadPushToken, {
+          user_id: args.user_id,
+          push_token: args.push_token,
+        });
       } else if (code) {
         await reportPushFailures(ctx, [{ code, count: 1, sample: single?.message ?? code }]);
       }
@@ -126,6 +135,18 @@ export const sendPushNotification = internalAction({
       console.error('Error sending push notification:', error);
       throw error;
     }
+  },
+});
+
+// Whether a push to this person must be stripped, and the project folder of
+// the session it is about (the one name a stripped push gives).
+export const pushPrivacyFor = internalQuery({
+  args: { user_id: v.id('users'), conversation_id: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ strip: boolean; project: string | null }> => {
+    if (!(await pushesStrippedFor(ctx, args.user_id))) return { strip: false, project: null };
+    const convId = args.conversation_id ? ctx.db.normalizeId('conversations', args.conversation_id) : null;
+    const conv = convId ? await ctx.db.get(convId) : null;
+    return { strip: true, project: projectNameOf(conv?.project_path) };
   },
 });
 
@@ -635,6 +656,11 @@ export async function deliverSessionNotificationToParties(
   return delivered;
 }
 
+/** The session a push is about, by name: its title, else its project folder. */
+function sessionPushTitle(conv: { title?: string; project_path?: string }): string {
+  return conv.title?.trim() || conv.project_path?.split("/").pop() || "Session";
+}
+
 export const createSessionNotification = mutation({
   args: {
     api_token: v.string(),
@@ -658,8 +684,13 @@ export const createSessionNotification = mutation({
       return { error: "Not found" };
     }
 
+    // A daemon titles every permission push alike; the person needs to know
+    // which session is asking.
+    const title = args.type === "permission_request"
+      ? `${sessionPushTitle(conversation)} · needs permission`
+      : args.title;
     const delivered = await deliverSessionNotificationToParties(
-      ctx, conversation, args.type, args.title, args.message,
+      ctx, conversation, args.type, title, args.message,
     );
 
     // Stamp the needs-input dedupe key so the server-side check
@@ -1025,7 +1056,7 @@ export async function performNeedsInputCheck(
   // Mark BEFORE delivering so a conflicting retry can't double-push.
   await ctx.db.patch(conv._id, { needs_input_notified_key: key });
 
-  const title = conv.title?.trim() || conv.project_path?.split("/").pop() || "Session";
+  const title = sessionPushTitle(conv);
   const message =
     (kind === "awaiting_input" ? auqQuestionPreview(lastMsg) : null) ??
     (lastMsg?.role === "assistant" ? notifPreview(lastMsg.content) : null) ??

@@ -30,6 +30,20 @@ interface ContextChatInputProps {
   linkedObjectId?: string;
   projectPath?: string;
   conversationId?: string;
+  /** The project a new session starts in (session-projects.md SP1), and
+   *  whether this is the project's own composer: its first session becomes
+   *  the project's canonical one (SP4). */
+  projectId?: string;
+  projectDefault?: boolean;
+  /** Called with the session the message went to, in place of opening it:
+   *  a page that shows the session itself keeps the person where they are. */
+  onSent?: (sessionId: string) => void;
+  /** Always show the full input, never the resting pill: a surface whose
+   *  composer is the whole point (a project with no session yet). */
+  open?: boolean;
+  /** Laid out in the page's flow at the parent's width (the project page's
+   *  empty state), not pinned to the bottom of a scrolling column. */
+  inline?: boolean;
 }
 
 export function ContextChatInput({
@@ -40,6 +54,11 @@ export function ContextChatInput({
   linkedObjectId,
   projectPath: projectPathProp,
   conversationId,
+  projectId,
+  projectDefault,
+  onSent,
+  open,
+  inline,
 }: ContextChatInputProps) {
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -57,7 +76,7 @@ export function ContextChatInput({
   // ternary silently collapses to the fallback branch.
   const agentKey: AgentKey = selectedAgent || fromConvexAgentType(currentAgent);
   const agentOptions = usePinnedPickerOptions(agentKey);
-  const isExpanded = isFocused || message.length > 0;
+  const isExpanded = !!open || isFocused || message.length > 0;
   // Whether this asks the hosted assistant.
   const askingHosted = isHostedAgentType(agentOptions.find((a) => a.id === agentKey)?.convexType ?? currentAgent);
   // A held month or a thinking outage keeps the words and says why, rather
@@ -102,7 +121,8 @@ export function ContextChatInput({
         // column that shows the placeholder's wrapped tail instead of its start.
         textareaRef.current.scrollTop = 0;
       }
-      openLinkedSession({ _id: sid });
+      if (onSent) onSent(sid);
+      else openLinkedSession({ _id: sid });
     };
 
     const store = useInboxStore.getState();
@@ -158,6 +178,7 @@ export function ContextChatInput({
         ...(linkedObjectId
           ? { linked_object: { type: contextType, id: linkedObjectId } }
           : {}),
+        ...(projectId ? { project_id: projectId, ...(projectDefault ? { project_default: true } : {}) } : {}),
       }),
     });
 
@@ -181,7 +202,7 @@ export function ContextChatInput({
     finish(sid);
 
     store.sendMessageWhenReady(sid, fullMessage, undefined, clientId);
-  }, [message, contextType, contextTitle, getContextBody, agentKey, agentOptions, currentAgent, linkedObjectId, projectPathProp, conversationId, openLinkedSession, hold]);
+  }, [message, contextType, contextTitle, getContextBody, agentKey, agentOptions, currentAgent, linkedObjectId, projectPathProp, conversationId, openLinkedSession, hold, projectId, projectDefault, onSent]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -216,18 +237,19 @@ export function ContextChatInput({
   }
 
   return (
-    <div data-context-composer className="shrink-0 pointer-events-none sticky bottom-0 z-10">
-      <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />
-      <div className="pb-4 pointer-events-auto bg-sol-bg">
-      <div className="mx-auto px-2 sm:px-4 conv-col">
-        <div className="mx-auto px-4 mb-1 flex justify-between items-center conv-col">
-          <div className="flex items-center gap-1">
+    <div data-context-composer className={inline ? "shrink-0" : "shrink-0 pointer-events-none sticky bottom-0 z-10"}>
+      {!inline && <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />}
+      <div className={inline ? "" : "pb-4 pointer-events-auto bg-sol-bg"}>
+      <div className={inline ? "" : "mx-auto px-2 sm:px-4 conv-col"}>
+        <div className={inline ? "mb-1.5 flex items-center" : "mx-auto px-4 mb-1 flex justify-between items-center conv-col"}>
+          <div className={inline ? "flex flex-wrap items-center gap-1" : "flex items-center gap-1"}>
             {agentOptions.map((agent) => (
               <button
                 key={agent.id}
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => setSelectedAgent(agent.id)}
+                title={agent.label}
                 className={`px-2 py-0.5 text-[11px] font-medium rounded-md border transition-colors flex items-center gap-1 ${
                   agentKey === agent.id
                     ? agentAccent(agent.convexType).chip
@@ -235,13 +257,15 @@ export function ContextChatInput({
                 }`}
               >
                 <AgentTypeIcon agentType={agent.convexType} className="w-3 h-3" />
-                {agent.label}
+                {/* Inline, the row stays one line: the picked agent says its
+                    name, the others are their mark (named on hover). */}
+                {(!inline || agentKey === agent.id) && agent.label}
               </button>
             ))}
           </div>
-          <span className="text-[10px] text-sol-text-dim/50">
+          {!inline && <span className="text-[10px] text-sol-text-dim/50">
             {contextType}
-          </span>
+          </span>}
         </div>
       <div className={`flex flex-col border shadow-lg px-4 py-2 rounded-2xl bg-sol-bg-alt ${isFocused ? "border-sol-border" : "border-sol-border/50"}`}>
         <div className="flex items-end gap-2">

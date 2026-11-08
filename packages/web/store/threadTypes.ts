@@ -54,6 +54,9 @@ export type ThreadInboxRow = {
   updated_at: number;
   unread: number;
   unread_capped?: boolean;
+  /** The unread part waits on the viewer: counted on the Threads badge.
+   *  Other unread rows are activity, shown but never counted. */
+  for_you?: boolean;
   last_reply?: ThreadLastReply | null;
 };
 

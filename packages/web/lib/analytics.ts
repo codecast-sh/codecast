@@ -9,7 +9,7 @@ import {
   claimErrorKey,
   setupErrorToasts as setupPlatformErrorToasts,
 } from "@platform/analytics/errors";
-import { CODECAST_EVENTS, type CodecastEventName, type CodecastEventProps } from "@codecast/shared/analytics";
+import { CODECAST_EVENTS, POSTHOG_REPLAY_SAMPLE_RATE, type CodecastEventName, type CodecastEventProps } from "@codecast/shared/analytics";
 import { CHUNK_LOAD_ERROR_PATTERNS } from "./chunkReloadGuard";
 import { DOC_REWRITTEN_ERROR } from "@codecast/shared/docs";
 import codecastJson from "../codecast.json";
@@ -68,8 +68,8 @@ export function getPlatform(): AnalyticsPlatform {
 }
 
 // Codecast's configuration. The package holds the behavior these values drive:
-// Sentry error reporting off in development, no browser tracing, session
-// recording or dead click capture, SPA pageviews on history changes, and
+// Sentry error reporting off in development, no browser tracing or dead click
+// capture, SPA pageviews on history changes, and
 // platform/environment/app on every event as super properties. Dev and prod
 // share one PostHog project, so the environment property keeps local traffic
 // out of product metrics.
@@ -79,10 +79,14 @@ export function initAnalytics(): Promise<void> {
     analytics.initAnalytics({
       posthogKey: META_ENV.VITE_POSTHOG_KEY,
       posthogHost: META_ENV.VITE_POSTHOG_HOST,
-      sentryDsn: META_ENV.VITE_SENTRY_DSN,
+      // A browser that has seen regulated health data loads neither vendor
+      // (setRegulatedData below); codecast's own error sink still runs.
+      optedOut: regulated || undefined,
+      sentryDsn: regulated ? undefined : META_ENV.VITE_SENTRY_DSN,
       environment: META_ENV.DEV ? "development" : "production",
       platform: getPlatform(),
       appName: "codecast",
+      sessionReplaySampleRate: POSTHOG_REPLAY_SAMPLE_RATE,
       // The catalog is enforced at the track boundary inside the package: an
       // event it does not describe is dropped, and a session stops sending
       // after 1000 events. A browser that sets Do Not Track loads no PostHog
@@ -109,6 +113,7 @@ export function initAnalytics(): Promise<void> {
       scrubUrl: scrubSecretPaths,
     });
     runtime = analytics;
+    if (!regulated) releaseRegulatedOptOut(analytics);
     startReplayOnError(analytics);
     for (const call of queuedCalls.splice(0)) call(analytics);
   });
@@ -126,12 +131,69 @@ export function initAnalytics(): Promise<void> {
 // unless the file turns it on.
 function startReplayOnError(analytics: AnalyticsRuntime) {
   const sink = analytics.getCodecastSink();
-  if (!sink || typeof window === "undefined") return;
+  if (!sink || regulated || typeof window === "undefined") return;
   const parsed = parseCodecastConfig(codecastJson);
   const replay = parsed.ok ? parsed.config.replay : undefined;
   void import("@platform/analytics/replay")
-    .then(({ startReplay }) => startReplay({ sink, sampleRate: replay?.sampleRate ?? 0, replayDom: replay?.dom ?? "off" }))
+    .then(({ startReplay }) => {
+      replayRecorder = startReplay({ sink, sampleRate: replay?.sampleRate ?? 0, replayDom: replay?.dom ?? "off" });
+      if (regulated) replayRecorder.stop();
+    })
     .catch(() => {});
+}
+
+// Regulated health data (HIPAA). A person in a team whose policy sets
+// regulated_data (Team settings > Managed devices) may have patient data on
+// screen, and neither PostHog nor Sentry is covered by a BAA, so this browser
+// sends them nothing: no events, no session recording, no error reports, and
+// no replay recording. Remembered in localStorage so the next load starts
+// quiet before the teams feed arrives; a page that learns it mid-session shuts
+// the vendors down on the spot. Leaving regulated mode takes effect on the
+// next load; PostHog opts back in at once.
+const REGULATED_KEY = "codecast.regulated-data";
+let regulated = readRegulatedMarker();
+let replayRecorder: { stop(): void } | undefined;
+
+function readRegulatedMarker(): boolean {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(REGULATED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Whether this browser treats its data as regulated (exported for tests). */
+export function isRegulatedData(): boolean {
+  return regulated;
+}
+
+/** Called with whether any of the viewer's teams holds regulated health data. */
+export function setRegulatedData(on: boolean) {
+  if (on === regulated) return;
+  regulated = on;
+  try {
+    if (on) localStorage.setItem(REGULATED_KEY, "1");
+    else localStorage.removeItem(REGULATED_KEY);
+  } catch {}
+  if (!runtime) return;
+  const posthog = runtime.posthog;
+  if (on) {
+    try { posthog.stopSessionRecording(); } catch {}
+    try { posthog.opt_out_capturing(); } catch {}
+    replayRecorder?.stop();
+    replayRecorder = undefined;
+    void import("@sentry/react").then((sentry) => sentry.close()).catch(() => {});
+  } else {
+    releaseRegulatedOptOut(runtime);
+  }
+}
+
+// PostHog persists an opt-out in its own storage, and the only opt-out codecast
+// ever writes is the one above, so a browser no longer regulated opts back in.
+function releaseRegulatedOptOut(analytics: AnalyticsRuntime) {
+  try {
+    if (analytics.posthog.__loaded && analytics.posthog.has_opted_out_capturing()) analytics.posthog.opt_in_capturing();
+  } catch {}
 }
 
 export function identifyUser(userId: string, traits?: Record<string, unknown>) {

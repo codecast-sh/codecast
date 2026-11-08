@@ -16,6 +16,8 @@ describe("purgeAccountPass", () => {
       conversations: [...conversations, { _id: "mateconv", user_id: MATE }],
       notifications: [{ _id: "n1", recipient_user_id: ME }],
       team_memberships: [{ _id: "tm1", user_id: ME }],
+      // My side answers on a teammate's session go with my account; theirs stay.
+      side_answers: [{ _id: "sa1", user_id: ME, conversation_id: "mateconv" }, { _id: "sa2", user_id: MATE, conversation_id: "mateconv" }],
     });
     const purged: string[] = [];
     const ctx: any = { db, scheduler: { runAfter: async (_ms: number, _fn: any, a: any) => { if (a.conversation_id) purged.push(a.conversation_id); } } };
@@ -33,6 +35,7 @@ describe("purgeAccountPass", () => {
     expect(rows("conversations").map((r: any) => r._id)).toEqual(["mateconv"]);
     expect(rows("notifications")).toEqual([]);
     expect(rows("team_memberships")).toEqual([]);
+    expect(rows("side_answers").map((r: any) => r._id)).toEqual(["sa2"]);
     expect(rows("authAccounts")).toEqual([]);
     expect(rows("users").map((r: any) => r._id)).toEqual([MATE]);
   });

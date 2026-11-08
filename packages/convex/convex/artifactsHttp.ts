@@ -17,12 +17,14 @@ import {
   artifactUrl,
   lineDiff,
   accessSummary,
+  teamGateRefusal,
 } from "./artifacts";
 import {
   brandArtifactHtml,
   passwordGatePage,
   emailGatePage,
   expiredPage,
+  teamGatePage,
   sourcePage,
   diffPage,
   editorPage,
@@ -36,7 +38,7 @@ import { pageUsesData } from "@codecast/shared/contracts/pageData";
 import { servePageData, type ValidatedQuery } from "./pageData";
 import { HYPERFRAMES_RUNTIME, pageHasHyperframesRuntime, pageIsMotion, pageServingOrigin, pageUsesPlayer } from "@codecast/shared/contracts";
 import { injectPageTheme } from "@codecast/shared/render";
-import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
+import { sha256Hex, passwordHash, kTokenFor, eTokenFor, mTokenFor } from "./lib/artifactGates";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -526,23 +528,6 @@ export const publish = httpAction(async (ctx, request) => {
       contentHash = await withDataHash(contentHash, JSON.stringify(dataSet));
     }
 
-    // Unchanged fast path — common under --watch: no blob stores at all.
-    if (existing && existing.content_hash === contentHash && !thumb_b64) {
-      if (accessSet && Object.keys(accessSet).length) {
-        await ctx.runMutation(internal.artifacts.applyManage, { artifact_id: existing._id, set: accessSet });
-      }
-      const url = artifactUrl(existing.slug);
-      return json({
-        slug: existing.slug,
-        url,
-        version: existing.version,
-        updated: true,
-        unchanged: true,
-        manage_url: ownerKey ? `${url}#o=${ownerKey}` : url,
-        ...(dataSet ? { data: { workspace: dataSet.workspace, queries: dataSet.queries.length } } : {}),
-      });
-    }
-
     // Provenance.
     let sessionShortId: string | undefined;
     let sessionConversationId: string | undefined;
@@ -565,6 +550,42 @@ export const publish = httpAction(async (ctx, request) => {
     });
     if (evidence.error || !evidence.binding) return json({ error: evidence.error ?? "Could not resolve task" }, 404);
     const binding = evidence.binding;
+
+    // Regulated data (HIPAA): a page whose workspace, data or publishing
+    // device answers to a team with regulated_data is gated to that team's
+    // signed-in members, on create and on every republish, and never takes a
+    // public edit link.
+    const gate: { team_id: Id<"teams">; team_name: string } | null = await ctx.runQuery(internal.artifacts.publishGate, {
+      user_id: who.user_id,
+      api_token,
+      existing_id: existing?._id,
+      session_conversation_id: sessionConversationId as never,
+      task_id: binding.task_id,
+      plan_id: binding.plan_id,
+      data_workspace: dataSet?.workspace,
+    });
+    if (gate) {
+      const refusal = teamGateRefusal(gate.team_name, (accessSet ?? {}) as { edit_mode?: string });
+      if (refusal) return json({ error: refusal }, 403);
+      accessSet = { ...(accessSet ?? {}), team_gate: gate.team_id };
+    }
+
+    // Unchanged fast path — common under --watch: no blob stores at all.
+    if (existing && existing.content_hash === contentHash && !thumb_b64) {
+      if (accessSet && Object.keys(accessSet).length) {
+        await ctx.runMutation(internal.artifacts.applyManage, { artifact_id: existing._id, set: accessSet });
+      }
+      const url = artifactUrl(existing.slug);
+      return json({
+        slug: existing.slug,
+        url,
+        version: existing.version,
+        updated: true,
+        unchanged: true,
+        manage_url: ownerKey ? `${url}#o=${ownerKey}` : url,
+        ...(dataSet ? { data: { workspace: dataSet.workspace, queries: dataSet.queries.length } } : {}),
+      });
+    }
 
     // --- Store blobs ---
     const storageId = await ctx.storage.store(new Blob([docHtml], { type: "text/html; charset=utf-8" }));
@@ -950,6 +971,7 @@ export const comment = httpAction(async (ctx, request) => {
       // The gates the page cleared, echoed back for the mutation to re-check.
       k: typeof body.k === "string" ? body.k : undefined,
       e: typeof body.e === "string" ? body.e : undefined,
+      m: typeof body.m === "string" ? body.m : undefined,
       author_name: String(body.author_name ?? ""),
       author_email: typeof body.author_email === "string" ? body.author_email : undefined,
       version: typeof body.version === "number" ? body.version : 0,
@@ -1000,6 +1022,8 @@ export const view = httpAction(async (ctx, request) => {
       email: typeof body.email === "string" ? body.email : undefined,
       k: typeof body.k === "string" ? body.k : undefined,
       e: typeof body.e === "string" ? body.e : undefined,
+      m: typeof body.m === "string" ? body.m : undefined,
+      identity_token: typeof body.identity_token === "string" ? body.identity_token : undefined,
     });
     return json({ ok: true });
   } catch {
@@ -1064,10 +1088,10 @@ const CACHE_SHAPE = "public, max-age=60";
 /** The policy for a body served off this artifact. Protected the moment a
  * gate stands in front of it; otherwise public, but never past its expiry. */
 export function cachePolicy(
-  a: { password_hash?: string | null; email_gate?: boolean; expires_at?: number | null },
+  a: { password_hash?: string | null; email_gate?: boolean; expires_at?: number | null; team_gate?: string | null },
   now = Date.now(),
 ): string {
-  if (a.password_hash || a.email_gate) return CACHE_PROTECTED;
+  if (a.team_gate || a.password_hash || a.email_gate) return CACHE_PROTECTED;
   if (!a.expires_at) return CACHE_PUBLIC;
   const left = a.expires_at - now;
   if (left <= 0) return CACHE_PROTECTED;
@@ -1091,9 +1115,19 @@ export const serve = httpAction(async (ctx, request) => {
   const kind = artifact.kind ?? "html";
   const shareUrl = artifactUrl(artifact.slug);
 
-  // --- Gates (order: expiry → password → email wall) ---
+  // --- Gates (order: expiry → team → password → email wall) ---
   if (artifact.expires_at && Date.now() > artifact.expires_at) {
     return htmlResponse(expiredPage({ title: artifact.title }), 410, CACHE_PROTECTED);
+  }
+  // A team gate is access control, not a shared secret: a member opens the
+  // page through the app (/pages/auth), which hands them its m token. The gate
+  // page names the team and nothing of the page, whose title may itself be
+  // regulated data.
+  const mToken = artifact.team_gate ? await mTokenFor(artifact) : null;
+  if (artifact.team_gate && (!mToken || q.get("m") !== mToken)) {
+    if (q.get("meta") === "1") return json({ error: "Locked" }, 403);
+    if (q.get("thumb") === "1" || tail) return notFound("Not found");
+    return htmlResponse(teamGatePage({ slug, teamName: artifact.team_gate_name, shareUrl }), 403, CACHE_PROTECTED);
   }
   let kToken = "";
   if (artifact.password_hash) {
@@ -1136,7 +1170,7 @@ export const serve = httpAction(async (ctx, request) => {
         // when it last moved, awaiting_since when a comment sent to the agent
         // has not been answered by a newer version yet.
         agent,
-        gated: { password: !!art.password_hash, email: !!art.email_gate },
+        gated: { team: !!artifact.team_gate, password: !!art.password_hash, email: !!art.email_gate },
         versions: (art.versions as HistoryVersion[]).map((x) => ({
           version: x.version,
           title: x.title,
@@ -1345,6 +1379,7 @@ export const serve = httpAction(async (ctx, request) => {
   html = injectMotion(html, apiBase);
   {
     const gate = new URLSearchParams();
+    if (mToken) gate.set("m", mToken);
     if (kToken) gate.set("k", kToken);
     if (artifact.email_gate && q.get("e")) gate.set("e", q.get("e")!);
     const qs = gate.toString();
@@ -1355,7 +1390,7 @@ export const serve = httpAction(async (ctx, request) => {
   if (q.get("preview") === "1") return htmlResponse(html, 200, cachePolicy(artifact));
   // Bake the validated gate tokens into the meta URL so the bar's polling
   // clears the same gates the document did.
-  const metaTokens = `${kToken ? `&k=${kToken}` : ""}${artifact.email_gate && q.get("e") ? `&e=${q.get("e")}` : ""}`;
+  const metaTokens = `${mToken ? `&m=${mToken}` : ""}${kToken ? `&k=${kToken}` : ""}${artifact.email_gate && q.get("e") ? `&e=${q.get("e")}` : ""}`;
   const branded = brandArtifactHtml(html, {
     title: doc.title,
     author: artifact.author_name,
@@ -1373,7 +1408,7 @@ export const serve = httpAction(async (ctx, request) => {
     views: artifact.views,
     commentCount: artifact.comments_disabled ? 0 : artifact.comment_count,
     commentsEnabled: !artifact.comments_disabled,
-    gated: { password: !!artifact.password_hash, email: !!artifact.email_gate },
+    gated: { team: !!artifact.team_gate, password: !!artifact.password_hash, email: !!artifact.email_gate },
     editMode: artifact.edit_mode ?? "owner",
     live: q.get("live") === "1",
     hasThumb: !!artifact.thumb_storage_id,

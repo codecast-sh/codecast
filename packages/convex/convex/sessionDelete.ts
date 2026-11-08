@@ -4,7 +4,9 @@ import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { killConversation } from "./conversations";
-import { settleTaskWaits } from "./taskWaits";
+import { CONVERSATION_ROW_TABLES, conversationRowEffects } from "./lib/conversationRows";
+import { isRegulatedTeam } from "./lib/accessLog";
+import { mayDeleteRegulated, startDeletion } from "./regulatedDeletion";
 
 // Deleting a session removes it for everyone: the agent is torn down like a
 // kill, the conversation row goes at once (the change-tracked db emits the
@@ -12,65 +14,20 @@ import { settleTaskWaits } from "./taskWaits";
 // conversation is purged in budgeted passes afterwards. A tombstone keeps the
 // daemon from recreating it from the transcript still on the owner's machine.
 
-// Every table whose rows belong to one conversation, with the index leading on
-// conversation_id. Docs and anchors are left alone: a doc is its author's own
-// object, and an anchor is a role seat (seated sessions refuse deletion).
-const PURGE_TABLES: ReadonlyArray<readonly [string, string]> = [
-  ["messages", "by_conversation_id"],
-  ["message_thinking", "by_conversation_message"],
-  ["message_tool_inputs", "by_conversation_message"],
-  ["conversation_images", "by_conversation_id"],
-  ["conversation_summaries", "by_conversation_id"],
-  ["session_insights", "by_conversation_id"],
-  ["conversation_context", "by_conversation_id"],
-  ["conversation_git_diffs", "by_conversation_id"],
-  ["file_changes", "by_conversation_id"],
-  ["file_change_bodies", "by_conversation_change_key"],
-  ["file_touches", "by_conversation"],
-  ["comments", "by_conversation_id"],
-  ["public_comments", "by_conversation_id"],
-  ["review_comments", "by_conversation"],
-  ["composer_suggestions", "by_conversation_id"],
-  ["pending_messages", "by_conversation_id"],
-  ["pending_permissions", "by_conversation_status"],
-  ["session_decisions", "by_conversation_status"],
-  ["session_owners", "by_conversation"],
-  ["session_migrations", "by_conversation"],
-  ["collab_grants", "by_conversation"],
-  ["share_redemptions", "by_conversation_user"],
-  ["entity_conversations", "by_conversation"],
-  ["commits", "by_conversation_id"],
-  ["pull_request_sessions", "by_conversation"],
-  ["call_agent_feeds", "by_conversation"],
-  ["call_session_links", "by_conversation"],
-  ["external_events", "by_conversation_created"],
-  ["delivery_attempts", "by_conversation_sequence"],
-  ["execution_bindings", "by_conversation_epoch"],
-  ["conversation_execution_heads", "by_conversation"],
-  ["managed_sessions", "by_conversation_id"],
-];
-
 const PURGE_BUDGET = 1000;
 
 export const purgeConversationRows = internalMutation({
   args: { conversation_id: v.string() },
   handler: async (ctx, args) => {
     let budget = PURGE_BUDGET;
-    for (const [table, index] of PURGE_TABLES) {
+    for (const [table, index] of CONVERSATION_ROW_TABLES) {
       if (budget <= 0) break;
       const rows = await (ctx.db as any)
         .query(table)
         .withIndex(index, (q: any) => q.eq("conversation_id", args.conversation_id))
         .take(budget);
       for (const row of rows) {
-        if (table === "conversation_images" && row.storage_id) {
-          await ctx.storage.delete(row.storage_id).catch(() => {});
-        }
-        // An open question that will never be answered fails the tasks
-        // waiting on it, so their owners re-plan (task-graph.md TG2).
-        if (table === "session_decisions" && row.status === "pending") {
-          await settleTaskWaits(ctx, row, { status: "withdrawn" });
-        }
+        await conversationRowEffects(ctx, table, row);
         await ctx.db.delete(row._id);
       }
       budget -= rows.length;
@@ -83,19 +40,24 @@ export const purgeConversationRows = internalMutation({
 });
 
 /** Delete one session and its nested subagent transcripts. Only the account
- *  that runs it may delete it; a seated role session refuses. */
+ *  that runs it may delete it; a seated role session refuses. In a team whose
+ *  data is regulated, a team admin may too, and the delete is permanent
+ *  everywhere its content went (regulatedDeletion.ts), logged as it goes. */
 export async function deleteSessionAsOwner(ctx: any, userId: Id<"users">, conversationId: Id<"conversations">) {
   const conv = await ctx.db.get(conversationId);
   if (!conv) return { deleted: 0 };
-  if (conv.user_id !== userId) throw new Error("Only the session's owner can delete it");
+  const regulatedTeam = conv.team_id && (await isRegulatedTeam(ctx, conv.team_id)) ? conv.team_id : null;
+  const allowed = regulatedTeam ? await mayDeleteRegulated(ctx, userId, conv.user_id, regulatedTeam) : conv.user_id === userId;
+  if (!allowed) throw new Error("Only the session's owner can delete it");
   if (conv.persistent) throw new Error("A role's standing session cannot be deleted");
+  const ownerId: Id<"users"> = conv.user_id;
 
-  await killConversation(ctx, userId, { conversation_id: conversationId, mark_completed: true }, { cause: "delete" });
+  await killConversation(ctx, ownerId, { conversation_id: conversationId, mark_completed: true }, { cause: "delete" });
 
   // Subagent transcripts are part of the session's content; spawned worker
   // sessions are their own conversations and stay.
   const queue: any[] = [conv];
-  let deleted = 0;
+  const purged: string[] = [];
   while (queue.length) {
     const row = queue.shift();
     const children = await ctx.db
@@ -103,21 +65,29 @@ export async function deleteSessionAsOwner(ctx: any, userId: Id<"users">, conver
       .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", row._id))
       .collect();
     for (const child of children) {
-      if (child.user_id === userId && (child.is_subagent || child.parent_message_uuid)) queue.push(child);
+      if (child.user_id === ownerId && (child.is_subagent || child.parent_message_uuid)) queue.push(child);
     }
     if (row.session_id) {
       await ctx.db.insert("deleted_sessions", {
-        user_id: userId,
+        user_id: ownerId,
         session_id: row.session_id,
         conversation_id: String(row._id),
         deleted_at: Date.now(),
       });
     }
     await ctx.db.delete(row._id);
-    await ctx.scheduler.runAfter(0, internal.sessionDelete.purgeConversationRows, { conversation_id: String(row._id) });
-    deleted++;
+    purged.push(String(row._id));
   }
-  return { deleted };
+  if (regulatedTeam) {
+    const team = await ctx.db.get(regulatedTeam);
+    await startDeletion(ctx, {
+      team, actorId: userId, kind: "session", targetId: String(conv._id), targetLabel: conv.title ?? undefined, shortId: conv.short_id,
+      roots: purged.map((id) => ({ plan: "conversation" as const, id })),
+    });
+  } else {
+    for (const id of purged) await ctx.scheduler.runAfter(0, internal.sessionDelete.purgeConversationRows, { conversation_id: id });
+  }
+  return { deleted: purged.length };
 }
 
 export const deleteSession = mutation({

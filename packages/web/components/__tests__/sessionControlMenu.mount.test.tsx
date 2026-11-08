@@ -23,8 +23,11 @@ const calls = {
   actions: [] as Array<[unknown, Record<string, unknown>]>,
   navigates: [] as string[],
   toasts: [] as Array<[string, string]>,
-  reset() { this.switches = []; this.forks = []; this.actions = []; this.navigates = []; this.toasts = []; },
+  backendSwitches: [] as Array<[string, string, boolean]>,
+  reset() { this.switches = []; this.forks = []; this.actions = []; this.navigates = []; this.toasts = []; this.backendSwitches = []; },
 };
+// The live session meta the panel reads (its session id gates the backend rows).
+let liveMeta: Record<string, unknown> | undefined;
 
 const storeState = {
   sessions: { conv1: { _id: "conv1", title: "Fix the auth race", agent_type: "claude_code", project_path: "/p", git_root: "/p" } } as Record<string, any>,
@@ -38,6 +41,8 @@ const storeState = {
   setConversationModel() {},
   addOptimisticMessage: () => "c1",
   sendMessage() {},
+  sessionCommands: {} as Record<string, any>,
+  switchClaudeBackend: (_requestId: string, convId: string, backend: string, interrupt?: boolean) => { calls.backendSwitches.push([convId, backend, !!interrupt]); return Promise.resolve(); },
 };
 
 beforeAll(async () => {
@@ -65,7 +70,7 @@ beforeAll(async () => {
     useConvex: () => ({ action: (ref: unknown, args: Record<string, unknown>) => { calls.actions.push([ref, args]); return Promise.resolve({ session: { conversation_id: "newconv", short_id: "jx7new1", agent_type: args.agent_type } }); } }),
   }));
   mock.module("../../hooks/useDynamicModels", () => ({ useDynamicModels: () => ({ dynamic: false, featured: [], all: [] }) }));
-  mock.module("../../hooks/useLiveSessionMeta", () => ({ useLiveSessionMeta: () => undefined }));
+  mock.module("../../hooks/useLiveSessionMeta", () => ({ useLiveSessionMeta: () => liveMeta }));
   mock.module("../../hooks/useSyncAgentDefinitions", () => ({ useAgentDefinitions: () => [] }));
   mock.module("../../lib/conversationProcessor", () => ({ formatModel: (m: string) => m }));
   const realAgentActions = await import("../../lib/sessionAgentActions");
@@ -235,4 +240,65 @@ test("a blank session and an agent with no model rail read their state on the id
   mount({ agentType: "gemini", model: undefined, effort: undefined });
   expect(q("[data-session-state]")!.textContent).toContain("keeps the model it launched with");
   expect(q("[data-session-control-panel]")!.textContent).not.toContain("Effort");
+});
+
+// ── Runs in (tmux / Agent SDK) ───────────────────────────────────────────────
+
+const pressBackend = (b: string) => {
+  const row = q(`[data-backend-row="${b}"]`)!;
+  React.act(() => { row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+};
+
+function liveClaude(fields: Record<string, unknown>) {
+  liveMeta = { sessionId: "11111111-2222-4333-8444-555555555555", agentType: "claude_code", model: "claude-opus-4-8", effort: "high" };
+  const now = Date.now();
+  storeState.sessions.conv1 = { ...storeState.sessions.conv1, session_id: liveMeta.sessionId, last_heartbeat: now, updated_at: now, agent_status_updated_at: now, is_connected: true, ...fields };
+}
+
+test("a live tmux Claude session offers the Agent SDK as a plain switch", async () => {
+  liveClaude({ agent_status: "idle", claude_backend: null });
+  try {
+    mount();
+    const rows = qa("[data-backend-row]");
+    expect(rows.map((r) => r.getAttribute("data-backend-row"))).toEqual(["tmux", "sdk"]);
+    expect(q('[data-backend-row="tmux"]')!.getAttribute("data-current")).toBe("true");
+    expect(q('[data-backend-row="sdk"]')!.textContent).toContain("never parked");
+    pressBackend("sdk");
+    await flush();
+    expect(calls.backendSwitches).toEqual([["conv1", "sdk", false]]);
+    expect(q('[data-move-row="fork"]')!.textContent).toContain("on another agent");
+  } finally {
+    liveMeta = undefined;
+  }
+});
+
+test("an SDK session mid-turn names the interrupt on the terminal row, and its fork row says the copy opens in a terminal", async () => {
+  liveClaude({ agent_status: "working", claude_backend: "sdk" });
+  try {
+    mount();
+    expect(q('[data-backend-row="sdk"]')!.getAttribute("data-current")).toBe("true");
+    expect(q('[data-backend-row="tmux"]')!.textContent).toContain("Stop the turn, move to the terminal");
+    pressBackend("tmux");
+    await flush();
+    expect(calls.backendSwitches).toEqual([["conv1", "tmux", true]]);
+    expect(q('[data-move-row="fork"]')!.textContent).toContain("in a terminal");
+  } finally {
+    liveMeta = undefined;
+  }
+});
+
+test("a refused switch says why under the rows; a blank or non-Claude session shows no backend rows", () => {
+  liveClaude({ agent_status: "idle", claude_backend: null });
+  storeState.sessionCommands = { r1: { _id: "r1", conversation_id: "conv1", kind: "backend", backend: "sdk", command: "switch_claude_backend", requested_at: Date.now() - 2000, executed_at: Date.now() - 1000, result: null, error: "Stays in the terminal: Claude Code 2.0.1 is older than 2.1.248" } };
+  try {
+    mount();
+    expect(q("[data-backend-failed]")!.textContent).toContain("older than 2.1.248");
+    mount({ messageCount: 0 });
+    expect(q("[data-backend-rows]")).toBeNull();
+    mount({ agentType: "codex" });
+    expect(q("[data-backend-rows]")).toBeNull();
+  } finally {
+    liveMeta = undefined;
+    storeState.sessionCommands = {};
+  }
 });

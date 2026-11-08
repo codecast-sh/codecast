@@ -92,6 +92,29 @@ describe("levelCheckout", () => {
     expect(read(shared, "y.ts")).toBe("y\n");
   });
 
+  // Union's main turned two repro scripts from 755 to 644 (Nov 6). The blob was unchanged, so the level absorbed it
+  // and every levelled line checkout read the files as changed.
+  test("a mode-only change upstream moves the file's mode, and a local mode change stands", async () => {
+    const { shared, other, upstream } = setup({ "run.sh": "echo hi\n", "own.sh": "echo own\n" });
+    const exec = (dir: string, f: string) => (fs.statSync(path.join(dir, f)).mode & 0o111) !== 0;
+    const chmodUpstream = (f: string, mode: number) => { fs.chmodSync(path.join(other, f), mode); upstream({}, `chmod ${f}`); };
+    chmodUpstream("run.sh", 0o755);
+    let r = await levelCheckout(shared, "origin/main");
+    expect(r.ok).toBe(true);
+    expect(exec(shared, "run.sh")).toBe(true);
+    expect(status(shared)).toBe("");
+    chmodUpstream("run.sh", 0o644);
+    r = await levelCheckout(shared, "origin/main");
+    expect(exec(shared, "run.sh")).toBe(false);
+    expect(status(shared)).toBe("");
+    // A person made own.sh executable here, and upstream did the same: nothing to do, and still clean.
+    fs.chmodSync(path.join(shared, "own.sh"), 0o755);
+    chmodUpstream("own.sh", 0o755);
+    r = await levelCheckout(shared, "origin/main");
+    expect(exec(shared, "own.sh")).toBe(true);
+    expect(status(shared)).toBe("");
+  });
+
   test("deletions upstream remove the file and its emptied directory", async () => {
     const { shared, upstream } = setup({ "keep.ts": "k\n", "gone/only.ts": "g\n" });
     upstream({ "gone/only.ts": null });

@@ -129,6 +129,10 @@ export const CODECAST_STATUS_HOOK = `#!/bin/bash
 # Reports Claude Code lifecycle events to codecast daemon via status files
 set -uo pipefail
 
+# A session on codecast's Claude SDK backend reports status and answers its
+# permission prompts through its host process, so this hook stands down there.
+[ -n "\${CODECAST_SDK_SESSION:-}" ] && { cat >/dev/null 2>&1; exit 0; }
+
 # Envelope keys sit at the front. A UserPromptSubmit payload can carry a
 # megabyte prompt after them; copying all of it into the shell is wasted work
 # except when we need the AskUserQuestion questions array for the sidecar.
@@ -189,6 +193,15 @@ elif [ "$EVENT" = "Stop" ]; then
   # waits on the daemon's file index to learn a fresh session's path.
   TRANSCRIPT_PATH="\${HOOK_transcript_path:-}"
 elif [ "$EVENT" = "PermissionRequest" ]; then
+  # A session launched in bypass mode has already said "never ask". Claude
+  # Code still raises a dialog there for its built-in rm check, which flags
+  # any Bash command it cannot parse (a big heredoc) and then stalls the
+  # agent and pings the phone. The person chose to let those run.
+  # AskUserQuestion is a question, not a permission, so it still goes through.
+  if [ "$PERM" = "bypassPermissions" ] && [ -n "$TOOL" ] && [ "$TOOL" != "AskUserQuestion" ]; then
+    printf '%s\\n' '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+    exit 0
+  fi
   # Claude Code's first-class permission event (CC >= ~2.1.x). Unlike the
   # generic Notification ('Claude needs your permission', no tool name), it
   # carries the real tool_name + tool_input + permission_mode, so the daemon

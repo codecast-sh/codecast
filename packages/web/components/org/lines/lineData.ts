@@ -20,7 +20,7 @@ export type LineProject = {
   risks?: string[];
   /** Tasks open and done by the board's rule; "counting" while the task store fills; null when it has none. */
   counts: { open: number; done: number } | "counting" | null;
-  /** Sessions under the roles whose area holds it, by state; null when the tree carries none. */
+  /** Its sessions by state (its own, else those of the roles whose area holds it); null when none. */
   sessions: StateCounts | null;
   /** The role the project names or whose scope lists it. */
   lead: OrgRole | null;
@@ -42,12 +42,17 @@ export type LineContext = {
   tasks: readonly BoardTask[];
   /** False while the task store is still filling. */
   tasksCounted?: boolean;
+  /** Each project's own sessions by state (hooks/useProjectSessionCounts):
+   *  when given, a project counts the sessions working in it, not the
+   *  sessions of the roles whose area lists it. */
+  projectSessions?: ReadonlyMap<string, StateCounts>;
 };
 
 /** A project row's line facts: the counts its own board shows, what is moving under it, and its lead. */
 export function lineProjectOf(row: LineProjectRow, ctx: LineContext): LineProject {
   const n = projectTaskCounts(ctx.tasks, [row._id]);
-  const sessions = ctx.tree ? sessionsUnder(ctx.tree, [row._id]) : [];
+  const own = ctx.projectSessions?.get(row._id);
+  const sessions = own || !ctx.tree ? [] : sessionsUnder(ctx.tree, [row._id]);
   return {
     id: row._id, title: row.title,
     ...(row.short_id ? { short_id: row.short_id } : {}),
@@ -56,7 +61,7 @@ export function lineProjectOf(row: LineProjectRow, ctx: LineContext): LineProjec
     ...(row.target_date ? { target_date: row.target_date } : {}),
     ...(row.risks?.length ? { risks: row.risks } : {}),
     counts: ctx.tasksCounted === false ? "counting" : n.total > 0 ? { open: n.total - n.done, done: n.done } : null,
-    sessions: sessions.length ? countStates([...sessions]) : null,
+    sessions: own ?? (sessions.length ? countStates([...sessions]) : null),
     lead: namedLead(row, ctx.roles),
   };
 }
