@@ -314,16 +314,34 @@ describe("applyTaskUpdate", () => {
     });
   });
 
-  test("rejects a running or finished task", async () => {
-    for (const status of ["running", "completed", "failed"]) {
+  test("rejects a finished task, and a running one for fields the live run reads", async () => {
+    for (const [status, edit] of [
+      ["running", { model: "opus" }],
+      ["completed", { title: "Nope" }],
+      ["failed", { title: "Nope" }],
+    ] as const) {
       const task = editable();
       task.status = status;
       const { db, rows } = fakeDb([task, home()]);
-      const result = await applyTaskUpdate({ db } as any, task as any, { title: "Nope" }, ACTOR);
+      const result = await applyTaskUpdate({ db } as any, task as any, edit, ACTOR);
       expect(result.ok).toBe(false);
       expect(task.title).toBe("Check CI");
+      expect(task.model).toBeUndefined();
       expect(revisionsOf(rows)).toHaveLength(0);
     }
+  });
+
+  // The live run was handed its prompt when it started, so a run may rewrite
+  // the prompt and title it will fire with next time.
+  test("takes a title and prompt edit on a running task", async () => {
+    const task = editable();
+    task.status = "running";
+    const { db } = fakeDb([task, home()]);
+    const result = await applyTaskUpdate({ db } as any, task as any, { title: "Check CI twice", prompt: "Check CI on main twice" }, ACTOR);
+    expect(result.ok).toBe(true);
+    expect(task.title).toBe("Check CI twice");
+    expect(task.prompt).toBe("Check CI on main twice");
+    expect(task.status).toBe("running");
   });
 
   // The precheck is an editable field like any other, so `cast trigger update
