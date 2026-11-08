@@ -108,4 +108,17 @@ describe("listed processes", () => {
     expect(listed).toContain("ffmpeg");
     expect(summarizeProcesses(rows).omittedProcessCount).toBe(45);
   });
+
+  test("every session keeps its top process when busier ones fill the list", () => {
+    const rows: ResourceProcess[] = [
+      ...Array.from({ length: 300 }, (_, i) => ({ pid: 1000 + i, ppid: 1, name: "big", kind: "app" as const, cpu: 5, rss: 1e9 + i })),
+      ...Array.from({ length: 40 }, (_, i) => ({ pid: 5000 + i, ppid: 1, name: `claude-${i}`, kind: "agent" as const, cpu: 0, rss: 1e6, sessionId: `s${i}` })),
+      { pid: 6000, ppid: 5000, name: "claude-0-child", kind: "tool", cpu: 0, rss: 1, sessionId: "s0" },
+    ];
+    const listed = listedProcesses(rows);
+    expect(listed).toHaveLength(256);
+    expect(new Set(listed.filter((p) => p.sessionId).map((p) => p.sessionId)).size).toBe(40);
+    expect(listed.map((p) => p.name)).toContain("claude-0");
+    expect(listed.map((p) => p.name)).not.toContain("claude-0-child");
+  });
 });

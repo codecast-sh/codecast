@@ -90,15 +90,20 @@ export function summarizeProcesses(rows: ResourceProcess[]) {
   return { groups: [...grouped.values()], processes: listedProcesses(rows), omittedProcessCount: Math.max(0, rows.length - RESOURCE_PROCESS_LIMIT) };
 }
 
-/** The processes the snapshot names, within RESOURCE_PROCESS_LIMIT: the ones
- *  ranking highest by either CPU or memory, so a busy small process is named as
- *  readily as a large idle one. */
+/** The processes the snapshot names, within RESOURCE_PROCESS_LIMIT: each
+ *  session's top process first, so a session is never reported as having no
+ *  process because busier ones filled the list (the offload review reads an
+ *  absent session as not running), then the rest ranking highest by either CPU
+ *  or memory, so a busy small process is named as readily as a large idle one. */
 export function listedProcesses(rows: ResourceProcess[]): ResourceProcess[] {
   const rank = new Map<ResourceProcess, number>();
   [...rows].sort((a, b) => b.cpu - a.cpu || a.pid - b.pid).forEach((p, i) => rank.set(p, i));
   [...rows].sort((a, b) => b.rss - a.rss || a.pid - b.pid).forEach((p, i) => rank.set(p, Math.min(rank.get(p)!, i)));
-  return [...rows]
-    .sort((a, b) => rank.get(a)! - rank.get(b)! || a.pid - b.pid)
+  const ranked = [...rows].sort((a, b) => rank.get(a)! - rank.get(b)! || a.pid - b.pid);
+  const seen = new Set<string>();
+  const firsts = ranked.filter((p) => !!p.sessionId && !seen.has(p.sessionId) && !!seen.add(p.sessionId));
+  const firstSet = new Set(firsts);
+  return [...firsts, ...ranked.filter((p) => !firstSet.has(p))]
     .slice(0, RESOURCE_PROCESS_LIMIT)
     .sort((a, b) => b.rss - a.rss || a.pid - b.pid);
 }

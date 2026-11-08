@@ -114,7 +114,7 @@ export function useResourceMonitor() {
   const now = useCoarseNow(15_000);
   const rows = useMachineResourceRows();
   const { devices, loaded } = useDevices();
-  const { sessions: managed } = useManagedSessions();
+  const { sessions: managed, ready: managedReady } = useManagedSessions();
   const { candidates } = useMigrationCandidates();
   const { batches } = useMigrationBatches();
   const { rehearsals } = useMoveRehearsals();
@@ -127,7 +127,12 @@ export function useResourceMonitor() {
   }, [managed, pinnedIds]);
 
   const plans = useMemo(() => {
-    if (!candidates) return [];
+    // A plan sorts every session on the machine into movable or staying, and
+    // the review holds that sorting once opened (holdPlan). The cached fleet
+    // can be days old (no surface feeds it while this page is closed), and
+    // its live rows then age out of the heartbeat window, so a plan built
+    // before the server answers names every running session "Not running".
+    if (!candidates || !managedReady) return [];
     const out: OffloadPlan[] = [];
     for (const source of machines) {
       if (source.role !== "local") continue;
@@ -135,7 +140,7 @@ export function useResourceMonitor() {
       if (plan) out.push(plan);
     }
     return out;
-  }, [machines, sessions, devices, candidates, now]);
+  }, [machines, sessions, devices, candidates, managedReady, now]);
 
   const runs = useMemo(() => {
     const byConv = new Map(sessions.filter((s) => s.conversationId).map((s) => [s.conversationId!, s.sessionId]));
