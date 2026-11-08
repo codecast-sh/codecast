@@ -22,10 +22,12 @@ test("request writes optimistic command state, never a false parked status; skip
   expect(hibernationResultCounts(Object.values(useInboxStore.getState().sessionCommands))).toEqual({ pending: 0, succeeded: 0, skipped: 1, failed: 0 });
 });
 
-test("store classifier and signatures reflect parking and wake while ignoring heartbeat churn", () => {
+test("store classifier and signatures file a parked row by its verdict and reflect wake while ignoring heartbeat churn", () => {
   const base: any = { _id: 'a', agent_status: 'dormant', is_idle: true, message_count: 5, updated_at: Date.now(), last_heartbeat: Date.now() };
   const parked = { ...base, agent_status: 'hibernated', hibernated_at: 100 };
-  expect(classifySession(parked).rest).toBe('dormant');
+  // Parking is not a wake: the row files by the verdict it carries.
+  expect(classifySession(parked).rest).toBe('needs_input');
+  expect(classifySession({ ...parked, thread_state_status: 'done' }).rest).toBe('done');
   expect(classifySession({ ...parked, session_error: 'Wake failed' }).rest).toBe('needs_input');
   expect(sessionStructuralSig(parked)).not.toBe(sessionStructuralSig(base));
   expect(sessionStructuralSig({ ...parked, last_heartbeat: 999 })).toBe(sessionStructuralSig(parked));

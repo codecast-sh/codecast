@@ -49,7 +49,7 @@ const seed = async (patch: Record<string, unknown>) => act(async () => { useInbo
 await seed({
   teams: [{ _id: TEAM, features: { org: true } }],
   currentUser: { _id: "fixture-user-me" },
-  clientState: { ...(useInboxStore.getState().clientState as object), ui: { active_team_id: TEAM } },
+  clientState: { ...(useInboxStore.getState().clientState as object), ui: { active_team_id: TEAM, show_characters: true } },
   orgTree: tree,
   projects: {
     [GROWTH]: row({ _id: GROWTH, title: "Growth", short_id: "pr-4" }),

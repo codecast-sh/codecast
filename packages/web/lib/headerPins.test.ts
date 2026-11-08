@@ -1,6 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { setCharacters } from "../test-helpers/characters";
 import { defaultPinOf, movePin, pinDropSlot, resolveHeaderPins } from "./headerPins";
 import type { AnchorRow } from "../hooks/useSyncAnchors";
+
+// These read a session's or role's character, which needs Characters on.
+beforeEach(() => setCharacters(true));
 
 // S30: with no pins chosen, the header shows the person's global Executive
 // Assistant on every workspace, named, with its role and reach as the subtitle.

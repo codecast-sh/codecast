@@ -20,6 +20,8 @@ beforeAll(async () => {
   React = await import("react");
   ({ createRoot } = await import("react-dom/client"));
   ({ act } = await import("react"));
+  // A session's character shows only with Characters on (off by default).
+  (await import("../../test-helpers/characters")).setCharacters(true);
   // Loading jsdom and react-dom takes well past bun's 5 s hook default on a
   // loaded machine, and a slow import is not a failing test.
 }, 120_000);

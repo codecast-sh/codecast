@@ -7,7 +7,7 @@
 // mount tests, and mock.module is process global and permanent, so every
 // module mocked here is spread from the real one and put back in afterAll,
 // the way followInCall does for callManager.
-import { afterAll, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
@@ -34,6 +34,9 @@ mock.module("convex/react", () => ({
 }));
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { RoomThread } = await import("../RoomThread");
+
+// Names and faces here are characters, which need Characters on (off by default).
+beforeEach(async () => { (await import("../../../test-helpers/characters")).setCharacters(true); });
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
 // The composer measures its own row; jsdom has no observer to do it with.

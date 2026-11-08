@@ -173,6 +173,11 @@ jobs:
       # program over its code plus the convex and cli files it imports, and
       # playground is its shell plus its own Convex deployment's functions.
       - name: Typecheck (cli + web + sim + convex + evals + playground)
+        # web's program outgrew V8's default ~4 GB heap: on 2026-11-08 its tsc
+        # died in GC at 4029 MB (exit 134). 6 GB leaves room on the 16 GB
+        # runner for the other programs turbo runs beside it.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: bun run typecheck --filter=@codecast/cli --filter=@codecast/web --filter=@codecast/convex --filter=@codecast/evals --filter=@codecast/playground
 
   lint:

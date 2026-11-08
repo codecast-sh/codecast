@@ -10,8 +10,10 @@ import { Hero, HeroReprise } from "./Hero";
 import { SignalsSection, WaysInSection } from "./Signals";
 import { ChangeRunSection } from "./ChangeRun";
 import { ShipSection, TraceSection } from "./ShipTrace";
-import { AutonomySection, LibrarySection, RateSection } from "./Autonomy";
-import { CopyCommand, ForScripts, HAIR, INK, LINE, PAPER, StillContext, TEXT, useStillMode } from "./kit";
+import { AutonomySection, RateSection } from "./Autonomy";
+import { LibrarySection } from "./Library";
+import { CopyCommand, Label } from "./kit";
+import { HAIR, INK, LINE, PAPER, StillContext, TEXT, useStillMode } from "./base";
 import "./flows.css";
 
 /*
@@ -72,8 +74,8 @@ function Rail() {
 }
 
 const RELATED: { slug: string; why: string }[] = [
-  { slug: "decisions", why: "Decide, and every other step that waits on a person, lands in the same queue as the rest of your calls." },
-  { slug: "pull-requests", why: "A change on its way to Land can be a pull request whose session answers its own review." },
+  { slug: "decisions", why: "Decide, and every other step that waits on a person, lands in the same queue as the rest of your decisions." },
+  { slug: "pull-requests", why: "A run of Change can start from a pull request, and the PR page shows which session wrote each line." },
   { slug: "triggers", why: "The session that shipped a change can arm a follow-up that checks on it once the deploy is live." },
   { slug: "memory", why: "Every landed change links back to the session that wrote it, which is how a fix finds who caused it." },
 ];
@@ -98,14 +100,14 @@ export default function FlowsPage() {
         <LibrarySection />
 
         <section style={{ backgroundColor: SOL.base3 }}>
-          <div className="max-w-6xl mx-auto px-5 sm:px-8 py-20">
+          <div className="max-w-7xl mx-auto px-5 sm:px-8 pt-16 pb-20">
             <div className="max-w-3xl mb-14">
-              <ForScripts note={<>Agents send their own finished work through a flow from the session, and read a flow&apos;s steps before they do.</>}>
-                <div className="flex flex-col gap-2">
-                  <CopyCommand cmd="cast flow run change" />
-                  <CopyCommand cmd="cast flow show change" />
-                </div>
-              </ForScripts>
+              <Label>From a session or a script</Label>
+              <p className="mt-2 mb-3 text-[14px] leading-[1.6]" style={{ color: TEXT }}>Agents send their own finished work through a flow, and read a flow&apos;s steps before they do.</p>
+              <div className="flex flex-col gap-2">
+                <CopyCommand cmd="cast flow run change" />
+                <CopyCommand cmd="cast flow show change" />
+              </div>
             </div>
             <h2 className="font-mono font-bold text-[24px] sm:text-[28px] tracking-[-0.03em] mb-8" style={{ color: INK }}>Related features</h2>
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -32,13 +32,15 @@ async function render(node: React.ReactNode): Promise<HTMLElement> {
   return host as unknown as HTMLElement;
 }
 
-/** The switch lives in the store, so a test drives it the way the app does. */
+/** The switch lives in the store, so a test drives it the way the app does.
+ *  Characters (off by default) stays on: these tests are about what a
+ *  character looks like when a session wears one. */
 async function setPersonifyAll(on: boolean) {
   const { useInboxStore } = await import("../../store/inboxStore");
   await act(async () => {
     useInboxStore.setState((s: Record<string, unknown>) => ({
       ...s,
-      clientState: { ...((s.clientState as object) ?? {}), ui: { ...(((s.clientState as { ui?: object })?.ui) ?? {}), personify_sessions: on } },
+      clientState: { ...((s.clientState as object) ?? {}), ui: { ...(((s.clientState as { ui?: object })?.ui) ?? {}), show_characters: true, personify_sessions: on } },
     }) as never);
   });
 }

@@ -5,6 +5,8 @@ import { MemoryRouter } from "react-router";
 import { buildTaskGroups, canSubGroup, isValidTaskGroup, parseTaskGroup, taskGroupDropUpdates, TASK_AXES } from "../taskGrouping";
 import { DEFAULT_TASK_STATUSES, isOnHumanBoard } from "@codecast/shared/tasks";
 import { orderedStatuses, statusFill } from "../taskStatuses";
+import { IdentityPrefsOverride } from "../../hooks/useIdentityPrefs";
+import { DEFAULT_IDENTITY_PREFS } from "../sessionIdentity";
 
 const ctx = { projects: {}, onFilterLabel: () => {} };
 // Grouping must never reorder within a bucket, so the identity sort is the
@@ -216,7 +218,9 @@ describe("the assignee axis with roles", () => {
 
   it("heads a role's group with its ringed face and the way to the role, a person's with theirs", () => {
     const result = groups("assignee", [task(asRole(growth)), task({ assignee: "sam", assignee_info: { name: "Samvit", github_username: "samvit" } })], "", orgCtx);
-    const html = (node) => renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>);
+    // The role's face is its character: Characters is off by default, and
+    // static markup reads the store's initial state, so turn it on here.
+    const html = (node) => renderToStaticMarkup(<MemoryRouter><IdentityPrefsOverride.Provider value={DEFAULT_IDENTITY_PREFS}>{node}</IdentityPrefsOverride.Provider></MemoryRouter>);
     expect(html(result[0].icon)).toContain('data-assignee-role="or-growth"');
     expect(html(result[0].icon)).toContain('data-avatar="fox"');
     expect(html(result[0].extra)).toContain('href="/org/or-growth"');

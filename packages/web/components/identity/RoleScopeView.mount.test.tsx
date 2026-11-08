@@ -77,7 +77,7 @@ function SheetHead() {
 test("with the tree, the card is the role's summary and says what its sheet's head says", async () => {
   await seed({
     currentUser: { _id: "fixture-user-me" },
-    clientState: { ...(useInboxStore.getState().clientState as object), ui: { active_team_id: TEAM } },
+    clientState: { ...(useInboxStore.getState().clientState as object), ui: { active_team_id: TEAM, show_characters: true } },
     orgTree: ORG_FIXTURE as OrgTree,
     projects: { [project._id]: project },
     initiatives: { g1: goal },

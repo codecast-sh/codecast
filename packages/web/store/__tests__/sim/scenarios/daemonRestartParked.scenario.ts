@@ -3,7 +3,9 @@
 // coming due on one of them, beside one session still working. Its heartbeats
 // lapse past the liveness window; it restarts, re-registers the pane that
 // survived and claims the trigger. No session may duplicate, the parked rows
-// stay parked and read the same in every window (INV-sessions-mine,
+// keep the verdict they carry and read the same in every window: each is
+// declared done, and parking is not a wake, so the two without a trigger file
+// as Done and only the one whose trigger is armed parks in Dormant (INV-sessions-mine,
 // INV-followers), and the armed trigger stays consistent with its session
 // (INV-triggers).
 
@@ -26,13 +28,15 @@ async function expectNoDuplicateSessions(w: ScenarioWorld): Promise<void> {
 
 export async function daemonRestartParked(w: ScenarioWorld): Promise<void> {
   w.team("acme").user("ada", ["acme"]);
-  const parked = ["p1", "p2", "p3"].map((n) => w.session("ada", n, { agentStatus: "hibernated" }));
+  const parked = ["p1", "p2", "p3"].map((n) => w.session("ada", n, { agentStatus: "hibernated", row: { thread_state_status: "done" } }));
   const live = w.session("ada", "live", { agentStatus: "working" });
   const trigger = w.trigger("nightly", { owner: "ada", session: parked[0] });
   const ada = await w.device("ada", { followers: 1 });
   const daemon = w.daemon("ada");
-  // A parked row reads parked whether its daemon is alive, dead or back.
-  const stillParked = async () => { for (const s of parked) await w.expect(ada.host).shows(s, { bucket: "dormant" }); };
+  // A parked row reads by its own verdict whether its daemon is alive, dead or back.
+  const stillParked = async () => {
+    for (const s of parked) await w.expect(ada.host).shows(s, { bucket: s === parked[0] ? "dormant" : "done" });
+  };
 
   await w.advance(HEARTBEAT_ALIVE_MS + 60_000);
   await stillParked();

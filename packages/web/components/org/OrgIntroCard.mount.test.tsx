@@ -20,16 +20,17 @@ let intro: typeof import("../../lib/orgIntro");
 let card: typeof import("./OrgIntroCard") & typeof import("./OrgIntroAnywhere") & typeof import("../../lib/orgIntroCard");
 
 // The fakes the card's mount reads through: the store, the router, the toast.
-type Ui = { org_intro_seen?: boolean; org_upsell_seen?: boolean };
+// Characters (off by default) is on: the card meets the Head of People by its face.
+type Ui = { org_intro_seen?: boolean; org_upsell_seen?: boolean; show_characters?: boolean };
 const fake = {
-  state: { clientStateInitialized: true, teams: [{ _id: "t1", features: { org: true } }], currentUser: { _id: "u1" } as { _id: string } | null, clientState: { ui: {} as Ui }, call: { phase: "idle" }, updateClientUI(p: Ui) { Object.assign(fake.state.clientState.ui, p); fake.writes.push({ ...p }); } },
+  state: { clientStateInitialized: true, teams: [{ _id: "t1", features: { org: true } }], currentUser: { _id: "u1" } as { _id: string } | null, clientState: { ui: { show_characters: true } as Ui }, call: { phase: "idle" }, updateClientUI(p: Ui) { Object.assign(fake.state.clientState.ui, p); fake.writes.push({ ...p }); } },
   writes: [] as Ui[],
   pathname: "/inbox",
   pushes: [] as string[],
   phone: false,
   toasts: [] as Array<{ id: string; render: (id: string) => React.ReactElement; onDismiss?: () => void }>,
   dismissed: [] as string[],
-  reset() { fake.state.clientStateInitialized = true; fake.state.currentUser = { _id: "u1" }; fake.state.clientState.ui = {}; fake.state.call = { phase: "idle" }; fake.writes = []; fake.pathname = "/inbox"; fake.pushes = []; fake.phone = false; fake.toasts = []; fake.dismissed = []; },
+  reset() { fake.state.clientStateInitialized = true; fake.state.currentUser = { _id: "u1" }; fake.state.clientState.ui = { show_characters: true }; fake.state.call = { phase: "idle" }; fake.writes = []; fake.pathname = "/inbox"; fake.pushes = []; fake.phone = false; fake.toasts = []; fake.dismissed = []; },
 };
 
 beforeAll(async () => {

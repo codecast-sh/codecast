@@ -18,7 +18,6 @@ import { CloudPlacementStrip } from "./CloudPlacementStrip";
 import { AppLoader } from "./AppLoader";
 import { LoginCodePaste } from "./LoginCodePaste";
 import type { ConversationData } from "./conversation/types";
-import { threadStateView } from "../lib/threadState";
 import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
@@ -42,15 +41,15 @@ import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
 import Link from "next/link";
-import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
-import { isWatchHostDead, liveWatchRowsFor } from "./monitorRows";
+import { fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
+import { useLiveWatchRows } from "../hooks/useLiveWatchRows";
 import { useOpenWatchMessage } from "../hooks/useOpenWatchMessage";
 import { partitionTriggerInbox, groupSessionsByTrigger, groupTriggerRowsByHome, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
 import { rowScrollDelta, scrollMarginTopOf } from "../lib/rowScroll";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { TriggerRowItem, TriggerHomeHeader, SchedChildArrow, SchedHealthDot, SchedFireBadge } from "./TriggerRow";
-import { dormantWakeOf } from "./inbox/dormantWake";
+import { DormantClaimRow, DormantWakeRow } from "./inbox/DormantWakeRows";
 import { WAKE_BADGE, RUNNING_BADGE_TONE } from "../lib/triggerBadges";
 import { schedAccent, type SchedAccent } from "../lib/triggerAccent";
 // Who is speaking on each row (docs/architecture/session-characters.md S3).
@@ -1252,19 +1251,6 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
 // fold the rest behind a count row.
 const MAX_MONITOR_BARS = 3;
 
-// Message-derived watch rows (own lifecycle + restart fence) merged with the
-// daemon's verified report — the report supplies rows the loaded window lacks
-// and retires rows the daemon found dead (liveWatchRowsFor). One hook so the
-// full bars, the folded strip and the dormant fallback all read the same rows.
-function useLiveWatchRows(session: InboxSession, now: number) {
-  const messages = useInboxStore((st) => st.messages[session._id]);
-  return useMemo(
-    () => (isWatchHostDead(session, now) ? [] : liveWatchRowsFor(session, messages, now)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the row fields the merge reads
-    [messages, now, session.open_tasks, session.open_tasks_at, session.agent_started_at, session.agent_status, session.last_heartbeat, session.inbox_killed_at, session.updated_at],
-  );
-}
-
 // A dynamic-workflow run in flight inside the card above — the session's turn
 // has ended but it is WAITING on the fleet, so the run gets the same ↳ child
 // bar the schedule and monitor families wear, in workflow cyan. Rendered from
@@ -1432,157 +1418,6 @@ export function MonitorBars({ session, isActive }: {
         </button>
       )}
     </>
-  );
-}
-
-// -- Wake rows --
-// DormantWakeRow: every card in the DORMANT section carries one line saying
-// what wakes it and when (dormantWakeOf), whatever the card-bar mode, because
-// a parked card is only safe to ignore when its wake is visible. Nothing
-// verifiable scheduled reads as a claim with the time it returns to the person.
-//
-// DormantClaimRow is the inverse, for a card filed under NEEDS INPUT whose
-// pinned state still declares dormant: the agent SAYS a machine wakes it, but
-// the system can verify no armed trigger, watch, loop or run (the wake already
-// landed and the agent never re-declared, the wake lives somewhere the daemon
-// cannot see, or the bare claim outlived DORMANT_CLAIM_TTL_MS). The row names
-// the claim and marks it unverified, so the card explains why it still asks.
-function DormantWakeRow({ session, rows, isActive, onOpen, onOpenSchedule }: {
-  session: InboxSession;
-  rows: TriggerRow[];
-  isActive: boolean;
-  onOpen: (session: InboxSession) => void;
-  onOpenSchedule: (row: TriggerRow) => void;
-}) {
-  const now = useCoarseNow(30_000);
-  const watches = useLiveWatchRows(session, now);
-  const wake = dormantWakeOf(session, rows, watches, now);
-  let what: string;
-  let when: React.ReactNode;
-  let warn = false;
-  switch (wake.kind) {
-    case "trigger":
-      what = taskDisplayTitle(wake.row.task) + (wake.others > 0 ? ` +${wake.others}` : "");
-      when = <SchedFireBadge task={wake.row.task} />;
-      break;
-    case "trigger_unloaded":
-      what = "a trigger fires into it";
-      when = "armed";
-      break;
-    case "workflow":
-      what = `workflow: ${wake.name}`;
-      when = "when it finishes";
-      break;
-    case "background":
-      what = `${wake.count > 1 ? `${wake.count} background tasks` : "background task"}${wake.what ? `: ${wake.what}` : ""}`;
-      when = "when it finishes";
-      break;
-    case "workers":
-      what = "its subagents are still working";
-      when = "when they finish";
-      break;
-    case "snoozed":
-      what = "snoozed";
-      when = fmtClock(wake.at, now);
-      break;
-    case "parked":
-      what = "parked by you";
-      when = "on next activity";
-      break;
-    case "claim":
-      warn = true;
-      what = wake.what ? `nothing scheduled · ${wake.what}` : "nothing scheduled";
-      when = wake.back > now ? `yours in ${fmtDuration(wake.back - now)}` : "yours now";
-      break;
-  }
-  return (
-    <div data-cc-tech data-card-bar data-dormant-wake={wake.kind} className={`relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
-      <button
-        className="w-full flex items-center gap-1.5 text-left cursor-pointer pl-2 pr-3 py-[3px] hover:bg-sol-blue/[0.05] transition-colors"
-        onClick={() => (wake.kind === "trigger" ? onOpenSchedule(wake.row) : onOpen(session))}
-        title={wake.kind === "claim" ? "The agent named a wake nothing here can see. It returns to Needs Input if nothing happens." : "Open"}
-      >
-        <SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" />
-        <span className={`text-[11px] truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
-        <span className={`ml-auto shrink-0 whitespace-nowrap text-[10px] tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{when}</span>
-      </button>
-    </div>
-  );
-}
-
-function DormantClaimRow({ session, isActive, hasOtherRows, onOpen }: {
-  session: InboxSession;
-  isActive: boolean;
-  hasOtherRows: boolean;
-  onOpen: (session: InboxSession) => void;
-}) {
-  const now = useCoarseNow(30_000);
-  const watchRows = useLiveWatchRows(session, now).length;
-  if (hasOtherRows || watchRows > 0) return null;
-  const ts = threadStateView(session, session.message_count ?? 0, now);
-  // Only a state that still DECLARES dormant earns the row; a stale state
-  // reads as absent (threadStateView returns null), and any other declared
-  // status means no wake was claimed.
-  if (ts?.status !== "dormant") return null;
-  return (
-    <WakeReasonRowShell
-      isActive={isActive}
-      family="Wake"
-      title="state claims a machine wake"
-      detail={`no armed trigger, watch, or loop · ${ts.provenance}`}
-      badge="unverified"
-      badgeClass="bg-sol-yellow/10 text-sol-yellow border-sol-yellow/30"
-      onClick={() => onOpen(session)}
-    />
-  );
-}
-
-// The one row anatomy both wake-reason variants wear, on one line like the
-// folded trigger strip: ↳ child glyph, family eyebrow, title, detail, optional
-// badge, so a card's children always read as one family. The badge slot means one thing on every child row: the state of
-// the WAKE (a trigger's countdown, a command "running", a claim "unverified").
-// The plain reason row has no wake to report, so it carries no badge — the
-// card's section already says the session is parked.
-function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass, onClick }: {
-  isActive: boolean;
-  family: string;
-  title: string;
-  detail: string;
-  badge?: string;
-  badgeClass?: string;
-  onClick: () => void;
-}) {
-  const ariaLabel = `${family} — why this session is parked`;
-  return (
-    <div data-cc-tech data-card-bar className={`group/dormrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
-      <button
-        className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
-        onClick={onClick}
-        title="Open the session"
-      >
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="flex items-center shrink-0 text-sol-blue/70" role="img" aria-label={ariaLabel}>
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <title>{ariaLabel}</title>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
-            </svg>
-          </span>
-          {/* One line, in the folded strip's type: family, what it waits on,
-              where that came from, and the wake's state when it has one. */}
-          <div className="min-w-0 flex-1 flex items-center gap-1.5">
-            <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
-            {title && <span className="text-[11px] truncate min-w-0 text-gray-400 font-normal">{title}</span>}
-            {detail && <span className="text-[10px] truncate min-w-0 text-sol-text-dim">{title ? "· " : ""}{detail}</span>}
-            {badge && (
-              <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${badgeClass ?? ""}`}>
-                {badge}
-              </span>
-            )}
-          </div>
-        </div>
-      </button>
-    </div>
   );
 }
 

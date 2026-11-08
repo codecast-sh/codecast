@@ -1,5 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { setCharacters } from "../../test-helpers/characters";
 import { instantSessionRows, mergeSearchRows, rankSessions, sessionMatchesQuery, sessionStanding, standingMark, type SessionStanding } from "../instantSessionSearch";
+
+// These read a session's or role's character, which needs Characters on.
+beforeEach(() => setCharacters(true));
 
 const session = (over: any) => ({
   _id: over._id,

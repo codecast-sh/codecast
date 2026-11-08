@@ -80,7 +80,7 @@ export function PermissionRecordLine({ question, outcome, output, className }: {
 
 /** The record an answer leaves in the transcript (permissionRecord); null
  *  when the answer is not a permission ask's. */
-export function usePermissionRecord(decision: DecisionAnswerMessage): ReturnType<typeof permissionRecord> {
+function usePermissionRecord(decision: DecisionAnswerMessage): ReturnType<typeof permissionRecord> {
   const run = useInboxStore((s) => (decision.id ? s.sessionDecisions[decision.id]?.run : undefined));
   return permissionRecord(decision, run);
 }

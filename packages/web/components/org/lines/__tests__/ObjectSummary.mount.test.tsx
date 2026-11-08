@@ -24,7 +24,7 @@ async function verifySummaries() {
   const fx = await import("../../../company/companyFixture");
   const tree = fx.COMPANY_FIXTURE_TREE;
   const collections: Record<string, any[]> = { initiatives: fx.COMPANY_FIXTURE_INITIATIVES, projects: fx.COMPANY_FIXTURE_PROJECTS, tasks: fx.COMPANY_FIXTURE_TASKS };
-  const state: any = { currentUser: { _id: "fixture-user-me" }, orgTree: tree, teamMembers: fx.COMPANY_FIXTURE_ROSTER };
+  const state: any = { currentUser: { _id: "fixture-user-me" }, orgTree: tree, teamMembers: fx.COMPANY_FIXTURE_ROSTER, clientState: { ui: { show_characters: true } } };
   const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {}, subscribe: () => () => {} });
   mock.module("../../../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
   const realWorkspace = { ...(await import("../../../../hooks/useWorkspaceCollection")) };

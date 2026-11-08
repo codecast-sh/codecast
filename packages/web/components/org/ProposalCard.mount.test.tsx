@@ -44,6 +44,8 @@ const realProposals = { ...(await import("../../hooks/useSyncOrgProposals")) };
 mock.module("../../hooks/useSyncOrgProposals", () => ({ ...realProposals, useSyncOrgProposal: (ref: string | null) => ({ ready: !!ref, missing: false }), useSyncOrgProposals: () => ({ ready: true, missing: false }) }));
 const realTree = { ...(await import("../../hooks/useSyncOrgTree")) };
 const { useInboxStore } = await import("../../store/inboxStore");
+// Roles wear their characters here; Characters is off by default.
+(await import("../../test-helpers/characters")).setCharacters(true);
 mock.module("../../hooks/useSyncOrgTree", () => ({ ...realTree, useSyncOrgTree: () => ({ tree: useInboxStore((s) => s.orgTree), ready: true, missing: false, refused: false, retry() {} }), useSyncOrgTreeFeeder: () => ({ ready: true, missing: false, refused: false, retry() {} }) }));
 
 const { createRoot } = await import("react-dom/client");

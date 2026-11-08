@@ -15,6 +15,8 @@ mock.module("convex/react", () => ({
 }));
 const { classifyUserMessage, FOLD_KEPT_USER_KINDS, isStickyWorthy } = await import("../conversation/classify");
 const { EscalationDivider } = await import("../conversation/blocks/systemBlocks");
+const { IdentityPrefsOverride } = await import("../../hooks/useIdentityPrefs");
+const { DEFAULT_IDENTITY_PREFS } = await import("../../lib/sessionIdentity");
 
 // A session that moved between its role and the person while `cast escalate`
 // existed (retired, org-staffing.md S28) left one machine message in both
@@ -27,7 +29,11 @@ const wire = [
   "</session-escalation>",
 ].join("\n");
 const backWire = '<session-escalation move="back" by="person" role="or-8" handle="calling" name="Calling" session="jx7abcd" to="Ashot" at="1">\n\n</session-escalation>';
-const render = (node: React.ReactNode) => renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>);
+// The role's face is its character, which needs Characters on (off by
+// default); static markup reads the store's initial state, so say it here.
+const render = (node: React.ReactNode) => renderToStaticMarkup(
+  <MemoryRouter><IdentityPrefsOverride.Provider value={DEFAULT_IDENTITY_PREFS}>{node}</IdentityPrefsOverride.Provider></MemoryRouter>,
+);
 
 describe("escalation divider", () => {
   test("classifies as its own kind, kept when folded, never sticky", () => {
