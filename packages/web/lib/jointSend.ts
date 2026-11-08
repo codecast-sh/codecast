@@ -12,16 +12,16 @@
 // claims that clear each named author's composer.
 import { formatJointMessage, type JointPart } from "@codecast/shared/contracts/jointMessage";
 import type { PresenceRow } from "../hooks/useDocPresence";
+import { typingRows } from "./composerPresence";
 
 export type JointCandidate = { user_id: string; from: string; text: string };
 type Entry = { me: string; candidates: JointCandidate[]; armed: boolean; onSent?: (sent: JointCandidate[]) => void };
 
 const entries = new Map<string, Entry>();
 
-/** Others' live drafts in this session's composer, as the presence strip sees them. */
+/** Others' live drafts in this session's composer, as the presence strip sees them (typingRows). */
 export function jointCandidatesOf(rows: readonly PresenceRow[]): JointCandidate[] {
-  return rows
-    .filter((r) => r.draft_text && r.draft_text.trim())
+  return typingRows(rows)
     .map((r) => ({ user_id: r.user_id, from: r.user_name, text: r.draft_text!.trim() }));
 }
 
@@ -47,6 +47,12 @@ export function armJointSend(conversationId: string): boolean {
 export function composeJointTurn(me: string, mine: string, candidates: readonly JointCandidate[]): string {
   const parts: JointPart[] = [{ from: me, body: mine }, ...candidates.map((c) => ({ from: c.from, body: c.text }))];
   return formatJointMessage(parts);
+}
+
+/** Drop an armed joint send without sending it (the submit turned out not to be a turn). */
+export function disarmJointSend(conversationId: string): void {
+  const entry = entries.get(conversationId);
+  if (entry) entry.armed = false;
 }
 
 /**

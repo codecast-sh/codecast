@@ -31,6 +31,14 @@ function setup(row: Record<string, unknown> = {}) {
 }
 
 describe("hold for a human prompt", () => {
+  test("a daemon's retry timer never moves a row failed as unconfirmed; a person's retry does", async () => {
+    const f = setup({ status: "failed", delivery_disposition_reason: "unconfirmed", paste_verified_at: 50 });
+    expect(await (retryMessage as any)._handler(f.ctx, { message_id: "message", device_id: "device" })).toMatchObject({ skipped: true });
+    expect(f.row().status).toBe("failed");
+    expect(await retryPendingMessageForUser(f.ctx, USER, CONVERSATION, { messageId: "message" })).toBe("pending");
+    expect(f.row().delivery_disposition_reason).toBeUndefined();
+  });
+
   test("a hold re-pends without spending a retry and stamps the reason", async () => {
     const f = setup({ paste_verified_at: 50 });
     await (retryMessage as any)._handler(f.ctx, { message_id: "message", device_id: "device", hold_reason: "waiting for a human answer in the terminal" });

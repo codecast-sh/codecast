@@ -83,7 +83,7 @@ describe("/confirm", () => {
   test("a pending presence challenge confirms with an assertion, signed out", async () => {
     challenge = PENDING;
     const m = await mount();
-    expect(m.container.querySelector("h1")!.textContent).toBe("Confirm to approve an Ask first read");
+    expect(m.container.querySelector("h1")!.textContent).toBe("Confirm to approve this decision");
     expect(m.container.querySelector("[data-confirm-sub]")!.textContent).toBe(PENDING.label);
     await act(async () => (m.container.querySelector("[data-confirm-run]") as HTMLButtonElement).click());
     expect(ceremonies).toEqual(["get"]);

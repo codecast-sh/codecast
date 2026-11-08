@@ -725,10 +725,48 @@ const NO_TOKEN =
 const headGuard = { expected_head_sha: v.optional(v.string()) };
 const mergeMethod = v.optional(v.union(v.literal("merge"), v.literal("squash"), v.literal("rebase")));
 
+// GitHub's merge states that branch protection holds: required reviews or
+// checks unmet (BLOCKED), or a branch that must be up to date and is not
+// (BEHIND). Only these can be bypassed; conflicts and drafts cannot.
+const HELD_BY_PROTECTION = new Set(["BLOCKED", "BEHIND"]);
+
+/** Why GitHub is holding a pull request, and whether this identity may skip it. */
+export function heldMessage(pr: { repository: string; number: number }, mergeState: string, canBypass: boolean, as: string): string {
+  const why = mergeState === "BEHIND"
+    ? "its branch must be up to date with the base first"
+    : "required reviews or checks have not passed";
+  return `Branch protection holds ${pr.repository}#${pr.number}: ${why}. ` + (canBypass
+    ? `${as} may bypass it: cast pr merge --admin, or Bypass protection and merge on the pull request page.`
+    : `GitHub does not let ${as} bypass it.`);
+}
+
+/**
+ * Merge on GitHub. A merge that branch protection holds goes through only when
+ * the caller asked to bypass (`bypass`, what `--admin` sends) and GitHub says
+ * their identity may; without the ask it is refused here, so an admin's token
+ * never skips a team's required checks by accident, from the page or from an
+ * agent running `cast pr merge`.
+ */
 export const merge = action({
-  args: { api_token: v.optional(v.string()), ...locatorArgs, ...headGuard, method: mergeMethod, delete_branch: v.optional(v.boolean()) },
+  args: {
+    api_token: v.optional(v.string()),
+    ...locatorArgs,
+    ...headGuard,
+    method: mergeMethod,
+    delete_branch: v.optional(v.boolean()),
+    bypass: v.optional(v.boolean()),
+  },
   handler: async (ctx, args): Promise<any> =>
     pullRequestVerb(ctx, args, { requireState: "open" }, async (actor, acting) => {
+      const access: any = await ctx.runAction(internal.githubApi.pullRequestMergeability, {
+        repository: actor.pr.repository,
+        pr_number: actor.pr.number,
+        github_access_token: acting.token,
+      });
+      const held = HELD_BY_PROTECTION.has(access.merge_state);
+      if (held && !(args.bypass && access.can_bypass)) {
+        throw new Error(heldMessage(actor.pr, access.merge_state, access.can_bypass, acting.as));
+      }
       const result: any = await ctx.runAction(internal.githubApi.mergePullRequest, {
         repository: actor.pr.repository,
         pr_number: actor.pr.number,
@@ -737,8 +775,39 @@ export const merge = action({
         delete_branch: args.delete_branch,
         head_ref: actor.pr.head_ref ?? undefined,
         expected_head_sha: args.expected_head_sha,
+        bypass_node_id: held ? access.id : undefined,
       });
-      return { merged: result.merged, sha: result.sha, branch_deleted: result.branch_deleted, head_ref: actor.pr.head_ref };
+      return {
+        merged: result.merged,
+        sha: result.sha,
+        branch_deleted: result.branch_deleted,
+        head_ref: actor.pr.head_ref,
+        bypassed: held,
+      };
+    }),
+});
+
+/**
+ * Whether this caller could merge the pull request now, as GitHub answers for
+ * the identity a merge would act as: its live merge state and whether that
+ * identity may bypass branch protection. The page asks before offering a
+ * bypass, so the option appears only for people who hold the right.
+ */
+export const mergeAccess = action({
+  args: { api_token: v.optional(v.string()), ...locatorArgs },
+  handler: async (ctx, args): Promise<any> =>
+    pullRequestVerb(ctx, args, { requireState: "open" }, async (actor, acting) => {
+      const access: any = await ctx.runAction(internal.githubApi.pullRequestMergeability, {
+        repository: actor.pr.repository,
+        pr_number: actor.pr.number,
+        github_access_token: acting.token,
+      });
+      return {
+        merge_state: access.merge_state,
+        held: HELD_BY_PROTECTION.has(access.merge_state),
+        can_bypass: access.can_bypass,
+        head_sha: access.head_sha,
+      };
     }),
 });
 

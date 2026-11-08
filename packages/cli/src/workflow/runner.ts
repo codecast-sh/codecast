@@ -698,9 +698,17 @@ async function waitOnStation(
     // The subject read finished before its brief landed: only work after it (a working read, or a reply past the brief) answers.
     if (subject && state === "working") subjectWorked = true;
     if (subject && !subjectWorked && (row.message_count ?? 0) < subject.sentAtCount + 2 && !row.is_killed) continue;
-    const settled = state === "done" || state === "needs_input" || (!!subject && state === "dormant") || row.is_killed || (wasLive && !row.is_live);
+    // A hand that pinned done after arming a once trigger into its own session reads dormant: the inbox files that
+    // rest as parked until the trigger wakes it (inboxProjection doneRest). Its done pin is its answer. Two onefix
+    // Builds armed their seven-day checks, pinned "watching" and waited at Build for hours (ct-74310, ct-86290,
+    // 2026-11-07). A hand whose background work still runs reads waiting, and the run waits on it (ct-59925).
+    const restPin = !subject && state === "dormant" && row.agent_status !== "waiting" && !row.is_killed
+      ? await cliCall(options, "/cli/sessions/state/get", { session: conversationId })
+      : undefined;
+    const settled = state === "done" || state === "needs_input" || (!!subject && state === "dormant") || row.is_killed || (wasLive && !row.is_live)
+      || restPin?.status === "done";
     if (!settled) continue;
-    const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
+    const pinned = restPin ?? await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
     // A presenter brought back still shows the pin it left last visit until it pins again.
     if (answeredAfter !== undefined && !row.is_killed && !(typeof pinned?.at === "number" && (answeredAfter === null || pinned.at > answeredAfter))) {
       askedOnce = false;
@@ -1229,6 +1237,20 @@ export interface RunOptions {
   loadedFlowVersions?: string;
   /** The flow versions the run is pinned to now, or null when that cannot be read. */
   pinnedFlowVersions?: () => Promise<string | null>;
+  /** Set when the server answers a report with the run already over (workflow_runs runOver): why it ended. */
+  endedOnServer?: string;
+}
+
+/** The run ended on the server while this runner drove it (a person stopped it, its problem closed). */
+class RunEndedOnServer extends Error {}
+
+/**
+ * A runner whose run is over starts no station after it. A cancel cannot reach a runner waiting out a hold or inside
+ * a station's command, so the runner learns of it from the answer to its next report, and stops there: five runs
+ * stopped at their holds on Nov 5 went on through Build and Present when the holds ended (ct-73543's two cards).
+ */
+function stopIfEnded(options: RunOptions): void {
+  if (options.endedOnServer) throw new RunEndedOnServer(options.endedOnServer);
 }
 
 /** A run's pinned flow versions as one comparable string. */
@@ -1525,11 +1547,14 @@ async function reportProgress(options: RunOptions, payload: Record<string, any>)
     body: JSON.stringify({ api_token: options.apiToken, run_id: options.runId, ...p }),
   });
   try {
-    const res = await post(payload);
-    if (res.ok) return true;
+    let res = await post(payload);
     // A backend older than this CLI rejects the whole report for an arg it does not know: the enrichments go, the report stays.
     const extras = PROGRESS_ENRICHMENTS.filter((k) => k in payload);
-    if (extras.length) return (await post(Object.fromEntries(Object.entries(payload).filter(([k]) => !extras.includes(k))))).ok;
+    if (!res.ok && extras.length) res = await post(Object.fromEntries(Object.entries(payload).filter(([k]) => !extras.includes(k))));
+    if (!res.ok) return false;
+    const answer = await res.json().catch(() => null) as { ended?: { status: string; reason: string | null } } | null;
+    if (answer?.ended) options.endedOnServer = answer.ended.reason || `the run is ${answer.ended.status}`;
+    return true;
   } catch {}
   return false;
 }
@@ -1718,6 +1743,11 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   }
   try {
     return await driveRun(graph, options, cwd, initialContext, startNode, hash, graphNodeHashes);
+  } catch (err) {
+    if (!(err instanceof RunEndedOnServer)) throw err;
+    // Nothing is reported: the run's end, its task and its hands were settled when it ended.
+    console.log(`\n${c.bold}${c.yellow}━━━ The run is over on the server (${err.message}): this runner stops ━━━${c.reset}`);
+    return "failed";
   } finally {
     claim?.release();
   }
@@ -2002,6 +2032,7 @@ async function runNodeLoop(
         visits,
       });
     }
+    stopIfEnded(options);
     const checkpoint = (next?: string) => {
       if (options.runId && !options.dryRun) writeCheckpoint(state.context["run_dir"], options.runId, state, nodeOutcomes, next);
     };
@@ -2070,6 +2101,7 @@ async function runNodeLoop(
         cost_usd: current.type === "call" ? Number(state.context[`${current.id}.cost_usd`] ?? 0) : undefined,
       });
     }
+    stopIfEnded(options);
 
     // A hand may have moved the task (handoff, verdict); the next edge routes
     // on the task as it is now. Verdicts older than this node read as none.

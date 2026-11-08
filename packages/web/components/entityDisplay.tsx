@@ -157,17 +157,20 @@ export function SessionSummaryBlock({
   session,
   className = "",
   clamp = true,
+  preview: withPreview = true,
 }: {
   session: any;
   className?: string;
   /** false renders the whole summary/preview — the expanded object card. */
   clamp?: boolean;
+  /** false drops the last-message line, for a surface that shows the turns themselves. */
+  preview?: boolean;
 }) {
   const summary = sessionCardSummary(session);
   // The raw preview is a transcript slice: strip machine framing, and drop
   // the row when nothing readable survives (a preview that is ALL framing).
   const preview = stripTranscriptTags(session.last_message_preview ?? "");
-  const showPreview = preview && preview !== summary;
+  const showPreview = withPreview && preview && preview !== summary;
   const role = session.last_message_role;
   if (!summary && !showPreview) return null;
   return (

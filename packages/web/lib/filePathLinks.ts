@@ -119,6 +119,63 @@ export interface FilePathContextValue {
   /** The session's checkout root, which turns an absolute path into the
    *  repo-relative one a `file:` search is written with. */
   gitRoot?: string | null;
+  /** Absolute paths the session's own tool calls named. Agents often write a
+   *  path relative to somewhere other than their working directory (a sibling
+   *  repo, the parent of the checkout); these say where it really is. */
+  knownPaths?: readonly string[];
+}
+
+/** The absolute and `~/` paths named anywhere in these tool call inputs
+ *  (JSON strings), `~` expanded against `home`, sorted and unique. */
+export function namedAbsolutePaths(inputs: Iterable<string>, home: string | undefined): string[] {
+  const out = new Set<string>();
+  const visit = (v: unknown): void => {
+    if (typeof v === "string") {
+      for (const m of v.slice(0, 20_000).matchAll(FILE_PATH_SCAN_RE)) {
+        const raw = m[1].replace(TRAILING_PUNCT, "");
+        if (!raw.startsWith("/") && !raw.startsWith("~")) continue;
+        const abs = resolveCustomPath(raw, home);
+        if (abs) out.add(abs);
+      }
+    } else if (Array.isArray(v)) v.forEach(visit);
+    else if (v && typeof v === "object") Object.values(v).forEach(visit);
+  };
+  for (const input of inputs) {
+    try {
+      visit(JSON.parse(input));
+    } catch {
+      visit(input);
+    }
+  }
+  return [...out].sort();
+}
+
+/**
+ * The absolute path a mention names. A bare relative mention resolves against
+ * the working directory, unless the paths the session touched place it
+ * somewhere else: a touched path that holds the mention's first two or more
+ * segments (`ls ~/src/repo/a/b` places `repo/a/b/c.ts`). When the touched
+ * paths disagree, or one agrees with the working directory, it stays there.
+ */
+export function resolveMentionPath(path: string, ctx: FilePathContextValue | null | undefined): string | undefined {
+  if (!ctx) return undefined;
+  const direct = resolveCustomPath(path, ctx.home, ctx.base);
+  const rel = path.trim().replace(/\/$/, "");
+  const known = ctx.knownPaths;
+  if (!known?.length || /^[~/.]/.test(rel)) return direct;
+  const segs = rel.split("/");
+  const candidates = new Set<string>();
+  for (const k of known) {
+    for (let j = segs.length; j >= 2; j--) {
+      const head = segs.slice(0, j).join("/");
+      const at = `${k}/`.indexOf(`/${head}/`);
+      if (at < 0) continue;
+      candidates.add([k.slice(0, at + 1 + head.length), ...segs.slice(j)].join("/"));
+      break;
+    }
+  }
+  if (candidates.size !== 1 || (direct && candidates.has(direct))) return direct;
+  return [...candidates][0];
 }
 
 /** Provided once per conversation (ConversationView) with the session's
@@ -132,7 +189,7 @@ export const FilePathContext = createContext<FilePathContextValue | null>(null);
  * the raw path rides along and the page does its best.
  */
 export function filePathHref(path: string, line: number | undefined, ctx?: FilePathContextValue | null): string {
-  const abs = ctx ? resolveCustomPath(path, ctx.home, ctx.base) : undefined;
+  const abs = resolveMentionPath(path, ctx);
   return filesHref({ localPath: abs ?? path, line });
 }
 

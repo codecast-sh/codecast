@@ -41,9 +41,9 @@ describe("defaultMachineId", () => {
     expect(defaultMachineId(devices, { lastPicked: "desktop" })).toBe("desktop");
   });
 
-  it("the machine this client runs on outranks the standing pick, but not an online owner", () => {
+  it("the standing pick outranks the machine this client runs on, and an online owner outranks both", () => {
     const devices = [dev("laptop", { online: false }), dev("desktop", { last_seen: 5000, local_project_roots: ["/x"] })];
-    expect(defaultMachineId(devices, { localDeviceId: "laptop", lastPicked: "desktop", projectPath: "/x" })).toBe("laptop");
+    expect(defaultMachineId(devices, { localDeviceId: "laptop", lastPicked: "desktop", projectPath: "/x" })).toBe("desktop");
     expect(defaultMachineId(devices, { localDeviceId: "laptop", ownerDeviceId: "desktop" })).toBe("desktop");
     expect(defaultMachineId(devices, { localDeviceId: "gone", lastPicked: "desktop" })).toBe("desktop");
   });

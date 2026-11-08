@@ -14,9 +14,9 @@ import { type Config, getAgentArgs } from "./config/types.js";
 import { appendModelEffortFlags, resolvePrintModelAlias } from "./launchCommand.js";
 import { SAFE_MODE_DENY_RULES, SAFE_MODE_MANDATE, definitionLaunchFlags } from "./agentLaunch.js";
 import { resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
-import { runTriggerPrecheck } from "./precheckRunner.js";
+import { precheckFingerprint, runTriggerPrecheck } from "./precheckRunner.js";
 import { buildTriggerFrame } from "./triggerFrame.js";
-import { describeTriggerPrecheckFailure, triggerPrecheckPassed, triggerFiringSource, triggerPrecheckApplies, triggerLifecycleInstructions, STASHED_RUN_NOTE } from "@codecast/shared/contracts";
+import { describeTriggerPrecheckFailure, judgeTriggerPrecheck, precheckMessageBlock, triggerFiringContinues, triggerFiringSource, triggerPrecheckApplies, triggerPrecheckMode, triggerLifecycleInstructions, STASHED_RUN_NOTE, TRIGGER_PRECHECK_STATE_ENV } from "@codecast/shared/contracts";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const _execAsync = promisify(exec);
@@ -362,8 +362,9 @@ export class TaskScheduler {
    * in $HOME when the checkout is missing — ran apply-mode tasks blind on the
    * always-awake remote (same bug class as ct-32728/ct-36594).
    *
-   * Primary rule: a task runs ONLY on the device that created it
-   * (created_device_id, stamped by `cast trigger add`). Web-created and
+   * Primary rule: a task runs ONLY on the device it is bound to
+   * (created_device_id, stamped by `cast trigger add`: this machine, or the
+   * one `--device` names). Web-created and
    * legacy tasks carry no device id and fall back to checkout existence.
    */
   private canServeTask(task: any): boolean {
@@ -403,6 +404,10 @@ export class TaskScheduler {
 
     this.log(`Claimed task "${task.title}" (${task._id})`);
 
+    // The claimed row's message is the one this firing carries (claimTask
+    // clears it unless the firing continues a woken one); the polled copy may
+    // hold an older run's. This firing's gate may set a new one.
+    task.precheck_message = claimed?.precheck_message;
     if (await this.precheckRefusedRun(task, claimed)) return;
 
     // --context current path: inject the prompt into the originating conversation
@@ -433,7 +438,7 @@ export class TaskScheduler {
           ? STASHED_RUN_NOTE
           : "";
         const wrappedPrompt = serverFrame
-          ?? `<scheduled-task title="${safeTitle}" task-id="${task._id}">${[task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n")}${filingNote}</scheduled-task>`;
+          ?? `<scheduled-task title="${safeTitle}" task-id="${task._id}">${[task.prompt, precheckMessageBlock(task.precheck_message), triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n")}${filingNote}</scheduled-task>`;
         // The injected message becomes a user-row in the messages table once
         // the agent's JSONL is parsed. The UI detects the <scheduled-task>
         // wrapper and renders it as a ScheduledTaskBlock, so we must not
@@ -599,7 +604,10 @@ export class TaskScheduler {
    * in `running`.
    */
   private async precheckRefusedRun(task: any, claimed: any): Promise<boolean> {
-    if (!task.precheck) return false;
+    // The claimed row is current: the gate as it stands, and the state the last
+    // firing kept. An older server returns only part of it; the polled copy fills in.
+    const gate = { ...task, ...claimed };
+    if (!gate.precheck) return false;
     const source = claimed?.last_run_source ?? triggerFiringSource(task.schedule_type);
     if (!triggerPrecheckApplies(source)) return false;
 
@@ -613,15 +621,33 @@ export class TaskScheduler {
       this.log(`Precheck for task "${task.title}" has no directory to run in (${task.project_path}) — running ungated`, "warn");
       return false;
     }
-    const result = await runTriggerPrecheck({ command: task.precheck, cwd });
-    if (triggerPrecheckPassed(result)) {
+    const mode = triggerPrecheckMode(gate.precheck_mode);
+    if (mode !== "exit" && triggerFiringContinues(gate)) {
+      this.log(`Running "${task.title}" ungated: it continues a firing its precheck already woke`);
+      return false;
+    }
+    const previous: string | undefined = gate.precheck_state;
+    const result = await runTriggerPrecheck({
+      command: gate.precheck,
+      cwd,
+      ...(mode === "state" ? { env: { [TRIGGER_PRECHECK_STATE_ENV]: previous ?? "null" } } : {}),
+    });
+    const verdict = judgeTriggerPrecheck(mode, result, previous, precheckFingerprint);
+    if (verdict.wake) {
       this.log(`Precheck passed for task "${task.title}" in ${result.durationMs}ms`);
+      // The state and message live on the trigger row: the server builds an
+      // inject run's frame from it, so it is written before the run starts.
+      if (mode !== "exit") {
+        const kept = await this.syncService.passTaskPrecheck(task._id, this.daemonId, { command: gate.precheck, mode }, verdict.state, verdict.message);
+        if (!kept) this.log(`Could not keep the precheck state for task "${task.title}"; its next firing compares against the old one`, "warn");
+      }
+      task.precheck_message = verdict.message;
       return false;
     }
 
-    const reason = describeTriggerPrecheckFailure(result);
+    const reason = verdict.reason ?? describeTriggerPrecheckFailure(result);
     this.log(`Skipping ${source} run of task "${task.title}": ${reason}`);
-    await this.syncService.skipTaskRun(task._id, this.daemonId, result, reason, source);
+    await this.syncService.skipTaskRun(task._id, this.daemonId, result, reason, source, verdict.state, mode);
     return true;
   }
 

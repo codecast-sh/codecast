@@ -598,6 +598,27 @@ export function publishRequestBody(
 // Media already uploaded this run, so --watch republishes don't rehash big files.
 const uploadedMedia = new Map<string, string>();
 
+/** Upload one video or audio file to media hosting (R2, keyed by its content
+ * hash) and return its public URL; the same bytes already there upload nothing.
+ * `label` names the file in progress lines and errors. */
+export async function uploadMediaFile(deps: PublishDeps, abs: string, label: string): Promise<{ url: string; bytes: number; existed: boolean }> {
+  const size = fs.statSync(abs).size;
+  const hash = crypto.createHash("sha256");
+  for await (const chunk of fs.createReadStream(abs)) hash.update(chunk as Buffer);
+  const ext = path.extname(abs).slice(1).toLowerCase();
+  const signed = await apiPost(deps, "/cli/media/sign", { sha256: hash.digest("hex"), size, ext }, { exitOnError: false });
+  if (!signed.exists) {
+    process.stderr.write(fmt.muted(`uploading ${label} (${formatBytes(size)})\n`));
+    const put = await fetch(signed.upload_url, {
+      method: "PUT",
+      headers: { "Content-Type": signed.content_type ?? "application/octet-stream", "Cache-Control": "public, max-age=31536000, immutable" },
+      body: await fs.openAsBlob(abs),
+    });
+    if (!put.ok) throw new Error(`Upload of ${label} failed (${put.status}): ${(await put.text()).slice(0, 200)}`);
+  }
+  return { url: signed.url as string, bytes: size, existed: !!signed.exists };
+}
+
 /** Upload each media file to R2 (skipped when the same bytes are already there)
  * and add it to the bundle as a path that the server redirects to the upload. */
 export async function uploadMedia(deps: PublishDeps, payload: PublishPayload): Promise<void> {
@@ -606,20 +627,7 @@ export async function uploadMedia(deps: PublishDeps, payload: PublishPayload): P
     const cacheKey = `${m.abs}:${stat.size}:${stat.mtimeMs}`;
     let url = uploadedMedia.get(cacheKey);
     if (!url) {
-      const hash = crypto.createHash("sha256");
-      for await (const chunk of fs.createReadStream(m.abs)) hash.update(chunk as Buffer);
-      const ext = path.extname(m.path).slice(1).toLowerCase();
-      const signed = await apiPost(deps, "/cli/media/sign", { sha256: hash.digest("hex"), size: stat.size, ext }, { exitOnError: false });
-      if (!signed.exists) {
-        process.stderr.write(fmt.muted(`uploading ${m.path} (${formatBytes(stat.size)})\n`));
-        const put = await fetch(signed.upload_url, {
-          method: "PUT",
-          headers: { "Content-Type": signed.content_type ?? "application/octet-stream", "Cache-Control": "public, max-age=31536000, immutable" },
-          body: await fs.openAsBlob(m.abs),
-        });
-        if (!put.ok) throw new Error(`Upload of ${m.path} failed (${put.status}): ${(await put.text()).slice(0, 200)}`);
-      }
-      url = signed.url as string;
+      url = (await uploadMediaFile(deps, m.abs, m.path)).url;
       uploadedMedia.set(cacheKey, url);
     }
     payload.files!.push({ path: m.path, media_url: url, size: stat.size });

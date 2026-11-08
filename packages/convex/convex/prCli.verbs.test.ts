@@ -3,7 +3,7 @@
 // words when it refuses. The web page and `cast pr` both call these.
 import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
-import { autoMerge, close, draft, edit, merge, reopen, reviewers, review, updateBranch } from "./prCli";
+import { autoMerge, close, draft, edit, merge, mergeAccess, reopen, reviewers, review, updateBranch } from "./prCli";
 
 function harness(actor: any, answer: any = {}) {
   const calls: Array<{ name: string; args: any }> = [];
@@ -13,6 +13,9 @@ function harness(actor: any, answer: any = {}) {
       const name = getFunctionName(ref);
       calls.push({ name, args });
       if (name.includes("tokenForPR")) return "app_tok";
+      if (name.includes("pullRequestMergeability") && typeof answer !== "function") {
+        return { id: "PR_node", merge_state: "CLEAN", can_bypass: false, head_sha: "abc" };
+      }
       if (typeof answer === "function") return answer(name, args);
       return answer;
     },
@@ -73,12 +76,49 @@ describe("pull request verbs", () => {
     await (autoMerge as any)._handler(ctx, { number: 12, enabled: true, expected_head_sha: "abc" });
     await (autoMerge as any)._handler(ctx, { number: 12, enabled: false, expected_head_sha: "abc" });
     await (updateBranch as any)._handler(ctx, { number: 12, expected_head_sha: "abc" });
-    expect(calls.map((c) => c.name.split(":")[1])).toEqual(["mergePullRequest", "setAutoMerge", "setAutoMerge", "updatePullRequestBranch"]);
-    expect(calls[0].args).toMatchObject({ method: "rebase", expected_head_sha: "abc" });
-    expect(calls[1].args).toMatchObject({ enabled: true, expected_head_sha: "abc" });
+    expect(calls.map((c) => c.name.split(":")[1])).toEqual(["pullRequestMergeability", "mergePullRequest", "setAutoMerge", "setAutoMerge", "updatePullRequestBranch"]);
+    expect(calls[1].args).toMatchObject({ method: "rebase", expected_head_sha: "abc" });
+    expect(calls[1].args.bypass_node_id).toBeUndefined();
+    expect(calls[2].args).toMatchObject({ enabled: true, expected_head_sha: "abc" });
     // Turning auto-merge off needs no guard: it can only make the branch safer.
-    expect(calls[2].args.expected_head_sha).toBeUndefined();
-    expect(calls[3].args).toMatchObject({ expected_head_sha: "abc", github_access_token: "user_tok" });
+    expect(calls[3].args.expected_head_sha).toBeUndefined();
+    expect(calls[4].args).toMatchObject({ expected_head_sha: "abc", github_access_token: "user_tok" });
+  });
+
+  describe("a merge branch protection holds", () => {
+    const held = (canBypass: boolean, state = "BLOCKED") => (name: string) =>
+      name.includes("pullRequestMergeability")
+        ? { id: "PR_node", merge_state: state, can_bypass: canBypass, head_sha: "abc" }
+        : { merged: true, sha: "m1", branch_deleted: false };
+
+    test("is refused without the ask, even for someone who may bypass, and names --admin", async () => {
+      const { ctx, calls } = harness(withToken, held(true));
+      const out = await (merge as any)._handler(ctx, { number: 12 });
+      expect(out.error).toMatch(/Branch protection holds codecast-sh\/codecast#12: required reviews or checks/);
+      expect(out.error).toMatch(/ashot may bypass it: cast pr merge --admin/);
+      expect(calls.some((c) => c.name.includes("mergePullRequest"))).toBe(false);
+    });
+
+    test("is refused with the ask when GitHub does not let this identity bypass", async () => {
+      const { ctx, calls } = harness(withoutToken, held(false, "BEHIND"));
+      const out = await (merge as any)._handler(ctx, { number: 12, bypass: true });
+      expect(out.error).toMatch(/up to date with the base first\. GitHub does not let the codecast app bypass it/);
+      expect(calls.some((c) => c.name.includes("mergePullRequest"))).toBe(false);
+    });
+
+    test("bypasses as the person when they ask and GitHub allows it", async () => {
+      const { ctx, calls } = harness(withToken, held(true));
+      const out = await (merge as any)._handler(ctx, { number: 12, bypass: true, expected_head_sha: "abc" });
+      expect(out).toMatchObject({ merged: true, bypassed: true, as: "ashot" });
+      const call = calls.find((c) => c.name.includes("mergePullRequest"))!;
+      expect(call.args).toMatchObject({ bypass_node_id: "PR_node", github_access_token: "user_tok", expected_head_sha: "abc" });
+    });
+
+    test("mergeAccess reports the hold and the right to bypass", async () => {
+      const { ctx } = harness(withToken, held(true));
+      const out = await (mergeAccess as any)._handler(ctx, { number: 12 });
+      expect(out).toMatchObject({ merge_state: "BLOCKED", held: true, can_bypass: true, as: "ashot" });
+    });
   });
 
   test("merge refuses a pull request that is not open before touching GitHub", async () => {

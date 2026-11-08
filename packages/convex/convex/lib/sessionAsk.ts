@@ -13,6 +13,7 @@ import { countMatches } from "@codecast/shared/search";
 import { formatToolName, isEditTool, isWriteTool, toolPathFromInput, toolSummary } from "@codecast/shared/render";
 import { CHEAP_MODEL, type SurfaceRequest } from "./anthropic";
 import { citationSpans, spanLines } from "./sessionAskCitations";
+import { clipText, wellFormedString } from "./wellFormed";
 import { isCompactionMessage, isNavigableUserMessage, stripContextTags, type FilterableMessage } from "../userMessagesFilter";
 
 export type AskLineKind = "human" | "agent" | "result" | "compaction" | "context";
@@ -95,7 +96,7 @@ export function clipAround(text: string, terms: string[], max: number): string {
   positions.sort((a, b) => a - b);
   const headLen = Math.floor(max / 2);
   const later = positions.filter((p) => p > headLen).slice(0, 2);
-  if (later.length === 0) return `${text.slice(0, max)} […]`;
+  if (later.length === 0) return `${clipText(text, max)} […]`;
   const window = Math.floor((max - headLen) / later.length);
   const parts = [text.slice(0, headLen)];
   let end = headLen;
@@ -105,7 +106,8 @@ export function clipAround(text: string, terms: string[], max: number): string {
     parts.push(text.slice(from, from + window));
     end = from + window;
   }
-  return `${parts.join(" […] ")}${end < text.length ? " […]" : ""}`;
+  // A window can open or close inside an emoji; keep each cut half from failing the reply.
+  return wellFormedString(`${parts.join(" […] ")}${end < text.length ? " […]" : ""}`);
 }
 
 type ToolCall = { id?: string; name: string; input: string };
@@ -158,7 +160,7 @@ export function toAskLine(m: AskMessage, line: number, terms: string[]): AskLine
       if (path && !files.includes(path)) files.push(path);
     }
     const summary = toolSummary(c as { name: string; input: string });
-    return `${formatToolName(c.name)}${summary ? ` ${summary}` : ""}`.slice(0, TOOL_LINE_CHARS);
+    return clipText(`${formatToolName(c.name)}${summary ? ` ${summary}` : ""}`, TOOL_LINE_CHARS);
   });
   const error = results.some((r) => r.is_error) || undefined;
   const keptResults = results
@@ -308,11 +310,11 @@ const KIND_LABEL: Record<AskLineKind, string> = {
 
 /** One line as the model reads it. `brief` drops tool results and keeps a head of the prose. */
 export function renderAskLine(l: AskLine, brief: boolean): string {
-  const text = brief && l.text.length > BRIEF_TEXT_CHARS ? `${l.text.slice(0, BRIEF_TEXT_CHARS)} […]` : l.text;
+  const text = brief && l.text.length > BRIEF_TEXT_CHARS ? `${clipText(l.text, BRIEF_TEXT_CHARS)} […]` : l.text;
   const out = [`[msg ${l.ref ?? l.line} · ${KIND_LABEL[l.kind]}${l.error ? ", error" : ""}]${text ? ` ${text}` : ""}`];
   for (const t of l.tools) out.push(`  tool call: ${t}`);
   if (!brief) for (const r of l.results) out.push(`  result: ${r}`);
-  else if (l.error && l.results[0]) out.push(`  result: ${l.results[0].slice(0, ERROR_RESULT_CHARS)}`);
+  else if (l.error && l.results[0]) out.push(`  result: ${clipText(l.results[0], ERROR_RESULT_CHARS)}`);
   return out.join("\n");
 }
 

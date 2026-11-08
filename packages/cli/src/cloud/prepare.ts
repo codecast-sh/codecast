@@ -68,6 +68,7 @@ const AUTO_GRANT_RETRY_MS = 24 * 3600_000;
 import { requiredHostTools, runHostTools, summarizeHostTools, type HostToolRequirement, type HostToolsReport } from "./hostTools.js";
 import { readProjectRegistrations } from "./mirror/projectRefresh.js";
 import type { HostCastPlatform } from "../hosts/updateHost.js";
+import { HostCastBehind } from "../hosts/installRelease.js";
 import {
   cloudCopyFiles,
   cloudSeedRef,
@@ -451,6 +452,8 @@ export interface ReadyHostHomeReport {
   mirror: string;
   /** The host cast step's line, when the host is one this laptop registered. */
   cast?: string;
+  /** Why the host is still behind this laptop's cast, when it could not be brought up (HostCastBehind). */
+  castBehind?: string;
   /** The host git setup's result, when the step ran and the host answered. */
   git?: HostGitState;
   /** The agent logins push (step 1), when it ran. */
@@ -532,6 +535,27 @@ export function gitForPrepare(
  * `cast hosts wake`, `cast hosts sync-auth`, provisionLinuxHost (with
  * force), performMoveToRemote.
  */
+/**
+ * The cast step, first of the host-home steps: a host runs at least this
+ * laptop's cast before anything starts there
+ * (hosts/updateHost castForPrepare, which throws HostCastBehind otherwise).
+ * Only a host this laptop registered is one it provisions and so keeps
+ * current; for any other this is undefined.
+ */
+export async function readyHostCast(
+  host: RemoteHost,
+  cloudId: string,
+  log: Progress,
+  step?: (host: RemoteHost, platform: HostCastPlatform, log: Progress) => string,
+): Promise<string | undefined> {
+  // `cast remote move` knows a host by its address, not its id.
+  const entry = readHosts().find((h) => h.id === cloudId || h.address === cloudId);
+  if (!entry) return undefined;
+  // Lazy: hosts/updateHost reaches browser/provisionLinux, which imports this module.
+  const { castForPrepare, hostCastPlatform } = await import("../hosts/updateHost.js");
+  return (step ?? castForPrepare)(host, hostCastPlatform(entry), log);
+}
+
 export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions = {}): Promise<ReadyHostHomeReport> {
   const log = opts.onProgress ?? (() => {});
   const cloudId = opts.cloudId ?? host.address;
@@ -543,13 +567,17 @@ export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions
   }
   let logins: AgentLoginsReport | undefined;
   let tools: HostToolsReport | undefined;
-  // Only a host this laptop registered is one it provisions and so keeps current.
-  const entry = readHosts().find((h) => h.id === cloudId);
+  // A host behind this laptop's cast does not stop the other steps (the next
+  // attempt needs them anyway); the report carries it, and what was about to
+  // start there refuses on it (wakeCloudHost).
   let cast: string | undefined;
-  if (entry) {
-    // Lazy: hosts/updateHost reaches browser/provisionLinux, which imports this module.
-    const { castForPrepare, hostCastPlatform } = await import("../hosts/updateHost.js");
-    cast = (opts.castStep ?? castForPrepare)(host, hostCastPlatform(entry), log);
+  let castBehind: string | undefined;
+  try {
+    cast = await readyHostCast(host, cloudId, log, opts.castStep);
+  } catch (err) {
+    if (!(err instanceof HostCastBehind)) throw err;
+    castBehind = err.message;
+    log(err.message);
   }
   // The declared machine setup first: packages and services the repo's own setup may need.
   if (!opts.skipLogins) {
@@ -571,7 +599,7 @@ export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions
   }
   const git = opts.skipGit ? undefined : gitForPrepare(host, cloudId, log, { localGitRoot: opts.localGitRoot, repoPath: opts.repoPath, gitIdentity: opts.gitIdentity });
   const mirror = await mirrorForPrepare(host, cloudId, log, { force: opts.force, localGitRoot: opts.localGitRoot, mirror: opts.mirrorDeps });
-  return { mirror, ...(cast ? { cast } : {}), ...(git ? { git } : {}), ...(logins ? { logins } : {}), ...(tools ? { tools } : {}) };
+  return { mirror, ...(cast ? { cast } : {}), ...(castBehind ? { castBehind } : {}), ...(git ? { git } : {}), ...(logins ? { logins } : {}), ...(tools ? { tools } : {}) };
 }
 
 /**
@@ -610,6 +638,7 @@ export async function wakeCloudHost(opts: PrepareCloudHostOptions): Promise<Prep
   // key are what let the host's own clone/fetch succeed.
   opts.onStep?.("config");
   const home = await readyHostHome(host, { localGitRoot: opts.repoRoot, repoPath, cloudId: up.id, onProgress: log });
+  if (home.castBehind) throw new HostCastBehind(home.castBehind);
   return { cloud: { ...up, deviceId }, host, deviceId, repoPath, repoRoot: opts.repoRoot, seedCwd: opts.seedCwd, previousAddress: cloud.address, ...(home.git ? { git: home.git } : {}) };
 }
 

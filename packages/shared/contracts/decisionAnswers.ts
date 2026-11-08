@@ -20,6 +20,9 @@ export interface DecisionAnswerMessage {
   question?: string;
   // The chosen option's label, or the free text the human typed.
   answer: string;
+  // What follows the tag: a `cast decide --run` answer carries the command's
+  // result there (commandRun.ts runResultText).
+  detail?: string;
 }
 
 // Among a conversation's answered decision rows, the one a legacy answer
@@ -75,8 +78,8 @@ export function decisionIdFromClientId(clientId: string | null | undefined): str
   return clientId?.startsWith(DECISION_ANSWER_CLIENT_PREFIX) ? clientId.slice(DECISION_ANSWER_CLIENT_PREFIX.length) || null : null;
 }
 
-export function formatDecisionAnswer(a: { id: string; question: string; answer: string }): string {
-  return `Decision: ${a.answer}\n<cast-decision id="${a.id}" question="${escapeTagAttr(a.question)}"/>`;
+export function formatDecisionAnswer(a: { id: string; question: string; answer: string; detail?: string }): string {
+  return `Decision: ${a.answer}\n<cast-decision id="${a.id}" question="${escapeTagAttr(a.question)}"/>${a.detail ? `\n\n${a.detail}` : ""}`;
 }
 
 /** Whether a message is an answer that names its decision (the tagged
@@ -101,11 +104,14 @@ export function parseDecisionAnswer(rawContent: string | null | undefined): Deci
     const legacy = text.trim().match(/^Decision:[ \t]+(\S[^\n]*)$/);
     return legacy ? { id: "", answer: legacy[1].trim() } : null;
   }
-  const answer = text.replace(DECISION_ANSWER_TAG_RE, "").trim().replace(/^Decision:\s*/, "");
+  const at = match.index ?? 0;
+  const answer = text.slice(0, at).trim().replace(/^Decision:\s*/, "");
+  const detail = text.slice(at + match[0].length).trim();
   return {
     id: match[1],
     question: match[2] !== undefined ? unescapeTagAttr(match[2]) : undefined,
     answer,
+    ...(detail ? { detail } : {}),
   };
 }
 

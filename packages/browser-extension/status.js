@@ -20,6 +20,12 @@ const GROUP_COLOR_HEX = {
   orange: "#fa903e",
 };
 
+/** A typed pairing code in canonical form (I and L read as 1, O as 0), or "". Mirrors normalizePairingCode in the CLI's pairing.ts. */
+function normalizePairingCode(input) {
+  const code = String(input || "").toUpperCase().replace(/[\s-]/g, "").replace(/[IL]/g, "1").replace(/O/g, "0");
+  return /^[0-9A-HJKMNP-TV-Z]{8}$/.test(code) ? code : "";
+}
+
 function describeBridge(s, port) {
   const n = s.attached ? s.attached.length : 0;
   const driving = n ? `Driving ${n} tab${n === 1 ? "" : "s"} right now.` : "";
@@ -32,9 +38,11 @@ function describeBridge(s, port) {
     case "standby":
       return { cls: "state-wait", title: "Standby", text: "Agents use another Chrome profile where Codecast is connected. This profile takes over if that one closes." };
     case "bad-token":
-      return { cls: "state-bad", title: "Token rejected", text: "This pairing is stale. Run cast browser extension setup again; it hands this page the current token." };
+      return { cls: "state-bad", title: "Pairing rejected", text: "This profile's pairing was revoked or is stale. Run cast browser extension setup again to pair it." };
+    case "bad-code":
+      return { cls: "state-bad", title: "Code not accepted", text: "The pairing code was wrong, used or expired. Run cast browser extension setup again for a new one." };
     default:
-      return { cls: "state-none", title: "Not paired", text: "Run cast browser extension setup in a terminal on this machine. It opens this page with the token filled in." };
+      return { cls: "state-none", title: "Not paired", text: "Run cast browser extension setup in a terminal on this machine. It opens this page with a one-time code filled in." };
   }
 }
 

@@ -30,7 +30,25 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
     .option("--since <window>", "How far back to look for fix commits (git --since)", "7d")
     .option("--cwd <path>", "The repository checkout (default: the current directory)")
     .option("--json", "Machine-readable output")
+    .option("--record", "Store what landed on main and what each fix repaired on the server, read from this machine's own mirror of origin (the nightly run)")
+    .option("--team <id>", "With --record: the team the repository belongs to")
+    .option("--from <dir...>", "With --record: checkouts naming the repositories (only their origin is read; default: --cwd)")
+    .option("--backfill-days <n>", "With --record: read this many days back instead of resuming after the newest recorded change")
     .action(async (options: any) => {
+      if (options.record) {
+        if (!options.team) throw new Error("--record needs --team <id>");
+        const { recordFixloop } = await import("./lineFixloopRecord.js");
+        const out = await recordFixloop({
+          roots: options.from?.length ? options.from : [options.cwd || process.cwd()],
+          teamId: options.team,
+          post: (p, body) => apiPost(deps, p, body, { exitOnError: false }),
+          log: options.json ? undefined : (s) => console.log(s),
+          ...(options.backfillDays ? { backfillDays: Number(options.backfillDays) } : {}),
+        });
+        if (options.json) console.log(JSON.stringify(out, null, 2));
+        if (out.some((r: any) => r.error)) { for (const r of out as any[]) if (r.error) console.error(`${r.root}: ${r.error}`); process.exitCode = 1; }
+        return;
+      }
       const { traceFixes, formatFixloop, rollupByRole } = await import("./lineFixloop.js");
       const { readAuthConfig } = await import("./config/readAuthConfig.js");
       const { defaultConfigDir } = await import("./config/configDir.js");

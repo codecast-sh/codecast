@@ -6,6 +6,7 @@ import TriggersPage from "./triggers/Page";
 import AgentsPage from "./agents/Page";
 import MemoryPage from "./memory/Page";
 import DecisionsPage from "./decisions/Page";
+import FlowsPage from "./flows/Page";
 import PullRequestsPage from "./pull-requests/Page";
 import CloudPage from "./cloud/Page";
 import CallsPage from "./calls/Page";
@@ -20,6 +21,7 @@ export const FEATURE_PAGES: Record<string, ComponentType> = {
   "agents": AgentsPage,
   "memory": MemoryPage,
   "decisions": DecisionsPage,
+  "flows": FlowsPage,
   "pull-requests": PullRequestsPage,
   "cloud": CloudPage,
   "calls": CallsPage,

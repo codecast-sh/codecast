@@ -60,6 +60,29 @@ describe("landedCommit", () => {
     expect(await landedCommit(work, "ff", "main")).toEqual({ sha: tip, files: ["web/w.ts"] });
     expect((await landedCommit(work, "ff", "main", ["web/w.ts", "api/a.ts"]))?.files).toEqual(["web/w.ts", "api/a.ts"]);
   });
+
+  // The merge step replays a branch onto a main that changed the same file elsewhere (ct-61888, Nov 7): no commit
+  // reads as the branch left it, and the run waited at Deploy for a landing that had already happened.
+  test("a change replayed onto a main that moved in the same file lands as the commit that holds it", async () => {
+    git(other, "pull", "-q", "--rebase", "origin", "main");
+    write(other, "api/b.ts", "1\n2\n3\n4\n5\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-qm", "b base");
+    git(other, "push", "-q", "origin", "HEAD:main");
+    git(work, "fetch", "-q", "origin", "main");
+    git(work, "checkout", "-q", "-b", "replay", "origin/main");
+    write(work, "api/b.ts", "ONE\n2\n3\n4\n5\n");
+    git(work, "commit", "-qam", "replay change");
+    write(other, "api/b.ts", "1\n2\n3\n4\nFIVE\n");
+    git(other, "commit", "-qam", "main moves in the same file");
+    git(other, "push", "-q", "origin", "HEAD:main");
+    expect(await landedCommit(work, "replay", "main")).toBeNull();
+    write(other, "api/b.ts", "ONE\n2\n3\n4\nFIVE\n");
+    git(other, "commit", "-qam", "replayed change");
+    git(other, "push", "-q", "origin", "HEAD:main");
+    const landed = git(other, "rev-parse", "HEAD");
+    expect(await landedCommit(work, "replay", "main")).toEqual({ sha: landed, files: ["api/b.ts"] });
+  });
 });
 
 describe("targetState", () => {

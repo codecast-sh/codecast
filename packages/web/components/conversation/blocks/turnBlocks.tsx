@@ -42,12 +42,12 @@ import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_COMPONENTS, USER_MD_REMARK } from "../../messageMarkdown";
-import { browserTabOf, type BrowserTabRef } from "../../castCommand";
+import { browserTabOf, sayTextOf, type BrowserTabRef } from "../../castCommand";
 import { useInboxStore, isConvexId, retryPendingSend, type ForkChild } from "../../../store/inboxStore";
 import { useMessageBookmark } from "../../../hooks/useMessageBookmark";
 import { useCommentTools } from "../../../hooks/useCommentTools";
 import { BranchSelector } from "../../BranchSelector";
-import { Check, FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, MessageCircle, SquareDashedMousePointer, X } from "lucide-react";
+import { Check, FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, MessageCircle, SquareDashedMousePointer, X, History } from "lucide-react";
 import { sendableText } from "../../../lib/sendableText";
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
@@ -60,6 +60,8 @@ import { ghostRestartContextFor, deriveRestartStage } from "../../../hooks/useSe
 import { useConversationCommands } from "../../../hooks/useSessionCommands";
 import { requestSessionRestart } from "../../../lib/sessionCommands";
 import { CastCommandBlock } from "./castBlocks";
+import { RewindReview, useCanRewindFiles } from "../RewindToHere";
+import { requestRewind } from "../../../lib/rewindFiles";
 import { AskUserQuestionBlock, ImageBlock, MonitorBlock, PlanModeBlock, ThinkingBlock } from "./interactiveBlocks";
 import { useImageSrc } from "../../../hooks/useImageSrc";
 import { FooterIconButton, FullscreenIcon, UserIcon } from "./shared";
@@ -68,7 +70,7 @@ import { useConversationIdentityRow } from "../../../hooks/useLiveIdentityRow";
 import { AgentSpeaker } from "../../identity/AgentSpeaker";
 import { ScheduleWakeupBlock, TeammateMessageCard } from "./systemBlocks";
 import { BrowserWatchButton, SendMessageBlock, SkillBlock, TaskCreateUpdateBlock, TaskListBlock, TaskToolBlock, TeamCreateBlock, TodoWriteBlock, StructuredResultBlock, ToolBlock, WorkflowToolBlock } from "./toolBlocks";
-import { isAlwaysVisibleToolCall, parseApiErrorContent, parseCastCommand, parseContextBlocks, parseSkillBlocks, parseTeammateMessages, stripSystemTags } from "../classify";
+import { isAlwaysVisibleToolCall, isSayToolCall, parseApiErrorContent, parseCastCommand, parseContextBlocks, parseSkillBlocks, parseTeammateMessages, stripSystemTags } from "../classify";
 import { copyMessageLink, formatFullTimestamp, formatMessagePartsForCopy, formatRelativeTime, forwardMessageToChat, safeString, useRelativeTime } from "../../../lib/conversationFormat";
 import { MessageMarkdown, ReactMarkdown } from "../markdown";
 import { linkifyMentions } from "../../../lib/conversationMarkdown";
@@ -199,7 +201,7 @@ function CancelPendingButton({ onClick, disabled, quiet = false }: { onClick: ()
 }
 
 
-function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision }: { content: string; decision?: DecisionAnswerMessage; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
+function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision, bubble }: { content: string; decision?: DecisionAnswerMessage; /** Clean mode's chat bubble: right-aligned, no name row. */ bubble?: boolean; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
   const relativeTime = useRelativeTime();
   // A hosted conversation has no machine or process: its pending notes speak
   // of the assistant picking the message up, not of delivery to an agent.
@@ -209,6 +211,11 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const [isTruncated, setIsTruncated] = useState(false);
   const [contentExpanded, setContentExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  // Rewind needs the fork that continues from here, so it is offered where forking is.
+  const canRewind = useCanRewindFiles(conversationId, timestamp) && !!onForkFromMessage && !!messageUuid && !isPending && !isQueued;
+  // The plan step's request id while the review is open: asked on the press, not on mount.
+  const [rewinding, setRewinding] = useState<string | null>(null);
+  const openRewind = () => { if (conversationId) setRewinding(requestRewind(conversationId, "plan", { message_ts: timestamp })); };
   const rawContent = stripPastedContent(content)
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")
@@ -474,9 +481,22 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   // Right-click mirrors the corner toolbar (meta actions only); the hook's
   // guards keep native menus on links and text selections.
   const ctxMenu = useContextMenu<void>();
+  // A bubble carries no name row, so nothing under it is indented past one.
+  const indent = bubble ? "" : "pl-8";
+  const gutter = bubble ? "" : "ml-8";
 
   return (
-    <div data-cc-message="user" id={`msg-${messageId}`} className={`group relative scroll-mt-20 -mx-4 px-4 py-4 rounded-lg ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/15 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : "bg-sol-blue/10 border border-sol-blue/30"} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 pending-stripes queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)}>
+    <div data-cc-message="user" data-cc-bubble={bubble ? "" : undefined} id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${bubble ? `ml-auto w-fit max-w-[84%] mt-4 mb-2 px-3.5 py-2 rounded-[18px] rounded-br-[5px]` : `-mx-4 px-4 py-4 rounded-lg ${effectivelyCollapsed ? "mb-2" : "mb-6"}`} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/15 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : bubble ? "bg-sol-blue/15" : "bg-sol-blue/10 border border-sol-blue/30"} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 pending-stripes queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)}>
+      {rewinding && conversationId && messageUuid && (
+        <RewindReview
+          planId={rewinding}
+          conversationId={conversationId}
+          messageTs={timestamp}
+          subject={(displayContent || content).replace(/\s+/g, " ").trim().slice(0, 80) || "This message"}
+          onClose={() => setRewinding(null)}
+          onStaged={() => { setRewinding(null); onForkFromMessage?.(messageUuid); }}
+        />
+      )}
       <ContextMenu state={ctxMenu}>
         {() => (
           <>
@@ -490,6 +510,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             {onForkFromMessage && messageUuid && (
               <CtxItem icon={Split} onSelect={() => onForkFromMessage(messageUuid)}>Fork from here</CtxItem>
             )}
+            {canRewind && <CtxItem icon={History} onSelect={openRewind}>Rewind to here…</CtxItem>}
             {onStartShareSelection && (
               <CtxItem icon={SquareDashedMousePointer} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
             )}
@@ -557,6 +578,17 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             <Split className="w-4 h-4" />
           </button>
         )}
+        {canRewind && (
+          <button
+            onClick={openRewind}
+            className={TOOLBAR_BTN}
+            title="Rewind files to before this message"
+            aria-label="Rewind to here"
+            data-rewind-to-here
+          >
+            <History className="w-4 h-4" />
+          </button>
+        )}
         <button
           onClick={handleCopy}
           className={TOOLBAR_BTN}
@@ -568,7 +600,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           </svg>
         </button>
       </div>
-      <div data-cc-message-who className="flex items-center gap-2 mb-2">
+      {!bubble && <div data-cc-message-who className="flex items-center gap-2 mb-2">
         <UserIcon avatarUrl={avatarUrl} />
         <span className="text-sol-blue text-xs font-medium">{jointNames ?? (userName || "You")}</span>
         <a
@@ -584,10 +616,10 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
           </svg>
         )}
-      </div>
+      </div>}
       {decision && !effectivelyCollapsed && <DecisionAnswerQuote decision={decision} conversationId={conversationId} timestamp={timestamp} />}
       {contextBlocks.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 pl-8 mb-1.5">
+        <div className={`flex flex-wrap gap-1.5 ${indent} mb-1.5`}>
           {contextBlocks.map((ctx, i) => (
             <ContextBlockPill key={i} ctx={ctx} />
           ))}
@@ -595,7 +627,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       )}
       {displayContent ? <div
         ref={contentRef}
-        className={`text-sol-text text-sm pl-8 break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}
+        className={`text-sol-text text-sm ${indent} break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}
         style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? clippedStyle(USER_CONTENT_MAX_HEIGHT) : undefined}
       >
         {(() => {
@@ -637,14 +669,14 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         })()}
       </div> : null}
       {!effectivelyCollapsed && images && images.filter(img => !img.tool_use_id).length > 0 && (
-        <div className="pl-8 mt-2">
+        <div className={`${indent} mt-2`}>
           {images.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
         </div>
       )}
       {isTruncated && (
         <button
           onClick={handleToggleExpand}
-          className="text-xs text-sol-text-dim hover:text-sol-blue mt-2 ml-8 transition-colors"
+          className={`text-xs text-sol-text-dim hover:text-sol-blue mt-2 ${gutter} transition-colors`}
         >
           Expand
         </button>
@@ -652,13 +684,13 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       {isExpanded && collapsed && (
         <button
           onClick={handleToggleExpand}
-          className="text-xs text-sol-text-dim hover:text-sol-blue mt-2 ml-8 transition-colors"
+          className={`text-xs text-sol-text-dim hover:text-sol-blue mt-2 ${gutter} transition-colors`}
         >
           Collapse
         </button>
       )}
       {!effectivelyCollapsed && (isOverflowing || contentExpanded) && (
-        <div className="flex items-center gap-3 mt-2 ml-8">
+        <div className={`flex items-center gap-3 mt-2 ${gutter}`}>
           <button
             onClick={() => setContentExpanded(e => !e)}
             className="text-xs font-medium text-sol-blue hover:text-sol-blue/80 transition-colors"
@@ -1204,7 +1236,10 @@ function AssistantBlockImpl({
   isConversationActive,
   globalImageMap,
   globalFileMap,
+  bubble,
 }: {
+  /** Clean mode's chat bubble: the agent's words in a left-aligned bubble under its name, shown whole. */
+  bubble?: boolean;
   content?: string;
   timestamp: number;
   thinking?: string;
@@ -1345,6 +1380,8 @@ function AssistantBlockImpl({
       <ScheduleWakeupBlock key={tc.id} tool={tc} result={result} timestamp={src.timestamp} />
     ) : isPlanModeTool(tc.name) ? (
       <PlanModeBlock key={tc.id} tool={tc} result={result} conversationId={conversationId} messageId={src.messageId} onSendMessage={onSendInlineMessage} />
+    ) : isSayToolCall(tc) ? (
+      <div key={tc.id} data-cc-said className="text-sol-text prose prose-invert prose-sm max-w-none my-1.5">{renderAssistantBody(sayTextOf(parseCastCommand(tc))!)}</div>
     ) : parseCastCommand(tc) ? (
       <CastCommandBlock key={tc.id} tool={tc} result={result} images={images} globalImageMap={globalImageMap} conversationId={conversationId} />
     ) : (
@@ -1416,7 +1453,7 @@ function AssistantBlockImpl({
     : shouldShowHeader ? "-top-2" : "-top-7";
 
   return (
-    <div data-cc-message="assistant" id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-2.5" : "mb-6"} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? relativeTime(timestamp) : undefined}>
+    <div data-cc-message="assistant" id={`msg-${messageId}`} data-cc-bubble={bubble ? "" : undefined} className={`group relative scroll-mt-20 ${bubble ? "mb-2" : onlyToolCalls ? "mb-0.5" : condensed ? "mb-2.5" : "mb-6"} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? relativeTime(timestamp) : undefined}>
       <ContextMenu state={ctxMenu}>
         {() => (
           <>
@@ -1519,13 +1556,13 @@ function AssistantBlockImpl({
       )}
 
       {shouldShowHeader && (
-        <div data-cc-message-who className="flex items-center gap-2 mb-2 mt-4">
+        <div data-cc-message-who className={`flex items-center gap-2 ${bubble ? "mb-1.5 mt-4" : "mb-2 mt-4"}`}>
           <span className="flex items-center gap-2 cursor-default" title={model ? `Model: ${model}` : undefined}>
             <AssistantWho conversationId={conversationId} agentType={agentType} />
           </span>
           {/* The hosted assistant is the author, whatever model answered; its
               model stays in the tooltip above for a developer. */}
-          {model && !isHostedAgentType(agentType) && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
+          {model && !bubble && !isHostedAgentType(agentType) && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
           <a
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
@@ -1542,7 +1579,7 @@ function AssistantBlockImpl({
         </div>
       )}
 
-      <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
+      <div className={bubble ? "min-w-0 max-w-[88%] pl-8" : shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
         {hasImages && images?.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
 
         {/* Hidden entirely unless the global "Show thinking" toggle is on
@@ -1572,7 +1609,7 @@ function AssistantBlockImpl({
                 <div
                   ref={contentRef}
                   className="relative"
-                  style={!contentExpanded && isOverflowing ? clippedStyle(CONTENT_MAX_HEIGHT) : undefined}
+                  style={!bubble && !contentExpanded && isOverflowing ? clippedStyle(CONTENT_MAX_HEIGHT) : undefined}
                 >
                   {conversationId ? (
                     <MessageIdentityProvider conversationId={String(conversationId)} messageId={messageId}>
@@ -1604,7 +1641,7 @@ function AssistantBlockImpl({
               >
                 Show more
               </button>
-            )) : !parsedApiError && (isOverflowing || !contentExpanded) && (
+            )) : !parsedApiError && !bubble && (isOverflowing || !contentExpanded) && (
               <div data-cc-message-overflow className="flex items-center gap-1 mt-2">
                 <FooterIconButton onClick={() => setFullscreen(true)} title="Fullscreen">
                   <FullscreenIcon />

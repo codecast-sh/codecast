@@ -67,10 +67,12 @@ export type DeployMerge = {
   into: string;
   at: number;
   pr_url?: string;
+  /** The merge commit's place in main's order (commits.main_at), when the reader looked it up. */
+  main_at?: number;
 };
 
 const asAttempt = (m: DeployMerge): AttemptMerge => ({
-  sha: m.sha, branch: m.branch, into: m.into, at: m.at, prUrl: m.pr_url ?? null, repository: null,
+  sha: m.sha, branch: m.branch, into: m.into, at: m.at, prUrl: m.pr_url ?? null, repository: null, mainAt: m.main_at ?? null,
 });
 
 /** The merges no live deploy has carried yet: what the deploy stage would send. Oldest first. */
@@ -82,7 +84,7 @@ export function waitingMerges(merges: ReadonlyArray<DeployMerge>, deploys: Reado
 
 /**
  * The merges a recorded deploy carried, by the history's own rule: the deploy
- * is the first live one on its target at or after the merge, on the same code.
+ * is the first live one on its target whose code holds the merge.
  * `deploys` holds every deploy of the project (this one included).
  */
 export function carriedBy(deploy: DeployRow, merges: ReadonlyArray<DeployMerge>, deploys: ReadonlyArray<DeployRow>): DeployCarry[] {

@@ -16,7 +16,7 @@ import {
   AGENT_MODEL_CONFIG, AGENT_PICKER_OPTIONS, compareMachineChips, featuredModelOptions, fromConvexAgentType, isHostedAgentType, launchRailOptions, toConvexAgentType,
   type AgentClientId, type DeviceModelInventory,
 } from '@codecast/shared/contracts';
-import { defaultMachineId, listedMachines } from '@codecast/web/lib/machinePicker';
+import { defaultMachineId, intendedMachineId, listedMachines, savedDefaultProject } from '@codecast/web/lib/machinePicker';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { OptionSheet } from '@/components/OptionSheet';
 import { SettingsSwitch } from '@/components/settings/SettingsUI';
@@ -219,10 +219,26 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
   // feedback loop is needed to pin the highlight against heartbeats.
   // The folder list for the picked machine (or the union with no pick), from
   // the store: the same ladder web's ProjectSwitcher uses.
-  const pickedDevice = useMemo(() => (deviceId ? devices.find((d) => d.device_id === deviceId) ?? null : null), [devices, deviceId]);
-  const recentProjects = useScopedRecentProjects({ scopedDeviceId: deviceId, routedDevice: pickedDevice, active: visible });
-  const projectPath = pathPick ?? recentProjects[0]?.path ?? "";
-  const defaultDeviceId = defaultMachineId(rawDevices, {
+  // The person's saved defaults and last hand pick (account-wide, Settings >
+  // New sessions) decide before any heuristic; one that cannot serve falls through.
+  const ui = {
+    defaultDevice: useInboxStore((s) => s.clientState.ui?.default_device ?? null),
+    lastPicked: useInboxStore((s) => s.clientState.ui?.last_picked_device_id ?? null),
+    defaultProject: useInboxStore((s) => s.clientState.ui?.default_project ?? null),
+  };
+  const savedProject = savedDefaultProject({ default_project: ui.defaultProject }, rawDevices);
+  // The machine intent names, judged against the folder the person chose or
+  // saved (not the recents list, which is itself scoped to this machine).
+  const intendedDeviceId = deviceId ? null : intendedMachineId(rawDevices, {
+    projectPath: (pathPick ?? savedProject ?? "").trim() || null,
+    defaultDevice: ui.defaultDevice,
+    lastPicked: ui.lastPicked,
+  });
+  const scopedDeviceId = deviceId ?? intendedDeviceId;
+  const pickedDevice = useMemo(() => (scopedDeviceId ? devices.find((d) => d.device_id === scopedDeviceId) ?? null : null), [devices, scopedDeviceId]);
+  const recentProjects = useScopedRecentProjects({ scopedDeviceId, routedDevice: pickedDevice, active: visible });
+  const projectPath = pathPick ?? savedProject ?? recentProjects[0]?.path ?? "";
+  const defaultDeviceId = intendedDeviceId ?? defaultMachineId(rawDevices, {
     ownerDeviceId: null,
     projectPath: projectPath.trim() || null,
   });
@@ -241,7 +257,9 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
   // setting. Read at submit time because heartbeats can reorder the devices
   // between the pick and the send.
   const launchStampsForCreate = () => ({
-    target_device_id: deviceId && deviceId !== defaultDeviceId ? deviceId : undefined,
+    // A machine the person's default or last pick names is intent, so it is
+    // stamped like a pick; a heuristic default is left to routing.
+    target_device_id: (deviceId && deviceId !== defaultDeviceId ? deviceId : intendedDeviceId) ?? undefined,
     model: model !== "default" ? model : undefined,
     effort: effort !== "default" ? effort : undefined,
     stable_mode: stableMode !== "auto" ? stableMode : undefined,
@@ -477,6 +495,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
               // rails differ per client, so a pick can't carry over).
               if (a.id === agentId) return;
               setAgentId(a.id);
+              useInboxStore.getState().updateClientUI({ last_picked_agent: toConvexAgentType(a.id) });
               setModel("default");
               setEffort("default");
             }}
@@ -695,6 +714,8 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
             // path (it may have no such checkout), so clear it and let the
             // field fall back to the new list's top folder.
             setDeviceId(id === defaultDeviceId ? null : id);
+            // "Last used" for the next new session, on every device.
+            useInboxStore.getState().updateClientUI({ last_picked_device_id: id });
             setProjectPath(null);
             setSubmitError(null);
           }}

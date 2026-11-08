@@ -1,10 +1,11 @@
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, lazy, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { ConversationView } from "./ConversationView";
+const CommentDock = lazy(() => import("./comments/CommentDock").then((m) => ({ default: m.CommentDock })));
 import type { ConversationData, ConversationViewHandle, ConversationViewProps } from "./conversation/types";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { extractFileChanges, mergeFileChanges } from "../lib/fileChangeExtractor";
@@ -80,9 +81,13 @@ export interface ConversationDiffLayoutProps {
   foldWorkingTurns?: ConversationViewProps["foldWorkingTurns"];
   openAtTop?: ConversationViewProps["openAtTop"];
   composerPlaceholder?: ConversationViewProps["composerPlaceholder"];
+  hideHeaderTitle?: ConversationViewProps["hideHeaderTitle"];
   /** A host with no room for the diff (a proposal's thread in the org page's
    *  column): the conversation alone, at every width. */
   hideDiff?: boolean;
+  /** A host where the conversation is the page (a project's session): the
+   *  diff column opens only once the session has changes to show. */
+  diffOnlyWithChanges?: boolean;
 }
 
 const EMPTY_LIST: any[] = [];
@@ -130,7 +135,9 @@ export function ConversationDiffLayout({
   foldWorkingTurns,
   openAtTop,
   composerPlaceholder,
-  hideDiff,
+  hideHeaderTitle,
+  hideDiff: hideDiffProp,
+  diffOnlyWithChanges,
 }: ConversationDiffLayoutProps) {
   devRenderCount("ConversationDiffLayout");
   const heightClass = "h-full";
@@ -139,6 +146,7 @@ export function ConversationDiffLayout({
   const updateLayout = useInboxStore(s => s.updateClientLayout);
   const layout: Layout = { "content-panel": layoutPref.content, "diff-panel": layoutPref.diff };
   const conversationRef = useRef<ConversationViewHandle>(null);
+  const commentRailW = useInboxStore((s) => (conversation ? s.commentRailWidth[conversation._id] ?? 0 : 0));
 
   const {
     changes,
@@ -150,6 +158,7 @@ export function ConversationDiffLayout({
     setChanges,
     diffPanelOpen,
   } = useDiffViewerStore();
+  const hideDiff = hideDiffProp || (!!diffOnlyWithChanges && changes.length === 0);
 
   // Every change of the session, materialized server-side at ingest and
   // independent of how many message pages are loaded. References only: the
@@ -307,6 +316,7 @@ export function ConversationDiffLayout({
     foldWorkingTurns,
     openAtTop,
     composerPlaceholder,
+    hideHeaderTitle,
   };
 
   // Mobile: tabs layout
@@ -341,9 +351,11 @@ export function ConversationDiffLayout({
     );
   }
 
-  // Desktop: diff panel open - resizable panels
+  // Desktop: diff panel open - resizable panels. The comment rail docks at
+  // this layout's right edge, past the diff, rather than between the
+  // conversation and the diff; the panels make room for it.
   return (
-    <div className={`${heightClass} w-full relative`}>
+    <div className={`${heightClass} w-full relative overflow-x-clip`} style={commentRailW ? { paddingRight: commentRailW } : undefined}>
       <Group
         orientation="horizontal"
         onLayoutChange={handleLayoutChange}
@@ -355,7 +367,7 @@ export function ConversationDiffLayout({
         <Panel id="content-panel" minSize="15%">
           <div className="h-full relative overflow-y-auto">
 
-            <ConversationView {...conversationViewProps} />
+            <ConversationView {...conversationViewProps} hostsCommentRail={false} />
           </div>
         </Panel>
 
@@ -376,7 +388,11 @@ export function ConversationDiffLayout({
           </div>
         </Panel>
       </Group>
-
+      {conversation && (
+        <Suspense fallback={null}>
+          <CommentDock conversationId={conversation._id.toString()} onJumpToMessage={(id) => conversationRef.current?.scrollToMessage(id)} />
+        </Suspense>
+      )}
     </div>
   );
 }
