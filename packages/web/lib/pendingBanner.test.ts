@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, pendingMessageHoldScreen, serverPendingBubbles, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
+import { inFlightPending, pendingBannerState, sessionMessageQueueLabel, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, pendingMessageHoldScreen, serverPendingBubbles, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "./pendingBanner";
 
 describe("session message queue labels", () => {
   test.each([undefined, "idle", "waiting", "dormant", "done", "connected", "starting", "resuming"])("does not call a %s recipient busy", status => {
@@ -281,4 +281,14 @@ test("a message waiting on a cloud placement never offers kill and restart: ther
   expect(pendingBannerState(undefined, { ...late, cloudPlacing: true })).toBe("none");
   // A restart the person already pressed keeps its progress.
   expect(pendingBannerState(undefined, { ...late, cloudPlacing: true, restartInFlight: true })).toBe("stuck");
+});
+
+test("a send that failed as unconfirmed reads as not confirmed, never as retrying", () => {
+  expect(sessionMessageQueueLabel("failed", "unconfirmed", "idle")).toBe("not confirmed");
+  expect(sessionMessageQueueLabel("failed", undefined, "idle")).toBe("queued · retrying");
+});
+
+test("an unconfirmed row is not in flight for the composer, so it never reads as lost or resumes the session", () => {
+  expect(inFlightPending({ status: "failed", hold_reason: "unconfirmed" })).toBeNull();
+  expect(inFlightPending({ status: "failed" })).toEqual({ status: "failed" });
 });

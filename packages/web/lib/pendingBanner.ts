@@ -8,6 +8,7 @@
 // there would interrupt and discard live work. Only when the agent is genuinely idle
 // (or gone) and STILL hasn't taken the message is a restart the right escalation.
 
+import { UNCONFIRMED_DELIVERY_REASON } from "@codecast/shared/contracts";
 import { MID_TURN_AGENT_STATUSES, isRecoveryContinueClientId } from "@codecast/shared/contracts";
 
 export type LiveAgentStatus =
@@ -57,6 +58,8 @@ export type PendingBannerState = "none" | "queued" | "stuck";
 
 export function sessionMessageQueueLabel(status?: string, reason?: string, recipientStatus?: string): string | null {
   if (!status) return null;
+  // Typed into the session and never seen to arrive: nothing retries it.
+  if (status === "failed" && reason === UNCONFIRMED_DELIVERY_REASON) return "not confirmed";
   if (reason) return `queued · ${reason}`;
   if (status === "failed" || status === "undeliverable") return "queued · retrying";
   if (recipientStatus === "permission_blocked") return "queued · waiting for an answer";
@@ -204,10 +207,13 @@ export function serverPendingBubbles(
 // (delivered/cancelled) so a lagging transcript keeps its bubble; to the
 // tracker that row is nothing in flight. Reading it as in flight raised
 // "Disconnected · Cancel" (and an auto-resume) after every delivered message.
-export function inFlightPending<T extends { status?: string }>(pending: T | null | undefined): T | null {
+export function inFlightPending<T extends { status?: string; hold_reason?: string }>(pending: T | null | undefined): T | null {
   // No status: a viewer with only others' queued rows (no primary of their
   // own). Held: waiting on purpose (the end of a turn), nothing to deliver yet.
+  // Unconfirmed: typed in and never seen to arrive, so it waits for a person's
+  // resend on its bubble; nothing is in flight to recover by resuming.
   if (!pending || !pending.status || pending.status === "delivered" || pending.status === "cancelled" || pending.status === "held") return null;
+  if (pending.status === "failed" && pending.hold_reason === UNCONFIRMED_DELIVERY_REASON) return null;
   return pending;
 }
 
