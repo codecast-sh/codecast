@@ -70,13 +70,29 @@ export function catchUp(graph: WorkflowGraph, checkpoint: RunCheckpoint, project
 }
 
 /**
+ * The station `ref` names in the graph: its id, or its label when exactly one
+ * station carries it (any case). Throws naming every station otherwise, so a
+ * wrong guess is answered with the list instead of another guess.
+ */
+export function stationOf(graph: WorkflowGraph, ref: string): string {
+  const want = ref.trim();
+  if (graph.nodes.has(want)) return want;
+  const stations = [...graph.nodes.values()].filter((n) => n.type !== "start" && n.type !== "exit");
+  const lower = want.toLowerCase();
+  const hits = stations.filter((n) => n.id.toLowerCase() === lower || n.label?.toLowerCase() === lower);
+  if (hits.length === 1) return hits[0].id;
+  const list = stations.map((n) => (n.label && n.label !== n.id ? `${n.id} (${n.label})` : n.id)).join(", ");
+  throw new Error(`the run's graph has no station ${want}${hits.length > 1 ? " (more than one station has that label)" : ""}; its stations: ${list}`);
+}
+
+/**
  * Where a failed run resumes, and what was done first: `at` checked against
  * the graph it will read, and, with `ontoMain`, its branch put on the default
  * branch (on the machine holding the run). Throws with the reason to stop.
  */
-export function resumeStation(graph: WorkflowGraph | null, at: string, opts: { ontoMain?: boolean; runId: string; projectPath: string; here: boolean }): { at: string; note: string | null } {
+export function resumeStation(graph: WorkflowGraph | null, ref: string, opts: { ontoMain?: boolean; runId: string; projectPath: string; here: boolean }): { at: string; note: string | null } {
   if (!graph) throw new Error("the run's graph could not be read here");
-  if (!graph.nodes.has(at)) throw new Error(`the run's graph has no station ${at}`);
+  const at = stationOf(graph, ref);
   if (!opts.ontoMain) return { at, note: null };
   if (!opts.here) throw new Error("--onto-main works in the run's worktree: run it on the machine that holds the run");
   const checkpoint = findCheckpoint(opts.projectPath, opts.runId);

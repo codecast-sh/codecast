@@ -9,6 +9,7 @@ import {
   respondToGateFromCli,
   respondToGate,
   cancel,
+  cancelFromCli,
   createFromCli,
   listRunsCore,
   graphOfRun,
@@ -306,6 +307,14 @@ describe("withdrawing a gate (the-line.md L4)", () => {
     expect(tables.workflow_runs[0].fail_reason).toBe("Cancelled by user");
   });
 
+  test("cast workflow cancel stops the run the same way, with the owner's token", async () => {
+    const { ctx, tables } = await seed();
+    await pause(ctx);
+    expect(await (cancelFromCli as any)._handler(ctx, { api_token: TOKEN, run_id: RUN })).toEqual({ run_id: RUN, was: "paused", cancelled: true });
+    expect(tables.session_decisions[0].status).toBe("withdrawn");
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "failed", fail_reason: "Cancelled by user" });
+  });
+
   test("a run that ends takes back a decision its presenter posted that no gate took up, and nothing else", async () => {
     // What another station posts (a proposal for an expectation) is answered on its own and stays.
     // sd-1072 on ct-61115: Present posted it, the card refused the report until
@@ -431,6 +440,10 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
 
     expect(await listRunsCore(ctx, STRANGER, { task_id: "ct-7" })).toEqual([]);
     expect(await listRunsCore(ctx, STRANGER, {})).toEqual([]);
+    // One run by its id (`cast workflow show <run>`), for whoever reads it; slim leaves the station sessions out.
+    expect((await listRunsCore(ctx, MATE, { run_id: RUN, slim: true })).map((r: any) => r._id)).toEqual([RUN]);
+    expect(await listRunsCore(ctx, STRANGER, { run_id: RUN })).toEqual([]);
+    expect(await listRunsCore(ctx, MATE, { run_id: "not-a-run" })).toEqual([]);
     await expect(listRunsCore(ctx, STRANGER, { team_id: TEAM })).rejects.toThrow();
     void tables;
   });

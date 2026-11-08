@@ -1381,6 +1381,7 @@ function completedTaskRunFields(
     conversation_id?: string;
     run_session_uuid?: string;
     needs_attention?: boolean;
+    rearm_at?: number;
   },
   isLateSummary = false,
 ): Record<string, any> {
@@ -1404,9 +1405,25 @@ function completedTaskRunFields(
   };
   if (!isLateSummary) {
     updates.run_count = task.run_count + 1;
-    Object.assign(updates, nextArmingAfterRun(task, now));
+    Object.assign(updates, rearmedAfterRun(task, nextArmingAfterRun(task, now), args.rearm_at));
+  } else if (args.rearm_at !== undefined) {
+    // An inject run reports after the daemon already completed and re-armed
+    // the row at injection; its recheck moves that arming.
+    Object.assign(updates, rearmedAfterRun(task, { status: task.status, run_at: task.run_at }, args.rearm_at));
   }
   return updates;
+}
+
+// A run that asked to look again (`cast trigger complete --again-in`): the
+// trigger fires once more at that time, whatever its schedule. A recurring one
+// keeps the slot it would have taken, so the run after the recheck returns to
+// the cadence; a one-shot stays armed instead of finishing; an event trigger
+// with events still waiting takes them at once, as it would have.
+export function rearmedAfterRun(task: Pick<Doc<"agent_tasks">, "schedule_type">, next: Record<string, any>, rearmAt: number | undefined): Record<string, any> {
+  if (rearmAt === undefined) return next;
+  if (task.schedule_type === "recurring") return { ...next, status: "scheduled", run_at: rearmAt, cadence_slot_at: next.run_at };
+  if (task.schedule_type === "event" && next.run_at !== undefined) return next;
+  return { ...next, status: "scheduled", run_at: rearmAt };
 }
 
 // When a trigger fires next, once this firing is over. Shared by the completion
@@ -1546,6 +1563,10 @@ export const completeTaskRun = mutation({
     // (`cast trigger complete --needs-attention`). Skips the clean-run fold
     // below and keeps the run card escalated in the inbox.
     needs_attention: v.optional(v.boolean()),
+    // `cast trigger complete --again-in`: fire once more at this time
+    // (rearmedAfterRun). A running trigger cannot be edited, so this is how
+    // a run books its own recheck.
+    rearm_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -2545,14 +2566,15 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
 // version. A no-op edit (nothing actually differs) writes neither.
 //
 // A role tunes its check from inside the run that check started (S38), when
-// the row is "running". The cadence, the gate, the focus and the reason touch
-// nothing the live run reads, so an edit of those alone is taken then too: the
+// the row is "running". The cadence, the gate, the focus, the reason, the
+// prompt and the title touch nothing the live run reads (it was handed its
+// prompt when it started), so an edit of those alone is taken then too: the
 // arming after the run (nextArmingAfterRun) counts the next slot with the new
 // interval.
 // The edits assertRoutineAllowed rechecks: the ones that can take an armed
 // routine past its plan's limits, and a result thread that may be hosted.
 const ROUTINE_LIMIT_FIELDS: ReadonlySet<string> = new Set(["originating_conversation_id", "target_conversation_id", "schedule_type", "interval_ms"]);
-const RUNNING_SAFE_FIELDS: ReadonlySet<string> = new Set(["interval_ms", "precheck", "precheck_mode", "role_focus", "tune_why"]);
+const RUNNING_SAFE_FIELDS: ReadonlySet<string> = new Set(["interval_ms", "precheck", "precheck_mode", "role_focus", "tune_why", "prompt", "title"]);
 
 export async function applyTaskUpdate(
   ctx: TaskCtx,

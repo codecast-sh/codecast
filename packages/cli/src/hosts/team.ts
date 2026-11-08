@@ -60,7 +60,7 @@ async function backend() {
   try {
     return await convexClient();
   } catch {
-    die("not signed in on this machine", "run `cast login` first");
+    die("not signed in on this machine", "run cast auth (or cast login - with a setup token where there is no browser)");
   }
 }
 
