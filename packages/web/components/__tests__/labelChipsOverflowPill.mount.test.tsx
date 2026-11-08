@@ -4,6 +4,7 @@ import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { useInboxStore } from "../../store/inboxStore";
 import { LabelChipsRow } from "../LabelChipsRow";
+import { MemoryRouter } from "react-router";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 // The +N pill is the ONLY way to reach a label the row clipped away, so two
@@ -63,12 +64,14 @@ async function mountRow() {
   // Both labels hold nothing, so both live behind the pill: +2.
   await act(() =>
     root.render(
-      <LabelChipsRow
-        bucketCounts={{}}
-        projectCounts={[]}
-        projectPathByName={{}}
-        dropSessionOnLabel={() => {}}
-      />,
+      <MemoryRouter>
+        <LabelChipsRow
+          bucketCounts={{}}
+          projectCounts={[]}
+          projectPathByName={{}}
+          dropSessionOnLabel={() => {}}
+        />
+      </MemoryRouter>,
     ),
   );
   const pill = [...container.querySelectorAll("button")].find((b) =>
