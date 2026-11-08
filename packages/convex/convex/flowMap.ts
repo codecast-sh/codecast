@@ -125,17 +125,21 @@ export function foldFindings(rows: ReadonlyArray<{ source: string; created_at: n
 }
 
 const stationV = v.object({ key: v.string(), label: v.string(), ids: v.array(v.string()) });
-const funnelArgV = v.object({ stations: v.array(stationV), labels: v.array(v.object({ id: v.string(), label: v.string() })), now: v.number() });
+const funnelArgV = v.object({
+  stations: v.array(stationV), labels: v.array(v.object({ id: v.string(), label: v.string() })),
+  bar: v.union(v.object({ score: v.number(), findings: v.number() }), v.null()), now: v.number(),
+});
 
-/** The live flow's station steps for the Volume chart, and its stations' labels by node id. */
+/** The live flow's station steps for the Volume chart, its stations' labels by node id, and its bar. */
 export const funnelSetup = internalQuery({
   args: { workspace: v.string() },
-  handler: async (ctx, { workspace }): Promise<{ stations: FunnelStation[]; labels: Array<{ id: string; label: string }> }> => {
-    const { spine } = await flowSetup(ctx, workspace);
+  handler: async (ctx, { workspace }): Promise<{ stations: FunnelStation[]; labels: Array<{ id: string; label: string }>; bar: { score: number; findings: number } | null }> => {
+    const { flow, spine } = await flowSetup(ctx, workspace);
     const nodes: Array<{ id: string; label?: string; type?: string }> = spine?.nodes ?? [];
     return {
       stations: funnelStations(nodes, spine?.edges ?? []),
       labels: nodes.map((n) => ({ id: n.id, label: n.label || stationWords(n.id) })),
+      bar: flow?.bar ? { score: flow.bar.score, findings: flow.bar.findings } : null,
     };
   },
 });
@@ -163,7 +167,7 @@ export const problemsPage = internalQuery({
       // A problem with no finding left on it has no source to count under.
       const source = outcome ? await problemSource(ctx, t._id) : null;
       if (outcome && source) outcomes.push({ source, outcome });
-      const item = args.funnel ? funnelItem({ task: { ...t, _id: String(t._id) }, run: run ? { ...run, _id: String(run._id) } : null, stations: args.funnel.stations, labels, now: args.funnel.now }) : null;
+      const item = args.funnel ? funnelItem({ task: { ...t, _id: String(t._id) }, run: run ? { ...run, _id: String(run._id) } : null, stations: args.funnel.stations, labels, bar: args.funnel.bar, now: args.funnel.now }) : null;
       if (item) items.push(item);
     }
     return { open, scored, queued, outcomes, items, cursor: page.isDone ? null : page.continueCursor };
@@ -307,7 +311,7 @@ async function rollupWorkspace(ctx: any, workspace: string, now: number): Promis
   let open = 0, scored = 0, queued = 0;
   // One read serves both: a source's outcomes and the Volume chart's problems span the same 30 days.
   const since = now - FLOW_MAP_OUTCOME_DAYS * DAY_MS;
-  const setup: { stations: FunnelStation[]; labels: Array<{ id: string; label: string }> } = await ctx.runQuery((internal as any).flowMap.funnelSetup, { workspace });
+  const setup: { stations: FunnelStation[]; labels: Array<{ id: string; label: string }>; bar: { score: number; findings: number } | null } = await ctx.runQuery((internal as any).flowMap.funnelSetup, { workspace });
   const funnel = { ...setup, now };
   for (const status of PROBLEM_STATUSES) {
     cursor = null;

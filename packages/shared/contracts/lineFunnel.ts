@@ -8,6 +8,7 @@
 // capped list of the items behind each number, so the chart opens every count
 // with no query of its own. Pure.
 import { segmentTopOf } from "./flowPool";
+import { clearsBar, type FlowBar } from "./linePriority";
 import { endedFailing, mergeLeft, runEnd, type AnsweredGate, type LineRunStations } from "./lineRunEnd";
 
 export const DAY = 86_400_000;
@@ -18,8 +19,9 @@ export const FUNNEL_DAYS = 30;
 export const FUNNEL_ITEM_CAP = 40;
 
 /** Why a problem stopped at a step: its run closed it there (already fixed, not needed), a person dropped it, its run
- *  failed or was cancelled, it stands there now, it waits on a person's card, it waits in the queue for the line, it
- *  is under the flow's bar, it is under watch, or it came back after it shipped. */
+ *  failed or was cancelled, it stands there now, it waits on a person's card, it waits in the queue for the line (ready
+ *  and over the flow's bar), it is held back (not ready, or under the bar), it is under watch, or it came back after
+ *  it shipped. */
 export type FunnelReason = "closed" | "dropped" | "failed" | "cancelled" | "here" | "waiting" | "queued" | "held" | "watching" | "regressed" | "other";
 /** Display order: what ended first, what still moves after. */
 export const FUNNEL_REASONS: readonly FunnelReason[] = ["closed", "dropped", "failed", "cancelled", "regressed", "other", "here", "waiting", "queued", "held", "watching"];
@@ -139,7 +141,7 @@ export function funnelSteps(stations: ReadonlyArray<FunnelStation>): Array<{ key
 
 // ── one problem ─────────────────────────────────────────────────────────────
 
-export type FunnelTask = {
+export type FunnelTask = Parameters<typeof clearsBar>[0] & {
   _id: string;
   short_id?: string | null;
   title: string;
@@ -148,7 +150,7 @@ export type FunnelTask = {
   readiness?: string | null;
   waiting_since?: number | null;
   watch_until?: number | null;
-  cause?: { merged_into?: unknown; named?: { name: string } | null } | null;
+  cause?: { merged_into?: unknown; named?: { name: string } | null; scored?: { score: number } | null; signal_count?: number } | null;
 };
 export type FunnelRun = { _id: string; status: string; current_node_id?: string | null } & LineRunStations & AnsweredGate;
 
@@ -169,6 +171,8 @@ export function funnelItem(o: {
   labels: ReadonlyMap<string, string>;
   /** Its run waits on a person (paused at a card, a blocking decision names it). */
   waiting?: boolean;
+  /** The live flow's bar: a ready problem with no run under it is held back, over it queued. */
+  bar?: Pick<FlowBar, "score" | "findings"> | null;
   now: number;
 }): FunnelItem | null {
   const { task, run, stations, now } = o;
@@ -188,7 +192,9 @@ export function funnelItem(o: {
     if (end?.kind === "shipped" && !mergeLeft(run)) {
       level = merged;
       const deploy = stations.findIndex((s) => DEPLOYING.test(s.key));
-      const deployed = deploy < 0 || nodes.some((n) => n.status === "completed" && stationLevel(n.node_id) === 2 + deploy);
+      // A run whose own graph has no deploy station (an older flow's) is live once it ships.
+      const hasDeploy = deploy >= 0 && (!run.graph_nodes?.length || run.graph_nodes.some((n) => stationLevel(n.id) === 2 + deploy));
+      const deployed = !hasDeploy || nodes.some((n) => n.status === "completed" && stationLevel(n.node_id) === 2 + deploy);
       if (deployed) {
         level = merged + 1;
         if (task.status === "done" && typeof task.watch_until === "number" && task.watch_until <= now) level = merged + 2;
@@ -197,7 +203,7 @@ export function funnelItem(o: {
   }
   const live = !!run && LIVE.has(run.status);
   const waiting = live && (run!.status === "paused" || !!o.waiting || !!task.waiting_since);
-  const why = level === merged + 2 ? null : reasonOf({ task, run, level, merged, live, waiting, now });
+  const why = level === merged + 2 ? null : reasonOf({ task, run, level, merged, live, waiting, bar: o.bar, now });
 
   // Where it stands: the station it is at, else the last it reached before its exit.
   const at = live ? run!.current_node_id : [...nodes].filter((n) => n.status !== "pending" && n.node_id !== "exit").sort((a, b) => (a.completed_at ?? a.started_at ?? 0) - (b.completed_at ?? b.started_at ?? 0)).pop()?.node_id;
@@ -209,9 +215,9 @@ export function funnelItem(o: {
   };
 }
 
-function reasonOf(o: { task: FunnelTask; run: FunnelRun | null | undefined; level: number; merged: number; live: boolean; waiting: boolean; now: number }): FunnelReason {
+function reasonOf(o: { task: FunnelTask; run: FunnelRun | null | undefined; level: number; merged: number; live: boolean; waiting: boolean; bar?: Pick<FlowBar, "score" | "findings"> | null; now: number }): FunnelReason {
   const { task, run } = o;
-  if (!run) return task.status === "dropped" ? "dropped" : task.status === "done" ? "closed" : task.readiness === "ready" ? "queued" : "held";
+  if (!run) return task.status === "dropped" ? "dropped" : task.status === "done" ? "closed" : task.readiness === "ready" && clearsBar(task, o.bar) ? "queued" : "held";
   if (o.live) return o.waiting ? "waiting" : "here";
   const end = runEnd(run);
   if (end?.kind === "dissolved") return "closed";

@@ -971,7 +971,7 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   // role's sheet too, but it keeps the chip chat draws for it.
   const roleMention = typeof (props as any).className === "string" && (props as any).className.includes("mention-role");
   // A link carrying its share token is the same pill, opening through the token.
-  const entityRef = roleMention ? null : parseEntityUrl(href) ?? parseSharedEntityUrl(href);
+  const entityRef: { type: EntityType; id: string; to?: string } | null = roleMention ? null : parseEntityUrl(href) ?? parseSharedEntityUrl(href);
   if (entityRef) {
     // A GitHub pull request or commit URL is the same object as its codecast
     // page, so it renders as that pill and opens there. A URL leaves no doubt
@@ -987,7 +987,7 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
         mention={mention}
         certain={repoObject}
         label={repoObject && text && text !== href ? text : undefined}
-        to={repoObject ? repoObjectDeepHref(href) ?? undefined : "to" in entityRef ? entityRef.to : undefined}
+        to={repoObject ? repoObjectDeepHref(href) ?? undefined : entityRef.to}
       />
     );
   }

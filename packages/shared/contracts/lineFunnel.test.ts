@@ -69,6 +69,11 @@ describe("funnelItem", () => {
     expect(item(task({ status: "done", watch_until: NOW + 3 * DAY }), r)).toMatchObject({ level: level("live"), why: "watching", node: "Watch" });
   });
 
+  test("a run of an older graph with no deploy station is live once it ships", () => {
+    const r = run({ graph_nodes: [{ id: "bind" }, { id: "build" }, { id: "decide" }, { id: "watch" }], nodes: ["bind", "build", "decide", "watch", "exit"] });
+    expect(item(task({ status: "done", watch_until: NOW + DAY }), r)).toMatchObject({ level: level("live"), why: "watching" });
+  });
+
   test("its watch passed with the task done: closed clean", () => {
     const r = run({ nodes: ["bind", "triage", "build", "push", "merge", "deploy", "watch", "exit"] });
     expect(item(task({ status: "done", watch_until: NOW - DAY }), r)).toMatchObject({ level: level("clean"), why: null });
@@ -93,9 +98,14 @@ describe("funnelItem", () => {
     expect(item(task({ status: "dropped" }), run({ nodes: ["bind", "triage", "build", "dropped", "exit"] }))).toMatchObject({ level: level("build"), why: "dropped" });
   });
 
-  test("no run: queued when ready, held under the bar; merged into another problem counts nowhere", () => {
+  test("no run: queued when ready and over the bar, held back when not ready or under it; merged into another problem counts nowhere", () => {
     expect(item(task({ readiness: "ready" }), null)).toMatchObject({ level: 0, why: "queued", run: null, status: null });
     expect(item(task({ readiness: "not_ready" }), null)!.why).toBe("held");
+    const bar = { score: 60, findings: 3 };
+    const at = (t: FunnelTask) => funnelItem({ task: t, run: null, stations, labels, bar, now: NOW })!.why;
+    expect(at(task({ readiness: "ready", cause: { scored: { score: 40 }, signal_count: 1 } }))).toBe("held");
+    expect(at(task({ readiness: "ready", cause: { scored: { score: 40 }, signal_count: 3 } }))).toBe("queued");
+    expect(at(task({ readiness: "ready", cause: { scored: { score: 80 }, signal_count: 1 } }))).toBe("queued");
     expect(item(task({ cause: { merged_into: "t9" } }), null)).toBeNull();
   });
 
