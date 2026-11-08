@@ -111,7 +111,7 @@ const spawnTask = (id: string, projectPath?: string) => ({
 describe("TaskScheduler across a daemon restart", () => {
   // tr-1162 (2026-09-29): the daemon restarted a minute into a run. The new
   // process had a fresh lease identity and an empty run table, so the run's
-  // conversation was born unstamped (a loose Needs Input card), the lease
+  // conversation was born unstamped (a loose Needs You card), the lease
   // lapsed, and the re-claim respawned into the same tmux name and killed it.
   it("keeps its lease identity and adopts the runs the previous daemon left live", () => {
     const first = makeScheduler([]).scheduler;

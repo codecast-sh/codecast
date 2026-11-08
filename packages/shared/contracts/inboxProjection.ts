@@ -241,7 +241,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // the hard blocks, the active set and the dead check keep reading the real
   // status, which is still an honest observation of the process.
   // Why: without this a resume overwrote a declared `done` with the settled
-  // fallthrough and filed the session under Needs Input (ct-49533).
+  // fallthrough and filed the session under Needs You (ct-49533).
   const verdictStatus = input.sessionBoundary ? undefined : agentStatus;
   const declaredDormant =
     (verdictStatus === "dormant" && !input.dormantClaimExpired) || verdictStatus === "waiting";
@@ -324,7 +324,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
 
   // Settled with content: who acts next? A rest verdict names a machine (dormant)
   // or nobody (done); otherwise the ball is in the user's court — the web inbox
-  // files that under NEEDS INPUT, so the CLI matches.
+  // files that under NEEDS YOU, so the CLI matches.
   if (isIdle) return hasMsgs ? restState() : "idle";
 
   // Not idle but no active status either: mid-grace right after a turn, or the
@@ -434,7 +434,7 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
 // blank or killed (classifyWorkState), so its updated_at does not churn either.
 //
 // The stamp is direction free. A list that puts the freshest on top reads
-// `key`; a queue the reader clears top-down (Needs Input, Done, Dormant) reads `at`
+// `key`; a queue the reader clears top-down (Needs You, Done, Dormant) reads `at`
 // ascending and keeps its own direction.
 
 // A session created this recently holds the top of a freshest-first list: the
@@ -949,7 +949,7 @@ export function shouldShowInInbox(conv: InboxVisibilityRow): boolean {
 
 // ── Stamp currency (user rest verdict, settle verdict) ──────────────────────
 
-// The user's rest verdict: where THEY filed the row — Needs Input, Done or
+// The user's rest verdict: where THEY filed the row — Needs You, Done or
 // Dormant — by gesture or by dragging it into that section.
 export type UserRest = "needs_input" | "done" | "dormant";
 export const USER_RESTS: readonly UserRest[] = ["needs_input", "done", "dormant"];

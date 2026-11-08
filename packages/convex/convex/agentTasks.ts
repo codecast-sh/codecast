@@ -396,6 +396,47 @@ function runNoticeConversationId(
   return task.originating_conversation_id ?? runConv?._id;
 }
 
+async function notifyRunAttention(
+  ctx: TaskCtx,
+  task: Doc<"agent_tasks">,
+  conversationId: Id<"conversations"> | undefined,
+  type: "task_completed" | "task_failed",
+  detail: string,
+  now: number,
+): Promise<void> {
+  const user = await ctx.db.get(task.user_id);
+  if (!user || user.notification_preferences?.task_activity === false || !conversationId) return;
+  const message = `${detail.trim() || "Review this run and decide the next step."} — ${task.title}`;
+  const unread = await ctx.db.query("notifications")
+    .withIndex("by_recipient_read", (q: any) => q.eq("recipient_user_id", task.user_id).eq("read", false))
+    .collect();
+  const existing = unread.find((n: any) => n.entity_id === String(task._id) &&
+    (n.type === "task_completed" || n.type === "task_failed"));
+  if (existing) {
+    await ctx.db.patch(existing._id, { type, message, conversation_id: conversationId, created_at: now });
+    return;
+  }
+  const notificationId = await ctx.db.insert("notifications", {
+    recipient_user_id: task.user_id,
+    type,
+    message,
+    entity_id: String(task._id),
+    conversation_id: conversationId,
+    read: false,
+    created_at: now,
+  });
+  if (user.push_token && user.notifications_enabled) {
+    await enqueuePush(ctx as MutationCtx, {
+      user,
+      notification_id: notificationId,
+      type,
+      title: type === "task_failed" ? "Run stopped — needs attention" : "Needs attention",
+      body: message,
+      data: { type, taskId: task._id, conversationId },
+    });
+  }
+}
+
 // How long a limit-parked run waits when no account reports a reset time, and
 // the margin past a reported reset so the first request lands after the
 // window rolled rather than on its last second.
@@ -1412,7 +1453,7 @@ export function nextArmingAfterRun(task: Pick<Doc<"agent_tasks">, "schedule_type
 //    has said who acts next: nobody, or with --needs-attention the human. That
 //    is the same claim `cast state --status done|blocked` makes, so it goes
 //    through the same writer. Without it the run's process exit reads as a dead
-//    session with output: every clean run filed under Needs Input, and the
+//    session with output: every clean run filed under Needs You, and the
 //    stall rule pulled a folded one back out seconds after the fold.
 // 2. The result is posted where it is read (runResultThreadOf) — or, when the
 //    outcome is the owner's to act on (runOwnerWakeOf: a death, an ask, or a
@@ -1429,7 +1470,7 @@ export async function settleRunConversation(
   runConv: Doc<"conversations"> | null,
   args: { summary?: string; needs_attention?: boolean; daemon_id?: string },
   now: number,
-): Promise<void> {
+): Promise<boolean> {
   const summary = args.summary ? normalizeThreadState(args.summary) : "";
   // The agent's own report (no daemon_id) — a codex run reports too, though
   // its conversation is never resolved (no session uuid), so the outcome is
@@ -1441,7 +1482,8 @@ export async function settleRunConversation(
   }
 
   const outcome: RunOutcome = reported ? (args.needs_attention ? "attention" : "reported") : "unreported_exit";
-  let posted = await wakeRunOwner(ctx, task, runConv, outcome, reported ? args.summary : undefined, now);
+  const ownerNotified = await wakeRunOwner(ctx, task, runConv, outcome, reported ? args.summary : undefined, now);
+  let posted = ownerNotified;
   const threadId = posted ? undefined : runResultThreadOf(task);
   const thread = threadId && args.summary ? await ctx.db.get(threadId) : null;
   // Never into a hosted transcript, which only its turn engine writes: a run's
@@ -1484,6 +1526,7 @@ export async function settleRunConversation(
     // legacy dismissed stamp that files rows under Killed.
     await ctx.db.patch(runConv._id, { inbox_stashed_at: now });
   }
+  return ownerNotified;
 }
 
 export const completeTaskRun = mutation({
@@ -1550,7 +1593,7 @@ export const completeTaskRun = mutation({
       return true;
     }
 
-    await settleRunConversation(ctx, task, runConv, args, now);
+    const ownerNotified = await settleRunConversation(ctx, task, runConv, args, now);
 
     // --needs-attention is the agent's claim on the user's eyes, and stash/kill
     // must not swallow it: if the conversation the flag points at (the inject
@@ -1563,7 +1606,7 @@ export const completeTaskRun = mutation({
       (args.conversation_id
         ? (args.conversation_id as Id<"conversations">)
         : undefined);
-    if (args.needs_attention) {
+    if (args.needs_attention && !ownerNotified) {
       const conv =
         runConv && runConv._id === attentionConvId
           ? runConv
@@ -1575,30 +1618,8 @@ export const completeTaskRun = mutation({
 
     await patchTask(ctx, task, updates);
 
-    // Notify only a run the agent flagged --needs-attention. Every run's
-    // summary already lands in its thread or on the schedule row (see the fold
-    // above), so a clean completion, one-shot or repeating, is read there; a
-    // "Task completed" push for each was most of a person's bell (50 a week).
-    // Late summaries never re-notify (the initial completion already did).
-    const shouldNotify = !isLateSummary && !!args.needs_attention;
-    const user = await ctx.db.get(auth.userId);
-    if (shouldNotify && user?.push_token && user.notifications_enabled) {
-      const notifId = await ctx.db.insert("notifications", {
-        recipient_user_id: auth.userId,
-        type: "task_completed",
-        message: `Task "${task.title}" completed${args.summary ? `: ${args.summary.slice(0, 100)}` : ""}`,
-        conversation_id: attentionConvId,
-        read: false,
-        created_at: now,
-      });
-      await enqueuePush(ctx, {
-        user,
-        notification_id: notifId,
-        type: "task_completed",
-        title: "Task completed",
-        body: task.title,
-        data: { type: "task_completed", taskId: args.task_id, conversationId: attentionConvId },
-      });
+    if (!isLateSummary && args.needs_attention && !ownerNotified) {
+      await notifyRunAttention(ctx, task, attentionConvId, "task_completed", args.summary ?? "", now);
     }
 
     return true;
@@ -1675,27 +1696,10 @@ export const failTaskRun = mutation({
       }
       // A fresh run's death is its owner's to act on: the run is nested under
       // it and out of the inbox, so the owner is told, not the human.
-      await wakeRunOwner(ctx, task, runConv, "failed", args.error, Date.now());
-
-      const user = await ctx.db.get(auth.userId);
-      if (user?.push_token && user.notifications_enabled) {
-        const failedConvId = runNoticeConversationId(task, runConv);
-        const notifId = await ctx.db.insert("notifications", {
-          recipient_user_id: auth.userId,
-          type: "task_failed",
-          message: `Task "${task.title}" failed: ${args.error || "max retries exceeded"}`,
-          conversation_id: failedConvId,
-          read: false,
-          created_at: Date.now(),
-        });
-        await enqueuePush(ctx, {
-          user,
-          notification_id: notifId,
-          type: "task_failed",
-          title: "Task failed",
-          body: `${task.title}: ${args.error || "max retries exceeded"}`,
-          data: { type: "task_failed", taskId: args.task_id, conversationId: failedConvId },
-        });
+      const ownerNotified = await wakeRunOwner(ctx, task, runConv, "failed", args.error, Date.now());
+      if (!ownerNotified) {
+        await notifyRunAttention(ctx, task, runNoticeConversationId(task, runConv), "task_failed",
+          `Stopped after retries. ${args.error || "Review the run before restarting it."}`, Date.now());
       }
     }
 
@@ -2997,16 +3001,10 @@ export const reclaimStaleTasks = internalMutation({
             precheck_message: undefined,
           });
 
-          const user = await ctx.db.get(task.user_id);
-          if (user?.push_token && user.notifications_enabled) {
-            await ctx.db.insert("notifications", {
-              recipient_user_id: task.user_id,
-              type: "task_failed",
-              message: `Task "${task.title}" failed: lease expired after ${task.retry_count} retries`,
-              conversation_id: task.originating_conversation_id,
-              read: false,
-              created_at: now,
-            });
+          const detail = `Stopped after ${task.retry_count} retries because the runner stopped responding. Review the run before restarting it.`;
+          const ownerNotified = await wakeRunOwner(ctx, task, runConv, "failed", detail, now);
+          if (!ownerNotified) {
+            await notifyRunAttention(ctx, task, runNoticeConversationId(task, runConv), "task_failed", detail, now);
           }
         }
       }
