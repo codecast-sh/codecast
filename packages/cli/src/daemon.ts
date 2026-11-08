@@ -66,8 +66,9 @@ import { scanOpenBackgroundTasksInto, type OpenTaskInfo, type OpenTaskTimes, typ
 import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunLastActivity } from "./workflowRunLive.js";
 import { HibernationWorkScan, subagentFilesAccounted } from "./hibernationWork.js";
 import { governor, sampleLoad, describeLoad, readGovernorState, writeGovernorState, SAMPLE_INTERVAL_MS as GOVERNOR_SAMPLE_INTERVAL_MS } from "./loadGovernor.js";
-import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, recentRevives, isStationHandOpening, stationHandsFirst, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, unrecordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
+import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, recentRevives, retiredByPerson, isStationHandOpening, stationHandsFirst, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, unrecordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
 import { TurnClaimLedger, TurnClaimRecovery, awaitingResume, claimTransition, type ClaimFacts, type TurnClaim } from "./turnClaims.js";
+import { BUSY_STATUSES as WATCHDOG_BUSY_STATUSES, MEM_RESTART_BYTES, MEM_WARN_BYTES, STUCK_MS as WATCHDOG_STUCK_MS, describeOwnWork, liveWorkflowRuns, sessionLastActivityMs, sessionWatchdogDecision, watchdogReviveMessage, type WatchdogVerdict } from "./sessionWatchdog.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE, wslDistroName } from "./windowsSupport.js";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
@@ -398,7 +399,7 @@ import { buildStableContext, ensureStableHookForLaunch, recordStableContext, typ
 import { atomicWriteFile } from "./atomicWrite.js";
 import { writeStoredConfig } from "./config/storedConfig.js";
 import { configDirTarget, fenceAdmits, fenceTargetOf, type FenceKind } from "./configFence.js";
-import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
+import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ProcessInfo, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import { collectMachineResources, processesStartedOutside, readHostPressure } from "./systemResources.js";
 import { setBackgroundSessions, setGovernorBackground } from "./backgroundPriority.js";
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
@@ -24424,6 +24425,143 @@ async function collectResourceSnapshot(): Promise<void> {
 }
 
 let processCaptureFailing = false;
+
+// ── Live-session watchdog (sessionWatchdog.ts) ──────────────────────────────
+// A live agent that hung mid-turn or leaked memory past the line is stopped
+// here, and brought back by what already brings back a death: a mid-turn one
+// by its turn claim (turnClaims.ts, with its attempt cap), a finished turn
+// that still owns work by the mid-work revive, both through queueRevive and
+// its per-conversation budget; a session between turns is resumed with no
+// message. Runs off the resource tick, which already holds every session's
+// agent pid and its RSS.
+const watchdogBusySince = new Map<string, number>();
+const watchdogLastHold = new Map<string, string>();
+const watchdogMemWarned = new Set<string>();
+// Why the watchdog stopped a session, read by the turn claim's resume so its
+// revive says so (and the web's restart rule shows it).
+const watchdogRestartReasons = new Map<string, string>();
+// The machine was asleep or the daemon just booted: quiet time before this
+// says nothing about a hang.
+let watchdogAwakeSince = Date.now();
+let sessionWatchdogRunning = false;
+
+async function runSessionWatchdog(snapshot: Map<number, ProcessInfo>, sessionPids: Map<string, number>, now: number): Promise<void> {
+  if (sessionWatchdogRunning) return;
+  sessionWatchdogRunning = true;
+  try {
+    for (const map of [watchdogBusySince, watchdogLastHold]) {
+      for (const id of map.keys()) if (!sessionPids.has(id)) map.delete(id);
+    }
+    for (const id of watchdogMemWarned) if (!sessionPids.has(id)) watchdogMemWarned.delete(id);
+    for (const [sessionId, pid] of sessionPids) {
+      const proc = snapshot.get(pid);
+      if (!proc || detectSessionAgentType(sessionId) !== "claude") continue;
+      const status = lastSentAgentStatus.get(sessionId);
+      if (WATCHDOG_BUSY_STATUSES.has(status ?? "")) {
+        if (!watchdogBusySince.has(sessionId)) watchdogBusySince.set(sessionId, turnStartedAt.get(sessionId) ?? now);
+      } else {
+        watchdogBusySince.delete(sessionId);
+      }
+      if (proc.rss >= MEM_WARN_BYTES && !watchdogMemWarned.has(sessionId)) {
+        watchdogMemWarned.add(sessionId);
+        log(`[SESSION-WATCHDOG] ${sessionId.slice(0, 8)} pid ${pid} at ${Math.round(proc.rss / 1024 ** 3)} GB; restarts at ${Math.round(MEM_RESTART_BYTES / 1024 ** 3)} GB`);
+      }
+      // Cheap gate first: only a long busy stretch or a big process pays for the disk reads.
+      const busySince = watchdogBusySince.get(sessionId);
+      const longBusy = busySince !== undefined && now - Math.max(busySince, watchdogAwakeSince) >= WATCHDOG_STUCK_MS;
+      if (!longBusy && proc.rss < MEM_RESTART_BYTES) { watchdogLastHold.delete(sessionId); continue; }
+      const convId = conversationCacheRef?.[sessionId];
+      if (!convId) continue;
+
+      const transcript = findReapTranscript(sessionId, now);
+      // No transcript: nothing says it is quiet, so it is not hung.
+      const lastActivityMs = Math.max(transcript ? await sessionLastActivityMs(transcript.path) : now, proc.startedAt ?? 0);
+      const openTasks = transcript ? verifiedOpenTasks(transcript.path, sessionId).length : 0;
+      const runs = transcript ? await liveWorkflowRuns(transcript.path, proc.startedAt) : [];
+      let transcriptTurnEnded = false;
+      try { if (transcript) transcriptTurnEnded = classifyTranscriptTail(readFileTailSync(transcript.path), { skipLocalCommands: true }) === "idle"; } catch {}
+      const verdict = sessionWatchdogDecision({
+        status,
+        transcriptTurnEnded,
+        busySinceMs: busySince,
+        lastActivityMs,
+        awakeSinceMs: watchdogAwakeSince,
+        waitingOn: describeOwnWork(openTasks, runs, status),
+        rssBytes: proc.rss,
+        priorRestarts: priorRevives(REVIVE_LEDGER_FILE, convId),
+        now,
+      });
+      if (!verdict.restart) {
+        const hold = verdict.reason === "healthy" ? undefined : `${verdict.reason}${verdict.detail ? ` (${verdict.detail})` : ""}`;
+        if (hold && watchdogLastHold.get(sessionId) !== hold) {
+          log(`[SESSION-WATCHDOG] not restarting ${sessionId.slice(0, 8)} pid ${pid}: ${hold}${verdict.reason === "budget-spent" ? "; leaving it to a person" : ""}`, verdict.reason === "budget-spent" ? "warn" : "info");
+        }
+        if (hold) watchdogLastHold.set(sessionId, hold); else watchdogLastHold.delete(sessionId);
+        continue;
+      }
+      watchdogLastHold.delete(sessionId);
+      await restartUnhealthySession(sessionId, convId, pid, verdict, now);
+    }
+  } catch (err) {
+    log(`[SESSION-WATCHDOG] pass failed: ${err instanceof Error ? err.message : String(err)}`, "warn");
+  } finally {
+    sessionWatchdogRunning = false;
+  }
+}
+
+async function restartUnhealthySession(
+  sessionId: string,
+  convId: string,
+  pid: number,
+  verdict: Extract<WatchdogVerdict, { restart: true }>,
+  now: number,
+): Promise<void> {
+  const tag = `${sessionId.slice(0, 8)} pid ${pid}`;
+  const syncService = syncServiceRef;
+  if (!syncService) return;
+  // The revive paths' own gate: the person still holds the session.
+  const lifecycle = await syncService.getConversationLifecycle(convId, sessionId, { strict: true }).catch(() => undefined);
+  if (!lifecycle?.hideStateKnown || retiredByPerson(lifecycle)) {
+    log(`[SESSION-WATCHDOG] not restarting ${tag} (${verdict.detail}): ${lifecycle?.hideStateKnown ? "retired" : "lifecycle unknown"}`);
+    return;
+  }
+  log(`[SESSION-WATCHDOG] RESTART ${tag} conv=${convId.slice(0, 12)}: ${verdict.detail}; then ${verdict.resume}`, "warn");
+  const stopped = await reapPidTree(pid);
+  watchdogBusySince.delete(sessionId);
+  watchdogMemWarned.delete(sessionId);
+  log(`[SESSION-WATCHDOG] stopped ${stopped} process(es) under ${tag}`);
+  if (verdict.resume === "revive") {
+    // Mid-turn: the turn claim continues it, as when its pane dies
+    // (handleDeadSession). The kill is the observed exit the pass would
+    // otherwise wait 30 minutes for.
+    if (turnClaims().get(sessionId)) {
+      watchdogRestartReasons.set(sessionId, verdict.detail);
+      observedDeadPanes.add(sessionId);
+      log(`[SESSION-WATCHDOG] ${tag}: its turn claim resumes it`);
+      void requestTurnClaimRecovery();
+      return;
+    }
+    // A finished turn that owns work (waiting, a dormant wake): the mid-work
+    // revive, queued now. Its status file goes, so the sweep cannot queue a second.
+    forgetStatusFile(sessionId);
+    try {
+      if (await queueRevive(syncService, convId, now, "w", watchdogReviveMessage(verdict.detail))) {
+        log(`[SESSION-WATCHDOG] ${tag} revive queued`);
+        return;
+      }
+      log(`[SESSION-WATCHDOG] ${tag}: recovery is off on this machine; resuming without a message`);
+    } catch (err) {
+      log(`[SESSION-WATCHDOG] ${tag}: revive failed to queue (${err instanceof Error ? err.message : String(err)}); resuming without a message`, "warn");
+    }
+  } else {
+    // Between turns: no turn to continue, so no message; counted all the same.
+    recordRevive(REVIVE_LEDGER_FILE, convId, now);
+    forgetStatusFile(sessionId);
+  }
+  const ok = await autoResumeSession(sessionId, "", readTitleCache(), undefined, convId).catch(() => false);
+  log(`[SESSION-WATCHDOG] ${tag} ${ok ? "resumed" : "could not be resumed; the next message resumes it"}`);
+}
+
 async function collectResourceSnapshotNow(): Promise<void> {
   await ensureTmuxCarriesSessionIds();
 
@@ -24488,6 +24626,9 @@ async function collectResourceSnapshotNow(): Promise<void> {
       } catch { /* no snapshot yet, or unreadable: start from zero */ }
     }
     lastResourceTickAt = now;
+    if (sleepSkip) watchdogAwakeSince = now;
+    // Off the tick: a restart waits out a SIGTERM grace.
+    else void runSessionWatchdog(processSnapshot, sessionPids, now);
 
     for (const [sessionId, r] of resources) {
       sessionAwakeIdleMs.set(sessionId, nextAwakeIdleMs({
@@ -29747,7 +29888,12 @@ function makeTurnClaimRecovery(syncService: SyncService): TurnClaimRecovery {
       return { ...facts, liveness, ownedElsewhere, lastLifeAt, recentRevives: recentResumes, continueState, messagePending: !!facts.lifecycle?.hasPendingMessages && !(claim.continueId && continueState === "stalled") };
     },
     // Numbered by claim and attempt: the server dedupes a client id within the minute.
-    resume: (claim) => queueRevive(syncService, claim.conversationId, Date.now(), `${Math.floor(claim.claimedAt / 1000)}a${claim.attempts}`),
+    // A turn the live-session watchdog stopped says why (sessionWatchdog.ts).
+    resume: (claim) => {
+      const why = watchdogRestartReasons.get(claim.sessionId);
+      watchdogRestartReasons.delete(claim.sessionId);
+      return queueRevive(syncService, claim.conversationId, Date.now(), `${Math.floor(claim.claimedAt / 1000)}a${claim.attempts}`, why ? watchdogReviveMessage(why) : REVIVE_MESSAGE);
+    },
     settle: (claim: TurnClaim, reason) => {
       // A moved session runs elsewhere, and an SDK host reported its own stop.
       if (reason === "moved" || claudeSdkBackend?.owns(claim.conversationId)) return forgetStatusFile(claim.sessionId);
@@ -29796,11 +29942,11 @@ function admitRevive(sessionId: string, what: string): boolean {
 // that dies in between still spent it. The budget is per conversation: a
 // resume that lands on a new session id must not start it over. Its message
 // id; null when this machine's recovery is off.
-async function queueRevive(syncService: SyncService, convId: string, now: number, attempt?: string): Promise<string | null> {
+async function queueRevive(syncService: SyncService, convId: string, now: number, attempt?: string, content: string = REVIVE_MESSAGE): Promise<string | null> {
   recordRevive(REVIVE_LEDGER_FILE, convId, now);
   let id: string | null;
   try {
-    id = await syncService.enqueueUserMessage(convId, REVIVE_MESSAGE, reviveClientId(convId, now, attempt));
+    id = await syncService.enqueueUserMessage(convId, content, reviveClientId(convId, now, attempt));
   } catch (err) {
     // A call that failed queued nothing we know of; the next try counts again.
     unrecordRevive(REVIVE_LEDGER_FILE, convId, now);
