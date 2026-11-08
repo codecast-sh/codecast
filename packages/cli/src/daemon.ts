@@ -330,6 +330,7 @@ import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, trans
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync, tmuxRunAsync } from "./tmux.js";
+import { classifyTmuxLiveness } from "./tmuxLiveness.js";
 import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
 import { ghosttyPane } from "./ghostty.js";
 import type { PaneTransport } from "./paneTransport.js";
@@ -24806,9 +24807,12 @@ export async function resolveLiveTmuxTarget(
     }
     if (hasSessionOk) {
       cachedStillValid = true;
-      let agentAlive = true;
-      try { agentAlive = await isTmuxAgentAlive(cachedTmux, sessionId); } catch {}
-      if (agentAlive) {
+      let agentAlive: boolean | null = null;
+      try { agentAlive = await tmuxAgentLiveness(cachedTmux, sessionId); } catch {}
+      // Unknown is not dead: a probe that timed out under load once dropped a
+      // live session here, and delivery fell through to AppleScript (jx751p3).
+      if (agentAlive !== false) {
+        if (agentAlive === null) logDelivery(`Cached tmux ${cachedTmux} liveness unknown (probe got no answer), keeping it`);
         return { tmuxTarget: cachedTmux, source: "cache", proc: null, cachedStillValid: true };
       }
       // Dead agent: drop the cache (leave the tmux in place) and keep probing.
@@ -24826,12 +24830,16 @@ export async function resolveLiveTmuxTarget(
     .map(socket => socket.slice(socketPrefix.length))
     .filter(name => name.includes("-resume-") && name.endsWith(`-${resumeShortId(sessionId)}`));
   const candidates = [...new Set([...resumeReuseCandidates(undefined, startedTmux, resumeTmuxName ?? ""), ...resumedTmux])];
+  // This session's own tmux whose agent could not be seen: the route when the process lookup finds no pane.
+  let unsureTmux: string | null = null;
   for (const candidate of candidates) {
     try {
       await tmuxExec(["has-session", "-t", candidate], { timeout: 3000, killSignal: "SIGKILL" });
       if (candidate === derivedTmux && !await matchesTmuxConversation(candidate, conversationId!, tmuxExec)) continue;
       if (resumedTmux.includes(candidate) && !await matchesTmuxConversation(candidate, sessionId, tmuxExec, "session")) continue;
-      if (await isTmuxAgentAlive(candidate, sessionId)) {
+      const alive = await tmuxAgentLiveness(candidate, sessionId);
+      if (alive === null) unsureTmux ??= candidate;
+      if (alive) {
         return {
           tmuxTarget: candidate,
           source: candidate === startedTmux ? "started" : "resume-name",
@@ -24882,6 +24890,7 @@ export async function resolveLiveTmuxTarget(
     // pane): fall back to a still-valid cached target rather than the AppleScript path,
     // which would type into the foreground terminal and silently drop the message.
     if (!pane && cachedStillValid && cachedTmux) pane = cachedTmux;
+    if (!pane && unsureTmux) pane = unsureTmux;
     return { tmuxTarget: pane, source: pane ? "process" : null, proc, cachedStillValid };
   }
 
@@ -27699,38 +27708,31 @@ function isProcessRunning(pid: number): boolean {
  * session's messages into that other agent.
  */
 async function isTmuxAgentAlive(tmuxSession: string, sessionId?: string): Promise<boolean> {
+  return (await tmuxAgentLiveness(tmuxSession, sessionId)) === true;
+}
+
+// true: an agent runs in the pane. false: tmux, ps and the pane all answered and
+// none shows one (pane content alone never counts: it is likely the dead
+// process's last output). null: a probe got no answer (tmuxLiveness.ts).
+async function tmuxAgentLiveness(tmuxSession: string, sessionId?: string): Promise<boolean | null> {
   if (!hasTmux()) return false;
+  let panePid: number | "gone" | null;
   try {
-    const { stdout } = await tmuxExec(
-      ["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"], { timeout: 3000, killSignal: "SIGKILL" }
-    );
-    const panePid = stdout.trim();
-    if (!panePid) return false;
-
-    const agentPid = await findAgentPidInTree(parseInt(panePid, 10));
-    if (agentPid !== null && sessionId && await rejectsForeignProcess(sessionId, agentPid, `tmux ${tmuxSession}`)) return false;
-    const hasProcess = agentPid !== null;
-
-    try {
-      const { stdout: paneContent } = await tmuxExec(
-        ["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-10"], { timeout: 3000, killSignal: "SIGKILL" }
-      );
-      const trimmed = paneContent.trim();
-      if (!trimmed) return false;
-      if (/Resume this session with:/i.test(trimmed)) return false;
-      if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
-      if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(trimmed)) return false;
-      if (hasProcess) return true;
-      // No agent process in the process tree — the agent has exited or crashed.
-      // Don't optimistically return true just because the pane has content; that
-      // content is likely a crash stack trace or leftover output from the dead
-      // process. Return false so the caller falls through to auto-resume.
-      return false;
-    } catch {}
-    return hasProcess;
-  } catch {
-    return false;
+    const { stdout } = await tmuxExec(["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"], { timeout: 3000, killSignal: "SIGKILL" });
+    const pid = parseInt(stdout.trim(), 10);
+    panePid = Number.isFinite(pid) ? pid : "gone";
+  } catch (err) {
+    panePid = isTmuxSessionMissingError(err) ? "gone" : null;
   }
+  if (typeof panePid !== "number") return classifyTmuxLiveness({ panePid, agent: null, pane: null });
+
+  const agent = await agentInTree(panePid);
+  if (typeof agent === "number" && sessionId && await rejectsForeignProcess(sessionId, agent, `tmux ${tmuxSession}`)) return false;
+  let pane: string | null = null;
+  try {
+    ({ stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-10"], { timeout: 3000, killSignal: "SIGKILL" }));
+  } catch {}
+  return classifyTmuxLiveness({ panePid, agent, pane });
 }
 
 // Walk a process tree (BFS, bounded depth) and return the first agent process
@@ -27738,32 +27740,41 @@ async function isTmuxAgentAlive(tmuxSession: string, sessionId?: string): Promis
 // be the agent itself (not the parent shell) so the cache's isAgentProcess
 // revalidation keeps it alive.
 async function findAgentPidInTree(rootPid: number, maxDepth = 4): Promise<number | null> {
+  const found = await agentInTree(rootPid, maxDepth);
+  return typeof found === "number" ? found : null;
+}
+
+// The same walk, telling "no agent here" ("absent": every ps and pgrep
+// answered) from "could not see" (null: one timed out). The root is checked
+// first: a bare `claude` pane_pid is the agent.
+async function agentInTree(rootPid: number, maxDepth = 4): Promise<number | "absent" | null> {
   const visited = new Set<number>();
+  let unsure = false;
   async function scan(pids: number[], depth: number): Promise<number | null> {
     if (depth > maxDepth || pids.length === 0) return null;
     for (const pid of pids) {
       if (visited.has(pid)) continue;
       visited.add(pid);
-      if (await isAgentProcess(pid)) return pid;
+      const verdict = await agentProcessVerdict(pid);
+      if (verdict === true) return pid;
+      if (verdict === null) unsure = true;
     }
     for (const pid of pids) {
+      let children: number[] = [];
       try {
         const { stdout } = await execAsync(`pgrep -P ${pid}`, { timeout: 3000, killSignal: "SIGKILL" });
-        const children = stdout.trim().split(/\s+/).filter(Boolean).map(Number);
-        const found = await scan(children, depth + 1);
-        if (found !== null) return found;
-      } catch {}
+        children = stdout.trim().split(/\s+/).filter(Boolean).map(Number);
+      } catch (err) {
+        // pgrep exits 1 when the process has no children; anything else is no answer.
+        if ((err as { code?: number; killed?: boolean }).code !== 1 || (err as { killed?: boolean }).killed) unsure = true;
+      }
+      const found = await scan(children, depth + 1);
+      if (found !== null) return found;
     }
     return null;
   }
-  // Include the root itself, then descend — a bare `claude` pane_pid is the agent.
-  if (await isAgentProcess(rootPid)) return rootPid;
-  try {
-    const { stdout } = await execAsync(`pgrep -P ${rootPid}`, { timeout: 3000, killSignal: "SIGKILL" });
-    const childPids = stdout.trim().split(/\s+/).filter(Boolean).map(Number);
-    return scan(childPids, 1);
-  } catch {}
-  return null;
+  const found = await scan([rootPid], 0);
+  return found ?? (unsure ? null : "absent");
 }
 
 // Async on purpose: this runs per session in fleet-wide sweeps (liveness
