@@ -18,6 +18,21 @@
   #tabs .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   .row { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
   .row button { flex: 1; padding: 0.4rem 0.6rem; font-size: 12px; }
+  /* This tab: who has it, and the one thing the human can do about it. */
+  #tab { margin: 0 0 0.9rem; padding: 0.7rem 0.8rem; border: 1px solid var(--line); border-radius: 10px; background: var(--card); display: grid; gap: 0.5rem; }
+  #tab[hidden] { display: none; }
+  #tab .head { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+  #tab .badge { flex: none; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; color: #fff; border-radius: 4px; padding: 0.1em 0.45em; background: var(--dim); }
+  #tab[data-role="waiting"] .badge { background: #b26a00; }
+  #tab[data-role="running"] .badge { background: #c62828; }
+  #tab[data-role="lent"] .badge { background: #1a73e8; }
+  #tab[data-role="agent"] .badge { background: var(--coral); }
+  #tab .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
+  #tab .ask { margin: 0; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #tab .ask:empty { display: none; }
+  #tab .actions { display: flex; gap: 0.5rem; }
+  #tab .actions button { flex: 1; padding: 0.4rem 0.6rem; font-size: 12px; }
+  #tab .actions button[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -30,6 +45,14 @@
       codecast
     </span>
   </header>
+  <section id="tab" hidden aria-live="polite">
+    <div class="head"><span class="badge" data-badge></span><span class="name" data-name></span></div>
+    <p class="ask" data-ask></p>
+    <div class="actions">
+      <button id="primary" class="primary" type="button"></button>
+      <button id="secondary" type="button" hidden></button>
+    </div>
+  </section>
   <section id="status">
     <span class="dot"></span>
     <div style="min-width:0;flex:1">
