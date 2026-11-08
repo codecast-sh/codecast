@@ -42,6 +42,6 @@ cast browser read | shot | eval "<js>"     # text, a screenshot into the thread,
 cast browser do "find Sign in" click "wait --text Welcome"   # several steps, one process
 ```
 
-Snapshot, then act on a ref; when you can name the target, `find` it instead. Batch steps you can see ahead into one `do`, since each command costs seconds of startup. Evidence (console errors, failed requests, screenshots) lands in the thread; never link local file paths. Act only on your own tab, never the human's or another session's. Close tabs you opened when done (`cast browser stop`), unless the human still needs them. `cast browser show` brings your tab to the front only when the human asked to see it or must act in it, once. `cast browser --help` lists every verb, and `cast guide browser` covers tabs, recovery and sign-in.
+Snapshot, then act on a ref; when you can name the target, `find` it instead. Batch steps you can see ahead into one `do`: each command costs seconds of startup. Evidence lands in the thread; never link local file paths. Close tabs you opened when done (`cast browser stop`) unless the human still needs them; touch no others. Hand a step only the human can do (a sign-in) to `cast browser handoff "<step>"` and end your turn. `show` raises your tab only when asked. Subagents sharing a session each pass `--tab <name>`. `cast browser --help` lists every verb, and `cast guide browser` covers tabs, recovery and sign-in.
 <!-- cast @VERSION@ -->
 <!-- /codecast-browser -->
