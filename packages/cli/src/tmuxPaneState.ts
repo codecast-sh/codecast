@@ -184,6 +184,14 @@ function newestPaintedFrame(region: string): string {
 // ✳: a read that landed on it settled hands mid tool call on Linux.
 export const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽*]\s+\S[^\n]*…\s*\([^)\n]*?\b\d+[dhms]\b/m;
 
+// The composer's top rule with the turn status line painted over it: the
+// glyph, the verb and the digits replace some cells and the rule shows through
+// the spaces ("✽─Jitterbugging… ───1──4──13──────…"). Claude Code leaves this
+// after an idle compaction. Neither a plain rule nor a status line matches it,
+// so the box read as a lone footer rule with no composer, and every message to
+// the pane deferred as AGENT_UNKNOWN_STATE for four hours (2026-11-07, jx7aztd).
+export const CLAUDE_OVERPAINTED_RULE = /^\s*[·✢✳✶✻✽*][─━][^\n]*[─━]{10,}\s*$/m;
+
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
 // list, so check Rewind first). Idle is a positive whitelist — never inferred from
@@ -209,6 +217,11 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // user's Escape as "no active turn" while the pane showed this line). The
   // finished form, "✻ Churned for 0s · done 9:52 AM", has no "… (" and stays idle.
   if (CLAUDE_TURN_STATUS_LINE.test(region)) return "busy";
+  // The overpainted rule says a status line was drawn, not whether the turn is
+  // still running. Busy is the reading that is safe either way: delivery pastes
+  // into type-ahead without the leading Escape, and an idle composer still
+  // submits the paste.
+  if (CLAUDE_OVERPAINTED_RULE.test(region)) return "busy";
   // Rewind / cancel-able modal: distinguished from warnings by an Esc option.
   // Warnings have only "Press enter to continue" (no Esc). The "❯ (current)" marker
   // is also unique to the Rewind option list.
