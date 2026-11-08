@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 import { LOGIN_PATH_FILENAME } from "./loginShellPath.js";
 import { restoreSuspendedAgent } from "./tmuxSuspendedAgent.js";
-import { transcriptContainsDelivery } from "./tmuxDeliveryTranscript.js";
+import { DeliveryEchoLedger, deliveryEchoLedger, echoCandidatesOf, isHarnessEmittedUserTurn } from "./deliveryEchoLedger.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { handoffParentSessionId, linkPlanHandoffChild, planHandoffTarget } from "./planHandoff.js";
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
-import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, pairDeliveryAcks } from "@codecast/shared/contracts";
+import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
@@ -2124,8 +2124,8 @@ const compactionRedeliveryBypass = new Set<string>(); // messageIds that should 
 // and from then on the old attempt may neither paste nor release anything.
 const messagesInFlight = new Map<string, { ts: number; conversationId: string; ttlMs?: number; owner?: object }>();
 // `pasted` flips once the paste was SEEN in the composer and submitted: only
-// such an entry is vouched to the server (collectPastedInjectedIds, the
-// paste_verified stamp). A pre-paste entry exists solely for dedup.
+// such an entry is vouched to the server (the paste_verified stamp). A
+// pre-paste entry exists solely for dedup.
 const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
 
 // The daemon's own clock at the newest delivery into a conversation, or null.
@@ -2156,7 +2156,7 @@ const conversationDeliveryActive = new Set<string>();
 
 // A web message's whole point is the local tmux paste; that must never be blocked by a Convex
 // round-trip. The "injected" status is only an intermediate UI signal — the durable ack is the
-// content-matched promote-to-delivered in addMessages when the agent echoes the message to its
+// promote-to-delivered in addMessages when the agent's echo of the message, stamped with its id, reaches its
 // JSONL. So mark injected best-effort with a hard timeout and swallow failures: an un-timed
 // updateMessageStatus before the paste was wedging deliverMessage for the full 180s timeout
 // under Convex load, so the send-keys never ran and the message never reached the agent.
@@ -2269,26 +2269,6 @@ export function markInjectedBestEffort(
       }
     })();
   });
-}
-
-// DEC-01: the rows THIS process pasted into a live pane for a conversation —
-// an injectedMessageTs entry whose delivery has resolved (not in-flight; failed
-// deliveries delete their entry). This is what scopes the injected-ack: the
-// server only terminalizes rows the daemon can vouch for, so a stranded
-// injected row (paste never landed, or a previous daemon process died) is left
-// for the heal cron to re-pend and re-deliver instead of being falsely marked
-// delivered by an unrelated (or historical, resync-from-0) user-turn echo.
-export function collectPastedInjectedIds(conversationId: string): string[] {
-  const ids: string[] = [];
-  for (const [id, entry] of injectedMessageTs) {
-    if (entry.conversationId !== conversationId) continue;
-    if (messagesInFlight.has(id)) continue;
-    // A pre-paste mark is not a paste: an ack on it would terminalize a row
-    // whose paste was refused or never showed (a lost cast send, 2026-09-08).
-    if (!entry.pasted) continue;
-    ids.push(id);
-  }
-  return ids;
 }
 
 // Forgets what THIS process has already pasted for a conversation so re-pended
@@ -7246,7 +7226,7 @@ async function executeRemoteCommand(
             carryLaunchPrompt(launchPrompt.messageId, {
               conversationId, tmuxSession, projectPath: cwd, sessionId: assignedClaudeSessionId,
               transcript: path.join(process.env.HOME || "", ".claude", "projects", claudeProjectDirName(cwd), `${assignedClaudeSessionId}.jsonl`),
-            });
+            }, launchPrompt.text);
           }
           await typeIntoPane(tmuxSession, cmdText);
           const resultObj: Record<string, any> = { tmux_session: tmuxSession, agent_type: agentType, project_path: cwd };
@@ -10117,61 +10097,11 @@ const transcriptRetryOwners = new TranscriptRetryOwner({
   allowed: () => !readDaemonState()?.authExpired && !isSyncPaused(),
   retryable: error => !(error instanceof AuthExpiredError),
   onMissing: async source => {
-    transcriptAckObserved.delete(source.file);
     codexModelPositions.delete(source.file);
     bakImageRecoveryDone.delete(source.file);
     await pruneAcceptedTranscript(source.file);
   },
-  onStop: source => { transcriptAckObserved.delete(source.file); },
 });
-type TranscriptAckWindow = { file: string; identity: string; boundary: number; source: ReturnType<typeof ingestIdentity>; pasted: Map<string, string[]> };
-const transcriptAckObserved = new Map<string, ReturnType<typeof ingestIdentity>>();
-const TRANSCRIPT_ACK_OBSERVATIONS = 4096;
-const transcriptAckWindows = new Map<string, TranscriptAckWindow>();
-async function observeTranscriptAckWindow(sessionId: string, file: string): Promise<void> {
-  const pasted = new Map<string, string[]>();
-  for (const [id, entry] of injectedMessageTs) {
-    if (messagesInFlight.has(id)) continue;
-    if (!entry.pasted) continue;
-    const ids = pasted.get(entry.conversationId) ?? [];
-    ids.push(id); pasted.set(entry.conversationId, ids);
-  }
-  let current: ReturnType<typeof ingestIdentity>;
-  try { current = ingestIdentity(await fs.promises.stat(file)); }
-  catch (err: any) {
-    if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(err.code)) { transcriptAckObserved.delete(file); return; }
-    throw err;
-  }
-  const previous = transcriptAckObserved.get(file);
-  transcriptAckObserved.delete(file);
-  transcriptAckObserved.set(file, current);
-  if (transcriptAckObserved.size > TRANSCRIPT_ACK_OBSERVATIONS) transcriptAckObserved.delete(transcriptAckObserved.keys().next().value!);
-  if (previous && sameIngestFile(previous, current) && current.size >= previous.size) {
-    transcriptAckWindows.set(sessionId, { file, identity: JSON.stringify([current.dev, current.ino, current.birthtimeMs]), boundary: previous.size, source: current, pasted });
-  }
-}
-function transcriptAckEligibility(messages: RawMessage[], sessionId: string, conversationId: string, pendingReplay: boolean): () => Promise<boolean> {
-  const window = transcriptAckWindows.get(sessionId);
-  const eligible = !pendingReplay && !!window && messages.every(msg => {
-    if (msg.role !== "user") return true;
-    if (isHarnessEmittedUserTurn(msg.content)) return false;
-    const record = ingestRecord(msg);
-    return !!record && ["claude", "cursor", "codex"].includes(record.client) && record.file === window.file && record.identity === window.identity && record.offset >= window.boundary;
-  });
-  const pasted = window?.pasted.get(conversationId) ?? [];
-  return async () => {
-    if (!eligible || !window) return false;
-    let source: ReturnType<typeof ingestIdentity>;
-    try { source = ingestIdentity(await fs.promises.stat(window.file)); }
-    catch (err: any) {
-      if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(err.code)) return false;
-      throw err;
-    }
-    if (!sameIngestFile(window.source, source) || source.size < window.source.size || source.size === window.source.size && !sameIngestSnapshot(window.source, source)) return false;
-    const current = collectPastedInjectedIds(conversationId);
-    return current.length === pasted.length && current.every((id, i) => id === pasted[i]);
-  };
-}
 type TranscriptReceipt = { signature: string; file: string; identity: string; size: number; sessionId: string; weight: number; sourceKey: string };
 const acceptedPending = new Map<string, Map<string, TranscriptReceipt>>();
 let acceptedPendingReserved = 0;
@@ -10285,10 +10215,9 @@ async function runTranscriptPass(sessionId: string, file: string, run: () => Pro
     transcriptRetries.delete(sessionId);
     try {
       await pruneAcceptedTranscript(file);
-      await observeTranscriptAckWindow(sessionId, file);
       await run();
       if (transcriptRetries.has(sessionId)) throw new TranscriptIngestRetry(`Transcript ${sessionId} retains unread data`);
-    } finally { transcriptRetries.delete(sessionId); transcriptAckWindows.delete(sessionId); }
+    } finally { transcriptRetries.delete(sessionId); }
   }));
 }
 // A session the server refuses for good (isSessionRefusal) is consumed, not
@@ -10403,11 +10332,10 @@ export async function flushPendingTranscript(pending: PendingMessages, sessionId
   }finally{reservation.release();}
 }
 
-async function syncTranscriptMessages(messages: RawMessage[], conversationId: string, syncService: SyncService, retryQueue: RetryQueue, pending: PendingMessages, sessionId: string, cache: ConversationCache, authorityKeys: readonly string[] = [sessionId], forceNoAck = false) {
+async function syncTranscriptMessages(messages: RawMessage[], conversationId: string, syncService: SyncService, retryQueue: RetryQueue, pending: PendingMessages, sessionId: string, cache: ConversationCache, authorityKeys: readonly string[] = [sessionId]) {
   const unresolved={authExpired:false,conversationNotFound:false,accepted:false};
   if(authorityKeys.some(key=>cache[key]!==conversationId)){transcriptRetries.add(sessionId);return unresolved;}
   checkTranscriptDeadline();
-  const pendingReplay=!!pending[sessionId]?.length||!!acceptedPending.get(conversationId)?.size;
   if(!await flushPendingTranscript(pending,sessionId,conversationId,cache,syncService,retryQueue))return unresolved;
   const remaining:RawMessage[]=[];
   for(let i=0;i<messages.length;i++){
@@ -10415,7 +10343,6 @@ async function syncTranscriptMessages(messages: RawMessage[], conversationId: st
     if(!record||!acceptedPending.get(conversationId)?.has(transcriptReceiptKey(record.key,record.signature)))remaining.push(msg);
     if(i%128===127){await new Promise<void>(resolve=>setImmediate(resolve));checkTranscriptDeadline();}
   }
-  const eligible=transcriptAckEligibility(messages,sessionId,conversationId,pendingReplay);
   for(let offset=0;offset<remaining.length;offset+=TRANSCRIPT_PENDING_ROWS){
     assertTranscriptAuthority(sessionId,conversationId,cache,authorityKeys);
     const batch=remaining.slice(offset,offset+TRANSCRIPT_PENDING_ROWS),entries=[];
@@ -10428,7 +10355,7 @@ async function syncTranscriptMessages(messages: RawMessage[], conversationId: st
     const reservation=reserveTranscriptReceipts(sessionId,conversationId,entries);
     if(!reservation)return unresolved;
     try{
-      const result=await syncMessagesBatch(batch,conversationId,syncService,retryQueue,batch.every(msg=>!!msg.uuid),async()=>!forceNoAck&&remaining.length<=TRANSCRIPT_PENDING_ROWS&&authorityKeys.every(key=>cache[key]===conversationId)&&await eligible()&&authorityKeys.every(key=>cache[key]===conversationId),reservation.accept,reservation.accept,()=>assertTranscriptAuthority(sessionId,conversationId,cache,authorityKeys));
+      const result=await syncMessagesBatch(batch,conversationId,syncService,retryQueue,batch.every(msg=>!!msg.uuid),reservation.accept,reservation.accept,()=>assertTranscriptAuthority(sessionId,conversationId,cache,authorityKeys));
       if(authorityKeys.some(key=>cache[key]!==conversationId)){transcriptRetries.add(sessionId);return {...result,accepted:false,conversationNotFound:false};}
       checkTranscriptDeadline();
       if(!result.accepted){
@@ -10550,7 +10477,7 @@ function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "hum
 // parseSessionFile captures it). Left to the live stream alone a Codex conversation persists
 // as agent-only output — every user turn lost (ct-36429). So the daemon records the user turn
 // itself at delivery time. Routed through the same addMessages path as Claude, the server
-// content-matches it to the pending_messages row — adopting that row's client_id so the web's
+// settles the pending_messages row by its delivery id — adopting that row's client_id so the web's
 // optimistic bubble reconciles, and marking the row delivered. The stable `codex-user-<id>`
 // message_uuid keeps re-delivery idempotent.
 export function buildCodexUserTurnMessage(
@@ -10561,24 +10488,12 @@ export function buildCodexUserTurnMessage(
   return { uuid: `codex-user-${pendingMessageId}`, role: "user", content, timestamp };
 }
 
-// A user-role turn the HARNESS emits on its own — the boot <task-notification>
-// bundle about background tasks from the previous session — is never the echo
-// of a pasted pending message. The positional delivery-ack pairing in
-// syncMessagesBatch must skip these: pairing one with a pasted row stamps the
-// row's client_id onto the notification turn, and the real echo later re-adopts
-// the same client_id by content match — two transcript messages sharing one
-// client id, which the web timeline renders as overlapping duplicate rows.
-export function isHarnessEmittedUserTurn(content: string | undefined): boolean {
-  return !!content && content.trimStart().startsWith("<task-notification>");
-}
-
 async function syncMessagesBatch(
   messages: RawMessage[],
   conversationId: string,
   syncService: SyncService,
   retryQueue: RetryQueue,
   enqueueOnFailure = true,
-  ackEligible?: () => boolean | Promise<boolean>,
   onAccepted?: () => void,
   onBatchAccepted?: (inputIndexes: readonly number[]) => void,
   beforeBatch?: () => void,
@@ -10611,26 +10526,6 @@ async function syncMessagesBatch(
     },onBatchAccepted || guard ? {onBatchAccepted,beforeBatch:guard} : undefined);
     onAccepted?.();
     resetAuthFailureCount();
-    // If we just synced a user message from the JSONL, ack the injected pending
-    // messages THIS process pasted (scoped — see collectPastedInjectedIds). The
-    // content-matched ack in addMessages remains the reliable per-row path; this
-    // covers pastes whose echo can't content-match (poll conversions, truncated
-    // oversized content). Passing the explicit id list (even empty) stops a
-    // historical user turn — e.g. an auto-resume resyncing a fresh JSONL from
-    // position 0 — from terminalizing rows that never landed (DEC-01).
-    if ((ackEligible ? await ackEligible() : true) && messages.some(m => m.role === "user")) {
-      const pastedIds = collectPastedInjectedIds(conversationId);
-      const transcriptIds = synced.ids.filter((_, index) =>
-        messages[index]?.role === "user" && !isHarnessEmittedUserTurn(messages[index]?.content));
-      // Each daemon-vouched echo stamps the exact client_id messages.send/v2
-      // coverage needs (pairDeliveryAcks: the newest common suffix, DWB-03).
-      const deliveryAcks = pairDeliveryAcks(pastedIds, transcriptIds);
-      syncService.ackInjectedMessages(
-        conversationId,
-        pastedIds,
-        deliveryAcks,
-      ).catch(logConvexFailure);
-    }
     return { authExpired: false, conversationNotFound: false, accepted: true };
   } catch (err) {
     if (dispatchRefused) throw err;
@@ -12204,7 +12099,7 @@ async function processSessionFilePass(
       saveConversationCache(conversationCache);
       log(`Recreated conversation ${conversationId} for session ${sessionId}`);
 
-      const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
+      const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId]);
         if (!retryResult.accepted) return;
     } catch (retryErr) {
       const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
@@ -12528,7 +12423,7 @@ async function processCursorSessionPass(
       saveConversationCache(conversationCache);
       log(`Recreated conversation ${conversationId} for Cursor session ${sessionId}`);
 
-      const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
+      const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId]);
         if (!retryResult.accepted) return;
     } catch (retryErr) {
       const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
@@ -12706,7 +12601,7 @@ async function processCursorTranscriptFilePass(
         saveConversationCache(conversationCache);
         log(`Recreated conversation ${conversationId} for Cursor transcript ${sessionId}`);
 
-        const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
+        const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId]);
         if (!retryResult.accepted) return;
       } catch (retryErr) {
         const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
@@ -13022,7 +12917,7 @@ async function processCodexSessionPass(
         setConversationCache(conversationId);
         log(`Recreated conversation ${conversationId} for Codex session ${sessionId}`);
 
-        const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, lineageKeys, true);
+        const retryResult = await syncTranscriptMessages(messages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, lineageKeys);
         if (!retryResult.accepted) return;
       } catch (retryErr) {
         const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
@@ -13213,7 +13108,7 @@ async function processGeminiSessionPass(
         saveConversationCache(conversationCache);
         log(`Recreated conversation ${conversationId} for Gemini session ${sessionId}`);
 
-        const retryResult = await syncTranscriptMessages(newMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
+        const retryResult = await syncTranscriptMessages(newMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId]);
         if (!retryResult.accepted) return;
       } catch (retryErr) {
         const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
@@ -13876,7 +13771,7 @@ async function processTranscriptDeltaSessionPass(
           log(`Recreated conversation ${conversationId} for ${client} session ${sessionId}`);
           // Fresh conversation: rebuild it from the FULL active branch, not just the
           // delta (the shared prefix isn't there anymore). No orphans to clean.
-          const retryResult = await syncTranscriptMessages(allMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId], true);
+          const retryResult = await syncTranscriptMessages(allMessages, conversationId, syncService, retryQueue, pendingMessages, sessionId, conversationCache, [sessionId]);
         if (!retryResult.accepted) return;
         } catch (retryErr) {
           const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
@@ -17925,10 +17820,18 @@ export async function awaitTmuxComposerPayload(
 }
 
 type TmuxInjectionOptions = {
-  readTranscript?: () => Promise<string>; delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number; receiptSettleMs?: number;
+  readTranscript?: () => Promise<string>; delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; echoes?: DeliveryEchoLedger; gateBudgetMs?: number; receiptSettleMs?: number;
   /** Probe for an agent getting no CPU; tests stand in for a starved one. */
   agentStarved?: (target: string) => Promise<boolean>;
 };
+
+/** Whether a pane's transcript holds the echo of this delivery, by the ledger's pairing. */
+function transcriptEchoes(echoes: DeliveryEchoLedger, delivery: TmuxDeliveryIdentity & { payload: string }, agent: AgentClientId, transcript: string): boolean {
+  const turns = echoCandidatesOf(parseTranscriptFor(agent, transcript));
+  if (turns.some((m) => m.role === "user" && !m.messageUuid)) return DeliveryEchoLedger.unkeyedTranscriptHolds(turns, delivery.payload);
+  echoes.stamp(delivery.conversationId, turns);
+  return echoes.echoed(delivery.messageId);
+}
 
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
   try {
@@ -18035,8 +17938,11 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // prepareInjectedContent and the bracketedPaste capability.
   const sanitized = prepareInjectedContent(content, { bracketed });
   const receiptJournal = opts?.delivery ? opts.journal ?? tmuxDeliveryJournal() : null;
+  const echoes = opts?.delivery ? opts.echoes ?? deliveryEchoLedger() : null;
   const receipt = opts?.delivery ? receiptJournal!.get(opts.delivery.messageId) : null;
-  // The transcript settles a submit nothing else vouched for. A message the
+  // The transcript settles a submit nothing else vouched for: the echo ledger
+  // pairs the pane's turns with their deliveries, the same pairing the upload
+  // stamps, and this delivery is in if one of them is its echo. A message the
   // server already counts as finished needs no such evidence, and a pane with
   // no session stamp has no transcript to find, so it skips straight to the
   // receipt check below.
@@ -18054,7 +17960,10 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     } catch (error) {
       throw new TmuxDeliveryUncertainError(`cannot reconcile the earlier submit: ${String(error)}`);
     }
-    if (transcriptContainsDelivery(transcript, agentType ?? "claude", sanitized, receipt.pasteAt)) {
+    // The receipt is itself a record of the Enter: a delivery handed over by a
+    // daemon from before the ledger, or before a restart lost nothing, pairs the same way.
+    echoes!.expect({ ...opts!.delivery!, payload: sanitized, submittedAt: receipt.pasteAt });
+    if (echoes!.echoed(receipt.messageId) || transcriptEchoes(echoes!, { ...opts!.delivery!, payload: sanitized }, agentType ?? "claude", transcript)) {
       receiptJournal!.begin(opts!.delivery!, receipt.generation, sanitized);
       receiptJournal!.advance(receipt.messageId, "verified");
       if (syncServiceRef) await syncServiceRef.updateMessageStatus({ messageId: receipt.messageId, status: "delivered", deliveredAt: Date.now() });
@@ -18193,6 +18102,8 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
         // back changed must not be typed forever.
         log(`Receipt for ${opts!.delivery!.messageId} in ${target} settled without its payload reaching the prompt or the transcript after ${delivery.journal.writesOf(opts!.delivery!.messageId)} write(s); writing it again`);
         delivery.journal.release(opts!.delivery!.messageId);
+        // Never reached the agent: the next write's Enter records it afresh.
+        echoes!.forget(opts!.delivery!.messageId);
         prior = null;
         pasteAt = Date.now();
       }
@@ -18232,6 +18143,9 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   let pasteConfirmed = gate === "matched";
   const sendEnter = async () => {
     delivery?.journal.advance(opts!.delivery!.messageId, "submit");
+    // From this Enter on, the agent's next record of a turn like this one is
+    // this delivery (deliveryEchoLedger); a re-press keeps the first record.
+    if (opts?.delivery) echoes!.expect({ ...opts.delivery, payload: sanitized });
     await exec(["send-keys", "-t", target, "Enter"]);
   };
   if (retryingSubmit) {
@@ -26243,7 +26157,7 @@ function launchPromptCarried(messageId: string): boolean {
  *  the tail of its launch command. Null when nothing is waiting, when the
  *  message needs the composer, or when the lookup fails: the start then goes
  *  ahead bare and delivery pastes as before. */
-async function waitingLaunchPrompt(conversationId: string): Promise<{ messageId: string; fragment: string } | null> {
+async function waitingLaunchPrompt(conversationId: string): Promise<{ messageId: string; fragment: string; text: string } | null> {
   const config = readConfig();
   if (!syncServiceRef || !config?.auth_token) return null;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -26255,7 +26169,7 @@ async function waitingLaunchPrompt(conversationId: string): Promise<{ messageId:
     const picked = Array.isArray(rows) ? pickLaunchPrompt(rows, conversationId) : null;
     if (!picked) return null;
     assertLegacyDeliveryEnvelope(picked.row);
-    return { messageId: picked.row._id, fragment: launchPromptFragment(path.join(CONFIG_DIR, "launch-prompts"), conversationId, picked.text) };
+    return { messageId: picked.row._id, fragment: launchPromptFragment(path.join(CONFIG_DIR, "launch-prompts"), conversationId, picked.text), text: picked.text };
   } catch (err) {
     log(`Launch prompt lookup skipped for ${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
     return null;
@@ -26267,9 +26181,11 @@ async function waitingLaunchPrompt(conversationId: string): Promise<{ messageId:
 /** Record that a launch command carries this message, and mark the row
  *  injected before the command is typed: the agent echoes the prompt within
  *  moments of booting, and the echo's ack needs a row to promote. */
-function carryLaunchPrompt(messageId: string, carry: Omit<LaunchPromptCarry, "startedAt">): void {
+function carryLaunchPrompt(messageId: string, carry: Omit<LaunchPromptCarry, "startedAt">, payload: string): void {
   for (const id of launchPromptCarries.keys()) launchPromptCarried(id);
   launchPromptCarries.set(messageId, { ...carry, startedAt: Date.now() });
+  // The session's first prompt is this delivery: its echo carries the id.
+  deliveryEchoLedger().expect({ messageId, conversationId: carry.conversationId, payload });
   if (syncServiceRef) markInjectedBestEffort(syncServiceRef, messageId, undefined, { conversationId: carry.conversationId });
   logDelivery(`msg=${messageId.slice(0, 8)} rides the launch command of ${carry.tmuxSession} as its prompt argument`);
 }
@@ -26431,6 +26347,10 @@ async function deliverMessageIntoSession(
         const input: Array<{ type: "text"; text: string }> = [{ type: "text", text: content }];
         await deliveryStep(messageId, "admit_app_server", admit);
         await readyServer.turnStart({ threadId: appServerThreadId, input });
+        // turn/start answered: the turn is Codex's. The user turn the daemon
+        // writes for it below is its echo, by the uuid it is written under.
+        const userTurn = buildCodexUserTurnMessage(content, messageId, Date.now());
+        deliveryEchoLedger().expect({ messageId, conversationId, payload: content, exactUuid: userTurn.uuid });
         // Delivered input = a new turn: spend any declared settle verdict from
         // before it (codex settles key turnStartedAt by thread id — see
         // resolveTurnEndStatus at the app-server turn-completed handler).
@@ -26438,10 +26358,10 @@ async function deliverMessageIntoSession(
         // Persist the user turn ourselves: the app-server replays only the agent's output,
         // so without this the prompt is never stored and the conversation reads as agent-only
         // (ct-36429). syncMessagesBatch routes it through the same addMessages path as Claude,
-        // which content-matches the pending row (client_id adoption + delivered ack + dedupe).
+        // where its delivery id settles the pending row (client_id adoption + delivered ack).
         if (retryQueueRef) {
           await syncMessagesBatch(
-            [buildCodexUserTurnMessage(content, messageId, Date.now())],
+            [userTurn],
             conversationId,
             syncService,
             retryQueueRef,
@@ -26477,8 +26397,19 @@ async function deliverMessageIntoSession(
     // must not start the local app-server on its way. A setup problem throws
     // after its card is posted (the turn-stopped card; a credential one
     // carries the connect control), and the message is held.
-    const delivered = await cloudAgents.deliver(conversationId, content);
-    if (!delivered) return tryAppServerDelivery();
+    // Recorded before the send: the poll can bring the echo back before deliver returns.
+    deliveryEchoLedger().expect({ messageId, conversationId, payload: content });
+    let delivered: Awaited<ReturnType<typeof cloudAgents.deliver>>;
+    try {
+      delivered = await cloudAgents.deliver(conversationId, content);
+    } catch (err) {
+      deliveryEchoLedger().forget(messageId);
+      throw err;
+    }
+    if (!delivered) {
+      deliveryEchoLedger().forget(messageId);
+      return tryAppServerDelivery();
+    }
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`${cloudAgentLogTag(delivered.adapter)} delivered msg=${messageId.slice(0, 8)} to the cloud agent of conv=${conversationId.slice(0, 12)}`);
     return true;
@@ -26495,11 +26426,14 @@ async function deliverMessageIntoSession(
 
   // A Claude Code cloud session has no local process to type into: the turn
   // goes to the session's events API, and it syncs back through the cloud
-  // poll, where addMessages content-matches this pending row.
+  // poll under the uuid it was sent with, which settles this pending row by id.
   const cloud = sessionId ? claudeCloudRef?.cloudSessionFor(sessionId) : undefined;
   if (cloud && claudeCloudRef) {
     await deliveryStep(messageId, "admit_claude_cloud", admit);
     try {
+      // The event goes in under a uuid derived from this delivery, and the
+      // cloud poll mirrors it back under that uuid: the echo names its delivery.
+      deliveryEchoLedger().expect({ messageId, conversationId, payload: content, exactUuid: cloudEventUuid(messageId) });
       await deliveryStep(messageId, "claude_cloud", () => claudeCloudRef!.sendUserMessage(cloud.cloudId, content, cloudEventUuid(messageId)));
     } catch (err) {
       logDelivery(`[claude-cloud] send to ${cloud.cloudId} failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -26589,7 +26523,7 @@ async function deliverMessageIntoSession(
       // with an 8s timeout (markInjectedBestEffort), so it can never wedge delivery the way the
       // old un-timed `await updateMessageStatus` did. Marking before the inject closes the
       // doubled-message race: the inject makes Claude echo the message to JSONL within ms, and
-      // addMessages' content-matched ack only promotes an EXISTING "injected"/"pending" row to
+      // addMessages' echo ack only promotes an EXISTING "injected"/"pending" row to
       // "delivered". If we marked after and the ack won the race it would find no row and the
       // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
       // → duplicate reply. Marking first guarantees the ack always has a row to promote.
@@ -26728,7 +26662,7 @@ async function deliverMessageIntoSession(
       // Mark "injected" best-effort (non-blocking) BEFORE the paste. markInjectedBestEffort is
       // fire-and-forget with an 8s timeout, so it can't wedge the paste the way the old un-timed
       // `await updateMessageStatus` did. Marking first closes the doubled-message race: the paste
-      // makes Claude echo the message to JSONL within ms; addMessages' content-matched ack only
+      // makes Claude echo the message to JSONL within ms; addMessages' echo ack only
       // promotes an EXISTING row to "delivered". If we marked after and the ack ran first it would
       // find no row, the daemon's later mark would strand the row "injected", and the 120s retry
       // cron would re-pend it → duplicate reply. Marking first guarantees the ack has a row.
@@ -26793,12 +26727,15 @@ async function deliverMessageIntoSession(
         // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
         await deliveryStep(messageId, "admit_proc", admit);
         markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
+        // Recorded before the keystrokes: the agent can echo it before they return.
+        deliveryEchoLedger().expect({ messageId, conversationId, payload: content });
         await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
           agentType: detectedType,
         });
         logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
         return true;
       } catch (err) {
+        deliveryEchoLedger().forget(messageId);
         if (err instanceof PendingDeliveryHeldError || err instanceof TerminalHoldError) throw err;
         if (isDeliveryVerdict(err)) throw err;
         logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
@@ -26884,7 +26821,7 @@ async function deliverMessageIntoSession(
     logDelivery(`CANNOT auto-resume: tmux is not installed. Install with: brew install tmux`);
   }
   // Mark "injected" best-effort (non-blocking) before the resume. autoResumeSession spins up
-  // tmux + Claude and injects the content; the content-matched ack in addMessages flips the row
+  // tmux + Claude and injects the content; the echo ack in addMessages flips the row
   // to "delivered" when Claude echoes the message to JSONL, so this status write is not
   // load-bearing. Keeping it non-blocking ensures a slow/stalled Convex mark can't wedge the
   // resume+inject — the same failure mode fixed on the live-tmux path above.
@@ -29758,6 +29695,8 @@ async function main(): Promise<void> {
     authToken: config.auth_token,
     userId: config.user_id,
   });
+  // Every echo this daemon uploads names the delivery it settles.
+  syncService.setDeliveryEchoes(deliveryEchoLedger());
   syncServiceRef = syncService;
   // Before any transcript is read: redactSecrets replaces this machine's real
   // secret values from here on (knownValueRedaction.ts).
@@ -32419,6 +32358,10 @@ async function main(): Promise<void> {
               pasted: true,
             });
             markInjectedBestEffort(syncService, msg._id, undefined, { conversationId: msg.conversation_id, pasteVerified: true });
+            // Every path that puts a message in front of the agent records it
+            // where it hands it over; this catches one that did not, so the row
+            // the server now holds as taken can still be confirmed by its echo.
+            deliveryEchoLedger().expect({ messageId: msg._id, conversationId: msg.conversation_id, payload: messageContent });
             // Track for post-compaction recovery: if CC compacts and goes idle,
             // we can re-inject this message. Skip on recovery re-injections to
             // prevent infinite compaction->recovery loops.
@@ -32478,6 +32421,8 @@ async function main(): Promise<void> {
             // the session can send it again.
             logDelivery(`EXHAUSTED: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} submitted=${err.submitted} ${errMsg}`);
             syncService.cancelPendingMessage(msg._id).catch(logConvexFailure);
+            // Given up on: an open record would take a later send's echo with the same words.
+            deliveryEchoLedger().forget(msg._id);
             syncService.addMessage({
               conversationId: msg.conversation_id,
               role: "system",

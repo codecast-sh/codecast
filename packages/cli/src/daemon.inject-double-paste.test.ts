@@ -43,6 +43,12 @@ import {
   sweepStaleSessions,
   MATRIX_TMUX_PREFIX,
 } from "./test-helpers/messagingHarness.js";
+import { afterAll as restoreCodecastDirAfterAll } from "bun:test";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+
+// Deliveries these tests make record into the delivery echo ledger in CODECAST_DIR.
+const codecastDir = isolateCodecastDir();
+restoreCodecastDirAfterAll(() => codecastDir.restore());
 
 const CAN_RUN = hasBinary("tmux") && hasBinary("claude");
 const exec = async (args: string[]) => ({ stdout: tmuxRun(args).stdout ?? "" });
