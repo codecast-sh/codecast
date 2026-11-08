@@ -7,13 +7,18 @@ type SendIo = {
   currentSession(): string | null;
   post(path: string, body: Record<string, unknown>): Promise<any>;
   print(text: string): void;
+  /** Keep a refused message's body on disk; returns the file's path. */
+  hold?(target: string, body: string): string;
 };
+
+/** The server's refusal of a stale or killed target (pendingMessages.staleSendMessage). */
+const REFUSED = /^Not sent\./;
 
 export function registerSessionSendCommand(program: Command, io: SendIo): void {
   program
     .command("send")
     .description(
-      "Send a message to another session — your own or a teammate's\n\n" +
+      "Send a message to another session, your own or a teammate's\n\n" +
       "The text is injected into the target session as a new turn, attributed to\n" +
       "this session so the recipient (and the dashboard) can see who sent it. You\n" +
       "can message any session you can see in the feed (your own, or one shared\n" +
@@ -24,9 +29,12 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
       "A session that was killed, or has not run for longer than its prompt\n" +
       "cache lasts (one hour), is not woken by default: waking it rebuilds its\n" +
       "whole context before it reads the message. The send stops and says what\n" +
-      "it would cost; pass --wake when it truly has to act. Reporting back to the\n" +
-      "session that started you, or to one that declared itself dormant, always\n" +
-      "goes through.\n\n" +
+      "it would cost; pass --wake when it truly has to act. The refused message is\n" +
+      "kept in a file, and the refusal prints the one command that sends it.\n" +
+      "However long the target idled, a send goes through between a session and\n" +
+      "the one that started it (either way), to a role's standing session, and to\n" +
+      "a session that declared itself dormant. Of killed sessions, only your own\n" +
+      "workers are restarted for a send without --wake.\n\n" +
       "Detached scripts must pass --from <your session id> if the calling\n" +
       "session cannot be detected. An unattributed message is not queued.\n\n" +
       "Examples:\n" +
@@ -42,7 +50,7 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
     .argument("<text>", stdinText("Message text"))
     .option("--from <id>", "Override sender session (required if current session cannot be detected)")
     .option("--wake", "Deliver even when the target was killed or idle past its prompt cache lifetime")
-    .option("--raw", "Deliver the text exactly as typed, without the session-message wrapper — for the agent's own slash commands (/model opus, /effort high). Own sessions only.")
+    .option("--raw", "Deliver the text exactly as typed, without the session-message wrapper, for the agent's own slash commands (/model opus, /effort high). Own sessions only.")
     .action(async (sessionId: string, text: string, options: SendOptions) => {
       const body = text ?? "";
       if (!body.trim()) throw new Error("Message text is empty");
@@ -53,12 +61,22 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
       if (options.raw && !/^\/[a-zA-Z]/.test(body.trim())) {
         throw new Error("--raw is only for slash commands (/model, /effort). Drop --raw so the message is attributed to the sending session.");
       }
-      const result = await io.post("/cli/messages/send", {
-        to: sessionId,
-        from,
-        body,
-        ...(options.raw ? { raw: true } : { wake: options.wake === true }),
-      });
+      let result: any;
+      try {
+        result = await io.post("/cli/messages/send", {
+          to: sessionId,
+          from,
+          body,
+          ...(options.raw ? { raw: true } : { wake: options.wake === true }),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!REFUSED.test(message) || !io.hold) throw err;
+        // The sender decides with the cost in front of it; the body waits in a
+        // file so sending it after all never means typing it again.
+        const kept = io.hold(sessionId, body);
+        throw new Error(`${message}\nYour message is kept. To send it after all: cast send --wake ${sessionId} - < ${kept}`);
+      }
       printSendResult(result, io.print, { target: sessionId, fromSession: !options.raw });
     });
 }
