@@ -11,7 +11,8 @@ import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
 import { Command, Help, InvalidArgumentError, Option } from "commander";
 import { randomUUID } from "node:crypto";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
-import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
+import type { GroupDeps } from "./commandGroups.js";
+import { activateGroup, groupTokenInArgv, registerGroupStubs } from "./commandGroupActivation.js";
 import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
@@ -5785,7 +5786,7 @@ program
   .description("Print every cast command as JSON: paths, aliases, flags, arguments, and which are destructive")
   .option("--json", "Print the full machine-readable command surface")
   .action(async (options: { json?: boolean }) => {
-    const { activateAllGroups } = await import("./commandGroups.js");
+    const { activateAllGroups } = await import("./commandGroupActivation.js");
     await activateAllGroups(program, groupDeps());
     const { buildAgentContext, formatAgentContextSummary, writeStdout } = await import("./agentContext.js");
     const context = buildAgentContext(program, getVersion());
@@ -8692,7 +8693,7 @@ program
   .argument("[range]", "Message range: 12:20, 12:, :20, 15, or counted from the end: -1, -5:, -20:-10")
   .option("-f, --full", "Show full tool call and tool result content (the only way to see a StructuredOutput payload)")
   .option("-c, --context <n>", "Messages to show on each side of a single line, or of a #msg-<id> anchor (default 10)", nonNegativeCountOption)
-  .option("--grep <text>", "Only the messages holding this text (\"quoted phrase\" or words), with their line numbers")
+  .option("--grep <words>", "Only the messages holding this text (\"quoted phrase\" or words), with their line numbers")
   .option("-n, --tail <n>", "Read the last n messages (at most 500)", countOption)
   .option("--ack", "Also mark the session read: clears its unread dot in the web and mobile inbox")
   .option("--ask <question>", "Answer a question from this session, with line citations, checking whether later messages changed the answer")
@@ -19771,7 +19772,7 @@ plan
   });
 
 // Legacy aliases
-plan.command("decide").argument("<plan_id>", "Plan short ID").argument("<decision>", "What was decided").option("-r, --rationale <why>", "Why")
+plan.command("decide").argument("<plan_id>", "Plan short ID").argument("<decision>", "What was decided").option("-r, --rationale <why>", stdinText("Why"))
   .action(async (planId: string, decision: string, options: any) => {
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: planId, decision };

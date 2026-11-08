@@ -9,7 +9,8 @@ import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { checkProject, heapCapMb, heapDeath, isNativeFrame, lastLogLine, logPath, tscNodeOptions, TSC_HEAP_MB, classifyWatchLine, filesNotAsChecked, tscFileVersion, unlistedChanges, eventsPath, projectsTouching, buildInfoPath, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { heapCapMb, heapDeath, isNativeFrame, tscNodeOptions, TSC_HEAP_MB } from "./checkHeap.js";
+import { checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, tscFileVersion, unlistedChanges, eventsPath, projectsTouching, buildInfoPath, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
 beforeEach(() => {

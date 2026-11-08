@@ -19,7 +19,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { browserSocketUrl, CdpConnection, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
 import { shortTabId, tabLine } from "./tabId.js";
 import { narrated } from "./narrate.js";
@@ -326,6 +326,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     registerEngineCommands(br, deps);
     return;
   }
+  // The engine gives `browser` flags of its own (--tab, --deadline); this
+  // driver takes them per verb instead. A hidden one keeps the root help term
+  // ("browser|br [options]", commandGroups.ts) the same on either driver.
+  br.addOption(new Option("--builtin-driver").hideHelp());
   registerAdvancedClone(br, (next) => registerBrowserCommand(next, deps));
 
   // ---------------------------------------------------------------- lifecycle

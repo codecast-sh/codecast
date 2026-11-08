@@ -1040,6 +1040,7 @@ export function buildHostsCommand(parent: Command): Command {
   // One host's report as JSON, for `ls` to run per host in parallel.
   hosts
     .command("_report <id>", { hidden: true })
+    .description("One host's report as JSON, run per host by ls")
     .action(async (id: string) => {
       const host = readHosts().find((h) => h.id === id);
       if (!host) die(`no host ${id}`);

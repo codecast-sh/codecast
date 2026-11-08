@@ -19,11 +19,12 @@ import { buildWatchdogShellScript, WATCHDOG_HEARTBEAT_STALE_MS } from "./supervi
 
 const source = fs.readFileSync(path.join(import.meta.dir, "index.ts"), "utf-8");
 
-/** The body of `function <name>(...)`, by brace balance from its opening `{`. */
+/** The body of `function <name>(...)`, by brace balance from its opening `{`
+ *  (searched after the parameter list, which may hold an object type). */
 function functionBody(name: string): string {
   const at = source.indexOf(`function ${name}(`);
   expect(at, `${name} not found`).toBeGreaterThan(-1);
-  const open = source.indexOf("{", at);
+  const open = source.indexOf("{", source.indexOf(")", at));
   let depth = 0;
   for (let i = open; i < source.length; i++) {
     if (source[i] === "{") depth++;

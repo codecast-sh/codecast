@@ -450,7 +450,7 @@ describe("cast vault on the wire", () => {
   describe("health and flags in ls and show", () => {
     const DAY = 86_400_000;
     test("ls carries 2fa, ask-first, earlier values and each health as a short token", async () => {
-      const { formatSecretLine } = await import("./command.js");
+      const { formatSecretLine } = await import("./format.js");
       const now = Date.now();
       const line = (over: Partial<SecretMeta>) => formatSecretLine(meta(over), "Acme", now);
       const flagged = line({ kind: "login", has_otp: true, ask_first: true, version_count: 2, use_count: 3, last_used_at: now - 2 * 3_600_000 });

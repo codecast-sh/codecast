@@ -92,6 +92,13 @@ import { join } from "node:path";
 // rigFixtures.ts, entityLinks.repo.test.ts). The growth is split work owed:
 // daemon.ts +1100, browser/bridge/host.ts +850, cliEngine.ts, schema.ts and
 // pendingMessages.ts +200 each lead it.
+// The fix forward of the next ship that day (cb77b3421, the cast command
+// overhaul) re-pinned six grown files under the same decision: formatter.ts
+// and convex tasks.ts by two steps, hosts/cli.ts, publish.ts,
+// remote/session-move.ts and contracts/snippets.ts by one. It split the rest
+// instead: commandGroups.ts, newly over the cap, moved its placement code to
+// commandGroupActivation.ts; check.ts its heap cap to checkHeap.ts; and
+// secrets/command.ts its printing to secrets/format.ts. PIN stays 257.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");

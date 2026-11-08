@@ -270,7 +270,10 @@ describe("command groups stay off the boot graph", () => {
     // 1,961-line contracts/orgProposal.ts and its three leaves arrived with
     // them for one `cast role authority` validator and went back behind an
     // import() in that action.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(346);
+    // 347 the same day: commandGroupActivation.ts, the placeholder and
+    // activation code split out of commandGroups.ts for its max-lines cap.
+    // index.ts already loaded both halves.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(347);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.

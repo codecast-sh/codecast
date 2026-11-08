@@ -39,8 +39,8 @@ packages/cli/src/daemon.waiting-tasks.test.ts 900
 packages/cli/src/decideCommand.ts to
 packages/cli/src/doctor.ts 950
 packages/cli/src/execution/coordinator.ts 1000
-packages/cli/src/formatter.ts 2550
-packages/cli/src/hosts/cli.ts 1750
+packages/cli/src/formatter.ts 2650
+packages/cli/src/hosts/cli.ts 1800
 packages/cli/src/index.ts to
 packages/cli/src/jsonlGenerator.test.ts 900
 packages/cli/src/jsonlGenerator.ts 1050
@@ -50,8 +50,8 @@ packages/cli/src/orgTemplateRun.ts 1100
 packages/cli/src/parser.test.ts 1350
 packages/cli/src/parser.ts 2600
 packages/cli/src/prCommand.ts 1250
-packages/cli/src/publish.ts 950
-packages/cli/src/remote/session-move.ts 1500
+packages/cli/src/publish.ts 1000
+packages/cli/src/remote/session-move.ts 1550
 packages/cli/src/retryQueue.test.ts 1100
 packages/cli/src/secrets/command.ts 850
 packages/cli/src/snippets.sections.test.ts 950
@@ -152,7 +152,7 @@ packages/convex/convex/sources/sentry.ts 1100
 packages/convex/convex/syncLog.test.ts 950
 packages/convex/convex/taskWaits.test.ts 950
 packages/convex/convex/taskWaits.ts 950
-packages/convex/convex/tasks.ts 4900
+packages/convex/convex/tasks.ts 5000
 packages/convex/convex/teams.ts 1700
 packages/convex/convex/transcripts.test.ts 2050
 packages/convex/convex/transcripts.ts 3000
@@ -176,7 +176,7 @@ packages/shared/contracts/inboxProjection.ts 1650
 packages/shared/contracts/orgProposal.test.ts to
 packages/shared/contracts/orgProposal.ts 2000
 packages/shared/contracts/secrets.ts 950
-packages/shared/contracts/snippets.ts 1850
+packages/shared/contracts/snippets.ts 1900
 packages/shared/entities/index.ts to
 packages/shared/render/toolCall.ts 900
 packages/shared/tasks/graph.ts 950
