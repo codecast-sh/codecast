@@ -82,7 +82,7 @@ describe("a run in words", () => {
 
 describe("the pool", () => {
   test("holds the shipped flows, and a pushed one by its slug, reading its kind from its source", () => {
-    expect(pool.filter((f) => f.kind === "segment").map((f) => f.slug).sort()).toEqual(["check", "decide", "deploy", "eval", "prove-implement", "review", "ship"]);
+    expect(pool.filter((f) => f.kind === "segment").map((f) => f.slug).sort()).toEqual(["check", "decide", "deploy", "eval", "judge", "prove-implement", "review", "ship"]);
     const pushed = pushedFlow({
       _id: "w1", slug: "polish", name: "polish",
       source: 'digraph polish { graph [kind="segment", label="Polish", description="Critique then fix"] }',

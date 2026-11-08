@@ -1,9 +1,9 @@
 // A project's work board (cohesive build spec §5.3, D10, D17), mounted in
-// jsdom over a fake store row. Proves: the header is one row (back to the
-// project's sheet, the name, its id, status, lead, deadline, the goals it
-// serves, About to the sheet, Share) over three tabs kept in the URL (Tasks,
-// Timeline, Line), with no charter, folder or progress bar of its own (those
-// are the sheet's); an older link by Convex id moves to the `pj-` address;
+// jsdom over a fake store row. Proves: it opens on its Session view under one
+// dense row (back, the name, status, lead, the views menu, Share); the other
+// views (Tasks, Timeline, About, ...) are kept in the URL and bring back the
+// id, the deadline and the goals it serves, with a one-press way back to the
+// session and no charter, folder or progress bar in the header; an older link by Convex id moves to the `pj-` address;
 // an old ?tab=updates link opens the Timeline; the header paints the STORE
 // row, so a rename, a status pick and a deadline show in the same tick while
 // the per view query still answers with the old row; the deadline is written
@@ -62,6 +62,7 @@ async function verifyProjectHeader() {
     clientState: { ui: { active_team_id: "fixture-team" } },
     teams: [{ _id: "fixture-team", name: "Fixture", features: { line: true } }, { _id: "home-team", name: "Codecast" }],
     projects: { [PID]: { ...serverRow } } as Record<string, any>,
+    sessions: {} as Record<string, any>,
     syncMeta: { 'tasks:v2:{"workspace":"team","team_id":"fixture-team"}': { backfilledAt: 1 } },
     // What the store's action does to the draft (store/inboxStore updateProject).
     updateProject: (id: string, fields: Record<string, unknown>) => {
@@ -106,6 +107,8 @@ async function verifyProjectHeader() {
   const mark = (name: string) => function Mark(props: any) { return React.createElement("div", { [`data-${name}`]: props?.projectId ?? "" }); };
   const through = ({ children }: any) => children;
   mock.module("../../tasks/page", () => ({ TaskListContent: mark("task-list") }));
+  // The Session view is a whole conversation with its composer: stubbed like the other views.
+  mock.module("../../../components/projects/ProjectSession", () => ({ ProjectSession: ({ project }: any) => React.createElement("div", { "data-project-session": project._id }) }));
   mock.module("../../tasks/[id]/page", () => ({ TaskDetailContent: () => null }));
   mock.module("../../../components/DetailSplitLayout", () => ({ DetailSplitLayout: ({ list }: any) => list }));
   mock.module("../../../components/AuthGuard", () => ({ AuthGuard: through }));
@@ -153,17 +156,32 @@ async function verifyProjectHeader() {
   await mount();
   assert.deepEqual(calls.filter((c) => c.startsWith("replace:")), [], "the `pj-` address stays");
 
-  // ── one row: up to the Projects list, the name, its id, its facts and Share ──
-  const header = q("[data-intent-header]")!;
+  // ── it opens on its Session: one dense row, the name, status and lead, the views menu and Share ──
+  assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "sessions");
+  assert.ok(q(`[data-project-session='${PID}']`), "it opens on the project's default session");
+  let header = q("[data-intent-header]")!;
   assert.ok(header, "the board's header");
   assert.equal(q("[data-intent-stripe]"), null, "no stripe: the row is the header");
-  assert.equal(header.querySelectorAll("[data-intent-row]").length, 1, "one row above the tabs");
+  assert.equal(header.querySelectorAll("[data-intent-row]").length, 1, "one row");
   assert.equal(q("[data-intent-back]")!.getAttribute("href"), "/projects", "back goes up to the Projects page");
   assert.equal(q("[data-project-title]")!.textContent, "Agent org");
   assert.equal(q("[data-project-title]")!.tagName, "H1");
   assert.equal(q("[data-project-title]")!.getAttribute("title"), "Agent org", "one line, its whole name the tooltip");
-  assert.equal(q("[data-intent-id]")!.textContent, "pj-agentorg");
+  assert.equal(q("[data-intent-id]"), null, "the session view leaves the id to the views menu");
+  assert.equal(q("[data-project-pick='target']"), null, "and the deadline to the other views");
+  assert.equal(q("[data-project-back-to-session]"), null, "already on the session");
+  assert.ok(q("[data-project-view='sessions']"), "the views menu");
   assert.equal(q("[data-share]")!.getAttribute("data-share"), "/projects/pj-agentorg");
+
+  // ── another view, kept in the URL: the facts come back, and one press returns to the session ──
+  env.search = "tab=tasks";
+  await repaint();
+  header = q("[data-intent-header]")!;
+  assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "tasks");
+  assert.ok(q(`[data-task-list='${PID}']`), "the project's tasks");
+  assert.equal(q("[data-project-session]"), null);
+  assert.ok(q("[data-project-view='tasks']"), "the menu names the view on screen");
+  assert.equal(q("[data-intent-id]")!.textContent, "pj-agentorg");
   const chips = q("[data-intent-chips]")!;
   assert.match(chips.querySelector("[data-project-pick='status']")!.textContent!, /Active/);
   assert.ok(chips.querySelector(`[data-project-lead-chip='${PID}']`), "who leads it");
@@ -173,34 +191,28 @@ async function verifyProjectHeader() {
   const partOf = chips.querySelector(`[data-project-initiatives='${PID}']`)!;
   assert.match(partOf.textContent!, /^Serves/);
   assert.ok(partOf.querySelector("[data-pill='initiative:in-1']"), "the goal it serves");
-  // What the project is for, its charter and repositories live on its About tab, not in the header.
+  // What the project is for, its charter and repositories live on its About view, not in the header.
   for (const gone of ["[data-charter]", "[data-inline-edit='Project folder']", "[data-repository-links]", "[data-initiative-progress]", "[data-project-counts]"]) assert.equal(q(gone), null, `${gone} is not the header's`);
   assert.doesNotMatch(header.textContent!, /The org chart, roles and scopes\./);
-
-  // ── five tabs, kept in the URL ──
-  assert.deepEqual(qa("[data-intent-header] [data-scope-tab]").map((t) => t.getAttribute("data-scope-tab")), ["tasks", "timeline", "about", "flow", "expectations"]);
-  assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "tasks");
-  assert.equal(q("[data-scope-tab='tasks']")!.getAttribute("aria-current"), "page");
-  assert.ok(q(`[data-task-list='${PID}']`), "it opens on the project's tasks");
-  await click(q("[data-scope-tab='timeline']"));
-  assert.equal(calls.at(-1), "replace:/projects/pj-agentorg?tab=timeline");
+  env.search = "tab=timeline";
   await repaint();
   assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "timeline");
   assert.ok(q(`[data-project-timeline='${PID}']`));
   assert.equal(q("[data-task-list]"), null);
-  await click(q("[data-scope-tab='about']"));
-  assert.equal(calls.at(-1), "replace:/projects/pj-agentorg?tab=about");
+  env.search = "tab=about";
   await repaint();
   assert.ok(q("[data-project-about-tab]"), "About: what it is for, its charter, its repositories");
-  assert.ok(q("[data-charter]"), "the charter edits in place on the About tab");
-  await click(q("[data-scope-tab='tasks']"));
-  assert.equal(calls.at(-1), "replace:/projects/pj-agentorg", "the first tab is the bare address");
+  assert.ok(q("[data-charter]"), "the charter edits in place on the About view");
+  await click(q("[data-project-back-to-session]"));
+  assert.equal(calls.at(-1), "replace:/projects/pj-agentorg", "the session is the bare address");
   await repaint();
+  assert.ok(q(`[data-project-session='${PID}']`));
   // A link to the Updates tab the board no longer has opens the Timeline, where updates live.
   env.search = "tab=updates";
   await repaint();
   assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "timeline");
-  env.search = "";
+  // The rest reads the Tasks view, where the deadline shows.
+  env.search = "tab=tasks";
   await repaint();
 
   // ── local first: the header paints the store row, while the query still answers the old one ──

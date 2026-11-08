@@ -21,7 +21,7 @@ import CallsPanel from "../../app/settings/calls/page";
 import TeamPanel from "../../app/settings/team/page";
 import ManagedDevicesPanel from "../../app/settings/managed-devices/page";
 import AccessLogPage from "../../app/settings/access-log/page";
-import { useActiveTeamLogsAccess } from "./AccessLogPanel";
+import { useActiveTeamLogsAccess } from "../../hooks/useActiveTeamLogsAccess";
 import SyncPanel from "../../app/settings/sync/page";
 import IntegrationsPanel from "../../app/settings/integrations/page";
 import AgentsPanel from "../../app/settings/agents/page";

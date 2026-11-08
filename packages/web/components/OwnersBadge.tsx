@@ -37,6 +37,7 @@ import { Command, CommandInput, CommandList, CommandEmpty, CommandItem } from ".
 import { Switch } from "./ui/switch";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isPerson } from "@codecast/shared/team/memberKind";
+import { Button } from "./ui/button";
 
 export type { OwnersApi, HandoffInfo };
 
@@ -336,15 +337,10 @@ function HandoffStep({ owners, people, onBack, onSent }: {
             Stay an owner
           </label>
         )}
-        <button
-          type="button"
-          disabled={!picked}
-          onClick={send}
-          className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-sol-violet text-sol-bg hover:bg-sol-violet/90 disabled:bg-sol-bg-highlight disabled:text-sol-text-dim disabled:cursor-not-allowed transition-colors"
-        >
+        <Button type="button" variant="violet" size="xs" disabled={!picked} onClick={send} className="ml-auto">
           {picked ? `Hand off to ${firstName}` : "Pick someone"}
           {picked && <KeyCap size="xs">↵</KeyCap>}
-        </button>
+        </Button>
       </div>
     </div>
   );
