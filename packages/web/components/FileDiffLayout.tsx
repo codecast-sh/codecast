@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { FilePatchDiff } from "./DiffView";
-import { diffLineElements } from "./diff/pierre";
+import { diffLineElements, revealDiffLine } from "./diff/pierre";
 import { parsePatch, getFileStatus, type DiffLineAnchor } from "../lib/patchParser";
 import { cn, copyToClipboard } from "../lib/utils";
 import { copyText } from "../lib/copyText";
@@ -1473,7 +1473,10 @@ function landOnDiffRow(paneRef: React.RefObject<HTMLElement | null>, fileIndex: 
         if (anchor.lineNumber > line) break;
         best = el;
       }
-      return best ?? scope;
+      // A long diff draws only near the viewport: when the line (or, in a
+      // collapsed stretch, the nearest line before it) is not drawn yet,
+      // scroll there and look again.
+      return revealDiffLine(scope, { side: "RIGHT", lineNumber: line }, { orEarlier: true }) ? null : best ?? scope;
     },
     (el) => (el.matches("[data-line]") ? PANE_HEADER_PX : 0),
   );
