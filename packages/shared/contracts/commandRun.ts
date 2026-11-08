@@ -72,6 +72,29 @@ export function clipRunOutput(output: string): string {
   return trimmed.length <= MAX_RUN_OUTPUT ? trimmed : `…${trimmed.slice(-MAX_RUN_OUTPUT)}`;
 }
 
+/** Whether a delivered run result (runResultText) says the command succeeded: the record of a Yes reads its answer's detail when the decision row is gone. */
+export function runResultOk(detail: string | undefined): boolean {
+  return /^Ran `.*`: exit 0\./.test(detail?.split("\n")[0] ?? "");
+}
+
+/** Where an answered permission ask stands, as its record in the conversation shows it. */
+export type PermissionOutcome = "running" | "done" | "failed" | "declined";
+
+/** The record an answer leaves in the conversation: read from its decision's run when the row is at hand, else from the answer itself (the server's result rides after its tag). Null when the answer is not a permission ask's. */
+export function permissionRecord(
+  answer: { question?: string; answer: string; detail?: string },
+  run: Pick<CommandRun, "state" | "output"> | undefined,
+): { question: string; outcome: PermissionOutcome; output?: string } | null {
+  const question = answer.question ?? "";
+  const byState: Partial<Record<CommandRunState, PermissionOutcome>> = { queued: "running", running: "running", done: "done", failed: "failed", skipped: "declined" };
+  const fromRow = run ? byState[run.state] : undefined;
+  if (fromRow) return { question, outcome: fromRow, ...(fromRow === "failed" && run?.output ? { output: run.output } : {}) };
+  if (answer.answer !== RUN_OPTION || !answer.detail?.startsWith("Ran ")) return null;
+  if (runResultOk(answer.detail)) return { question, outcome: "done" };
+  const output = answer.detail.split("\n").slice(1).join("\n").replace(/^\s*```\n?|\n?```\s*$/g, "").trim();
+  return { question, outcome: "failed", ...(output ? { output } : {}) };
+}
+
 /** What the asking session reads after its answer's tag once the run ends: the command, its exit, and its output. */
 export function runResultText(run: { argv: readonly string[]; exit_code?: number; output?: string; state: CommandRunState }): string {
   const head = run.state === "done" ? `Ran \`${commandLine(run.argv)}\`: exit 0.` : `Ran \`${commandLine(run.argv)}\`: it failed${run.exit_code !== undefined ? ` (exit ${run.exit_code})` : ""}.`;
