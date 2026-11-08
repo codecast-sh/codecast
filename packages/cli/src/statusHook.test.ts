@@ -399,3 +399,13 @@ describe("codecast-status hook reads agent_id from the envelope only", () => {
     expect(out.status).toBe("working");
   });
 });
+
+describe("a Claude SDK session", () => {
+  // Its host reports status and answers permission prompts itself (claudeSdk/backend.ts).
+  test("the hook stands down and records nothing", () => {
+    const payload = { hook_event_name: "Stop", session_id: "sdk-session-0001" };
+    execFileSync("bash", [hookFile], { input: JSON.stringify(payload), env: { ...process.env, HOME: home, CODECAST_SDK_SESSION: "1" } });
+    expect(fs.existsSync(statusFile(payload.session_id))).toBe(false);
+    expect(reported(payload)).toBe(true);
+  });
+});
