@@ -658,7 +658,8 @@ export class SyncService {
   // like the composer's messages.
   // Resolves to whether the server queued it: null means it declined (a crash
   // revive under recovery mode "off").
-  async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<boolean> {
+  /** Queue a message for the conversation's session; the new row's id, or null when the server declined it (recovery off). */
+  async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<string | null> {
     await this.throttle();
     const queued = await this.mutate("pendingMessages:sendMessageToSession" as any, {
       conversation_id: conversationId,
@@ -667,7 +668,7 @@ export class SyncService {
       ...(opts.human ? { human: true } : {}),
       api_token: this.apiToken,
     });
-    return queued !== null;
+    return queued === null || queued === undefined ? null : String(queued);
   }
 
   // After this (primary) daemon pushes a CHANGED credential to the remote
