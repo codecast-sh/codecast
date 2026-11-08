@@ -40,7 +40,7 @@ export const STATE_COLOR: Record<WorkState, string> = {
   dormant: "var(--sol-violet)",
   idle: "var(--sol-text-dim)",
 };
-const STATE_WORD: Record<WorkState, string> = { working: "Working", needs_input: "Needs input", done: "Done", dormant: "Dormant", idle: "Idle" };
+const STATE_WORD: Record<WorkState, string> = { working: "Working", needs_input: "Needs you", done: "Done", dormant: "Dormant", idle: "Idle" };
 
 export function Dot({ state, size = 8 }: { state: WorkState; size?: number }) {
   return <span className="inline-block rounded-full shrink-0" style={{ width: size, height: size, background: STATE_COLOR[state], boxShadow: state === "working" ? `0 0 0 3px color-mix(in srgb, ${STATE_COLOR[state]} 22%, transparent)` : undefined }} />;
