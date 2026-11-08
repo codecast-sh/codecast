@@ -29,7 +29,7 @@ import { spawnSync } from "../proc.js";
 import { tmuxRun } from "../tmux.js";
 import { paneOwnerId } from "../tmuxRoute.js";
 import {
-  baseSessionKey, engineHome, engineSession, engineSessionKey, engineStateDir, findEngine, isPaneSession, isRealSession, managedPort, runEngine,
+  baseSessionKey, engineHome, ownerOfSessionKey, engineSession, engineSessionKey, engineStateDir, findEngine, isPaneSession, isRealSession, managedPort, runEngine,
   type EngineOptions,
 } from "./engine.js";
 import { CdpConnection, readCdpJson, type CdpEndpoint } from "./cdp.js";
@@ -194,8 +194,8 @@ export function withEndedSession(live: LiveOwners, sessionId: string): LiveOwner
  * `env:<uuid>` reads back as `env-<uuid>` and `pane:%12` as `pane-12`.
  */
 export function ownerState(key: string, live: LiveOwners): LivenessVerdict {
-  // A real-mode session is the same agent under a suffixed key (engine.ts).
-  key = baseSessionKey(key);
+  // A real-mode session, or a named tab, is the same agent under a longer key (engine.ts).
+  key = ownerOfSessionKey(key);
   const env = /^(?:env|session)-(.+)$/.exec(key);
   if (env) return live.session(env[1]);
   const pane = /^pane-(.+)$/.exec(key);
