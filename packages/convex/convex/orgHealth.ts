@@ -228,6 +228,25 @@ export async function readWorkTasks(ctx: Ctx, userId: Id<"users">, teamId: Id<"t
   return { tasks: Array.from(byId.values()), truncated, any_truncated: Object.values(truncated).some(Boolean) };
 }
 
+/** The task fields org.health reads, and nothing else. The open set of a large
+ *  workspace is thousands of rows, and a whole task row carries its
+ *  description, summaries and guides: Union's 6,931 rows were 28.7 MB, passed
+ *  from healthWorkPart into healthCorePart as arguments and held there beside
+ *  the scan until the core ran out of its 64 MB. Health counts and filters
+ *  by status, plan, project and time, and names a stale task by id and
+ *  title; computeOrgHealth reads every task through this shape on both the
+ *  fanned and the in-process path, so a field read here and missing from the
+ *  list fails the tests rather than prod. */
+export const HEALTH_TASK_FIELDS = ["_id", "_creationTime", "short_id", "title", "status", "execution_status", "plan_id", "project_id", "updated_at", "conversation_ids"] as const;
+export type HealthTask = { [K in (typeof HEALTH_TASK_FIELDS)[number]]?: any };
+export function slimHealthTask(t: any): HealthTask {
+  const out: HealthTask = {};
+  for (const k of HEALTH_TASK_FIELDS) if (t[k] !== undefined) out[k] = t[k];
+  return out;
+}
+/** A WorkTasks read with each row cut to the fields health reads. */
+export const slimWorkTasks = (work: WorkTasks): WorkTasks => ({ ...work, tasks: work.tasks.map(slimHealthTask) });
+
 /** The repos the scanned sessions touch (org-staffing.md S9): where to read
  *  the commit history from. */
 export function reposFromScan(scan: OrgScan): string[] {
@@ -402,7 +421,9 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     // The goals each area feeds (I4), one bounded read for every role row.
     readWorkspaceInitiatives(ctx, teamId ? `team:${teamId}` : `user:${userId}`),
   ]);
-  const tasks = work.tasks;
+  // A supplied read is already slim (healthWorkPart, orgWatch.workPart); an
+  // in-process read is cut here, so both paths hold the same small rows.
+  const tasks: any[] = opts?.work ? work.tasks : work.tasks.map(slimHealthTask);
   // The live series the goals' numbers read, so the health panel shows what a role's brief shows.
   const initiativeSeries = await seriesLookup(ctx, teamId ? `team:${teamId}` : `user:${userId}`, initiativeRows);
   const plansByProject = new Map<string, any[]>();
@@ -895,7 +916,7 @@ export const healthWorkPart = query({
     const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
     if (!userId) return null;
     const now = args.now ?? Date.now();
-    return readWorkTasks(ctx, userId, args.team_id, { perStatus: HEALTH_CAPS.tasks, updatedSince: now - HEALTH_WINDOW_7D_MS, recentCap: HEALTH_CAPS.recent_tasks });
+    return slimWorkTasks(await readWorkTasks(ctx, userId, args.team_id, { perStatus: HEALTH_CAPS.tasks, updatedSince: now - HEALTH_WINDOW_7D_MS, recentCap: HEALTH_CAPS.recent_tasks }));
   },
 });
 

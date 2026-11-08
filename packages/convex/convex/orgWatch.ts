@@ -18,7 +18,7 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { AREA_STATUS_ATTENTION, areaChangeLine, type AreaChange, type AreaStatus } from "@codecast/shared/contracts/orgAreas";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
-import { computeOrgHealth, HEALTH_CAPS, HEALTH_WINDOW_7D_MS, healthMembersAndRoles, readHealthDecisions, readWorkTasks, type HealthDecisions, type WorkTasks } from "./orgHealth";
+import { computeOrgHealth, HEALTH_CAPS, HEALTH_WINDOW_7D_MS, healthMembersAndRoles, readHealthDecisions, readWorkTasks, slimWorkTasks, type HealthDecisions, type WorkTasks } from "./orgHealth";
 import { fireRoleEvent } from "./agentTasks";
 import { HEAD_AREA_CHANGE_SPEC } from "./lib/orgRoutine";
 
@@ -107,7 +107,7 @@ export const decisionsPart = internalQuery({
 export const workPart = internalQuery({
   args: { user_id: v.id("users"), team_id: v.optional(v.id("teams")), now: v.number() },
   handler: async (ctx, args): Promise<WorkTasks> =>
-    readWorkTasks(ctx, args.user_id, args.team_id, { perStatus: HEALTH_CAPS.tasks, updatedSince: args.now - HEALTH_WINDOW_7D_MS, recentCap: HEALTH_CAPS.recent_tasks }),
+    slimWorkTasks(await readWorkTasks(ctx, args.user_id, args.team_id, { perStatus: HEALTH_CAPS.tasks, updatedSince: args.now - HEALTH_WINDOW_7D_MS, recentCap: HEALTH_CAPS.recent_tasks })),
 });
 
 /** The plan for one workspace: health computed, the rows' watch state read

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { HEALTH_CAPS, NAV_PROMPT_LIVE_SINCE, computeOrgHealth, readTurnsSince, roleActivity } from "./orgHealth";
+import { HEALTH_CAPS, HEALTH_TASK_FIELDS, NAV_PROMPT_LIVE_SINCE, computeOrgHealth, readTurnsSince, readWorkTasks, roleActivity, slimWorkTasks } from "./orgHealth";
 import { collectOrgSessions } from "./org";
 import { reachedSentence } from "@codecast/shared/contracts/orgAreas";
 
@@ -391,6 +391,34 @@ describe("readWorkTasks", () => {
     const capped = await readWorkTasks(ctxOf(db), ME as any, TEAM, { perStatus: 2, updatedSince: NOW - 7 * D, recentCap: 100 });
     expect(capped.truncated).toMatchObject({ open: true, in_progress: false, backlog: false, in_review: false, recent: false });
     expect(capped.any_truncated).toBe(true);
+  });
+});
+
+// The task rows passed from healthWorkPart into healthCorePart (ct-87999): a
+// whole row carries its description, summaries and guides, and Union's open
+// set as whole rows ran the core out of its 64 MB.
+describe("health task rows are slim", () => {
+  const LONG = { description: "d".repeat(20_000), last_session_summary: "s".repeat(5_000), change_guide: "g".repeat(5_000), labels: ["a"], assignee: ME };
+  test("the rows carry exactly the fields health reads", async () => {
+    expect([...HEALTH_TASK_FIELDS]).toEqual(["_id", "_creationTime", "short_id", "title", "status", "execution_status", "plan_id", "project_id", "updated_at", "conversation_ids"]);
+    const db = fixtures({ tasks: [task("ct-fat", { ...LONG, plan_id: "plans_launch", conversation_ids: ["c1"], execution_status: "blocked" })] });
+    const work = slimWorkTasks(await readWorkTasks(ctxOf(db), ME as any, TEAM, { perStatus: 100, updatedSince: NOW - 7 * D, recentCap: 100 }));
+    expect(work.tasks).toEqual([{ _id: "ct-fat", short_id: "ct-fat", title: "ct-fat", status: "open", execution_status: "blocked", plan_id: "plans_launch", project_id: P, updated_at: NOW - 2 * H, conversation_ids: ["c1"] }]);
+    expect(JSON.stringify(work).length).toBeLessThan(500);
+  });
+  test("health computed from slim rows matches health from whole rows, and reads no other task field", async () => {
+    const db = fixtures();
+    for (const t of await db.query("tasks").collect()) Object.assign(t, LONG);
+    const whole = await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW);
+    const read = slimWorkTasks(await readWorkTasks(ctxOf(db), ME as any, TEAM, { perStatus: HEALTH_CAPS.tasks, updatedSince: NOW - 7 * D, recentCap: HEALTH_CAPS.recent_tasks }));
+    // A read of any field outside the list throws, so a new use of a task field fails here first.
+    const allowed = new Set<string | symbol>(HEALTH_TASK_FIELDS);
+    const guarded = read.tasks.map((t) => new Proxy(t, { get(target: any, k) {
+      if (typeof k === "string" && !allowed.has(k) && !(k in Object.prototype)) throw new Error(`health read task.${k}, which HEALTH_TASK_FIELDS does not carry`);
+      return target[k];
+    } }));
+    const slim = await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW, { work: { ...read, tasks: guarded } });
+    expect(slim).toEqual(whole);
   });
 });
 
