@@ -2122,7 +2122,7 @@ export class SyncService {
   async recordTreeSnapshots(rows: Array<{
     conversation_id: string; sha: string; tree_sha: string; base_sha: string; prev_sha?: string; branch?: string;
     depth: number; changed_paths: string[]; changed_count: number; dirty: boolean; checkout_key: string;
-    source: "turn" | "sweep"; taken_at: number; turn_completed_at?: number; took_ms?: number; shared_sessions?: number;
+    source: "turn" | "sweep" | "prompt"; taken_at: number; turn_completed_at?: number; took_ms?: number; shared_sessions?: number;
   }>): Promise<{ written: number } | null> {
     if (!this.apiToken || !rows.length) return null;
     try {

@@ -3183,6 +3183,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setSessionBackground: async (ctx, _userId, [device_id, session_id, background]: [string, string, boolean]) => {
     return ctx.runMutation!(api.machineResources.setSessionBackground, { device_id, session_id, background });
   },
+  rewindFiles: async (ctx, _userId, [requestId, convId, op, opts]: [string, string, string, { message_ts?: number; fingerprint?: string; overwrite?: boolean; path?: string; staged_id?: string; discard_token?: string }?]) => {
+    return await ctx.runMutation!((api as any).sessionCommands.rewindFiles, {
+      request_id: requestId, conversation_id: convId as Id<"conversations">, op, ...(opts ?? {}),
+    });
+  },
   hibernateSession: async (ctx, _userId, [requestId, convId, sessionId, ownerDeviceId]: [string, string, string, string]) => {
     return await ctx.runMutation!((api as any).sessionCommands.hibernate, {
       request_id: requestId, conversation_id: convId as Id<"conversations">,
