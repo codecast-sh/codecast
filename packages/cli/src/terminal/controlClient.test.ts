@@ -9,7 +9,7 @@ describe("TmuxControlClient.start", () => {
   // status dot. start() must reject so the client gets an error it can show.
   it.skipIf(!hasTmux())("rejects when the attach target does not exist", async () => {
     const client = new TmuxControlClient(
-      { kind: "attach", target: "cast-term-does-not-exist-000", readOnly: true },
+      { kind: "attach", target: "cast-term-does-not-exist-000" },
       { onOutput() {}, onExit() {} },
     );
     try {
@@ -32,12 +32,17 @@ describe("TmuxControlClient interactive attach", () => {
     const size = () => tmuxExecSync(["display-message", "-p", "-t", name, "#{window_width}x#{window_height}"], { encoding: "utf-8" }).trim();
     tmuxExecSync(["new-session", "-d", "-s", name, "-x", "100", "-y", "30", "sleep 30"]);
     const client = new TmuxControlClient(
-      { kind: "attach", target: name, readOnly: false },
+      { kind: "attach", target: name },
       { onOutput() {}, onExit() {} },
     );
     try {
       // The hello size is a pre-layout guess: it must not touch the pane.
       await client.start(80, 24);
+      // Watching never sizes the pane; only holding control does.
+      client.resize(60, 10);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(size()).toBe("100x30");
+      await client.setSizing(true);
       expect(size()).toBe("100x30");
       client.resize(60, 10);
       await new Promise((r) => setTimeout(r, 300));
@@ -61,11 +66,12 @@ describe("TmuxControlClient interactive attach", () => {
     const size = () => tmuxExecSync(["display-message", "-p", "-t", name, "#{window_width}x#{window_height}"], { encoding: "utf-8" }).trim();
     tmuxExecSync(["new-session", "-d", "-s", name, "-x", "100", "-y", "30", "sleep 30"]);
     const client = new TmuxControlClient(
-      { kind: "attach", target: name, readOnly: false },
+      { kind: "attach", target: name },
       { onOutput() {}, onExit() {} },
     );
     try {
       await client.start(80, 24);
+      await client.setSizing(true);
       client.resize(60, 6);
       await new Promise((r) => setTimeout(r, 300));
       expect(size()).toBe("60x6");
@@ -108,5 +114,62 @@ describe("seed state", () => {
     expect(plain).not.toContain("1049");
     expect(plain).not.toContain("?100");
     expect(plain.endsWith("\x1b[?25l")).toBe(true);
+  });
+});
+
+describe("TmuxControlClient command replies", () => {
+  // Pane output and command replies share one stdout. Holding it for a
+  // backed-up viewer used to starve every command issued meanwhile (a new
+  // viewer's capture waited out the timeout and opened blank), and a reply
+  // that came after its command timed out was taken by the NEXT command,
+  // pairing every later reply off by one.
+  function rig() {
+    const { EventEmitter } = require("node:events");
+    const stdout = Object.assign(new EventEmitter(), { paused: false, pause() { this.paused = true; }, resume() { this.paused = false; } });
+    const written: string[] = [];
+    const child = { stdout, stdin: { write: (s: string) => written.push(s) } };
+    const client = new TmuxControlClient({ kind: "create", sessionName: "cast-term-x" }, { onOutput() {}, onExit() {} });
+    (client as unknown as { child: unknown }).child = child;
+    const reply = (lines: string[]) =>
+      (client as unknown as { handleEvent(ev: unknown): void }).handleEvent({ type: "reply", ok: true, lines });
+    const command = (cmd: string) => (client as unknown as { command(c: string): Promise<{ ok: boolean; lines: string[] }> }).command(cmd);
+    return { client, stdout, reply, command, written };
+  }
+
+  it("reads while a reply is owed, even when output is held", async () => {
+    const { client, stdout, reply, command } = rig();
+    client.pauseOutput();
+    expect(stdout.paused).toBe(true);
+    const answer = command("display-message -p hi");
+    expect(stdout.paused).toBe(false);
+    reply(["hi"]);
+    expect((await answer).lines).toEqual(["hi"]);
+    // Nothing owed: back to held.
+    expect(stdout.paused).toBe(true);
+    client.resumeOutput();
+    expect(stdout.paused).toBe(false);
+  });
+
+  it("a late reply is consumed by the command that timed out, not the next one", async () => {
+    const { reply, command } = rig();
+    const realSetTimeout = globalThis.setTimeout;
+    let fire: (() => void) | null = null;
+    (globalThis as { setTimeout: unknown }).setTimeout = ((fn: () => void) => {
+      fire ??= fn;
+      return { unref() {} } as unknown as NodeJS.Timeout;
+    }) as unknown as typeof setTimeout;
+    let first: Promise<{ ok: boolean; lines: string[] }>;
+    let second: Promise<{ ok: boolean; lines: string[] }>;
+    try {
+      first = command("slow");
+      second = command("next");
+    } finally {
+      (globalThis as { setTimeout: unknown }).setTimeout = realSetTimeout;
+    }
+    fire!();
+    expect((await first).ok).toBe(false);
+    reply(["late answer to slow"]);
+    reply(["answer to next"]);
+    expect((await second).lines).toEqual(["answer to next"]);
   });
 });
