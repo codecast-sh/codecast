@@ -5,10 +5,13 @@
 // spells these keys out. Accelerators use registry syntax so
 // formatAcceleratorParts renders them with the same glyphs as every other
 // chord in the app.
+/** "Queue for later": the chord, and the queue control's tooltip beside the send button. */
+export const QUEUE_CHORD = "ctrl+enter";
+
 export const SEND_CHORDS: ReadonlyArray<{ accel: string; label: string }> = [
   { accel: "enter", label: "Send" },
   { accel: "shift+enter", label: "New line" },
-  { accel: "ctrl+enter", label: "Queue for later" },
+  { accel: QUEUE_CHORD, label: "Queue for later" },
   { accel: "alt+enter", label: "Send and advance" },
   { accel: "alt+shift+enter", label: "Send and stash" },
   { accel: "meta+shift+enter", label: "Fork and send" },
