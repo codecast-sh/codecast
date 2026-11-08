@@ -629,6 +629,14 @@ describe("tmuxComposerText", () => {
     const pane = `⏺ done\n${"─".repeat(20)}\n❯ first\n  second\n${"─".repeat(20)}\n  status`;
     expect(tmuxComposerText(pane)).toBe(" first\n  second");
   });
+  test("a boxed draft under blank lines is read, not called empty", () => {
+    const rule = "─".repeat(20);
+    const pane = `${rule}\n❯ \n\n\n\n  [Pasted text #2 +4 lines]<user-message from="Sam">\n  coordinate\n\n  </user-message>\n${rule}\n  week 77%`;
+    expect(tmuxComposerText(pane)).toBe(" \n\n\n\n  [Pasted text #2 +4 lines]<user-message from=\"Sam\">\n  coordinate\n\n  </user-message>");
+  });
+  test("an unboxed composer still ends at a blank line", () => {
+    expect(tmuxComposerText("› draft\n\n  gpt-6 · ~/src · title")).toBe(" draft");
+  });
   test("empty composer reads blank; glyphless pane reads null", () => {
     expect(tmuxComposerText(`❯ \n${"─".repeat(20)}`)?.trim()).toBe("");
     expect(tmuxComposerText("nothing")).toBeNull();

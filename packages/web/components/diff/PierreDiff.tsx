@@ -6,10 +6,13 @@
 // highlight variables, so a diff follows the app's palette and its light/dark
 // switch instead of the OS. The diff colors themselves (row backgrounds, word
 // emphasis, selection) are set on `diffs-container` in globals.css.
-import { useMemo } from "react";
-import { getFiletypeFromFileName, preloadHighlighter, processFile, registerCustomCSSVariableTheme } from "@pierre/diffs";
-import { FileDiff, useStableCallback, type DiffLineAnnotation, type FileDiffOptions, type SelectedLineRange } from "@pierre/diffs/react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { getFiletypeFromFileName, preloadHighlighter, processFile, registerCustomCSSVariableTheme, type Virtualizer } from "@pierre/diffs";
+import { FileDiff, VirtualizerContext, useStableCallback, type DiffLineAnnotation, type FileDiffOptions, type SelectedLineRange } from "@pierre/diffs/react";
 import { diffPatchText, type DiffModel } from "../../lib/diffModel";
+import { acquireVirtualizer, drawableLines, VIRTUAL_METRICS, VIRTUALIZE_LINE_THRESHOLD } from "./virtualizer";
+
+export { revealVirtualLine } from "./virtualizer";
 
 const DIFF_THEME = "codecast";
 
@@ -109,13 +112,38 @@ export function PierreDiff<A>({
     onGutterUtilityClick: interactive ? gutterClick : undefined,
   }), [theme, model.whole, expandUnchanged, wrap, showLineNumbers, selectable, interactive, selected, gutterClick]);
 
+  // A long diff draws only the rows near the viewport. Pierre picks windowed
+  // drawing when it mounts under a Virtualizer, and the Virtualizer belongs to
+  // the scroller around the diff, so the diff mounts once that is known (in
+  // the same commit, before paint) and mounts again if it crosses the line.
+  const host = useRef<HTMLDivElement>(null);
+  const virtual = drawableLines(fileDiff) > VIRTUALIZE_LINE_THRESHOLD;
+  const [virtualizer, setVirtualizer] = useState<Virtualizer>();
+  useLayoutEffect(() => {
+    if (!virtual || !host.current) return;
+    const held = acquireVirtualizer(host.current);
+    setVirtualizer(held.virtualizer);
+    return () => {
+      setVirtualizer(undefined);
+      held.release();
+    };
+  }, [virtual]);
+
   return (
-    <FileDiff<A, undefined>
-      fileDiff={fileDiff}
-      options={options}
-      selectedLines={selectable ? selectedLines ?? null : undefined}
-      lineAnnotations={lineAnnotations}
-      renderAnnotation={renderAnnotation}
-    />
+    <div ref={host}>
+      {virtual && !virtualizer ? null : (
+        <VirtualizerContext.Provider value={virtual ? virtualizer : undefined}>
+          <FileDiff<A, undefined>
+            key={virtual ? "windowed" : "whole"}
+            fileDiff={fileDiff}
+            options={options}
+            metrics={virtual ? VIRTUAL_METRICS : undefined}
+            selectedLines={selectable ? selectedLines ?? null : undefined}
+            lineAnnotations={lineAnnotations}
+            renderAnnotation={renderAnnotation}
+          />
+        </VirtualizerContext.Provider>
+      )}
+    </div>
   );
 }

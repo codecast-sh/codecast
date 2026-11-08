@@ -13,6 +13,7 @@
  */
 
 import { WebSocket } from "ws";
+import { fetchBridge } from "./bridge/retiring.js";
 
 export interface CdpEvent {
   method: string;
@@ -234,7 +235,8 @@ export interface CdpTarget {
  *  (bridge/host.ts Client.session). `raise` marks a socket that brings tabs
  *  to the front on purpose (the focus route, `tab --show`); the host lets no
  *  other socket raise the human's Chrome. */
-export type CdpEndpoint = number | { port: number; token?: string; session?: string; raise?: boolean };
+/** `profile` names the bridge's Chrome profile (bridge/links.ts id) a session's new tabs open in. */
+export type CdpEndpoint = number | { port: number; token?: string; session?: string; raise?: boolean; profile?: string };
 
 /** Longer than the host's own tab listing budget (host.ts listTabs, 40 s), so the host answers before the reader gives up. */
 export const BRIDGE_HTTP_TIMEOUT_MS = 45_000;
@@ -262,7 +264,7 @@ export async function readCdpJson<T>(ep: CdpEndpoint, route: string, timeoutMs =
     }, timeoutMs);
   });
   try {
-    const read = fetch(cdpHttpUrl(ep, route), { signal: controller.signal }).then(async response => {
+    const read = fetchBridge(cdpHttpUrl(ep, route), { signal: controller.signal }).then(async response => {
       if (!response.ok) {
         // The bridge host says why in the body (a stalled worker, a missing
         // extension); the reason is what the caller's retry reads (stall.ts).
@@ -296,10 +298,11 @@ export async function browserSocketUrl(ep: CdpEndpoint, timeoutMs = 10_000): Pro
 /** The bridge scopes a socket to the session named on its URL, and lets it
  *  raise tabs only with `raise=1`; Chrome ignores the query. */
 export function withSession(wsUrl: string, ep: CdpEndpoint): string {
-  if (typeof ep === "number" || (!ep.session && !ep.raise)) return wsUrl;
+  if (typeof ep === "number" || (!ep.session && !ep.raise && !ep.profile)) return wsUrl;
   const u = new URL(wsUrl);
   if (ep.session) u.searchParams.set("session", ep.session);
   if (ep.raise) u.searchParams.set("raise", "1");
+  if (ep.profile) u.searchParams.set("profile", ep.profile);
   return u.toString();
 }
 

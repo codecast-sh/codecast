@@ -1,0 +1,158 @@
+/* The Loop view (FlowLoop): five columns shared by the rules, the stages and the work, so each rule sits over the
+   stage it governs; the foot carries production back to signals. Narrow, it reads as one column, stage by stage. */
+.lp { container: lp / inline-size; display: flex; flex-direction: column; gap: 10px; padding: 18px 18px 14px; border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); background: var(--lw-paper); }
+.lp-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+
+/* The rules: a card each, a dotted drop to its stage. */
+.lp-rules { padding: 12px; border: 1px solid var(--lw-rule-2); border-radius: 12px; background: var(--lw-card); }
+.lp-rule { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--lw-rule-2); border-radius: 8px; color: inherit; text-decoration: none; background: var(--lw-paper); }
+.lp-rule:hover { border-color: var(--lw-rule); }
+.lp-rule::after { content: ""; position: absolute; left: 50%; top: calc(100% + 1px); height: 24px; border-left: 1.5px dotted color-mix(in srgb, var(--lw-ink-3) 60%, transparent); }
+.lp-rule-name { font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink); }
+.lp-rule-val { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+
+.lp-stages { margin-top: 14px; }
+.lp-stages li { display: flex; align-items: baseline; gap: 8px; padding: 0 2px 6px; border-bottom: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-lg); font-weight: 650; color: var(--lw-ink); }
+.lp-stage-n { font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-3); }
+
+/* The work: signals down the first column, the two ways in across the next two, the shared checks, then ship. */
+.lp-body {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px;
+  grid-template-areas: "sig person person checks ship" "sig line line checks ship";
+}
+.lp-box { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--lw-rule-2); border-radius: 10px; background: var(--lw-card); min-width: 0; }
+.lp-signals { grid-area: sig; }
+.lp-lane[data-lane="person"] { grid-area: person; }
+.lp-lane[data-lane="line"] { grid-area: line; }
+.lp-checks { grid-area: checks; }
+.lp-ship { grid-area: ship; }
+.lp-box-head { font-size: var(--lw-fs-sm); color: var(--lw-ink-2); text-decoration: none; }
+.lp-box-head b { color: var(--lw-ink); font-size: var(--lw-fs-lg); }
+.lp-box-head:hover { color: var(--lw-ink); }
+.lp-box-k, .lp-lane-k { display: inline-flex; align-items: center; gap: 6px; font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ink-2); }
+
+.lp-sources { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.lp-sources li { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; border-radius: 6px; background: var(--lw-paper-2); font-size: var(--lw-fs-xs); color: var(--lw-ink-2); }
+.lp-sources li .lw-num { margin-left: auto; color: var(--lw-ink); font-weight: 650; }
+.lp-sources li[data-state="stopped"] .lp-src-name { color: var(--lw-bad); }
+.lp-src-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The joins: signals feed the line, both ways in meet at the checks, the checks lead to ship. */
+.lp-signals, .lp-lane, .lp-checks { position: relative; overflow: visible; }
+.lp-lane::after, .lp-checks::after, .lp-signals::after { position: absolute; right: -12px; top: 50%; transform: translateY(-50%); color: var(--lw-ink-3); font-size: 12px; z-index: 1; }
+.lp-lane::after, .lp-checks::after { content: "→"; }
+.lp-signals::after { content: "→"; top: 75%; }
+/* A lane: who starts the work, then its steps in order, an arrow between. */
+.lp-lane { flex-direction: row; align-items: stretch; flex-wrap: wrap; }
+.lp-lane[data-lane="person"] { border-left: 3px solid var(--lw-person); }
+.lp-lane[data-lane="line"] { border-left: 3px solid var(--lw-live); }
+.lp-lane-k { flex: 0 0 100%; }
+.lp-lane .lp-step { flex: 1 1 0; }
+.lp-lane .lp-step + .lp-step { position: relative; margin-left: 18px; }
+.lp-lane .lp-step + .lp-step::before { content: "→"; position: absolute; left: -15px; top: 8px; color: var(--lw-ink-3); }
+.lp-step {
+  display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border: 1px solid var(--lw-rule-2); border-radius: 8px; background: var(--lw-paper);
+  color: inherit; text-decoration: none; text-align: left; font: inherit; cursor: pointer; min-width: 0;
+}
+.lp-step:hover { border-color: var(--lw-rule); }
+.lp-step-name { font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink); text-decoration: none; }
+a.lp-step-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.lp-figs { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.lp-fig { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); text-decoration: none; white-space: nowrap; }
+.lp-fig b { color: var(--lw-ink); font-weight: 650; }
+.lp-fig-n { white-space: nowrap; }
+a.lp-fig:hover { text-decoration: underline; text-underline-offset: 3px; }
+.lp-fig[data-tone="you"], .lp-fig[data-tone="you"] b { color: var(--lw-person); }
+.lp-fig[data-tone="bad"], .lp-fig[data-tone="bad"] b { color: var(--lw-bad); }
+.lp-fig[data-tone="live"] b { color: var(--lw-live); }
+
+/* The checks: an automated check, or a person deciding. */
+.lp-checks ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.lp-check { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--lw-rule-2); border-radius: 8px; background: var(--lw-paper); color: inherit; text-decoration: none; }
+.lp-check .lp-figs { grid-column: 2; }
+.lp-check:hover { border-color: var(--lw-rule); }
+.lp-check[data-person] { border-color: color-mix(in srgb, var(--lw-person) 40%, transparent); background: color-mix(in srgb, var(--lw-person) 7%, var(--lw-paper)); }
+.lp-icon { width: 14px; height: 14px; flex: none; color: var(--lw-ink-3); }
+.lp-icon-person { color: var(--lw-person); }
+.lp-decide { margin-top: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--lw-person) 12%, var(--lw-card)); text-decoration: none; }
+
+.lp-ship .lp-step { position: relative; }
+.lp-ship .lp-step + .lp-step::before { content: "↓"; position: absolute; left: 50%; top: -14px; color: var(--lw-ink-3); font-size: 11px; }
+.lp-ship .lp-step + .lp-step { margin-top: 6px; }
+.lp-prod { margin-top: auto; align-self: flex-start; padding: 3px 10px; border-radius: 999px; background: var(--lw-ink); color: var(--lw-paper); font-size: var(--lw-fs-xs); font-weight: 650; }
+
+/* Production back to signals: a line along the foot, its arrow at the first column. */
+.lp-back {
+  position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; padding: 8px 12px 8px 34px;
+  border: 1px solid var(--lw-rule-2); border-radius: 10px; background: var(--lw-card); text-decoration: none;
+}
+.lp-back::before { content: "↺"; position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--lw-ink-3); }
+.lp-back-k { font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink); }
+.lp-back:hover { border-color: var(--lw-rule); }
+
+.lp-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 2px 2px 0; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.lp-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.lp-dot { width: 8px; height: 8px; border-radius: 50%; }
+.lp-dot[data-lane="person"] { background: var(--lw-person); }
+.lp-dot[data-lane="line"] { background: var(--lw-live); }
+
+/* Narrow: the stages read top to bottom, the rules in a wrapping row over them. */
+/* A laptop column: the five stages hold, tighter. */
+@container lp (max-width: 900px) {
+  .lp { padding: 12px; }
+  .lp-row, .lp-body { gap: 8px; }
+  .lp-rules { padding: 8px; }
+  .lp-rule { padding: 6px 8px; }
+  .lp-rule-name, .lp-step-name { font-size: var(--lw-fs-xs); }
+  .lp-stages li { font-size: var(--lw-fs-sm); }
+  .lp-box { padding: 8px; }
+  .lp-step { padding: 6px 8px; }
+  .lp-lane .lp-step + .lp-step { margin-left: 14px; }
+  .lp-lane .lp-step + .lp-step::before { left: -12px; }
+  .lp-check { padding: 5px 6px; column-gap: 6px; }
+  .lp-fig { white-space: normal; overflow-wrap: normal; }
+  .lp-rule, .lp-check, .lp-step { overflow-wrap: anywhere; }
+}
+@container lp (max-width: 620px) {
+  .lp-rules { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .lp-rule::after { display: none; }
+  .lp-stages { display: none; }
+  .lp-body { grid-template-columns: minmax(0, 1fr); grid-template-areas: "sig" "person" "line" "checks" "ship"; }
+  .lp-lane::after, .lp-checks::after, .lp-signals::after { content: "↓"; right: auto; left: 50%; top: auto; bottom: -13px; transform: none; }
+}
+
+/* A wait on a person is a control: a pill with the person, opening where they answer. */
+a.lp-fig[data-tone="you"] { display: inline-block; max-width: 100%; white-space: normal; padding: 1px 8px 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--lw-person) 12%, var(--lw-card)); }
+a.lp-fig[data-tone="you"]:hover { background: color-mix(in srgb, var(--lw-person) 20%, var(--lw-card)); text-decoration: none; }
+.lp-fig-icon { display: inline-block; width: 11px; height: 11px; color: var(--lw-person); margin-right: 4px; vertical-align: -1px; }
+.lp-name-btn { all: unset; cursor: pointer; font-size: var(--lw-fs-sm); font-weight: 650; color: var(--lw-ink); }
+.lp-name-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* Both ways in meet on one bracket that enters the checks at the first; the checks run in order. */
+.lp-checks::before { content: ""; position: absolute; left: -8px; top: 18px; bottom: 18px; border-left: 1.5px solid color-mix(in srgb, var(--lw-ink-3) 55%, transparent); }
+.lp-checks ul { position: relative; }
+.lp-checks ul::before { content: "→"; position: absolute; left: -16px; top: 6px; color: var(--lw-ink-3); font-size: 12px; }
+.lp-checks li + li { position: relative; padding-top: 6px; }
+.lp-checks li + li::before { content: "↓"; position: absolute; left: 50%; top: -6px; font-size: 10px; color: var(--lw-ink-3); }
+.lp-checks ul { gap: 2px; }
+.lp-lane::after { right: -14px; }
+
+/* Production drops to the way back, and the way back rises into Signals. */
+.lp-ship { position: relative; overflow: visible; }
+.lp-ship::after { content: "↓"; position: absolute; left: 24px; bottom: -14px; color: var(--lw-ink-3); font-size: 12px; }
+.lp-signals::before { content: "↑"; position: absolute; left: 24px; bottom: -14px; color: var(--lw-ink-3); font-size: 12px; }
+@container lp (max-width: 620px) {
+  .lp-checks::before, .lp-checks ul::before { display: none; }
+}
+
+/* Measured rates (ct-87140): each with its sample, an unsettled one saying so. */
+.lp-fig.lp-fig-wrap { white-space: normal; }
+.lp-rates { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1px 8px; margin-top: 4px; padding-top: 5px; border-top: 1px dashed var(--lw-rule-2); font-size: var(--lw-fs-xs); }
+.lp-rates-k { grid-column: 1 / -1; color: var(--lw-ink-3); }
+.lp-rate { display: contents; }
+.lp-rate-k { color: var(--lw-ink-2); white-space: nowrap; }
+.lp-rate-v { color: var(--lw-ink-3); min-width: 0; }
+.lp-rate-v b { color: var(--lw-ink); font-weight: 650; }
+.lp-rate-v[data-empty] b { color: var(--lw-ink-2); }
+.lp-rate-v[data-tone="bad"] b { color: var(--lw-bad); }
+.lp-miss { grid-column: 2; font-size: var(--lw-fs-xs); }

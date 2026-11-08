@@ -42,6 +42,43 @@ export const PERMISSION_CARD_STYLE = {
     fontFamily: "JetBrainsMono",
     marginBottom: 4,
   },
+  sourceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  subagentTag: {
+    fontSize: 11,
+    color: "#a78bfa",
+    marginBottom: 4,
+  },
+  safetyTag: {
+    fontSize: 11,
+    color: "#fb923c",
+    marginBottom: 4,
+  },
+  intent: {
+    fontSize: 13,
+    color: "#e0e0e0",
+    marginBottom: 4,
+  },
+  removal: {
+    fontSize: 11,
+    color: "#e0e0e0",
+    fontFamily: "JetBrainsMono",
+    marginBottom: 2,
+  },
+  removalVerb: {
+    color: "#ff6b6b",
+  },
+  removalCount: {
+    color: "#ff6b6b",
+  },
+  removalNote: {
+    color: "#999",
+    fontStyle: "italic",
+  },
   argsContainer: {
     backgroundColor: "rgba(0, 0, 0, 0.3)",
     borderRadius: 4,
@@ -91,3 +128,26 @@ export const PERMISSION_CARD_COPY = {
   deny: "Deny",
   argsMaxLines: 3,
 } as const;
+
+/** Who is asking, as the card's tags: a subagent (by type) rather than the
+ *  session's own agent, and Claude Code's built-in safety check, which still
+ *  asks in bypass mode (an rm whose target it cannot resolve). */
+export function permissionSourceTags(p: { subagent_type?: string; safety_check?: boolean }): { kind: "subagent" | "safety"; label: string }[] {
+  const tags: { kind: "subagent" | "safety"; label: string }[] = [];
+  if (p.subagent_type) tags.push({ kind: "subagent", label: p.subagent_type === "subagent" ? "subagent" : `${p.subagent_type} subagent` });
+  if (p.safety_check) tags.push({ kind: "safety", label: "Claude Code safety check" });
+  return tags;
+}
+
+/** One rm target on a card, as removalPreview resolved it. */
+export type PermissionRemoval = { target: string; files?: number; dirs?: number; note?: string };
+
+/** What an rm target would delete, at a glance: "79 files", "2 files · 3
+ *  folders", "nothing there", or why it could not be counted. */
+export function removalCountLabel(r: PermissionRemoval): string {
+  if (r.note) return r.note;
+  const parts: string[] = [];
+  if (r.files) parts.push(`${r.files.toLocaleString("en-US")} file${r.files === 1 ? "" : "s"}`);
+  if (r.dirs) parts.push(`${r.dirs.toLocaleString("en-US")} folder${r.dirs === 1 ? "" : "s"}`);
+  return parts.length ? parts.join(" · ") : "nothing there";
+}

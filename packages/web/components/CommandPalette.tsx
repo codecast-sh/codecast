@@ -37,7 +37,8 @@ import { useBulkMoveSessions, useMoveTargets } from "../hooks/useBulkMoveSession
 import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, projectOfFromState, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
+import { projectChipLabel } from "../store/workProjects";
 import { resolveRecentVisits, visitTimeAgo, visitObjectLabel, type ResolvedVisit } from "../lib/recentVisits";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { kindOfQuery, matchGoals, matchMentionGroups, matchProjects, matchRoles, matchRoutines, searchIndexOf, type MentionRecord } from "../lib/universalSearch";
@@ -215,6 +216,8 @@ const api = _api as any;
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
 import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 import { hoverFocus } from "../shortcuts/focusSource";
+import { SwitchReview } from "./consequential/ConsequentialSwitch";
+import { permanentDeleteLedger, regulatedTeam, SESSION_REACHES } from "./consequential/deletionLedgers";
 
 /** A relation pick's leading glyph, as every other palette mode has one: the
  *  task's status, or the hourglass of a wait parsed from the query. */
@@ -482,6 +485,18 @@ export function ActionSubmenu({
   // row. No second render block — the bucket mode's __create__ row does the work.
   const [renameId, setRenameId] = useState<string | null>(null);
 
+  // Deleting a session of a team whose data is regulated is permanent
+  // everywhere its content went, so it goes through the shared review first.
+  const [deleteReview, setDeleteReview] = useState(false);
+  const deleteSessions = () => {
+    const store = useInboxStore.getState();
+    for (const row of targets) store.deleteSession(row._id);
+    toast.success(targets.length > 1 ? `Deleted ${targets.length} sessions` : "Session deleted");
+    if (targets.length > 1) useInboxSelection.getState().clear();
+    onClose();
+  };
+  const deleteTeam = mode === "session_delete" ? targets.map((row) => regulatedTeam(useInboxStore.getState().teams, row.team_id)).find(Boolean) ?? null : null;
+
   const updatePlan = useInboxStore((s) => s.updatePlan);
   const assignToAgent = useInboxStore((s) => s.assignTaskToAgent);
   // The hand-off action runs through the client directly (an action, not a mutation).
@@ -556,7 +571,7 @@ export function ActionSubmenu({
     // the view badges here can never disagree with the panel's chip row.
     const placed = placeInboxRows(st, { focusedId: st.currentSessionId ?? null });
     const bucketByConv = convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>);
-    const counts = computeChipCounts([...placed.sorted, ...placed.snoozed, ...placed.stashed, ...placed.dismissed], bucketByConv);
+    const counts = computeChipCounts([...placed.sorted, ...placed.snoozed, ...placed.stashed, ...placed.dismissed], bucketByConv, projectOfFromState(st));
     // Label counts come from the assignments themselves, not from cached
     // sessions: bucket_assignments sync completely (buckets.webList collects the
     // whole per-user table), while the session cache is windowed and boot-pruned
@@ -640,7 +655,8 @@ export function ActionSubmenu({
         rows.push({ key: `label:${b._id}`, id: b._id, kind: "label", label: b.name, count: bucketCounts[b._id] || 0, active: activeBucketFilter === b._id, dot: getLabelColor(b.name).dot });
       }
       for (const [name, count] of projectCounts) {
-        rows.push({ key: `project:${name}`, kind: "project", label: name, count, active: activeProjectFilter === name, path: projectPathByName[name] || null, dot: getLabelColor(name).dot });
+        const label = projectChipLabel(name, useInboxStore.getState().projects);
+        rows.push({ key: `project:${name}`, kind: "project", label, count, active: activeProjectFilter === name, path: projectPathByName[name] || null, dot: getLabelColor(label).dot });
       }
       const matched = rows.filter((r) => r.label.toLowerCase().includes(q));
       // "All sessions" mirrors bucket-mode's remove row: empty-search only, on
@@ -920,10 +936,8 @@ export function ActionSubmenu({
     const count = targets.length;
     const store = useInboxStore.getState();
     if (mode === "session_delete") {
-      for (const row of targets) store.deleteSession(row._id);
-      toast.success(count > 1 ? `Deleted ${count} sessions` : "Session deleted");
-      if (count > 1) useInboxSelection.getState().clear();
-      onClose();
+      if (deleteTeam) setDeleteReview(true);
+      else deleteSessions();
       return;
     }
     if (mode === "rename" || mode === "deadline" || mode === "project" || mode === "project_status" || mode === "trigger_cancel" || mode === "trigger_delete") {
@@ -1336,6 +1350,20 @@ export function ActionSubmenu({
 
   return (
     <>
+      {deleteReview && deleteTeam && (
+        <SwitchReview
+          ledger={permanentDeleteLedger({
+            what: "session",
+            count: targets.length,
+            title: targets.length > 1 ? `${targets.length} sessions` : cleanTitle(targets[0]?.title || "") || "Untitled session",
+            team: deleteTeam.name,
+            figures: [{ value: String(targets.reduce((n, row) => n + (row.message_count ?? 0), 0)), label: "messages", tone: "warn" }],
+            reaches: SESSION_REACHES,
+          })}
+          onClose={() => setDeleteReview(false)}
+          onConfirm={() => { setDeleteReview(false); deleteSessions(); }}
+        />
+      )}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/30">
         {enteredViaRoot && (
           <button

@@ -19,6 +19,7 @@ import { computeReportingPeople } from "./orgGoals";
 import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
 import { activityPlanOf, computeStale, type ActivityCommit, type ActivitySession } from "./lib/orgActivity";
 import { isActiveTask } from "@codecast/shared/tasks";
+import { approxMessageBytes, isNavigableUserMessage } from "./userMessagesFilter";
 
 // org.health (docs/architecture/org-staffing.md S3): the flow signals the
 // capacity model needs, per role, per person and for the company, with the
@@ -104,7 +105,7 @@ export async function roleActivity(ctx: Ctx, userId: Id<"users">, role: any, now
   }
   // A wake is a turn of the standing session (org-staffing.md S25): a
   // person's line, a mention, a decision, a hand's stall, a routine firing.
-  // Each is one user message in its thread.
+  // Each is one prompt row in its thread (readTurnsSince), never a tool result.
   const wakes = await readTurnsSince(ctx, role, now - HEALTH_WINDOW_7D_MS);
   const byDay = new Map<string, number>();
   for (const at of wakes) byDay.set(utcDay(at), (byDay.get(utcDay(at)) ?? 0) + 1);
@@ -136,18 +137,50 @@ const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1
 export const ACTIVITY_COMMITS_PER_REPO = 500;
 
 /** When the standing session was told something inside the window: the
- *  timestamps of its user turns, newest first, capped. This is what the load
+ *  timestamps of its inbound turns, newest first, capped. This is what the load
  *  model means by an item reaching a seat; the scope's churn (tasks changed)
- *  is a different number. */
+ *  is a different number.
+ *
+ *  An inbound turn is a user-role row that is a prompt (isNavigableUserMessage,
+ *  the rule the message navigator and the `nav_prompt` flag share). Most
+ *  user-role rows are tool results (the CLI stores each one as a user row),
+ *  and compaction summaries, local command output and task notifications are
+ *  user rows too; none of them is a wake. Counting the whole user range read a
+ *  browser-heavy routine's tool calls as 60 items a day.
+ *
+ *  Live writes flag every prompt row, so a conversation whose history is
+ *  flagged (nav_prompts_indexed_at) is read off by_conversation_nav_prompt,
+ *  which holds only prompts. Before that, the user range is walked newest
+ *  first with the same predicate, bounded by rows and bytes. */
 export const TURNS_LOAD_CAP = 1500;
+/** The unflagged walk's ceilings: tool results dominate the user range, so the
+ *  walk is bounded by documents and by bytes deserialized, not by wakes found. */
+export const TURNS_SCAN_DOC_LIMIT = 8000;
+export const TURNS_SCAN_BYTE_LIMIT = 4_000_000;
 export async function readTurnsSince(ctx: Ctx, role: any, since: number): Promise<number[]> {
   const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
   if (!anchor?.conversation_id) return [];
-  const rows: any[] = await ctx.db.query("messages")
+  const conv: any = await ctx.db.get(anchor.conversation_id);
+  if (conv?.nav_prompts_indexed_at !== undefined) {
+    const rows: any[] = await ctx.db.query("messages")
+      .withIndex("by_conversation_nav_prompt", (q: any) => q.eq("conversation_id", anchor.conversation_id).eq("nav_prompt", true).gte("timestamp", since))
+      .order("desc")
+      .take(TURNS_LOAD_CAP);
+    return rows.filter((m) => m.timestamp >= since).map((m) => m.timestamp);
+  }
+  const out: number[] = [];
+  let docs = 0;
+  let bytes = 0;
+  const q = ctx.db.query("messages")
     .withIndex("by_conversation_role_timestamp", (q: any) => q.eq("conversation_id", anchor.conversation_id).eq("role", "user").gte("timestamp", since))
-    .order("desc")
-    .take(TURNS_LOAD_CAP);
-  return rows.map((m) => m.timestamp);
+    .order("desc");
+  for await (const m of q as AsyncIterable<any>) {
+    if (m.timestamp < since) break;
+    if (isNavigableUserMessage(m)) out.push(m.timestamp);
+    if (out.length >= TURNS_LOAD_CAP || ++docs >= TURNS_SCAN_DOC_LIMIT) break;
+    if ((bytes += approxMessageBytes(m)) >= TURNS_SCAN_BYTE_LIMIT) break;
+  }
+  return out;
 }
 
 /** The statuses a task is still open under (shared/tasks TASK_STATUS_CATEGORIES minus done and dropped). */

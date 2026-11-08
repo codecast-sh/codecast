@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
-import { filePathMention, filePathHref, parseFilePathHref, FILE_PATH_SCAN_RE, mentionFromMatch } from "../filePathLinks";
+import { filePathMention, filePathHref, parseFilePathHref, FILE_PATH_SCAN_RE, mentionFromMatch, namedAbsolutePaths, resolveMentionPath } from "../filePathLinks";
 import { entityRemarkPlugins } from "../remarkEntityIds";
 import { resolveVaultTarget, filesHref } from "../vault/vaultHref";
 
@@ -108,6 +108,40 @@ describe("hrefs", () => {
     expect(filePathHref("lib/x.ts", undefined, ctx)).toBe(filesHref({ localPath: "/Users/ashot/src/codecast/lib/x.ts" }));
     expect(filePathHref("~/notes/a.md", undefined, ctx)).toBe(filesHref({ localPath: "/Users/ashot/notes/a.md" }));
     expect(filePathHref("/tmp/x.png", undefined, ctx)).toBe(filesHref({ localPath: "/tmp/x.png" }));
+  });
+
+  test("a mention written relative to somewhere else resolves to the path the session touched", () => {
+    const home = "/Users/ashot";
+    const knownPaths = namedAbsolutePaths(
+      [
+        JSON.stringify({ command: "cd /Users/ashot/src/video/projects/hotel-lobby && ls ~/src/union-mobile/outreach/landing/public/team/" }),
+        JSON.stringify({ file_path: "/Users/ashot/src/video/bin/vid" }),
+        "not json ~/src/other/lib/x.ts",
+      ],
+      home,
+    );
+    expect(knownPaths).toEqual([
+      "/Users/ashot/src/other/lib/x.ts",
+      "/Users/ashot/src/union-mobile/outreach/landing/public/team",
+      "/Users/ashot/src/video/bin/vid",
+      "/Users/ashot/src/video/projects/hotel-lobby",
+    ]);
+    const ctx = { base: "/Users/ashot/src/video", home, knownPaths };
+    expect(resolveMentionPath("union-mobile/outreach/landing/public/team/ashot.jpg", ctx)).toBe(
+      "/Users/ashot/src/union-mobile/outreach/landing/public/team/ashot.jpg",
+    );
+    // Two shared segments place it; one ("team/x.jpg") is too common a name to.
+    expect(resolveMentionPath("landing/public/team/samvit.jpg", ctx)).toBe(
+      "/Users/ashot/src/union-mobile/outreach/landing/public/team/samvit.jpg",
+    );
+    expect(resolveMentionPath("team/samvit.jpg", ctx)).toBe("/Users/ashot/src/video/team/samvit.jpg");
+    // A directory inside a touched path, and the working directory when it was touched itself.
+    expect(resolveMentionPath("outreach/landing/public/", ctx)).toBe("/Users/ashot/src/union-mobile/outreach/landing/public");
+    expect(resolveMentionPath("bin/vid", ctx)).toBe("/Users/ashot/src/video/bin/vid");
+    // Nothing touched matches, two do, or the mention is explicitly cwd-relative: the working directory.
+    expect(resolveMentionPath("lib/y.ts", ctx)).toBe("/Users/ashot/src/video/lib/y.ts");
+    expect(resolveMentionPath("x.ts", { ...ctx, knownPaths: ["/a/x.ts", "/b/x.ts"] })).toBe("/Users/ashot/src/video/x.ts");
+    expect(resolveMentionPath("./lib/x.ts", ctx)).toBe("/Users/ashot/src/video/lib/x.ts");
   });
 });
 

@@ -75,6 +75,14 @@ export interface AnalyticsConfig {
    * events and breadcrumbs, codecast error reports and replays (./scrub).
    */
   scrubUrl?: (text: string) => string;
+  /**
+   * Fraction of sessions PostHog records as a replay, 0 to 1. Unset or 0
+   * records nothing and, on web, never loads the recorder. A recorded session
+   * serializes every DOM (or view tree) change on the main thread, so keep it
+   * to a sample. Mobile replay also needs a binary built with the
+   * posthog-react-native-session-replay native module.
+   */
+  sessionReplaySampleRate?: number;
 }
 
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com";
@@ -113,6 +121,10 @@ export function resolveConfig(config: AnalyticsConfig): ResolvedAnalyticsConfig 
   }
   if (config.codecastIngestKey !== undefined && typeof config.codecastIngestKey !== "string") {
     throw new AnalyticsConfigError("codecastIngestKey must be a string");
+  }
+  const rate = config.sessionReplaySampleRate;
+  if (rate !== undefined && !(typeof rate === "number" && rate >= 0 && rate <= 1)) {
+    throw new AnalyticsConfigError(`sessionReplaySampleRate must be a number from 0 to 1, got ${JSON.stringify(rate)}`);
   }
   const host = config.posthogHost || DEFAULT_POSTHOG_HOST;
   if (!/^https?:\/\//.test(host)) {

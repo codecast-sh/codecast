@@ -78,13 +78,24 @@ export function pendingEventsBlock(events: readonly PendingTriggerEvent[] | null
   ].join("\n");
 }
 
+/**
+ * What the trigger's precheck reported when it woke this run (a `changes`
+ * gate's new output, a `state` gate's message). The command's output can
+ * carry text from anywhere it read (a PR title, a log line), so it is fenced
+ * as data. Null when it said nothing.
+ */
+export function precheckMessageBlock(message: string | null | undefined): string | null {
+  if (!message?.trim()) return null;
+  return `What this trigger's precheck reported when it woke this run:\n${fenceForeignText(message, "the trigger's precheck output")}`;
+}
+
 /** The frame a trigger run arrives in: the trigger's prompt with its lifecycle,
  *  and what the writer read at firing (the role's card, the session that
  *  waits, a change that lasted, whether the session is stashed). Pure, so the
  *  server's one writer (agentTasks.triggerFrameFor) and the eval harness's
  *  role-wake fixtures render the same bytes. */
 export function triggerRunFrame(
-  task: { _id: string; short_id?: string; title?: string; prompt?: string | null; role_id?: string; event_filter?: { event_type?: string }; requested_run_focus?: string; role_focus?: string | null; pending_events?: readonly PendingTriggerEvent[]; hosted_home?: boolean },
+  task: { _id: string; short_id?: string; title?: string; prompt?: string | null; role_id?: string; event_filter?: { event_type?: string }; requested_run_focus?: string; role_focus?: string | null; pending_events?: readonly PendingTriggerEvent[]; precheck_message?: string; hosted_home?: boolean },
   read: { role: RoleCard | null; waiting?: WaitingSession | null; change?: AreaChange; stashed: boolean },
 ): string {
   // A hosted routine (hosted_home) wakes the hosted assistant, which has no
@@ -97,7 +108,7 @@ export function triggerRunFrame(
   const focus = orgReviewFocusOf(task.requested_run_focus);
   // A role's own focus for its check (org-staffing.md S38) follows the
   // routine's prompt: the prompt is the product's, the focus is the role's.
-  const body = [focus?.prompt, task.prompt, roleFocusBlock(task.role_focus), pendingEventsBlock(task.pending_events), triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (read.stashed ? STASHED_RUN_NOTE : "");
+  const body = [focus?.prompt, task.prompt, roleFocusBlock(task.role_focus), pendingEventsBlock(task.pending_events), precheckMessageBlock(task.precheck_message), triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (read.stashed ? STASHED_RUN_NOTE : "");
   return formatScheduledTask({
     title: task.title || "",
     task_id: String(task._id),

@@ -4,6 +4,8 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SettingsRedirect } from "@/components/settings/SettingsRedirect";
 import { SETTINGS_PAGES_MOVED, settingsSectionForPath } from "@/lib/settingsSections";
+import { isSetupFlowPath } from "@/lib/setupFlow";
+import { SetupScreen } from "@/components/onboarding/SetupScreen";
 
 /**
  * Settings render in a modal (components/settings/SettingsModal.tsx), not as
@@ -22,6 +24,15 @@ export function SettingsLayout() {
   if (hit) return <SettingsRedirect hit={hit} />;
   const moved = SETTINGS_PAGES_MOVED[location.pathname.replace(/\/+$/, "")];
   if (moved) return <Navigate to={moved + location.search} replace />;
+
+  // Create team and Join team are the setup flow: full screen, like /start.
+  if (isSetupFlowPath(location.pathname)) {
+    return (
+      <SetupScreen>
+        <Outlet />
+      </SetupScreen>
+    );
+  }
 
   return (
     <AuthGuard>

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { HEALTH_CAPS, computeOrgHealth, roleActivity } from "./orgHealth";
+import { HEALTH_CAPS, computeOrgHealth, readTurnsSince, roleActivity } from "./orgHealth";
 import { collectOrgSessions } from "./org";
 import { reachedSentence } from "@codecast/shared/contracts/orgAreas";
 
@@ -489,5 +489,48 @@ describe("company.watched_without_lead (org-roles-run-work.md R4)", () => {
   test("the stock fixture, one role per project, flags nothing", async () => {
     const r = await computeOrgHealth(ctxOf(fixtures()), ME as any, TEAM, NOW);
     expect(r.company.watched_without_lead).toEqual([]);
+  });
+});
+
+describe("readTurnsSince counts inbound turns, not tool results", () => {
+  // A browser-heavy routine turn: one wake, then dozens of tool calls whose
+  // results the CLI stores as user-role rows. Plus the other user rows that
+  // are not a wake: a compaction summary, local command output, a task
+  // notification.
+  const thread = (flagged: boolean) => {
+    const prompt = (id: string, at: number, content: string) => ({ _id: id, conversation_id: S_GROWTH, role: "user", content, timestamp: at, ...(flagged ? { nav_prompt: true } : {}) });
+    const rows: any[] = [
+      prompt("w1", NOW - H, "<session-message from=\"billing\">look at the invoices</session-message>"),
+      prompt("w2", NOW - 2 * H, "check the launch metrics"),
+      prompt("w3", NOW - D, "routine: weekly growth review"),
+      prompt("w_old", NOW - 10 * D, "outside the window"),
+      { _id: "compact", conversation_id: S_GROWTH, role: "user", content: "This session is being continued from a previous conversation that ran out of context. Summary: ...", timestamp: NOW - 3 * H },
+      { _id: "local", conversation_id: S_GROWTH, role: "user", content: "<local-command-stdout>ok</local-command-stdout>", timestamp: NOW - 3 * H - 1 },
+      { _id: "notice", conversation_id: S_GROWTH, role: "user", content: "<task-notification>done</task-notification>", timestamp: NOW - 3 * H - 2 },
+    ];
+    for (let i = 0; i < 60; i++) rows.push({ _id: `tr${i}`, conversation_id: S_GROWTH, role: "user", content: "", tool_results: [{ tool_use_id: `t${i}`, content: "x".repeat(100) }], timestamp: NOW - H + 1 + i });
+    return rows;
+  };
+  const growthTurns = async (flagged: boolean) => {
+    const db = fixtures({ messages: thread(flagged) });
+    if (flagged) await db.patch(S_GROWTH as any, { nav_prompts_indexed_at: NOW - 30 * D });
+    const role = await db.get(GROWTH as any);
+    return { db, turns: await readTurnsSince(ctxOf(db), role, NOW - 7 * D) };
+  };
+
+  test("an unflagged thread is walked with the prompt predicate", async () => {
+    const { turns } = await growthTurns(false);
+    expect(turns).toEqual([NOW - H, NOW - 2 * H, NOW - D]);
+  });
+
+  test("a flagged thread reads the prompt index", async () => {
+    const { turns } = await growthTurns(true);
+    expect(turns).toEqual([NOW - H, NOW - 2 * H, NOW - D]);
+  });
+
+  test("the role's load reads three wakes, not sixty-three", async () => {
+    const { db } = await growthTurns(false);
+    const a = await roleActivity(ctxOf(db), ME as any, await db.get(GROWTH as any), NOW, { wholeWorkspaceLatest: null });
+    expect(a.wakes_7d.total).toBe(3);
   });
 });

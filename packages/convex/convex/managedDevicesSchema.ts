@@ -11,6 +11,8 @@ export const teamPolicyValidator = v.object({
   browser_control_disabled: v.optional(v.boolean()),
   computer_control_disabled: v.optional(v.boolean()),
   cloud_hosts_disabled: v.optional(v.boolean()),
+  regulated_data: v.optional(v.boolean()),
+  slack_baa_confirmed: v.optional(v.boolean()),
   auto_update: v.optional(v.union(v.literal("on"), v.literal("off"))),
   excluded_paths: v.optional(v.array(v.string())),
 });

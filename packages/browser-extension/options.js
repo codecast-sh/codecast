@@ -1,7 +1,17 @@
 const $ = (id) => document.getElementById(id);
 
-async function save(token, port) {
-  await chrome.storage.local.set({ bridge: { token, port } });
+/** How long a code from setup stays good; the host keeps the same bound (pairing.ts PAIRING_CODE_TTL_MS). */
+const CODE_TTL_MS = 10 * 60_000;
+
+/**
+ * Pair with what the terminal handed over: a one-time code (what setup sends
+ * now), or the shared token an older cast still sends. A code replaces any
+ * key this profile held; the worker exchanges it for a new one.
+ */
+async function save(secret, port) {
+  const code = normalizePairingCode(secret);
+  const bridge = code ? { port, code, codeExpiresAt: Date.now() + CODE_TTL_MS } : { token: secret, port };
+  await chrome.storage.local.set({ bridge });
   await chrome.runtime.sendMessage({ op: "reconnect" });
   setTimeout(refreshStatus, 600);
 }
@@ -66,12 +76,13 @@ async function pairFromFragment() {
     if (tab?.id !== undefined) await chrome.tabs.remove(tab.id).catch(() => {});
     return false;
   }
-  const token = (frag.get("token") || "").trim();
+  const code = normalizePairingCode(frag.get("code") || "");
+  const token = code || (frag.get("token") || "").trim();
   if (!token) return false;
   const port = parseInt(frag.get("port") || "", 10) || CAST_DEFAULT_PORT;
   history.replaceState(null, "", location.pathname);
   const { bridge } = await chrome.storage.local.get("bridge");
-  if (bridge && bridge.token === token && bridge.port === port) {
+  if (!code && bridge && bridge.token === token && bridge.port === port) {
     // Shown until the worker reports; refreshStatus then owns the block.
     renderBridgeStatus($("status"), { state: "connecting", attached: [] }, port);
     $("status").querySelector("[data-title]").textContent = "Pairing from the terminal";
@@ -82,9 +93,9 @@ async function pairFromFragment() {
   const root = $("status");
   root.classList.remove("state-ok", "state-wait", "state-bad", "state-none");
   root.classList.add("state-wait");
-  root.querySelector("[data-title]").textContent = "Pair with cast?";
+  root.querySelector("[data-title]").textContent = code ? `Pair with cast? Code ${code.slice(0, 4)}-${code.slice(4)}` : "Pair with cast?";
   root.querySelector("[data-text]").textContent =
-    `A terminal on this machine asked to pair this extension with the bridge host on port ${port}. ` +
+    `A terminal on this machine asked to pair this Chrome profile with the bridge host on port ${port}. ` +
     "Continue only if you just ran cast browser extension setup.";
   $("reconnect").hidden = true;
   $("pair").hidden = false;
@@ -104,7 +115,8 @@ $("pair").addEventListener("click", async () => {
 
 async function load() {
   const { bridge } = await chrome.storage.local.get("bridge");
-  $("token").value = (bridge && bridge.token) || "";
+  // A key or token is never shown back; a code still waiting to be used is.
+  $("token").value = (bridge && bridge.code) || "";
   $("port").value = (bridge && bridge.port) || CAST_DEFAULT_PORT;
 }
 
@@ -159,3 +171,14 @@ $("version").textContent = `v${chrome.runtime.getManifest().version}`;
 
 pairFromFragment().then(load).then(refreshStatus);
 setInterval(refreshStatus, 2000);
+
+// Where agent tabs open (background.js separateWindowWanted). New tabs only.
+(async () => {
+  const { agentWindow } = await chrome.storage.local.get("agentWindow");
+  for (const input of document.querySelectorAll('input[name="agentWindow"]')) {
+    input.checked = input.value === (agentWindow === "separate" ? "separate" : "current");
+    input.addEventListener("change", () => {
+      if (input.checked) chrome.storage.local.set({ agentWindow: input.value });
+    });
+  }
+})();

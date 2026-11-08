@@ -125,14 +125,17 @@ describe("terminal color reports", () => {
       }
       expect(await run("show-options", "-p", "-t", client.pane!)).toBe(paneStyles);
       expect(await askTerminal()).toBe("\x1b]10;rgb:0707/3636/4242\x07\x1b]11;rgb:2121/2121/2121\x07");
-      for (const readOnly of [true, false]) {
+      for (const sizing of [false, true]) {
         const viewer = new TmuxControlClient(
-          { kind: "attach", target: name, readOnly },
+          { kind: "attach", target: name },
           { onOutput() {}, onExit() {} },
         );
         try {
           const start = viewer.start(100, 24, { foreground: "#ffffff", background: "#000000" });
-          if (supportsReports) await start;
+          if (supportsReports) {
+            await start;
+            await viewer.setSizing(sizing);
+          }
           else await expect(start).rejects.toThrow("requires tmux 3.5 or newer");
           expect(await run("show-options", "-p", "-t", client.pane!)).toBe(paneStyles);
         } finally {

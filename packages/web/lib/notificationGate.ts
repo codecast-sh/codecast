@@ -31,10 +31,16 @@ export function bannerRank(kind?: string): number {
 // paths must match and must name something: a list page (/inbox, /tasks) is not
 // the banner's target, and neither is a banner with no route.
 export function showsBannerEntity(active: string | null | undefined, route?: string): boolean {
-  if (!active || !route) return false;
-  const strip = (p: string) => p.split(/[?#]/)[0].replace(/\/+$/, "");
-  const target = strip(route);
-  return strip(active) === target && target.split("/").filter(Boolean).length >= 2;
+  const target = bannerEntity(route);
+  return !!target && bannerEntity(active) === target;
+}
+
+/** The thing a path names, the way the rule above compares it: the path
+ *  without query, fragment or trailing slash. Null for a list page or no path. */
+export function bannerEntity(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const stripped = path.split(/[?#]/)[0].replace(/\/+$/, "");
+  return stripped.split("/").filter(Boolean).length >= 2 ? stripped : null;
 }
 
 export type BannerRequest = {

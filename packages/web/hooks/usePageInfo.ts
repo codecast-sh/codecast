@@ -26,6 +26,8 @@ export type PageInfo = {
   /** The gate tokens the serve route reads, for a gated page this viewer may open. */
   k?: string | null;
   e?: string | null;
+  /** The member token of a team-gated page (regulated data), for its team's signed-in members. */
+  m?: string | null;
 };
 
 export type PageRef = { slug: string; decision?: string | null };
@@ -58,10 +60,10 @@ export function usePageInfoRow(slug: string): PageInfo | undefined {
   return (useInboxStore.getState() as any).pageEmbeds?.[slug];
 }
 
-/** The "&k=..&e=.." a frame or pane address needs to pass a page's gates; empty for an open page. */
+/** The "&m=..&k=..&e=.." a frame or pane address needs to pass a page's gates; empty for an open page. */
 export function pageGateKeys(info: PageInfo | undefined): string {
   if (!info?.gated) return "";
-  return `${info.k ? `&k=${info.k}` : ""}${info.e ? `&e=${info.e}` : ""}`;
+  return `${info.m ? `&m=${info.m}` : ""}${info.k ? `&k=${info.k}` : ""}${info.e ? `&e=${info.e}` : ""}`;
 }
 
 /** A page's info, fed and read: the row paints at once when this viewer has seen the page before. */

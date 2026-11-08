@@ -1,7 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
-import { initAnalytics, reportRecoverableRenderError, setupErrorToasts } from "../lib/analytics";
+import { initAnalytics, reportRecoverableRenderError, setRegulatedData, setupErrorToasts } from "../lib/analytics";
+import { watchRegulatedData } from "../lib/regulatedData";
 import { initGoogleAds } from "../lib/googleAds";
 import { armChunkReloadGuardReset, installStaleChunkReload } from "../lib/chunkReloadGuard";
 import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
@@ -90,6 +91,9 @@ const idle: (cb: () => void) => void =
     ? (cb) => (window as any).requestIdleCallback(cb, { timeout: 15_000 })
     : (cb) => setTimeout(cb, 1);
 
+// Not deferred: a team holding regulated health data must quiet the analytics
+// vendors before anything is sent (lib/analytics.ts setRegulatedData).
+watchRegulatedData(setRegulatedData);
 idle(() => void initAnalytics().catch(() => {}));
 
 // NOT deferred like the line above. Google reads the ad click id off the

@@ -4,7 +4,7 @@ import {
   setUser as setSentryUser,
 } from "@sentry/react";
 import posthog from "posthog-js/dist/module.slim.js";
-import { AnalyticsExtensions } from "posthog-js/dist/extension-bundles.js";
+import { AnalyticsExtensions, SessionReplayExtensions } from "posthog-js/dist/extension-bundles.js";
 import {
   createPreInitBuffer,
   resolveConfig,
@@ -194,14 +194,16 @@ export function initAnalytics(input: AnalyticsConfig) {
   // written, no autocapture listeners. Sentry stays up — a crash report is not
   // the behavioural tracking DO_NOT_TRACK asks us to stop.
   if (config.posthogKey && !optedOut) {
+    const replayRate = isDev ? 0 : (config.sessionReplaySampleRate ?? 0);
     posthog.init(config.posthogKey, {
       api_host: config.posthogHost,
       autocapture: true,
       capture_pageview: "history_change",
       capture_pageleave: true,
       persistence: "localStorage",
-      __extensionClasses: AnalyticsExtensions,
-      disable_session_recording: true,
+      __extensionClasses: replayRate > 0 ? { ...AnalyticsExtensions, ...SessionReplayExtensions } : AnalyticsExtensions,
+      disable_session_recording: replayRate === 0,
+      ...(replayRate > 0 ? { session_recording: { sampleRate: replayRate } } : {}),
       capture_dead_clicks: false,
       // Pageviews, pageleaves and autocapture all stamp the page's URL, its
       // referrer and the person's first URL; an app whose links are keys

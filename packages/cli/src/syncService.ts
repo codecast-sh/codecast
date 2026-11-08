@@ -1,4 +1,6 @@
 import { ConvexHttpClient, ConvexClient } from "convex/browser";
+import type { PermissionSource } from "./permissionHandler.js";
+import { boundedRuleRequest, type PermissionRuleRequest } from "@codecast/shared/contracts/permissionRules";
 import { recoveringWebSocket } from "@codecast/shared/network";
 import { readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
@@ -12,6 +14,7 @@ import { isManagedExcludedPath, POLICY_EXCLUDED_SESSION } from "./config/managed
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
 import type { OpenTaskReport, AgentStatus, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
 import { argumentValidationProblem } from "@codecast/shared/contracts";
+import type { DeliveryEchoLedger } from "./deliveryEchoLedger.js";
 import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
 import { filesForWire, type SyncFile } from "./userFiles.js";
 import { callFrameAtPath, referenceCallFrames } from "./callFrameRefs.js";
@@ -389,6 +392,13 @@ export interface CreateConversationParams {
   fork?: { from: string; atUuid: string; copied: number; cutoff?: number };
 }
 
+const ECHO_IDS_RECHECK_MS = 10 * 60_000;
+
+function withoutDeliveryIds<T extends { delivery_ids?: unknown }>(message: T): Omit<T, "delivery_ids"> {
+  const { delivery_ids: _ids, ...rest } = message;
+  return rest;
+}
+
 export class SyncService {
   /** Stores the snapshot; the answer names the sessions a person put at background priority on this machine. */
   async reportMachineResources(snapshot: import("@codecast/shared/contracts").MachineResourceSnapshot): Promise<{ background_sessions?: string[]; unattended_sessions?: string[] } | undefined> {
@@ -438,6 +448,18 @@ export class SyncService {
   // permanent "sync stalled". Different conversations write different docs and stay
   // fully parallel; only same-conversation writes are chained.
   private conversationWriteChains = new Map<string, Promise<unknown>>();
+  // The daemon's delivery echo ledger (deliveryEchoLedger.ts). Installed by the
+  // daemon only: with it, every user turn this service uploads carries the ids
+  // of the deliveries it echoes, and the batch tells the server so.
+  private deliveryEchoes: Pick<DeliveryEchoLedger, "stamp"> | null = null;
+  // Set when the server refused the fields: it is older than this CLI and still
+  // pairs echoes itself, so the ids are left off rather than the batch. Asked
+  // again after a while, since the deployment catches up without a restart.
+  private echoIdsRefusedAt: number | null = null;
+
+  setDeliveryEchoes(ledger: Pick<DeliveryEchoLedger, "stamp"> | null): void {
+    this.deliveryEchoes = ledger;
+  }
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl, {
@@ -1381,6 +1403,8 @@ export class SyncService {
       model?: string;
     usage?: import("./parser.js").ClaudeUsage;
     apiMessageId?: string;
+    /** Set by the ledger stamp below; a caller never passes it. */
+    deliveryIds?: string[];
     }>;
     reconcileRemoteExisting?: boolean;
   }, options?: { onBatchAccepted?: (inputIndexes: readonly number[]) => void; beforeBatch?: () => void }): Promise<{ inserted: number; ids: string[] }> {
@@ -1389,6 +1413,8 @@ export class SyncService {
     if (params.messages.length === 0) {
       return { inserted: 0, ids: [] };
     }
+    const echoes = this.deliveryEchoes;
+    if (echoes) params = { ...params, messages: echoes.stamp(params.conversationId, params.messages) };
     await this.rescueLocalImageLinks(params.messages);
     await this.offloadImages(params.messages);
     await this.offloadFiles(params.messages);
@@ -1460,6 +1486,7 @@ export class SyncService {
         timestamp: msg.timestamp,
         usage: msg.usage,
         api_message_id: msg.apiMessageId,
+        ...(msg.deliveryIds?.length ? { delivery_ids: msg.deliveryIds } : {}),
       });
       preparedIndexes?.set(preparedMessages[preparedMessages.length - 1], inputIndex);
     }
@@ -1500,18 +1527,30 @@ export class SyncService {
         await this.throttle();
         await this.guarded(async () => {
           beforeBatch?.();
-          const result = await withTimeout(
+          const send = (withEchoIds: boolean) => withTimeout(
             this.mutate(
               "messages:addMessages" as any,
               {
                 conversation_id: params.conversationId,
-                messages: batch,
+                messages: withEchoIds ? batch : batch.map(withoutDeliveryIds),
                 api_token: this.apiToken,
+                ...(withEchoIds ? { echo_ids: true } : {}),
               }
             ),
             ADD_MESSAGES_BATCH_TIMEOUT_MS,
             `addMessages batch (${batch.length} msgs)`
           );
+          let result: unknown;
+          if (echoes && (this.echoIdsRefusedAt === null || Date.now() - this.echoIdsRefusedAt > ECHO_IDS_RECHECK_MS)) {
+            try {
+              result = await send(true);
+              this.echoIdsRefusedAt = null;
+            } catch (err) {
+              if (!/echo_ids|delivery_ids/.test(argumentValidationProblem(err) ?? "")) throw err;
+              this.echoIdsRefusedAt = Date.now();
+              result = await send(false);
+            }
+          } else result = await send(false);
           if (onBatchAccepted) onBatchAccepted(batch.map(message => preparedIndexes!.get(message)!));
           const typed = result as { inserted: number; ids: string[] };
           totalInserted += typed.inserted;
@@ -1665,15 +1704,25 @@ export class SyncService {
   // silently stranded conversations on their spawn-time stub id, so every
   // session-bound `cast` write from the agent failed "Conversation not found"
   // while message sync (keyed by conversation _id) looked perfectly healthy.
-  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string): Promise<void> {
-    await this.mutate("conversations:updateSessionId" as any, {
+  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string, notARepo?: boolean): Promise<void> {
+    const base = {
       conversation_id: conversationId,
       session_id: sessionId,
       project_path: projectPath,
       git_root: gitRoot,
       git_remote_url: gitRemoteUrl,
       api_token: this.apiToken,
-    });
+    };
+    const bind = (args: Record<string, unknown>) => this.mutate("conversations:updateSessionId" as any, args);
+    if (!notARepo) return void (await bind(base));
+    try {
+      await bind({ ...base, not_a_repo: true });
+    } catch (err) {
+      // A server older than this CLI refuses the field and the whole call; the
+      // binding matters more than clearing a guessed git_root.
+      if (!argumentValidationProblem(err)) throw err;
+      await bind(base);
+    }
   }
 
   /** Owner device of a conversation (single-owner guard). null if unknown/unowned. */
@@ -1846,16 +1895,24 @@ export class SyncService {
   }
 
   /** Resolves undefined when the server could not be asked (the caller may retry), else whether another live device owns the session. */
-  async registerManagedSession(sessionId: string, pid: number, tmuxSession?: string, conversationId?: string): Promise<{ notOwner?: boolean; owner?: string } | undefined> {
+  async registerManagedSession(sessionId: string, pid: number, tmuxSession?: string, conversationId?: string, backend?: "sdk"): Promise<{ notOwner?: boolean; owner?: string } | undefined> {
     try {
-      const res = await this.mutate("managedSessions:registerManagedSession" as any, {
+      const args = {
         session_id: sessionId,
         pid,
         tmux_session: tmuxSession,
         conversation_id: conversationId,
         api_token: this.apiToken,
         device_id: deviceId(),
-      });
+      };
+      // The backend is enrichment: a server deployed before it knew the field rejects the whole
+      // call (closed validator), so it registers bare there.
+      const res = backend
+        ? await this.mutate("managedSessions:registerManagedSession" as any, { ...args, backend }).catch((err) => {
+          if (!/backend/.test(String(err))) throw err;
+          return this.mutate("managedSessions:registerManagedSession" as any, args);
+        })
+        : await this.mutate("managedSessions:registerManagedSession" as any, args);
       // Single-owner invariant: another live device owns this session → caller backs off.
       if (res && typeof res === "object" && (res as any).notOwner) {
         return { notOwner: true, owner: (res as any).owner };
@@ -1957,37 +2014,6 @@ export class SyncService {
     } catch (error) {
       if (error instanceof AuthExpiredError) throw error;
       return null;
-    }
-  }
-
-  async ackInjectedMessages(
-    conversationId: string,
-    pastedMessageIds?: string[],
-    deliveryAcks?: Array<{
-      pendingMessageId: string;
-      transcriptMessageId: string;
-    }>,
-  ): Promise<void> {
-    try {
-      await this.guarded(() =>
-        this.mutate("pendingMessages:ackInjectedMessages" as any, {
-          conversation_id: conversationId,
-          api_token: this.apiToken,
-          device_id: deviceId(),
-          ...(pastedMessageIds ? { message_ids: pastedMessageIds } : {}),
-          ...(deliveryAcks?.length
-            ? {
-                delivery_acks: deliveryAcks.map((ack) => ({
-                  pending_message_id: ack.pendingMessageId,
-                  transcript_message_id: ack.transcriptMessageId,
-                })),
-              }
-            : {}),
-        })
-      );
-    } catch (error) {
-      if (error instanceof AuthExpiredError) throw error;
-      // Non-critical — don't let ack failures break the sync loop
     }
   }
 
@@ -2111,7 +2137,7 @@ export class SyncService {
   async recordTreeSnapshots(rows: Array<{
     conversation_id: string; sha: string; tree_sha: string; base_sha: string; prev_sha?: string; branch?: string;
     depth: number; changed_paths: string[]; changed_count: number; dirty: boolean; checkout_key: string;
-    source: "turn" | "sweep"; taken_at: number; turn_completed_at?: number; took_ms?: number; shared_sessions?: number;
+    source: "turn" | "sweep" | "prompt"; taken_at: number; turn_completed_at?: number; took_ms?: number; shared_sessions?: number;
   }>): Promise<{ written: number } | null> {
     if (!this.apiToken || !rows.length) return null;
     try {
@@ -2125,6 +2151,11 @@ export class SyncService {
   async reportMergeBack(args: { conversation_id: string; state: "merged" | "empty" | "conflict" | "failed"; files?: string[]; reason?: string }): Promise<void> {
     if (!this.apiToken) return;
     await this.mutate("subagentFleet:reportMergeBack", { api_token: this.apiToken, ...args });
+  }
+
+  async reportCommandRun(args: { decision_id: string; state: "running" | "done" | "failed"; exit_code?: number; output?: string }): Promise<void> {
+    if (!this.apiToken) return;
+    await this.mutate("sessionDecisions:reportCommandRun" as any, { api_token: this.apiToken, ...args });
   }
 
   async setSessionError(conversationId: string, error?: string, opts: { force?: boolean } = {}): Promise<void> {
@@ -2358,7 +2389,8 @@ export class SyncService {
     tool_name: string;
     arguments_preview: string;
     suggestions?: unknown[];
-  }): Promise<string> {
+    rule_request?: PermissionRuleRequest;
+  } & PermissionSource): Promise<string> {
     return this.guarded(async () => {
       const base = {
         conversation_id: params.conversation_id,
@@ -2368,16 +2400,39 @@ export class SyncService {
         api_token: this.apiToken,
       };
       const create = (args: Record<string, unknown>) => this.mutate("permissions:createPermissionRequest" as any, args);
-      if (!params.suggestions?.length) return (await create(base)) as string;
+      const extras = {
+        ...(params.suggestions?.length && { suggestions: params.suggestions }),
+        ...(params.subagent_type && { subagent_type: params.subagent_type }),
+        ...(params.subagent_conversation_id && { subagent_conversation_id: params.subagent_conversation_id }),
+        ...(params.safety_check && { safety_check: true }),
+        ...(params.intent && { intent: params.intent }),
+        ...(params.removals?.length && { removals: params.removals }),
+        ...(params.rule_request && { rule_request: boundedRuleRequest(params.rule_request) }),
+      };
+      if (Object.keys(extras).length === 0) return (await create(base)) as string;
       try {
-        return (await create({ ...base, suggestions: params.suggestions })) as string;
+        return (await create({ ...base, ...extras })) as string;
       } catch (err) {
-        // A server older than this CLI refuses the field and the whole call;
-        // the card still works without the "Always allow" rules.
+        // A server older than this CLI refuses the fields and the whole call;
+        // the card still works without the "Always allow" rules and the source.
         if (!argumentValidationProblem(err)) throw err;
         return (await create(base)) as string;
       }
     });
+  }
+
+  /** How codecast's rules settle a call before a card (permissionRules.check).
+   *  Throws when the server cannot answer, which the caller reads as "ask". */
+  async checkPermission(conversationId: string, request: PermissionRuleRequest): Promise<{
+    action: "allow" | "deny" | "ask";
+    reason?: "rule" | "unattended";
+    message?: string;
+  }> {
+    return this.guarded(async () => (await this.client.query("permissionRules:check" as any, {
+      conversation_id: conversationId,
+      request: boundedRuleRequest(request),
+      api_token: this.apiToken,
+    })) as any);
   }
 
   async cancelPermissionRequest(permissionId: string): Promise<boolean> {
@@ -2626,6 +2681,9 @@ export class SyncService {
     result: TriggerPrecheckResult,
     reason: string,
     source: TriggerFiringSource,
+    /** A `changes` or `state` precheck's state to keep; absent keeps the stored one. */
+    precheckState?: string,
+    precheckMode?: string,
   ): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
@@ -2642,9 +2700,29 @@ export class SyncService {
           output: result.output,
           reason,
           source,
+          ...(precheckState !== undefined ? { precheck_state: precheckState, precheck_mode: precheckMode } : {}),
         }
       );
       return ok as boolean;
+    } catch {
+      return false;
+    }
+  }
+
+  /** A `changes` or `state` precheck woke this firing: keep its state and
+   *  the message its run carries, before the run starts. */
+  async passTaskPrecheck(taskId: string, daemonId: string, gate: { command: string; mode: string }, state: string | undefined, message: string | undefined): Promise<boolean> {
+    if (!this.apiToken) return false;
+    try {
+      return (await this.mutate("agentTasks:passTaskPrecheck" as any, {
+        api_token: this.apiToken,
+        task_id: taskId,
+        daemon_id: daemonId,
+        command: gate.command,
+        precheck_mode: gate.mode,
+        ...(state !== undefined ? { precheck_state: state } : {}),
+        ...(message !== undefined ? { message } : {}),
+      })) as boolean;
     } catch {
       return false;
     }

@@ -97,6 +97,8 @@ function createsInForeground(window: string): boolean {
   if (!window.includes('"Target.createTarget"')) return false;
   // The bridge host SERVES the method to its clients; a case label is not a call.
   if (/case\s+"Target\.createTarget"/.test(window)) return false;
+  // Nor is a comparison: the guardrails test a client's method name against it.
+  if (/[!=]==\s*"Target\.createTarget"/.test(window)) return false;
   if (/background:\s*true/.test(window)) return false;
   return !BACKGROUND_PARAMS.some((p) => window.includes(`"Target.createTarget", ${p.expr}`));
 }

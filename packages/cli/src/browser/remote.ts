@@ -131,6 +131,32 @@ export function remoteExec(host: RemoteHost, command: string, timeoutMs = 30_000
 }
 
 /**
+ * remoteExec without blocking the event loop, for the daemon: stdout on exit
+ * 0, else an Error naming the exit and the tail of stderr. `input` is written
+ * to the remote command's stdin.
+ */
+export function remoteExecAsync(host: RemoteHost, command: string, opts: { input?: string; timeoutMs?: number } = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("ssh", [...sshArgs(host), `${host.user}@${host.address}`, command], { stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    child.stdout?.on("data", (d: Buffer) => { out += d; });
+    child.stderr?.on("data", (d: Buffer) => { err += d; });
+    const timeoutMs = opts.timeoutMs ?? 30_000;
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("exit", (code, signal) => {
+      clearTimeout(timer);
+      if (code === 0) return resolve(out.trim());
+      const tail = err.split("\n").map((l) => l.trim()).filter(Boolean).slice(-3).join(" | ");
+      reject(Object.assign(new Error(`ssh ${host.user}@${host.address}: ${signal ? `timed out after ${timeoutMs}ms` : `exit ${code}`}${tail ? ` — ${tail}` : ""}`), { code }));
+    });
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(opts.input ?? "");
+  });
+}
+
+/**
  * Start something on the remote without waiting for it to finish.
  *
  * `spawn` rather than `execFileSync` because we genuinely do not want the exit

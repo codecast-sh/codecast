@@ -19,6 +19,7 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { requireRole, resolveRoleRef, rolesInBoundary, userCanAccessRole } from "./lib/orgAccess";
 import { callModelMetered, modelCost } from "./lib/anthropic";
+import type { VendorGate } from "./lib/vendorGuard";
 import { roleIconValidator } from "./lib/roleIconValidator";
 import { ICON_MODEL, generateRoleIcon, type Ask, type IconBrief } from "./lib/roleIconGenerator";
 import {
@@ -228,7 +229,7 @@ export const saveGenerated = internalMutation({
 export type GeneratedIcon = { icon: RoleIcon; svg: string; concept: string; rationale: string; preview_url: string | null; cost_usd: number; calls: number };
 
 /** The model call the pipeline asks for, on the deployment's key; a sheet goes up to storage so the judge can read it by url. */
-export function deploymentAsk(ctx: any, scratch: Id<"_storage">[]): Ask {
+export function deploymentAsk(ctx: any, scratch: Id<"_storage">[], gate: VendorGate): Ask {
   return async (req) => {
     let images: Array<{ label: string; url: string }> | undefined;
     if (req.image) {
@@ -237,7 +238,7 @@ export function deploymentAsk(ctx: any, scratch: Id<"_storage">[]): Ask {
       const url = await ctx.storage.getUrl(id);
       if (url) images = [{ label: "Contact sheet", url }];
     }
-    const r = await callModelMetered({ model: ICON_MODEL, system: req.system, prompt: req.prompt, max_tokens: req.max_tokens, images, label: req.label, timeout_ms: req.timeout_ms });
+    const r = await callModelMetered({ model: ICON_MODEL, system: req.system, prompt: req.prompt, max_tokens: req.max_tokens, images, label: req.label, timeout_ms: req.timeout_ms, gate });
     return { text: r.reply?.text ?? null, usage: r.usage, error: r.error };
   };
 }
@@ -249,7 +250,9 @@ async function runGeneration(ctx: any, brief: IconBrief, only_if_missing: boolea
   // Everything stored here is deleted at the end unless a save keeps it.
   const scratch: Id<"_storage">[] = [];
   try {
-    const result = await generateRoleIcon(brief, deploymentAsk(ctx, scratch));
+    // A role's title and charter are its team's words (lib/vendorGuard).
+    const gate = { ctx, scope: { row: { table: "org_roles", id: brief.role_id } } };
+    const result = await generateRoleIcon(brief, deploymentAsk(ctx, scratch, gate));
     const cost_usd = modelCost(ICON_MODEL, result.usage);
     console.log(`role icon for @${brief.handle}: ${result.ok ? `"${result.icon.concept}"` : "none"} in ${result.rounds.length} round(s), ${result.calls} calls, $${cost_usd.toFixed(3)}`);
     if (!result.ok) throw new Error(`No icon for @${brief.handle}: ${result.reason}`);

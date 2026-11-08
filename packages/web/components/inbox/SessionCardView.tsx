@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { SessionWorkProject } from "../projects/SessionWorkProject";
 import { SessionTaskChip } from "../work/SessionTaskChip";
 import { Pin, Star, Clock, EyeOff } from "lucide-react";
 import Link from "next/link";
@@ -90,6 +91,8 @@ export type SessionCardLiveness = {
 
 export type SessionCardViewProps = {
   session: InboxSession;
+  /** The project it works in (projects/SessionWorkProject workProjectSig). */
+  workProject?: string;
   isActive: boolean;
   isParentActive?: boolean;
   /** Ticked in the inbox multi-selection (lib/inboxSelection). */
@@ -226,6 +229,7 @@ export function SessionCardView({
   onOpenParent,
   onPaneDragStart,
   onDropFiles,
+  workProject,
 }: SessionCardViewProps) {
   // Idempotent, so a container that already applied it (for its own clock
   // signature) hands the same row through.
@@ -758,6 +762,7 @@ export function SessionCardView({
             onFilterProject={onFilterProject && ((e) => onFilterProject(session, e))}
             onFilterLabel={onFilterLabel && ((e) => onFilterLabel(session, e))}
           />
+          {workProject && <SessionWorkProject sig={workProject} className="flex-shrink" />}
           {session.is_anchor && anchorIdentity && <><MetaSep /><AnchorScopePill anchor={anchorIdentity} quiet className="flex-shrink-0" /></>}
           {/* A role's sessions are the role's (S23.3): never rows under its
               card, one count that opens the role's page. Silent at zero. */}
