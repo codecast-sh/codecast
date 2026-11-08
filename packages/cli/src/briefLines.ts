@@ -189,3 +189,15 @@ export function briefTextLines(brief: any, now: number): string[] {
     ...playbookGuideLines(brief.narrative).map((line, i) => `${i === 0 ? "\n" : ""}  ${c.dim}${line}${c.reset}`),
   ];
 }
+
+/** `cast brief edit --old/--new`: the narrative with `old` replaced, the first
+ *  occurrence or every one with `all`. `old` must appear, and appear once
+ *  unless `all`, so a patch never lands somewhere the role did not mean. */
+export function patchBriefNarrative(narrative: string, old: string, replacement: string, all = false): { content: string; replaced: number } | { error: string } {
+  if (!old) return { error: "--old is empty: pass the exact text to replace" };
+  const parts = narrative.split(old);
+  const found = parts.length - 1;
+  if (found === 0) return { error: `--old is not in the brief. Print the narrative as stored with: cast brief --narrative` };
+  if (found > 1 && !all) return { error: `--old appears ${found} times in the brief: add surrounding text so it matches once, or pass --all to replace every one` };
+  return { content: all ? parts.join(replacement) : parts[0] + replacement + parts.slice(1).join(old), replaced: all ? found : 1 };
+}

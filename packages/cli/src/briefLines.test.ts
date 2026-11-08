@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { authorityLine, briefCharterLines, briefHandLine, briefInitiativeLines, briefProjectNumberLines, briefServesNumbers, standingSessionLine, wakeLine } from "./briefLines";
+import { authorityLine, briefCharterLines, briefHandLine, briefInitiativeLines, briefProjectNumberLines, briefServesNumbers, standingSessionLine, wakeLine, patchBriefNarrative } from "./briefLines";
 import { stripAnsi } from "@platform/cli-kit/render";
 
 // The brief's hand line reads the server's BriefHand shape: `state`, not
@@ -89,5 +89,17 @@ describe("an area read by numbers", () => {
     expect(briefServesNumbers({ initiatives: [{ metrics: [] }], project_numbers: [] })).toBe(false);
     expect(briefServesNumbers({ initiatives: [{ metrics: ["x"] }] })).toBe(true);
     expect(briefServesNumbers({ project_numbers: [{ metrics: ["x"] }] })).toBe(true);
+  });
+});
+
+describe("patchBriefNarrative", () => {
+  const brief = "Docs: steady\n\n## Rules learned\n- Rule one (2026-10-01)\n- Rule two (2026-10-02)\n";
+  test("replaces one exact match and leaves the rest as stored", () => {
+    expect(patchBriefNarrative(brief, "- Rule one (2026-10-01)\n", "")).toEqual({ content: "Docs: steady\n\n## Rules learned\n- Rule two (2026-10-02)\n", replaced: 1 });
+  });
+  test("refuses text that is absent, or repeated without --all", () => {
+    expect(patchBriefNarrative(brief, "Rule three", "x")).toMatchObject({ error: expect.stringContaining("cast brief --narrative") });
+    expect(patchBriefNarrative(brief, "- Rule", "- Law")).toMatchObject({ error: expect.stringContaining("2 times") });
+    expect(patchBriefNarrative(brief, "- Rule", "- Law", true)).toMatchObject({ replaced: 2, content: expect.stringContaining("- Law two") });
   });
 });

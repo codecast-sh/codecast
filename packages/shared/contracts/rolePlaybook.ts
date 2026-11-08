@@ -193,11 +193,14 @@ export function briefBudget(narrative: string | null | undefined): BriefBudget {
   const chars = (narrative ?? "").trim().length;
   return { chars, budget: BRIEF_BUDGET_CHARS, over: chars > BRIEF_BUDGET_CHARS, near: chars > BRIEF_BUDGET_CHARS * BUDGET_NEAR };
 }
-const kb = (chars: number) => `${(chars / 1000).toFixed(1)} KB`;
-export const briefBudgetWords = (b: BriefBudget): string => `${kb(b.chars)} of ${kb(b.budget)}`;
+const count = (n: number) => n.toLocaleString("en-US");
+/** "12,031 of 12,000 characters, 31 over": exact, so a role trimming its
+ *  brief knows how much to cut. */
+export const briefBudgetWords = (b: BriefBudget): string =>
+  `${count(b.chars)} of ${count(b.budget)} characters${b.over ? `, ${count(b.chars - b.budget)} over` : ""}`;
 /** What a role is told when its save is over the budget (orgRoles.performBriefEdit). */
 export const briefOverBudgetMessage = (b: BriefBudget): string =>
-  `The brief is ${briefBudgetWords(b)}: over its budget, so it was not saved. You read it at every wake, so condense it and save again: merge entries that say one thing, drop what is closed or no longer true, and thin old metric readings down to the milestones. An entry you keep keeps its shape and its date.`;
+  `The brief is ${briefBudgetWords(b)}: over its budget, so it was not saved. You read it at every wake, so condense it and save again: merge entries that say one thing, drop what is closed or no longer true, and thin old metric readings down to the milestones. An entry you keep keeps its shape and its date. One change at a time: cast brief edit --old "<text>" --new "<text>" (an empty --new drops it).`;
 
 /** `cast brief`'s lines about the playbook: the shape of an entry in each
  *  section, so the format has one home and a condensed brief still parses,
@@ -207,7 +210,7 @@ export function playbookGuideLines(narrative: string | null | undefined): string
   return [
     `your playbook: what you have learned that your next run should not have to learn again, kept by you in this brief. A section is a list under its heading, one entry a line, and every entry keeps its date; leave out a section you have nothing for.`,
     ...PLAYBOOK_SECTIONS.map((s) => `  ## ${s.title}: ${s.shape}`),
-    ...(budget.near ? [`brief: ${briefBudgetWords(budget)}${budget.over ? ", over its budget" : ""}. You read all of it at every wake: condense it before you add to it, and keep the shapes above when you do.`] : []),
+    ...(budget.near ? [`brief: ${briefBudgetWords(budget)}${budget.over ? ": over its budget" : ""}. You read all of it at every wake: condense it before you add to it, and keep the shapes above when you do.`] : []),
   ];
 }
 

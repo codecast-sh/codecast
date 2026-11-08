@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BRIEF_BUDGET_CHARS, WAKE_TUNE, briefBudget, briefOverBudgetMessage, msToEvery, parsePlaybook, playbookCounts, playbookGuideLines, playbookIsEmpty, roleFocusBlock, threadOverdue, wakeTuneRefusal, wakeWords } from "./rolePlaybook";
+import { BRIEF_BUDGET_CHARS, WAKE_TUNE, briefBudget, briefBudgetWords, briefOverBudgetMessage, msToEvery, parsePlaybook, playbookCounts, playbookGuideLines, playbookIsEmpty, roleFocusBlock, threadOverdue, wakeTuneRefusal, wakeWords } from "./rolePlaybook";
 import { parseStandingSection } from "./briefStanding";
 import { orgEveryToMs } from "./orgProposal";
 
@@ -122,7 +122,8 @@ describe("the budget", () => {
     expect(briefBudget("x".repeat(BRIEF_BUDGET_CHARS * 0.8))).toMatchObject({ over: false, near: true });
     const over = briefBudget("x".repeat(BRIEF_BUDGET_CHARS + 1));
     expect(over.over).toBe(true);
-    expect(briefOverBudgetMessage(over)).toContain("12.0 KB of 12.0 KB");
+    expect(briefOverBudgetMessage(over)).toContain("12,001 of 12,000 characters, 1 over: over its budget");
+    expect(briefBudgetWords(briefBudget("x".repeat(9_500)))).toBe("9,500 of 12,000 characters");
   });
 
   test("cast brief prints the shape of every section, and how full the brief is once that matters", () => {
