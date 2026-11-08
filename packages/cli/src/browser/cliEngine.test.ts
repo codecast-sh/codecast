@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { carryLogins, lastMutatingIndex, translate, readEvalScript, loginRaisePlan, LOGIN_RAISE_COOLDOWN_MS } from "./cliEngine.js";
+import { carryLogins, castVoice, isUnattachableTab, lastMutatingIndex, normalizeTabArgs, parseShotArgs, parseViewportSize, translate, readEvalScript, loginRaisePlan, LOGIN_RAISE_COOLDOWN_MS } from "./cliEngine.js";
 import { parseEngineRefs, rankByVisibility, withOrdinals } from "./engineRefs.js";
 
 describe("carryLogins on the cloud host", () => {
@@ -270,5 +270,63 @@ describe("loginRaisePlan", () => {
   test("a pending sign-in inside the cooldown does not raise again", () => {
     expect(loginRaisePlan("accounts.google.com", now - 10_000, now)).toBe("cooldown");
     expect(loginRaisePlan("accounts.google.com", now - LOGIN_RAISE_COOLDOWN_MS + 1, now)).toBe("cooldown");
+  });
+});
+
+describe("tab ls and engine wording", () => {
+  test("`tab ls` lists and `tab rm` closes, instead of reading as a tab label", () => {
+    expect(normalizeTabArgs(["ls"])).toEqual(["list"]);
+    expect(normalizeTabArgs(["rm", "t2"])).toEqual(["close", "t2"]);
+    expect(translate("tab", ["ls"], null)).toEqual([{ args: ["tab", "list"] }]);
+    expect(normalizeTabArgs(["docs"])).toEqual(["docs"]);
+  });
+
+  test("engine messages name cast browser, never the engine binary", () => {
+    expect(castVoice("No tab with label `ls`; run `agent-browser tab`")).toBe("No tab with label `ls`; run `cast browser tab`");
+  });
+
+  test("Chrome refusing the debugger is recognised", () => {
+    expect(isUnattachableTab("✗ CDP error (Target.attachToTarget): Cannot attach to this target.")).toBe(true);
+    expect(isUnattachableTab("tab_gone")).toBe(false);
+  });
+});
+
+describe("parseShotArgs", () => {
+  const opts = (args: string[]) => {
+    const r = parseShotArgs(args);
+    if ("error" in r) throw new Error(r.error);
+    return r.opts;
+  };
+
+  test("the spellings agents reach for: -o, --out, --path, --full-page", () => {
+    expect(opts(["-o", "/tmp/a.png"]).out).toBe("/tmp/a.png");
+    expect(opts(["--out=/tmp/a.png"]).out).toBe("/tmp/a.png");
+    expect(opts(["--path", "a.png", "--full-page"])).toEqual({ out: "a.png", full: true });
+    expect(opts(["t1-1440.png", "-s", "#hero"])).toEqual({ out: "t1-1440.png", selector: "#hero" });
+  });
+
+  test("a flag shot does not have is refused, never handed to the engine as a selector", () => {
+    const r = parseShotArgs(["--viewport-only", "/tmp/a.png"]);
+    expect("error" in r && r.error).toBe("shot has no --viewport-only flag");
+  });
+
+  test("two paths are refused", () => {
+    expect("error" in parseShotArgs(["a.png", "--out", "b.png"])).toBe(true);
+    expect("error" in parseShotArgs(["a.png", "b.png"])).toBe(true);
+  });
+});
+
+describe("parseViewportSize", () => {
+  test("presets, WxH in its common spellings, and a bare width", () => {
+    expect(parseViewportSize("mobile")).toEqual({ width: 390, height: 844, preset: "mobile" });
+    expect(parseViewportSize("1440x900")).toEqual({ width: 1440, height: 900 });
+    expect(parseViewportSize("1440*900")).toEqual({ width: 1440, height: 900 });
+    expect(parseViewportSize("390")).toEqual({ width: 390, height: 844 });
+    expect(parseViewportSize("1100")).toEqual({ width: 1100, height: 900 });
+  });
+
+  test("anything else is not a size", () => {
+    expect(parseViewportSize("big")).toBeNull();
+    expect(parseViewportSize("1440x")).toBeNull();
   });
 });
