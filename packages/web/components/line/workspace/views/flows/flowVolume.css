@@ -17,7 +17,7 @@
 .fv [data-why="other"] { --why: var(--lw-rule); }
 .fv [data-why="here"] { --why: var(--lw-live); }
 .fv [data-why="waiting"] { --why: var(--lw-person); }
-.fv [data-why="queued"] { --why: var(--lw-script); }
+.fv [data-why="unstarted"] { --why: var(--lw-script); }
 .fv [data-why="held"] { --why: color-mix(in srgb, var(--lw-script) 45%, var(--lw-paper)); }
 .fv [data-why="watching"] { --why: var(--lw-ok); }
 
@@ -35,19 +35,23 @@
 
 .fv-track { position: relative; display: flex; align-items: flex-end; border-bottom: 1px solid var(--lw-rule); }
 .fv-bar { display: flex; flex-direction: column-reverse; width: 100%; height: calc(var(--f) * 100%); min-height: 0; border-radius: 4px 4px 0 0; overflow: hidden; }
-.fv-bar[data-signals] { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--lw-finding) 55%, var(--lw-paper)) 0 6px, color-mix(in srgb, var(--lw-finding) 35%, var(--lw-paper)) 6px 12px); }
+.fv-bar[data-signals] { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--lw-ink-3) 38%, var(--lw-paper)) 0 6px, color-mix(in srgb, var(--lw-ink-3) 20%, var(--lw-paper)) 6px 12px); }
 .fv-seg { flex: 1 1 0; min-height: 2px; min-width: 2px; border: 0; padding: 0; background: var(--why); }
 button.fv-seg { cursor: pointer; }
 button.fv-seg:hover { filter: brightness(1.12); }
 .fv-seg + .fv-seg { box-shadow: inset 0 -1px 0 var(--lw-paper); }
 
 .fv-drops { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; min-width: 0; }
-.fv-drop { display: inline-flex; align-items: center; gap: 5px; padding: 1px 5px; margin-left: -5px; border: 1px solid transparent; border-radius: 5px; background: none; font: inherit; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); white-space: nowrap; text-align: left; }
+.fv-drops > li { display: flex; min-width: 0; }
+.fv-drop { display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; min-width: 0; padding: 1px 5px; margin-left: -5px; border: 1px solid transparent; border-radius: 5px; background: none; font: inherit; font-size: var(--lw-fs-xs); line-height: 1.3; color: var(--lw-ink-2); text-align: left; }
 button.fv-drop { cursor: pointer; }
 button.fv-drop:hover { border-color: var(--lw-rule-2); }
 .fv-drop[aria-pressed="true"] { border-color: var(--lw-ink-3); background: var(--lw-card); }
-.fv-drop i { width: 8px; height: 8px; flex: none; border-radius: 2px; background: var(--why); }
+.fv-drop i { width: 8px; height: 8px; flex: none; align-self: center; border-radius: 2px; background: var(--why); }
 .fv-drop b { color: var(--lw-ink); font-weight: 650; }
+.fv-drop-w { min-width: 0; }
+/* A column on its own scale (signals, problems): the runs and everything after share one scale, set apart by a heavier rule. */
+.fv-col[data-step="runs"] { border-left: 2px solid var(--lw-rule); }
 .fv-src { display: flex; gap: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); min-width: 0; }
 .fv-src span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fv-src b { margin-left: auto; color: var(--lw-ink-2); font-weight: 600; }
