@@ -27,6 +27,7 @@ function fixture(writeSucceeded = true) {
     ...inference,
     createKeystrokeInference: (opts: inference.KeystrokeInferenceDeps) => inference.createKeystrokeInference({ ...opts, setTimer: fn => { timers.push(fn); return { unref() {} } as any; }, clearTimer: () => {} }),
     readAskInputSidecar: async () => ({ questions: [{ options: [{ label: "yes" }, { label: "no" }] }] }),
+    claudeSdkBackend: null,
     ASK_INPUT_DIR: "/fixture", lastSentAgentStatus: statuses, lastAgentStatusSentAt: statusAt,
     turnStartedAt: new Map([["sid", now - 1000]]), detectSessionAgentType: () => "claude",
     awaitingAskUserQuestion: awaiting, preAskUserQuestionStatus: before, conversationCacheRef: { sid: "conv" },
@@ -110,6 +111,7 @@ test("guarded Escape observes only a successful send or signal", async () => {
   const clock = 1_800_000_000_000;
   const deps = {
     Date: { now: () => clock },
+    claudeSdkBackend: null,
     // A cloud agent's Escape cancels its turn through its API: no pane, nothing observed.
     cloudAgents: { interrupt: async () => cloudEscape },
     appServerConversations: new Map(), persistedAppServerThreads: new Map(), latestInjectionTsFor: () => null,
@@ -153,6 +155,7 @@ test("a stop-and-send Escape releases its queued message only when there is no t
   const clock = 1_800_000_000_000;
   const deps = {
     Date: { now: () => clock },
+    claudeSdkBackend: null,
     cloudAgents: { interrupt: async () => null },
     appServerConversations: new Map(), persistedAppServerThreads: new Map(), latestInjectionTsFor: () => injectedAt,
     log: () => {}, resolveCommandSessionId: async () => "sid", detectSessionAgentType: () => "claude",

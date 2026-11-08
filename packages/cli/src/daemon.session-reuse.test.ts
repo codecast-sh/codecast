@@ -125,7 +125,7 @@ describe("double-start fix invariants", () => {
     );
     const backendStart = daemonSource.indexOf("const tryBackendDelivery = async");
     expect(backendStart).toBeGreaterThan(-1);
-    expect(daemonSource.slice(backendStart, daemonSource.indexOf("\n  };", backendStart))).toContain("if (!delivered) return tryAppServerDelivery();");
+    expect(daemonSource.slice(backendStart, daemonSource.indexOf("\n  };", backendStart))).toMatch(/if \(!delivered\) \{[^}]*return tryAppServerDelivery\(\);/);
   });
 
   test("the Claude-only delivery fallback refuses a different declared agent", () => {

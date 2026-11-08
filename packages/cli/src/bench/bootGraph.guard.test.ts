@@ -346,7 +346,8 @@ describe("command groups stay off the boot graph", () => {
     // option, its help line and the exit check in the watch loop; its parser,
     // sessionsUntil.ts, loads lazily) and contracts/inboxProjection.ts (+0.6,
     // hibernated rows file by their verdict instead of as dormant).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4522);
+    // 4525 that evening: growth in files already on the graph (tmux.ts, daemon-adjacent leaves), no new file.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4525);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -507,7 +508,8 @@ describe("command groups stay off the boot graph", () => {
     // the contracts index.ts names above plus commandRun and deliveryHold.
     // 577 later the same day: contracts/approvalAnswers.ts, the four-line
     // approval answer words commandRun.ts and assistant.ts share (e2056d25b).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(577);
+    // 578 that evening: tmuxLiveness.ts, a leaf split out for unsticking a session whose pane is gone.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(578);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
