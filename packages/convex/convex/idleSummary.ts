@@ -360,7 +360,7 @@ export const generateIdleSummary = internalAction({
 // schedule runs, subagents never chime). Those filters are about who gets a
 // notification, not about what a settled row IS — so whole populations (every
 // `cast spawn` audit, every pinned thread) could never be classified and sat
-// in Needs Input forever. This is the classifier's own gate: it runs for any
+// in Needs You forever. This is the classifier's own gate: it runs for any
 // top-level settled row with content whose agent made no declaration and whose
 // verdict does not already cover this settle.
 export const classifySettle = internalMutation({

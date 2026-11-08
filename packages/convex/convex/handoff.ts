@@ -392,7 +392,7 @@ export async function applyHandoffLink(
   }
 
   // The source is finished: its pinned state names the successor, filed as
-  // done so it leaves Needs Input. The source agent ends its turn after this.
+  // done so it leaves Needs You. The source agent ends its turn after this.
   await performSetThreadState(ctx, source, handoffStateLine(child.short_id, child.agent_type, child.model), "done");
 }
 
