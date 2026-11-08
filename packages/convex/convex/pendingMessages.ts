@@ -1578,7 +1578,7 @@ export async function clearHasPendingIfQuiet(
 }
 
 // Mark a single pending message delivered (terminal) and clear the conversation's
-// has_pending_messages flag when nothing else is in flight. Shared by the content-matched
+// has_pending_messages flag when nothing else is in flight. Shared by the echo
 // ack inside addMessages (the reliable path — fires whenever the agent echoes the message,
 // on any sync path) and available to other callers.
 export async function markPendingDelivered(
@@ -1868,7 +1868,7 @@ export function planStuckMessageHeal(
   // dropped had no backstop at all. Revive it once it is older than any legitimate in-flight
   // delivery (and, via the cron's readiness gate, only when the session is idle and ready). This
   // can never duplicate a delivered message: anything that actually reached the agent is promoted
-  // to terminal "delivered" by the content-matched ack in addMessages, so a row still "pending"
+  // to terminal "delivered" by the echo ack in addMessages, so a row still "pending"
   // at this age provably never landed. We don't bump retry_count (repend resets it), so this
   // never conflates elapsed wait time with the real-attempt budget — the original "don't touch
   // pending" bug is structurally avoided.
@@ -2445,8 +2445,10 @@ export const cancelOldPendingMessages = internalMutation({
   },
 });
 
-// Ack injected messages for a conversation as "delivered". Called by the daemon
-// when a user message appears in the synced JSONL. When the daemon supplies
+// Ack injected messages for a conversation as "delivered". Called by daemons
+// older than delivery ids when a user message appears in the synced JSONL; a
+// daemon that stamps echoes (addMessages echo_ids) settles each row in the
+// write that stores its echo and never calls this. When the daemon supplies
 // `pastedMessageIds` (the rows IT pasted into a live pane this process), only
 // those rows are acked; rows it cannot vouch for stay `injected` for the heal
 // cron to re-pend and re-deliver. Without the list (old daemon) the legacy
@@ -2492,7 +2494,7 @@ export async function ackInjectedForDaemon(
         await ctx.db.patch(transcriptMessageId, { client_id: msg.client_id });
         // The row now HAS its transcript relation — record it, or the
         // delivered-tier match in findEchoedPendingMessage stays open and a
-        // later content-matched echo adopts the same client_id onto a SECOND
+        // later echo adopts the same client_id onto a SECOND
         // message (two rows sharing a client id garbles the web timeline).
         if (!msg.echo_message_id) {
           await ctx.db.patch(msg._id, { echo_message_id: transcriptMessageId });
