@@ -6,7 +6,9 @@ import { KeyCap } from "@/components/KeyboardShortcutsHelp";
 import { BACK, BAD, GOOD, LINE, PERSON, TEXT } from "./base";
 import { CHANGE } from "./story";
 
-const keyMeta = (k: string) => createElement(KeyCap, { size: "xs" }, k);
+// A .ts module has no JSX, and KeyCap types children as a required prop.
+// eslint-disable-next-line react/no-children-prop
+const keyMeta = (k: string) => createElement(KeyCap, { size: "xs", children: k });
 
 // ---------- Steps, ways out, ways back ----------
 
