@@ -8,6 +8,7 @@
 // owns, and a live query over it would re-run on every heartbeat of every
 // running one. The client reads the head on open and walks older pages once.
 import { v } from "convex/values";
+import { clipText } from "./lib/wellFormed";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { query } from "./functions";
 import type { Doc } from "./_generated/dataModel";
@@ -27,7 +28,7 @@ export type SessionIndexRow = {
   message_count: number;
 };
 
-const cut = (text: string | null | undefined) => (text ? text.slice(0, TEXT_CUT) : null);
+const cut = (text: string | null | undefined) => (text ? clipText(text, TEXT_CUT) : null);
 
 function indexRowOf(conv: Doc<"conversations">): SessionIndexRow {
   return {

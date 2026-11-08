@@ -105,6 +105,9 @@ export interface Config extends CloudSessionSyncSettings {
   codex_args?: string;
   agent_permission_modes?: AgentPermissionModes;
   agent_default_params?: AgentDefaultParams;
+  /** How the daemon runs Claude Code sessions: in a tmux pane (default) or
+   *  through the Agent SDK in a host process (claudeSdk/backend.ts). */
+  claude_backend?: "tmux" | "sdk";
 
   // Managed provider API keys (pl-207) live in their OWN 0600 file
   // (~/.codecast/provider-keys.json, see providerKeyStore.ts) — NOT here — because
@@ -274,7 +277,9 @@ export interface Config extends CloudSessionSyncSettings {
   // --- Browser (`cast browser`, browser/autoShot.ts) ---
   // Automatic screenshots after page-changing browser commands, so a browsing
   // thread self-documents. Absent → ON; `cast browser shots off` sets false.
-  browser?: { auto_shots?: boolean };
+  // human_input: curved, paced pointer and key timing on input the bridge
+  // relays to the human's Chrome (browser/humanInput.ts). Absent → ON.
+  browser?: { auto_shots?: boolean; human_input?: boolean };
 
   // --- Vaults (index.ts `cast files`, daemon /vault/* routes) ---
   // Directories of markdown the user registered for browsing over the loopback

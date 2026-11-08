@@ -5,7 +5,7 @@ import { internal } from "./_generated/api";
 import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
 import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
-import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, andList, lineSlugOf, ORG_AUTHORITY_KINDS, authorityWords, orgEveryToMs, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
+import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, andList, lineSlugOf, orgAuthorityGrantsError, authorityWords, orgEveryToMs, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
 import { WAKE_TUNE, briefBudget, briefOverBudgetMessage, msToEvery, roleWakeOf, wakeTuneRefusal, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
 import { EXECUTIVE_ASSISTANT_HANDLE, EXECUTIVE_ASSISTANT_NAME, leadScopeChange, type AssistantReach } from "@codecast/shared/contracts/orgLead";
@@ -43,7 +43,7 @@ import { EMPTY_SCOPE, isScopeless, keepsReportsInside, normalizeScope, outsideKe
 import { areaMoves, areasOf, beginAreaHandoff, handOverAreaMoves, ownerSnapshot } from "./orgHandoff";
 import { syncRoleAgenda } from "./orgAgenda";
 import { syncInboxLook } from "./orgInbox";
-import { mergeAllowance } from "./lib/lineMerge";
+import { roleMergeAllowance } from "./lib/regretRead";
 import { announceSeating, decommissionAnchorRow, provisionStandingAgent, roleBootstrapOf, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor } from "./anchors";
 import { enqueuePendingMessage, formatSessionMessage, tellRole, performSessionSend } from "./pendingMessages";
 import { standingReportsToFields } from "./lib/standingSeat";
@@ -1043,7 +1043,7 @@ export async function performSetLine(
 
 export async function lineOfRole(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "access");
-  return { role_id: role._id, short_id: role.short_id, handle: role.handle, name: role.name, line_workflow_slug: lineSlugOf(role), merge: mergeAllowance(role, Date.now()) };
+  return { role_id: role._id, short_id: role.short_id, handle: role.handle, name: role.name, line_workflow_slug: lineSlugOf(role), merge: await roleMergeAllowance(ctx, role, Date.now(), true) };
 }
 
 // `cast role line <handle> [--set <slug>]` (L2).
@@ -1166,6 +1166,18 @@ async function insertRoleDoc(ctx: Ctx, userId: Id<"users">, role: any, docType: 
 // The conversation an adopt names must be the caller's own plain session: not
 // a hand (it reports to a seat already) and not another role's standing
 // session. The role's own standing session is accepted, so a repeat is a no-op.
+// A lead hired for a project takes over the session the project was already
+// being talked to in (session-projects.md SP4): the canonical session of the
+// one scope project that has one. Several, or none, start a fresh seat.
+async function projectSessionToSeat(ctx: Ctx, role: any): Promise<string | undefined> {
+  const sessions: string[] = [];
+  for (const id of role.scope?.project_ids ?? []) {
+    const project = await ctx.db.get(id);
+    if (project?.default_session_id && (await ctx.db.get(project.default_session_id))) sessions.push(String(project.default_session_id));
+  }
+  return sessions.length === 1 ? sessions[0] : undefined;
+}
+
 async function requireAdoptable(ctx: Ctx, userId: Id<"users">, role: any, ref: string): Promise<any> {
   // The workspace anchor's session (org-staffing.md S12) is the company's,
   // not only its host's: whoever may reshape the anchor may seat it.
@@ -1211,7 +1223,10 @@ async function performProvisionRoleCore(
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
-  const adopt = args.adopt_conversation_id ? await requireAdoptable(ctx, userId, role, args.adopt_conversation_id) : undefined;
+  const projectSession = args.adopt_conversation_id ? undefined : await projectSessionToSeat(ctx, role);
+  const adopt = args.adopt_conversation_id
+    ? await requireAdoptable(ctx, userId, role, args.adopt_conversation_id)
+    : projectSession ? await requireAdoptable(ctx, userId, role, projectSession).catch(() => undefined) : undefined;
   const bootstrap = await roleBootstrapOf(ctx, role);
   const { scopeNames, parentName } = bootstrap;
   const patch: Record<string, any> = { updated_at: Date.now() };
@@ -1879,11 +1894,9 @@ async function performSetAuthorityCore(ctx: any, userId: Id<"users">, args: { ro
   const revoke = new Set((args.revoke ?? []).map((id) => id.trim()));
   const kept: StoredAuthority[] = ((role.authority ?? []) as StoredAuthority[]).filter((g) => !revoke.has(g.id));
   const byId = new Map(kept.map((g) => [g.id, g]));
+  const invalid = orgAuthorityGrantsError(args.authority ?? []);
+  if (invalid) throw new Error(invalid);
   for (const g of args.authority ?? []) {
-    if (!/^[a-z][a-z0-9-]{0,47}$/.test(g.id)) throw new Error(`Authority id ${JSON.stringify(g.id)} is not a slug`);
-    if (!(ORG_AUTHORITY_KINDS as readonly string[]).includes(g.kind)) throw new Error(`Authority kind is one of ${ORG_AUTHORITY_KINDS.join(", ")}`);
-    if (!g.label?.trim()) throw new Error(`Authority ${g.id} needs a label`);
-    for (const [k, n] of Object.entries(g.limit ?? {})) if (typeof n !== "number" || !(n >= 0)) throw new Error(`Authority ${g.id} limit ${k} must be a non negative number`);
     const expires_at = g.expires ? now + intervalMs(g.expires) : undefined;
     const prior = byId.get(g.id);
     byId.set(g.id, {

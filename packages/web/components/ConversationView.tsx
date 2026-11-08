@@ -28,6 +28,7 @@ import { useStorageImageUrls } from "../hooks/useStorageImageUrl";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { getShareTokenScope, shareTokenArg } from "../lib/shareTokenScope";
+import { useRecordConversationOpen } from "../lib/accessLogOpen";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
@@ -40,6 +41,7 @@ import { GROUP_WINDOW_MS } from "@codecast/shared/chat";
 import { useNowWhen } from "../hooks/useCoarseNow";
 import { isAskTool } from "@codecast/shared/render";
 import { resolveSessionSkills } from "../lib/sessionSkills";
+import { GOAL_COMMAND } from "../lib/builtinCommands";
 import { latestUsageOf } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { StableContextCards } from "./StableContextCards";
@@ -49,7 +51,11 @@ import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useOpenReveal, useR
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession, toggleSessionsLikeFirst } from "../store/undoActions";
 import { toast } from "sonner";
-import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge, settleTimelineItemAtOffset, cancelActiveItemSettle, releaseScrollTarget, shouldResumeFollow, READER_SCROLL_WINDOW_MS } from "./conversationScroll";
+import { goalCanPause, goalCanResume, goalFrameLine, goalObjectiveProblem, goalMessageBody, parseGoalCommand, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
+import { SessionGoalPill } from "./SessionGoalPill";
+import { SwitchReview } from "./consequential/ConsequentialSwitch";
+import { sessionGoalLedger } from "../lib/sessionGoalLedger";
+import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, jumpRowForMessage, initialScrollEdge, settleTimelineItemAtOffset, cancelActiveItemSettle, releaseScrollTarget, shouldResumeFollow, READER_SCROLL_WINDOW_MS } from "./conversationScroll";
 import { deriveHostedRunningPhrase, deriveRunningPhrase, shouldShowIdleGap, workingSinceForClock, isProducingAgentStatus } from "./workingStatus";
 import { quoteToComposer, submitReview } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
@@ -128,7 +134,7 @@ import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import { AskSessionPanel } from "./conversation/AskSessionPanel";
-import { useAskSession } from "../hooks/useAskSession";
+import { askSideQuestion } from "../lib/sideAnswers";
 import { openSessionAtMessage } from "../lib/openSessionAtMessage";
 import type { MentionItem } from "./editor/MentionList";
 import { HeaderPinMenuItem } from "./anchor/AnchorPanel";
@@ -186,6 +192,11 @@ import { FeatureUpsell } from "./agentFeatures/FeatureUpsell";
 import { useOfferedFeatures } from "./agentFeatures/useFeatureOffer";
 import { pickFeatureMoment, type MomentFeature } from "../lib/featureMoments";
 import { Button } from "./ui/button";
+import { attributeMeasurementsByKey } from "../lib/virtualList/attributeByKey";
+import { createScrollHold, type ScrollHold } from "../lib/virtualList/scrollHold";
+import { VLIST_LEGACY } from "../lib/virtualList/legacyFlags";
+import { useScrollSeek } from "../hooks/useScrollSeek";
+import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
 /** Agent states in which the session is waiting on its human, not working. */
@@ -266,7 +277,7 @@ function recordVirtHeight(key: string, size: number) {
 // that adds a hook here keeps the fiber and crashes on the shifted hook slot
 // ("Should have a queue"). The dev sizing happens inside the body instead.
 const ConversationViewInner = (
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, onTargetSettled, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode, leadNode, leadPinned, stickyPrompt = true, initialDensity, foldWorkingTurns = false, openAtTop = false, composerPlaceholder }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, onTargetSettled, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode, leadNode, leadPinned, stickyPrompt = true, initialDensity, foldWorkingTurns = false, openAtTop = false, composerPlaceholder, hostsCommentRail = true, hideHeaderTitle }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
   devRenderCount("ConversationView2");
   const renderStart = performance.now();
   const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
@@ -382,11 +393,19 @@ const ConversationViewInner = (
   // "Ask this session" (a, the palette, the menu, or Ask in the search pill).
   const [askOpen, setAskOpen] = useState(false);
   const askInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const askSession = useAskSession(conversation?._id ? String(conversation._id) : "");
-  const openAskPanel = useCallback(() => {
+  const askConversationId = conversation?._id ? String(conversation._id) : "";
+  const openAskPanel = useCallback((focus = true) => {
     setAskOpen(true);
-    setTimeout(() => askInputRef.current?.focus(), 0);
+    if (focus) setTimeout(() => askInputRef.current?.focus(), 0);
   }, []);
+  const closeAskPanel = useCallback(() => setAskOpen(false), []);
+  // `/btw <question>` in the composer: a side answer in the Ask panel, never a
+  // message to the agent; the composer keeps focus. A bare `/btw` opens the
+  // panel ready to type.
+  const handleSideQuestion = useCallback((question: string) => {
+    openAskPanel(!question);
+    return question ? askSideQuestion(askConversationId, question) : null;
+  }, [askConversationId, openAskPanel]);
   useWatchEffect(() => {
     if (!localSearchQuery) { setDebouncedSearchQuery(""); return; }
     const timer = setTimeout(() => setDebouncedSearchQuery(localSearchQuery), 300);
@@ -630,7 +649,8 @@ const ConversationViewInner = (
   // Width reserved on the right by the teammate comment rail (per-conversation, so
   // multiple tab panes don't fight). Pads the transcript/composer and nudges the
   // scroll affordances left so nothing hides under the panel.
-  const commentRailW = useInboxStore((s) => (conversation ? s.commentRailWidth[conversation._id] ?? 0 : 0));
+  // A host that docks the rail itself makes room for it outside this view.
+  const commentRailW = useInboxStore((s) => (conversation && hostsCommentRail ? s.commentRailWidth[conversation._id] ?? 0 : 0));
   // Pipe this conversation's comment thread into the inbox cache once; the dock
   // and the inline per-message threads all read from the store.
   useConversationCommentsSync(conversation?._id?.toString());
@@ -1118,6 +1138,48 @@ const ConversationViewInner = (
 
 
   const populateInputRef = useRef<((text: string, opts?: { append?: boolean }) => void) | null>(null);
+  // `/goal` in the composer (shared/contracts/sessionGoal parseGoalCommand):
+  // setting or resuming opens the consequential review, and the typed text
+  // stays in the composer until the person confirms; pause, clear and show
+  // act at once.
+  const clearComposerRef = useRef<(() => void) | null>(null);
+  const [goalReview, setGoalReview] = useState<{ objective: string; resume: boolean } | null>(null);
+  const goalConversationId = conversation?._id ? String(conversation._id) : "";
+  const handleGoalCommand = useCallback((text: string): boolean => {
+    const cmd = parseGoalCommand(text);
+    if (!cmd || !goalConversationId) return false;
+    const st = useInboxStore.getState();
+    const goal = sessionGoalOf(st.sessionGoals, goalConversationId);
+    const live = goal && goal.status !== "cleared" ? goal : null;
+    if (cmd.op === "set") {
+      const problem = goalObjectiveProblem(cmd.objective);
+      if (problem) toast(problem);
+      else setGoalReview({ objective: cmd.objective, resume: false });
+      return true;
+    }
+    if (cmd.op === "resume") {
+      if (live && goalCanResume(live)) setGoalReview({ objective: live.objective, resume: true });
+      else toast(live ? `The goal is ${live.status === "done" ? "met" : "running"}` : "No goal on this session");
+      return true;
+    }
+    if (!live) toast("No goal on this session");
+    else if (cmd.op === "show") toast(`Goal ${live.status === "active" ? "running" : live.status === "done" ? "met" : live.status}, round ${live.rounds}/${live.max_rounds}`, { description: live.reason || live.objective });
+    else if (cmd.op === "pause") {
+      if (goalCanPause(live)) st.pauseSessionGoal(goalConversationId);
+      else toast(`The goal is ${live.status}`);
+    } else if (cmd.op === "clear") st.clearSessionGoal(goalConversationId);
+    clearComposerRef.current?.();
+    return true;
+  }, [goalConversationId]);
+  const confirmGoal = useCallback(() => {
+    const review = goalReview;
+    setGoalReview(null);
+    if (!review || !goalConversationId) return;
+    const st = useInboxStore.getState();
+    if (review.resume) st.resumeSessionGoal(goalConversationId);
+    else st.setSessionGoal(goalConversationId, review.objective, `goal-${goalConversationId}-${Date.now().toString(36)}`);
+    clearComposerRef.current?.();
+  }, [goalReview, goalConversationId]);
   const { handleForkFromMessage, forkHandler, handleForkFromBranch, handleForkReply, forkTailHandler } = useForkActions({ injectSession, conversation, addOptimisticFork, currentUser, hasMoreAbove, convCommand, timelineRef, populateInputRef, addOptimisticMsg, sendInlineMessage });
   // Bridge for the quote/comment review UI: lets MessageReview, the selection
   // toolbar, and the review bar push text into the composer without prop-drilling.
@@ -1172,8 +1234,10 @@ const ConversationViewInner = (
       });
     }
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
-  const { userMsgKindMap, turnAggregates, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
+  const { userMsgKindMap, turnAggregates, cleanRows, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
   const { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery } = useSessionMentions({ conversation, managedSession });
+  // The owner composer runs /goal itself, so it offers it beside the agent's commands.
+  const composerSkills = useMemo(() => [GOAL_COMMAND, ...(sessionSkills ?? []).filter((k) => k.name !== GOAL_COMMAND.name)], [sessionSkills]);
   const { serverUserMessages, stickyEligibleServerIds, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds } = useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap });
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
@@ -1506,6 +1570,7 @@ const ConversationViewInner = (
     if (item.type === 'pull_request') return 120;
 
     const msg = item.data as Message;
+    if (cleanRows && msg.role === "assistant") return cleanRows.has(msg._id) ? 120 : 0;
     // Compact: a collapsed turn is one card on the first assistant message; the
     // rest of the turn is height 0 until expanded.
     if (foldTurns && msg.role === "assistant") {
@@ -1549,6 +1614,7 @@ const ConversationViewInner = (
         case 'skill_expansion': return commandExpansionMap.consumed.has(msg._id) ? 0 : 44;
         case 'task_notification': return 40;
         case 'scheduled_task': return 56;
+        case 'goal_round': return 44;
         case 'role_brief': return 44;
         case 'workflow_frame': return kind.frame === 'user request' ? 44 : 100;
         case 'teammate_events': return 80;
@@ -1570,7 +1636,7 @@ const ConversationViewInner = (
       return 200;
     }
     return 40;
-  }, [timeline, feedDensity, foldTurns, foldWorkingTurns, userMsgKindMap, commandExpansionMap, nudgeRuns, turnAggregates, expandedGroups]);
+  }, [timeline, feedDensity, foldTurns, foldWorkingTurns, cleanRows, userMsgKindMap, commandExpansionMap, nudgeRuns, turnAggregates, expandedGroups]);
 
   const estimateSize = useCallback((index: number) => {
     const estimate = estimateUncachedSize(index);
@@ -1584,24 +1650,17 @@ const ConversationViewInner = (
   // estimateSize and skips the reflow cascade. Keyed by collapse mode because a
   // collapsed row renders different content (and height) than an expanded one.
   //
-  // Attribution guard: the virtualizer files every measurement under
-  // getItemKey(el.dataset.index). The data-index attribute is written at React
-  // COMMIT time while getItemKey reflects the timeline at RENDER time — under a
-  // deferred update (conversation switch via useDeferredValue, a pending-row
-  // prune, an older-page prepend) those can disagree, so a row's height would
-  // be filed under a NEIGHBORING message's key. Such a wrong entry never
-  // self-corrects: the ResizeObserver only reports size CHANGES (a stable row
-  // stays silent) and the no-entry path below prefers the cached belief over
-  // the DOM — which is how the settled overlapping-rows / phantom-void states
-  // happen. Each row stamps its own key as data-vkey; when the stamp disagrees
-  // with what the virtualizer is about to attribute, return the current belief
-  // (a no-op) and record nothing.
+  // The element's index comes from its own data-vkey stamp
+  // (attributeMeasurementsByKey after the virtualizer), so the key here is
+  // always the row's own, even mid deferred switch or prepend.
   const measureElement = useCallback((element: Element, entry: ResizeObserverEntry | undefined, instance: any) => {
     const horizontal = instance.options.horizontal;
     const index = instance.indexFromElement(element);
+    if (index < 0) return 0;
     const key = instance.options.getItemKey(index);
     const stampedKey = (element as HTMLElement).dataset?.vkey;
-    if (stampedKey !== undefined && stampedKey !== String(key)) {
+    if (VLIST_LEGACY && stampedKey !== undefined && stampedKey !== String(key)) {
+      ((window as any).__VSTAT ??= {}).guard = ((window as any).__VSTAT.guard ?? 0) + 1; // TEMP-VSTAT
       return instance.itemSizeCache.get(key) ?? instance.options.estimateSize(index);
     }
     const box = entry?.borderBoxSize?.[0];
@@ -1612,7 +1671,9 @@ const ConversationViewInner = (
       const cached = instance.itemSizeCache.get(key);
       size = cached !== undefined ? cached : (element as HTMLElement)[horizontal ? "offsetWidth" : "offsetHeight"];
     }
-    if (index >= 0) recordVirtHeight(virtHeightKey(key, rowDensityKey(index)), size);
+    // A fast-scroll placeholder reports its believed height back; keep that
+    // out of the cache, where it would pass for a measurement.
+    if (index >= 0 && (element as HTMLElement).dataset?.seek === undefined) recordVirtHeight(virtHeightKey(key, rowDensityKey(index)), size);
     return size;
   }, [rowDensityKey]);
 
@@ -1633,13 +1694,15 @@ const ConversationViewInner = (
     setNavScrollProgress(progress);
   }, []);
 
+  // The one pending programmatic scroll target (lib/virtualList/scrollHold).
+  const holdRef = useRef<ScrollHold | null>(null);
   const virtualizer = useVirtualizer({
     directDomUpdates: true,
     // Rows placed by `top`, not translate3d: a 3D transform makes every row a
     // compositor layer, and the browser re-layers the whole page on each frame
     // that moves the caret, so each keystroke paid for every visible row.
     directDomUpdatesMode: "position",
-    onChange: updateScrollProgress,
+    onChange: (instance) => { updateScrollProgress(instance); holdRef.current?.onChange(); },
     count: timeline.length,
     getScrollElement: () => containerRef.current,
     getItemKey,
@@ -1673,6 +1736,13 @@ const ConversationViewInner = (
     followOnAppend: shouldFollowStreaming(userScrolled, guestStayAtTop) ? "auto" : false,
     scrollEndThreshold: 8,
   });
+  if (!VLIST_LEGACY) attributeMeasurementsByKey(virtualizer);
+  holdRef.current ??= createScrollHold(virtualizer, () => containerRef.current);
+  const seek = useScrollSeek(containerRef, () => virtualizer.getVirtualItems().map((v) => v.key));
+  useMountEffect(() => () => holdRef.current?.release());
+  // ConversationView stays mounted across switches: the previous
+  // conversation's pending target must not pull the next one.
+  useWatchEffect(() => () => holdRef.current?.release(), [conversation?._id]);
 
   const rowLayoutsRef = useRef(new Map<string | number, string>());
   useLayoutEffect(() => {
@@ -1731,19 +1801,12 @@ const ConversationViewInner = (
       revealRowRef.current = { ...revealRowRef.current, until: Date.now() + 800 };
     }
   }, [openReveal, setUserScrolled]);
-  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+  adjustScrollForResizeRule(virtualizer, (key) => {
     const hold = scrollHoldRef.current;
     const revealRow = revealRowRef.current;
-    // getScrollOffset/scrollAdjustments are not on the public type.
-    const v = instance as unknown as { getScrollOffset: () => number; scrollAdjustments: number };
-    return shouldAdjustScrollForResize({
-      itemStart: item.start,
-      scrollOffset: v.getScrollOffset() + (v.scrollAdjustments ?? 0),
-      scrollDirection: instance.scrollDirection,
-      held: (!!hold && item.key === hold.key && Date.now() < hold.until)
-        || (!!revealRow && String(item.key) === revealRow.key && Date.now() < revealRow.until),
-    });
-  };
+    return (!!hold && key === hold.key && Date.now() < hold.until)
+      || (!!revealRow && String(key) === revealRow.key && Date.now() < revealRow.until);
+  });
   const rowLookupRef = useRef({ timeline, getItemKey });
   rowLookupRef.current = { timeline, getItemKey };
   const toggleReceipt = useCallback((ownerId: string) => {
@@ -1815,6 +1878,7 @@ const ConversationViewInner = (
         // the same layout-px border box the virtualizer's own measurements use.
         const real = el.offsetHeight;
         if (Math.abs(real - v.size) > 1) {
+          (((window as any).__VSTAT ??= {}).heal ??= []).push({ k: String(v.key), from: v.size, to: real, t: Date.now() }); // TEMP-VSTAT
           if ((window as any).__RECON_DEBUG) (((window as any).__RECON_LOG) ??= []).push({ i: v.index, from: v.size, to: real });
           corrections.push({ index: v.index, size: real });
         }
@@ -1835,10 +1899,17 @@ const ConversationViewInner = (
   // retry ladder as soon as the user scrolls somewhere on purpose (wheel latch)
   // — used by the initial open-at-bottom pin, where later retries must never
   // fight a reader who already started moving.
-  const scrollToEdgeRef = useRef<(edge: 'top' | 'bottom', opts?: { bailOnUserScroll?: boolean }) => void>(() => {});
+  const scrollToEdgeRef = useRef<(edge: 'top' | 'bottom', opts?: { bailOnUserScroll?: boolean; holdMs?: number }) => void>(() => {});
   scrollToEdgeRef.current = (edge, opts) => {
     const sc = containerRef.current;
     if (!sc) return;
+    if (!VLIST_LEGACY) {
+      holdRef.current?.set(edge, {
+        holdMs: opts?.holdMs ?? 1000,
+        bail: opts?.bailOnUserScroll ? () => userScrolledRef.current : undefined,
+      });
+      return;
+    }
     const pull = () => {
       if (opts?.bailOnUserScroll && userScrolledRef.current) return;
       if (edge === 'top') {
@@ -2015,6 +2086,8 @@ const ConversationViewInner = (
 
   // A viewer who came in on a share link passes on that link: the bare
   // conversation URL denies anyone without the token.
+  // A regulated team's audit log gets one entry per open (lib/accessLogOpen).
+  useRecordConversationOpen(conversation?._id ? String(conversation._id) : null, (conversation as any)?.team_id ?? null);
   const copyConversationLink = useCallback(() => {
     const token = getShareTokenScope(conversation?._id);
     const url = token ? `${shareOrigin()}/share/${token}` : `${shareOrigin()}/conversation/${conversation?._id}`;
@@ -2622,6 +2695,19 @@ const ConversationViewInner = (
       // because the tracked offset lags the programmatic write). Re-pin on
       // the settle ladder, then keep pulling while heights keep settling —
       // stopping the moment the reader scrolls somewhere on purpose.
+      if (!VLIST_LEGACY) {
+        // Held for a while rather than trusted once: height settling has a long
+        // tail (late images, fonts), and the hold re-aims on each size change
+        // until the reader takes the view.
+        scrollToEdgeRef.current('bottom', { bailOnUserScroll: true, holdMs: 8000 });
+        lastScrollTopRef.current = sc.scrollTop;
+        setTimeout(() => {
+          paginationCooldownRef.current = 0;
+          sc.dispatchEvent(new Event('scroll'));
+        }, 1000);
+        setInitialScrollDone(true);
+        return;
+      }
       scrollToEdgeRef.current('bottom', { bailOnUserScroll: true });
       lastScrollTopRef.current = sc.scrollTop;
       // Height settling has a long tail (late images, fonts, the drift
@@ -2657,7 +2743,7 @@ const ConversationViewInner = (
   useWatchEffect(() => {
     const sc = containerRef.current;
     if (!sc) return;
-    const release = () => releaseScrollTarget(virtualizer);
+    const release = () => { releaseScrollTarget(virtualizer); holdRef.current?.release(); };
     const readerEvents = ["touchmove", "pointerdown", "keydown"] as const;
     for (const ev of readerEvents) sc.addEventListener(ev, release, { passive: true });
     const movingDown = () => { readerDownAtRef.current = Date.now(); };
@@ -3573,6 +3659,10 @@ const ConversationViewInner = (
           return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} />;
         case 'scheduled_task':
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} hosted={isHostedAgentType(conversation?.agent_type)} />;
+        case 'goal_round': {
+          const line = goalFrameLine(kind.frame);
+          return <FoldedPromptBlock key={msg._id} label={line.label} preview={line.detail} content={goalMessageBody(msg.content!)} timestamp={msg.timestamp} />;
+        }
         case 'role_brief':
           return <FoldedPromptBlock key={msg._id} label="Role brief" preview={stripSystemTags(msg.content!).trim().split("\n")[0].replace(/\*\*/g, "")} content={stripSystemTags(msg.content!).trim()} timestamp={msg.timestamp} />;
         case 'workflow_frame':
@@ -3639,7 +3729,7 @@ const ConversationViewInner = (
           // option; the footer carries the question and the way back to the ask.
           const decision = kind.kind === 'decision_answer' ? kind.decision : undefined;
           const forkSeedParent = isForkSeedClientId(msg.client_id) ? conversation?.forked_from : undefined;
-          const prompt = <UserPrompt key={msg._id} content={kind.kind === 'direct_user' ? kind.body : decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          const prompt = <UserPrompt key={msg._id} bubble={foldWorkingTurns} content={kind.kind === 'direct_user' ? kind.body : decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
           if (!forkSeedParent) return prompt;
           return (
             <Fragment key={msg._id}>
@@ -3667,6 +3757,11 @@ const ConversationViewInner = (
         const asked = lastPersonWords(index);
         return <HostedNotice key={msg._id} kind={notice} content={msg.content || ""} conversationId={conversation?._id} retryText={asked} live={!nextMessage(index)} retries={(retryFold?.attempts.get(msg._id) ?? 1) - 1} />;
       }
+
+      // Fold mode draws only what the agent said and the cards waiting on the
+      // person, each as a bubble; the rest of the turn draws nothing.
+      const clean = cleanRows?.get(msg._id);
+      if (cleanRows && !clean) return null;
 
       const prevMsgForCompaction = getPreviousNonToolResultMessage(index);
       if (prevMsgForCompaction?.role === "user" && userMsgKindMap.get(prevMsgForCompaction._id)?.kind === 'compaction_prompt') {
@@ -3720,24 +3815,25 @@ const ConversationViewInner = (
       const assistantBlock = (
         <AssistantBlock
           key={msg._id}
-          content={msg.content}
+          content={clean ? clean.text : msg.content}
           timestamp={msg.timestamp}
-          thinking={msg.thinking}
+          thinking={clean ? undefined : msg.thinking}
           showThinking={showThinking}
-          toolCalls={msg.tool_calls}
+          toolCalls={clean ? clean.tools : msg.tool_calls}
           toolResults={relevantToolResults}
-          images={msg.images}
+          images={clean ? undefined : msg.images}
           messageId={msg._id}
           messageUuid={msg.message_uuid}
           conversationId={conversation?._id}
-          density={effectiveDensity}
-          condensedReceipt={condensedReceipt}
+          density={clean ? "full" : effectiveDensity}
+          condensedReceipt={clean ? undefined : condensedReceipt}
           globalToolResultMap={condensedReceipt ? globalToolResultMap : undefined}
           onCollapseTurn={onCollapseTurn}
           childConversationMap={conversation?.child_conversation_map}
           childConversations={conversation?.child_conversations}
           agentNameToChildMap={agentNameToChildMap}
-          showHeader={isFirstInSequence}
+          showHeader={clean ? clean.header : isFirstInSequence}
+          bubble={!!clean}
           toolCallChangeSelectionMap={toolCallChangeSelectionMap}
           isHighlighted={highlightedMessageId === msg._id}
           runMessageIds={runMessageIds}
@@ -3881,6 +3977,14 @@ const ConversationViewInner = (
   const composerHostsControl = ownerComposerMounted && !(inRevealBand && !bandComposerOpen) && !newSessionPage && !isHostedConv;
   const threadStatePanel = conversation ? (
     <div data-cc-thread-state>
+      <SessionGoalPill conversationId={conversation._id.toString()} sessionTitle={conversation.title || "This session"} canSteer={effectiveIsOwner} />
+      {goalReview && (
+        <SwitchReview
+          ledger={sessionGoalLedger({ objective: goalReview.objective, session: conversation.title || "This session", resume: goalReview.resume })}
+          onClose={() => setGoalReview(null)}
+          onConfirm={confirmGoal}
+        />
+      )}
       <ThreadStatePanel
         conversationId={conversation._id.toString()}
         threadState={conversation.thread_state}
@@ -3946,7 +4050,7 @@ const ConversationViewInner = (
               />
             )}
         </>}
-        title={isRenaming ? (
+        title={hideHeaderTitle && !isRenaming ? null : isRenaming ? (
               <input
                 ref={renameInputRef}
                 value={renameDraft}
@@ -4189,7 +4293,7 @@ const ConversationViewInner = (
                     )}
                     {isLocalSearchOpen && !guest && localSearchQuery.trim().length > 2 && (
                       <button
-                        onClick={() => { askSession(localSearchQuery); onClearHighlight(); openAskPanel(); }}
+                        onClick={() => { void askSideQuestion(askConversationId, localSearchQuery); onClearHighlight(); openAskPanel(); }}
                         className="ml-1 px-1 rounded text-[10px] font-medium whitespace-nowrap hover:bg-amber-300/50 dark:hover:bg-amber-700/40 transition-colors"
                         title="Ask this session instead of searching it"
                       >
@@ -4561,7 +4665,7 @@ const ConversationViewInner = (
           top={headerHeight}
           inputRef={askInputRef}
           onCite={(messageId) => openSessionAtMessage(String(conversation._id), messageId)}
-          onClose={() => setAskOpen(false)}
+          onClose={closeAskPanel}
         />
       )}
 
@@ -4805,6 +4909,18 @@ const ConversationViewInner = (
             )}
             {virtualizer.getVirtualItems().map((virtualItem) => {
               const item = timeline[virtualItem.index];
+              if (seek.placeholder(virtualItem.key)) {
+                return (
+                  <div
+                    key={virtualItem.key}
+                    data-index={virtualItem.index}
+                    data-vkey={String(virtualItem.key)}
+                    data-seek=""
+                    ref={virtualizer.measureElement}
+                    style={{ position: "absolute", left: 0, width: "100%", height: virtualItem.size }}
+                  />
+                );
+              }
               const content = renderItem(item, virtualItem.index);
               // Only once the scan is complete: pages land oldest first, so dimming
               // earlier would grey out recent rows whose hits are not counted yet.
@@ -4995,7 +5111,7 @@ const ConversationViewInner = (
               ) : null}
               <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} sharedDraft={composerPresenceEnabled(conversation) && !onSendOverride && !newSessionPage} status={conversation.status} embedded={embedded} hero={newSessionPage} sessionControl={composerHostsControl && (
                 <HeaderModelControl variant="composer" conversationId={conversation._id} agentType={conversation.agent_type} model={conversation.model} effort={(conversation as any).effort} messageCount={conversation.message_count} canEdit open={sessionControlOpen} onOpenChange={setSessionControlOpen} />
-              )} composerFoot={newSessionPage ? <NewSessionFoot slotRef={setNewSessionFootSlot} dropRef={dropFilesRef} /> : undefined} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (newSessionPage && roleSend.recipient ? sendToRole : workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
+              )} composerFoot={newSessionPage ? <NewSessionFoot slotRef={setNewSessionFootSlot} dropRef={dropFilesRef} /> : undefined} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onSideQuestion={!guest && !newSessionPage && !onSendOverride ? handleSideQuestion : undefined} onEscapeClose={askOpen ? closeAskPanel : undefined} onGoalCommand={newSessionPage || onSendOverride ? undefined : handleGoalCommand} clearInputRef={clearComposerRef} onGateSend={onSendOverride ?? (newSessionPage && roleSend.recipient ? sendToRole : workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
                 {/* Who else is in this box (a teammate's live draft, or "is
                     here" for a share link guest with no face on the roster)
                     and who asks to send into it. Inside the composer, so they
@@ -5008,7 +5124,7 @@ const ConversationViewInner = (
                 )}
                 <CollabRequestBanner conversationId={conversation._id.toString()} />
                 {composerNode}
-              </>} composerPlaceholder={newSessionPage && roleSend.recipient ? `Ask ${roleSend.recipient.name} for anything…` : composerPlaceholder} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
+              </>} composerPlaceholder={newSessionPage && roleSend.recipient ? `Ask ${roleSend.recipient.name} for anything…` : composerPlaceholder} skills={newSessionPage || onSendOverride ? sessionSkills : composerSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open
@@ -5207,7 +5323,7 @@ const ConversationViewInner = (
         {(rows) => <CharacterPicker rows={rows as any} onDone={headerCharacterPicker.close} />}
       </CursorPopover>
       <SelectionQuoteToolbar conversationId={conversation?._id ?? ""} />
-      {conversation && (
+      {conversation && hostsCommentRail && (
         <Suspense fallback={null}>
           <CommentDock conversationId={conversation._id.toString()} onJumpToMessage={scrollToMessageById} />
         </Suspense>

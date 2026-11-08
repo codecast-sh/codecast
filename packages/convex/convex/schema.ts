@@ -1,3 +1,5 @@
+import { permissionRemovalValidator } from "./lib/permissionRemoval";
+import { ruleRequestValidator } from "./lib/permissionRuleRequest";
 import { distributionValidator, updateStateValidator } from "./lib/deviceUpdate";
 import { resourceOffloadIntent } from "./resourceOffloadSchema";
 import { syncOutboxTables } from "./syncOutboxSchema";
@@ -47,9 +49,12 @@ import { orgRoleTokenTables } from "./orgRoleTokensSchema";
 import { liveFlowTables } from "./liveFlowsSchema";
 import { flowMapTables } from "./flowMapSchema";
 import { sessionFlowTables } from "./sessionFlowsSchema";
+import { landedChangeTables } from "./landedChangesSchema";
 import { slackTables } from "./slackSchema";
 import { callRoomTables } from "./callRoomSchema";
 import { passkeyTables } from "./passkeysSchema";
+import { accessLogTables } from "./accessLogSchema";
+import { dataDeletionTables } from "./dataDeletionsSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
 import { decisionValidator, intentSourceValidator, milestoneValidator, questionValidator, scoreValidator } from "./lib/initiativeValidators";
 import { orgChangeReplyValidator, orgLogSubjectValidator } from "./lib/orgLogValidators";
@@ -139,8 +144,11 @@ export default defineSchema({
   ...liveFlowTables,
   ...flowMapTables,
   ...sessionFlowTables,
+  ...landedChangeTables,
   ...slackTables,
   ...passkeyTables,
+  ...accessLogTables,
+  ...dataDeletionTables,
   ...authTables,
   users: defineTable({
     email: v.optional(v.string()),
@@ -739,6 +747,11 @@ export default defineSchema({
     title_embedding: v.optional(v.array(v.float64())),
     project_hash: v.optional(v.string()),
     project_path: v.optional(v.string()),
+    // The named project this session works in, set only where a person or the
+    // project decided it (the composer's pick, a move, a project's default
+    // session). Workers, spawns and task-bound sessions derive theirs at read
+    // time (shared/contracts/sessionProject); never copy it onto a child.
+    project_id: v.optional(v.id("projects")),
     model: v.optional(v.string()),
     // Last-known effort level (low|medium|high|max), same lifecycle as `model`:
     // stamped optimistically by the web picker / at create, confirmed by the
@@ -1383,6 +1396,7 @@ export default defineSchema({
     .index("by_user_git_root", ["user_id", "git_root", "started_at"])
     .index("by_user_git_remote_url", ["user_id", "git_remote_url"])
     .index("by_user_project_path", ["user_id", "project_path", "started_at"])
+    .index("by_project_id", ["project_id", "updated_at"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
@@ -1812,6 +1826,11 @@ export default defineSchema({
     // role's `merge` authority grant and its daily limit. Off (absent) unless
     // a person turns it on for this line. Human only, logged like the line.
     line_merge: v.optional(v.boolean()),
+    // The merge step on the measured rate (regret.md R7): while set, the line
+    // merges only while its regret-free rate holds `bar` (0..1) over at least
+    // `min` finished changes; the daily limit still applies. Absent: the count
+    // alone decides. Human only, set with the switch.
+    line_merge_rate: v.optional(v.object({ bar: v.number(), min: v.number(), set_by: v.id("users"), set_at: v.number() })),
     // Leeway to hire: on, a role's proposal of a new role under itself is
     // brought online at once, with no lead or person approving it
     // (orgProposals.routeHire). Off (absent or false) unless a person turns it on.
@@ -4046,6 +4065,9 @@ export default defineSchema({
     repository: v.optional(v.string()),
     sha: v.optional(v.string()),
     previous_sha: v.optional(v.string()),
+    // The sha's place in main's order (its commit's commits.main_at), stamped when the deploy's range is filled: a
+    // merge is in the deploy's code when it reached main at or before this (contracts/causeHistory carryingDeploys).
+    cut_at: v.optional(v.number()),
     version: v.optional(v.string()),
     // The CI run or the page that shows the deploy.
     url: v.optional(v.string()),
@@ -4337,6 +4359,29 @@ export default defineSchema({
   })
     .index("by_user_day", ["user_id", "day_start"])
     .index("by_user_team_day", ["user_id", "team_id", "day_start"]),
+
+  // Side answers (`/btw` in the composer, sideAnswers.ts): one person's
+  // question about a conversation, answered by the cheap model over its synced
+  // transcript and never sent to the agent. Private to the asker; readable only
+  // while the asker can still read the conversation. `client_id` is the id the
+  // composer's optimistic row carried, so the server row supersedes it.
+  side_answers: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    client_id: v.string(),
+    question: v.string(),
+    status: v.union(v.literal("pending"), v.literal("answered"), v.literal("failed")),
+    answer: v.optional(v.string()),
+    citations: v.optional(v.array(v.object({ line: v.number(), message_id: v.string() }))),
+    unread: v.optional(v.object({ after: v.number(), before: v.number() })),
+    error_code: v.optional(v.string()),
+    error_message: v.optional(v.string()),
+    created_at: v.number(),
+    answered_at: v.optional(v.number()),
+  })
+    .index("by_conversation_user", ["conversation_id", "user_id", "created_at"])
+    .index("by_user", ["user_id"])
+    .index("by_client_id", ["client_id"]),
 
   session_insights: defineTable({
     conversation_id: v.id("conversations"),
@@ -4903,6 +4948,22 @@ export default defineSchema({
     // whether an approval keeps the suggested rules.
     deny_message: v.optional(v.string()),
     remember: v.optional(v.boolean()),
+    // Who is asking, for the card: the subagent's type when a subagent raised
+    // the prompt, and whether it is Claude Code's built-in safety check (a
+    // prompt raised in bypass mode, such as an rm it cannot resolve). The
+    // subagent's own conversation holds its steps up to the call.
+    subagent_type: v.optional(v.string()),
+    subagent_conversation_id: v.optional(v.id("conversations")),
+    safety_check: v.optional(v.boolean()),
+    // The agent's one-line account of the call, and what each rm in it would
+    // delete as the daemon read the disk when the prompt opened.
+    intent: v.optional(v.string()),
+    removals: v.optional(v.array(permissionRemovalValidator)),
+    // What the call asks for in codecast's own rule terms (shared/contracts
+    // permissionRules.ts): the permission, the patterns it touches, and the
+    // rules "always" would keep. An answer re-checks the session's other
+    // pending rows against the rules it saved.
+    rule_request: v.optional(ruleRequestValidator),
   })
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_session", ["session_id"])
@@ -4990,6 +5051,19 @@ export default defineSchema({
     // A change card (the-line-end-to-end.md LE10, shared/contracts/changeCard.ts):
     // the web renders it natively in place of a report. Validated on ask.
     card: v.optional(v.any()),
+    // A command the asker wants a person to run (`cast decide --run`,
+    // shared/contracts/commandRun.ts): the card shows it, a person's Run
+    // executes it on the session's machine (daemon run_cast) and the result
+    // comes back as the answer.
+    run: v.optional(v.object({
+      argv: v.array(v.string()),
+      state: v.union(v.literal("waiting"), v.literal("queued"), v.literal("running"), v.literal("done"), v.literal("failed"), v.literal("skipped")),
+      device_id: v.optional(v.string()),
+      cwd: v.optional(v.string()),
+      exit_code: v.optional(v.number()),
+      output: v.optional(v.string()),
+      at: v.optional(v.number()),
+    })),
     // true = the agent ended its turn and is parked on this answer.
     // false = advisory: the agent proceeded with default_option and the
     // human's answer can override it later.
@@ -5164,6 +5238,41 @@ export default defineSchema({
   // An ordered set of decisions one person clears in one sitting (D5).
   // Access is the anchor rule (lib/orgAccess): team_id / scope_user_id carry
   // the boundary; owner_user_id is the host.
+  // A session's goal (shared/contracts/sessionGoal.ts, task ct-87437): the
+  // objective a person gave the session, and the loop's own state. Each turn
+  // end the judge reads it (managedSessions applyAgentStatus → sessionGoals
+  // scheduleGoalJudge); continue delivers the next round, done and blocked
+  // stop it. One row per goal; setting a new goal clears the session's
+  // previous one, so the newest row is the session's goal. Access follows the
+  // conversation (no workspace key: a goal is part of its session).
+  session_goals: defineTable({
+    conversation_id: v.id("conversations"),
+    // Who set it: the loop's messages are sent in their name.
+    set_by: v.id("users"),
+    objective: v.string(),
+    status: v.union(v.literal("active"), v.literal("paused"), v.literal("done"), v.literal("blocked"), v.literal("cleared")),
+    rounds: v.number(),
+    max_rounds: v.number(),
+    stalls: v.number(),
+    max_stalls: v.number(),
+    idle_limit_ms: v.number(),
+    reason: v.optional(v.string()),
+    next_step: v.optional(v.string()),
+    verdict: v.optional(v.union(v.literal("done"), v.literal("continue"), v.literal("blocked"), v.literal("paused"))),
+    // The newest agent_status_updated_at a judge was scheduled for, so two
+    // reports of one turn end judge it once.
+    judged_status_ts: v.optional(v.number()),
+    last_activity_at: v.number(),
+    // The idle check chain that is current: a set or resume arms a new one.
+    idle_armed_at: v.optional(v.number()),
+    // The web's optimistic stub key: /goal paints the pill under this before
+    // the server answers, and the feed's altKey supersedes it.
+    client_key: v.string(),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_conversation", ["conversation_id", "created_at"])
+    .index("by_client_key", ["client_key"]),
   decision_stacks: defineTable({
     short_id: v.string(), // "ds-N"
     title: v.string(),
@@ -5195,6 +5304,24 @@ export default defineSchema({
     .index("by_scope_user", ["scope_user_id"])
     .index("by_short_id", ["short_id"])
     .index("by_status", ["status"]),
+
+  // A saved approval or a configured deny (lib/permissionRules.ts): settles a
+  // tool call from any harness before a card exists. Owned and read by
+  // `user_id` alone; `project` and `scope` say where it applies (the
+  // repository, and the workspace key of the sessions it settles). `scope` is
+  // not access: a team-scoped rule still governs only its owner's sessions.
+  permission_rules: defineTable({
+    user_id: v.id("users"),
+    project: v.string(),
+    scope: v.string(),
+    permission: v.string(),
+    pattern: v.string(),
+    action: v.union(v.literal("allow"), v.literal("deny")),
+    created_at: v.number(),
+    source_conversation_id: v.optional(v.id("conversations")),
+  })
+    .index("by_user_project", ["user_id", "project"])
+    .index("by_user", ["user_id", "created_at"]),
 
   // A role may answer decisions of one category in one scope without a person
   // (D2). Earned from agreement history or delegated by a stack policy; expires
@@ -5237,6 +5364,8 @@ export default defineSchema({
   authority_events: defineTable({
     kind: v.union(
       v.literal("permission_answered"),
+      v.literal("permission_rule_saved"),
+      v.literal("permission_rule_removed"),
       v.literal("share_link_minted"),
       v.literal("share_link_revoked"),
       v.literal("share_link_redeemed"),
@@ -5526,6 +5655,18 @@ export default defineSchema({
     // trigger; anything else records a skipped run and spends no session.
     // Event triggers ignore it — the webhook already IS the evidence.
     precheck: v.optional(v.string()),
+    // How the precheck is read (contracts/triggerPrecheck TriggerPrecheckMode):
+    // absent is by exit code; `changes` wakes when its stdout changed since the
+    // last firing; `state` reads a {wake, state, message} verdict it prints.
+    precheck_mode: v.optional(v.union(v.literal("changes"), v.literal("state"))),
+    // What the next firing's precheck compares against: a `changes` gate's
+    // stdout fingerprint, a `state` gate's state as JSON. Written by the daemon
+    // after each firing (skipTaskRun, passTaskPrecheck); cleared when the gate
+    // itself changes.
+    precheck_state: v.optional(v.string()),
+    // What the precheck reported when it woke the current run, for the run's
+    // frame. Set by passTaskPrecheck, cleared at every claim.
+    precheck_message: v.optional(v.string()),
     requested_run_source: v.optional(v.literal("manual")),
     // A focus a person gave the next run (org-staffing.md S24: "Plan the
     // goal tree" from the Head of People's thread): a key of
@@ -5660,6 +5801,7 @@ export default defineSchema({
       project_path: v.optional(v.string()),
       max_runtime_ms: v.optional(v.number()),
       precheck: v.optional(v.string()),
+      precheck_mode: v.optional(v.union(v.literal("changes"), v.literal("state"))),
       role_focus: v.optional(v.string()),
       tune_why: v.optional(v.string()),
     }),
@@ -5720,6 +5862,14 @@ export default defineSchema({
     metrics: v.optional(v.array(metricValidator)),
     priority: v.optional(v.union(v.literal("p0"), v.literal("p1"), v.literal("p2"), v.literal("p3"))),
     owner_role_id: v.optional(v.id("org_roles")),
+    // The project's canonical session (session-projects.md SP4): the one its
+    // own composer first started, while it has no seated lead. A lead hired
+    // from the project adopts it as the seat's standing session.
+    default_session_id: v.optional(v.id("conversations")),
+    // Named after its main session (started with the composer's new project
+    // switch): the session's generated title becomes the project's until a
+    // person renames the project.
+    title_from_session: v.optional(v.boolean()),
     non_goals: v.optional(v.array(v.string())),
     risks: v.optional(v.array(v.string())),
     budget: v.optional(v.object({ tokens_per_day: v.optional(v.number()), hands_per_day: v.optional(v.number()) })),
@@ -7187,6 +7337,11 @@ export default defineSchema({
     password_hash: v.optional(v.string()),
     email_gate: v.optional(v.boolean()),
     expires_at: v.optional(v.number()),
+    // Team gate: the page belongs to a team whose policy marks its data as
+    // regulated (regulated_data), so only that team's signed-in members may
+    // open it. Set by the server whenever the page's workspace or publishing
+    // device answers to such a team; never cleared while the team is regulated.
+    team_gate: v.optional(v.id("teams")),
     thumb_storage_id: v.optional(v.id("_storage")),
     // Who created the CURRENT version when it came from a link/team editor
     // (absent for owner publishes). Carried into artifact_versions when the

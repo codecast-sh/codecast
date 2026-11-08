@@ -55,7 +55,7 @@ const ALARM_CEILING = 0.08;
 
 const CUES: Array<{ name: string; spec: CueSpec; ms: number }> = [
   { name: "joined", spec: WALKIE_JOINED, ms: 310 },
-  { name: "keyUp", spec: WALKIE_KEY_UP, ms: 185 },
+  { name: "keyUp", spec: WALKIE_KEY_UP, ms: 720 },
   { name: "roger", spec: WALKIE_ROGER, ms: 130 },
   { name: "open", spec: WALKIE_OPEN, ms: 105 },
   { name: "away", spec: WALKIE_AWAY, ms: 90 },
@@ -177,15 +177,13 @@ describe("every cue is long enough to register and short enough to stay out of t
     });
   }
 
-  test("keyUp is the two-tone rise it is described as", () => {
-    // Two notes, the second higher than the first, overlapping so they read as
-    // one gesture rather than two beeps.
-    const [a, b] = WALKIE_KEY_UP.tones!;
-    expect(b.freq).toBeGreaterThan(a.freq);
-    expect(b.start).toBeLessThan(a.start + a.dur);
+  test("keyUp is a recording of a real walkie key-up, and nothing synthesized", () => {
+    expect(WALKIE_KEY_UP.sample?.src).toBe("/sounds/walkie-key-up.mp3");
+    expect(WALKIE_KEY_UP.tones ?? []).toHaveLength(0);
+    expect(WALKIE_KEY_UP.noise ?? []).toHaveLength(0);
   });
 
-  test("roger falls where keyUp rises", () => {
+  test("roger falls", () => {
     const r = WALKIE_ROGER.tones![0];
     expect(r.sweepTo).toBeLessThan(r.freq);
   });
@@ -201,15 +199,6 @@ describe("every cue is long enough to register and short enough to stay out of t
 
     expect(Math.min(...steps(climb))).toBeGreaterThan(Math.max(...steps(triad)));
     expect(climb[2] / climb[0]).toBeGreaterThan(triad[2] / triad[0]);
-  });
-
-  test("joined does not sound like keyUp either", () => {
-    // They share a top note on purpose — both are walkie, both centre on E —
-    // so the separation has to come from the other two axes: joined is three
-    // sine voices over 310ms, keyUp is two filtered squares over 185ms.
-    expect(WALKIE_JOINED.tones!.length).toBeGreaterThan(WALKIE_KEY_UP.tones!.length);
-    expect(WALKIE_JOINED.tones!.every((t) => (t.type ?? "sine") === "sine")).toBe(true);
-    expect(WALKIE_KEY_UP.tones!.every((t) => t.type === "square")).toBe(true);
   });
 
   test("open is two clicks at one pitch, not a tune", () => {
@@ -235,7 +224,8 @@ describe("every cue is long enough to register and short enough to stay out of t
     // tenth. squelch is exempt because band-limited noise sitting at 1800 Hz
     // straddles the line by construction, and it is the quietest of the six.
     for (const { name, spec } of CUES) {
-      if (name === "squelch") continue;
+      // squelch is noise; a recording is not rendered, so it has no share to measure.
+      if (name === "squelch" || spec.sample) continue;
       expect(cueHighBandShare(spec), name).toBeLessThan(0.1);
     }
   });
@@ -254,6 +244,11 @@ describe("every cue is long enough to register and short enough to stay out of t
 
 let oscStarts = 0;
 let bufferStarts = 0;
+/** Starts of a decoded recording (keyUp), apart from the squelch's noise buffer. */
+let sampleStarts = 0;
+
+/** Let a recording's fetch and decode finish, so its start is counted. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
 
 function fakeParam() {
   return {
@@ -275,15 +270,24 @@ class FakeAudioContext {
     return { type: "sine", frequency: fakeParam(), connect() {}, start() { oscStarts++; }, stop() {} };
   }
   createBuffer(_ch: number, len: number) { return { getChannelData: () => new Float32Array(len) }; }
+  decodeAudioData() { return Promise.resolve({ decoded: true }); }
   createBufferSource() {
-    return { buffer: null, connect() {}, start() { bufferStarts++; }, stop() {} };
+    return {
+      buffer: null as any,
+      connect() {},
+      start() { if (this.buffer?.decoded) sampleStarts++; else bufferStarts++; },
+      stop() {},
+    };
   }
   createBiquadFilter() {
     return { type: "lowpass", frequency: fakeParam(), Q: fakeParam(), connect() {} };
   }
 }
 
-const restoreGlobals = replaceGlobals({ AudioContext: FakeAudioContext });
+const restoreGlobals = replaceGlobals({
+  AudioContext: FakeAudioContext,
+  fetch: async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }),
+});
 afterAll(restoreGlobals);
 
 const realDesktop = { ...await import("../desktop") };
@@ -297,6 +301,7 @@ describe("who is allowed to sound which cue", () => {
   beforeEach(() => {
     oscStarts = 0;
     bufferStarts = 0;
+    sampleStarts = 0;
     isLeader = true;
     // Another sound test's stand-in context would otherwise still be cached
     // in sounds.ts and nothing below would count. See `resetAudioContext`.
@@ -305,10 +310,11 @@ describe("who is allowed to sound which cue", () => {
     // sounds_enabled defaults on: the store reads `!== false`.
   });
 
-  test("each cue builds the voices its spec describes", () => {
+  test("each cue builds the voices its spec describes", async () => {
     sounds.soundWalkieKeyUp();
-    expect(oscStarts).toBe(2);
-    oscStarts = 0;
+    await settle();
+    expect(sampleStarts).toBe(1);
+    expect(oscStarts).toBe(0);
 
     sounds.soundWalkieRoger();
     expect(oscStarts).toBe(1);
@@ -329,7 +335,7 @@ describe("who is allowed to sound which cue", () => {
     expect(bufferStarts).toBe(1);
   });
 
-  test("your own burst still sounds in a window that is not the leader", () => {
+  test("your own burst still sounds in a window that is not the leader", async () => {
     // Only one window holds the key, so the election has nothing to settle:
     // gating these would silence the person who pressed.
     isLeader = false;
@@ -337,7 +343,9 @@ describe("who is allowed to sound which cue", () => {
     sounds.soundWalkieRoger();
     sounds.soundWalkieJoined();
     sounds.soundWalkieAway();
-    expect(oscStarts).toBe(8);
+    await settle();
+    expect(sampleStarts).toBe(1);
+    expect(oscStarts).toBe(6);
   });
 
   test("a teammate's burst sounds only in the leader window", () => {
@@ -356,12 +364,14 @@ describe("who is allowed to sound which cue", () => {
     expect(bufferStarts).toBe(1);
   });
 
-  test("a preview plays in any window, because a click is not an announcement", () => {
+  test("a preview plays in any window, because a click is not an announcement", async () => {
     isLeader = false;
     for (const cue of sounds.WALKIE_PREVIEWS) sounds.previewWalkieCue(cue.spec);
-    // Every tonal cue's voices, plus the squelch's one noise burst.
-    expect(oscStarts).toBe(10);
+    await settle();
+    // Every synthesized cue's voices, the squelch's one noise burst, keyUp's recording.
+    expect(oscStarts).toBe(8);
     expect(bufferStarts).toBe(1);
+    expect(sampleStarts).toBe(1);
   });
 
   test("the previews cover every cue exactly once", () => {
@@ -381,6 +391,7 @@ describe("the switches", () => {
     useInboxStore.setState({ clientState: { ...(before ?? {}), ui: { ...(before?.ui ?? {}), ...ui } } } as any);
     oscStarts = 0;
     bufferStarts = 0;
+    sampleStarts = 0;
     sounds.resetAudioContext();
     try {
       sounds.soundWalkieKeyUp();
@@ -389,11 +400,15 @@ describe("the switches", () => {
       sounds.soundWalkieAway();
       sounds.soundWalkieOpen();
       sounds.soundWalkieSquelch();
+      await settle();
       expect(oscStarts).toBe(0);
       expect(bufferStarts).toBe(0);
+      expect(sampleStarts).toBe(0);
       for (const cue of sounds.WALKIE_PREVIEWS) sounds.previewWalkieCue(cue.spec);
-      expect(oscStarts).toBe(10);
+      await settle();
+      expect(oscStarts).toBe(8);
       expect(bufferStarts).toBe(1);
+      expect(sampleStarts).toBe(1);
     } finally {
       useInboxStore.setState({ clientState: before } as any);
     }

@@ -4,6 +4,7 @@ import { UsageError } from '@platform/evals/cli';
 import { stripInjectionNoise } from '@codecast/shared/contracts';
 
 import { cliFetchRead } from '../../../../cli/src/cliHttp';
+import { NO_TEAM_CONTENT_GATE } from '../../../../convex/convex/lib/vendorGuard';
 import { contextFromRows, haikuRequest, isConversationTurn, isGenericNudge, isMachineCarrierText, normalizeForMatch, predictSuggestions, type StoredProfile } from '../../../../convex/convex/composerSuggestions';
 import { parseJsonBlock } from '../../../../convex/convex/lib/anthropic';
 import { apiConfig, splitLineRef, toConvoMessages, toRows, type CliReadConversation, type CliReadMessage, type MessageRow } from '../../adapters/convo';
@@ -256,7 +257,7 @@ const impl: SurfaceImpl = {
   },
 
   async replay(snap: SuggestSnap, ctx) {
-    const predicted = await predictSuggestions(contextOf(snap), scrubTruth(snap.profile, snap.truth), 'anthropic', async (opts) => {
+    const predicted = await predictSuggestions(contextOf(snap), scrubTruth(snap.profile, snap.truth), 'anthropic', NO_TEAM_CONTENT_GATE, async (opts) => {
       // prod's anthropic branch posts exactly this request (llmComplete).
       const r = await ctx.call(haikuRequest(opts.prompt, opts.maxTokens));
       // A dry call echoes the prompt; the canned answer is the one the prompt calls most common.

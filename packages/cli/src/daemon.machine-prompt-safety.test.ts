@@ -23,7 +23,7 @@ import { SwapHeldError } from "./herdTake";
 import { TerminalHoldError } from "./terminalHold";
 import { ghosttyPane } from "./ghostty";
 import { unreachableTerminalOf } from "../../shared/contracts/deliveryHold";
-import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
+import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
 import { planHandoffTarget } from "./planHandoff";
@@ -31,7 +31,7 @@ import { waitForHandHost } from "./handHostGrace";
 
 // The fixture lifts delivery code out of daemon.ts by name; the pane classifiers
 // it calls live in tmuxPaneState.ts, so both files are read as one source.
-const source = ["./daemon.ts", "./tmuxPaneState.ts"].map(file => fs.readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
+const source = ["./daemon.ts", "./tmuxPaneState.ts", "./pollMessage.ts"].map(file => fs.readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
 const scratch: string[] = [];
 afterEach(() => { for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); clearPromptHolds(); setPendingRedrive(null); });
 const poll = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Deploy" });
@@ -190,6 +190,7 @@ function fixture(transport = "tmux", cached = true) {
     ensureTmuxPaneWide: async () => {}, glyphlessPromptPattern: () => null,
     classifyGlyphlessClientPaneState: fail("glyphless classification"), paneHasNoAgent: async () => false,
     acceptTrustPrompt: fail("trust input"), answerResumeCwdPicker: fail("cwd input"), DEAD_PANE_ERROR: "dead",
+    CLAUDE_OVERPAINTED_RULE,
     CLAUDE_TURN_STATUS_LINE,
     log: () => {}, logDelivery: () => {}, logConvexFailure: fail("convex failure"),
     // Free variables of the lifted delivery path. The real helper where it is
@@ -262,6 +263,7 @@ function fixture(transport = "tmux", cached = true) {
     messageRetryTimers: new Set(), injectedMarkWrites, syncService, conversationCache: cached ? { sid: "conv" } : {}, titleCache: {},
     sendAgentStatus: () => {}, recentSessionInjections: new Map(), resetReconnectDelay: () => {},
     checkForInteractivePrompt: async () => {},
+    claudeSdkBackend: null,
   };
   if (!fixtureFactory) {
     const names = [

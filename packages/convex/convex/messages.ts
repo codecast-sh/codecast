@@ -1,6 +1,7 @@
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { DELIVERED_ECHO_ADOPTION_WINDOW_MS, findEchoedPendingMessage, imageEchoMatchesPending, injectedImageRefs, injectedImageStorageIds, pendingImageStorageIds, resolveEchoImages, verifiedEchoImages } from "./lib/echoMatch";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
+import { clipText } from "./lib/wellFormed";
 import { claimShareToken } from "./publicShare";
 import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
@@ -1910,7 +1911,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
         convPatch.last_user_message_at = lastUserTs;
       }
       const previewSrc = lastUserContentStored || lastUserMsg.content;
-      const preview = redactSecrets(previewSrc || "").replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
+      const preview = clipText(redactSecrets(previewSrc || "").replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim(), 200);
       if (preview) {
         convPatch.last_message_preview = preview;
       }

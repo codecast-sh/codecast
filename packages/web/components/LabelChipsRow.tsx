@@ -17,6 +17,8 @@ import {
   type BucketItem,
 } from "../store/inboxStore";
 import { clickBucketChip, clickProjectChip } from "../store/chipFilterClicks";
+import { projectChipLabel, workProjectIdOfChipKey } from "../store/workProjects";
+import { useRouter } from "next/navigation";
 import { getLabelColor } from "../lib/labelColors";
 import { OWNS_MODIFIER_CLICK } from "../lib/openIntent";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
@@ -67,6 +69,8 @@ export function LabelChipsRow({
 }) {
   const s = useTrackedStore([
     st => st.buckets,
+    // Titles for project chips (`pj:` keys); the collection changes rarely.
+    st => st.projects,
     st => st.activeBucketFilter,
     st => st.activeProjectFilter,
     st => st.chipFilterExclude,
@@ -75,6 +79,11 @@ export function LabelChipsRow({
     st => st.extraProjectFilters,
   ]);
   const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
+  const router = useRouter();
+  // A project-axis chip is a project (`pj:` key, shown by its title) or a folder.
+  const chipLabel = (name: string) => projectChipLabel(name, s.projects);
+  const workProjects = useMemo(() => projectCounts.filter(([name]) => workProjectIdOfChipKey(name)), [projectCounts]);
+  const folders = useMemo(() => projectCounts.filter(([name]) => !workProjectIdOfChipKey(name)), [projectCounts]);
   // Each filter axis as a list (head chip + shift-added terms) — every chip
   // finds its own entry here to know whether it's active and in which polarity.
   const labelFilters = useMemo(
@@ -585,7 +594,8 @@ export function LabelChipsRow({
           </button>
         )}
         {projectCounts.map(([name, count]) => {
-          const pc = getLabelColor(name);
+          const label = chipLabel(name);
+          const pc = getLabelColor(label);
           const term = projectFilters.find((t) => t.id === name);
           const active = !!term;
           const excluded = !!term?.exclude;
@@ -606,14 +616,14 @@ export function LabelChipsRow({
                   ? `${pc.bg} ${pc.text}`
                   : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
               }`}
-              title={active ? filterChipTitle(name, excluded, sole) : `Project: ${name} — click to filter, right-click for more`}
+              title={active ? filterChipTitle(label, excluded, sole) : `${workProjectIdOfChipKey(name) ? "Project" : "Folder"}: ${label} — click to filter, right-click for more`}
             >
               {/* Same exclude cues + constant-width construction as the label
                   chips above. */}
               <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-full ${pc.dot}`} ${active ? "" : "opacity-50"}`} />
               <span className="inline-grid">
-                <span aria-hidden className="invisible font-medium col-start-1 row-start-1">{name}</span>
-                <span className={`col-start-1 row-start-1 ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{name}</span>
+                <span aria-hidden className="invisible font-medium col-start-1 row-start-1">{label}</span>
+                <span className={`col-start-1 row-start-1 ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{label}</span>
               </span>
               <span className="ml-0.5 opacity-50">{count}</span>
             </button>
@@ -664,18 +674,19 @@ export function LabelChipsRow({
         const project = projectCounts.find(([name]) => name === term.id);
         if (!project) return null;
         const [name, count] = project;
-        const pc = getLabelColor(name);
+        const label = chipLabel(name);
+        const pc = getLabelColor(label);
         const excluded = !!term.exclude;
         return (
           <button
             key={`pin:project:${name}`}
             onClick={(e) => clickProjectChip(name, projectPathByName[name] || null, e.altKey, e.shiftKey)}
             onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name })}
-            title={filterChipTitle(name, excluded, projectFilters.length === 1)}
+            title={filterChipTitle(label, excluded, projectFilters.length === 1)}
             className={`min-w-0 max-w-[8rem] px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${pc.bg} ${pc.text}`}
           >
             <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-full ${pc.dot}`}`} />
-            <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{name}</span>
+            <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{label}</span>
             <span className="ml-0.5 opacity-50 tabular-nums flex-shrink-0">{count}</span>
           </button>
         );
@@ -853,15 +864,16 @@ export function LabelChipsRow({
               className="w-full px-2 py-1 rounded-md text-[11px] bg-sol-bg-alt/50 border border-sol-border/40 text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/50"
             />
           </div>
-          {projectCounts.length > 0 && (
-            <>
-              {/* Each row is a session folder (its repo root, else where it
-                  ran), not a Codecast project, which groups tasks and docs. */}
+          {[["Projects", workProjects], ["Folders", folders]].map(([heading, rows]) => (rows as Array<[string, number]>).length > 0 && (
+            <div key={heading as string}>
+              {/* Projects are Codecast projects (the sessions working in
+                  them, store/workProjects); a folder is where a session ran. */}
               <div className="mt-0.5 border-t border-sol-border/40 px-3 pt-2 pb-1 text-[9px] font-semibold uppercase tracking-widest text-sol-text-dim/70">
-                Folders
+                {heading as string}
               </div>
-              {projectCounts.map(([name, count]) => {
-                const pc = getLabelColor(name);
+              {(rows as Array<[string, number]>).map(([name, count]) => {
+                const label = chipLabel(name);
+                const pc = getLabelColor(label);
                 const term = projectFilters.find((t) => t.id === name);
                 const active = !!term;
                 const excluded = !!term?.exclude;
@@ -883,13 +895,13 @@ export function LabelChipsRow({
                   >
                     <span className="w-3" />
                     <span className={`w-2 flex-shrink-0 ${excluded ? `h-[2px] rounded-full ${pc.dot}` : `h-2 rounded-full ${pc.dot}`}`} />
-                    <span className={`flex-1 truncate ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{name}</span>
+                    <span className={`flex-1 truncate ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{label}</span>
                     <span className="text-[10px] tabular-nums text-sol-text-dim/70">{count}</span>
                   </div>
                 );
               })}
-            </>
-          )}
+            </div>
+          ))}
         </div>,
         document.body
       )}
@@ -912,8 +924,8 @@ export function LabelChipsRow({
               }
             : {
                 id: p.name,
-                name: p.name,
-                noun: "folder",
+                name: chipLabel(p.name),
+                noun: workProjectIdOfChipKey(p.name) ? "project" : "folder",
                 filters: projectFilters,
                 set: (id: string | null, exclude?: boolean) => store.setActiveProjectFilter(id, id ? projectPathByName[p.name] || null : null, exclude),
                 toggle: (exclude: boolean) => store.toggleProjectFilterTerm(p.name, projectPathByName[p.name] || null, exclude),
@@ -959,6 +971,14 @@ export function LabelChipsRow({
                 <CtxItem icon={EyeOff} trailing={shiftAltClickHint} onSelect={() => axis.toggle(true)}>
                   Also hide this {axis.noun}
                 </CtxItem>
+              )}
+              {p.kind === "project" && workProjectIdOfChipKey(p.name) && (
+                <>
+                  <CtxSeparator />
+                  <CtxItem icon={ChevronRight} onSelect={() => router.push(`/projects/${s.projects[workProjectIdOfChipKey(p.name)!]?.short_id || workProjectIdOfChipKey(p.name)}`)}>
+                    Open project
+                  </CtxItem>
+                </>
               )}
               {p.kind === "label" && (
                 <>

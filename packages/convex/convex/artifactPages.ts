@@ -73,7 +73,7 @@ export interface BrandOpts {
   views?: number;
   commentCount?: number;
   commentsEnabled?: boolean;
-  gated?: { password: boolean; email: boolean };
+  gated?: { team?: boolean; password: boolean; email: boolean };
   editMode?: string;
   live?: boolean;
   hasThumb?: boolean;
@@ -546,6 +546,7 @@ function barHtml(o: BrandOpts): string {
   var qs=new URLSearchParams(location.search);
   var gateK=qs.get("k")||"";
   var gateE=qs.get("e")||"";
+  var gateM=qs.get("m")||"";
   // Opaque-origin storage: localStorage throws under the sandbox CSP, so every
   // touch is guarded and falls back to page-lifetime memory.
   var mem={};
@@ -804,8 +805,8 @@ function barHtml(o: BrandOpts): string {
   });
   if(!CC.metaUrl)return;
   var api=function(path,body){return fetch(CC.apiBase+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});};
-  // View beacon — one per page load; carries the gate email when present.
-  try{api("/cli/artifacts/view",{slug:CC.slug,email:gateEmail||undefined,k:gateK||undefined,e:gateE||undefined});}catch(e){}
+  // View beacon — one per page load; carries the gate email and the signed-in identity when present.
+  try{api("/cli/artifacts/view",{slug:CC.slug,email:gateEmail||undefined,k:gateK||undefined,e:gateE||undefined,m:gateM||undefined,identity_token:idTok||undefined});}catch(e){}
   // Resolve the identity token to a display identity (+ @mention roster for
   // teammates). Server-authoritative: a bad token silently degrades the page
   // back to anonymous commenting.
@@ -834,7 +835,7 @@ function barHtml(o: BrandOpts): string {
   };
   // Version links stay on whatever host serves this document. r is a
   // cache-buster (new URL → new cache key past the 60s edge/browser cache).
-  // EVERY navigation must carry the gate tokens (k/e) and live flag forward,
+  // EVERY navigation must carry the gate tokens (m/k/e) and live flag forward,
   // or a reload on a gated page lands back on the password wall. This helper
   // (and the a.back rewrite in pageShell) is the single place that encodes
   // WHERE tokens live: the query string. If gated bundle assets ever move
@@ -842,7 +843,7 @@ function barHtml(o: BrandOpts): string {
   // change in the same commit or in-page nav strands unlocked viewers.
   var keepHash=location.hash||"";
   var withQ=function(extra){var q=new URLSearchParams(location.search);var out=new URLSearchParams();
-    ["k","e","live"].forEach(function(p){var val=q.get(p);if(val)out.set(p,val);});
+    ["m","k","e","live"].forEach(function(p){var val=q.get(p);if(val)out.set(p,val);});
     if(CC.live)out.set("live","1");
     Object.keys(extra).forEach(function(p){out.set(p,String(extra[p]));});
     return location.pathname+"?"+out.toString()+keepHash;};
@@ -1238,7 +1239,7 @@ function barHtml(o: BrandOpts): string {
     sSet("__cc_name",name||"");
     api("/cli/artifacts/comment",{slug:CC.slug,author_name:me?me.name:((name||"").trim()||"anonymous"),
       author_email:gateEmail||undefined,version:CC.version,
-      k:gateK||undefined,e:gateE||undefined,
+      k:gateK||undefined,e:gateE||undefined,m:gateM||undefined,
       deliver:false,
       owner_key:ownerKey||undefined,
       identity_token:idTok||undefined,
@@ -1469,7 +1470,7 @@ function barHtml(o: BrandOpts): string {
           api("/cli/artifacts/comment",{slug:CC.slug,
             author_name:me?me.name:(sGet("__cc_name")||"anonymous"),
             author_email:gateEmail||undefined,version:CC.version,
-            k:gateK||undefined,e:gateE||undefined,
+            k:gateK||undefined,e:gateE||undefined,m:gateM||undefined,
             deliver:false,owner_key:ownerKey||undefined,identity_token:idTok||undefined,
             parent_id:tid,comments:[{text:txt}]})
           .then(function(r){
@@ -1638,7 +1639,7 @@ function barHtml(o: BrandOpts): string {
 
     mgr.appendChild(el("div","__cc_h2","Editing"));
     var seg=el("div","__cc_chips");
-    ["owner","link","team"].forEach(function(m){
+    (ac.team_only?["owner","team"]:["owner","link","team"]).forEach(function(m){
       var b=el("button","__cc_chip2"+((ac.edit_mode||"owner")===m?" __cc_segon":""),m);b.type="button";
       b.addEventListener("click",function(){if((ac.edit_mode||"owner")!==m){b.disabled=true;mset({edit_mode:m});}});
       seg.appendChild(b);
@@ -1756,7 +1757,7 @@ function barHtml(o: BrandOpts): string {
 function ogMeta(o: BrandOpts): string {
   const author = o.author ? ` by ${escAttr(o.author)}` : "";
   const image =
-    o.hasThumb && o.apiBase && o.slug && !(o.gated?.password || o.gated?.email)
+    o.hasThumb && o.apiBase && o.slug && !(o.gated?.team || o.gated?.password || o.gated?.email)
       ? `\n<meta property="og:image" content="${escAttr(`${o.apiBase}/cli/a/${o.slug}?thumb=1`)}">\n<meta name="twitter:card" content="summary_large_image">`
       : `\n<meta name="twitter:card" content="summary">`;
   return `
@@ -1864,7 +1865,7 @@ ${body}
     var base=hashAt>=0?href.slice(0,hashAt):href;
     var qAt=base.indexOf("?");
     var params=new URLSearchParams(qAt>=0?base.slice(qAt+1):"");
-    ["k","e","live"].forEach(function(p){var v=q.get(p);if(v)params.set(p,v);});
+    ["m","k","e","live"].forEach(function(p){var v=q.get(p);if(v)params.set(p,v);});
     var qs=params.toString();
     a.href=location.pathname+(qs?"?"+qs:"")+hash;
   });
@@ -1953,6 +1954,28 @@ ${PAGE_GATE_SIGNAL}
   });
 })();</script>`;
   return pageShell(o.title, body);
+}
+
+/** A team-gated page (regulated data) seen without its member token. A member
+ * opens it through the app: /pages/auth signs them in, asks ownerUnlock for the
+ * token, and comes back here with it. Names the team, never the page, whose
+ * title may itself be regulated data. */
+export function teamGatePage(o: { slug: string; teamName: string | null; shareUrl: string }): string {
+  let origin = "https://codecast.sh";
+  try { origin = new URL(o.shareUrl).origin; } catch { /* default host */ }
+  const open = `${origin}/pages/auth?slug=${encodeURIComponent(o.slug)}&back=${encodeURIComponent(o.shareUrl)}`;
+  const team = o.teamName ? escHtml(o.teamName) : "this team";
+  const body = `
+${PAGE_GATE_SIGNAL}
+<div class="top"><a class="brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer">${logoSvg(22)}</a></div>
+<div class="card" style="max-width:420px;margin:12vh auto 0">
+  <div class="glyph">${LOCK_SVG}</div>
+  <h1 style="font-size:16px;color:var(--ink);margin:0 0 6px">${team} members only</h1>
+  <p style="margin:0 0 18px;opacity:.7">Sign in with an account in ${team} to open it.</p>
+  <a class="primary" id="go" href="${escAttr(open)}" style="display:block;text-align:center;text-decoration:none">Open in Codecast</a>
+</div>
+<script>(function(){var a=document.getElementById("go");try{var u=new URL(a.href);u.searchParams.set("back",location.href);a.href=u.toString();}catch(e){}})();</script>`;
+  return pageShell("Members only", body);
 }
 
 export function expiredPage(o: { title: string }): string {

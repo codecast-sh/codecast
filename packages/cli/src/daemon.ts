@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 import { LOGIN_PATH_FILENAME } from "./loginShellPath.js";
+import { parsePollMessage, pollDeclineText, pollMenuSteps, type PollMessage } from "./pollMessage.js";
+import { ClaudeSdkBackend } from "./claudeSdk/backend.js";
+import { chooseClaudeBackend, sdkBackendRefusal } from "./claudeSdk/select.js";
+import type { SdkLaunchSpec } from "./claudeSdk/options.js";
+import type { SdkPermissionAnswer } from "./claudeSdk/protocol.js";
 import { restoreSuspendedAgent } from "./tmuxSuspendedAgent.js";
 import { transcriptContainsDelivery } from "./tmuxDeliveryTranscript.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
@@ -86,7 +91,7 @@ import { checkoutOfMoveClone, copyAgentAuthToRemoteAsync, copyCredentialToRemote
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush, primeGhToken } from "./remote/agentAuth.js";
 import { hostForDevice, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
 import {
-  AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocketEnv,
+  AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocket, hostAgentSocketEnv,
   bridgeAddressStale, shouldRunBridge,
 } from "./cloud/agentBridge.js";
 import { HeldConnections } from "./cloud/heldConnection.js";
@@ -94,7 +99,7 @@ import {
   REACH_MOUNTED_LINE, REACH_TICK_MS, reachHostRefusal, reachLaptopArgs, reachRefusal, reachRemoveArgs, writeReachStatus,
   type ReachFolder, type ReachState, type ReachStatus,
 } from "./cloud/reach.js";
-import { worktreeEnvPrefix } from "./worktreeEnv.js";
+import { worktreeEnv, worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
 import { startMirrorProcess } from "./cloud/mirror/process.js";
 import { releaseSessionWorktree, runTreesInUseVia } from "./worktreeGc.js";
@@ -268,7 +273,7 @@ import { TokenDecryptError } from "./tokenEncryption.js";
 import { bearerFromStored, secretFromStored, storedFromBearer } from "./bearerToken.js";
 import { knownValueNames, refreshKnownVault, startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
 import { VAULT_REFRESH_PATH, vaultRedactionSource } from "./secrets/redactionSource.js";
-import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
+import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, CLOUD_ENV_VAR, agentEnvScrub, LAUNCH_TOKEN_VAR, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
 import { handStartedAt, launchTokenLedger } from "./launchToken.js";
 import { waitForHandHost } from "./handHostGrace.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
@@ -287,15 +292,24 @@ import { subagentPromptParent } from "./agentPromptOrigin.js";
 import { declaredSpawnParent } from "./spawnParents.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
+import { RUN_TIMEOUT_MS } from "@codecast/shared/contracts/commandRun";
+import { personEnv } from "./sessionIdentity.js";
 import { RetryQueue, flushRetryQueueForShutdown, isSessionRefusal, type RetryOperation } from "./retryQueue.js";
 import { cursorDbOpenPath } from "./cursorDbPath.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
 import { detectPermissionPrompt } from "./permissionDetector.js";
-import { handlePermissionRequest, type PermissionDecision } from "./permissionHandler.js";
+import { watchPromptSettled } from "./permissionPromptWatch.js";
+import { describeRemovals, type RemovalPreview } from "./removalPreview.js";
+import { isOutsideGitRepo } from "./gitRepoProbe.js";
+import { handlePermissionRequest, settlePermission, waitForPermissionDecision, type PermissionDecision, type PermissionSource } from "./permissionHandler.js";
+import { boundedRuleRequest, codexApprovalRequest, keptPatterns, type PermissionRuleRequest } from "@codecast/shared/contracts/permissionRules";
 import {
   PermissionHookWaiters,
+  glanceCommand,
+  permissionDecisionOutput,
   parsePermissionHookInput,
+  projectRootOf,
   PERMISSION_HOOK_PATH,
   PERMISSION_LAUNCH_TOKEN_HEADER,
   PERMISSION_HOOK_MAX_BODY,
@@ -387,7 +401,7 @@ import { setBackgroundSessions, setGovernorBackground } from "./backgroundPriori
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
+import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -1847,6 +1861,13 @@ const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 // live sessions dead fleet-wide.
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk" | "auto";
 const PERMISSION_MODES: ReadonlySet<string> = new Set(["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk", "auto"]);
+// Shift+Tab's cycle in Claude Code, for an SDK session asked to step its mode
+// (codecast launches every Claude with bypass allowed, so bypass is in it).
+const SDK_PERMISSION_MODE_CYCLE = ["default", "acceptEdits", "plan", "bypassPermissions"] as const;
+function nextSdkPermissionMode(current: string | null | undefined): string {
+  const i = SDK_PERMISSION_MODE_CYCLE.indexOf((current ?? "default") as (typeof SDK_PERMISSION_MODE_CYCLE)[number]);
+  return SDK_PERMISSION_MODE_CYCLE[(i + 1) % SDK_PERMISSION_MODE_CYCLE.length];
+}
 // Claude Code paints the active permission mode in its composer footer
 // ("⏵⏵ bypass permissions on (shift+tab to cycle)", "⏸ plan mode on",
 // "⏸ manual mode on"). Which mode a shift+tab lands on is the TUI's own
@@ -3158,8 +3179,14 @@ export async function extractPendingToolUseFromTranscriptAsync(transcriptPath: s
 
 // Prompts answered by their own card (a question, a plan, a task move), never
 // by an Approve/Deny row. Matches PERMISSION_SKIP_TOOLS on the web.
+// How long an SDK session's permission prompt waits on its card; canUseTool itself has no deadline.
+const SDK_PERMISSION_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
 const PERMISSION_CARD_SKIP_TOOLS: ReadonlySet<string> = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
 const permissionRecordPending = new Set<string>();
+// Sessions whose PermissionRequest hook is being settled against codecast's
+// rules: the status path opens no card meanwhile, since the hook opens
+// its own if the rules leave the call to a person.
+const permissionSettling = new Map<string, number>();
 // The id of the web card a session's open prompt got, once it exists. A
 // PermissionRequest hook that arrives after a Notification already opened the
 // card binds to it rather than opening a second one.
@@ -3314,13 +3341,16 @@ function logConvexFailure(err: unknown): void {
 // not found" while message sync (keyed by conversation _id) stayed healthy, so
 // nothing surfaced the break (union-mobile fleet, 2026-08-29). Ride the durable
 // retry queue instead: never rejects, so callers may await it or drop it.
+// A cwd that git says is outside any repo is reported as such, so the server
+// drops the git_root a web-started stub guessed from the chosen folder.
 async function pushSessionIdBinding(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string): Promise<void> {
+  const notARepo = !gitRoot && !!projectPath && (await isOutsideGitRepo(projectPath));
   try {
-    await syncServiceRef?.updateSessionId(conversationId, sessionId, projectPath, gitRoot, gitRemoteUrl);
+    await syncServiceRef?.updateSessionId(conversationId, sessionId, projectPath, gitRoot, gitRemoteUrl, notARepo);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`updateSessionId failed for ${conversationId.slice(0, 12)} <- ${sessionId.slice(0, 8)}: ${msg}; queuing for retry`, "warn");
-    retryQueueRef?.add("updateSessionId", { conversationId, sessionId, projectPath, gitRoot, gitRemoteUrl }, msg);
+    retryQueueRef?.add("updateSessionId", { conversationId, sessionId, projectPath, gitRoot, gitRemoteUrl, notARepo }, msg);
   }
 }
 
@@ -5862,6 +5892,52 @@ function disclaimPrefix(): string {
   return buildDisclaimShellPrefix([cmd, ...prefixArgs].join(" "));
 }
 
+/** disclaimPrefix as argv, for a launch that execs without a shell (the Claude SDK host's claude). */
+function disclaimArgv(): string[] {
+  const { cmd, prefixArgs } = resolveCastInvocation();
+  return buildDisclaimShellPrefix(cmd) ? [cmd, ...prefixArgs, "_disclaimed", "--"] : [];
+}
+
+/** A definition's tool policy and prompt for an SDK launch: the argv and prompt the tmux path types as a shell fragment. */
+async function sdkDefinitionFlags(def: AgentDefinitionSpec): Promise<{ args: string[]; appendSystemPrompt?: string; warning?: string }> {
+  // Loaded inside the one command that launches from a definition (boot graph guard).
+  const { definitionLaunchFlags, describeDropped } = await import("./agentLaunch.js");
+  const { resolveAgentLaunch } = await import("@codecast/shared/contracts");
+  const flags = definitionLaunchFlags(resolveAgentLaunch(def, { agent: "claude" }, "claude"), "claude");
+  const args = [...flags.args, ...(flags.systemPrompt ? ["--system-prompt", flags.systemPrompt] : [])];
+  return { args, appendSystemPrompt: flags.systemPrompt ? undefined : flags.appendSystemPrompt, warning: describeDropped(def.name, flags.dropped) ?? undefined };
+}
+
+/** Record that `sessionId` is this conversation's session, here and on the server. */
+async function bindSessionToConversation(conversationId: string, sessionId: string, cwd: string): Promise<void> {
+  const cache = readConversationCache();
+  cache[sessionId] = conversationId;
+  if (conversationCacheRef) conversationCacheRef[sessionId] = conversationId;
+  saveConversationCache(cache);
+  if (!syncServiceRef) return;
+  // project_path/git_root follow the session's real cwd: it was launched there.
+  const gitInfo = await getGitInfo(cwd);
+  void pushSessionIdBinding(conversationId, sessionId, cwd, gitInfo?.repoRoot || gitInfo?.root, gitInfo?.remoteUrl);
+}
+
+/**
+ * Bind and register a session that runs on the Claude SDK backend. Like a
+ * codex app-server thread it has no pane, so it stays out of
+ * resumeSessionCache (the pane health sweep would read it as dead).
+ */
+async function bindSdkSession(conversationId: string, sessionId: string, cwd: string): Promise<void> {
+  const replaced = buildReverseConversationCache(readConversationCache())[conversationId];
+  if (replaced && replaced !== sessionId) stopManagedSessionHeartbeat(replaced);
+  await bindSessionToConversation(conversationId, sessionId, cwd);
+  clearHibernationPark(sessionId, conversationId);
+  if (!syncServiceRef) return;
+  syncServiceRef.claimSession(conversationId).catch(logConvexFailure);
+  syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
+  syncServiceRef.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(logConvexFailure);
+  syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+  ensureManagedSessionHeartbeat(sessionId);
+}
+
 /**
  * Run a `cast <args...>` subcommand in a child process WITHOUT blocking the
  * daemon's event loop. Critical for long, I/O-heavy subcommands (e.g. a remote
@@ -5956,9 +6032,23 @@ function startMigrateChild(key: string, args: string[]): { started: boolean; pid
   }
 }
 
+/** Run a `cast decide --run` command a person approved, and report it. */
+async function runApprovedCast(decisionId: string, argv: string[], cwd: string | undefined): Promise<void> {
+  const report = (state: "running" | "done" | "failed", extra: { exit_code?: number; output?: string } = {}) =>
+    syncServiceRef?.reportCommandRun({ decision_id: decisionId, state, ...extra }).catch((err: Error) => log(`[RUN] report ${state} for ${decisionId} failed: ${err.message}`));
+  await report("running");
+  // A person's shell, so the CLI sends no from_session and the act is theirs.
+  const env = personEnv();
+  if (cwd) env.CODECAST_CWD = cwd;
+  log(`[RUN] ${decisionId}: cast ${argv.join(" ").slice(0, 200)}`);
+  const res = await runCastCommand(argv, { env, cwd, timeoutMs: RUN_TIMEOUT_MS, inheritEnv: false });
+  const output = [res.stdout, res.stderr].filter((x) => x.trim()).join("\n");
+  await report(res.code === 0 ? "done" : "failed", { ...(res.code !== null ? { exit_code: res.code } : {}), output: res.code === null ? `${output}\nStopped after ${RUN_TIMEOUT_MS / 60000} minutes.` : output });
+}
+
 function runCastCommand(
   args: string[],
-  opts: { timeoutMs?: number; killGroup?: boolean; env?: Record<string, string>; cwd?: string } = {},
+  opts: { timeoutMs?: number; killGroup?: boolean; env?: Record<string, string>; cwd?: string; inheritEnv?: boolean } = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const timeoutMs = opts.timeoutMs ?? 30 * 60 * 1000;
   const { cmd, prefixArgs } = resolveCastInvocation();
@@ -5970,7 +6060,7 @@ function runCastCommand(
       child = spawn(cmd, [...prefixArgs, ...args], {
         // The daemon's launchd PATH has no node/bun/homebrew; the cast shim and
         // anything it execs (a browser driver, claude) need the agent PATH.
-        env: { ...process.env, ...opts.env, PATH: agentSpawnPath() },
+        env: { ...(opts.inheritEnv === false ? {} : process.env), ...opts.env, PATH: agentSpawnPath() },
         stdio: ["ignore", "pipe", "pipe"],
         ...(opts.cwd ? { cwd: opts.cwd } : {}),
         // killGroup: the child leads its own process group so the cap can
@@ -6208,14 +6298,15 @@ async function killConversationBackends(
   // (worktreeGc.ts) — killing a session is the one moment a worktree stops
   // being anybody's.
   let gcCwd: string | undefined = startedSessionTmux.get(conversationId)?.projectPath
-    ?? persistedAppServerThreads.get(conversationId)?.cwd;
+    ?? persistedAppServerThreads.get(conversationId)?.cwd
+    ?? claudeSdkBackend?.specFor(conversationId)?.cwd;
 
   // Tear down every backend bound to this conversation (app-server thread
   // and/or tmux), then stamp the kill-specific server status. Shared with
   // start_session so "one backend per conversation" is enforced identically
   // -- and so a split-brained conversation gets BOTH backends killed, not
   // just the first one matched.
-  const teardown = await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true });
+  const teardown = await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true, keepSdkBinding: true });
   if (teardown.killedAppServer && teardown.appServerThreadId) {
     if (syncServiceRef) {
       syncServiceRef.markSessionCompleted(conversationId).catch(logConvexFailure);
@@ -6226,6 +6317,12 @@ async function killConversationBackends(
   }
   if (teardown.killedTmux) {
     result = "killed_tmux";
+  }
+  if (teardown.killedSdk) {
+    // Stopped, not completed: as for a tmux pane, the server's kill decides that, and an account
+    // recycle (switch_account) resumes the session through this same teardown.
+    if (syncServiceRef) sendAgentStatus(syncServiceRef, conversationId, teardown.killedSdk, "stopped");
+    result = "killed_sdk";
   }
 
   const cache = readConversationCache();
@@ -6335,11 +6432,14 @@ async function killConversationBackends(
   // injected message.
   await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
 
-  if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardownPlan.reapPidTree) && !error) {
+  if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardown.killedSdk || teardownPlan.reapPidTree) && !error) {
     const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef
       ? syncServiceRef.isWorktreeShared(conversationId, p)
       : Promise.reject(new Error("No session roster")), runTreesInUseVia(liveWorkflowRunIds));
     log(`[WORKTREE-GC] ${verdict.action}${"reason" in verdict ? `: ${verdict.reason}` : ""}`);
+    // Its folder is gone, so an SDK session can no longer resume where it ran: a later Restart
+    // finds its folder the way a tmux resume does.
+    if (verdict.action === "released" && teardown.killedSdk) await claudeSdkBackend?.stop(conversationId, { forget: true });
   }
 
   if (!result) result = sessionId ? "no_process" : "no_session";
@@ -6952,9 +7052,18 @@ async function executeRemoteCommand(
           // register the tmux — wiping the in-flight/dedup state here let the
           // subscription re-process that message and inject the briefing twice
           // (ct-40212 incident, msg ns74720h).
-          if (torn.killedAppServer || torn.killedTmux) {
+          if (torn.killedAppServer || torn.killedTmux || torn.killedSdk) {
             await clearConversationDeliveryAndResumeState(conversationId, undefined, "RECONFIG");
           }
+        }
+
+        // Before any worktree is made, so a refused start leaves none behind.
+        if (agentType === "codex" && codexAppServerInstance?.binaryMissing) {
+          error = "Codex is not installed. Install it from https://codex.openai.com then restart your daemon.";
+          if (conversationId) {
+            syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
+          }
+          break;
         }
 
         let worktreeResult: WorktreeResult | null = null;
@@ -6985,14 +7094,6 @@ async function executeRemoteCommand(
             cwd = worktreeResult.worktreePath;
             log(`[WORKTREE] Created isolated worktree: ${worktreeResult.worktreeName} at ${cwd}`);
           }
-        }
-
-        if (agentType === "codex" && codexAppServerInstance?.binaryMissing) {
-          error = "Codex is not installed. Install it from https://codex.openai.com then restart your daemon.";
-          if (conversationId) {
-            syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
-          }
-          break;
         }
 
         // `cast stable off` removes the Claude SessionStart hook, but the
@@ -7036,10 +7137,12 @@ async function executeRemoteCommand(
         // Export the per-session stable-context choice (and the conversation id,
         // so the SessionStart hook records against it directly with no lookup
         // race). Values are validated above / Convex ids — shell-safe tokens.
-        const stableEnvParts: string[] = [];
-        if (stablePrefs.stable_mode) stableEnvParts.push(`${STABLE_ENV_MODE}=${stablePrefs.stable_mode}`);
-        if (stablePrefs.stable_exclude?.length) stableEnvParts.push(`${STABLE_ENV_EXCLUDE}=${stablePrefs.stable_exclude.join(",")}`);
-        if (conversationId && /^[a-z0-9]+$/i.test(conversationId)) stableEnvParts.push(`${STABLE_ENV_CONVERSATION_ID}=${conversationId}`);
+        const stableEnvVars: Record<string, string> = {
+          ...(stablePrefs.stable_mode ? { [STABLE_ENV_MODE]: stablePrefs.stable_mode } : {}),
+          ...(stablePrefs.stable_exclude?.length ? { [STABLE_ENV_EXCLUDE]: stablePrefs.stable_exclude.join(",") } : {}),
+          ...(conversationId && /^[a-z0-9]+$/i.test(conversationId) ? { [STABLE_ENV_CONVERSATION_ID]: conversationId } : {}),
+        };
+        const stableEnvParts = Object.entries(stableEnvVars).map(([k, v]) => `${k}=${v}`);
         const stableEnv = stableEnvParts.length ? ` ${stableEnvParts.join(" ")}` : "";
         // PORT_<NAME> and the worktree identity from the workspace state, for
         // any cwd inside a codecast worktree — the ones this daemon made
@@ -7054,10 +7157,13 @@ async function executeRemoteCommand(
         // Which launch this pane is running (ct-49532): recorded before the
         // command is built, so a hook post from the process that occupied this
         // pane before now carries a superseded token and is dropped.
-        const launchTokenEnvPart = launchTokenEnv(launchTokenLedger().issue(tmuxSession, assignedClaudeSessionId || undefined));
+        const launchToken = launchTokenLedger().issue(tmuxSession, assignedClaudeSessionId || undefined);
+        const launchTokenEnvPart = launchTokenEnv(launchToken);
+        // A shell's CLAUDE_CODE_EFFORT_LEVEL would beat the --effort this launch passes.
+        const launchScrub = binaryArgs.includes("--effort") ? agentEnvScrub(undefined, { effortSet: true }) : AGENT_ENV_SCRUB;
         const envPrefix = worktreeResult
-          ? `${AGENT_ENV_SCRUB}${launchTokenEnvPart} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${wtEnv}${stableEnv}`
-          : `${AGENT_ENV_SCRUB}${launchTokenEnvPart}${wtEnv}${stableEnv}`;
+          ? `${launchScrub}${launchTokenEnvPart} AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${wtEnv}${stableEnv}`
+          : `${launchScrub}${launchTokenEnvPart}${wtEnv}${stableEnv}`;
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -7169,6 +7275,59 @@ async function executeRemoteCommand(
             log(`[codex-app-server] registered conv=${conversationId.slice(0, 12)} -> thread=${codexThreadId.slice(0, 8)}`);
           }
           break;
+        }
+
+        // A Claude session on the SDK backend runs in a host process instead of
+        // a pane. Everything above (cwd, worktree, launch argv, account, stable
+        // context, launch token) is the same launch; only the transport differs.
+        // A refusal or a host that does not come up starts the tmux session below.
+        if (agentType === "claude" && conversationId && assignedClaudeSessionId && claudeSdkBackend
+          && chooseClaudeBackend(parsed.backend, process.env, config.claude_backend) === "sdk") {
+          const refusal = await sdkBackendRefusal(binary);
+          if (refusal) {
+            log(`[claude-sdk] ${conversationId.slice(0, 12)} starts in tmux: ${refusal}`, "warn");
+          } else {
+            try {
+              const definition = requestedDefinition ? await sdkDefinitionFlags(requestedDefinition) : null;
+              if (definition?.warning) log(`[definition ${requestedDefinition!.name}] ${definition.warning}`, "warn");
+              const spec: SdkLaunchSpec = {
+                conversationId,
+                sessionId: assignedClaudeSessionId,
+                // A start that names a session Claude already wrote continues it.
+                resume: fs.existsSync(path.join(process.env.HOME || "", ".claude", "projects", claudeProjectDirName(cwd), `${assignedClaudeSessionId}.jsonl`)),
+                cwd,
+                executable: binary,
+                args: [...binaryArgs, ...(definition?.args ?? [])],
+                // The variables the tmux launch line sets, as values (no shell quoting to undo).
+                env: {
+                  ...worktreeEnv(cwd),
+                  ...(hostAgentSocket() ? { SSH_AUTH_SOCK: hostAgentSocket()! } : {}),
+                  ...(worktreeResult ? { AGENT_RESOURCE_INDEX: String(worktreeResult.portIndex) } : {}),
+                  ...stableEnvVars,
+                  [LAUNCH_TOKEN_VAR]: launchToken,
+                  ...(isRemoteDevice() ? { [CLOUD_ENV_VAR]: "1" } : {}),
+                },
+                ...(definition?.appendSystemPrompt ? { appendSystemPrompt: definition.appendSystemPrompt } : {}),
+                spawnPrefix: disclaimArgv(),
+              };
+              await claudeSdkBackend.start(conversationId, spec, requestedAccount);
+              await bindSdkSession(conversationId, assignedClaudeSessionId, cwd);
+              const resultObj: Record<string, any> = { sdk_session: assignedClaudeSessionId, agent_type: agentType, project_path: cwd };
+              if (worktreeResult) {
+                resultObj.worktree_name = worktreeResult.worktreeName;
+                resultObj.worktree_branch = worktreeResult.worktreeBranch;
+                resultObj.worktree_path = worktreeResult.worktreePath;
+                resultObj.port_index = worktreeResult.portIndex;
+              }
+              result = JSON.stringify(resultObj);
+              log(`[REMOTE] Started claude session ${assignedClaudeSessionId.slice(0, 8)} on the SDK backend (cwd: ${cwd})`);
+              touchHostActivity();
+              break;
+            } catch (err) {
+              log(`[claude-sdk] host for ${conversationId.slice(0, 12)} did not start, starting tmux instead: ${err instanceof Error ? err.message : String(err)}`, "warn");
+              await claudeSdkBackend.stop(conversationId, { forget: true }).catch(() => {});
+            }
+          }
         }
 
         if (!hasTmux()) {
@@ -7290,6 +7449,23 @@ async function executeRemoteCommand(
           result = `escape_${verdict.reason}`;
           log(`[REMOTE] Escape skipped for ${conversationId.slice(0, 12)} (${where}): ${verdict.reason}${pressedAt ? ` pressed ${Date.now() - pressedAt}ms ago` : ""}${lastInjectedAt ? `, last injection ${Date.now() - lastInjectedAt}ms ago` : ""}`);
         };
+
+        // A Claude SDK session: a real interrupt, answered once the turn has drained.
+        if (claudeSdkBackend?.owns(conversationId)) {
+          // The interrupt is sent now; its drain runs off the command queue, so a long turn's
+          // wind-down never holds the commands queued behind this one. A stop-and-send message
+          // is released once the turn has drained.
+          if (!claudeSdkBackend.isRunning(conversationId)) {
+            result = "escape_no_active_turn";
+            releaseStopAndSend();
+            break;
+          }
+          result = "escape_sent";
+          void claudeSdkBackend.interrupt(conversationId)
+            .catch((err) => log(`[claude-sdk] interrupt failed for ${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`))
+            .finally(releaseStopAndSend);
+          break;
+        }
 
         // A cloud agent: Escape cancels its running turn.
         try {
@@ -7572,6 +7748,16 @@ async function executeRemoteCommand(
         }
         if (target && !PERMISSION_MODES.has(target)) {
           error = `Unknown permission mode '${target}'`;
+          break;
+        }
+        // A Claude SDK session changes mode through its host: no footer to press.
+        if (claudeSdkBackend?.owns(conversationId)) {
+          const current = claudeSdkBackend.permissionModeFor(conversationId);
+          const mode = target ?? nextSdkPermissionMode(current);
+          if (await claudeSdkBackend.setPermissionMode(conversationId, mode)) {
+            result = mode;
+            log(`[REMOTE] set_permission_mode: SDK session for ${conversationId.slice(0, 12)} now ${mode}`);
+          } else error = `The Claude SDK session for ${conversationId} is not running`;
           break;
         }
         const sessionId = await resolveCommandSessionId(conversationId);
@@ -7999,6 +8185,26 @@ async function executeRemoteCommand(
         if (conversationId && cloudAgents.forConversation(conversationId)) {
           await clearConversationDeliveryAndResumeState(conversationId, sessionId, "resume_session_cloud");
           result = JSON.stringify({ cloud_agent: true });
+          break;
+        }
+        // A Restart of a Claude SDK conversation resumes in its own host or fails. The tmux repair,
+        // reconstitution and blank-pane paths below would put it in two backends at once, or bind
+        // the conversation to a session no process runs. Forks and agent switches go on below.
+        if (conversationId && claudeSdkBackend?.owns(conversationId) && !parsed.fork && !parsed.switch_agent && !parsed.parent_session_id
+          && (!parsed.agent_type || fromConvexAgentType(parsed.agent_type) === "claude")) {
+          try {
+            const client = await claudeSdkBackend.ensure(conversationId, { userInitiated: true });
+            const sdkSession = claudeSdkBackend.sessionFor(conversationId);
+            const sdkCwd = claudeSdkBackend.specFor(conversationId)?.cwd;
+            if (client && sdkSession && sdkCwd) {
+              // Running again: active, connected, claimed and beating, as every tmux resume marks it.
+              await bindSdkSession(conversationId, sdkSession, sdkCwd);
+              result = JSON.stringify({ sdk_session: sdkSession });
+            } else error = `No Claude SDK session for ${conversationId}`;
+          } catch (err) {
+            error = `Could not resume the Claude SDK session: ${err instanceof Error ? err.message : String(err)}`;
+            syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
+          }
           break;
         }
         // Fresh-session guard. If the conversation just had a session spawned
@@ -8863,6 +9069,23 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "line_fixloop": {
+        // The nightly fix trace (docs/architecture/regret.md R2): record what
+        // landed on main and what each fix repaired. The checkouts only name
+        // the repositories; history is read from this machine's own mirror of
+        // origin. args: { team_id, roots }.
+        try {
+          const args = commandArgs ? JSON.parse(commandArgs) : {};
+          if (typeof args.team_id !== "string" || !Array.isArray(args.roots) || args.roots.length === 0) throw new Error("line_fixloop needs team_id and roots");
+          const roots = args.roots.filter((r: unknown): r is string => typeof r === "string");
+          void runCastCommand(["line", "fixloop", "--record", "--team", args.team_id, "--from", ...roots], { timeoutMs: 2 * 60 * 60 * 1000 })
+            .then((r) => log(`[LINE] Fix trace for ${args.team_id}: exit ${r.code}${r.code ? ` ${(r.stderr || r.stdout).trim().slice(-300)}` : ""}`));
+          result = JSON.stringify({ accepted: roots.length });
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+        }
+        break;
+      }
       case "line_trial_reask": {
         // "Re-ask" in the line app on a trial run paused where no answer can
         // land: the same re-ask the CLI does, run here because it stops the
@@ -9157,6 +9380,24 @@ async function executeRemoteCommand(
         await stopLocalSessionBackends(conversationId, sessionId).catch(() => {});
         await clearConversationDeliveryAndResumeState(conversationId, sessionId, "quiesce_session").catch(() => {});
         result = JSON.stringify({ quiesced: true, mode, had_pane: hadPane, status: status ?? null, outside: [...outsideTmux.map((name) => ({ name: `tmux session ${name}` })), ...outside.map((p) => ({ pid: p.pid, name: p.name, via: p.detached }))] });
+        break;
+      }
+      case "run_cast": {
+        // A person pressed Run on a `cast decide --run` card (commandRun.ts).
+        // The command runs as theirs: outside the asking session (its session
+        // env stripped, so the CLI sends no from_session), in the session's
+        // folder. In the background, so a long command never holds the queue;
+        // the run reports itself (sessionDecisions.reportCommandRun).
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const decisionId: string | undefined = typeof parsed.decision_id === "string" ? parsed.decision_id : undefined;
+        const argv: string[] | null = Array.isArray(parsed.argv) && parsed.argv.every((a: unknown) => typeof a === "string") ? parsed.argv : null;
+        if (!decisionId || !argv?.length || argv[0] === "decide") {
+          error = "run_cast: missing decision_id or argv";
+          break;
+        }
+        const cwd = typeof parsed.cwd === "string" && fs.existsSync(parsed.cwd) ? parsed.cwd : undefined;
+        void runApprovedCast(decisionId, argv, cwd);
+        result = JSON.stringify({ started: true });
         break;
       }
       case "merge_back": {
@@ -9966,7 +10207,7 @@ export async function executeRetryOperation(op: RetryOperation, deps: Pick<Trans
   }
 
   if (op.type === "updateSessionId") {
-    const params = op.params as { conversationId: string; sessionId: string; projectPath?: string; gitRoot?: string; gitRemoteUrl?: string };
+    const params = op.params as { conversationId: string; sessionId: string; projectPath?: string; gitRoot?: string; gitRemoteUrl?: string; notARepo?: boolean };
     // Superseded while queued: the session resumed under a fresh uuid (or the
     // local mapping was pruned). Executing anyway would clobber the newer
     // binding, so discard — the newer link enqueued its own op.
@@ -9976,7 +10217,7 @@ export async function executeRetryOperation(op: RetryOperation, deps: Pick<Trans
       deps.updateState();
       return true;
     }
-    await deps.syncService.updateSessionId(params.conversationId, params.sessionId, params.projectPath, params.gitRoot, params.gitRemoteUrl);
+    await deps.syncService.updateSessionId(params.conversationId, params.sessionId, params.projectPath, params.gitRoot, params.gitRemoteUrl, params.notARepo);
     log(`Retry: Rebound session ${params.sessionId.slice(0, 8)} -> conversation ${params.conversationId.slice(0, 12)}`);
     deps.updateState();
     return true;
@@ -10040,6 +10281,13 @@ export async function executeRetryOperation(op: RetryOperation, deps: Pick<Trans
 
 class TranscriptIngestRetry extends Error {}
 const transcriptRetries = new Set<string>();
+// Why each session's last transcript pass failed. A failing pass logs at info,
+// which never leaves the machine, so the hourly health report names the
+// reason beside each stuck file at warn, where it reaches the server.
+const transcriptLastFailure = new Map<string, { at: number; reason: string }>();
+function noteTranscriptFailure(sessionId: string, reason: string): void {
+  transcriptLastFailure.set(sessionId, { at: Date.now(), reason: reason.slice(0, 300) });
+}
 const transcriptRetryOwners = new TranscriptRetryOwner({
   allowed: () => !readDaemonState()?.authExpired && !isSyncPaused(),
   retryable: error => !(error instanceof AuthExpiredError),
@@ -10115,6 +10363,7 @@ const TRANSCRIPT_RECEIPT_BYTES = 8 * 1024 * 1024;
 let transcriptCapacityLogAt = 0;
 function transcriptCapacityRefused(sessionId: string, kind: string): void {
   transcriptRetries.add(sessionId);
+  noteTranscriptFailure(sessionId, `${kind} capacity refused`);
   if (Date.now() - transcriptCapacityLogAt >= 5000) {
     transcriptCapacityLogAt = Date.now();
     log(`Transcript ${sessionId} ${kind} capacity; source remains unread; receipts=${acceptedPendingCount} reserved=${acceptedPendingReserved} bytes=${acceptedPendingBytes + acceptedPendingReservedBytes}`);
@@ -12176,7 +12425,7 @@ async function processSessionFilePass(
         sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
 
         const permArgPreview = truncateForNotification(
-          `${permissionPrompt.tool_name}: ${permissionPrompt.arguments_preview || ""}`, 150
+          `${permissionPrompt.tool_name}: ${glanceCommand(permissionPrompt.arguments_preview || "")}`, 150
         );
         syncService.createSessionNotification({
           conversation_id: conversationId,
@@ -12318,6 +12567,7 @@ async function processSessionFilePass(
     const errMsg = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
     log(`processSessionFile failed for ${sessionId.slice(0, 8)} at position=${lastPosition}: ${errMsg}${stack}`);
+    noteTranscriptFailure(sessionId, errMsg);
     throw err;
   }
 }
@@ -14858,45 +15108,7 @@ export function resolveInteractiveQuestions(prompt: InteractivePrompt, sidecar: 
 // expected to stay on the same question after each one, so the tmux closed-loop must
 // not "confirm" them with Enter (Enter on a multiSelect list toggles the highlighted
 // row, corrupting the selection). The sender navigates tabs itself via Right/Enter.
-type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string; multi?: boolean };
-
-export function parsePollMessage(content: string): PollMessage | null {
-  try {
-    const parsed = JSON.parse(content);
-    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps) || typeof parsed.text === "string")) return parsed;
-  } catch {}
-  return null;
-}
-
-// A free-text answer to an AskUserQuestion menu. Claude Code's question menu has no
-// inline text slot, so the only way to enter free text is to decline the whole menu
-// (Escape) and type the answer at the prompt — which discards every menu selection. The
-// web sends such an answer as a top-level `text` with no menu keys; pre-2026-06-27 builds
-// embedded it inside `steps` (one step per `text`). BOTH are a decline: do it ONCE up
-// front, then type. Doing it per-step (the old behavior) declined the menu mid-loop and
-// spilled the remaining option digits into the freshly-reopened prompt box (the "211"
-// bug). The OTHER text shape — menu keys PLUS `poll.text` (e.g. plan feedback, where
-// option 4 opens a feedback field) — is NOT a decline: those keys drive a menu whose
-// final option opens the text input, so the text lands in the field, not at the prompt.
-//
-// Returns the text to type after the decline (newlines flattened — a literal LF reads as
-// Enter in the TUI and submits early, which is why the normal paste path flattens too; the
-// middot keeps multi-answer prose readable on one line), or null when this isn't a decline.
-export function pollDeclineText(poll: PollMessage): string | null {
-  const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
-  const menuSteps = steps.filter(s => !s.text);
-  const embeddedText = steps.filter(s => s.text).map(s => s.text!).join("\n\n");
-  const isDecline = (poll.text != null && menuSteps.length === 0) || (embeddedText !== "" && poll.text == null);
-  if (!isDecline) return null;
-  return (poll.text ?? embeddedText).replace(/\r?\n+/g, "  ·  ").trim();
-}
-
-// The menu-navigation steps of a poll (the option keystrokes), excluding any step that
-// carries embedded free text (those decline the menu — see pollDeclineText).
-export function pollMenuSteps(poll: PollMessage): Array<{ key: string; text?: string }> {
-  const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
-  return steps.filter(s => !s.text);
-}
+export { parsePollMessage, pollDeclineText, pollMenuSteps } from "./pollMessage.js";
 
 // The synthetic poll the daemon emits for a live interactive prompt must carry a
 // STABLE message id. checkForInteractivePrompt fires from several call sites
@@ -15487,7 +15699,7 @@ export function extractTmuxLiveRegion(paneContent: string): string {
       return tail.slice(working).join("\n");
     }
   }
-  const isSep = (line: string) => /^[─━]{20,}\s*$/.test(line);
+  const isSep = (line: string) => /^[─━]{20,}\s*$/.test(line) || CLAUDE_OVERPAINTED_RULE.test(line);
   const sepIdx: number[] = [];
   for (let i = 0; i < tail.length; i++) {
     if (isSep(tail[i])) sepIdx.push(i);
@@ -17462,12 +17674,18 @@ async function runTmuxSubmitVerify(
 }
 
 // Text the composer shows after its last ❯/› glyph: the prompt line plus the
-// wrapped/continuation lines under it, up to the box rule or a blank line.
+// wrapped/continuation lines under it. A boxed composer (Claude) is bounded by
+// its rule, blank lines included: a draft can sit under blank lines (type-ahead
+// into a busy turn on a starved client), and stopping at the first one read
+// that box as empty, so each retry pasted another copy on top (jx751p3,
+// 2026-11-07). An unboxed one (Codex) ends at a blank line.
 // null when no glyph is visible (glyphless client or mid-redraw).
 export function tmuxComposerText(pane: string): string | null {
   const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
   if (glyphAt === -1) return null;
   const lines = pane.slice(glyphAt + 1).split("\n");
+  const ruleAt = lines.findIndex((line, i) => i > 0 && /^[─═]{3,}\s*$/.test(line));
+  if (ruleAt !== -1) return lines.slice(0, ruleAt).join("\n").replace(/\s+$/, "");
   const body = [lines[0]];
   for (const line of lines.slice(1)) {
     if (!line.trim() || /^[─═]{3,}\s*$/.test(line)) break;
@@ -18254,6 +18472,16 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // retry/backoff redelivers; the pre-paste C-a/C-k drain on the retry
     // clears any residue if the pty buffer drains late.
     throw new Error("INJECT_UNVERIFIED: paste unconfirmed and payload never appeared, leaving message pending for retry");
+  }
+  // The window closed with our text still in the composer: the opposite of no
+  // evidence. Returning here acked a message the agent never took, so nothing
+  // retried it, and its receipt held the pane against every later message. On
+  // a starved client (2026-11-06, jx751p3, load 14/core) 38 Enters went
+  // unanswered and the session took nothing for 12 hours. Throwing leaves it
+  // pending; the retry finds the payload at the prompt and submits it there.
+  if (verify.outcome === "agent_prompt_stalled"
+      && tmuxComposerHoldsPayload(await captureTmuxComposerPane(tmuxExec, target, captureLines).catch(() => ""), sanitized)) {
+    throw new Error("INJECT_UNVERIFIED: the payload is still in the composer after the submit window, leaving message pending for retry");
   }
 
   const verdict = verify.outcome === "delivered" ? verify.evidence : verify.outcome;
@@ -19452,6 +19680,9 @@ type AppServerTurnProgress = {
 };
 const appServerThreads = new Map<string, AppServerThreadEntry>();
 const appServerConversations = new Map<string, string>();
+// Claude conversations that run through the Agent SDK in a host process instead
+// of a tmux pane (claudeSdk/backend.ts). Set up in the daemon's main.
+let claudeSdkBackend: ClaudeSdkBackend | null = null;
 const persistedAppServerThreads = new Map<string, PersistedAppServerThreadRecord>();
 const appServerTurnProgress = new Map<string, AppServerTurnProgress>();
 const pendingAppServerForkParents = new Set<string>();
@@ -19668,14 +19899,24 @@ export async function teardownConversationBackends(
 }
 
 /** Bind {@link teardownConversationBackends} to the daemon's live globals. */
-function teardownConversationBackendsLive(
+async function teardownConversationBackendsLive(
   conversationId: string,
-  opts: { interruptActiveTurn?: boolean } = {},
-): Promise<{ killedAppServer: boolean; killedTmux: boolean; appServerThreadId?: string }> {
+  opts: { interruptActiveTurn?: boolean; keepSdkBinding?: boolean } = {},
+): Promise<{ killedAppServer: boolean; killedTmux: boolean; killedSdk?: string; appServerThreadId?: string }> {
   // A cloud agent has no pane to kill; stopping it cancels its running turn.
   if (opts.interruptActiveTurn) cloudAgents.interruptInBackground(conversationId);
+  // A Claude SDK host is stopped, and its binding dropped: whatever runs the
+  // conversation next (a new start, another agent) is not this host. A kill
+  // keeps it (keepSdkBinding), so a Restart or an account recycle resumes on the
+  // SDK backend; the resume gate keeps a killed conversation down.
+  const sdkSession = claudeSdkBackend?.sessionFor(conversationId);
+  if (sdkSession) {
+    await claudeSdkBackend!.stop(conversationId, { forget: !opts.keepSdkBinding }).catch((err) => log(`[claude-sdk] stop failed: ${err instanceof Error ? err.message : String(err)}`));
+    stopManagedSessionHeartbeat(sdkSession);
+    log(`[REMOTE] Tore down Claude SDK host ${sdkSession.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
+  }
   const persisted = persistedAppServerThreads.get(conversationId);
-  return teardownConversationBackends(conversationId, {
+  const torn = await teardownConversationBackends(conversationId, {
     appServerConversations,
     appServerThreads,
     startedTmux: startedSessionTmux,
@@ -19694,6 +19935,7 @@ function teardownConversationBackendsLive(
       : undefined,
     onLog: log,
   });
+  return sdkSession ? { ...torn, killedSdk: sdkSession } : torn;
 }
 
 /**
@@ -20319,7 +20561,7 @@ function startCodexPermissionPoller(sessionId: string, tmuxSession: string, conv
       sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
 
       const preview = truncateForNotification(
-        `${prompt.command || prompt.reason}`, 200
+        glanceCommand(prompt.command || prompt.reason), 200
       );
       syncService.createSessionNotification({
         conversation_id: conversationId,
@@ -23028,6 +23270,7 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
   // own working transition).
   if (stored === "permission_blocked") {
     if (resumeSessionCache.has(sessionId)) return; // tmux: pane is authoritative
+    if (claudeSdkBackend?.conversationForSession(sessionId)) return; // SDK: its host reports the prompt itself
     // staleOk here and below: this reconcile runs for every session every
     // maintenance tick, and most of the fleet has no local transcript — probing
     // each miss would re-create the per-tick walk storm. The next tick retries.
@@ -23540,16 +23783,8 @@ async function discoverAndLinkSession(
       return;
     }
     if (replacedSessionId && replacedSessionId !== linkedSessionId) stopManagedSessionHeartbeat(replacedSessionId);
-    cache[linkedSessionId] = conversationId;
-    if (conversationCacheRef) {
-      conversationCacheRef[linkedSessionId] = conversationId;
-    }
-    saveConversationCache(cache);
+    await bindSessionToConversation(conversationId, linkedSessionId, cwd);
     if (syncServiceRef) {
-      // Reconcile project_path/git_root to the real session cwd (see Claude
-      // match branch). `cwd` is authoritative here: the pane was launched in it.
-      const discoveryGitInfo = await getGitInfo(cwd);
-      void pushSessionIdBinding(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root, discoveryGitInfo?.remoteUrl);
       registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
       if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
         stopManagedSessionHeartbeat(startedEntry.sessionId);
@@ -24246,10 +24481,11 @@ export function resumeReuseCandidates(
 // previous process alive often enough that it is the main way an orphan ends up
 // posting for a pane it no longer owns; the new token is what the daemon fences
 // those posts out with.
-export function buildResumeEnvPrefix(agentType: string, cwd?: string, launchToken?: string): string {
+export function buildResumeEnvPrefix(agentType: string, cwd?: string, launchToken?: string, opts: { effortSet?: boolean } = {}): string {
   const token = launchTokenEnv(launchToken);
-  const prefix = agentType === "claude"    ? `${AGENT_ENV_SCRUB}${token} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
-    : `${AGENT_ENV_SCRUB}${token}`;
+  const scrub = opts.effortSet ? agentEnvScrub(undefined, { effortSet: true }) : AGENT_ENV_SCRUB;
+  const prefix = agentType === "claude"    ? `${scrub}${token} CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 CLAUDE_CODE_RESUME_TOKEN_THRESHOLD=999999999999`
+    : `${scrub}${token}`;
   const workspaceEnv = [cwd ? worktreeEnvPrefix(cwd) : "", hostAgentSocketEnv()].filter(Boolean).join(" ");
   return workspaceEnv ? `${prefix} ${workspaceEnv}` : prefix;
 }
@@ -24418,7 +24654,58 @@ export async function resolveLiveTmuxTarget(
 /** A live agent that no tmux pane holds (a herdr tab, a terminal): a resume now would start a second copy on its transcript. */
 export const liveOutsideTmux = (live: ResolvedLiveSession): boolean => !live.tmuxTarget && !!live.proc;
 
+/** May this session come back now: the lifecycle gate and the single-owner gate, for autoResumeSession and its SDK branch. */
+async function resumeAllowed(sessionId: string, conversationId: string | undefined, opts: ResumeOptions | undefined): Promise<boolean> {
+  // Lifecycle gate: a killed/completed conversation must never come back on its
+  // own. This is the chokepoint every AUTOMATIC resurrection path funnels through
+  // (the health check's reconstitution, message-delivery resume, the warm pool,
+  // repairAndResumeSession), so the check lives here rather than at each caller.
+  // Fails OPEN on a lookup error.
+  if (!opts?.userInitiated && conversationId && await conversationForbidsResurrection(conversationId, sessionId, "RESUME", { trustStatusFallback: false })) {
+    return false;
+  }
+
+  // Single-owner resume gate — see resumeOwnerVerdict for the two rules it folds
+  // together. One owner lookup serves both.
+  const ownerInfo = conversationId && syncServiceRef
+    ? await syncServiceRef.getConversationOwnerInfo(conversationId)
+    : null;
+  const verdict = resumeOwnerVerdict({ conversationId, localDeviceId: deviceId(), isRemote: isRemoteDevice(), owner: ownerInfo });
+  if (verdict === "owned_by_other_device") {
+    log(`[OWNER] skipping resume of ${sessionId.slice(0, 8)} — owned by device ${ownerInfo!.ownerDeviceId.slice(0, 8)}${ownerInfo!.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
+    return false;
+  }
+  if (verdict === "remote_no_conversation") {
+    log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
+    return false;
+  }
+  if (verdict === "remote_unowned") {
+    const owner = ownerInfo?.ownerDeviceId;
+    log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
+    return false;
+  }
+  return true;
+}
+
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId, opts?: ResumeOptions): Promise<boolean> {
+  // Every automatic resume comes through here. A session on the Claude SDK
+  // backend resumes in a host, never in a pane: two processes on one session
+  // would both answer.
+  // Matched by conversation too: a caller can still hold the session id from before a /clear.
+  const sdkConversation = claudeSdkBackend?.conversationForSession(sessionId)
+    ?? (conversationId && claudeSdkBackend?.owns(conversationId) ? conversationId : undefined);
+  if (sdkConversation && claudeSdkBackend) {
+    const client = await claudeSdkBackend.ensure(sdkConversation, { userInitiated: !!opts?.userInitiated }).catch((err) => {
+      log(`[claude-sdk] not resuming ${shortId(sessionId)}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    });
+    if (!client) return false;
+    sessionId = claudeSdkBackend.sessionFor(sdkConversation) ?? sessionId;
+    ensureManagedSessionHeartbeat(sessionId);
+    // Without a message id, the content names the send, so a repeated resume does not send it twice.
+    if (content) await claudeSdkBackend.deliver(sdkConversation, opts?.delivery?.messageId ?? `resume-${createHash("sha1").update(`${sessionId}\n${content}`).digest("hex").slice(0, 16)}`, content);
+    return true;
+  }
   if (swapHeld(sessionId)) {
     logDelivery(`Not resuming ${sessionId.slice(0, 8)}: a herdr take is swapping its agent`);
     return false;
@@ -24452,37 +24739,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   }
   let releaseAccountResume: (() => void) | undefined;
   const promise = Promise.resolve().then(async () => {
-    const canResume = async (): Promise<boolean> => {
-      // Lifecycle gate: a killed/completed conversation must never come back on its
-      // own. This is the chokepoint every AUTOMATIC resurrection path funnels through
-      // (the health check's reconstitution, message-delivery resume, the warm pool,
-      // repairAndResumeSession), so the check lives here rather than at each caller.
-      // Fails OPEN on a lookup error.
-      if (!opts?.userInitiated && conversationId && await conversationForbidsResurrection(conversationId, sessionId, "RESUME", { trustStatusFallback: false })) {
-        return false;
-      }
-
-      // Single-owner resume gate — see resumeOwnerVerdict for the two rules it folds
-      // together. One owner lookup serves both.
-      const ownerInfo = conversationId && syncServiceRef
-        ? await syncServiceRef.getConversationOwnerInfo(conversationId)
-        : null;
-      const verdict = resumeOwnerVerdict({ conversationId, localDeviceId: deviceId(), isRemote: isRemoteDevice(), owner: ownerInfo });
-      if (verdict === "owned_by_other_device") {
-        log(`[OWNER] skipping resume of ${sessionId.slice(0, 8)} — owned by device ${ownerInfo!.ownerDeviceId.slice(0, 8)}${ownerInfo!.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
-        return false;
-      }
-      if (verdict === "remote_no_conversation") {
-        log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — no conversation id to verify ownership`);
-        return false;
-      }
-      if (verdict === "remote_unowned") {
-        const owner = ownerInfo?.ownerDeviceId;
-        log(`[OWNER] remote daemon skipping resume of ${sessionId.slice(0, 8)} — owner=${owner ? owner.slice(0, 8) : "unowned"} (this device ${deviceId().slice(0, 8)})`);
-        return false;
-      }
-      return true;
-    };
+    const canResume = (): Promise<boolean> => resumeAllowed(sessionId, conversationId, opts);
     if (!(await canResume()) || resumeInFlight.get(sessionId) !== promise) return false;
     releaseAccountResume = await accountLifecycleGate.acquireResume(agentTypeHint);
     if (resumeInFlight.get(sessionId) !== promise) return false;
@@ -24849,7 +25106,7 @@ export async function buildClaudeResumeCommand(a: {
 function resumeLaunchLine(a: {
   agentType: AgentClientId; cwd: string; pane: string; sessionId: string; resumeAccountPrefix: string; resumeCmd: string;
 }): string {
-  const env = buildResumeEnvPrefix(a.agentType, a.cwd, launchTokenLedger().issue(a.pane, a.sessionId));
+  const env = buildResumeEnvPrefix(a.agentType, a.cwd, launchTokenLedger().issue(a.pane, a.sessionId), { effortSet: /(^|\s)--effort\s/.test(a.resumeCmd) });
   return `${a.resumeAccountPrefix}${providerKeySourcePrefix(a.agentType, CONFIG_DIR)}${disclaimPrefix()}${env} ${a.resumeCmd}`;
 }
 
@@ -25446,6 +25703,8 @@ async function repairAndResumeSession(
   agentTypeHint?: AgentClientId,
   opts?: ResumeOptions
 ): Promise<boolean> {
+  // An SDK session is resumed by its backend only; a repaired tmux copy would run beside it.
+  if (claudeSdkBackend && (claudeSdkBackend.conversationForSession(sessionId) || (conversationId && claudeSdkBackend.owns(conversationId)))) return false;
   const existing = repairInFlight.get(sessionId);
   if (existing) return existing;
 
@@ -26380,8 +26639,31 @@ async function deliverMessageIntoSession(
     return false;
   };
 
-  // Backends that are not a pane: a codex app-server thread, a cloud agent.
+  // A Claude conversation on the SDK backend: the message goes to its host,
+  // which resumes the saved session in a new host when the old one is gone. A
+  // failure throws, so the message is retried there, never pasted into a pane.
+  const trySdkDelivery = async (): Promise<boolean> => {
+    if (!claudeSdkBackend?.owns(conversationId)) return false;
+    // Bringing a dead host back is a resume and passes the resume gate inside the backend
+    // (a killed or completed conversation stays down). Refused, the message waits and retries, as on tmux.
+    await deliveryStep(messageId, "admit_sdk", admit);
+    // Marked before the send for the reason the started-pane path marks first:
+    // Claude echoes the message to its JSONL at once, and the echo promotes the row.
+    markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
+    const outcome = await claudeSdkBackend.deliver(conversationId, messageId, content);
+    // A menu answer reaches Claude as a tool result, never as a user line to echo: it is delivered now (as the tmux path marks it).
+    if (outcome !== "sent") await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+    // A host resumed by this delivery is live again.
+    const sdkSession = claudeSdkBackend.sessionFor(conversationId);
+    if (sdkSession) ensureManagedSessionHeartbeat(sdkSession);
+    syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
+    logDelivery(`[claude-sdk] delivered msg=${messageId.slice(0, 8)} to conv=${conversationId.slice(0, 12)}`);
+    return true;
+  };
+
+  // Backends that are not a pane: a Claude SDK host, a codex app-server thread, a cloud agent.
   const tryBackendDelivery = async (): Promise<boolean> => {
+    if (await trySdkDelivery()) return true;
     // A cloud agent first: a Codex Cloud task is a codex conversation, and
     // must not start the local app-server on its way. A setup problem throws
     // after its card is posted (the turn-stopped card; a credential one
@@ -28777,6 +29059,36 @@ async function logHealthReport(retryQueue: RetryQueue, config: Config): Promise<
       `Health: ${unsyncedFiles.length} pending files, ${droppedCount} dropped ops, ${queueSize} in retry queue`
     );
   }
+  for (const line of stuckTranscriptLines(unsyncedFiles, Date.now())) logWarn(line.message, line.sessionId);
+}
+
+const STUCK_TRANSCRIPT_REPORT_MS = 10 * 60_000;
+const STUCK_TRANSCRIPT_REPORT_MAX = 5;
+
+/** One line per transcript the hourly count calls pending for longer than
+ *  ten minutes: which session, since when, and the last reason its pass
+ *  failed. The count alone ("1 pending files" three hours running, 2026-11-05)
+ *  left nothing to tell a slow file from a wedged one. */
+export function stuckTranscriptLines(
+  files: string[],
+  now: number,
+  record: (file: string) => Pick<SyncRecord, "lastSyncedAt" | "lastSyncedPosition"> | null = getSyncRecord,
+  failures: ReadonlyMap<string, { at: number; reason: string }> = transcriptLastFailure,
+): Array<{ sessionId: string; message: string }> {
+  const lines: Array<{ sessionId: string; message: string }> = [];
+  for (const file of files) {
+    const rec = record(file);
+    if (!rec?.lastSyncedAt || now - rec.lastSyncedAt < STUCK_TRANSCRIPT_REPORT_MS) continue;
+    const sessionId = path.basename(file, ".jsonl");
+    const failure = failures.get(sessionId);
+    const why = failure ? `last failure ${new Date(failure.at).toISOString()}: ${failure.reason}` : "no pass failure recorded";
+    lines.push({
+      sessionId,
+      message: `Sync stuck: session ${sessionId} unsynced since ${new Date(rec.lastSyncedAt).toISOString()} at byte ${rec.lastSyncedPosition}; ${why}`,
+    });
+    if (lines.length >= STUCK_TRANSCRIPT_REPORT_MAX) break;
+  }
+  return lines;
 }
 
 function startReconciliation(
@@ -29190,6 +29502,10 @@ function startWatchdog(
           if (ageMs < threshold && !predatesBoot) continue;
           const convId = deps.conversationCache[sessionId];
           if (!convId) { await fs.promises.unlink(filePath).catch(() => {}); continue; }
+          // An SDK session's Claude has no tty for the process lookup below to find, and its host
+          // says itself when it is gone: idle there is a person not typing, not an exit. Matched by
+          // conversation, so a session id left behind by a /clear is skipped too.
+          if (claudeSdkBackend?.owns(convId)) continue;
           // Stale by time — but is the agent actually gone, or just idling for
           // the user? Only reap when the process table ANSWERED and nothing was
           // there; a probe that threw is carried as `unverifiable` (see predicate).
@@ -29795,6 +30111,16 @@ async function main(): Promise<void> {
     shouldRun: () => !isRemoteDevice() && isCloudMirrorEnabled(readConfig()),
     log: (m) => log(`[MIRROR] ${m}`),
   });
+  // The laptop Chrome link (cloud/browserLink.ts): every managed cloud host
+  // that is up reaches this laptop's bridge, so its sessions drive the
+  // human's Chrome; a host that goes away ends its link and its token.
+  if (!isRemoteDevice()) {
+    void import("./cloud/browserLink.js").then(({ BrowserLinks, BROWSER_LINK_TICK_MS }) => {
+      const links = new BrowserLinks({ log: (m, level) => log(m, level) });
+      setTimeout(() => { void links.tick(); }, 68_000 * bootPacing.fanoutOffsetScale);
+      setInterval(() => { void links.tick(); }, BROWSER_LINK_TICK_MS);
+    }).catch((err) => log(`[BROWSER-LINK] did not start: ${err instanceof Error ? err.message : String(err)}`));
+  }
   // The opt-in SSH agent bridge (cloud/agentBridge.ts), on the same tick.
   setTimeout(() => { maintainAgentBridges().catch(() => {}); }, 66_000 * bootPacing.fanoutOffsetScale);
   setInterval(() => { maintainAgentBridges().catch(() => {}); }, AGENT_BRIDGE_TICK_MS);
@@ -30539,6 +30865,15 @@ async function main(): Promise<void> {
     return file?.agentType === "claude" ? file.path : undefined;
   }
 
+  /** A subagent's transcript: beside its parent's under <parent>/subagents/,
+   *  else wherever the index has it (a workflow's agents sit a level deeper). */
+  function subagentTranscriptFor(parentSessionId: string, subagentSessionId: string): string | undefined {
+    const parent = claudeTranscriptFor(parentSessionId);
+    const direct = parent && path.join(path.dirname(parent), parentSessionId, "subagents", `${subagentSessionId}.jsonl`);
+    if (direct && fs.existsSync(direct)) return direct;
+    return claudeTranscriptFor(subagentSessionId);
+  }
+
   // Returns true when the status was handed to the async idle hop; the hop's
   // re-entry persists it, so a caller must not persist meanwhile (that wrote
   // the previous record under the new hook, one stale write per settle).
@@ -30548,19 +30883,24 @@ async function main(): Promise<void> {
   function openPermissionRecord(
     convId: string,
     sessionId: string,
-    prompt: { tool_name: string; arguments_preview: string; suggestions?: unknown[] },
+    prompt: { tool_name: string; arguments_preview: string; glance?: string; suggestions?: unknown[]; source?: PermissionSource; ruleRequest?: PermissionRuleRequest; prechecked?: boolean },
   ): { id: Promise<string | null>; decision: Promise<PermissionDecision | null> } {
     permissionRecordPending.add(sessionId);
-    syncService.createSessionNotification({
-      conversation_id: convId,
-      type: "permission_request",
-      title: "codecast - Permission needed",
-      message: truncateForNotification(`${prompt.tool_name}: ${prompt.arguments_preview}`, 150),
-    }).catch(() => {});
     let setId!: (id: string | null) => void;
     const id = new Promise<string | null>((r) => { setId = r; });
     permissionRecordIds.set(sessionId, id);
-    const decision = handlePermissionRequest(syncService, convId, sessionId, prompt, log, setId).finally(() => {
+    // The push goes out only once a card exists: a call codecast's rules
+    // settled (handlePermissionRequest) never pings anyone.
+    const onCreated = (permissionId: string) => {
+      setId(permissionId);
+      syncService.createSessionNotification({
+        conversation_id: convId,
+        type: "permission_request",
+        title: "codecast - Permission needed",
+        message: truncateForNotification(`${prompt.tool_name}: ${prompt.glance ?? glanceCommand(prompt.arguments_preview)}`, 150),
+      }).catch(() => {});
+    };
+    const decision = handlePermissionRequest(syncService, convId, sessionId, prompt, log, onCreated).finally(() => {
       setId(null);
       permissionRecordPending.delete(sessionId);
       if (permissionRecordIds.get(sessionId) === id) permissionRecordIds.delete(sessionId);
@@ -30756,7 +31096,7 @@ async function main(): Promise<void> {
         try { fs.unlinkSync(filePath); } catch {}
       }
 
-      if (data.status === "permission_blocked" && !permissionRecordPending.has(sessionId)) {
+      if (data.status === "permission_blocked" && !permissionRecordPending.has(sessionId) && !permissionSettling.has(sessionId)) {
         permissionRecordPending.add(sessionId);
         permissionJustResolved.add(sessionId);
         const transcriptPath = data.transcript_path || claudeTranscriptFor(sessionId);
@@ -30901,6 +31241,41 @@ async function main(): Promise<void> {
     return claudeTranscriptFor(sessionId);
   }
 
+  // What a Bash call's rms would delete, so the card can say it. The read is
+  // capped (removalPreview.ts) and a failure only leaves the card without it.
+  function removalsFor(input: PermissionHookInput): { removals?: RemovalPreview[] } {
+    if (input.toolName !== "Bash" || !input.command || !input.cwd) return {};
+    try {
+      const removals = describeRemovals(input.command, input.cwd);
+      return removals.length ? { removals } : {};
+    } catch (err) {
+      log(`[PERMISSION] removal preview failed: ${err instanceof Error ? err.message : String(err)}`);
+      return {};
+    }
+  }
+
+  // The card a permission prompt opens: the tool, its preview, and who asks.
+  // A subagent's card links to the subagent's own conversation.
+  function permissionCardPrompt(input: PermissionHookInput) {
+    const subagentConv = input.agentId ? conversationCache[`agent-${input.agentId}`] : undefined;
+    return {
+      tool_name: input.toolName,
+      arguments_preview: input.preview,
+      glance: input.glance,
+      suggestions: input.suggestions,
+      ruleRequest: input.ruleRequest,
+      // Every caller settles codecast's rules before opening a card.
+      prechecked: true,
+      source: {
+        ...(input.subagentType && { subagent_type: input.subagentType }),
+        ...(subagentConv && { subagent_conversation_id: subagentConv }),
+        ...(input.permissionMode === "bypassPermissions" && { safety_check: true }),
+        ...(input.intent && { intent: input.intent }),
+        ...removalsFor(input),
+      },
+    };
+  }
+
   // A PermissionRequest hook waiting for the web (permissionHookWait.ts). Its
   // status goes through the same sink a status post would, so the session
   // reads as blocked at once; the card it opens is the one the hook answers.
@@ -30918,39 +31293,255 @@ async function main(): Promise<void> {
     };
     const convId = conversationCache[sessionId];
     const answerable = !!convId && !PERMISSION_CARD_SKIP_TOOLS.has(toolName);
-    // Bind to a card a Notification already opened for this prompt, unless a
-    // hook holds that one (a second prompt in parallel gets its own card).
-    const opened = answerable && permissionRecordPending.has(sessionId) ? permissionRecordIds.get(sessionId) : undefined;
-    const record = answerable && !permissionRecordPending.has(sessionId)
-      ? openPermissionRecord(convId, sessionId, { tool_name: toolName, arguments_preview: preview, suggestions: input.suggestions })
-      : null;
-    if (record) permissionJustResolved.add(sessionId);
-    hookStatusGate.deliver(sessionId, normalizeHookStatus({
-      status: "permission_blocked",
-      ts: Math.floor(Date.now() / 1000),
-      ...(input.permissionMode && { permission_mode: input.permissionMode as PermissionMode }),
-      ...(input.launchToken && { launch_token: input.launchToken }),
-      message: preview ? `${toolName}: ${preview}` : toolName,
-      dialog: true,
-    }));
-    const idPromise = record?.id ?? opened;
-    if (!idPromise) { reply(null); return; }
+    // The card a person answers, with the hook waiting on it.
+    const openHookCard = () => {
+      // A subagent's call sits in its own transcript (subagents/agent-<id>.jsonl),
+      // synced as its own conversation: the card links there, and the watch
+      // below reads that file, since the parent's only shows the Task call.
+      const subagentSession = input.agentId ? `agent-${input.agentId}` : undefined;
+      // Bind to a card a Notification already opened for this prompt, unless a
+      // hook holds that one (a second prompt in parallel gets its own card).
+      const opened = answerable && permissionRecordPending.has(sessionId) ? permissionRecordIds.get(sessionId) : undefined;
+      const record = answerable && !permissionRecordPending.has(sessionId)
+        ? openPermissionRecord(convId, sessionId, permissionCardPrompt(input))
+        : null;
+      if (record) permissionJustResolved.add(sessionId);
+      hookStatusGate.deliver(sessionId, normalizeHookStatus({
+        status: "permission_blocked",
+        ts: Math.floor(Date.now() / 1000),
+        ...(input.permissionMode && { permission_mode: input.permissionMode as PermissionMode }),
+        ...(input.launchToken && { launch_token: input.launchToken }),
+        message: preview ? `${toolName}: ${preview}` : toolName,
+        dialog: true,
+      }));
+      const idPromise = record?.id ?? opened;
+      if (!idPromise) { reply(null); return; }
 
-    const wait = permissionHookWaiters.wait(sessionId, input.suggestions);
-    res.on("close", wait.cancel);
-    void idPromise.then((id) => {
-      if (!id || (!record && permissionHookWaiters.holds(id))) { wait.cancel(); return; }
-      wait.bind(id);
-      // The row's own poll backs up the subscription.
-      record?.decision.then((decision) => { if (decision) permissionHookWaiters.answer(id, decision); });
-    });
-    void wait.done.then((output) => {
-      reply(output);
-      if (!output) return;
-      log(`[PERMISSION] answered ${toolName} for ${shortId(sessionId)} through its hook`);
-      sendAgentStatus(syncService, convId, sessionId, "working");
+      // Codecast keeps an "always" answer itself (the row's rule_request);
+      // Claude's suggestions go back to Claude only for a call codecast can
+      // keep nothing for, the same rule the server and the card follow.
+      const wait = permissionHookWaiters.wait(sessionId, keptPatterns(input.ruleRequest).length ? [] : input.suggestions);
+      // The prompt can end without the web: answered in the terminal, timed out
+      // (the dangerous rm dialog denies itself after 120s), interrupted. The
+      // status transition usually cancels the card, but it never fires when this
+      // prompt's permission_blocked was refused (launch fence, bypass-mode
+      // phantom), and the card then waits for a press that can only type a stray
+      // key into the pane. permissionPromptWatch.ts has the rest.
+      const abandon = (why: string) => {
+        void idPromise.then((id) => (id ? syncService.cancelPermissionRequest(id) : false))
+          .then((ok) => { if (ok) log(`[PERMISSION] cancelled ${toolName} card for ${shortId(sessionId)}: ${why}`); })
+          .catch((err) => log(`Failed to cancel abandoned permission card: ${err instanceof Error ? err.message : String(err)}`));
+      };
+      const transcript = subagentSession ? subagentTranscriptFor(sessionId, subagentSession) : claudeTranscriptFor(sessionId);
+      const stopWatch = transcript
+        ? watchPromptSettled({
+            readPending: () => extractPendingToolUseFromTranscriptAsync(transcript),
+            toolName,
+            onSettled: () => { wait.cancel(); abandon("its call settled in the transcript"); },
+          })
+        : () => {};
+      res.on("close", () => {
+        stopWatch();
+        wait.cancel();
+        if (!res.writableEnded) abandon("its hook was dropped unanswered");
+      });
+      void idPromise.then((id) => {
+        if (!id || (!record && permissionHookWaiters.holds(id))) { wait.cancel(); return; }
+        wait.bind(id);
+        // The row's own poll backs up the subscription.
+        record?.decision.then((decision) => { if (decision) permissionHookWaiters.answer(id, decision); });
+      });
+      void wait.done.then((output) => {
+        reply(output);
+        if (!output) return;
+        log(`[PERMISSION] answered ${toolName} for ${shortId(sessionId)} through its hook`);
+        sendAgentStatus(syncService, convId, sessionId, "working");
+      });
+    };
+    // Codecast's rules answer first: a saved approval, a configured deny, or a
+    // session nobody watches settles the call with no card, push or blocked
+    // status. Only a call they leave open reaches a person.
+    if (!answerable) { openHookCard(); return; }
+    permissionSettling.set(sessionId, (permissionSettling.get(sessionId) ?? 0) + 1);
+    void settlePermission(syncService, convId, input.ruleRequest, log).then((settled) => {
+      const left = (permissionSettling.get(sessionId) ?? 1) - 1;
+      if (left > 0) permissionSettling.set(sessionId, left); else permissionSettling.delete(sessionId);
+      if (!settled) { if (!res.writableEnded && !res.destroyed) openHookCard(); return; }
+      reply(permissionDecisionOutput(settled, []));
+      // A Notification can open a card before the hook arrives; the call is
+      // settled now, so that card goes (its own poll then presses nothing).
+      // A card a hook holds is another call's, still waiting on a person.
+      void permissionRecordIds.get(sessionId)?.then((id) => (id && !permissionHookWaiters.holds(id) ? syncService.cancelPermissionRequest(id) : false)).catch(() => {});
+      log(`[PERMISSION] ${settled.approved ? "allowed" : "denied"} ${toolName} for ${shortId(sessionId)} by codecast (${settled.settled})`);
     });
   };
+
+  // The Claude SDK backend (claudeSdk/backend.ts). Its sessions take the paths
+  // a hook post takes: activity goes through the status sink a hook post feeds,
+  // and a canUseTool prompt opens the same web card and waits in the same
+  // waiter the PermissionRequest hook does, whose decision is the shape
+  // canUseTool returns. The status hook stands down in these sessions
+  // (CODECAST_SDK_SESSION), so nothing is reported twice.
+  claudeSdkBackend = new ClaudeSdkBackend({
+    log: (line) => log(line),
+    castArgv: () => {
+      const { cmd, prefixArgs } = resolveCastInvocation();
+      return [cmd, ...prefixArgs];
+    },
+    shellPrefix: (account) => `${launchAccountPrefix(account, log).prefix}${providerKeySourcePrefix("claude", CONFIG_DIR)}`,
+    activity: (convId, sessionId, a, launchToken) => {
+      const cwd = claudeSdkBackend?.specFor(convId)?.cwd;
+      hookStatusGate.deliver(sessionId, normalizeHookStatus({
+        status: a.status,
+        ts: a.ts,
+        ...(a.permissionMode && { permission_mode: a.permissionMode as PermissionMode }),
+        ...(a.message && { message: a.message }),
+        ...(a.sessionBoundary && { session_boundary: true }),
+        ...(a.dialog && { dialog: true }),
+        ...(a.turnCompletedAt && {
+          turn_completed_at: a.turnCompletedAt,
+          ...(cwd && { transcript_path: claudeTranscriptFor(sessionId) ?? path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(cwd), `${sessionId}.jsonl`) }),
+        }),
+        ...(launchToken && { launch_token: launchToken }),
+      }));
+    },
+    permission: (convId, sessionId, request, settled, cardOpened) => new Promise(async (resolve) => {
+      const input = parsePermissionHookInput(JSON.stringify({
+        hook_event_name: "PermissionRequest",
+        session_id: sessionId,
+        tool_name: request.toolName,
+        tool_input: request.input,
+        cwd: claudeSdkBackend?.specFor(convId)?.cwd,
+        ...(request.agentId && { agent_id: request.agentId }),
+        permission_suggestions: request.suggestions ?? [],
+      }));
+      if (!input) return resolve(null);
+      // Codecast's rules answer first, as on the hook path: a saved approval, a
+      // configured deny or an unattended session settles the call with no card.
+      // A daemon that reattached to an open card already passed this step.
+      if (!request.cardId && !PERMISSION_CARD_SKIP_TOOLS.has(input.toolName)) {
+        const settled = await settlePermission(syncService, convId, input.ruleRequest, log);
+        if (settled) {
+          log(`[PERMISSION] ${settled.approved ? "allowed" : "denied"} ${input.toolName} for ${shortId(sessionId)} by codecast (${settled.settled})`);
+          return resolve(JSON.parse(permissionDecisionOutput(settled, [])).hookSpecificOutput.decision);
+        }
+      }
+      // A daemon that reattached binds to the card the previous daemon opened.
+      const record = request.cardId ? null : openPermissionRecord(convId, sessionId, permissionCardPrompt(input));
+      const idPromise = request.cardId ? Promise.resolve<string | null>(request.cardId) : record!.id;
+      let finished = false;
+      const release = () => {
+        if (!request.cardId) return;
+        permissionRecordPending.delete(sessionId);
+        if (permissionRecordIds.get(sessionId) === idPromise) permissionRecordIds.delete(sessionId);
+      };
+      const finish = (answer: SdkPermissionAnswer | null) => {
+        if (finished) return;
+        finished = true;
+        release();
+        resolve(answer);
+      };
+      if (request.cardId) {
+        // Bound to the card a previous daemon opened: marked pending as openPermissionRecord marks its
+        // own, so the status sink's card path does not open a second card for the same prompt.
+        permissionRecordPending.add(sessionId);
+        permissionRecordIds.set(sessionId, idPromise);
+      }
+      // canUseTool has no deadline, so the wait has none either; the card's own poll ends an
+      // unanswered card after an hour, and that denies the call. A waiter released by anything but an
+      // answer (a status move, a session release) leaves the prompt waiting on its card: wait again.
+      let wait = permissionHookWaiters.wait(sessionId, input.suggestions, SDK_PERMISSION_WAIT_MS);
+      let boundId: string | null = null;
+      const listen = (w: typeof wait) => void w.done.then((output) => {
+        if (finished || w !== wait) return;
+        if (output) {
+          try {
+            finish(JSON.parse(output).hookSpecificOutput.decision);
+          } catch {
+            finish(null);
+          }
+          return;
+        }
+        if (settled.aborted || !boundId) return finish(null);
+        wait = permissionHookWaiters.wait(sessionId, input.suggestions, SDK_PERMISSION_WAIT_MS);
+        wait.bind(boundId);
+        listen(wait);
+      });
+      listen(wait);
+      settled.addEventListener("abort", () => {
+        wait.cancel();
+        finish(null);
+        void idPromise.then((id) => (id ? syncService.cancelPermissionRequest(id) : false)).catch(() => {});
+      }, { once: true });
+      void idPromise.then((id) => {
+        // No card could be created: nothing can answer, and the backend denies the call.
+        if (!id) return finish(null);
+        boundId = id;
+        cardOpened(id);
+        wait.bind(id);
+        const decision = record ? record.decision : waitForPermissionDecision(syncService, sessionId, id, request.toolName, log);
+        void decision.then((d) => {
+          if (settled.aborted || finished) return;
+          const answer = d ?? { approved: false, message: "The permission request expired unanswered." };
+          if (!permissionHookWaiters.answer(id, answer)) finish(JSON.parse(permissionDecisionOutput(answer, input.suggestions)).hookSpecificOutput.decision);
+        });
+      });
+    }),
+    turnError: (convId, sessionId, err) => log(`[claude-sdk] turn for ${shortId(sessionId)} ended on ${err.kind}: ${err.message.slice(0, 200)}`),
+    resumeAccount: async (convId, saved) => {
+      // The same answer the tmux resume asks for (buildClaudeResumeCommand).
+      const pin = await syncService.pinForResume(convId).catch(() => null);
+      return pin ? pin.cc_account ?? undefined : saved;
+    },
+    mayResume: (convId, sessionId, userInitiated) => resumeAllowed(sessionId, convId, userInitiated ? { userInitiated: true } : undefined),
+    transcriptExists: (sessionId, cwd) => !!claudeTranscriptFor(sessionId)
+      || fs.existsSync(path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(cwd), `${sessionId}.jsonl`)),
+    transcriptHas: async (sessionId, text, since) => {
+      const file = claudeTranscriptFor(sessionId);
+      if (!file) return false;
+      try {
+        // The tail, read off the loop: the message was sent minutes ago at most, and a whole
+        // transcript can run to hundreds of MB. A line the cut splits is just not parsed.
+        return transcriptContainsDelivery(await readFileTailAsync(file, 4 * 1024 * 1024), "claude", text, since);
+      } catch {
+        return false;
+      }
+    },
+    sessionChanged: (convId, _previous, next) => {
+      const cwd = claudeSdkBackend?.specFor(convId)?.cwd;
+      if (cwd) void bindSdkSession(convId, next, cwd).catch((err) => log(`[claude-sdk] rebind failed: ${err instanceof Error ? err.message : String(err)}`));
+    },
+    resumeModelEffort: (sessionId, cwd) => {
+      const file = claudeTranscriptFor(sessionId) ?? path.join(os.homedir(), ".claude", "projects", claudeProjectDirName(cwd), `${sessionId}.jsonl`);
+      const split = (flag: string) => flag.trim() ? flag.trim().split(/\s+/).slice(0, 2) : [];
+      try {
+        return { model: split(resumeModelFlagFromFile(file, "")), effort: split(resumeEffortFlagFromFile(file, "")) };
+      } catch {
+        return { model: [], effort: [] };
+      }
+    },
+    stopped: (convId, sessionId, reason, abandonedCards = []) => {
+      log(`[claude-sdk] session ${shortId(sessionId)} stopped (${reason}); the next message resumes it`);
+      for (const id of abandonedCards) syncService.cancelPermissionRequest(id).catch(() => {});
+      permissionHookWaiters.releaseSession(sessionId);
+      stopManagedSessionHeartbeat(sessionId);
+      sendAgentStatus(syncService, convId, sessionId, "stopped");
+    },
+    tooOld: (convId, sessionId, version, minimum) => {
+      const message = `Claude Code ${version ?? "(unknown)"} is older than ${minimum}, which the SDK backend needs. Update Claude Code (claude update); the next message runs this session in tmux.`;
+      syncService.setSessionError(convId, message).catch(logConvexFailure);
+      sendAgentStatus(syncService, convId, sessionId, "stopped");
+    },
+  });
+  void claudeSdkBackend.reattachAll().then((convs) => {
+    for (const conv of convs) {
+      const sid = claudeSdkBackend?.sessionFor(conv);
+      if (!sid) continue;
+      conversationCache[sid] = conv;
+      ensureManagedSessionHeartbeat(sid);
+    }
+    if (convs.length) log(`[claude-sdk] reattached ${convs.length} host(s)`);
+  }).catch((err) => log(`[claude-sdk] reattach failed: ${err instanceof Error ? err.message : String(err)}`));
 
   setHookStatusSink((sessionId, data) => {
     // One gate for every effect below. handleStatusData applies the same launch
@@ -31455,13 +32046,23 @@ async function main(): Promise<void> {
     onApproval: async (threadId: string, approval: ApprovalRequest) => {
       const entry = appServerThreads.get(threadId);
       if (!entry) return true;
+      // The same rules as Claude's calls: a command or an edit settles against
+      // codecast's saved approvals before any card, and "always" keeps one.
+      // A request of another kind has no rule terms: rules never allow it, and
+      // a session nobody watches still gets a decline instead of a wait.
+      const ruleRequest = boundedRuleRequest(codexApprovalRequest(approval.method, approval.params, { cwd: entry.cwd, root: projectRootOf(entry.cwd) })
+        ?? { permission: approval.method, patterns: [], always: [], opaque: true });
       if (entry.approvalPolicy === "never") {
+        // Nobody is asked here, but a configured deny still wins.
+        const settled = await settlePermission(syncService, entry.conversationId, ruleRequest, log);
+        if (settled && !settled.approved && settled.settled === "rule") return false;
         log(`[codex-app-server] auto-approving ${approval.method} for thread ${threadId.slice(0, 8)} (approvalPolicy=never)`);
         return true;
       }
       const permissionPrompt = {
         tool_name: approval.method,
         arguments_preview: JSON.stringify(approval.params).slice(0, 200),
+        ruleRequest,
       };
       try {
         const decision = await handlePermissionRequest(syncService, entry.conversationId, threadId, permissionPrompt, log);

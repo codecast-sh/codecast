@@ -15,6 +15,7 @@ import { joinProposals, type OrgProposalRow } from "../org/orgStaffingTypes";
 import { openProposals, proposalWorkspace, sameWorkspace } from "../org/staffingModel";
 import { useLineTree } from "../org/lines/lineTree";
 import { CompanyRowsOverride } from "../org/company/useCompanyRows";
+import { useProjectSessionCounts } from "../../hooks/useProjectSessionCounts";
 import { companyDoc, flatGoals, type CompanyDoc, type CompanyMember, type CompanyProject, type DocGoal } from "./companyModel";
 
 const projectSig = (p: ProjectItem) => `${p.title}|${p.status}|${p.short_id ?? ""}|${p.owner_role_id ?? ""}|${p.updated_at}|${p.color ?? ""}|${p.target_date ?? ""}|${p.risks?.length ?? 0}`;
@@ -40,6 +41,7 @@ export function useCompanyDoc(): { doc: CompanyDoc; open: OrgProposalRow[] } {
   const tasks = useBoardTasks();
   const tasksCounted = useTasksBackfilled();
   const liveRoster = useCompanyRoster();
+  const projectSessions = useProjectSessionCounts();
   const tree = override ? override.tree : liveTree;
   const initiatives = override ? override.goals : liveInitiatives;
   const projects = override ? override.projects : liveProjects;
@@ -54,8 +56,8 @@ export function useCompanyDoc(): { doc: CompanyDoc; open: OrgProposalRow[] } {
     [proposalRows, proposalChanges, workspace?.kind, workspace?.id], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const doc = useMemo(
-    () => companyDoc({ tree, workspaceName: teamName, initiatives, projects: projects as CompanyProject[], roster, tasks, tasksCounted, changes: open.flatMap((p) => p.changes), proposals: open }),
-    [tree, teamName, initiatives, projects, roster, tasks, tasksCounted, open],
+    () => companyDoc({ tree, workspaceName: teamName, initiatives, projects: projects as CompanyProject[], roster, tasks, tasksCounted, projectSessions: override ? undefined : projectSessions, changes: open.flatMap((p) => p.changes), proposals: open }),
+    [tree, teamName, initiatives, projects, roster, tasks, tasksCounted, projectSessions, override, open],
   );
   return { doc, open };
 }

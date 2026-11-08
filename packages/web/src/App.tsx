@@ -161,6 +161,7 @@ const TeamMember = lazy(() => import("@/app/team/[username]/page"));
 
 const Orchestration = lazy(() => import("@/app/orchestration/page"));
 const Cli = lazy(() => import("@/app/cli/page"));
+const Start = lazy(() => import("@/app/start/page"));
 const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
 const Memory = lazy(() => import("@/app/memory/page"));
@@ -197,6 +198,7 @@ const SettingsAccountPool = lazy(() => import("@/app/settings/account-pool/page"
 const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
+const SettingsTeamFeatures = lazy(() => import("@/app/settings/team/features/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
 const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
@@ -273,6 +275,8 @@ export function App() {
             {/* Identity relay for published-page comments (artifact bar → sign in). */}
             <Route path="pages/auth" element={<E name="ArtifactAuth"><ArtifactAuth /></E>} />
             <Route path="join/:code" element={<E name="JoinTeam"><JoinTeam /></E>} />
+            {/* The first-run setup flow, full screen with no shell around it. */}
+            <Route path="start" element={<E name="Start"><Start /></E>} />
 
             {/* Dashboard tab shell — one stable layout route keeps the sidebar,
                 tab bar and mounted TabContent panes alive across navigations so
@@ -510,6 +514,7 @@ export function App() {
               <Route path="team" element={<E name="SettingsTeam"><SettingsTeam /></E>} />
               <Route path="team/create" element={<E name="SettingsTeamCreate"><SettingsTeamCreate /></E>} />
               <Route path="team/join" element={<E name="SettingsTeamJoin"><SettingsTeamJoin /></E>} />
+              <Route path="team/features" element={<E name="SettingsTeamFeatures"><SettingsTeamFeatures /></E>} />
               <Route path="notifications" element={<E name="SettingsNotifications"><SettingsNotifications /></E>} />
               <Route path="integrations" element={<E name="SettingsIntegrations"><SettingsIntegrations /></E>} />
               {/* Old deep link; the GitHub install flow still returns here. */}

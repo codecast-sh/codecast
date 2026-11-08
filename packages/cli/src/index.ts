@@ -122,6 +122,7 @@ import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchP
 import { setReserved } from "./ccProfileFlags.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { recoveryModeOf, type RecoveryMode } from "@codecast/shared/contracts";
+import { TRIGGER_PRECHECK_MODES, triggerPrecheckMode, type TriggerPrecheckMode } from "@codecast/shared/contracts";
 import { agentDisplayName, CHEAP_MODEL, normalizeSubagentCaps } from "@codecast/shared/contracts";
 /** Parallel agents for plan orchestrate and autopilot when no --max is given and no subagent cap is configured (0 = no limit is not a wave size). */
 const ORCHESTRATE_DEFAULT_MAX = 3;
@@ -132,6 +133,7 @@ import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, routineLine, standingSessionLine } from "./briefLines.js";
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
+import { orgAuthorityGrantsError } from "@codecast/shared/contracts/orgProposal";
 import { parkedNote, planReadiness, stuckAdvice, stuckNote } from "./planReadiness.js";
 import { listedBlockers, listedReady } from "./listedReadiness.js";
 import { checkoutWords } from "./checkoutWords.js";
@@ -13115,6 +13117,15 @@ program
 
 // --- Agent Tasks ---
 
+/** `--precheck-mode`, checked; exits naming the choices otherwise. */
+function parsePrecheckMode(value: string): TriggerPrecheckMode {
+  if (!(TRIGGER_PRECHECK_MODES as readonly string[]).includes(value)) {
+    console.error(`--precheck-mode must be one of ${TRIGGER_PRECHECK_MODES.join(", ")}`);
+    process.exit(1);
+  }
+  return value as TriggerPrecheckMode;
+}
+
 /** The shared duration grammar (@codecast/shared/time), undefined for input it refuses. */
 function parseDuration(input: string): number | undefined {
   try {
@@ -13938,7 +13949,7 @@ roleGroup
   .command("authority")
   .description("Grant or revoke what a role may do outside codecast (a person's act): spend, publish, write, connect, each with a limit and an expiry")
   .argument("<handle>", "@handle, or-N, or id")
-  .option("--grant <json>", "A JSON list of grants [{ id, kind, label, scope?, limit?, expires? }]; '-' reads stdin")
+  .option("--grant <json>", "A JSON list of grants [{ id, kind: spend|publish|write|connect, label, scope?, limit?: { usd_per_month | usd_per_day | per_day: number }, expires?: \"90d\" }]; '-' reads stdin")
   .option("--revoke <id>", "Revoke a grant by id (repeatable)", (value: string, all: string[]) => [...all, value], [])
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
@@ -13946,7 +13957,8 @@ roleGroup
     const role_id = await resolveRoleId(handle, options.team);
     const raw = options.grant === "-" ? readStdinBody() : options.grant;
     const authority = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(authority)) { console.error("--grant is a JSON list"); process.exit(1); }
+    const invalid = orgAuthorityGrantsError(authority);
+    if (invalid) { console.error(`--grant: ${invalid}`); process.exit(1); }
     const result = await cliPost("/cli/role/authority", { role_id, authority, revoke: options.revoke, from_session: callingSession() });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
     const held = (result.authority ?? []) as any[];
@@ -15229,11 +15241,13 @@ trigger
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked. A run that continues an existing session inherits that session's rules instead.")
   .option("--mode <mode>", "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
+  .option("--device <name>", "Machine whose daemon runs this trigger (device id prefix, label or hostname, e.g. studio). Default: this machine. Runs wait while it is offline")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--as <definition>", "Spawned runs launch as this agent definition (cast agent ls): model, effort, tools and prompt")
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id). Default: the agent's saved default. Ignored by runs that inject into a session.")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
   .option("--precheck <command>", "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers and manual runs ignore it.")
+  .option("--precheck-mode <mode>", "How --precheck is read. exit (default): exit 0 runs. changes: runs when its output differs from the last firing's, and its new output goes into the run; the first firing records it and skips, so it needs --every. state: it gets the previous state as JSON in $CAST_PRECHECK_STATE (null at first) and prints {\"wake\": true|false, \"state\": ..., \"message\": \"...\"}; the state is kept for the next firing, the message goes into the run it wakes.")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
   .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Every run nests under this session and is read there rather than as an inbox card, and this session is woken if a run fails, dies, or asks for attention. A trigger that fires once also posts its clean result back here; a repeating one does not, since a line per firing would bury the thread.")
   .option("--thread", "Post each run's result into the current conversation as a message, without waking it. Works with --spawn; a --spawn trigger that fires once does this on its own.")
@@ -15250,6 +15264,24 @@ trigger
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    // The trigger runs only on the device it is bound to (TaskScheduler.canServeTask):
+    // --device names one of yours; else a spawning trigger goes to your saved
+    // default device when it is online and holds the folder; else this machine.
+    let runDeviceId = deviceId();
+    if (options.device || options.spawn) {
+      const { convexClient } = await import("./remote/cli.js");
+      const { pickDevice } = await import("./migrate/pickDevice.js");
+      const { client, token, api } = await convexClient();
+      if (options.device) {
+        const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
+        runDeviceId = pickDevice(devices, options.device, "--device").device_id;
+      } else {
+        // A backend without the query answers an error: keep this machine.
+        const saved = await client.query(api.newSessionDefaults.defaultDevice, { api_token: token, project_path: options.project || getRealCwd() }).catch(() => null);
+        if (saved) runDeviceId = saved;
+      }
+    }
 
     let schedule_type: "once" | "recurring" | "event" = "once";
     let run_at: number | undefined;
@@ -15290,6 +15322,11 @@ trigger
         .find(Boolean) ?? prompt;
     const title = options.title || firstLine.slice(0, 60);
     const maxRuntimeMs = options.maxRuntime ? parseDuration(options.maxRuntime) : undefined;
+    if (options.precheckMode !== undefined && !options.precheck) {
+      console.error("--precheck-mode reads a --precheck command; pass one.");
+      process.exit(1);
+    }
+    const precheckMode = options.precheckMode !== undefined ? parsePrecheckMode(options.precheckMode) : undefined;
 
     let context_summary: string | undefined;
     let originating_conversation_id: string | undefined;
@@ -15396,9 +15433,9 @@ trigger
           agent_type: options.agent,
           model: options.model,
           agent_definition: options.as || undefined,
-          // Bind the task to this machine: only the creating device's
-          // scheduler claims it (see TaskScheduler.canServeTask).
-          created_device_id: deviceId(),
+          // Bind the task to one machine: only that device's scheduler
+          // claims it (see TaskScheduler.canServeTask).
+          created_device_id: runDeviceId,
           schedule_type,
           run_at,
           interval_ms,
@@ -15406,6 +15443,8 @@ trigger
           mode: options.safe ? "propose" : options.mode,
           max_runtime_ms: maxRuntimeMs,
           precheck: options.precheck,
+          // "exit" is the default, stored as absent.
+          precheck_mode: precheckMode === "exit" ? undefined : precheckMode,
           wake_creator: options.wake || undefined,
         }),
       });
@@ -15646,6 +15685,7 @@ trigger
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id); 'default' clears the pin")
   .option("--max-runtime <duration>", "Max runtime (e.g., 10m)")
   .option("--precheck <command>", "Shell gate run before each scheduled or recurring run; exit 0 runs the trigger. Pass \"\" to remove the gate.")
+  .option("--precheck-mode <mode>", "How the precheck is read: exit, changes or state (see cast trigger add --help). Changing the gate or its mode starts its state over.")
   .option("--for <session>", "Rebind: runs inject into this session (short id, conversation id, or Claude session uuid) instead of spawning fresh agents.")
   .option("--spawn", "Unbind: each run starts a fresh session again instead of injecting into a bound one.")
   .option("--thread <session>", "Post each run's result into this conversation. Pass \"\" to stop posting.")
@@ -15724,6 +15764,7 @@ trigger
       body.max_runtime_ms = ms;
     }
     if (options.precheck !== undefined) body.precheck = options.precheck;
+    if (options.precheckMode !== undefined) body.precheck_mode = parsePrecheckMode(options.precheckMode);
     // Routing. --spawn clears the binding (null, not absent — absent means
     // "keep"); --for names the new one and the server resolves it.
     if (options.spawn) body.originating_conversation_id = null;
@@ -15737,7 +15778,7 @@ trigger
     if (options.wake !== undefined) body.wake_creator = options.wake;
 
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime/--precheck/--for/--spawn/--thread/--wake.");
+      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime/--precheck/--precheck-mode/--for/--spawn/--thread/--wake.");
       process.exit(1);
     }
 
@@ -15885,7 +15926,8 @@ trigger
     // last firing it refused — a skipped run leaves no conversation to read,
     // so this line is the only record of it here.
     if (t.precheck) {
-      console.log(`Precheck: ${c.dim}${t.precheck}${c.reset}`);
+      const precheckMode = triggerPrecheckMode(t.precheck_mode);
+      console.log(`Precheck: ${c.dim}${t.precheck}${c.reset}${precheckMode === "exit" ? "" : ` ${fmt.muted(`(${precheckMode})`)}`}`);
       if (t.last_run_source === "manual") console.log(fmt.muted("The last run was manual, so the precheck did not run."));
       if (t.last_precheck_skip_at) {
         console.log(
@@ -17671,6 +17713,37 @@ charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true
     }
     await cliPost("/cli/projects/update", body);
     console.log(`${c.green}ok${c.reset} Updated project ${c.cyan}${body.id}${c.reset}`);
+  });
+
+// A session in a project (docs/architecture/session-projects.md). Workers and
+// sessions it spawns follow it there: they derive theirs, nothing is copied.
+async function setSessionProject(sessionRef: string | undefined, projectId: string | null): Promise<void> {
+  const session = sessionRef || detectCurrentSessionId();
+  if (!session) {
+    console.error("No session given and none detected here: pass a session id");
+    process.exit(1);
+  }
+  const res: any = await cliPost("/cli/projects/set-session", { session, project_id: projectId });
+  const who = res?.short_id ?? session;
+  if (projectId) console.log(`${c.green}ok${c.reset} ${c.cyan}${who}${c.reset} is in the project, with the sessions it starts`);
+  else console.log(`${c.green}ok${c.reset} ${c.cyan}${who}${c.reset} left its project${res?.project_id ? ` (still in ${res.project_id} through its task or parent)` : ""}`);
+}
+
+projectCmd
+  .command("join")
+  .description("Put a session in a project; the sessions it starts belong there too")
+  .argument("<project>", "Project ID, short id or title substring")
+  .argument("[session]", "Session id or short id (default: this session)")
+  .action(async (ref: string, session: string | undefined) => {
+    await setSessionProject(session, await resolveProjectId(ref));
+  });
+
+projectCmd
+  .command("leave")
+  .description("Take a session out of the project it was put in")
+  .argument("[session]", "Session id or short id (default: this session)")
+  .action(async (session: string | undefined) => {
+    await setSessionProject(session, null);
   });
 
 // "2026-09-26" → ms at local end-of-day, so a deadline includes its own day.

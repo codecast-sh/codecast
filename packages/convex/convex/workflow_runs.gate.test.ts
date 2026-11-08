@@ -13,6 +13,7 @@ import {
   listRunsCore,
   graphOfRun,
   pollGateResponse,
+  updateProgress,
 } from "./workflow_runs";
 import { resolve, withdraw, withdrawCore, GATE_PRESENT_AGAIN, answerCore, askCore, settleClientResolution, edit } from "./sessionDecisions";
 import { hashToken } from "./apiTokens";
@@ -354,6 +355,59 @@ describe("withdrawing a gate (the-line.md L4)", () => {
     expect(tables.workflow_runs[0].fail_reason).toBe("gate withdrawn");
     const polled = await (pollGateResponse as any)._handler(ctx, { api_token: TOKEN, run_id: RUN });
     expect(polled.present_again).toBeUndefined();
+  });
+});
+
+// ct-73543 (Nov 5): a person stopped the run while its runner waited out a hold. When the hold ended the runner
+// reported on, and the reports carried the run through Build and Present to a second card for the problem.
+describe("a run that is over (runOver)", () => {
+  const report = (ctx: any, extra: Record<string, any>) =>
+    (updateProgress as any)._handler(ctx, { api_token: TOKEN, run_id: RUN, current_node_id: extra.node_id, ...extra });
+  const withPresenter = () => seed({
+    conversations: [
+      { _id: "conversations_spawner", session_id: "sess-spawner", user_id: HOST, team_id: TEAM, message_count: 2 },
+      { _id: "conversations_primary", session_id: `wf-${RUN}`, user_id: HOST, team_id: TEAM, message_count: 1, workflow_run_id: RUN, is_workflow_primary: true },
+      { _id: "conversations_present", session_id: "sess-present", short_id: "jx7pres", user_id: HOST, team_id: TEAM, message_count: 9, parent_conversation_id: "conversations_primary" },
+    ],
+    workflows: [{ _id: "workflows_line", user_id: HOST, name: "line", slug: "line", nodes: [
+      { id: "build_hold", type: "command" }, { id: "card_write", type: "agent" }, { id: "decide", shape: "hexagon", type: "human", asker: "card_write" },
+    ], edges: [] }],
+  });
+
+  test("a report from a run a person stopped changes nothing and tells its runner the run is over", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflow_runs[0].current_node_id = "build_hold";
+    tables.workflow_runs[0].node_statuses = [{ node_id: "build_hold", status: "running", started_at: NOW }];
+    await (cancel as any)._handler(asUser(ctx, HOST), { id: RUN });
+    const r = await report(ctx, { node_id: "build_hold", node_status: "completed", outcome: "success" });
+    expect(r).toEqual({ ended: { status: "failed", reason: "Cancelled by user" } });
+    expect(await report(ctx, { node_id: "build", node_status: "running" })).toEqual(r);
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "failed", fail_reason: "Cancelled by user", current_node_id: "build_hold" });
+    expect(tables.workflow_runs[0].node_statuses).toEqual([{ node_id: "build_hold", status: "running", started_at: NOW }]);
+  });
+
+  test("a gate a stopped run reaches asks nobody, and the card its presenter posted on the way goes with the run", async () => {
+    const { ctx, tables } = await withPresenter();
+    await (cancel as any)._handler(asUser(ctx, HOST), { id: RUN });
+    // A runner from before runOver carried on to Present, which posted its card.
+    const card: any = await askCore(ctx, { userId: HOST }, { session_id: "sess-present", question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }], blocking: true } as any);
+    const r: any = await pause(ctx, { node_id: "decide", asker: "card_write", asker_session_id: "jx7pres" });
+    expect(r.error).toContain("the run is over (Cancelled by user)");
+    expect(r.ended).toEqual({ status: "failed", reason: "Cancelled by user" });
+    const row = tables.session_decisions.find((d) => String(d._id) === String(card.id));
+    expect(row.status).toBe("withdrawn");
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "failed", fail_reason: "Cancelled by user" });
+  });
+
+  test("a run whose card was taken back is live: its runner sends it back to the presenter", async () => {
+    const { ctx, tables } = await seed();
+    await pause(ctx);
+    await (withdraw as any)._handler(ctx, { api_token: TOKEN, decision_id: "sd-1" });
+    expect(tables.workflow_runs[0].fail_reason).toBe(GATE_PRESENT_AGAIN);
+    const r = await report(ctx, { node_id: "review", node_status: "completed", outcome: "success", run_status: "running" });
+    expect(r).toEqual({ ok: true });
+    expect(tables.workflow_runs[0].status).toBe("running");
+    expect(tables.workflow_runs[0].fail_reason).toBeUndefined();
   });
 });
 

@@ -11,12 +11,21 @@
 // expo-updates can mark it launched — which auto-rolls the update back. Absent
 // native modules degrade to no-ops instead; telemetry resumes once users get a
 // build that bundles them.
-import { initAnalytics as initPlatformAnalytics } from "@platform/analytics/native";
-import { CODECAST_EVENTS } from "@codecast/shared/analytics";
+import { initAnalytics as initPlatformAnalytics, posthog, Sentry } from "@platform/analytics/native";
+import { CODECAST_EVENTS, POSTHOG_REPLAY_SAMPLE_RATE } from "@codecast/shared/analytics";
 import { MOBILE_EVENTS } from "./mobileEvents";
+import { teamsHoldRegulatedData } from "@codecast/shared/contracts";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
+import { watchRegulatedData } from "@codecast/web/lib/regulatedData";
 
+// Regulated health data (HIPAA), as on web (packages/web/lib/analytics.ts): a
+// person in a team whose policy sets regulated_data sends PostHog and Sentry
+// nothing. The teams list is persisted, so a returning launch knows before
+// init; one that learns it later shuts both down on the spot.
 export function initAnalytics() {
+  const regulated = teamsHoldRegulatedData(useInboxStore.getState().teams as any) === true;
   initPlatformAnalytics({
+    optedOut: regulated || undefined,
     // Same catalog and same per-session cap as web and Convex (ct-49565), so a
     // funnel that spans surfaces cannot disagree with itself about property
     // names. Mobile sends screens today; a named event added here is checked.
@@ -24,14 +33,18 @@ export function initAnalytics() {
     catalog: { ...CODECAST_EVENTS, ...MOBILE_EVENTS },
     posthogKey: process.env.EXPO_PUBLIC_POSTHOG_KEY,
     posthogHost: process.env.EXPO_PUBLIC_POSTHOG_HOST,
-    sentryDsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+    sentryDsn: regulated ? undefined : process.env.EXPO_PUBLIC_SENTRY_DSN,
     environment: __DEV__ ? "development" : "production",
     platform: "mobile",
     appName: "codecast",
-    // Session replay walks the view tree on the JS thread (and masks every
-    // text input). That froze taps for seconds, worst on a new session with
-    // the keyboard open and send waiting on the same thread. Sentry stays.
-    enableSessionReplay: false,
+    // Replay walks the view tree on the JS thread (and masks every text
+    // input); for everyone it froze taps for seconds, so only a sample records.
+    sessionReplaySampleRate: POSTHOG_REPLAY_SAMPLE_RATE,
+  });
+  watchRegulatedData((on) => {
+    if (!on) return;
+    try { void posthog?.optOut(); } catch {}
+    try { void (Sentry as any)?.close?.(); } catch {}
   });
 }
 

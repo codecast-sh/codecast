@@ -19,6 +19,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { scheduleFedSessionSettle } from "./callChat";
 import { scheduleWorkerSettle } from "./workerSettle";
 import { closeSessionRepliesAfterTurn } from "./chatSessionReplies";
+import { scheduleGoalJudge } from "./sessionGoals";
 
 // A status CHANGE is the entry point to the needs-input push (see
 // notifications.checkNeedsInput). "idle" only settles into needs_input after
@@ -935,10 +936,18 @@ async function applyAgentStatus(ctx: MutationCtx, session: Doc<"managed_sessions
     await releaseQueuedRows(ctx, args.conversation_id);
     // Chat lines this turn read and did not answer stop saying "thinking".
     await closeSessionRepliesAfterTurn(ctx, args.conversation_id);
+    // A session working toward a goal has this turn judged (sessionGoals.ts).
+    if (!args.session_boundary) {
+      // A re-published settle carries its old stamp, so the stamp names the turn only when it advanced.
+      await scheduleGoalJudge(ctx, args.conversation_id, (turnStampAdvanced ? args.turn_completed_at : undefined) ?? patch.agent_status_updated_at ?? Date.now(), args.agent_status);
+    }
   } else if (session.agent_status === "permission_blocked" && args.agent_status !== "permission_blocked" && !ACTIVE_AGENT_STATUSES.has(args.agent_status)) {
     // A turn stopped at a permission prompt (denied, or interrupted by a
     // "stop and send") ended too: its queue goes in.
     await releaseQueuedRows(ctx, args.conversation_id);
+    if (!args.session_boundary) {
+      await scheduleGoalJudge(ctx, args.conversation_id, patch.agent_status_updated_at ?? Date.now(), args.agent_status);
+    }
   }
   // The activity line names what the agent does NOW; a settled turn does
   // nothing, so the stamp comes off the row here rather than lingering until
@@ -1328,19 +1337,34 @@ export const getConversationBySessionId = query({
 // > cutoff), so the deletes never collide with heartbeat writes. Everything in range
 // is dead by definition. WINDOW only needs to exceed the gap between cron runs so a
 // death is always caught before it ages out — 6h gives the 10-min cron wide margin.
+//
+// One pass reads at most REAP_PAGE_SIZE rows and hands the rest to a scheduled
+// continuation that resumes after the last heartbeat it read. Collecting the whole
+// window in one mutation timed out on every run (6 an hour, none committed, on
+// 2026-11-07): ~330 dead rows plus the superseded heartbeat entries between them,
+// and a timed-out pass deletes nothing, so the backlog only grew.
 const REAP_WINDOW_MS = 6 * 60 * 60 * 1000;
+export const REAP_PAGE_SIZE = 50;
 export const reapStaleManagedSessions = internalMutation({
-  args: { cutoffMs: v.optional(v.number()) },
+  args: {
+    cutoffMs: v.optional(v.number()),
+    // Set by a continuation: the pass's fixed cutoff, and the last heartbeat read.
+    cutoff: v.optional(v.number()),
+    after: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     noteWriteCause(ctx, "cron:reapStaleManagedSessions");
-    const cutoff = Date.now() - (args.cutoffMs ?? 60 * 60 * 1000); // dead = no beat in 1h
+    const cutoff = args.cutoff ?? Date.now() - (args.cutoffMs ?? 60 * 60 * 1000); // dead = no beat in 1h
     const readStart = Date.now();
     const dead = await ctx.db
       .query("managed_sessions")
-      .withIndex("by_heartbeat", (q: any) =>
-        q.gte("last_heartbeat", cutoff - REAP_WINDOW_MS).lt("last_heartbeat", cutoff)
-      )
-      .collect();
+      .withIndex("by_heartbeat", (q: any) => {
+        const lower = args.after === undefined
+          ? q.gte("last_heartbeat", cutoff - REAP_WINDOW_MS)
+          : q.gt("last_heartbeat", args.after);
+        return lower.lt("last_heartbeat", cutoff);
+      })
+      .take(REAP_PAGE_SIZE);
     const readMs = Date.now() - readStart;
 
     // A parked pane and a hosted conversation's status row are not dead rows:
@@ -1349,11 +1373,18 @@ export const reapStaleManagedSessions = internalMutation({
     const reapable = dead.filter(s => s.agent_status !== "hibernated" && isDaemonManagedRow(s));
     for (const s of reapable) await ctx.db.delete(s._id);
 
+    const more = dead.length === REAP_PAGE_SIZE;
+    if (more) {
+      await ctx.scheduler.runAfter(0, internal.managedSessions.reapStaleManagedSessions, {
+        cutoff,
+        after: dead[dead.length - 1].last_heartbeat,
+      });
+    }
     if (reapable.length > 0) {
       console.log(
-        `reapStaleManagedSessions: deleted ${reapable.length} dead session(s) (scan ${readMs}ms)`
+        `reapStaleManagedSessions: deleted ${reapable.length} dead session(s) (scan ${readMs}ms${more ? ", continuing" : ""})`
       );
     }
-    return { deleted: reapable.length };
+    return { deleted: reapable.length, more };
   },
 });

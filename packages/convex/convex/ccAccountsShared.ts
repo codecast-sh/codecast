@@ -1209,6 +1209,43 @@ export function blockedHeadlineCause<T extends { pending_api_error_kind?: string
   ] as const).reduce((best, cur) => (cur[0] > best[0] ? cur : best))[1];
 }
 
+/** The blocked-incident push: what parked, counted over top-level sessions
+ *  only, and the newest park it covers, or null when nothing a person owns is
+ *  parked. A subagent worker belongs to the session that started it, which
+ *  reads its state and revives or drops it; pushing its park asked the person
+ *  to act on work they never started (a Codex reviewer's safety stop read
+ *  "1 needs safety review (1 subagent)" on the lock screen). The inbox still
+ *  lists parked workers under their parent. */
+export function blockedIncidentNotice<
+  T extends { pending_api_error_kind?: string | null; updated_at?: number; is_subagent?: boolean; parent_conversation_id?: string | null },
+>(blocked: T[]): { title: string; message: string; anchor: T; newestPark: number } | null {
+  const owned = blocked.filter((c) => !isSubagentConversation(c));
+  if (owned.length === 0) return null;
+  const of = (kind: string) => owned.filter((c) => c.pending_api_error_kind === kind).length;
+  const auth = of("auth");
+  const safety = of("safety");
+  const counts: Array<[number, string]> = [
+    [auth, "signed out"],
+    [of("connection"), "dropped mid-response"],
+    [of("fatal"), "failed on an api error"],
+    [of("throttle"), "rate limited by a burst"],
+    [of("context"), "filled their context"],
+    [safety, "stopped for safety review"],
+  ];
+  const limit = owned.length - counts.reduce((n, [c]) => n + c, 0);
+  const parts = [[limit, "hit a usage limit"] as [number, string], ...counts]
+    .filter(([n]) => n > 0)
+    .map(([n, label]) => `${n} ${label}`);
+  const hint = safety > 0 ? "safety stops wait for you" : auth > 0 ? "sign in to revive them" : "revive them from the inbox";
+  const anchor = [...owned].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
+  return {
+    title: `${owned.length} session${owned.length === 1 ? "" : "s"} blocked on ${blockedHeadlineCause(owned)}`,
+    message: `${parts.join(" · ")}. ${hint[0].toUpperCase()}${hint.slice(1)}.`,
+    anchor,
+    newestPark: anchor.updated_at ?? 0,
+  };
+}
+
 // The parent-link fields every inbox session row MUST carry so the client can
 // tell a subagent from a top-level session and nest it under its parent. The
 // client reads exactly these via isSubagentConversation; without them a row

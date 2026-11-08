@@ -17,18 +17,20 @@
 import { createContext, useContext } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { activeTeamIdOf } from "./activeTeam";
-import { TEAM_FEATURES, workspaceFeatureEnabled, workspaceFeatureState, type FeatureState, type TeamFeatureKey } from "@codecast/shared/contracts";
+import { featureVendorBlock, TEAM_FEATURES, workspaceFeatureEnabled, workspaceFeatureState, type FeatureState, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { anyHolderHasFeature, defineFeatures, holderHasFeature } from "@platform/flags";
 
 /** codecast's catalog as a @platform/flags catalog. Shared with the off-feature
  *  landing (TeamFeatureOff), so the toggle, the gate and the copy agree. */
 export const TEAM_FEATURE_CATALOG = defineFeatures(TEAM_FEATURES);
 
-/** Is `key` on for the team with id `teamId`, out of the store's teams list? */
+/** Is `key` on for the team with id `teamId`, out of the store's teams list?
+ *  A regulated team's feature whose vendor has no BAA yet is off however it
+ *  is set (featureVendorBlock); the server refuses it the same way. */
 export function teamHasFeature(teams: any[], teamId: string | null | undefined, key: TeamFeatureKey): boolean {
   if (!teamId) return false;
   const team = (teams || []).find((t: any) => String(t._id) === String(teamId));
-  return holderHasFeature(TEAM_FEATURE_CATALOG, team, key);
+  return holderHasFeature(TEAM_FEATURE_CATALOG, team, key) && !featureVendorBlock(team, key);
 }
 
 /** A fixed answer for every feature, in place of the viewer's teams: the
@@ -47,7 +49,7 @@ export function useTeamFeature(key: TeamFeatureKey): boolean {
  *  (the calls history page, an incoming ring), where hiding per active team
  *  would drop a teammate's ring from another team. */
 export function useAnyTeamFeature(key: TeamFeatureKey): boolean {
-  return useInboxStore((s) => anyHolderHasFeature(TEAM_FEATURE_CATALOG, s.teams || [], key));
+  return useInboxStore((s) => anyHolderHasFeature(TEAM_FEATURE_CATALOG, (s.teams || []).filter((t: any) => !featureVendorBlock(t, key)), key));
 }
 
 /** Calls affordances (huddle buttons, occupancy chips, palette entry): the

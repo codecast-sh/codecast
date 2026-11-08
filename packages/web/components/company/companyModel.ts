@@ -48,6 +48,8 @@ export type CompanyInput = {
   tasks?: readonly BoardTask[];
   /** False while the task store is still filling: a count read now would be partial. */
   tasksCounted?: boolean;
+  /** Each project's own sessions by state (hooks/useProjectSessionCounts). */
+  projectSessions?: ReadonlyMap<string, StateCounts>;
   /** The changes of every open proposal of this workspace. */
   changes?: readonly OrgProposalChange[];
   /** Those proposals, so a change names the one it belongs to. */
@@ -336,7 +338,7 @@ export function companyDoc(input: CompanyInput): CompanyDoc {
     }
   }
 
-  const ctx = { tree: input.tree, roles: liveRoles, tasks: input.tasks ?? [], tasksCounted: input.tasksCounted };
+  const ctx = { tree: input.tree, roles: liveRoles, tasks: input.tasks ?? [], tasksCounted: input.tasksCounted, projectSessions: input.projectSessions };
   const docProject = (p: Pick<PlanProject, "id" | "title" | "short_id" | "status" | "ghost">): DocProject => {
     const row = projectById.get(p.id);
     const proposal = p.ghost ? proposalOf(p.ghost.change_id) : undefined;

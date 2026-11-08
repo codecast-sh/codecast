@@ -8,9 +8,9 @@
 // nit the real-speech run heard on every voice message finalize.
 //
 // The collapse is keyed on the chat message id, which both feeds carry. These
-// tests drive the real `soundChatMessage` and count oscillator starts, the same
-// way the browser run identified cues: by the nodes they create, not by a claim
-// that something played.
+// tests drive the real `soundChatMessage` and count the recordings it starts,
+// the same way the browser run identified cues: by the nodes they create, not
+// by a claim that something played.
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createNotificationDelivery, installNotificationDelivery, type ClaimResult } from "../notificationDelivery";
@@ -20,6 +20,8 @@ import { useInboxStore } from "../../store/inboxStore";
 
 let oscStarts = 0;
 let bufferStarts = 0;
+/** Starts of a decoded recording (a cue's sample), apart from noise buffers. */
+let sampleStarts = 0;
 
 function fakeParam() {
   return {
@@ -53,12 +55,16 @@ class FakeAudioContext {
   createBuffer(_ch: number, len: number) {
     return { getChannelData: () => new Float32Array(len) };
   }
+  decodeAudioData() {
+    return Promise.resolve({ decoded: true });
+  }
   createBufferSource() {
     return {
-      buffer: null,
+      buffer: null as any,
       connect() {},
       start() {
         bufferStarts++;
+        if (this.buffer?.decoded) sampleStarts++;
       },
       stop() {},
     };
@@ -69,6 +75,11 @@ class FakeAudioContext {
 }
 
 (globalThis as any).AudioContext = FakeAudioContext;
+// Every recording loads as an opaque buffer; the fake decoder marks it.
+globalThis.fetch = (async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) })) as any;
+
+/** Let a recording's fetch and decode finish, so its start is counted. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
 
 // Spread the real module and override only the leader flag: `mock.module`
 // replaces it for the whole test process, and a partial stand-in would break
@@ -91,6 +102,7 @@ describe("one arrival, one sound", () => {
   beforeEach(() => {
     oscStarts = 0;
     bufferStarts = 0;
+    sampleStarts = 0;
     // sounds.ts caches one AudioContext for the whole process, so without this
     // whichever sound test file runs first pins its stand-in for the rest and
     // the others count nothing. See `resetAudioContext`.
@@ -102,7 +114,7 @@ describe("one arrival, one sound", () => {
     setWindowRoleForTest(true);
   });
 
-  test("agent tabs create no audio graph until explicitly opted into alert testing", () => {
+  test("agent tabs create no audio graph until explicitly opted into alert testing", async () => {
     const previous = globalThis.sessionStorage;
     const values = new Map([["codecast-agent-tab", "1"]]);
     globalThis.sessionStorage = { getItem: (key: string) => values.get(key) ?? null } as Storage;
@@ -112,12 +124,13 @@ describe("one arrival, one sound", () => {
       soundCallRing();
       soundSend();
       previewSoundCategory("chat");
+      await settle();
       expect(oscStarts).toBe(0);
       expect(bufferStarts).toBe(0);
       values.set("codecast-agent-alerts", "1");
       soundChatMessage("agent-opted-in");
-      expect(oscStarts).toBe(4);
-      expect(bufferStarts).toBe(2);
+      await settle();
+      expect(sampleStarts).toBe(1);
     } finally {
       globalThis.sessionStorage = previous;
     }
@@ -137,9 +150,8 @@ describe("one arrival, one sound", () => {
       await Promise.resolve();
       useInboxStore.setState({ myCalls: { ...previous, incoming: [] } });
       resolve("claimed");
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(oscStarts).toBe(0);
+      await settle();
+      expect(sampleStarts).toBe(0);
     } finally {
       stop();
       useInboxStore.setState({ myCalls: previous });
@@ -162,8 +174,9 @@ describe("one arrival, one sound", () => {
       soundChatMessage("autoplay-blocked");
       await Promise.resolve();
       await Promise.resolve();
+      await settle();
       expect(claims).toBe(0);
-      expect(oscStarts).toBe(0);
+      expect(sampleStarts).toBe(0);
     } finally {
       stop();
       globalThis.AudioContext = previous;
@@ -171,43 +184,47 @@ describe("one arrival, one sound", () => {
     }
   });
 
-  test("the knock motif is four oscillators and two knocks", () => {
+  test("a chat message plays the marimba recording and nothing else", async () => {
     soundChatMessage("msg-baseline");
-    // Two mallet strikes, each a fundamental plus its 4x partial, and a
-    // filtered-noise transient in front of each.
-    expect(oscStarts).toBe(4);
-    expect(bufferStarts).toBe(2);
+    await settle();
+    expect(sampleStarts).toBe(1);
+    expect(oscStarts).toBe(0);
   });
 
-  test("both layers answering the same message sound it once", () => {
+  test("both layers answering the same message sound it once", async () => {
     soundChatMessage("msg-1"); // the toast layer, off the chat rail
     soundChatMessage("msg-1"); // DesktopProvider, off the notification row
-    expect(oscStarts).toBe(4);
+    await settle();
+    expect(sampleStarts).toBe(1);
   });
 
-  test("two different messages still sound twice", () => {
+  test("two different messages still sound twice", async () => {
     soundChatMessage("msg-2");
     soundChatMessage("msg-3");
-    expect(oscStarts).toBe(8);
+    await settle();
+    expect(sampleStarts).toBe(2);
   });
 
-  test("an unkeyed call is never collapsed", () => {
+  test("an unkeyed call is never collapsed", async () => {
     // A caller with no message id in hand must still be heard. Silence is the
     // worse failure of the two, so an unknown key opts out of the collapse.
     soundChatMessage();
     soundChatMessage();
-    expect(oscStarts).toBe(8);
+    await settle();
+    expect(sampleStarts).toBe(2);
   });
 
-  test("a non-leader window stays silent and claims no key", () => {
+  test("a non-leader window stays silent and claims no key", async () => {
     setWindowRoleForTest(false);
     soundChatMessage("msg-4");
-    expect(oscStarts).toBe(0);
+    await settle();
+    expect(sampleStarts).toBe(0);
 
     // The suppressed call must not have consumed the key: the leader window
     // gets its sound when it observes the same message.
     setWindowRoleForTest(true);
     soundChatMessage("msg-4");
-    expect(oscStarts).toBe(4);
+    await settle();
+    expect(sampleStarts).toBe(1);
   });
 });

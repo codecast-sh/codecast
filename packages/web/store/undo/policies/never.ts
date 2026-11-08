@@ -95,6 +95,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   commentOnDecision: SEND,
   dropDecisionComment: LOCAL_ECHO,
   askDecisionSession: SEND,
+  askSideQuestion: never("send: the question goes to the model at once; its answer is private to the asker"),
+  dropSideAnswer: LOCAL_ECHO,
   deleteDecisionComment: DELETE,
   sendLineChat: SEND,
   dropLineChatSend: LOCAL_ECHO,
@@ -165,6 +167,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
 
   // Deletes
   deleteCallRecording: DELETE,
+  deleteCall: DELETE,
   admitGuestKnock: never("door: letting a stranger into a call is not taken back by an undo; remove them"),
   denyGuestKnock: never("door: the guest was told no; they can ask again"),
   removeCallGuest: never("door: the guest was put out of the call; they can be let in again"),

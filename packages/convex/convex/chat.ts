@@ -39,7 +39,9 @@ import {
   isThreadMuted,
   isVisibleAgentPending,
   mentionSessions,
+  sessionDmKeyFor,
   mentionUserIds,
+  tallyUnread,
   threadFaceKey,
   withThreadMuted,
 } from "@codecast/shared/chat";
@@ -86,6 +88,7 @@ import { chatMentionClientId, chatRelayClientId } from "./lib/chatWakeIds";
 import { nextChatStamp, patchChat } from "./lib/chatRows";
 import { closeSessionReplyOnAnswer, openSessionReply } from "./chatSessionReplies";
 import { buildAnchorWake, buildChatWake, buildSessionRelay } from "./chatWakePrompts";
+import { openaiFetch } from "./lib/openai";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 
@@ -757,34 +760,12 @@ async function railFor(
           q.eq("channel_id", channel._id).gt("created_at", lastReadAt))
         .take(UNREAD_CAP * 2 + 1)
       : [];
-    // Channel-LEVEL rows only. A thread reply does not tick the channel's
-    // number: the reader cannot clear it from the channel view (the reply's
-    // body never appears there), so counting it makes a badge that reading
-    // cannot extinguish. Thread activity reaches its audience as chat_reply
-    // notifications — and a mention anywhere still counts below, because
-    // being named must never be invisible. A BROADCAST reply is the
-    // exception: it does appear in the channel, so reading clears it.
-    // History imported from Slack is never unread. Those lines were read
-    // where they were written, often months ago; arriving here is a move, not
-    // an event. Without this a freshly mirrored room opens with a badge for
-    // every line it brought, which is the one thing that makes a new mirror
-    // feel like a mess rather than a room you already know.
-    const counted = unreadRows.filter(
-      (row) => visible(row) && !mine(row)
-        && !isHistoryLine(row)
-        && (row.thread_root_id === undefined || row.broadcast === true),
-    );
-    // Two numbers, never one. A single count that includes ordinary chatter
-    // teaches people to ignore counts, and then the one that matters — someone
-    // said your name — is invisible inside the noise. In a DM every line is
-    // addressed to you, so every unread row counts as a mention.
-    const unreadMentions = unreadRows.filter((row) =>
-      visible(row) && !mine(row) && !isHistoryLine(row) && (
-        channel.kind === "dm"
-        || row.mention_scope === "here"
-        || (!!userId && mentionUserIds(row.mentions as any).includes(userId.toString()))
-      ),
-    ).length;
+    // The shared unread rule (@codecast/shared/chat tallyUnread): every
+    // client tallies the rows it holds with the same function, so the badge
+    // this rail raises is the one opening the channel clears.
+    const tally = userId
+      ? tallyUnread(unreadRows, lastReadAt, userId.toString(), { isDm: channel.kind === "dm" })
+      : { unread: 0, mentions: 0 };
 
     rail.push({
       channel_id: channel._id,
@@ -794,7 +775,7 @@ async function railFor(
       member_ids: isRestricted(channel)
         ? (await channelMemberIds(ctx, channel._id)).map((id) => id.toString())
         : undefined,
-      agents: channel.kind === "dm" || isCommunity(channel)
+      agents: isCommunity(channel)
         ? undefined
         : (await channelAgentRows(ctx, channel._id)).map(channelAgentRef),
       last_message: lastMessage
@@ -819,9 +800,9 @@ async function railFor(
         : null,
       // Sorts the rail by recency without any denormalized field.
       sort_at: lastMessage?.created_at ?? channel.created_at,
-      unread: Math.min(counted.length, UNREAD_CAP),
-      unread_capped: counted.length > UNREAD_CAP,
-      unread_mentions: unreadMentions,
+      unread: Math.min(tally.unread, UNREAD_CAP),
+      unread_capped: tally.unread > UNREAD_CAP,
+      unread_mentions: tally.mentions,
       // A missing read row means the member has never opened this channel,
       // which reads as "mentions only" until they join it for real.
       notify_level: read?.notify_level ?? "mentions",
@@ -1394,8 +1375,12 @@ export const createChannel = mutation({
 //
 // The room's own member is whoever will speak in it. A role's standing session
 // speaks as the role's bot (insertChatMessage), so its DM is the bot and the
-// people it named: the human whose token it runs on joins only when named,
-// never because the session happens to run on their machine.
+// people it named. A session with no role is itself the party: it gets its own
+// room with the people it named (ensureDmRoom's `session`), and every line
+// they write there reaches it. Either way the human whose token it runs on
+// joins only when named, never because the session runs on their machine; a
+// session that names its owner too is writing to them, and speaks in the room
+// its owner shares with those people.
 export const openDm = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -1412,9 +1397,11 @@ export const openDm = mutation({
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const { teamId } = await requireTeamForWrite(ctx, userId, args.team_id);
-    const speaker = args.origin === "agent" ? await sessionSpeaker(ctx, userId, args.origin_session_id) : userId;
+    const { speaker, session } = args.origin === "agent"
+      ? await sessionSpeaker(ctx, userId, args.origin_session_id)
+      : { speaker: userId, session: null };
     const { room, others } = await openPeopleRoom(ctx, {
-      teamId, speaker, ids: args.member_ids ?? [], handles: args.handles ?? [], limitedUser: userId, clientId: args.client_id,
+      teamId, speaker, session, ids: args.member_ids ?? [], handles: args.handles ?? [], limitedUser: userId, clientId: args.client_id,
     });
     // Re-opening is joining: the caller may have left the read row behind. No
     // chat_added here: an empty DM room is not an event. The first MESSAGE
@@ -1425,18 +1412,20 @@ export const openDm = mutation({
   },
 });
 
-/** Who a session's chat lines speak as when it opens a DM. Same rule as
- *  postChatMessage, including the ownership check on the caller-supplied
- *  session id. */
+/** Who a session's chat lines speak as when it opens a DM: its role's bot,
+ *  or (no role) the caller, with the session itself as the room's party. Same
+ *  rule as postChatMessage, including the ownership check on the
+ *  caller-supplied session id. */
 async function sessionSpeaker(
   ctx: MutationCtx,
   callerId: Id<"users">,
   sessionRef: string | undefined,
-): Promise<Id<"users">> {
-  if (!sessionRef) return callerId;
+): Promise<{ speaker: Id<"users">; session: Doc<"conversations"> | null }> {
+  if (!sessionRef) return { speaker: callerId, session: null };
   const conv = await findConversationByAnyRefWhere(ctx, sessionRef, (c) => isConversationOwner(ctx, callerId, c));
-  if (!conv) return callerId;
-  return (await sessionVoice(ctx, callerId, conv, "new-dm"))?.user_id ?? callerId;
+  if (!conv) return { speaker: callerId, session: null };
+  const voice = await sessionVoice(ctx, callerId, conv, "new-dm");
+  return voice ? { speaker: voice.user_id, session: null } : { speaker: callerId, session: conv };
 }
 
 /** The role bot a session's lines speak as, or null to speak as the caller.
@@ -1465,14 +1454,20 @@ async function sessionVoice(
 }
 
 /** The DM room of `speaker` and the people named by id or handle, found or
- *  made. Rate limited on `limitedUser`, the human whose token asked. */
+ *  made; with a `session`, that session's own room with them, unless it named
+ *  the speaker too. Rate limited on `limitedUser`, the human whose token asked. */
 async function openPeopleRoom(
   ctx: MutationCtx,
-  opts: { teamId: Id<"teams">; speaker: Id<"users">; ids: Id<"users">[]; handles: string[]; limitedUser: Id<"users">; clientId?: string },
+  opts: {
+    teamId: Id<"teams">; speaker: Id<"users">; session?: Doc<"conversations"> | null;
+    ids: Id<"users">[]; handles: string[]; limitedUser: Id<"users">; clientId?: string;
+  },
 ): Promise<{ room: { channel: Doc<"chat_channels">; created: boolean }; others: Id<"users">[] }> {
-  const others = await dmOthers(ctx, opts.teamId, opts.speaker, opts.ids, opts.handles);
+  const { others, namedSelf } = await dmOthers(ctx, opts.teamId, opts.speaker, opts.ids, opts.handles);
   await chatRateLimit(ctx, opts.limitedUser, "chat.channel_create", CHANNEL_CREATE_LIMIT);
-  const room = await ensureDmRoom(ctx, opts.teamId, [opts.speaker, ...others], opts.speaker, { client_id: opts.clientId });
+  const room = opts.session && !namedSelf
+    ? await ensureDmRoom(ctx, opts.teamId, others, opts.speaker, { client_id: opts.clientId, session: opts.session })
+    : await ensureDmRoom(ctx, opts.teamId, [opts.speaker, ...others], opts.speaker, { client_id: opts.clientId });
   return { room, others };
 }
 
@@ -1487,7 +1482,7 @@ async function dmOthers(
   selfId: Id<"users">,
   ids: Id<"users">[],
   handles: string[],
-): Promise<Id<"users">[]> {
+): Promise<{ others: Id<"users">[]; namedSelf: boolean }> {
   const targets = [...ids];
   if (handles.length > 0) {
     const roster = await teamRoster(ctx, teamId);
@@ -1501,6 +1496,7 @@ async function dmOthers(
     }
   }
   const others: Id<"users">[] = [];
+  const namedSelf = targets.some((id) => id.toString() === selfId.toString());
   const seen = new Set<string>([selfId.toString()]);
   for (const id of targets) {
     if (seen.has(id.toString())) continue;
@@ -1516,7 +1512,7 @@ async function dmOthers(
   if (others.length + 1 > MAX_DM_MEMBERS) {
     chatFail("INVALID", `A group message holds at most ${MAX_DM_MEMBERS} people`);
   }
-  return others;
+  return { others, namedSelf };
 }
 
 /** The team's people and the handle each answers to: what `cast chat dm` and
@@ -1559,9 +1555,11 @@ export async function ensureDmRoom(
   teamId: Id<"teams">,
   memberIds: Id<"users">[],
   createdBy: Id<"users">,
-  opts: { client_id?: string } = {},
+  opts: { client_id?: string; session?: Doc<"conversations"> } = {},
 ): Promise<{ channel: Doc<"chat_channels">; created: boolean }> {
-  const dmKey = dmKeyFor(String(teamId), memberIds.map(String));
+  const dmKey = opts.session
+    ? sessionDmKeyFor(String(teamId), memberIds.map(String), String(opts.session._id))
+    : dmKeyFor(String(teamId), memberIds.map(String));
   const existing = await ctx.db
     .query("chat_channels")
     .withIndex("by_dm_key", (q: any) => q.eq("dm_key", dmKey))
@@ -1576,9 +1574,13 @@ export async function ensureDmRoom(
     return { channel: existing, created: false };
   }
   const now = Date.now();
+  const session = opts.session;
+  const sessionShortId = session ? (session.short_id ?? String(session._id).slice(0, 7)) : "";
   const channelId = await ctx.db.insert("chat_channels", {
     team_id: teamId,
-    name: "",
+    // A people DM has no name: every surface derives it from the members. A
+    // session's room is named for the session, the party they talk to.
+    name: session ? oneLine(session.title || `Session ${sessionShortId}`, 80) : "",
     kind: "dm",
     dm_key: dmKey,
     created_by: createdBy,
@@ -1592,6 +1594,13 @@ export async function ensureDmRoom(
     if (seen.has(id.toString())) continue;
     seen.add(id.toString());
     await ctx.db.insert("chat_channel_members", { channel_id: channelId, user_id: id, added_by: createdBy, added_at: now });
+  }
+  // The session is the room's agent member: its owner reads and posts there
+  // through it (canAccessChannel), and every line people write reaches it.
+  if (session) {
+    await ctx.db.insert("chat_channel_agents", {
+      channel_id: channelId, conversation_id: session._id, short_id: sessionShortId, added_by: createdBy, added_at: now,
+    });
   }
   return { channel: (await ctx.db.get(channelId))!, created: true };
 }
@@ -2550,7 +2559,7 @@ export const sendMessage = mutation({
     // A person's line reaches every role and session inside the room
     // (C5); an agent's reaches them only through a mention, like anywhere.
     const personLine = !sender?.is_bot && args.origin !== "agent";
-    const agentMembers = personLine && channel.kind !== "dm" ? await channelAgentRows(ctx, channel._id) : [];
+    const agentMembers = personLine ? await channelAgentRows(ctx, channel._id) : [];
     const memberIds = new Set(agentMembers.map((row) => String(row.role_id ?? row.conversation_id)));
     let mentionWakes: MentionWakeResult = { roles: 0, sessions: 0, folded: 0, skipped: [] };
     if (message && (roles.length > 0 || sessions.length > 0)) {
@@ -3124,8 +3133,7 @@ export const transcribeVoiceNote = internalAction({
   args: { message_id: v.id("chat_messages"), storage_id: v.id("_storage") },
   handler: async (ctx, args): Promise<void> => {
     let content = "";
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (apiKey) {
+    if (process.env.OPENAI_API_KEY) {
       try {
         const audio = await ctx.storage.get(args.storage_id);
         if (audio) {
@@ -3136,13 +3144,10 @@ export const transcribeVoiceNote = internalAction({
           form.append("file", audio, `voice.${ext}`);
           form.append("model", VOICE_FALLBACK_MODEL);
           form.append("response_format", "text");
-          const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${apiKey}` },
-            body: form,
-          });
-          if (resp.ok) content = (await resp.text()).trim();
-          else console.error("[chat] voice transcription failed", resp.status, (await resp.text()).slice(0, 300));
+          // A regulated team's voice note reaches OpenAI only once it has a BAA (lib/vendorGuard).
+          const resp = await openaiFetch({ ctx, scope: { row: { table: "chat_messages", id: args.message_id } } }, "/v1/audio/transcriptions", { method: "POST", body: form });
+          if (resp?.ok) content = (await resp.text()).trim();
+          else if (resp) console.error("[chat] voice transcription failed", resp.status, (await resp.text()).slice(0, 300));
         }
       } catch (err) {
         console.error("[chat] voice transcription threw", err);
@@ -4514,7 +4519,10 @@ async function deliverToChannelAgents(
 ): Promise<{ roles: number; sessions: number; skipped: string[] }> {
   const out = { roles: 0, sessions: 0, skipped: [] as string[] };
   const team = await ctx.db.get(opts.channel.team_id);
-  const where = `#${opts.channel.name}`;
+  // A DM's only agent member is the session the room belongs to
+  // (ensureDmRoom): the people in it are talking to that session.
+  const dm = opts.channel.kind === "dm";
+  const where = dm ? "your direct message" : `#${opts.channel.name}`;
   // A line in a thread is answered in it; a line at channel level is answered
   // at channel level, the way people talk in a group room.
   const threadRootId = opts.root?._id;
@@ -4524,7 +4532,9 @@ async function deliverToChannelAgents(
     channelTopic: opts.channel.topic,
     teamName: oneLine((team as any)?.name ?? "team", 60),
     threadRootId,
-    lead: `${opts.senderName} posted in ${where}, a channel you are a member of.`,
+    lead: dm
+      ? `${opts.senderName} wrote to you in your direct message with them.`
+      : `${opts.senderName} posted in ${where}, a channel you are a member of.`,
     entries: [{ name: opts.senderName, content: opts.message.content }],
     channelEntries: [],
     nonce: crypto.randomUUID().replace(/-/g, "").slice(0, 12),
@@ -4532,7 +4542,9 @@ async function deliverToChannelAgents(
       threadRootId ? "Reply in the thread with:" : "Reply in the channel with:",
       `  cast chat send --channel ${opts.channel._id}${threadRootId ? ` --thread ${threadRootId}` : ""} "<your reply>"`,
       `Read more: cast chat read --channel ${opts.channel._id}`,
-      "Every member hears every line people post here. Answer only when the line wants something from you, and once.",
+      dm
+        ? "Answer when the line wants something from you, and once."
+        : "Every member hears every line people post here. Answer only when the line wants something from you, and once.",
     ],
   });
   const content = `<chat-mention channel="${where.replace(/"/g, "'")}" thread="${threadRootId ?? opts.message._id}" from="${opts.senderName.replace(/"/g, "'")}">\n${body}\n</chat-mention>`;

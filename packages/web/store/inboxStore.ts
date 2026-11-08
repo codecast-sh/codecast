@@ -1,4 +1,6 @@
 import { resourceOffloadStubs, cancelResourceBatch } from "./resourceOffloadActions";
+import { approvesCommandRun } from "@codecast/shared/contracts/commandRun";
+import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, GOAL_RESUME_RESET, goalCanPause, goalCanResume, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
 import type { InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { captureError } from "../lib/analytics";
@@ -25,6 +27,8 @@ import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/se
 export { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
 import { create } from "zustand";
 import { decisionCommentStub, decisionCommentStubId, type DecisionCommentRow, type DecisionThreadItem } from "./decisionThreadTypes";
+import type { SideAnswerRow } from "@codecast/shared/contracts";
+import { sideAnswerStub, sideAnswerStubId } from "./sideAnswerTypes";
 import { useSyncExternalStore, useRef } from "react";
 import {
   mutativeMiddleware,
@@ -84,7 +88,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -159,6 +163,7 @@ export {
 export { monotonicNow } from "./syncActivity";
 import { decisionDraftKey, pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { LocalMirror, MergeBackStatus, OpenTaskReport, SessionActivity, SubagentCaps, SubagentSlot } from "@codecast/shared/contracts";
+import { cascadeFromAnswer } from "@codecast/shared/contracts/permissionRules";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
 import { escalationTargetIds } from "@codecast/shared/contracts/decisionEscalation";
@@ -234,7 +239,8 @@ import { stampSessionCommand } from "./sessionCommandStamp";
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
-import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
+import { pathOnMyMachines, savedDefaultProject, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
+import { projectChipLabel, workProjectChipKey, workProjectOf, type WorkProjectSource } from "./workProjects";
 import { pendingJoinRow } from "../lib/teamMachines";
 import { projectRootOf } from "../lib/recentProjectPaths";
 import { cloudPlacementFor, CLOUD_SESSION_SOURCES, isHostedAgentType, type CloudSessionSource } from "@codecast/shared/contracts";
@@ -243,6 +249,40 @@ import { promptTitle } from "@codecast/shared/contracts/assistant";
 /** What a conversation being started is called until its row syncs: a
  *  hosted one by the person's first words (the server stores the same
  *  placeholder), else the generic name in the agent's own words. */
+/** The project a new session started with the Project toggle makes: named
+ *  after its first message, in the workspace the person is in. */
+/** The stub key a project started from a new-session stub carries
+ *  (projects.client_key), so its synced row supersedes the stub. */
+export const newProjectKeyOf = (stubId: string): string => `pjstub-${stubId}`;
+
+/** A project's address (its `pj-` short id) once the server row behind a
+ *  stub key has landed; null after `timeoutMs` with none. */
+export function projectAddressOnce(clientKey: string, timeoutMs = 30_000): Promise<string | null> {
+  const find = (st: { projects: Record<string, any> }) =>
+    (Object.values(st.projects) as Array<{ client_key?: string; short_id?: string }>).find((p) => p.client_key === clientKey && p.short_id)?.short_id ?? null;
+  const now = find(useInboxStore.getState());
+  if (now) return Promise.resolve(now);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { unsub(); resolve(null); }, timeoutMs);
+    const unsub = useInboxStore.subscribe((st) => {
+      const addr = find(st);
+      if (addr) { clearTimeout(timer); unsub(); resolve(addr); }
+    });
+  });
+}
+
+function newProjectFor(s: { drafts: Record<string, any>; pendingMessages: Record<string, Array<{ role?: string; content?: string }>>; clientState: any }, stubId: string, firstMessage?: string) {
+  // The send inserts the first message before it fires the create, and the
+  // composer is already empty by then: read the message, else the draft.
+  const text = firstMessage
+    ?? s.pendingMessages[stubId]?.find((m) => m.role === "user" && m.content)?.content
+    ?? s.drafts[stubId]?.draft_message;
+  const team = s.clientState?.ui?.active_team_id as string | undefined;
+  // The whole first message is what the project is for until someone writes it.
+  const description = text?.trim().slice(0, 2000);
+  return { title: promptTitle(text) || "New project", client_key: newProjectKeyOf(stubId), ...(description ? { description } : {}), ...(team ? { team_id: team } : {}) };
+}
+
 function stubTitle(agentType: string, firstMessage?: string): string {
   if (!isHostedAgentType(agentType)) return "New session";
   return promptTitle(firstMessage) || "New conversation";
@@ -610,6 +650,13 @@ export type InboxSession = {
   // an outbox-cap/boot heal can reissue createSession without losing the
   // originating task/doc/plan relation; the server row never needs this field.
   _linkedObject?: { type: string; id: string };
+  // Local only: a stub started from its project's own composer, so the create
+  // makes it the project's canonical session (session-projects.md SP4).
+  _projectDefault?: boolean;
+  // Local only: the new-session composer's Project toggle. The create makes a
+  // project named after the first message, with this session as its
+  // canonical one (session-projects.md SP4).
+  _newProject?: boolean;
   // Local-only recovery metadata for a cross-agent continuation. The server
   // represents it as parent_conversation_id (not forked_from), but a stranded
   // stub must still reissue forkFromMessage with target_agent_type rather than
@@ -792,6 +839,9 @@ export type InboxSession = {
   // click-through. agent_team_name/agent_name identify the teammate so a
   // name in a transcript can resolve to the sibling session carrying it.
   spawned_by_conversation_id?: string | null;
+  // The project a person put this session in; workers derive theirs
+  // (store/workProjects, shared/contracts/sessionProject).
+  project_id?: string | null;
   // The handoff pair (`cast handoff --to`, handoff.start): where a child came
   // from and where a source continued. Links only; neither marks the row a
   // subagent.
@@ -1409,6 +1459,8 @@ export type SessionDecisionItem = {
   report_slug?: string;
   /** A change card (the-line-end-to-end.md LE10) the decision is about. */
   card?: import("@codecast/shared/contracts/changeCard").ChangeCard;
+  /** `cast decide --run`: the command the card runs on a person's Run, and how that went. */
+  run?: import("@codecast/shared/contracts/commandRun").CommandRun;
   blocking: boolean;
   default_option?: number;
   /** A pointer card (a staffing proposal's): answering clears it and
@@ -1748,10 +1800,17 @@ export type ClientUI = {
   // (@codecast/shared/contracts/keyBindings). Stamped: follows them to every
   // device, and `cast shortcuts` writes the same key from any session.
   key_bindings?: KeyBindingOverride[];
-  // The agent a new conversation starts with (a Convex agent_type), read only
-  // through lib/defaultAgent, which also decides a machine-less account's
-  // default. Absent means Claude.
-  default_agent?: string;
+  // "New session defaults" (Settings > General; @codecast/shared/contracts
+  // newSessionDefaults). Stamped, so they follow the person to every device,
+  // and `cast spawn` reads default_device server-side. Absent = last used.
+  // default_agent is a Convex agent_type, read only through lib/defaultAgent,
+  // which also decides a machine-less account's default.
+  default_agent?: string | null;
+  default_device?: string | null;
+  default_project?: string | null;
+  // The agent last chosen by hand in a new-session picker: "last used" when
+  // default_agent is absent. Stamped like last_picked_device_id.
+  last_picked_agent?: string;
   visual_style?: "classic" | "minimal";
   sidebar_collapsed?: boolean;
   // The sidebar sections the chevrons pin open (true) or closed (false), by
@@ -1784,6 +1843,16 @@ export type ClientUI = {
   // When the person last had a pull request open, by pull request id: what
   // the timeline draws its "since you last looked" line from.
   pr_last_seen?: Record<string, number>;
+  // When the person last left or entered each workspace ("personal" or a team
+  // id): the switcher's dot lights only for threads waiting on them that
+  // moved after it (useSwitchWorkspace stamps it).
+  workspace_seen_at?: Record<string, number>;
+  // When the person finished or skipped the setup flow (/start). Until it
+  // is set, a first-run inbox with no team sends them there once.
+  setup_done_at?: number;
+  // Agent features chosen in the setup flow, waiting for the first machine
+  // to come online (components/onboarding/usePendingAgentFeatures).
+  agent_features_pending?: { slugs: string[]; at: number } | null;
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
@@ -1833,10 +1902,9 @@ export type ClientUI = {
   // bar as its own row, "hidden" removes them entirely (the same gesture the
   // subagent toggle offers). Absent = show_triggers legacy, then "strip".
   card_bars?: "strip" | "full" | "hidden";
-  // The machine you last chose by hand in the new-session picker — the default
-  // the picker opens on for NEW work (defaultMachineId rung 2). Deliberately
-  // UNSTAMPED, i.e. per-device: "where should this run" is answered differently
-  // from a phone than from the laptop that holds the checkouts.
+  // The machine you last chose by hand in a new-session picker: where NEW work
+  // opens when default_device is absent (machinePicker intendedMachineId).
+  // Stamped, so a pick on the laptop holds on the phone too (sd-2611).
   last_picked_device_id?: string;
   // The composer's "start from" pick for cloud sessions: the preparing
   // laptop's checkout (absent = checkout) or origin/main. Per-device like
@@ -2171,7 +2239,7 @@ function patchedTab(t: AppTab, patch: Partial<AppTab>): AppTab {
 // A URL that names any other shell page (/questions, /triggers, /tasks) also
 // owns the view, so it is null too: restoring the last conversation there
 // moved the address bar off the page the link pointed at (an approval
-// notification, /welcome's way into the app). Only the inbox and the app root
+// notification, /start's way into the app). Only the inbox and the app root
 // restore the client's own position.
 export function bootLinkTarget(sessions: Record<string, unknown>, path?: string): string | null | undefined {
   if (path === undefined) {
@@ -4267,6 +4335,8 @@ export function visualOrderSessions(
     // Narrow the walk to the "your move" rows: questions, NEEDS INPUT and DONE
     // exactly as the chokepoint files them (Ctrl+I, queue advance).
     yourMove?: boolean;
+    // Which project each session works in, for project chips (store/workProjects).
+    projectOf?: (sessionId: string) => string | null;
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
@@ -4290,6 +4360,7 @@ export function visualOrderSessions(
           projectFilters,
           bucketFilters: opts.bucketFilters,
           bucketByConv: opts.bucketByConv ?? {},
+          projectOf: opts.projectOf,
         })
       ) continue;
       result.push(s);
@@ -4317,6 +4388,9 @@ export function sortLabels(buckets: Record<string, BucketItem>): BucketItem[] {
 export function computeChipCounts(
   activeSessions: InboxSession[],
   bucketByConv: Record<string, string | undefined>,
+  // Which project each session works in: projects get chips of their own
+  // (`pj:<id>` keys, store/workProjects), ahead of the folders.
+  projectOf?: (sessionId: string) => string | null,
 ): {
   bucketCounts: Record<string, number>;
   projectCounts: Array<[string, number]>;
@@ -4324,6 +4398,7 @@ export function computeChipCounts(
 } {
   const bucketCounts: Record<string, number> = {};
   const projCounts: Record<string, number> = {};
+  const workCounts: Record<string, number> = {};
   const projectPathByName: Record<string, string> = {};
   for (const s of activeSessions) {
     const b = bucketByConv[s._id];
@@ -4333,10 +4408,16 @@ export function computeChipCounts(
       projCounts[name] = (projCounts[name] || 0) + 1;
       if (!projectPathByName[name]) projectPathByName[name] = s.git_root || s.project_path || "";
     }
+    const work = projectOf?.(s._id);
+    if (work) {
+      const key = workProjectChipKey(work);
+      workCounts[key] = (workCounts[key] || 0) + 1;
+    }
   }
+  const byCount = (a: [string, number], b: [string, number]) => b[1] - a[1];
   return {
     bucketCounts,
-    projectCounts: Object.entries(projCounts).sort((a, b) => b[1] - a[1]),
+    projectCounts: [...Object.entries(workCounts).sort(byCount), ...Object.entries(projCounts).sort(byCount)],
     projectPathByName,
   };
 }
@@ -4370,6 +4451,10 @@ export function resolveComposeProjectPath(opts: {
   recentProjects?: Array<{ path: string; team_id?: string | null }>;
   machineRoster?: Array<Pick<MachineCandidate, "local_project_roots">>;
   teamId?: string | null;
+  // The person's saved default project (savedDefaultProject, already checked
+  // against their machines): it outranks everything but an explicit caller
+  // context and a team room's repo.
+  defaultProject?: string;
 }): string | undefined {
   const { context, conversation, recentProjects, machineRoster, teamId } = opts;
   const teamPath = teamId
@@ -4386,7 +4471,7 @@ export function resolveComposeProjectPath(opts: {
     rawConvPath && (!machineRoster || pathOnMyMachines(machineRoster, rawConvPath)) ? projectRootOf(rawConvPath) : undefined;
   const chipPath = ownCheckoutPath(activeProjectPath, { name: activeProjectFilter, recentProjects, machineRoster });
   const recentPath = recentProjects?.find((p) => !machineRoster || pathOnMyMachines(machineRoster, p.path))?.path;
-  return context?.projectPath || context?.gitRoot || teamPath || convPath || chipPath || recentPath || undefined;
+  return context?.projectPath || context?.gitRoot || teamPath || opts.defaultProject || convPath || chipPath || recentPath || undefined;
 }
 
 // A filter path names a project, not a place a new session can start: a chip's
@@ -4418,9 +4503,11 @@ export function defaultNewSessionPath(st: {
   chipFilterExclude?: boolean;
   recentProjects?: Array<{ path: string; team_id?: string | null }>;
   machineRoster?: Array<Pick<MachineCandidate, "local_project_roots">>;
+  clientState?: { ui?: { default_project?: string | null } | null };
 }, teamId?: string | null): string | undefined {
   return resolveComposeProjectPath({
     teamId,
+    defaultProject: savedDefaultProject(st.clientState?.ui, st.machineRoster ?? []),
     conversation: st.currentConversation,
     activeProjectFilter: st.activeProjectFilter,
     activeProjectPath: st.activeProjectPath,
@@ -4692,9 +4779,10 @@ export function selectFavoriteSessions(
   sessions: Record<string, InboxSession>,
   projectFilters?: readonly ProjectFilterTerm[],
   favoritesList?: any[],
+  projectOf?: (sessionId: string) => string | null,
 ): InboxSession[] {
   const matchesProject = (s: InboxSession) =>
-    passesFilterTerms(projectFilters, getProjectName(s.git_root, s.project_path));
+    passesFilterTerms(projectFilters, projectAxisKeys(s, projectOf));
   const out: InboxSession[] = [];
   const seen = new Set<string>();
   for (const fav of favoritesList ?? []) {
@@ -4722,8 +4810,9 @@ export function favoritesVisualOrder(
   sessions: Record<string, InboxSession>,
   projectFilters?: readonly ProjectFilterTerm[],
   favoritesList?: any[],
+  projectOf?: (sessionId: string) => string | null,
 ): InboxSession[] {
-  const favs = selectFavoriteSessions(sessions, projectFilters, favoritesList);
+  const favs = selectFavoriteSessions(sessions, projectFilters, favoritesList, projectOf);
   const pinned = favs.filter((s) => s.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   const rest = favs.filter((s) => !s.is_pinned);
   const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
@@ -4897,19 +4986,31 @@ export function toggleFilterTerm<T extends BucketFilterTerm>(
 // must be one of them (a session has ONE label and ONE project, so includes
 // are a union); with only excludes it must miss every one. An empty list
 // passes everything. ONE predicate for labels and projects alike.
-export function passesFilterTerms(terms: readonly BucketFilterTerm[] | undefined, id: string | undefined): boolean {
+export function passesFilterTerms(terms: readonly BucketFilterTerm[] | undefined, id: string | undefined | readonly string[]): boolean {
   if (!terms?.length) return true;
+  // A session answers to several keys on the project axis (its folder and
+  // its project, projectAxisKeys): it matches a term when any key does.
+  const has = (termId: string) => (typeof id === "string" || id === undefined ? termId === id : id.includes(termId));
   let hasInclude = false;
   let matchedExclude = false;
   for (const term of terms) {
     if (!term.exclude) {
       hasInclude = true;
-      if (term.id === id) return true;
-    } else if (term.id === id) {
+      if (has(term.id)) return true;
+    } else if (has(term.id)) {
       matchedExclude = true;
     }
   }
   return hasInclude ? false : !matchedExclude;
+}
+
+/** The keys a session answers to on the project chip axis: its folder's name,
+ *  and `pj:<id>` for the project it works in (store/workProjects). */
+export function projectAxisKeys(s: Pick<InboxSession, "_id" | "git_root" | "project_path">, projectOf?: (sessionId: string) => string | null): string[] {
+  const keys = [getProjectName(s.git_root, s.project_path)];
+  const project = projectOf?.(s._id);
+  if (project) keys.push(workProjectChipKey(project));
+  return keys;
 }
 
 // Does a session pass the active project/bucket chips? ONE predicate behind both
@@ -4921,13 +5022,20 @@ export function passesFilterTerms(terms: readonly BucketFilterTerm[] | undefined
 // lists with per-term polarity, judged by passesFilterTerms.
 /** The chip filters off a store snapshot, as chipMatchesSession takes them. */
 export function chipFilterOpts(
-  state: Parameters<typeof chipProjectFilters>[0] & Parameters<typeof chipBucketFilters>[0],
+  state: Parameters<typeof chipProjectFilters>[0] & Parameters<typeof chipBucketFilters>[0] & Partial<WorkProjectSource>,
   bucketByConv: Record<string, string | undefined>,
 ): ChipFilterOpts {
-  return { projectFilters: chipProjectFilters(state), bucketFilters: chipBucketFilters(state), bucketByConv };
+  return { projectFilters: chipProjectFilters(state), bucketFilters: chipBucketFilters(state), bucketByConv, projectOf: projectOfFromState(state) };
 }
 
-export type ChipFilterOpts = { projectFilters?: readonly ProjectFilterTerm[]; bucketFilters?: readonly BucketFilterTerm[]; bucketByConv: Record<string, string | undefined> };
+/** The session → project resolver off a store snapshot, for the chip axis. */
+export function projectOfFromState(state: Partial<WorkProjectSource>): ((sessionId: string) => string | null) | undefined {
+  if (!state.sessions) return undefined;
+  const source = state as WorkProjectSource;
+  return (id) => workProjectOf(source, id);
+}
+
+export type ChipFilterOpts = { projectFilters?: readonly ProjectFilterTerm[]; bucketFilters?: readonly BucketFilterTerm[]; bucketByConv: Record<string, string | undefined>; projectOf?: (sessionId: string) => string | null };
 
 export function chipMatchesSession(
   s: InboxSession,
@@ -4938,7 +5046,7 @@ export function chipMatchesSession(
   // a project EXCLUDE, Ctrl+N from a focused session in that project would
   // otherwise navigate you onto a card the panel refuses to render.
   if (!isConvexId(s._id)) return true;
-  if (opts.projectFilters?.length && !passesFilterTerms(opts.projectFilters, getProjectName(s.git_root, s.project_path))) return false;
+  if (opts.projectFilters?.length && !passesFilterTerms(opts.projectFilters, projectAxisKeys(s, opts.projectOf))) return false;
   return passesFilterTerms(opts.bucketFilters, opts.bucketByConv[s._id]);
 }
 
@@ -5178,7 +5286,7 @@ export function computeVisualOrder(state: {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
   if (state.showFavorites) {
-    const order = favoritesVisualOrder(state.sessions, chipProjectFilters(state), state.favorites);
+    const order = favoritesVisualOrder(state.sessions, chipProjectFilters(state), state.favorites, projectOfFromState(state));
     if (!opts.yourMove) return order;
     return order.filter(yourMoveOf(placed));
   }
@@ -5211,6 +5319,7 @@ export function computeVisualOrder(state: {
     bucketByConv,
     collapsedSections: mode === "grouped" ? collapsed : undefined,
     yourMove: opts.yourMove,
+    projectOf: projectOfFromState(state),
   });
   if (mode === "bucket") {
     const { labelGroups, projectGroups } = groupSessionsForLabelView(base, state.buckets, bucketByConv);
@@ -5728,6 +5837,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Approve or deny one tool-permission request; the card leaves at once. */
   /** opts: a denial's reason for the model; remember keeps the row's suggested rules. */
   resolvePermission: (permissionId: string, status: "approved" | "denied", opts?: { message?: string; remember?: boolean }) => void;
+  /** Drop a saved approval or deny (Settings > Approvals); the next matching call asks again. */
+  /** `rule` names a row the server has not echoed yet, so the remove still finds it. */
+  removePermissionRule: (ruleId: string, rule?: { project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny" }) => void;
+  /** Keep a rule by hand where the viewer already keeps rules (a deny wins over every allow). */
+  addPermissionRule: (rule: { project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny"; label: string }) => void;
   /** Answer a workflow run's open gate (a choice key or free text). */
   respondToGate: (runId: string, response: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
@@ -5770,7 +5884,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   confirmSessionCommand: (requestId: string) => void;
   dismissSessionCommand: (requestId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -5982,6 +6096,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // -- Drafts --
   setDraft: (id: string, fields: Record<string, any>) => void;
   setSessionHasDraft: (id: string, has: boolean) => void;
+  setSessionNewProject: (id: string, on: boolean) => void;
   getDraft: (id: string) => Record<string, any> | undefined;
   moveDraft: (fromId: string, toId: string) => void;
   clearDraft: (id: string) => void;
@@ -6223,6 +6338,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   decisionDetails: Record<string, DecisionDetailItem>;
   decisionThreads: Record<string, DecisionThreadItem>;
   decisionComments: Record<string, DecisionCommentRow>;
+  sideAnswers: Record<string, SideAnswerRow>;
+  askSideQuestion: (conversationId: string, question: string, clientId: string) => Promise<unknown>;
+  dropSideAnswer: (clientId: string) => void;
   // A comment in a decision's team thread, relayed to the session that owns it (decisionThread.ts).
   // Resolves with the server's answer; a refusal comes back as { error } (lib/decisionThread sendDecisionComment).
   commentOnDecision: (decisionId: string, text: string, clientId: string, parentId?: string) => Promise<unknown>;
@@ -6262,6 +6380,13 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // "Group into a stack": a stub row keyed by client_key (altKey supersedes
   // when the server row syncs) and stack_id stamped on the members.
   createStackWith: (input: { title: string; decision_ids: string[]; team_id?: string; client_key: string }) => void;
+  // A session's goal (convex sessionGoals.ts): /goal paints a stub keyed by
+  // client_key (altKey supersedes it) and clears the session's previous goal;
+  // pause, resume and clear flip the row. Each rides its named side effect.
+  setSessionGoal: (conversationId: string, objective: string, clientKey: string) => void;
+  pauseSessionGoal: (conversationId: string) => void;
+  resumeSessionGoal: (conversationId: string) => void;
+  clearSessionGoal: (conversationId: string) => void;
   // Local marks that a session's open AskUserQuestion / permission ask was
   // handled here (answered, dismissed, or evicted). Ephemeral by design — not
   // persisted, so a reload re-reads server truth. Every question surface reads
@@ -6329,8 +6454,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   dispatchCreateTeam: (stubId: string, opts: { name: string; icon?: string; icon_color?: string; discoverable?: boolean }) => Promise<string>;
   resolveTeamStub: (stubId: string, teamId: string) => void;
   discardTeamStub: (stubId: string, previousActiveTeamId: string | undefined) => void;
-  deleteTeam: (teamId: string, confirmName: string) => Promise<void>;
-  dispatchDeleteTeam: (teamId: string, confirmName: string, fallbackTeamId: string | undefined) => Promise<unknown>;
+  /** `permanent`: a regulated team's delete of all its data for good (regulatedDeletion.destroyTeam), never restorable. */
+  deleteTeam: (teamId: string, confirmName: string, opts?: { permanent?: boolean }) => Promise<void>;
+  dispatchDeleteTeam: (teamId: string, confirmName: string, fallbackTeamId: string | undefined, permanent?: boolean) => Promise<unknown>;
   restoreTeamRow: (team: any, previousActiveTeamId: string | undefined) => void;
   /** Team settings and membership, painted on the teams / teamMembers rows at
    *  once; each resolves (or rejects) with the server's answer. */
@@ -6662,6 +6788,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  leave `callRecordings` at once; a refusal puts them back and rejects
    *  with the server's reason. */
   deleteCallRecording: (recordingId: string) => Promise<unknown>;
+  /** A regulated team's call, with its recordings and transcript, deleted for good by a team admin (regulatedDeletion.deleteCall). */
+  deleteCall: (transcriptId: string) => Promise<unknown>;
   /** Drop the exclude tombstones of recording rows a push no longer sends. */
   settleCallRecordingTombstones: (released: string[], collection?: "callRecordings" | "callFrameShares") => void;
   /** Take a picture of a call off its public link (callRecordings
@@ -6708,7 +6836,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
     left?: { roomKey: string; at: number } | null;
   };
   setCallState: (patch: Partial<InboxStoreState["call"]>) => void;
-  teamUnreadCount: number | null;
   favorites: any[];
   bookmarks: any[];
 
@@ -7134,7 +7261,7 @@ export const PER_DEVICE_UI_KEYS = new Set([
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
   "trigger_prompt_height", "thread_state_collapsed", "calls_list_open", "people_view", "float_face_size",
-  "last_picked_device_id", "call_mic_device_id", "call_camera_device_id",
+  "call_mic_device_id", "call_camera_device_id",
   "call_speaker_device_id",
 ]);
 
@@ -7477,7 +7604,6 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
   // or to membership holds over pushes until the server agrees. teamMembers
   // adds presence quantization on top.
   teamMembers: { ...REGISTRY_SYNC_OPTS.teamMembers, normalize: quantizePresenceList },
-  teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list", normalize: (list: any, state: any) => reconcileFavoritesWithLocks(list ?? [], state) },
   // Run feeds overlay with different session budgets: a bare node keeps the
   // session another feed attached (lib/workflowRun carryNodeSessions).
@@ -8450,7 +8576,7 @@ function setProjectFilterHeadInDraft(draft: Draft, name: string | null, path?: s
     draft.activeBucketFilter = null;
     draft.extraBucketFilters = [];
     // An exclusion isn't a "view" you revisit — only include mode records.
-    if (!exclude) recordVisitInDraft(draft, { kind: "view", key: `project:${name}`, label: name, path: path ?? undefined });
+    if (!exclude) recordVisitInDraft(draft, { kind: "view", key: `project:${name}`, label: projectChipLabel(name, draft.projects), path: path ?? undefined });
   }
   commitChipFilterChange(draft, prev);
 }
@@ -9715,6 +9841,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
   decisionDetails: {},
   decisionThreads: {},
   decisionComments: {},
+  // Side answers (lib/sideAnswers): the question paints pending at once; the
+  // askSideQuestion side effect stores it and schedules the answer, and the
+  // feed's row with the same client id supersedes the stub. A refusal is
+  // returned, not thrown, and takes the stub back (lib/sideAnswers).
+  sideAnswers: {},
+  askSideQuestion: asyncAction(function (this: Draft, conversationId: string, question: string, clientId: string) {
+    const stub = sideAnswerStub({ conversationId, question, clientId });
+    this.sideAnswers[stub._id] = stub;
+  }),
+  dropSideAnswer: sync(function (this: Draft, clientId: string) {
+    delete this.sideAnswers[sideAnswerStubId(clientId)];
+  }),
   questionResolutions: {},
   // sync(): local-only bookkeeping — the mark never dispatches; server truth
   // arrives on its own rail (awaiting_input / agent_status) and expires it.
@@ -9905,6 +10043,34 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
     const row = this.sessionDecisions[decisionId];
     if (row && row.stack_id === stackId) row.stack_id = undefined;
+  }),
+  setSessionGoal: action(function (this: Draft, conversationId: string, objective: string, clientKey: string) {
+    // The newest row is the session's goal, so the stub supersedes the old one
+    // on screen; the server clears the old row, and only the newest is fed back.
+    // Newer than the goal it replaces whatever this client's clock says, so the pill shows it at once.
+    const previous = sessionGoalOf(this.sessionGoals, conversationId);
+    const now = Math.max(Date.now(), (previous?.created_at ?? 0) + 1);
+    this.sessionGoals[clientKey] = {
+      _id: clientKey, client_key: clientKey, conversation_id: conversationId, objective: objective.trim(),
+      status: "active", rounds: 0, max_rounds: GOAL_MAX_ROUNDS, stalls: 0, max_stalls: GOAL_MAX_STALLS,
+      idle_limit_ms: GOAL_IDLE_LIMIT_MS, last_activity_at: now, created_at: now, updated_at: now,
+    };
+  }),
+  pauseSessionGoal: action(function (this: Draft, conversationId: string) {
+    const goal = sessionGoalOf(this.sessionGoals, conversationId);
+    if (!goal || !goalCanPause(goal)) return;
+    goal.status = "paused";
+    goal.reason = "Paused by the person";
+  }),
+  resumeSessionGoal: action(function (this: Draft, conversationId: string) {
+    const goal = sessionGoalOf(this.sessionGoals, conversationId);
+    if (!goal || !goalCanResume(goal)) return;
+    Object.assign(goal, GOAL_RESUME_RESET);
+  }),
+  clearSessionGoal: action(function (this: Draft, conversationId: string) {
+    const goal = sessionGoalOf(this.sessionGoals, conversationId);
+    if (!goal || goal.status === "cleared") return;
+    goal.status = "cleared";
   }),
   createStackWith: action(function (this: Draft, input: { title: string; decision_ids: string[]; team_id?: string; client_key: string }) {
     const now = Date.now();
@@ -10822,10 +10988,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // refuses it. Resolving the conversation's last pending request unblocks
   // the session, so its question is marked resolved in the same commit. The
   // resolvePermission side effect runs permissions.updatePermissionStatus.
-  resolvePermission: action(function (this: Draft, permissionId: string, _status: "approved" | "denied", _opts?: { message?: string; remember?: boolean }) {
+  // A denial with a reason settles the session's other cards, the same rule
+  // the server applies (cascadeFromAnswer), so they leave on the press. What
+  // an "always" approves depends on every saved rule, denies included, which
+  // only the server holds: those cards leave with its next snapshot.
+  resolvePermission: action(function (this: Draft, permissionId: string, status: "approved" | "denied", opts?: { message?: string; remember?: boolean }) {
     const row = this.pendingPermissions[permissionId] as any;
     if (!row) return;
+    const pending = Object.values(this.pendingPermissions).filter((p: any) => p?.status === "pending") as any[];
+    const cascade = cascadeFromAnswer(row, { status, ...opts }, pending, []);
     delete this.pendingPermissions[permissionId];
+    for (const id of [...cascade.approve, ...cascade.deny]) delete this.pendingPermissions[id];
     const convId = row.conversation_id as string | undefined;
     if (!convId) return;
     const stillPending = Object.values(this.pendingPermissions).some(
@@ -11176,7 +11349,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // first_message/first_message_client_id ride the dispatch only: a hosted
   // conversation's start queues its first message server side, matched to
   // the optimistic bubble by its client id.
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -11204,6 +11377,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
       has_pending: false,
       last_user_message: null,
       ...(linkedObject ? { _linkedObject: linkedObject } : {}),
+      ...(opts.project_id ? { project_id: opts.project_id, ...(opts.project_default ? { _projectDefault: true } : {}) } : {}),
+      // Started as a new project: the session sits in the project's stub (the
+      // projects altKey retires it when the server row lands) and is its
+      // canonical session from the first paint.
+      ...(opts.new_project ? { project_id: opts.new_project.client_key, _projectDefault: true } : {}),
       ...(normalizedModel ? { model: normalizedModel } : {}),
       ...(opts.effort || existing?.effort ? { effort: opts.effort ?? existing?.effort } : {}),
       ...(opts.stable_mode || existing?.stable_mode ? { stable_mode: opts.stable_mode ?? existing?.stable_mode } : {}),
@@ -11221,6 +11399,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
     } as InboxSession;
     nextSession._launchSnapshot = launchSnapshotFromRow(nextSession);
     this.sessions[sessionId] = nextSession;
+    const np = opts.new_project;
+    const me = String(this.currentUser?._id ?? "");
+    if (np && !this.projects[np.client_key] && (np.team_id || me)) {
+      this.projects[np.client_key] = {
+        _id: np.client_key,
+        client_key: np.client_key,
+        title: np.title,
+        ...(np.description ? { description: np.description } : {}),
+        status: "active",
+        ...(np.team_id ? { team_id: np.team_id } : {}),
+        workspace: np.team_id ? `team:${np.team_id}` : `user:${me}`,
+        default_session_id: sessionId,
+        created_at: now,
+        updated_at: now,
+      } as ProjectItem;
+    }
   }),
 
   // Read the CURRENT project + agent off the stub row and create the server
@@ -11294,6 +11488,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
       ...(cur?._linkedObject?.type && cur?._linkedObject?.id
         ? { linked_object: cur._linkedObject }
         : {}),
+      // The project the stub was started in (session-projects.md SP1), and
+      // whether it is the project's own composer (its canonical session).
+      ...(cur?.project_id ? { project_id: cur.project_id, ...(cur._projectDefault ? { project_default: true } : {}) } : {}),
+      ...(cur?._newProject && !cur?.project_id ? { new_project: newProjectFor(s, stubId, fallback?.firstMessage?.content) } : {}),
       ...(modelKey !== "default" ? { model: modelKey } : {}),
       ...(cur?.effort ? { effort: cur.effort } : {}),
       // A cloud session's worktree is made on the HOST, by the daemon that
@@ -12614,6 +12812,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // Kept-draft marker on the session ROW (see InboxSession._hasDraft). sync():
   // local + IDB only — a deferred stub has no server row to dispatch to.
+  // The new-session composer's Project toggle, on the un-created stub.
+  setSessionNewProject: sync(function (this: Draft, id: string, on: boolean) {
+    const row = this.sessions[id];
+    if (!row || isConvexId(id)) return;
+    if (on) row._newProject = true;
+    else delete row._newProject;
+  }),
+
   setSessionHasDraft: sync(function (this: Draft, id: string, has: boolean) {
     const row = this.sessions[id];
     if (!row) return;
@@ -13262,6 +13468,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete (this.issueSyncSources as any)[id];
   }),
 
+  removePermissionRule: action(function (this: Draft, ruleId: string, _rule?: { project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny" }) {
+    delete (this.permissionRules as any)[ruleId];
+  }),
+
+  // The stub paints at once; permissionRules.add takes no client key, so the
+  // next snapshot carries the real row and drops the stub.
+  addPermissionRule: action(function (this: Draft, rule: { project: string; scope: string; permission: string; pattern: string; action: "allow" | "deny"; label: string }) {
+    const stubId = `temp_rule_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    (this.permissionRules as any)[stubId] = { _id: stubId, ...rule, created_at: Date.now() };
+  }),
+
   // Agent definitions and chains. An upsert with an _id patches the row in
   // place; without one it writes a stub keyed by a client_key the server
   // echoes back, so the stub supersedes onto the real row (registry altKey).
@@ -13556,6 +13773,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
         role: "admin",
         memberCount: 1,
         created_at: Date.now(),
+        // The server stores the same defaults (teams.createTeam), so the
+        // sidebar shows chat, calls and the rest the moment the team exists.
+        features: { ...DEFAULT_TEAM_FEATURES },
       },
     ];
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
@@ -13581,7 +13801,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // users.active_team_id (teams.endMembership), so the mirror and the canonical
   // pointer agree once the echo lands. A refused delete (not an admin, name
   // mismatch) puts the row and the pointer back.
-  deleteTeam: async (teamId: string, confirmName: string) => {
+  deleteTeam: async (teamId: string, confirmName: string, opts?: { permanent?: boolean }) => {
     const team = (get().teams ?? []).find((t: any) => t?._id === teamId);
     if (!team) throw new Error("Team not found");
     const previousActiveTeamId = get().clientState.ui?.active_team_id;
@@ -13589,14 +13809,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
       .filter((t: any) => t?._id !== teamId && isConvexId(String(t?._id)))
       .sort((a: any, b: any) => (a?.joined_at ?? 0) - (b?.joined_at ?? 0))[0];
     try {
-      await get().dispatchDeleteTeam(teamId, confirmName, fallback?._id);
+      await get().dispatchDeleteTeam(teamId, confirmName, fallback?._id, !!opts?.permanent);
     } catch (error) {
       if (!isParkedDispatchError(error)) get().restoreTeamRow(team, previousActiveTeamId);
       throw error;
     }
   },
 
-  dispatchDeleteTeam: asyncAction(function (this: Draft, teamId: string, _confirmName: string, fallbackTeamId: string | undefined) {
+  dispatchDeleteTeam: asyncAction(function (this: Draft, teamId: string, _confirmName: string, fallbackTeamId: string | undefined, _permanent?: boolean) {
     this.teams = (this.teams ?? []).filter((t: any) => t?._id !== teamId);
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
     if (this.clientState.ui.active_team_id === teamId) this.clientState.ui.active_team_id = fallbackTeamId;
@@ -14631,7 +14851,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   userSkills: undefined,
   teams: [],
   teamMembers: [],
-  teamUnreadCount: null,
   favorites: [],
   bookmarks: [],
 
@@ -14826,6 +15045,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // frame rather than once the thread's line arrives. Receipt-backed: the
   // rows ride the command as its local result, and a refusal, live or on a
   // replay after a reload, puts them back (_handleReceiptRejection).
+  // A regulated team's call deleted for good (convex regulatedDeletion.deleteCall):
+  // it leaves the list and its page in this frame; the server purges the rest.
+  deleteCall: asyncAction(function (this: Draft, transcriptId: string) {
+    delete (this as any).callList?.[transcriptId];
+    delete (this as any).callDetails?.[transcriptId];
+  }),
   deleteCallRecording: receiptAsyncAction(function (this: Draft, recordingId: string) {
     const rows = (this as any).callRecordings as Record<string, { run_id?: string; transcript_id?: string }>;
     const taken = runFilesOf(rows, recordingId);
@@ -15056,10 +15281,14 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
   // cleared by the answer and delivers nothing: the author is not woken.
   const content = answerText && !row.silent ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText }) : undefined;
   const convId = row.conversation_id;
+  // A Run on a `cast decide --run` card (commandRun.ts) is the server's to
+  // deliver, with the command's output, once the machine has run it.
+  const runs = !!row.run && approvesCommandRun(row, row.answer_index ?? -1);
+  if (row.run?.state === "waiting") row.run = { ...row.run, state: runs ? "queued" : "skipped", at: now };
   // A decision bound to a run (the-line.md L4) is the server's to deliver:
   // its run consumes the answer as the open gate, or, when the run is past
   // it, the server sends the same message (settleClientResolution).
-  if (content && !row.workflow_run_id) {
+  if (content && !row.workflow_run_id && !runs) {
     queueMicrotask(() => {
       const s = useInboxStore.getState();
       const clientId = s.addOptimisticMessage(convId, content);
