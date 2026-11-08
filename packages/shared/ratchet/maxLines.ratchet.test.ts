@@ -85,7 +85,13 @@ import { join } from "node:path";
 // orgLine.test.ts; PIN rose to 263. The fix forward of 2026-11-04 split the
 // files that run grew instead of re-pinning them (ingest.ts, the deploy and
 // calls modules, comparisons.ts, the org graph and the ops tabs among them),
-// and PIN fell to 258.
+// and PIN fell to 258. The ship of 2026-11-08 (48f912ac7, 132 commits)
+// re-pinned 44 grown files under the same decision; the six it took newly
+// over the cap were split instead (deployCarries.ts, threadKit.ts and
+// threadPageCodeKinds.ts, termRegistry.ts and termConnection.ts,
+// rigFixtures.ts, entityLinks.repo.test.ts). The growth is split work owed:
+// daemon.ts +1100, browser/bridge/host.ts +850, cliEngine.ts, schema.ts and
+// pendingMessages.ts +200 each lead it.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
