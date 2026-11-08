@@ -4119,7 +4119,7 @@ program
     "An owner is distinct from whose account RUNS the session, and from which\n" +
     "DEVICE it runs on — all three move independently. An agent account (e.g. a\n" +
     "bot on a shared machine) can park a session on a human reviewer; it then\n" +
-    "surfaces in the OWNER's inbox (web NEEDS INPUT + cast sessions/feed) marked\n" +
+    "surfaces in the OWNER's inbox (web NEEDS YOU + cast sessions/feed) marked\n" +
     "with who runs it. Owners reply with cast send or the web composer.\n\n" +
     "Ownership decides whose inbox it is in. A session you run but own no part\n" +
     "of leaves your inbox and stops notifying you, whatever state it is in; name\n" +
@@ -6941,10 +6941,10 @@ program
   .description(
     "Explore sessions — three independent axes:\n\n" +
     "  QUERY (which sessions): session ids, --state, --label, --team / -m … narrow the set\n" +
-    "  CONTENT: work state by default (grouped NEEDS INPUT → DONE → WORKING → DORMANT → IDLE),\n" +
+    "  CONTENT: work state by default (grouped NEEDS YOU → DONE → WORKING → DORMANT → IDLE),\n" +
     "           or --messages for conversation messages\n" +
     "  LIVENESS: a one-shot snapshot, or -w to stream changes live\n\n" +
-    "States answer WHO ACTS NEXT, matching the web inbox. NEEDS INPUT = a human must unblock it\n" +
+    "States answer WHO ACTS NEXT, matching the web inbox. NEEDS YOU = a human must unblock it\n" +
     "(open question, permission prompt, dead with output, or a finished turn nobody classified).\n" +
     "DONE = the agent delivered (`cast state --status done`); review at leisure. WORKING = the\n" +
     "agent is producing now. DORMANT = a machine wakes it (a declared `cast state --status\n" +
@@ -14117,14 +14117,15 @@ const org = program
   .hook("preAction", requireOrgFeatureHook);
 
 const ORG_STATE_ORDER = ["needs_input", "working", "dormant", "done", "idle"] as const;
+const orgStateWord = (k: string): string => (k === "needs_input" ? "needs you" : k.replace("_", " "));
 function orgTally(counts: Record<string, number>): string {
-  return ORG_STATE_ORDER.filter((k) => counts[k] > 0).map((k) => `${counts[k]} ${k.replace("_", " ")}`).join(", ") || "no sessions";
+  return ORG_STATE_ORDER.filter((k) => counts[k] > 0).map((k) => `${counts[k]} ${orgStateWord(k)}`).join(", ") || "no sessions";
 }
-/** " · needs input · Rotating the prod key": a standing agent's declared
+/** " · needs you · Rotating the prod key": a standing agent's declared
  *  status and pinned line, the same reading as the org card; empty when the
  *  row carries neither a status nor a work state. */
 function orgStandingLine(s: { state?: string | null; state_status?: string | null; state_line?: string | null }): string {
-  const word = (s.state_status ?? s.state ?? "").replace("_", " ");
+  const word = orgStateWord(s.state_status ?? s.state ?? "");
   if (!word && !s.state_line) return "";
   return `${word ? ` · ${word}` : ""}${s.state_line ? ` · ${s.state_line}` : ""}`;
 }
@@ -14447,7 +14448,7 @@ function chatAgentRef(ref: string): string {
 
 chat
   .command("add")
-  .description("Put roles or sessions in a channel: each hears every line people post there")
+  .description("Put roles or sessions in a channel. With two or more, a person's line or an agent's new post starts a thread they answer one at a time")
   .argument("<channel>", "#name or channel id")
   .argument("<agents...>", "@handle or or-N for a role, a session short id, or this (the session running cast)")
   .option("--team <name|id>", "Team whose #names resolve (default: your active team)")
@@ -14598,6 +14599,13 @@ async function sendChatLine(channelId: string, content: string, options: { threa
     if (wakes.folded) parts.push(`${wakes.folded} folded (over the hourly mention cap; read on next wake)`);
     for (const reason of wakes.skipped ?? []) parts.push(`skipped: ${reason}`);
     console.log(`${c.dim}  mentions: ${parts.join(" · ")}${c.reset}`);
+  }
+  // The room's agents taking turns on this thread (chatRounds.ts).
+  if (result.round?.floor) {
+    const after = result.round.queued ? `, ${result.round.queued} after it` : "";
+    console.log(`${c.dim}  room agents answer in turn: ${result.round.floor} has the floor${after}${c.reset}`);
+  } else if (result.round) {
+    console.log(`${c.dim}  room agents: nobody else is waiting to answer in this thread${c.reset}`);
   }
   // A reply on a thread a session started goes back into that session.
   if (result.session_relay?.delivered) {

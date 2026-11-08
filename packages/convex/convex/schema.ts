@@ -18,6 +18,7 @@ import { taskWaitValidator } from "./lib/taskWaitValidator";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { LINE_CATEGORIES } from "@codecast/shared/contracts/goalsBrief";
 import { proseAnchorValidator } from "./lib/proseAnchorValidator";
+import { chatRoundValidator } from "./lib/chatRoundValidator";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 import { lineSlotsValidator } from "./lib/lineSlotsValidator";
 import { workflowEdgeValidator, workflowNodeValidator, workflowSnapshotValidator } from "./lib/workflowGraphValidators";
@@ -979,7 +980,7 @@ export default defineSchema({
     inbox_killed_at: v.optional(v.number()),
     pending_kill_generation: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
-    // The user's own rest verdict — where they filed the row (Needs Input,
+    // The user's own rest verdict — where they filed the row (Needs You,
     // Done or Dormant) by gesture or by dragging it into that section. A stamp
     // that any later activity silently expires — honored only while
     // inbox_rest_at >= updated_at (see inboxFilters.userRestOf), the same
@@ -8870,6 +8871,11 @@ export default defineSchema({
     // `false` is a member saying stop — nothing but an explicit @mention wakes it
     // in that thread again (and that mention flips this back to true).
     anchor_follow: v.optional(v.boolean()),
+    // A room's agent members taking turns on this thread (chatRounds.ts), set
+    // on the thread ROOT only. One member holds the floor at a time and is
+    // handed the whole thread so far; the next is woken when it answers,
+    // passes (its turn ends without a reply here), or is skipped.
+    round: v.optional(chatRoundValidator),
     fork_conversation_id: v.optional(v.id("conversations")),
     // Slack provenance (slackSync). "inbound": the line was written in Slack and
     // mirrored here; `client_id` is then the derived `slack:<workspace>:<channel>:<ts>`
@@ -8903,6 +8909,8 @@ export default defineSchema({
     // A session's open "thinking" rows (chatSessionReplies): found when its
     // reply lands or its turn ends, without scanning the channel.
     .index("by_origin_session_status", ["origin_session_id", "agent_status"])
+    // The open round whose floor a session holds: found when its turn ends.
+    .index("by_round_floor_session", ["round.floor_session_id"])
     // A Slack event about a line WE posted (a reply under it, a reaction, an
     // edit) names our stamped ts, not the derived inbound client id, so the
     // outbound stamp needs its own lookup (slackSync.findMirroredRow).
