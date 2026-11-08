@@ -42,3 +42,14 @@ test("long output keeps its tail", () => {
   expect(out.endsWith("END")).toBe(true);
   expect(out.length).toBe(MAX_RUN_OUTPUT + 1);
 });
+
+test("an answer's permission record: from the run when the row is at hand, else from the delivered result", () => {
+  const { permissionRecord, runResultText } = require("./commandRun");
+  const argv = ["role", "authority", "@ads"];
+  expect(permissionRecord({ question: "Q?", answer: "Approve" }, { state: "running" })).toEqual({ question: "Q?", outcome: "running" });
+  expect(permissionRecord({ question: "Q?", answer: "Decline" }, { state: "skipped" })?.outcome).toBe("declined");
+  expect(permissionRecord({ question: "Q?", answer: "Approve", detail: runResultText({ argv, state: "done", exit_code: 0, output: "ok" }) }, undefined)).toEqual({ question: "Q?", outcome: "done" });
+  expect(permissionRecord({ question: "Q?", answer: "Approve", detail: runResultText({ argv, state: "failed", exit_code: 1, output: "no seat" }) }, undefined)).toEqual({ question: "Q?", outcome: "failed", output: "no seat" });
+  expect(permissionRecord({ question: "Q?", answer: "Approve" }, undefined)).toBeNull();
+  expect(permissionRecord({ question: "Q?", answer: "Decline" }, undefined)).toBeNull();
+});

@@ -7,7 +7,7 @@
 // decision sheet (SessionDecisionCard) keeps those, and the Approvals page
 // keeps the queue. The body (plan, what Yes does, the answers) is
 // HostedApprovalBody, which the Approvals page draws for the same asks.
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Button } from "../ui/button";
 import { Check } from "lucide-react";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
@@ -77,6 +77,7 @@ export function HostedApprovalBody({
   keys = false,
   clampPlan = true,
   later,
+  yesIcon,
 }: {
   question?: string;
   contextMd?: string;
@@ -88,6 +89,8 @@ export function HostedApprovalBody({
   clampPlan?: boolean;
   /** A quiet way to put the ask aside unanswered (the Approvals page). */
   later?: { label: string; title?: string; onClick: () => void };
+  /** Drawn before Yes: a permission ask's fingerprint, since its Yes confirms with Touch ID. */
+  yesIcon?: ReactNode;
 }) {
   const yes = options.find((o) => o.label === APPROVAL_ANSWERS.approve) ?? options[0];
   const always = options.find((o) => o.label === APPROVAL_ANSWERS.always);
@@ -120,7 +123,7 @@ export function HostedApprovalBody({
       <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-2">
         {yes && (
           <Button type="button" variant="amber" size="sm" data-option={yes.index} disabled={answered} onClick={() => onPick(yes.index)} className={APPROVAL_RADIUS}>
-            {approvalButtonLabel(yes.label)}
+            {yesIcon}{approvalButtonLabel(yes.label)}
           </Button>
         )}
         {no && (

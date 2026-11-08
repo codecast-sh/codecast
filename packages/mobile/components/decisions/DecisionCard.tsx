@@ -5,13 +5,14 @@
 // report, and the answers right there, or the answer once it is settled.
 // Answering is the store's answerDecision, so the card flips the moment it
 // is pressed and the asking session wakes with the answer.
-import { approvesPersonsAct } from '@codecast/shared/contracts/commandRun';
+import { RUN_OPTION, SKIP_OPTION, approvesPersonsAct } from '@codecast/shared/contracts/commandRun';
 import { approvalButtonLabel } from '@codecast/shared/contracts/assistant';
 import { useCallback, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import Feather from '@expo/vector-icons/Feather';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Text, TextInput } from '@/components/Themed';
 import { themedStyles, useTheme } from '@/constants/Theme';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
@@ -102,6 +103,34 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
   // Docked above the composer, the card keeps the transcript in view: the
   // question and one-line answers; the reasoning and every other kind of
   // answer are a tap away on the decision's screen.
+  // A permission ask (`cast decide --run`): the question and Yes / Not now,
+  // Yes marked with the fingerprint it confirms with, as on the web
+  // (components/conversation/PermissionAsk). Nothing else to read or open.
+  if (docked && row.run && !settledOf(row)) {
+    const yes = options.findIndex((o) => o.label === RUN_OPTION);
+    const no = options.findIndex((o) => o.label === SKIP_OPTION);
+    return (
+      <View style={[styles.card, styles.docked, styles.permission]} accessibilityLabel={`Permission: ${row.question}`}>
+        <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
+          <View style={styles.permissionTile}><Feather name="shield" size={16} color={Theme.yellow} /></View>
+          <Text style={[styles.question, { flex: 1, marginTop: 4 }]}>{row.question}</Text>
+        </View>
+        <View style={[styles.compactRow, { paddingLeft: 44 }]}>
+          {yes >= 0 ? (
+            <Pressable accessibilityRole="button" accessibilityHint="Confirms with Touch ID" onPress={() => answer({ index: yes })} style={[styles.compact, styles.permissionYes]}>
+              <Ionicons name="finger-print" size={15} color={Theme.bg} />
+              <Text style={[styles.compactText, { color: Theme.bg }]}>{approvalButtonLabel(RUN_OPTION)}</Text>
+            </Pressable>
+          ) : null}
+          {no >= 0 ? (
+            <Pressable accessibilityRole="button" onPress={() => answer({ index: no })} style={styles.compact}>
+              <Text style={styles.compactText}>{approvalButtonLabel(SKIP_OPTION)}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
   if (docked && !settledOf(row)) {
     const inline = (row.kind ?? 'single') === 'single' && options.length > 0 && options.length <= 4;
     return (
@@ -120,7 +149,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
               style={[styles.compact, i === (row.blocking ? -1 : row.default_option) && { borderColor: Theme.text }]}
             >
               {approvesPersonsAct(row, i) ? <Feather name="lock" size={11} color={Theme.textMuted} /> : null}
-              <Text style={styles.compactText} numberOfLines={1}>{row.run ? approvalButtonLabel(o.label) : o.label}</Text>
+              <Text style={styles.compactText} numberOfLines={1}>{o.label}</Text>
             </Pressable>
           )) : (
             <Pressable accessibilityRole="button" onPress={open} style={styles.compact}>
@@ -244,6 +273,9 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   compactRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   compact: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: '100%', borderWidth: 1, borderColor: Theme.borderLight, backgroundColor: Theme.card, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
   compactText: { fontSize: 14, fontWeight: '500', color: Theme.text },
+  permission: { borderWidth: 1, borderColor: Theme.yellow + '55', gap: 12 },
+  permissionTile: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: Theme.yellow + '22' },
+  permissionYes: { backgroundColor: Theme.yellow, borderColor: Theme.yellow },
   footer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 },
   footerRight: { flexDirection: 'row', gap: 18 },
   footerText: { fontSize: 13, color: Theme.textMuted },
