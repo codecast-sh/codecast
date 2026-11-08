@@ -52,7 +52,24 @@ export async function handlePermissionRequest(
 
     log(`Created permission request ${permissionId} for tool: ${prompt.tool_name}`);
     onCreated?.(permissionId);
+    return await waitForPermissionDecision(syncService, sessionId, permissionId, prompt.tool_name, log);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log(`Error handling permission request: ${errMsg}`);
+    return null;
+  }
+}
 
+/** Poll a permission row until it is answered, cancelled or times out (then cancelled). */
+export async function waitForPermissionDecision(
+  syncService: SyncService,
+  sessionId: string,
+  permissionId: string,
+  toolName: string,
+  log: (msg: string) => void,
+): Promise<PermissionDecision | null> {
+  const prompt = { tool_name: toolName };
+  try {
     const startTime = Date.now();
     while (Date.now() - startTime < TIMEOUT_MS) {
       const decision = await syncService.getPermissionDecision(sessionId, permissionId);
