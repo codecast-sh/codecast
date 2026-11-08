@@ -16668,7 +16668,7 @@ export function transcriptTailLastRealTimestamp(tailContent: string): number | n
 // permission_blocked is a latch with no other recovery path: the daemon doesn't
 // drive AskUserQuestion resolution, reconciledStatus deliberately skips it, and the
 // pane reconcile can't tell an answered poll from a pending one. So a lost resume
-// "working" hook freezes the session in "Needs Input". Recover only on the positive
+// "working" hook freezes the session in "Needs You". Recover only on the positive
 // signal that the prompt was answered -- the transcript tail's last real message is
 // a user turn. A still-pending prompt ends in the assistant tool_use (lastRole
 // "assistant") and is left untouched, so this can never clear a live prompt.
@@ -17660,6 +17660,20 @@ async function runTmuxSubmitVerify(
   let pasteSeen = opts.payloadObserved ?? false; // we watched our text sit in the input box
   let payloadSeen = false; // any trace of our text: in the box, or as transcript
   let idleEnters = 0;
+  // The pane as it stood at this loop's last Enter. A client that has not
+  // redrawn since has not read that Enter yet (a starved agent shows a stale
+  // frame), so pressing again only queues another key behind it. On 2026-11-07
+  // a starved Claude pane (jx751p3) took about 230 Enters in 7 minutes, read
+  // them later as one paste burst, and the newlines pushed its prompt out of
+  // view, so the next nine deliveries never saw their own paste and were given
+  // up on. One Enter per redraw still recovers a dropped Enter.
+  let frameAtEnter: string | null = null;
+  const pressEnter = async (pane: string, why: string): Promise<void> => {
+    if (pane === frameAtEnter) return;
+    io.log(`${why}, pressing Enter`);
+    frameAtEnter = pane;
+    await io.sendEnter();
+  };
   const settle = (outcome: TmuxSubmitOutcome, evidence: TmuxSubmitEvidence | null = null): TmuxSubmitVerifyResult =>
     ({ outcome, evidence, rePasted: false, payloadSeen, payloadCheckable });
   for (let elapsed = 0; elapsed < deadlineMs; elapsed += TICK) {
@@ -17730,8 +17744,7 @@ async function runTmuxSubmitVerify(
         (!!opts.bracketedPaste && tmuxPromptShowsPastePlaceholder(again, opts.chipLines));
       if (!stillStuck) return true;
       pasteSeen = true;
-      io.log("message still in input box after an apparent submit, pressing Enter");
-      await io.sendEnter();
+      await pressEnter(again, "message still in input box after an apparent submit");
       return false;
     };
 
@@ -17770,8 +17783,7 @@ async function runTmuxSubmitVerify(
       // were coalesced into the paste burst or dropped during boot. The TUI
       // is provably consuming input now, so a discrete Enter registers.
       pasteSeen = true;
-      io.log("message still in input box, pressing Enter");
-      await io.sendEnter();
+      await pressEnter(pane, "message still in input box");
       continue;
     }
 

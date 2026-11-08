@@ -139,9 +139,11 @@ describe("verifyTmuxSubmitAfterPaste", () => {
     expect(actions).toEqual([]);
   });
 
-  test("stuck input keeps getting discrete Enters until it submits", async () => {
-    // Text renders but the first two Enters don't take (still mid-boot).
-    const frames = [STUCK_PANE, STUCK_PANE, STUCK_PANE, WORKING_PANE];
+  test("stuck input gets a discrete Enter after each redraw until it submits", async () => {
+    // Text renders but the first Enter doesn't take (still mid-boot); the
+    // client redraws, which shows it is reading input, and the next one does.
+    const REDRAWN_STUCK_PANE = STUCK_PANE.replace("(shift+tab to cycle)", "(shift+tab to cycle) ");
+    const frames = [STUCK_PANE, STUCK_PANE, REDRAWN_STUCK_PANE, WORKING_PANE];
     const { io, actions } = scriptedIO(frames);
     const res = await verifyTmuxSubmitAfterPaste(io, {
       prePaste: BOOT_PANE,
@@ -149,7 +151,23 @@ describe("verifyTmuxSubmitAfterPaste", () => {
       contentPrefix: PROMPT,
     });
     expect(res.outcome).toBe("delivered");
-    expect(actions).toEqual(["enter", "enter", "enter"]);
+    expect(actions).toEqual(["enter", "enter"]);
+  });
+
+  test("a pane that never redraws gets one Enter, not one per tick", async () => {
+    // A starved client shows a stale frame and has not read the last Enter;
+    // each further press queues behind it and later lands as a newline in a
+    // paste burst (jx751p3, 2026-11-07: about 230 Enters in 7 minutes buried
+    // the prompt). The window stalls instead, and the retry submits from the
+    // prompt.
+    const { io, actions } = scriptedIO([STUCK_PANE]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: BOOT_PANE,
+      pasteConfirmed: true,
+      contentPrefix: PROMPT,
+    });
+    expect(res.outcome).toBe("agent_prompt_stalled");
+    expect(actions).toEqual(["enter"]);
   });
 
   test.each(["[Pasted text #1 +3 lines]", "[Pasted text #98]"])("collapsed paste %s gets a discrete Enter instead of being re-pasted", async chip => {
@@ -521,7 +539,9 @@ describe("verifyTmuxSubmitAfterPaste — a lone frame is not a submit", () => {
       contentPrefix: PROMPT,
     });
     expect(res.outcome).toBe("delivered");
-    expect(actions).toEqual(["enter", "enter"]);
+    // One Enter at the first stuck frame; the identical frame after it has not
+    // read that Enter yet, so it gets none.
+    expect(actions).toEqual(["enter"]);
   });
 
   test("an activity-looking frame with the text still at the prompt gets a discrete Enter", async () => {
