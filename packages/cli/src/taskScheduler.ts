@@ -58,7 +58,7 @@ interface RunningTask extends TrackedRun {
 // A run outlives the daemon that spawned it: its tmux pane survives a daemon
 // restart, but the lease, the run table and the birth stamp all lived in this
 // process. A restarted daemon that forgot them left the live run's conversation
-// unstamped (a loose Needs Input card), let the lease lapse, and re-claimed the
+// unstamped (a loose Needs You card), let the lease lapse, and re-claimed the
 // trigger into the same tmux name, killing the live run mid-command (tr-1162,
 // 2026-09-29). So the scheduler's lease identity and its live runs are kept on
 // disk, and a restarted daemon adopts them as its own.
