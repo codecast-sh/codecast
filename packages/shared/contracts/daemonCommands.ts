@@ -191,6 +191,12 @@ export const DAEMON_COMMANDS = [
   // `.codecast/line/` instead (line-map.md LX5); an older daemon refuses them
   // as an unknown edit op. Result: LineProfileEditReply. Old daemons:
   // "Unknown command".
+  // "Rewind to here" on a user message (cli/src/rewindTree.ts), targeted at
+  // the session's owning device. args: RewindFilesArgs (contracts/rewindFiles)
+  // — plan, diff, stage, put_back or keep a rewind of the session's checkout
+  // to just before that turn. Result: RewindFilesReply. Old daemons:
+  // "Unknown command" (the review says to update codecast there).
+  "rewind_files",
   "line_profile_edit",
   // The app's edit of one step of a published graph (line-workspace.md LW4):
   // the prompt or script file a .cast names, in the checkout its origin

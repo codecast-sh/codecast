@@ -47,7 +47,7 @@ import { useInboxStore, isConvexId, retryPendingSend, type ForkChild } from "../
 import { useMessageBookmark } from "../../../hooks/useMessageBookmark";
 import { useCommentTools } from "../../../hooks/useCommentTools";
 import { BranchSelector } from "../../BranchSelector";
-import { Check, FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, MessageCircle, SquareDashedMousePointer, X } from "lucide-react";
+import { Check, FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, MessageCircle, SquareDashedMousePointer, X, History } from "lucide-react";
 import { sendableText } from "../../../lib/sendableText";
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
@@ -60,6 +60,8 @@ import { ghostRestartContextFor, deriveRestartStage } from "../../../hooks/useSe
 import { useConversationCommands } from "../../../hooks/useSessionCommands";
 import { requestSessionRestart } from "../../../lib/sessionCommands";
 import { CastCommandBlock } from "./castBlocks";
+import { RewindReview, useCanRewindFiles } from "../RewindToHere";
+import { requestRewind } from "../../../lib/rewindFiles";
 import { AskUserQuestionBlock, ImageBlock, MonitorBlock, PlanModeBlock, ThinkingBlock } from "./interactiveBlocks";
 import { useImageSrc } from "../../../hooks/useImageSrc";
 import { FooterIconButton, FullscreenIcon, UserIcon } from "./shared";
@@ -209,6 +211,11 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const [isTruncated, setIsTruncated] = useState(false);
   const [contentExpanded, setContentExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  // Rewind needs the fork that continues from here, so it is offered where forking is.
+  const canRewind = useCanRewindFiles(conversationId) && !!onForkFromMessage && !!messageUuid && !isPending && !isQueued;
+  // The plan step's request id while the review is open: asked on the press, not on mount.
+  const [rewinding, setRewinding] = useState<string | null>(null);
+  const openRewind = () => { if (conversationId) setRewinding(requestRewind(conversationId, "plan", { message_ts: timestamp })); };
   const rawContent = stripPastedContent(content)
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")
@@ -480,6 +487,16 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
 
   return (
     <div data-cc-message="user" data-cc-bubble={bubble ? "" : undefined} id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${bubble ? `ml-auto w-fit max-w-[84%] mt-4 mb-2 px-3.5 py-2 rounded-[18px] rounded-br-[5px]` : `-mx-4 px-4 py-4 rounded-lg ${effectivelyCollapsed ? "mb-2" : "mb-6"}`} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/15 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : bubble ? "bg-sol-blue/15" : "bg-sol-blue/10 border border-sol-blue/30"} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 pending-stripes queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)}>
+      {rewinding && conversationId && messageUuid && (
+        <RewindReview
+          planId={rewinding}
+          conversationId={conversationId}
+          messageTs={timestamp}
+          subject={(displayContent || content).replace(/\s+/g, " ").trim().slice(0, 80) || "This message"}
+          onClose={() => setRewinding(null)}
+          onStaged={() => { setRewinding(null); onForkFromMessage?.(messageUuid); }}
+        />
+      )}
       <ContextMenu state={ctxMenu}>
         {() => (
           <>
@@ -493,6 +510,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             {onForkFromMessage && messageUuid && (
               <CtxItem icon={Split} onSelect={() => onForkFromMessage(messageUuid)}>Fork from here</CtxItem>
             )}
+            {canRewind && <CtxItem icon={History} onSelect={openRewind}>Rewind to here…</CtxItem>}
             {onStartShareSelection && (
               <CtxItem icon={SquareDashedMousePointer} onSelect={() => onStartShareSelection(messageId)}>Share messages…</CtxItem>
             )}
@@ -558,6 +576,17 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             aria-label="Fork from this message"
           >
             <Split className="w-4 h-4" />
+          </button>
+        )}
+        {canRewind && (
+          <button
+            onClick={openRewind}
+            className={TOOLBAR_BTN}
+            title="Rewind files to before this message"
+            aria-label="Rewind to here"
+            data-rewind-to-here
+          >
+            <History className="w-4 h-4" />
           </button>
         )}
         <button

@@ -21,7 +21,15 @@ function sameTarget(prev: Record<string, any>, row: Record<string, any>): boolea
     return prev.kind === "line_edit" && prev.project_id === row.project_id && !!prev.executed_at
       && (prev.keys ?? []).every((k: string) => (row.keys ?? []).includes(k));
   }
-  // A stop and a restart of one conversation are separate gestures; neither replaces the other.
-  if (row.conversation_id) return prev.conversation_id === row.conversation_id && (prev.kind === "interrupt") === (row.kind === "interrupt");
+  // A stop, a restart and each kind of rewind step of one conversation are separate gestures; none replaces another.
+  if (row.conversation_id) return prev.conversation_id === row.conversation_id && laneOf(prev) === laneOf(row);
   return prev.kind === row.kind && prev.device_id === row.device_id;
+}
+
+// Each rewind step stands beside the others: a put back in flight must not
+// erase the stage row that says what is staged (lib/rewindFiles stagedRewindOf).
+function laneOf(row: Record<string, any>): string {
+  if (row.kind === "interrupt") return "interrupt";
+  if (row.kind === "rewind") return `rewind:${row.op}`;
+  return "session";
 }
