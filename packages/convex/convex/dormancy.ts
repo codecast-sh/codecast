@@ -6,8 +6,10 @@
 //
 // The rule mirrors the web's partitionTriggerInbox absorption (triggerTasks.ts):
 // a trigger that injects into a session (has an originating_conversation_id),
-// armed (scheduled / running / paused), whose last run neither failed nor
-// flagged attention. Failed / flagged runs are exactly the "parked but
+// armed (scheduled / running), whose last run neither failed nor flagged
+// attention. A PAUSED trigger is not a wake: nothing fires it until a person
+// resumes it, so its home files by its own verdict. Counting it parked a
+// finished session in Dormant for weeks behind a paused reminder. Failed / flagged runs are exactly the "parked but
 // something warrants input" case, so they surface the home instead of parking
 // it. Standing loops (recurring / event) and `once` follow-ups park with
 // different strength — see ArmedTriggerHomes — so the loader keeps them apart.
@@ -15,7 +17,7 @@ import { isHostedAgentType, isLoopFresh, isMachineDeliveredMessage } from "@code
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
-const ARMED_TRIGGER_STATUSES = ["scheduled", "running", "paused"] as const;
+const ARMED_TRIGGER_STATUSES = ["scheduled", "running"] as const;
 
 type InjectTriggerTask = {
   originating_conversation_id?: Id<"conversations"> | null;

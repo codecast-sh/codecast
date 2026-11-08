@@ -11,8 +11,20 @@ describe("intentional hibernation", () => {
     expect(DEAD_AGENT_STATUSES.has("hibernated")).toBe(false);
     expect(ACTIVE_AGENT_STATUSES.has("hibernated")).toBe(false);
     expect(trustedAgentStatus("hibernated", 1, STATUS_TRUST_TTL_MS * 24, false)).toBe("hibernated");
-    expect(classifyWorkState(base)).toBe("dormant");
     expect(HIBERNATED_COPY).toBe("hibernated, resumes on send");
+  });
+
+  // Hibernation stops an idle process; it is not a wake. The row files by the
+  // verdict it carries, so a finished session reads Done and an unanswered
+  // turn still reads as the person's, instead of all of them parking in Dormant.
+  test("files by the verdict it carries, never parks on its own", () => {
+    expect(classifyWorkState(base)).toBe("needs_input");
+    expect(classifyWorkState({ ...base, declaredStatus: "done" })).toBe("done");
+    expect(classifyWorkState({ ...base, settleVerdict: "done" })).toBe("done");
+    expect(classifyWorkState({ ...base, declaredStatus: "done", armedOnceTriggerHome: true })).toBe("dormant");
+    expect(classifyWorkState({ ...base, armedTriggerHome: true })).toBe("dormant");
+    expect(classifyWorkState({ ...base, declaredStatus: "blocked" })).toBe("needs_input");
+    expect(classifyWorkState({ ...base, messageCount: 0 })).toBe("idle");
   });
 
   test("actual questions, errors and queued work retain priority", () => {

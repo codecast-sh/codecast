@@ -466,9 +466,9 @@ export function partitionTriggerInbox(
       {
         const home = sessions[convId];
         const parks =
-          task.schedule_type === "recurring" ||
+          task.status !== "paused" && (task.schedule_type === "recurring" ||
           task.schedule_type === "event" ||
-          (!!home && classifySession(home).waiting && classifySession(home).rest === "done");
+          (!!home && classifySession(home).waiting && classifySession(home).rest === "done"));
         if (
           home && parks &&
           convId !== opts.focusedId &&

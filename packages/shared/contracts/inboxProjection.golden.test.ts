@@ -104,6 +104,8 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // v24: a session imported from history holds a recent seat only while its
   // activity is recent (isStaleHistoryImport); no fixture row is an import.
   24: "873f7c5eaedf6e64",
+  // v25: a hibernated session files by the verdict it carries, not as dormant.
+  25: "820dddba656a01dc",
 };
 
 type Expected = {

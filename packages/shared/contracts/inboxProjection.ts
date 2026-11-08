@@ -118,7 +118,9 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // files by its own state, as one with a hand beside it already did.
 // v24: a session imported from history (history_import) holds a recent seat
 // only while its last activity is within HISTORY_IMPORT_INBOX_MS.
-export const INBOX_PROJECTION_VERSION = 24 as const;
+// v25: a hibernated session files by the verdict it carries (done, a
+// structural wake, or the person's move) instead of always parking as dormant.
+export const INBOX_PROJECTION_VERSION = 25 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -242,7 +244,14 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // status, which is still an honest observation of the process.
   // Why: without this a resume overwrote a declared `done` with the settled
   // fallthrough and filed the session under Needs You (ct-49533).
-  const verdictStatus = input.sessionBoundary ? undefined : agentStatus;
+  //
+  // A HIBERNATED session reads the same way: the daemon stopped an idle
+  // process to free the machine, and it resumes on the next send. That says
+  // nothing about who acts next, so the row files by the verdict it carries
+  // (its pinned declaration, the settle classifier, a structural wake).
+  // Filing every hibernated row as dormant parked finished sessions and open
+  // asks alike behind a wake that does not exist.
+  const verdictStatus = input.sessionBoundary || agentStatus === "hibernated" ? undefined : agentStatus;
   const declaredDormant =
     (verdictStatus === "dormant" && !input.dormantClaimExpired) || verdictStatus === "waiting";
   // The daemon carries a declaration as the settle status while the session is
@@ -308,7 +317,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // Actively producing, or carrying deliverable queued work on a live daemon.
   if (agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus)) return "working";
   if (canDeliver && hasPending) return "working";
-  if (agentStatus === "hibernated" && !hasPending) return "dormant";
+  if (agentStatus === "hibernated" && !hasPending) return hasMsgs ? restState() : "idle";
 
   // Dead or unresponsive with output → a human needs to read/restart it. A
   // dead daemon cannot deliver a wake, so no rest verdict survives this arm —
