@@ -20,10 +20,10 @@
  * Bridge sessions (environment_kind "bridge") are remote-control mirrors of
  * local sessions whose transcripts already sync from disk; they are skipped.
  */
+import { deliveryRecordUuid } from "./deliveryEchoLedger.js";
 import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as path from "path";
-import { createHash } from "crypto";
 import { readActiveCredentialAsync } from "./ccAccounts.js";
 import { codecastPath } from "./codecastDir.js";
 import { githubRepo } from "./cloud/gitOrigin.js";
@@ -169,8 +169,7 @@ export function buildTranscriptLines(events: CloudEvent[], ctx: LineContext): { 
 /** A stable event uuid for a codecast message, so a retried delivery is a
  *  server-side duplicate rather than a second turn. */
 export function cloudEventUuid(messageId: string): string {
-  const h = createHash("sha256").update(`codecast-cloud:${messageId}`).digest("hex");
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16], 16) & 3) | 8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+  return deliveryRecordUuid(messageId, "codecast-cloud");
 }
 
 export interface ClaudeCloudWatcherOptions {

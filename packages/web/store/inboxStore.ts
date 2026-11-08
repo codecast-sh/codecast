@@ -2993,7 +2993,10 @@ function pendingSendEchoed(msg: Message, localMessages: Message[]): boolean {
     // A queued send someone merged into another (mergeQueued) lands as one
     // part of a joint turn under the other row's client id.
     if (m.content?.startsWith("<user-message") && m.timestamp >= msg.timestamp && parseJointMessage(m.content)?.some((p) => p.body === (msg.content ?? "").trim())) return true;
-    if (msg._clientId) return m.client_id === msg._clientId;
+    // A send the server settled that the agent took in one turn with another
+    // send carries the other's client id; its words are inside that turn.
+    if (msg._clientId) return m.client_id === msg._clientId
+      || (!!msg._isSettled && !!m.client_id && m.timestamp >= msg.timestamp - ECHO_SKEW_MS && !!msg.content?.trim() && (m.content ?? "").includes(msg.content.trim()));
     if (m._id === msg._id) return true;
     return isInterruptControlMessage(msg.content)
       ? isInterruptControlMessage(m.content) && m.timestamp > (msg._sentBaselineTs ?? msg.timestamp - 120_000)
