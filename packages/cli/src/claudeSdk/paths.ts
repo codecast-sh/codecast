@@ -44,9 +44,4 @@ export function listSdkHostSessions(dir: string = sdkHostDir()): string[] {
   return names.filter((n) => n.endsWith(".json") && !n.endsWith(".spec.json")).map((n) => n.slice(0, -5)).filter((id) => SESSION_ID_RE.test(id));
 }
 
-/** Atomic write: a reader never sees half a file. */
-export function writeFileAtomic(file: string, text: string, mode = 0o600): void {
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, text, { mode });
-  fs.renameSync(tmp, file);
-}
+export { writeFileAtomic } from "../fsAtomic.js";

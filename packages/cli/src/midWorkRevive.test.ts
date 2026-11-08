@@ -5,7 +5,7 @@ import path from "node:path";
 import { isRecoveryContinueClientId } from "@codecast/shared/contracts";
 import {
   REVIVE_BUDGET, REVIVE_BUDGET_WINDOW_MS, REVIVE_MAX_AGE_MS, UNFINISHED_STATUS_FILE_TTL_MS,
-  isStationHandOpening, lastSignOfLifeMs, midWorkReviveDecision, stationHandsFirst, priorRevives, recordRevive, reviveClientId, statusFileExpired, type ReviveFacts,
+  isStationHandOpening, lastSignOfLifeMs, midWorkReviveDecision, stationHandsFirst, priorRevives, recordRevive, unrecordRevive, reviveClientId, statusFileExpired, type ReviveFacts,
 } from "./midWorkRevive.js";
 
 const NOW = Date.parse("2026-10-05T05:01:05Z");
@@ -28,14 +28,19 @@ describe("midWorkReviveDecision", () => {
     expect(midWorkReviveDecision(facts())).toEqual({ revive: true });
   });
 
-  test("revives every mid-turn status", () => {
-    for (const status of ["working", "thinking", "compacting", "waiting"]) {
-      expect(midWorkReviveDecision(facts({ status })).revive).toBe(true);
+  test("revives a finished turn that still owned background work", () => {
+    expect(midWorkReviveDecision(facts({ status: "waiting" })).revive).toBe(true);
+  });
+
+  // A death mid-turn is the turn claim's to resume (turnClaims.ts), never this path's too.
+  test("leaves mid-turn statuses to the turn claims", () => {
+    for (const status of ["working", "thinking", "compacting", "permission_blocked"]) {
+      expect(midWorkReviveDecision(facts({ status }))).toEqual({ revive: false, reason: "turn-finished" });
     }
   });
 
-  test("leaves a finished turn, a permission prompt and a trigger wait alone", () => {
-    for (const status of ["idle", "stopped", "permission_blocked", "dormant", undefined]) {
+  test("leaves a finished turn and a trigger wait alone", () => {
+    for (const status of ["idle", "stopped", "dormant", undefined]) {
       expect(midWorkReviveDecision(facts({ status }))).toEqual({ revive: false, reason: "turn-finished" });
     }
   });
@@ -94,6 +99,17 @@ describe("revive ledger", () => {
     expect(priorRevives(file, "old")).toEqual([]);
   });
 
+  // A revive is counted before its message is queued; one whose queue call
+  // failed or was declined gives its entry back, so retries do not spend the budget.
+  test("a revive that was never queued is taken back, and only that one", () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "revive-")), "revives.json");
+    recordRevive(file, "a", NOW - MIN);
+    recordRevive(file, "a", NOW);
+    unrecordRevive(file, "a", NOW);
+    unrecordRevive(file, "a", NOW); // nothing left at that time: a no-op
+    expect(priorRevives(file, "a")).toEqual([NOW - MIN]);
+  });
+
   test("a corrupt ledger reads as empty instead of blocking revives", () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "revive-")), "revives.json");
     fs.writeFileSync(file, "{not json");
@@ -106,6 +122,9 @@ describe("revive ledger", () => {
 test("the revive message reads as the system's, not the person's", () => {
   expect(isRecoveryContinueClientId(reviveClientId("jx7e4fydgv2are6sv3gdkp78n58fg737", NOW))).toBe(true);
   expect(reviveClientId("c", NOW)).toBe(reviveClientId("c", NOW + 30_000));
+  // A turn claim's second attempt in the same minute is a new continue, not a retry the server dedupes onto the first.
+  expect(reviveClientId("c", NOW, 2)).not.toBe(reviveClientId("c", NOW, 1));
+  expect(isRecoveryContinueClientId(reviveClientId("c", NOW, 2))).toBe(true);
 });
 
 // fdf643a3 on 2026-10-06: its turn ended at 02:00Z with a workflow running, the
