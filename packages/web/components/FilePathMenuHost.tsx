@@ -9,9 +9,9 @@ import { Folder, FolderOpen } from "lucide-react";
 import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "./ui/context-menu";
 import { OpenLinkItems, SessionsLinkItem } from "./LinkMenuHost";
 import { fileSessionsLink } from "../lib/sessionSearchLinks";
-import { filePathHref } from "../lib/filePathLinks";
+import { filePathHref, resolveMentionPath } from "../lib/filePathLinks";
 import { setFilePathMenuListener, type FilePathMenuPayload } from "../lib/filePathMenu";
-import { resolveCustomPath, parentDir } from "../lib/utils";
+import { parentDir } from "../lib/utils";
 import { openFiles } from "../lib/filesPane";
 import { resolveVaultTarget } from "../lib/vault/vaultHref";
 import { vaultOp } from "../lib/vault/client";
@@ -26,7 +26,7 @@ export function FilePathMenuHost() {
   return (
     <ContextMenu state={menu}>
       {(p) => {
-        const abs = resolveCustomPath(p.path, p.ctx?.home, p.ctx?.base) ?? p.path;
+        const abs = resolveMentionPath(p.path, p.ctx) ?? p.path;
         const folderHref = filePathHref(parentDir(abs), undefined, null);
         const vs = useVaultStore.getState();
         const target = vs.endpoint && !vs.isRemote ? resolveVaultTarget(abs, vs.vaults) : null;

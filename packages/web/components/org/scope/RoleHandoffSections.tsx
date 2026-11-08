@@ -13,12 +13,14 @@ import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import type { OrgRole, OrgTree } from "../orgTypes";
 import { useInboxStore } from "../../../store/inboxStore";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
-import { mergeStepLedger } from "../../consequential/ledgers";
+import { mergeRateLedger, mergeStepLedger } from "../../consequential/ledgers";
+import { REGRET_WINDOW_DAYS } from "@codecast/shared/contracts/regretRates";
 
 
 const serverWords = (e: any, fallback: string) => String(e?.message ?? "").replace(/^\[Request ID: [^\]]+\] Server Error\s*/i, "").split("\n")[0] || fallback;
 
-export type MergeAllowanceRow = { on: boolean; allowed: boolean; reason: string | null; used: number; limit: number | null };
+export type MeasuredRateRow = { settled: number; regretted: number; partial: number; rate: number | null; window_days?: number };
+export type MergeAllowanceRow = { on: boolean; allowed: boolean; reason: string | null; used: number; limit: number | null; mode?: "count" | "rate"; bar?: { bar: number; min: number } | null; measured?: MeasuredRateRow | null };
 
 /** What the merge switch says under itself. */
 export function mergeStepWords(m: MergeAllowanceRow | null | undefined): string {
@@ -71,6 +73,7 @@ export function MergeStepSwitch({ role, canEdit, merge }: { role: OrgRole; canEd
         </button>
         <span className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-merge-words>{mergeStepWords(merge)}</span>
       </div>
+      {merge && <MergeRateRow role={role} canEdit={canEdit} merge={merge} />}
       {reviewing && merge && <SwitchReview ledger={mergeStepLedger({ name: role.name, limit: merge.limit, used: merge.used })} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); void flip(true); }} />}
       {asking && (
         <form className="mt-2.5 flex items-center gap-2 flex-wrap" onSubmit={(e) => { e.preventDefault(); const n = parseInt(perDay, 10); if (n >= 1) flip(true, n); }} data-merge-limit-form>
@@ -82,6 +85,73 @@ export function MergeStepSwitch({ role, canEdit, merge }: { role: OrgRole; canEd
           <button type="button" onClick={() => setAsking(false)} className="h-7 px-2 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
           <span className="text-[11px] basis-full" style={{ color: "var(--sol-text-dim)" }}>This grants the role the authority to merge, for ninety days, with this daily limit. Revoke it under the role's authority at any time.</span>
         </form>
+      )}
+    </div>
+  );
+}
+
+const pct = (x: number | null | undefined) => (x == null ? "–" : `${Math.round(x * 100)}%`);
+
+/** How the merge step decides (regret.md R7): the daily count alone, or the measured regret-free rate over a bar a
+ *  person sets, with the count kept as a cap. The role's rate sits beside it either way. */
+export function MergeRateRow({ role, canEdit, merge }: { role: OrgRole; canEdit: boolean; merge: MergeAllowanceRow }) {
+  const setLineMerge = useInboxStore((s) => s.setOrgLineMerge);
+  const mode = merge.mode ?? "count";
+  const m = merge.measured ?? null;
+  const [editing, setEditing] = useState(false);
+  const [bar, setBar] = useState(String(Math.round((merge.bar?.bar ?? 0.9) * 100)));
+  const [min, setMin] = useState(String(merge.bar?.min ?? 20));
+  const [review, setReview] = useState<null | "rate" | "count">(null);
+  const want = { bar: Math.min(100, Math.max(1, parseInt(bar, 10) || 0)) / 100, min: Math.max(1, parseInt(min, 10) || 0) };
+  const holds = m && merge.bar ? m.rate !== null && m.settled >= merge.bar.min && m.rate >= merge.bar.bar : null;
+  const apply = async (to: "rate" | "count") => {
+    setReview(null);
+    try {
+      await setLineMerge(role._id, merge.on, undefined, to === "rate" ? want : null);
+      toast.success(to === "rate" ? `${role.name} merges while its rate holds ${pct(want.bar)}` : `${role.name} merges on its daily count`);
+      setEditing(false);
+    } catch (e: any) { toast.error(serverWords(e, "Could not change how the merge step decides")); }
+  };
+  const seg = (k: "count" | "rate", label: string) => (
+    <button
+      type="button"
+      aria-pressed={mode === k}
+      disabled={!canEdit}
+      onClick={() => (mode === k ? (k === "rate" && setEditing((x) => !x)) : k === "rate" ? setEditing(true) : setReview("count"))}
+      className="h-6 px-2.5 text-[11.5px] font-medium disabled:cursor-default"
+      style={mode === k ? { background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" } : { color: "var(--sol-text-muted)" }}
+      data-merge-mode={k}
+    >{label}</button>
+  );
+  const field = "w-14 h-6 px-1.5 rounded-md border text-[11.5px] tabular-nums";
+  const fieldStyle = { borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", background: "var(--sol-bg)", color: "var(--sol-text)" };
+  return (
+    <div className="mt-2 flex items-center gap-2.5 flex-wrap text-[11.5px]" data-merge-rate={mode}>
+      <span className="inline-flex rounded-md border overflow-hidden" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)" }} role="group" aria-label="Merge step decides on">
+        {seg("count", "Count")}
+        {seg("rate", "Rate")}
+      </span>
+      <span className="inline-flex items-baseline gap-1.5 tabular-nums" data-merge-measured title={`Regret-free: no traced fix within ${m?.window_days ?? REGRET_WINDOW_DAYS} days after live, last 60 days`}>
+        {m?.rate != null
+          ? <><b className="text-[13px] font-semibold" style={{ color: holds === false ? "var(--sol-orange)" : holds ? "var(--sol-green)" : "var(--sol-text)" }}>{pct(m.rate)}</b><span style={{ color: "var(--sol-text-dim)" }}>regret-free</span></>
+          : <span style={{ color: holds === false ? "var(--sol-orange)" : "var(--sol-text-dim)" }}>no rate yet ·</span>}
+        <span style={{ color: "var(--sol-text-muted)" }}>{m ? `${m.settled} finished${m.regretted ? ` · ${m.regretted} fixed` : ""}${m.partial ? ` · ${m.partial} open` : ""}` : "not measured"}</span>
+      </span>
+      {mode === "rate" && merge.bar && !editing && <span className="tabular-nums" style={{ color: "var(--sol-text-muted)" }} data-merge-bar>bar {pct(merge.bar.bar)} · min {merge.bar.min}</span>}
+      {editing && (
+        <form className="inline-flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); setReview("rate"); }} data-merge-rate-form>
+          <label className="inline-flex items-center gap-1" style={{ color: "var(--sol-text-muted)" }}>bar <input type="number" min={1} max={100} value={bar} onChange={(e) => setBar(e.target.value)} className={field} style={fieldStyle} aria-label="Bar, percent" />%</label>
+          <label className="inline-flex items-center gap-1" style={{ color: "var(--sol-text-muted)" }}>min <input type="number" min={1} value={min} onChange={(e) => setMin(e.target.value)} className={field} style={fieldStyle} aria-label="Finished changes, at least" /></label>
+          <button type="submit" className="h-6 px-2.5 rounded-md text-[11.5px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>Review</button>
+          <button type="button" onClick={() => setEditing(false)} className="h-6 px-1.5 rounded-md" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
+        </form>
+      )}
+      {review && (
+        <SwitchReview
+          ledger={mergeRateLedger({ name: role.name, to: review, bar: review === "rate" ? want.bar : merge.bar?.bar ?? 0, min: review === "rate" ? want.min : merge.bar?.min ?? 0, rate: m?.rate ?? null, settled: m?.settled ?? 0, limit: merge.limit, windowDays: m?.window_days ?? REGRET_WINDOW_DAYS })}
+          onClose={() => setReview(null)}
+          onConfirm={() => void apply(review)}
+        />
       )}
     </div>
   );

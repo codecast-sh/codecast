@@ -5,6 +5,7 @@ import {
   SessionSummaryBlock,
 } from "./entityDisplay";
 import { abbrevModel, relativeTime } from "../lib/entityDisplay";
+import { SessionLastTurns } from "./SessionLastTurns";
 
 /** `identity={false}` drops the title header: the caller (SessionHoverCard)
  *  already painted the face, the name and the title above this body. */
@@ -57,7 +58,9 @@ export function SessionHoverContent({ session, identity = true }: { session: any
         </div>
       </div>}
 
-      <SessionSummaryBlock session={session} className={identity ? "pl-[22px]" : ""} />
+      <SessionSummaryBlock session={session} preview={false} className={identity ? "pl-[22px]" : ""} />
+
+      {session._id && <SessionLastTurns conversationId={String(session._id)} className={identity ? "pl-[22px]" : ""} />}
 
       {metaParts.length > 0 && (
         <div className={`flex items-center gap-2 ${identity ? "pl-[22px]" : ""} text-[10px] text-gray-500 font-mono`}>

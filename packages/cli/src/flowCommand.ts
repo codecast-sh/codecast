@@ -428,6 +428,24 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       }
     });
 
+  // What the judge segment's call reads (workflow/blindChange.ts): a change's
+  // diff or the guidelines it answers to, with every sign of its author removed.
+  flow
+    .command("blind <part>", { hidden: true })
+    .description("Print a change's diff or its repository's guidelines with every sign of its author removed, as one JSON object { text, ... } (part: diff or guidelines)")
+    .requiredOption("--head <ref>", "The change's branch or commit")
+    .option("--base <ref>", "The branch it goes into; the change runs from their merge base", "main")
+    .option("--redact <words...>", "More names or ids to remove from the diff (a session, a branch)")
+    .option("--unified <lines>", "Lines of context around each hunk; a large number shows each changed file whole", "5")
+    .option("--record <chars>", "The JSON size to fit (default: what a station records)")
+    .action(async (part: string, opts: { head: string; base: string; redact?: string[]; unified: string; record?: string }) => {
+      const { blindDiff, blindGuidelines } = await import("./workflow/blindChange.js");
+      const range = { cwd: deps.realCwd(), base: opts.base, head: opts.head, redact: opts.redact, unified: Number(opts.unified) || 5, ...(opts.record ? { record: Number(opts.record) } : {}) };
+      if (part === "diff") console.log(JSON.stringify(blindDiff(range)));
+      else if (part === "guidelines") console.log(JSON.stringify(blindGuidelines(range)));
+      else throw new Error(`The part is diff or guidelines, not ${part}`);
+    });
+
   // The daemon's tracer for a Claude Code Workflow run (daemon.ts
   // workflowRunGraph): the script as the graph it ran, as JSON, in its own
   // process so a script that never yields cannot hold the daemon.

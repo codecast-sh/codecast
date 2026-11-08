@@ -13,7 +13,7 @@ import type { DiffFlow } from "../components/FileDiffLayout";
 import { useRepoLocation } from "../components/repo/useRepoFamily";
 import { formatDiffHash, parseDiffHash } from "../lib/prView";
 import { type DiffLineAnchor } from "../lib/patchParser";
-import { diffLineElements, findDiffLine } from "../components/diff/pierre";
+import { diffLineElements, findDiffLine, revealDiffLine } from "../components/diff/pierre";
 import { toStandaloneHref } from "../lib/repoView";
 import { sharePageUrl } from "../lib/utils";
 import { copyText } from "../lib/copyText";
@@ -104,7 +104,9 @@ export function useDiffAddress({
       },
       (root) => {
         const card = root.querySelector<HTMLElement>(`[id="${CSS.escape(fileId)}"]`);
-        return (anchor && card && findDiffLine(card, anchor)) || card;
+        if (!anchor || !card) return card;
+        // A long diff draws its line once scrolled near it; look again then.
+        return findDiffLine(card, anchor) ?? (revealDiffLine(card, anchor) ? null : card);
       },
       // A line sits a third of the way down, with the lines before it in view
       // for context; a file starts right under the sticky chrome. A line not

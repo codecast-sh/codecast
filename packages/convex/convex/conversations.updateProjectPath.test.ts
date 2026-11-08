@@ -107,4 +107,36 @@ describe("updateSessionId", () => {
     });
     expect(ctx.db._patched[0].patch).toMatchObject({ session_id: "sess-2", project_path: "/real", git_root: "/real", git_remote_url: "git@github.com:o/lb.git" });
   });
+
+  // Regression: a session started from a folder chip that is not a repo
+  // (~/code/work.noindex) kept the git_root the web guessed from the folder,
+  // and that row kept the folder alive as a project chip.
+  const guessed = { project_path: "/Users/a/code/work", git_root: "/Users/a/code/work", git_remote_url: "https://github.com/o/x.git" };
+
+  test("a cwd the daemon found outside any repo clears the guessed git_root", async () => {
+    const ctx = ctxFor(guessed);
+    await (updateSessionId as any)._handler(ctx, {
+      conversation_id: CONV, session_id: "sess-2", project_path: "/Users/a/code/work", not_a_repo: true, api_token: "t",
+    });
+    const row = await ctx.db.get(CONV);
+    expect(row.git_root).toBeUndefined();
+    expect(row.git_remote_url).toBeUndefined();
+    expect(row.project_path).toBe("/Users/a/code/work");
+  });
+
+  test("an older daemon that sends no flag leaves git_root as it was", async () => {
+    const ctx = ctxFor(guessed);
+    await (updateSessionId as any)._handler(ctx, {
+      conversation_id: CONV, session_id: "sess-2", project_path: "/Users/a/code/work", api_token: "t",
+    });
+    expect((await ctx.db.get(CONV)).git_root).toBe("/Users/a/code/work");
+  });
+
+  test("a reported git_root wins over the flag", async () => {
+    const ctx = ctxFor(guessed);
+    await (updateSessionId as any)._handler(ctx, {
+      conversation_id: CONV, session_id: "sess-2", project_path: "/real/sub", git_root: "/real", not_a_repo: true, api_token: "t",
+    });
+    expect((await ctx.db.get(CONV)).git_root).toBe("/real");
+  });
 });

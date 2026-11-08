@@ -111,6 +111,19 @@ function splitFlags(flags: string | null | undefined): string[] {
  * prompt nobody can answer. Returns null when the user's configured args
  * already pin a mode, so we never double up.
  */
+const CLAUDE_PERMISSION_MODES = new Set(["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"]);
+
+/** Claude's permission flags for a session that already runs in `mode` (the
+ *  last mode its hooks or SDK host reported): a resume onto another backend
+ *  keeps the mode the person chose instead of falling back to the machine's
+ *  launch default. Unknown or absent modes fall back to that default. A
+ *  non-bypass mode keeps bypass reachable from the mode control, as the
+ *  "default" machine setting does. */
+export function claudePermissionFlagsFor(mode: string | null | undefined, config?: Config | null): string | null {
+  if (!mode || !CLAUDE_PERMISSION_MODES.has(mode)) return getPermissionFlags("claude", config);
+  return mode === "bypassPermissions" ? "--permission-mode bypassPermissions" : `--permission-mode ${mode} --allow-dangerously-skip-permissions`;
+}
+
 export function getPermissionFlags(agentType: AgentClientId, config?: Config | null): string | null {
   const modes = config?.agent_permission_modes;
 

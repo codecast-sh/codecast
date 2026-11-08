@@ -29,7 +29,7 @@ import { CdpConnection, listTargets, type CdpEndpoint, type CdpTarget } from "./
 import { raiseAppByPid, raiseAppByPidSync } from "./raiseApp.js";
 import { noteDeliberateRaise } from "./focusSentinel.js";
 import { readState } from "./instance.js";
-import { listChromeDebugPorts, realChromePid } from "./localChrome.js";
+import { knownRealChromePid, listBrowserProcessesAsync, listChromeDebugPorts } from "./localChrome.js";
 import { bridgeEndpoint, proveBridgeHost, readBridgeState, type BridgeState, type ProvenBridge } from "./bridge/host.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import {
@@ -49,6 +49,8 @@ export type FocusFailure = "browser-stopped" | "browser-unreachable" | "tab-not-
 export interface FocusResult {
   ok: boolean;
   reason?: FocusFailure;
+  /** The full id of the tab found, when one was. */
+  tab?: string;
   /** The browser process that now holds the tab, when known. The daemon's own
    *  raise of it is refused whenever another app is active (a background
    *  process may not activate an app on macOS 14+), so the caller, usually the
@@ -132,7 +134,7 @@ export const localChromeFocusEngine: FocusEngine = {
   async listTabs() {
     const tabs: FocusTab[] = [];
     await Promise.all(
-      listChromeDebugPorts().map(async ({ port, pid }) => {
+      listChromeDebugPorts(await listBrowserProcessesAsync()).map(async ({ port, pid }) => {
         try {
           for (const t of await listTargets(port)) tabs.push({ id: t.targetId, url: t.url, port, pid });
         } catch {
@@ -151,7 +153,8 @@ export interface BridgeFocusDeps {
   isPidAlive(pid: number): boolean;
   prove(state: BridgeState): Promise<ProvenBridge>;
   listTargets(ep: CdpEndpoint): Promise<CdpTarget[]>;
-  /** The human's Chrome process, to bring frontmost; null when unknown. */
+  /** The human's Chrome process, to bring frontmost; null when not known
+   *  yet. Must answer without listing processes: the click waits on it. */
   realChromePid(): number | null;
 }
 
@@ -195,7 +198,7 @@ export const bridgeFocusEngine: FocusEngine = makeBridgeFocusEngine({
   isPidAlive,
   prove: (state) => proveBridgeHost(state, BRIDGE_FOCUS_TIMEOUT_MS),
   listTargets: (ep) => listTargets(ep, BRIDGE_FOCUS_TIMEOUT_MS),
-  realChromePid: () => realChromePid(),
+  realChromePid: knownRealChromePid,
 });
 
 // Activating a tab selects it inside its window, but a window behind other
@@ -254,7 +257,7 @@ function ownerOf(fields: { session_uuid?: unknown; tmux_session?: unknown }): Pr
  * focus back if the managed Chrome took it during the call — an async raise
  * that completes mid-call is read as a theft and undone.
  */
-export function focusBrowserTabBlocking(query: string): Promise<FocusResult> {
+export function focusBrowserTabBlocking(query: string | string[]): Promise<FocusResult> {
   return focusBrowserTab(query, defaultDeps(raiseAppByPidSync));
 }
 
@@ -269,12 +272,17 @@ export function focusBrowserTabBlocking(query: string): Promise<FocusResult> {
  * or waited for together, the route outlived the web's patience and the click
  * did nothing.
  *
+ * `queries` are tab ids in order of preference, and each listing is read for
+ * the first of them it holds: the engine that answers settles the click,
+ * rather than every engine having to report that the preferred tab is gone
+ * before the next one is looked for.
+ *
  * When no engine has it, the reported failure is the most hopeful one seen:
  * a stopped engine beside a running one that merely lacks the tab reads as
  * "tab-not-found", not "browser-stopped".
  */
 async function findTab(
-  query: string,
+  queries: string[],
   engines: FocusEngine[],
   activate?: (engine: FocusEngine, tab: FocusTab) => Promise<void>,
 ): Promise<{ tab: FocusTab } | { reason: FocusFailure }> {
@@ -316,7 +324,7 @@ async function findTab(
     }
     if (!tabs.length) continue;
 
-    const tab = matchTab(tabs, query);
+    const tab = queries.reduce<FocusTab | null>((found, q) => found ?? matchTab(tabs, q), null);
     if (!tab) {
       worse("tab-not-found");
       continue;
@@ -333,23 +341,23 @@ async function findTab(
   return { reason };
 }
 
-export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDeps()): Promise<FocusResult> {
-  const found = await findTab(query, deps.engines, (engine, tab) => engine.activate(tab));
+export async function focusBrowserTab(query: string | string[], deps: FocusDeps = defaultDeps()): Promise<FocusResult> {
+  const found = await findTab([query].flat(), deps.engines, (engine, tab) => engine.activate(tab));
   if ("reason" in found) return { ok: false, reason: found.reason };
   const { tab } = found;
   // This raise is asked for — tell the sentinel not to bounce it.
   noteDeliberateRaise();
   if (tab.pid) deps.raiseApp(tab.pid, deps.log);
-  return { ok: true, ...(tab.pid ? { pid: tab.pid } : {}) };
+  return { ok: true, tab: tab.id, ...(tab.pid ? { pid: tab.pid } : {}) };
 }
 
 /**
  * Whether the tab still exists, touching nothing: the web asks on hover so a
  * pill whose tab an agent closed reads as gone before the transcript says so.
  */
-export async function probeBrowserTab(query: string, deps: Pick<FocusDeps, "engines"> = defaultDeps()): Promise<FocusResult> {
-  const found = await findTab(query, deps.engines);
-  return "reason" in found ? { ok: false, reason: found.reason } : { ok: true };
+export async function probeBrowserTab(query: string | string[], deps: Pick<FocusDeps, "engines"> = defaultDeps()): Promise<FocusResult> {
+  const found = await findTab([query].flat(), deps.engines);
+  return "reason" in found ? { ok: false, reason: found.reason } : { ok: true, tab: found.tab.id };
 }
 
 /**
@@ -357,26 +365,23 @@ export async function probeBrowserTab(query: string, deps: Pick<FocusDeps, "engi
  * session it ran in rides along. The session's current tab (the one "watch
  * live" shows) stands in when the row named none (its output went through
  * grep or tail) and when the row's tab is gone: agents switch, share and
- * close each other's tabs, so an older row's tab often is.
+ * close each other's tabs, so an older row's tab often is. Both are looked
+ * for in one pass, the row's first: a browser that holds the session's tab
+ * and not the row's says the row's is gone, without waiting on the slowest
+ * engine to say so too.
  */
 export async function focusRequestedTab(
   params: URLSearchParams,
   deps: FocusDeps,
-  act: (tab: string, deps: FocusDeps) => Promise<FocusResult> = focusBrowserTab,
+  act: (tabs: string[], deps: FocusDeps) => Promise<FocusResult> = focusBrowserTab,
 ): Promise<{ tab: string; result: FocusResult }> {
   const rowTab = params.get("tab") ?? "";
-  const sessionTab = async () =>
+  const sessionTab =
     deps.resolveSessionTab?.(await ownerOf({ session_uuid: params.get("session_uuid"), tmux_session: params.get("tmux_session") })) ?? "";
-  if (rowTab) {
-    const result = await act(rowTab, deps);
-    if (result.ok || result.reason !== "tab-not-found") return { tab: rowTab, result };
-    const current = await sessionTab();
-    if (!current || matchTab([{ id: current }], rowTab)) return { tab: rowTab, result };
-    return { tab: current, result: await act(current, deps) };
-  }
-  const tab = await sessionTab();
-  if (!tab) return { tab, result: { ok: false, reason: "tab-not-found" } };
-  return { tab, result: await act(tab, deps) };
+  const queries = [rowTab, sessionTab].filter((q, i, all) => q && !(i > 0 && matchTab([{ id: q }], all[0])));
+  if (!queries.length) return { tab: "", result: { ok: false, reason: "tab-not-found" } };
+  const result = await act(queries, deps);
+  return { tab: result.tab ?? queries[0], result };
 }
 
 /**

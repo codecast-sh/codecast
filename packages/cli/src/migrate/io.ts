@@ -45,6 +45,7 @@ import type { BeginResult, RunnerIo, TransferResult } from "./runner.js";
 import { sessionFootprint, type Footprint } from "./footprint.js";
 import { hostLoginGap, hostResolver, hostRoom } from "./hosts.js";
 import { rehearsalNotice, rehearseMove } from "./rehearse.js";
+import { HostCastBehind } from "../hosts/installRelease.js";
 
 type Facts = Extract<BeginResult, { ok: true }>;
 
@@ -135,6 +136,8 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
     hosts.set(deviceId, entry);
     return entry;
   };
+  // Hosts proven to run at least this laptop's cast in this batch.
+  const castReady = new Set<string>();
   // Each session's footprint, read once by the rehearsal and used again for the host's tools.
   const footprints = new Map<string, Footprint>();
 
@@ -183,6 +186,19 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
 
     prepareHost: async (deviceId) => { await prepareHost(deviceId); },
     hostLoginGap: (deviceId) => hostLoginGap(async () => (await prepareHost(deviceId)).host),
+    hostCastGap: async (deviceId) => {
+      if (castReady.has(deviceId)) return null;
+      const { cloud, host } = await prepareHost(deviceId);
+      const { readyHostCast } = await import("../cloud/prepare.js");
+      try {
+        await readyHostCast(host, cloud.id, (m) => log(`  ${m}`));
+      } catch (err) {
+        if (err instanceof HostCastBehind) return err.message;
+        throw err;
+      }
+      castReady.add(deviceId);
+      return null;
+    },
 
     hostRoom: async (deviceId, facts) => hostRoom((await prepareHost(deviceId)).cloud, facts.git_root ?? facts.project_path ?? undefined),
 

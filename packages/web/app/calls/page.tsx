@@ -13,7 +13,9 @@
 // answers inline. The words, the room's typed lines, the agents' answers
 // and the recap read as one thread (components/calls/RoomThread.tsx).
 
+import { useRecordCallRecordingOpen } from "../../lib/accessLogOpen";
 import { isCallLive } from "../../lib/calls/callStatus";
+import { DeleteCallButton } from "../../components/calls/DeleteCallButton";
 import { useTeamFeature } from "../../lib/teamFeatures";
 import { useContext, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -398,6 +400,8 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   const callRecs = useCallRecordings(!recording && call && (call.filmed || roomRecording) ? String(call._id) : null);
   const videoFiles = useMemo(() => (callRecs?.recordings ?? []).map(toVideoFile), [callRecs]);
   const hasVideo = useMemo(() => playableFiles(videoFiles).length > 0, [videoFiles]);
+  // A regulated team's audit log gets one entry when this call's recording is opened here (lib/accessLogOpen).
+  useRecordCallRecordingOpen(call?._id ? String(call._id) : null, call?.team_id ? String(call.team_id) : null, hasVideo);
   const videoRuns = useMemo(() => callVideoRuns(videoFiles), [videoFiles]);
   // Which part of the call has video: the header says it, and the lines said
   // in it carry a rail, so a reader knows before clicking which lines play.
@@ -730,6 +734,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
           />
           {sentTick && <span className="text-sol-green">{sentTick}</span>}
           <span className="flex-1" />
+          <DeleteCallButton call={call} live={live} title={title} />
           <ShareControl
             label={recording ? "recording" : "call"}
             path={callAnchorHref(callPathRef(call))}

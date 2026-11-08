@@ -125,6 +125,9 @@ export function AssignmentBadge({
   const { seatRoleId, currentRole: parentRole } = useSessionRoleFacts(conversationId);
   const seatUnderRole = !!seatRoleId && !!parentRole;
   const [makingRole, setMakingRole] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // The hand-off step replaces the whole menu while it is open.
+  const [handingOff, setHandingOff] = useState(false);
   const orgOn = useWorkspaceFeature("org");
   // A session may run on a machine outside the viewer's own device list (a
   // teammate's, or the shared agent box whose daemon authenticates as the bot
@@ -196,7 +199,7 @@ export function AssignmentBadge({
   return (
     <>
     {makingRole && <MakeRoleDialog conversationId={conversationId} onClose={() => setMakingRole(false)} />}
-    <DropdownMenu>
+    <DropdownMenu open={menuOpen} onOpenChange={(o) => { setMenuOpen(o); if (!o) setHandingOff(false); }}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -270,17 +273,30 @@ export function AssignmentBadge({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="min-w-[16rem] max-w-[24rem]">
-        {runner && <div className="px-2 py-1.5 text-xs text-sol-text-muted">Runs under {runner.name}’s account</div>}
-        {!isRunner && <div className="px-2 pb-1.5 text-[10px] text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
-        <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
-        {cloudHost && isRunner && !preparing && (
+        {/* Who it belongs to leads: that is the move people come here for.
+            Where it runs follows; the hand-off step takes the whole menu. */}
+        <OwnerMenuItems
+          owners={owners}
+          conversationId={conversationId}
+          onMakeRole={orgOn ? () => setMakingRole(true) : undefined}
+          handingOff={handingOff}
+          onHandingOff={setHandingOff}
+          onDone={() => setMenuOpen(false)}
+        />
+        {!handingOff && (
           <>
             <DropdownMenuSeparator />
-            <MirrorMenuItems conversationId={conversationId} />
+            {runner && <div className="px-2 py-1.5 text-xs text-sol-text-muted">Runs under {runner.name}’s account</div>}
+            {!isRunner && <div className="px-2 pb-1.5 text-[10px] text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
+            <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
+            {cloudHost && isRunner && !preparing && (
+              <>
+                <DropdownMenuSeparator />
+                <MirrorMenuItems conversationId={conversationId} />
+              </>
+            )}
           </>
         )}
-        <DropdownMenuSeparator />
-        <OwnerMenuItems owners={owners} conversationId={conversationId} onMakeRole={orgOn ? () => setMakingRole(true) : undefined} />
       </DropdownMenuContent>
     </DropdownMenu>
     </>

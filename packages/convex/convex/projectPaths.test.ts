@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { conversationProjectRoot, foldCheckoutsByRepository, normalizeProjectPath, pathWithinLocalRoots, pickInheritedGitMeta, projectContainingPath } from "./projectPaths";
+import { conversationProjectRoot, foldCheckoutsByRepository, knownCheckoutRoots, normalizeProjectPath, pathWithinLocalRoots, pickInheritedGitMeta, projectContainingPath } from "./projectPaths";
 
 describe("normalizeProjectPath", () => {
   // Regression: a session whose cwd fell back to $HOME (e.g. a remote/resume
@@ -21,9 +21,9 @@ describe("normalizeProjectPath", () => {
     expect(normalizeProjectPath("/Users/ashot/Desktop/scratch")).toBe("/Users/ashot/Desktop/scratch");
   });
 
-  test("trims to the repo dir below a recognized code parent", () => {
-    expect(normalizeProjectPath("/Users/ashot/src/codecast/packages/web")).toBe("/Users/ashot/src/codecast");
-    expect(normalizeProjectPath("/Users/ashot/projects/foo/bar")).toBe("/Users/ashot/projects/foo");
+  test("never guesses a repo from the folder layout", () => {
+    expect(normalizeProjectPath("/Users/a/code/work.noindex/GitHub/slack-bot")).toBe("/Users/a/code/work.noindex/GitHub/slack-bot");
+    expect(normalizeProjectPath("/Users/ashot/src/codecast/packages/web/")).toBe("/Users/ashot/src/codecast/packages/web");
   });
 
   test("strips worktree suffixes", () => {
@@ -50,9 +50,22 @@ describe("conversationProjectRoot", () => {
     expect(conversationProjectRoot({ git_root: `${root}/` })).toBe(root);
   });
 
-  test("a bare cwd is still trimmed, since it may be anywhere inside a repo", () => {
-    expect(conversationProjectRoot({ project_path: "/Users/a/src/app/packages/web" })).toBe("/Users/a/src/app");
-    expect(conversationProjectRoot({ git_root: "", project_path: "/Users/a/src/app/packages/web" })).toBe("/Users/a/src/app");
+  test("a bare cwd joins the deepest known checkout containing it, else stands as it is", () => {
+    const known = ["/Users/a/src/app", "/Users/a/src/app/vendor/lib", "/Users/a/code/work/GitHub/bot"];
+    expect(conversationProjectRoot({ project_path: "/Users/a/src/app/packages/web" }, known)).toBe("/Users/a/src/app");
+    expect(conversationProjectRoot({ project_path: "/Users/a/src/app/vendor/lib/x" }, known)).toBe("/Users/a/src/app/vendor/lib");
+    expect(conversationProjectRoot({ git_root: "", project_path: "/Users/a/code/work/GitHub/bot" }, known)).toBe("/Users/a/code/work/GitHub/bot");
+    expect(conversationProjectRoot({ project_path: "/Users/a/src/application" }, known)).toBe("/Users/a/src/application");
+    expect(conversationProjectRoot({ project_path: "/Users/a/code/work/GitHub/other/sub" })).toBe("/Users/a/code/work/GitHub/other/sub");
+  });
+
+  test("knownCheckoutRoots reads git_roots only", () => {
+    const roots = knownCheckoutRoots([
+      { git_root: "/Users/a/src/app/.codecast/worktrees/wt1" },
+      { git_root: "/Users/a" },
+      { project_path: "/Users/a/src/cwd-only" },
+    ]);
+    expect([...roots]).toEqual(["/Users/a/src/app"]);
   });
 
   test("a managed worktree's git_root is its repository's checkout", () => {

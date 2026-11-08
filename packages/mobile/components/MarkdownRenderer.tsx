@@ -8,7 +8,8 @@ import {
   Modal,
   useWindowDimensions,
 } from 'react-native';
-import { isTrustedImageSrc } from '@/lib/convex';
+import { isTrustedImageSrc, isTrustedVideoSrc } from '@/lib/convex';
+import { InlineVideo } from './InlineVideo';
 import { Text as RNText } from '@/components/Themed';
 import * as Haptics from 'expo-haptics';
 import { copyToClipboard } from '@/lib/clipboard';
@@ -294,11 +295,23 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   );
 }
 
+function captionFromAlt(alt: string): string | undefined {
+  const t = alt.trim();
+  return t && !/^(image|img)$/i.test(t) ? t : undefined;
+}
+
+/** One image or video from a trusted paragraph; a video plays in the cast player. */
+function MarkdownMedia({ img, tiled }: { img: Image; tiled?: boolean }) {
+  const alt = img.alt ?? '';
+  if (isTrustedVideoSrc(img.url)) return <InlineVideo src={img.url} caption={captionFromAlt(alt)} tiled={tiled} />;
+  return <MarkdownImage src={img.url} alt={alt} tiled={tiled} />;
+}
+
 function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: boolean }) {
   const Theme = useTheme();
   const [full, setFull] = useState(false);
   const [failed, setFailed] = useState(false);
-  const caption = alt.trim() && !/^(image|img)$/i.test(alt.trim()) ? alt.trim() : undefined;
+  const caption = captionFromAlt(alt);
   if (failed) return null;
   return (
     <RNView style={tiled ? mdStyles.imageTile : undefined}>
@@ -322,8 +335,9 @@ function MarkdownImage({ src, alt, tiled }: { src: string; alt: string; tiled?: 
 }
 
 // A paragraph of nothing but images, every one from a trusted source
-// (storage-origin `cast image` uploads, pasted transcript images): web draws
-// these inline with the alt as a caption, side by side when adjacent. A mixed
+// (storage-origin `cast image` uploads, pasted transcript images, videos on
+// our media host): web draws these inline with the alt as a caption, side by
+// side when adjacent. A mixed
 // or untrusted paragraph keeps text semantics, where an image is a link.
 function trustedImages(p: Paragraph): Image[] | null {
   const imgs: Image[] = [];
@@ -332,7 +346,7 @@ function trustedImages(p: Paragraph): Image[] | null {
     else if (c.type === 'break' || (c.type === 'text' && !c.value.trim())) continue;
     else return null;
   }
-  return imgs.length > 0 && imgs.every((img) => isTrustedImageSrc(img.url)) ? imgs : null;
+  return imgs.length > 0 && imgs.every((img) => isTrustedImageSrc(img.url) || isTrustedVideoSrc(img.url)) ? imgs : null;
 }
 
 // Box-drawing/em-dash rule runs (optionally `code`/**bold**-wrapped) — the
@@ -429,9 +443,9 @@ function renderBlock(node: Nodes, ctx: MdCtx, k: string, first: boolean): React.
       if (imgs) {
         return imgs.length > 1 ? (
           <RNView key={k} style={mdStyles.imageRow}>
-            {imgs.map((img, j) => <MarkdownImage key={j} src={img.url} alt={img.alt ?? ''} tiled />)}
+            {imgs.map((img, j) => <MarkdownMedia key={j} img={img} tiled />)}
           </RNView>
-        ) : <MarkdownImage key={k} src={imgs[0].url} alt={imgs[0].alt ?? ''} />;
+        ) : <MarkdownMedia key={k} img={imgs[0]} />;
       }
       if (RULE_RESIDUE_RE.test(plainText(node).trim())) return <RNView key={k} style={mdStyles.horizontalRule} />;
       const solo = soloReference(node);

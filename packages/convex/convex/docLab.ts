@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { action } from "./functions";
 import { api } from "./_generated/api";
 import { callModel, parseJsonBlock } from "./lib/anthropic";
+import { requireVendorAllowed, type VendorGate } from "./lib/vendorGuard";
 import {
   LAB_FLAGS,
   LAB_TRIMS,
@@ -147,9 +148,11 @@ function toRequest(args: { tool: string; target?: string; context?: string; leve
   return { tool: "typos" };
 }
 
-async function runLab(req: LabRequest, text: string): Promise<LabResult> {
+async function runLab(gate: VendorGate, req: LabRequest, text: string): Promise<LabResult> {
   const { prompt, max_tokens } = labPrompt(req, text);
-  const reply = await callModel({ system: SYSTEM, prompt, max_tokens, model: LAB_MODEL, label: "Doc lab", timeout_ms: LAB_TIMEOUT_MS });
+  // A regulated team's doc is refused in words the editor can show (a FORBIDDEN ConvexError).
+  await requireVendorAllowed(gate.ctx, gate.scope, "anthropic");
+  const reply = await callModel({ system: SYSTEM, prompt, max_tokens, model: LAB_MODEL, label: "Doc lab", timeout_ms: LAB_TIMEOUT_MS, gate });
   if (!reply) throw new Error("The Lab could not reach its model; try again");
   const result = parseLabReply(req, reply.text);
   if (!result) throw new Error("The Lab's model answered in a shape it could not read; try again");
@@ -161,10 +164,11 @@ async function runLab(req: LabRequest, text: string): Promise<LabResult> {
  * the stored markdown while the writer types) and lands the result itself.
  */
 export const run = action({
-  args: { ...requestArgs, text: v.string() },
+  args: { ...requestArgs, text: v.string(), doc_id: v.string() },
   handler: async (ctx, args): Promise<LabResult> => {
     if (!(await ctx.auth.getUserIdentity())) throw new Error("Unauthorized");
-    return runLab(toRequest(args), args.text);
+    // The doc the editor's text comes from decides where it may be sent.
+    return runLab({ ctx, scope: { row: { table: "docs", id: args.doc_id } } }, toRequest(args), args.text);
   },
 });
 
@@ -181,7 +185,7 @@ export const runOnDoc = action({
     const md: string = doc.content ?? "";
     const clean = stripDrafting(md);
     const context = req.tool === "alternatives" ? surrounding(clean, req.target) : "";
-    const result = await runLab(req.tool === "alternatives" ? { ...req, context } : req, clean);
+    const result = await runLab({ ctx, scope: { workspace: doc.workspace ?? null, apiToken: args.api_token } }, req.tool === "alternatives" ? { ...req, context } : req, clean);
     const landed = applyLabResult(md, result, { target: req.tool === "alternatives" ? req.target : undefined, occurrence: args.occurrence });
     if (landed.md !== md) {
       await ctx.runMutation(api.docs.update, { api_token: args.api_token, id: args.id, content: landed.md, session_id: args.session_id });

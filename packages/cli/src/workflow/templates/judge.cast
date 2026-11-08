@@ -1,0 +1,37 @@
+// A segment (flows.md FL2): a model scores how likely the change is to need a
+// follow-up fix, from its diff and the repository's own guidelines, blind to
+// who made it. The two scripts build what it reads (workflow/blindChange.ts):
+// no commit message, trailer, branch, session, run or person reaches the call,
+// and the call has no tools to go looking, so a person's change, an agent's and
+// the line's are judged alike.
+//
+// The answer lands on the run as the call station's record, {"risk", "why"},
+// and the exit says which way it went: Low risk, High risk at or above the
+// composing node's `above` (default 50), or Unscored when it could not be
+// judged (a script or the call failed, or the answer held no risk).
+// A flow routes on `<node>.exit`; the record is how the judge's misses are
+// counted (a change it passed that a later fix traces to).
+//
+//   judge [flow="judge", above=60]
+//   judge -> ship   [condition="judge.exit = low"]
+//   judge -> decide [condition="judge.exit != low"]
+digraph judge {
+  graph [kind="segment", label="Judge", description="A model scores the change's risk from its diff and the repository's guidelines, blind to who made it", takes="branch", params="above=50"]
+  start [shape=Mdiamond]
+  guidelines [label="Guidelines", shape=parallelogram, timeout=120,
+    script="cast flow blind guidelines --base $default_branch --head $branch"]
+  diff [label="Diff", shape=parallelogram, timeout=120,
+    script="cast flow blind diff --base $default_branch --head $branch --redact $branch $worktree $change_session $change_conversation"]
+  judge [label="Judge", shape=note, model="claude-sonnet-5-5", max_tokens=2000, prompt="@judge/risk.md"]
+  low      [shape=Msquare, label="Low risk"]
+  high     [shape=Msquare, label="High risk"]
+  unscored [shape=Msquare, label="Unscored"]
+  start -> guidelines
+  guidelines -> diff [condition="outcome = success"]
+  guidelines -> unscored
+  diff -> judge [condition="outcome = success"]
+  diff -> unscored
+  judge -> high [condition="outcome = success and judge.json.risk >= $above"]
+  judge -> low  [condition="outcome = success and judge.json.risk < $above"]
+  judge -> unscored
+}

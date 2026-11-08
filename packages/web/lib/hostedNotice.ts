@@ -114,6 +114,7 @@ export const NOTICE_ROW_WORD: Record<NoticeKind, string> = {
   safety: "Stopped",
   verify: "Confirm email",
   limit: "Stopped",
+  vendor: "Off",
 };
 
 /** The notice card's tone: a stop the person can fix reads warm, a wait
@@ -127,6 +128,7 @@ export const NOTICE_TONE: Record<NoticeKind, "red" | "yellow" | "orange" | "blue
   safety: "red",
   verify: "blue",
   limit: "orange",
+  vendor: "orange",
 };
 
 const TONE_DOT = { red: "bg-sol-red/70", yellow: "bg-sol-yellow", orange: "bg-sol-orange", blue: "bg-sol-blue/70" } as const;
@@ -159,6 +161,7 @@ export function noticeMove(kind: NoticeKind, retryText: string | undefined, upgr
       // when the allowance comes back instead.
       return upgradesOpen ? { label: "Open Plan", opensPlan: true } : null;
     case "safety":
+    case "vendor":
       return null;
     case "verify":
       // Its move is the code field under the words (EmailProofForm), not a button.

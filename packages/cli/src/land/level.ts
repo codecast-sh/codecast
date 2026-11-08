@@ -149,6 +149,22 @@ function writeAtomic(file: string, content: Buffer, mode: string): void {
   fs.renameSync(tmp, file);
 }
 
+/**
+ * A change of mode alone (an executable bit) keeps the blob, so the plan absorbs it and writes nothing: the file takes
+ * target's mode when the disk still has the base's, as a clean file takes target's content. A mode changed here stands.
+ */
+function levelMode(file: string, entry: DiffEntry): void {
+  if (!entry.dst || entry.srcMode === entry.dstMode || entry.srcMode === SYMLINK || entry.dstMode === SYMLINK) return;
+  let st: fs.Stats;
+  try { st = fs.lstatSync(file); } catch { return; }
+  if (!st.isFile()) return;
+  const exec = (st.mode & 0o100) !== 0;
+  const wantExec = entry.dstMode === "100755";
+  if (exec === wantExec || exec !== (entry.srcMode === "100755")) return;
+  const perms = st.mode & 0o777;
+  fs.chmodSync(file, wantExec ? perms | ((perms & 0o444) >> 2) : perms & ~0o111);
+}
+
 /** Remove a file and the directories it leaves empty, stopping at the root. */
 function removeFile(root: string, rel: string): void {
   const file = path.join(root, rel);
@@ -216,13 +232,14 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
   // lands mid-level is merged, never overwritten.
   const raced: string[] = [];
   for (let a of actions) {
-    if (a.kind === "absorb" || a.kind === "keep") continue;
     const file = path.join(root, a.entry.path);
+    if (a.kind === "absorb" || a.kind === "keep") { levelMode(file, a.entry); continue; }
+    let gaveUp = false;
     for (let attempt = 0; ; attempt++) {
       const current: string | null = (await worktreeBlobs(root, [a.entry.path])).get(a.entry.path) ?? null;
       if (current === a.seen) break;
       const again: Action | null = attempt < 3 ? await decide(root, a.entry, current, baseOf(a.entry)) : null;
-      if (!again) { raced.push(a.entry.path); a = { kind: "keep", entry: a.entry, seen: current }; break; }
+      if (!again) { raced.push(a.entry.path); gaveUp = true; a = { kind: "keep", entry: a.entry, seen: current }; break; }
       a = again;
       if (a.kind === "absorb" || a.kind === "keep") break;
     }
@@ -230,7 +247,7 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
     else if (a.kind === "write") {
       if (a.entry.dst) writeAtomic(file, await blobContent(root, a.entry.dst), a.entry.dstMode);
       else removeFile(root, a.entry.path);
-    }
+    } else if (!gaveUp) levelMode(file, a.entry);
   }
 
   // The index last: target's entry for every path that moved, the rest of the

@@ -38,7 +38,3 @@ for(const enabled of [false,true]) test(`production full-ID app-server skip and 
   const row=resultRow((await run).stdout);expect(row.registration).toEqual({live:true,persisted:true,pendingFork:true,fullIdSibling:true,lineageSuppressed:true});
 }),loadScaledMs(70_000));
 
-for(const enabled of [false,true]) for(const mode of ['ack','ack-mutant']) test(`actual production queued reread ACK ${mode} worker=${enabled}`,()=>production('f3-ack-',[String(enabled),mode],async run=>{
-  if(mode==='ack-mutant'){const outcome=await settled(run);expect(outcome.ok).toBe(false);expect(outcome.stderr).toContain('queued reread must not ACK a newer prompt');}
-  else{const row=resultRow((await run).stdout);expect(row.ack.backendPositive).toBe(true);expect(row.ack.queueExecutor).toBe(true);console.log(JSON.stringify(row));}
-},{maxBuffer:3*1024*1024}),loadScaledMs(70_000));

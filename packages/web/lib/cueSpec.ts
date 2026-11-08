@@ -38,12 +38,43 @@ export type CueNoise = {
   sweepTo?: number;
 };
 
+/** A recorded sound, served from `public/sounds`. Every file there is
+ *  trimmed and normalized so its loudest sample is SAMPLE_PEAK; the renderer
+ *  cannot decode audio, so it takes the file's peak and length from here. */
+export type CueSample = {
+  src: string;
+  /** Seconds, as the file runs. */
+  dur: number;
+};
+
+/** Peak of every file in `public/sounds` after normalizing (-3.4 dBFS once decoded). */
+export const SAMPLE_PEAK = 0.676;
+
 export type CueSpec = {
   /** Multiplies every voice below. Peak on the wire is master times what the voices sum to. */
   master: number;
   tones?: CueTone[];
   noise?: CueNoise[];
+  sample?: CueSample;
 };
+
+// ── the recorded cues ─────────────────────────────────────────────────────
+//
+// Four cues are recordings (CC0, freesound.org) rather than synthesis, picked
+// by ear against the synthesized originals. Each master puts the file's peak
+// where the cue it replaced peaked, so swapping a sound did not move its level.
+
+/** A chat message: one struck marimba note (LloydEvans09, freesound 185833). Peak 0.0316, the old knock's. */
+export const CHAT_MARIMBA: CueSpec = { master: 0.047, sample: { src: "/sounds/chat-marimba.mp3", dur: 0.55 } };
+
+/** Someone knocking at your locked huddle: knuckles on a wooden door
+ *  (Flem0527, freesound 629987). Literally a knock, never mistaken for a ring. */
+export const DOOR_KNOCK: CueSpec = { master: 0.047, sample: { src: "/sounds/knock-wood-door.mp3", dur: 0.59 } };
+
+/** One ring cycle: a vibraphone chord (jack_urbanski, freesound 495674),
+ *  2.2 s inside the 3 s CALL_RING_PERIOD_MS. Peak 0.0458 on the first cycle,
+ *  the old ring's; RING_GAIN_BY_CYCLE climbs from there. */
+export const CALL_RING: CueSpec = { master: 0.068, sample: { src: "/sounds/ring-vibraphone.mp3", dur: 2.2 } };
 
 // Where the rest of the app sits, measured by `cueRender` off the same
 // envelopes `sounds.ts` builds. This is the band the walkie cues had to join;
@@ -79,14 +110,9 @@ export type CueSpec = {
 // cutoff is welcome here: it puts a little presence right where a small radio
 // speaker has its own.
 
-/** YOUR key down, mic genuinely open. A rising fifth, A5 to E6. */
-export const WALKIE_KEY_UP: CueSpec = {
-  master: 0.09,
-  tones: [
-    { freq: 880, start: 0, dur: 0.085, gain: 0.34, type: "square", lowpass: 1500 },
-    { freq: 1318.51, start: 0.075, dur: 0.11, gain: 0.38, type: "square", lowpass: 2200 },
-  ],
-};
+/** YOUR key down, mic genuinely open: a real walkie-talkie's key-up beep
+ *  (SoundBiterSFX, freesound 732209). Peak 0.0460, level with the ring. */
+export const WALKIE_KEY_UP: CueSpec = { master: 0.068, sample: { src: "/sounds/walkie-key-up.mp3", dur: 0.72 } };
 
 /** YOUR key up, the burst is closed and gone. One falling tone. */
 export const WALKIE_ROGER: CueSpec = {

@@ -57,12 +57,10 @@ export function FeedNavRowView({
   team,
   isActive,
   isNarrow,
-  unread,
 }: {
   team: { name: string; icon?: string; icon_color?: string };
   isActive: boolean;
   isNarrow: boolean;
-  unread?: number | null;
 }) {
   return (
     <Link
@@ -72,14 +70,7 @@ export function FeedNavRowView({
       title={team.name}
     >
       <TeamIcon icon={team.icon} color={team.icon_color} className="w-5 h-5 flex-shrink-0" />
-      {!isNarrow && (
-        <>
-          <span>Feed</span>
-          {unread != null && unread > 0 && !isActive && (
-            <NavCount n={unread} tone="bg-sol-cyan text-sol-bg" />
-          )}
-        </>
-      )}
+      {!isNarrow && <span>Feed</span>}
     </Link>
   );
 }

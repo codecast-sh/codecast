@@ -149,7 +149,9 @@ export async function loadHistory(ctx: QueryCtx, conversationId: Id<"conversatio
 export async function writeRows(ctx: MutationCtx, conversationId: Id<"conversations">, rows: StoredRow[]): Promise<boolean> {
   const conversation = await ctx.db.get(conversationId);
   if (!conversation) return false;
-  if (rows.length > 0) await writeMessageBatch(ctx, conversation, { conversation_id: conversationId, messages: rows });
+  // The engine names the pending row each user turn delivers (delivery_ids),
+  // so nothing it writes is paired by its words.
+  if (rows.length > 0) await writeMessageBatch(ctx, conversation, { conversation_id: conversationId, messages: rows, echo_ids: true });
   return true;
 }
 

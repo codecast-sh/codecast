@@ -1,13 +1,16 @@
+import { permissionRemovalValidator } from "./lib/permissionRemoval";
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { resolveEffectiveTeam } from "./data";
 import { runnerDeviceOf } from "./lib/runnerDevice";
+import { boundedRuleRequest, cascadeFromAnswer, keepableFor, keptPatterns, permissionRuleLabel } from "@codecast/shared/contracts/permissionRules";
+import { permissionProjectKey, ruleRequestValidator, rulesForConversation, saveAllowRules } from "./lib/permissionRules";
 
-async function getAuthenticatedUserId(
+export async function getAuthenticatedUserId(
   ctx: { db: any },
   apiToken?: string
 ): Promise<Id<"users"> | null> {
@@ -62,6 +65,12 @@ export const createPermissionRequest = mutation({
     tool_name: v.string(),
     arguments_preview: v.string(),
     suggestions: v.optional(v.array(v.any())),
+    subagent_type: v.optional(v.string()),
+    subagent_conversation_id: v.optional(v.id("conversations")),
+    safety_check: v.optional(v.boolean()),
+    intent: v.optional(v.string()),
+    removals: v.optional(v.array(permissionRemovalValidator)),
+    rule_request: v.optional(ruleRequestValidator),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -106,6 +115,14 @@ export const createPermissionRequest = mutation({
       created_at: now,
       owner_user_id: conversation.user_id,
       ...boundedSuggestions(args.suggestions),
+      ...(args.subagent_type && { subagent_type: args.subagent_type.slice(0, 80) }),
+      ...(args.subagent_conversation_id && { subagent_conversation_id: args.subagent_conversation_id }),
+      ...(args.safety_check && { safety_check: true }),
+      ...(args.intent && { intent: args.intent.slice(0, 200) }),
+      ...(args.removals?.length && {
+        removals: args.removals.slice(0, 5).map((r) => ({ ...r, target: r.target.slice(0, 300), ...(r.note && { note: r.note.slice(0, 100) }) })),
+      }),
+      ...(args.rule_request && { rule_request: boundedRuleRequest(args.rule_request) }),
     });
 
     return permissionId;
@@ -146,7 +163,8 @@ export const updatePermissionStatus = mutation({
     status: v.union(v.literal("approved"), v.literal("denied")),
     // A denial's reason, sent to the model as the deny message.
     message: v.optional(v.string()),
-    // An approval that also keeps the row's suggested rules.
+    // An approval that also keeps the row's rules: codecast's own (rule_request
+    // .always) when the row has them, else Claude's suggested ones.
     remember: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -177,24 +195,84 @@ export const updatePermissionStatus = mutation({
     }
 
     const message = args.status === "denied" ? args.message?.trim().slice(0, MAX_DENY_MESSAGE) : undefined;
-    const remember = args.status === "approved" && args.remember === true && (permission.suggestions?.length ?? 0) > 0;
-    await ctx.db.patch(args.permission_id, {
-      status: args.status,
-      resolved_at: Date.now(),
-      resolved_by: userId,
-      ...(message ? { deny_message: message } : {}),
-      ...(remember ? { remember: true } : {}),
-    });
-    await recordAuthorityEvent(ctx, {
-      kind: "permission_answered",
-      actor_user_id: userId,
-      conversation,
-      detail: { before: { status: "pending", tool_name: permission.tool_name }, after: { status: args.status, permission_id: args.permission_id } },
-    });
+    // Codecast keeps its own rules when the call has any; a call it can keep
+    // nothing for (opaque, an edit outside the project, an older row) keeps
+    // Claude's suggestions in Claude's settings, as the card's button names.
+    // What it keeps is re-derived from what the call touched, never taken
+    // from the daemon's word; an unknown project keeps nothing.
+    const keeps = permission.rule_request && permissionProjectKey(conversation)
+      ? keepableFor(permission.rule_request, conversation.git_root ?? undefined)
+      : [];
+    // Which kind it keeps follows what the card offered and the daemon
+    // expects (keptPatterns): codecast's rules when the call named any, else
+    // Claude's suggestions, which then ride back to Claude.
+    const codecastKeeps = keptPatterns(permission.rule_request).length > 0;
+    const remember = args.status === "approved" && args.remember === true &&
+      (codecastKeeps ? keeps.length > 0 : (permission.suggestions?.length ?? 0) > 0);
+    await answerPermission(ctx, permission, conversation, userId, { status: args.status, message, remember });
+
+    // One answer settles the session's other open asks: rules kept by
+    // "always" approve the ones they now cover, and a denial's reason applies
+    // to the whole batch, so parallel calls do not each wait on a person.
+    if (remember && keeps.length > 0) {
+      const saved = await saveAllowRules(ctx, conversation, { permission: permission.rule_request!.permission, always: keeps });
+      if (saved.length) {
+        await recordAuthorityEvent(ctx, {
+          kind: "permission_rule_saved",
+          actor_user_id: userId,
+          conversation,
+          detail: { after: { permission_id: args.permission_id, rules: saved.map((r) => permissionRuleLabel(r)) } },
+        });
+      }
+    }
+    const asks = (p: Doc<"pending_permissions">) => ({ ...p, _id: String(p._id), conversation_id: String(p.conversation_id) });
+    const pending = await otherPending(ctx, permission);
+    const cascade = cascadeFromAnswer(asks(permission), { status: args.status, message, remember }, pending.map(asks),
+      remember && keeps.length > 0 ? await rulesForConversation(ctx, conversation) : []);
+    for (const other of pending) {
+      const status = cascade.approve.includes(String(other._id)) ? "approved" : cascade.deny.includes(String(other._id)) ? "denied" : null;
+      if (status) await answerPermission(ctx, other, conversation, userId, { status, ...(status === "denied" && { message }), cause: args.permission_id });
+    }
 
     return args.permission_id;
   },
 });
+
+/** The session's open asks, oldest first (the cascade picks the siblings). */
+async function otherPending(ctx: { db: any }, p: Doc<"pending_permissions">): Promise<Doc<"pending_permissions">[]> {
+  const rows: Doc<"pending_permissions">[] = await ctx.db
+    .query("pending_permissions")
+    .withIndex("by_session", (q: any) => q.eq("session_id", p.session_id))
+    .filter((q: any) => q.eq(q.field("status"), "pending"))
+    .collect();
+  return rows.sort((a, b) => a.created_at - b.created_at);
+}
+
+/** Resolves one row and audits it. `cause` names the answer it followed from. */
+async function answerPermission(
+  ctx: { db: any },
+  p: Doc<"pending_permissions">,
+  conversation: Doc<"conversations">,
+  userId: Id<"users">,
+  answer: { status: "approved" | "denied"; message?: string; remember?: boolean; cause?: Id<"pending_permissions"> },
+) {
+  await ctx.db.patch(p._id, {
+    status: answer.status,
+    resolved_at: Date.now(),
+    resolved_by: userId,
+    ...(answer.message ? { deny_message: answer.message } : {}),
+    ...(answer.remember ? { remember: true } : {}),
+  });
+  await recordAuthorityEvent(ctx, {
+    kind: "permission_answered",
+    actor_user_id: userId,
+    conversation,
+    detail: {
+      before: { status: "pending", tool_name: p.tool_name },
+      after: { status: answer.status, permission_id: p._id, ...(answer.cause && { settled_by: answer.cause }) },
+    },
+  });
+}
 
 export const cancelPendingPermissions = mutation({
   args: {

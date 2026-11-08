@@ -3,7 +3,8 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useSyncUserSkills, useUserSkills } from "../hooks/useSyncUserSkills";
-import { useInboxStore, isConvexId, resolveComposeProjectPath, bucketProjectPath } from "../store/inboxStore";
+import { useInboxStore, isConvexId, resolveComposeProjectPath, bucketProjectPath, newProjectKeyOf, projectAddressOnce } from "../store/inboxStore";
+import { savedDefaultProject } from "../lib/machinePicker";
 import { NewSessionFoot, NewSessionView } from "./conversation/sessionControls";
 import { MessageInput } from "./MessageInput";
 import type { ConversationData } from "./conversation/types";
@@ -137,6 +138,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       chipFilterExclude: store.chipFilterExclude,
       recentProjects: store.recentProjects,
       machineRoster: store.machineRoster,
+      defaultProject: savedDefaultProject(store.clientState.ui, store.machineRoster),
     });
     // A resumed draft keeps its agent; otherwise the caller's agent, then the
     // conversation on screen's, carries over, and the default
@@ -288,6 +290,8 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   // than MessageInput's create-then-send.
   const liveAgentType = useInboxStore((s) => (sessionId ? (s.sessions[s.resolveLiveSessionId(sessionId)]?.agent_type as string | undefined) : undefined)) ?? skillCtx.agentType;
   const hosted = isHostedAgentType(liveAgentType);
+  // The new project switch (NewSessionProjectToggle) on this composer's stub.
+  const startsProject = useInboxStore((s) => (sessionId ? !!s.sessions[sessionId]?._newProject : false));
   const hostedRef = useRef(hosted);
   hostedRef.current = hosted;
 
@@ -466,6 +470,8 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     // deferred server create. This runs a tick before MessageInput's own send
     // awaits awaitConvexId(sessionId), so the in-flight create is already tracked
     // when the send resolves the stub→real id. Idempotent (once-guarded in store).
+    // Started as a new project: its key, so the way on goes to the project.
+    const projectKey = useInboxStore.getState().sessions[sessionId]?._newProject ? newProjectKeyOf(sessionId) : null;
     sentRef.current = true;
     const ready = materializeRef.current?.();
     // A hosted create carries the first message, so a refused one marks it.
@@ -494,6 +500,17 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       // person is waiting for the answer, not filing work for later. Cmd+Enter
       // keeps them where they were.
       const open = hostedRef.current ? !navigate : navigate;
+      // A new project opens on its page; started without opening, it says so
+      // with the way there.
+      if (projectKey) {
+        const go = () => void projectAddressOnce(projectKey).then((addr) => { if (addr) router.push(`/projects/${addr}`); });
+        if (open) go();
+        else {
+          const title = (useInboxStore.getState().projects as Record<string, { title?: string }>)[projectKey]?.title;
+          toast.success(title ? `Started ${title}` : "Project started", { action: { label: "Open", onClick: go } });
+        }
+        return;
+      }
       if (open) void resolveConvexId().then((convexId) => { if (convexId) router.push(`/conversation/${convexId}`); });
       return;
     }
@@ -656,7 +673,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           onDropFiles={dropFilesRef}
           onPopulateInput={populateInputRef}
           onGateSend={recipient ? async (text, images) => { await wakeRole(text, images); } : hosted ? startHosted : undefined}
-          composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : hosted ? "Ask anything, or hand me a chore" : undefined}
+          composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : hosted ? "Ask anything, or hand me a chore" : startsProject ? "What is the project for? Its first line names it" : undefined}
           onSubmitWithIntent={handleSubmit}
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}
           escapeOwnedRef={escapeOwnedRef}

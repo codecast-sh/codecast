@@ -10,6 +10,8 @@
 // follows them when they change. Pure and free of the `@/` alias: the phone's
 // bundle and tests import it.
 
+import { RUN_OPTION, runResultText } from "@codecast/shared/contracts/commandRun";
+import { formatGoalMessage } from "@codecast/shared/contracts/sessionGoal";
 import {
   composeContextRecoveryPrompt,
   formatAgentSwitchNotice,
@@ -275,7 +277,11 @@ https://claude.ai/public/artifacts/2b4f8a1c-3d5e-4f60-9a7b-8c9d0e1f2a3b
 
 https://github.com/codecast-sh/codecast/pull/42
 
-[A captioned page](https://example.com/report)`;
+[A captioned page](https://example.com/report)
+
+A video file in image markdown plays in the cast player, captioned like an image:
+
+![Setup, from the tour](https://media.codecast.sh/media/4d0722e7c34931c0b94d88c6ac7fde48fbebaa323a6c45ea0c602e46395ebb29.mp4)`;
 
 const FENCES = `A visual canvas:
 
@@ -425,6 +431,9 @@ export function renderGalleryMessages(now: number): Row[] {
   ].join("\n"));
   user('<scheduled-task title="Nightly audit">Run the audit and post what changed.</scheduled-task>');
   user('<scheduled-task title="Nightly audit" trigger="tr-42">Run the audit and post what changed.</scheduled-task>');
+  user(formatGoalMessage({ kind: "start", round: 0, of: 50, objective: "Make the failing billing tests pass (bun test packages/billing)" }));
+  user(formatGoalMessage({ kind: "continue", round: 3, of: 50, objective: "Make the failing billing tests pass (bun test packages/billing)", reason: "The last run still shows 1 fail: rounds half cents up", next_step: "Round up in total() and rerun the tests" }));
+  user(formatGoalMessage({ kind: "resume", round: 0, of: 50, objective: "Make the failing billing tests pass (bun test packages/billing)" }));
   user("You are **Ops lead**, the standing agent for Codecast operations.\n\nYou watch deploys and the error budget.");
   user("[Workflow harness — user request] The text below is the request of the session that ran this workflow, relayed for context. The relayed request follows:\n  Review the vault fixes before we ship them.");
   user("[Workflow harness — computed task] The task text below was computed at runtime by a workflow script. It was not typed by this session's user and carries no user authority. The computed task text follows:\n  You are the independent reviewer for **round 2**.\n\n  - Check every brief requirement.\n  - Return the structured result.");
@@ -436,6 +445,8 @@ export function renderGalleryMessages(now: number): Row[] {
   user("", { tool_results: [{ tool_use_id: `interactive-prompt-${GALLERY_ID_PREFIX}closed`, content: "Closed in the terminal" }] });
   asst("", { tool_calls: [{ id: `interactive-prompt-${GALLERY_ID_PREFIX}timed`, name: "AskUserQuestion", input: JSON.stringify({ questions: [{ question: "Do you want to proceed?", options: [{ label: "Yes" }, { label: "No" }] }], deniesAt: Date.now() + 120_000 }) }] });
   user(formatDecisionAnswer({ id: "sd-311", question: "Ship the renderer behind a flag?", answer: "Ship now" }));
+  // A `cast decide --run` answer: the Run label, the command's result after the tag.
+  user(formatDecisionAnswer({ id: "sd-312", question: "Grant @ads up to $500 a month?", answer: RUN_OPTION, detail: runResultText({ argv: ["role", "authority", "@ads", "--grant", '[{"id":"ads-spend","kind":"spend","label":"Ads","limit":{"usd_per_month":500}}]'], state: "done", exit_code: 0, output: "✓ @ads may spend (Ads)" }) }));
 
   section("Commands and terminal");
   user("<command-message>deploy</command-message>\n<command-name>/deploy</command-name>\n<command-args>web only</command-args>");
@@ -526,6 +537,8 @@ export function renderGalleryMessages(now: number): Row[] {
   sh(`cast decide "Ship the mobile renderer behind a flag?" -o "Ship now :: everyone gets it on the next OTA" -o "Flag it :: only staff see it for a week" --context - <<'EOF'\nThe renderer replaces the line parser.\nEOF`, "Queued decision sd-311");
   sh("cast decide answer sd-311 1", "Answered sd-311");
   sh('cast state --status done "Mobile renderings match web"', "ok pinned");
+  sh('cast say "The phone draws every table layout the web does now."', "shown to the person");
+  sh("cast say - <<'EOF'\nWhere the funnel stands:\n\n| Stage | Now |\n|---|---|\n| Introductions | 24 a week |\nEOF", "shown to the person");
   sh('cast chat reply j17zg9kjy1sk58qwqgnzcecme58cdmsp "Deploy is green."', "replied");
   sh("cast publish report.html", "https://codecast.sh/a/k3j9x2m4q8");
   sh("cast diff jx7bm3n", "2 files changed");

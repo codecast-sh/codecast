@@ -37,6 +37,17 @@ export async function deployTeamFor(
   userId: Id<"users">,
   repository: string,
 ): Promise<Id<"teams">> {
+  const team = await findDeployTeam(ctx, userId, repository);
+  if (team) return team;
+  throw new Error(`None of your teams has ${repository} connected (GitHub App or a published checkout); pass --team <name|id>.`);
+}
+
+/** deployTeamFor, answering null when none of the caller's teams works on the repository. */
+export async function findDeployTeam(
+  ctx: { db: any },
+  userId: Id<"users">,
+  repository: string,
+): Promise<Id<"teams"> | null> {
   const installed = await resolveTeamForRepository(ctx, repository);
   if (installed && (await isTeamMember(ctx, userId, installed))) return installed;
   const sources = await ctx.db
@@ -49,7 +60,7 @@ export async function deployTeamFor(
   }
   if (teams.length === 1) return teams[0];
   if (teams.length > 1) throw new Error(`More than one of your teams works on ${repository}; pass --team <name|id>.`);
-  throw new Error(`None of your teams has ${repository} connected (GitHub App or a published checkout); pass --team <name|id>.`);
+  return null;
 }
 
 // How far back through a repository's events the previous marker is looked
