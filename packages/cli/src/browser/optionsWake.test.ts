@@ -1,11 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import vm from "node:vm";
-
-const extensionFile = (name: string) => readFileSync(new URL(`../../../browser-extension/${name}`, import.meta.url), "utf8");
-// options.html loads status.js before options.js; the wake loop calls its askWorker and reviveIfRefused.
-const statusSource = extensionFile("status.js");
-const source = extensionFile("options.js");
+import { chromeStub, loadExtensionScript } from "./extensionStub.testutil";
 
 function optionsPage(hash: string, response: "silent" | "missing" | "connected") {
   const removed: number[] = [];
@@ -21,15 +15,11 @@ function optionsPage(hash: string, response: "silent" | "missing" | "connected")
   // The page's deadline reads the clock; tests move it.
   let now = 1_000_000;
   const FakeDate = class extends Date { static now() { return now; } };
-  const context = vm.createContext({
-    URLSearchParams, location, Date: FakeDate,
-    history: { replaceState() { location.hash = ""; } },
-    document: { getElementById: () => element, createElement: () => element },
-    localStorage: { getItem: () => null, setItem() {} },
-    chrome: {
+  // options.html loads status.js before options.js; the wake loop calls its askWorker and reviveIfRefused.
+  loadExtensionScript("options.js", {
+    chrome: chromeStub({
       runtime: {
         reload() {},
-        getManifest: () => ({ version: "0.1.0" }),
         sendMessage: ({ op }: { op: string }) => {
           messages.push(op);
           if (response === "silent") return new Promise(() => {});
@@ -37,23 +27,22 @@ function optionsPage(hash: string, response: "silent" | "missing" | "connected")
           return Promise.resolve({ ok: true });
         },
       },
-      storage: { local: { get: async () => ({}) } },
       tabs: {
         getCurrent: async () => ({ id: 7 }),
         remove: async (id: number) => { removed.push(id); },
       },
+    }),
+    globals: {
+      location, Date: FakeDate,
+      history: { replaceState() { location.hash = ""; } },
+      document: { getElementById: () => element, createElement: () => element },
+      localStorage: { getItem: () => null, setItem() {} },
+      setTimeout: (fn: () => void, ms: number) => { const id = ++nextTimer; timers.set(id, { fn, ms }); return id; },
+      clearTimeout: (id: number) => timers.delete(id),
     },
-    setInterval: () => 0,
-    setTimeout: (fn: () => void, ms: number) => { const id = ++nextTimer; timers.set(id, { fn, ms }); return id; },
-    clearTimeout: (id: number) => timers.delete(id),
+    // The page's status block asks the worker for its state on load; these tests count only the wake asks.
+    beforeMain: 'renderBridgeStatus = () => ({ cls: "state-bad" }); readBridgeStatus = async () => ({ state: "dead", attached: [] });',
   });
-  vm.runInContext(statusSource, context);
-  // The page's status block asks the worker for its state on load; these tests count only the wake asks.
-  vm.runInContext(
-    'renderBridgeStatus = () => ({ cls: "state-bad" }); readBridgeStatus = async () => ({ state: "dead", attached: [] });',
-    context,
-  );
-  vm.runInContext(source, context);
   /** Fire the oldest pending timer, the way the clock would. */
   const tick = async () => { const [id, t] = [...timers.entries()][0]; timers.delete(id); t.fn(); await settle(); await settle(); };
   return { removed, messages, timers, tick, advance: (ms: number) => { now += ms; } };
