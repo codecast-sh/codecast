@@ -21,8 +21,8 @@ import { isConvexId } from "../lib/entityLinks";
 // | create_stub    | appears in Working              | until the server row supersedes (altKey) |
 // | triage_gesture | moves or removes the row        | until ack or HIDDEN_OVERRIDE_SETTLE_MS   |
 // | focused        | stays visible while open        | while focused; never counted outside WS  |
-// | pending_send   | Needs Input → Working           | while the queue/outbox holds the send    |
-// | revive         | Needs Input → Working           | BLOCKED_REVIVE_TTL_MS (120s)             |
+// | pending_send   | Needs You → Working           | while the queue/outbox holds the send    |
+// | revive         | Needs You → Working           | BLOCKED_REVIVE_TTL_MS (120s)             |
 // | draft_blank    | renders a `new` row locally     | rendering only, never counts             |
 export const DECLARED_INBOX_OVERLAYS = [
   "create_stub",

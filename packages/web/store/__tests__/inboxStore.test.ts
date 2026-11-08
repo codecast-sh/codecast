@@ -267,7 +267,7 @@ describe("getSessionRenderKey", () => {
 });
 
 describe("placeSections (the placement chokepoint)", () => {
-  it("puts interrupted sessions in Needs Input", () => {
+  it("puts interrupted sessions in Needs You", () => {
     const interrupted: InboxSession = {
       ...baseSession,
       _id: "conv-interrupted",
@@ -295,7 +295,7 @@ describe("placeSections (the placement chokepoint)", () => {
     expect(needsInput.map((s) => s._id)).toContain("conv-needs-reply");
   });
 
-  it("puts stopped sessions in Needs Input (not invisible)", () => {
+  it("puts stopped sessions in Needs You (not invisible)", () => {
     const stopped: InboxSession = {
       ...baseSession,
       _id: "conv-stopped",
@@ -327,7 +327,7 @@ describe("placeSections (the placement chokepoint)", () => {
     expect(working.map((s) => s._id)).not.toContain("conv-stopped");
   });
 
-  it("routes auth-error (pending_api_error) sessions to Needs Input even when the daemon still claims working", () => {
+  it("routes auth-error (pending_api_error) sessions to Needs You even when the daemon still claims working", () => {
     // A signed-out session whose Stop hook was lost: the daemon re-asserts
     // "working" so is_idle stays false. Without the auth routing it would hide
     // in Working; the pending_api_error flag must surface it for re-login.
@@ -340,7 +340,7 @@ describe("placeSections (the placement chokepoint)", () => {
       agent_status: "working",
       pending_api_error: true,
     };
-    // Control: same shape, no banner → genuinely working, stays out of Needs Input.
+    // Control: same shape, no banner → genuinely working, stays out of Needs You.
     const working: InboxSession = {
       ...baseSession,
       _id: "conv-working",
@@ -364,7 +364,7 @@ describe("placeSections (the placement chokepoint)", () => {
     expect(workingBucket.map((s) => s._id)).not.toContain("conv-auth-error");
   });
 
-  it("puts idle sessions with pending messages in Working (not Needs Input)", () => {
+  it("puts idle sessions with pending messages in Working (not Needs You)", () => {
     const idleWithPending: InboxSession = {
       ...baseSession,
       _id: "conv-pending",
@@ -403,7 +403,7 @@ describe("placeSections (the placement chokepoint)", () => {
     expect(needsInput.map((s) => s._id)).toContain("conv-no-pending");
   });
 
-  it("puts sessions with queued messages in Working (not Needs Input)", () => {
+  it("puts sessions with queued messages in Working (not Needs You)", () => {
     const idleSession: InboxSession = {
       ...baseSession,
       _id: "conv-queued",
@@ -426,7 +426,7 @@ describe("placeSections (the placement chokepoint)", () => {
   it("moves an idle session with an unconfirmed pending send into Working (local-first)", () => {
     // The durable signal: a sent-but-unconfirmed message lives in
     // pendingMessages. Independent of ConversationView being mounted, that
-    // session must show as Working ("pending"), not sit in Needs Input.
+    // session must show as Working ("pending"), not sit in Needs You.
     const idleSession: InboxSession = {
       ...baseSession,
       _id: "conv-pending-send",
@@ -447,7 +447,7 @@ describe("placeSections (the placement chokepoint)", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-pending-send");
   });
 
-  it("routes an UNRESPONSIVE session with a stuck has_pending to Needs Input, not Working", () => {
+  it("routes an UNRESPONSIVE session with a stuck has_pending to Needs You, not Working", () => {
     // Regression (iOS-sim case): a message was queued, the daemon then died, and
     // has_pending stayed latched true. The session is idle and the dead daemon
     // can't deliver — it needs the user (resume/restart), so it must NOT keep a
@@ -491,7 +491,7 @@ describe("placeSections (the placement chokepoint)", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-live-pending");
   });
 
-  it("routes a STOPPED session with has_pending to Needs Input (won't pick it up)", () => {
+  it("routes a STOPPED session with has_pending to Needs You (won't pick it up)", () => {
     const stoppedPending: InboxSession = {
       ...baseSession,
       _id: "conv-stopped-pending",
@@ -576,7 +576,7 @@ describe("placeSections (the placement chokepoint)", () => {
     expect(buckets.newSessions.map((s) => s._id)).toContain(stub);
   });
 
-  it("keeps a working session out of Needs Input even when the previous turn was interrupted", () => {
+  it("keeps a working session out of Needs You even when the previous turn was interrupted", () => {
     // Regression: resume after interrupt leaves last_user_message as the
     // interrupt control text while agent_status flips to "working". An old
     // override classified this as idle; it must now stay in Working.
@@ -649,7 +649,7 @@ describe("placeSections (the placement chokepoint)", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-stale-idle");
   });
 
-  it("sweeps a statusless quiet row (liveness never delivered) into Needs Input after the idle grace", () => {
+  it("sweeps a statusless quiet row (liveness never delivered) into Needs You after the idle grace", () => {
     // The frozen-liveness class, route four (ct-39991): a row the sessionsLiveness
     // overlay refuses to cover (killed, subagent, unmanaged opencode import) has
     // agent_status null and is_idle stuck at the base list's stripped null. The
@@ -828,7 +828,7 @@ describe("placeSections (the placement chokepoint)", () => {
     // The user's complaint: an agent is blocked on an open AskUserQuestion, the
     // user answers via free text (the poll's "Other" path), and that send sits in
     // the durable pendingMessages map (the amber "pending" pill). The user has
-    // acted — the session must move to Working, not stay in Needs Input. The
+    // acted — the session must move to Working, not stay in Needs You. The
     // client send (pendingSendIds, 3rd arg) overrides awaiting_input on a live
     // daemon. Contrast with the test above: a server-only has_pending with NO
     // client send keeps the poll-deadlock protection.
@@ -880,11 +880,11 @@ describe("placeSections (the placement chokepoint)", () => {
     // Invariant: a client pending send (the amber "pending" pill) ALWAYS means
     // Working, even on a stopped daemon. The message is retried forever and a
     // launchd-revived daemon will deliver it; the dedicated "daemon offline"
-    // affordance is the global banner, not a per-card bounce into Needs Input. A
+    // affordance is the global banner, not a per-card bounce into Needs You. A
     // pending card must never appear outside Working — that mismatch (pill in
-    // Needs Input) is the impossible state we're guarding against. Contrast a
+    // Needs You) is the impossible state we're guarding against. Contrast a
     // stale SERVER-only has_pending with NO client send, which still routes a dead
-    // daemon to Needs Input (see the unresponsive/stopped has_pending tests above).
+    // daemon to Needs You (see the unresponsive/stopped has_pending tests above).
     const stoppedWithSend: InboxSession = {
       ...baseSession,
       _id: "conv-dead-sent",
@@ -928,7 +928,7 @@ describe("placeSections (the placement chokepoint)", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-unresp-sent");
   });
 
-  it("a pinned poll files under QUESTIONS once — asking outranks pinned, never duplicated into Needs Input", () => {
+  it("a pinned poll files under QUESTIONS once — asking outranks pinned, never duplicated into Needs You", () => {
 
     const pinnedPoll: InboxSession = {
       ...baseSession,
@@ -1013,7 +1013,7 @@ describe("placeSections (the placement chokepoint)", () => {
     ]);
   });
 
-  it("sinks deferred sessions to the bottom of Needs Input", () => {
+  it("sinks deferred sessions to the bottom of Needs You", () => {
     // Defer (shift+backspace / "send to bottom") sets is_deferred. The needsInput
     // group must honor that flag, otherwise deferring a needs-input session is a no-op.
     const early: InboxSession = {
@@ -2140,7 +2140,7 @@ describe("syncTable sessions — status flip without updated_at bump", () => {
     useInboxStore.setState({ sessions: {}, conversations: {}, pending: {} } as any);
   });
 
-  it("moves a session from Working to Needs Input when only the status changes", () => {
+  it("moves a session from Working to Needs You when only the status changes", () => {
     const store = useInboxStore.getState();
     // Recent updated_at so the session reads as genuinely working (the staleness
     // net distrusts an active status gone quiet past the trust TTL). The flip
@@ -2274,7 +2274,7 @@ describe("syncTable sessions — stale optimistic pending-send reconcile", () =>
     // server's sendMessage mutation lands (which sets has_pending + bumps updated_at),
     // a stale snapshot — still updated_at=100, is_idle, has_pending=false — arrives.
     // The absence-prune used to fire on it, dropping the pending pill and bouncing the
-    // card out of Working into Needs Input for a beat. The send baseline (=100) must
+    // card out of Working into Needs You for a beat. The send baseline (=100) must
     // keep it: the server has NOT advanced past the send, so nothing is consumed.
     const store = useInboxStore.getState();
     useInboxStore.setState({
@@ -4736,7 +4736,7 @@ describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
 // the last payload, with exemptions and a no-filter fallback) is deleted;
 // categorizeSessions only buckets the rows the chokepoint hands it. These pin
 // the invariant that converges counts across web / desktop / mobile and keeps
-// aged-out cruft out of Needs Input while it stays cached for search/open.
+// aged-out cruft out of Needs You while it stays cached for search/open.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("computeInboxVisible — the authoritative active set (working-set membership)", () => {
   const cid = (tag: string) => tag.padEnd(32, "0").slice(0, 32).toLowerCase();
