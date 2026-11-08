@@ -80,6 +80,12 @@ describe("cast guide", () => {
     for (const topic of guideTopics()) expect(message).toContain(topic.slug);
   });
 
+  test("a typo or a singular names the topic it was reaching for", () => {
+    expect(unknownTopicMessage("brwser")).toContain("did you mean 'cast guide browser'?");
+    expect(unknownTopicMessage("workflow")).toContain("'cast guide workflows'");
+    expect(unknownTopicMessage("zzzzzz")).not.toContain("did you mean");
+  });
+
   test("`cast guide <topic>` prints the version header and the whole body", () => {
     const run = runGuide(["browser"]);
     expect(run.status).toBe(0);
