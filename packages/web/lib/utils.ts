@@ -115,7 +115,7 @@ export function resolveCustomPath(
   } else {
     return undefined;
   }
-  abs = abs.replace(/\/{2,}/g, "/");
+  abs = abs.replace(/\/{2,}/g, "/").replace(/\/\.(?=\/|$)/g, "") || "/";
   if (abs.length > 1) abs = abs.replace(/\/$/, "");
   return abs;
 }
