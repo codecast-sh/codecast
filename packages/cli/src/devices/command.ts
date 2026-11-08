@@ -44,7 +44,7 @@ export async function backend(): Promise<Backend> {
   try {
     b = await convexClient();
   } catch {
-    die("not signed in on this machine: run `cast login` first");
+    die("not signed in on this machine: run cast auth (or cast login - with a setup token where there is no browser)");
   }
   const said = <T>(p: Promise<T>): Promise<T> => p.catch((err) => die(cliErrorMessage(err)));
   const client = {
@@ -319,19 +319,21 @@ export function registerDevicesCommand(program: Command): void {
     .description("Turn a snippet or machine setting on or off on a machine (hooks, auto_update, session_trailer, any `cast install` snippet), or set stable to solo|team|off")
     .option("--global", "stable only: inject in every project, not just this one")
     .action(async (needle: string, setting: string, value: string, o: { global?: boolean }) => {
-      const b = await backend();
-      const d = await ownDevice(b, needle);
+      // The setting and value are checked before any network call, so a typo
+      // is answered at once and names the right form.
       const v = value.toLowerCase();
       let args: Record<string, unknown>;
       if (setting === "stable") {
-        if (!["solo", "team", "off"].includes(v)) die("stable takes solo, team or off");
+        if (!["solo", "team", "off"].includes(v)) die(`stable takes solo, team or off (got "${value}"): cast devices set ${needle} stable team`);
         args = { snippet: "stable", enabled: v !== "off", mode: v, global: !!o.global };
       } else {
         const name = isMachineSetting(setting) ? setting : snippetBySlug(setting)?.slug;
         if (!name) die(`unknown setting "${setting}": hooks, auto_update, session_trailer, stable, or a snippet (cast install --help lists them)`);
-        if (!["on", "off", "true", "false"].includes(v)) die("value is on or off");
+        if (!["on", "off", "true", "false"].includes(v)) die(`${setting} takes on or off (got "${value}"): cast devices set ${needle} ${setting} off`);
         args = { snippet: name, enabled: v === "on" || v === "true" };
       }
+      const b = await backend();
+      const d = await ownDevice(b, needle);
       await b.client.mutation(b.api.devices.setDeviceSnippet, { api_token: b.token, device_id: d.device_id, ...args });
       console.log(`${fmt.success("ok")} ${setting} ${v} on ${deviceDisplayName(d)}${d.online ? "" : fmt.warning(" (offline: lands only if it is back within 5 minutes)")}`);
     });
@@ -344,7 +346,7 @@ export function registerDevicesCommand(program: Command): void {
     .action(async (needle: string, op: string, provider: string, o: { wait: string; json?: boolean }) => {
       const spec = getProviderKeySpec(provider);
       if (!spec) die(`unknown provider "${provider}": ${PROVIDER_KEYS.map((p) => p.id).join(", ")}`);
-      if (op !== "set" && op !== "rm") die("op is set or rm");
+      if (op !== "set" && op !== "rm") die(`the second word is set or rm (got "${op}"): cast devices key ${needle} set ${provider}`);
       const b = await backend();
       const d = await ownDevice(b, needle);
       if (op === "rm") {
@@ -388,7 +390,7 @@ export function registerDevicesCommand(program: Command): void {
     .option("--wait <seconds>", "How long to wait for the machine's answer", "30")
     .option("--json", "Machine-readable")
     .action(async (needle: string, tool: string, o: { start?: boolean; wait: string; json?: boolean }) => {
-      if (tool !== "browser" && tool !== "computer") die("tool is browser or computer");
+      if (tool !== "browser" && tool !== "computer") die(`tool is browser or computer (got "${tool}"): cast devices setup ${needle} browser`);
       const b = await backend();
       const d = await ownDevice(b, needle);
       const res = await b.client.mutation(b.api.devices.enqueueAgentToolSetupCommand, { api_token: b.token, device_id: d.device_id, tool, op: o.start ? "start" : "check" });
