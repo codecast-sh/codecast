@@ -189,7 +189,7 @@ describe("the sentence is rendered from the row, by the proposal page's writers"
 
   test("effects read forward on a row and backward on its inverse", () => {
     const hire = row("role", { after: { status: "active", name: "Growth", handle: "growth" }, effects: { takeover: { role_id: "r1", handle: "growth", sessions: [{ conversation_id: "s1", short_id: "jx7abcd", before: { owner_user_ids: ["u1"] } }], kept_in_front: [], over_cap: 0 }, routines_started: [{ agent_task_id: "a1", title: "Weekly" }] } });
-    expect(orgLogEffectLines(hire)).toEqual(["1 session now reports to @growth and leaves your needs input", "1 routine started"]);
+    expect(orgLogEffectLines(hire)).toEqual(["1 session now reports to @growth and leaves Needs You", "1 routine started"]);
     expect(orgLogEffectLines(invertRow(hire))).toEqual(["1 session goes back to where it was", "1 routine stopped"]);
   });
 });
