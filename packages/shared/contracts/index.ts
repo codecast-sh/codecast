@@ -138,7 +138,7 @@ export * from "./handoffPrompt";
 export * from "./browserExtension";
 export * from "./agentToolSetup";
 export type { AskResult, SideAnswerRow } from "./sessionAsk";
-export { SIDE_ANSWER_EXPIRE_MS } from "./sessionAsk";
+export { SIDE_ANSWER_EXPIRE_MS, explainAskFailure } from "./sessionAsk";
 export * from "./systemResources";
 export * from "./resourceOffloadPolicy";
 export * from "./testArtifacts";

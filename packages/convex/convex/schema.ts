@@ -1457,6 +1457,9 @@ export default defineSchema({
     // server channel.
     .index("by_user_killed", ["user_id", "inbox_killed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
+    // A device's live rows (cloud.hostSessions): a host that has run thousands
+    // of stations reads only the ones still active, not its whole history.
+    .index("by_owner_device_status", ["user_id", "owner_device_id", "status"])
     // The rows that can hold a host's checkout as shared (cloudPlacement
     // findSharedCheckoutOccupant): a start reads these, not every station the
     // host runs, so a station's transcript writes never conflict with a spawn.
@@ -6968,9 +6971,11 @@ export default defineSchema({
     // The provider twin lookup: every inbound issue event resolves its task
     // through this one index. issue-sync.md S1.1.
     .index("by_external", ["external.provider", "external.id"])
+    // `cast task ls -q` searches one workspace's titles here (tasks.listTasksCore):
+    // filtering a whole open set in memory ran out of memory on a large team.
     .searchIndex("search_tasks_v2", {
       searchField: "title",
-      filterFields: ["user_id", "project_id", "status"],
+      filterFields: ["user_id", "project_id", "status", "workspace"],
     }),
 
   // One observation from the world, typed by the finder that saw it

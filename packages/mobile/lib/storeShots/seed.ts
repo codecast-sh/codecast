@@ -25,6 +25,7 @@ import {
   TEAM_MEMBERS,
   SESSIONS,
 } from "./world";
+import { seedHeavy } from "./heavy";
 
 function write(label: string, fn: () => void) {
   try {
@@ -65,6 +66,7 @@ export function seedStoreShots(now = Date.now()) {
   // screen quiet for 5 minutes offers to resume. Re-stamp the sessions so the
   // world always stands at "now", however long a capture takes.
   setInterval(() => stampLive(Date.now()), 15_000);
+  write("heavy", () => seedHeavy(now));
   write("messages", () => s.applyTailMessages(SESSIONS.api._id, 0, API_TRANSCRIPT(now) as any, null));
 
   write("chatChannels", () =>
