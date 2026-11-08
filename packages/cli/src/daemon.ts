@@ -6507,7 +6507,7 @@ async function executeRemoteCommand(
   // daemon would resume a local copy and answer in parallel with the remote
   // (split-brain). A person reclaims a session from a dead owner with the
   // header chip, which restamps the owner before any command reaches this daemon.
-  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "set_permission_mode", "escape", "rewind", "hibernate_session"]);
+  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "set_permission_mode", "escape", "rewind", "rewind_files", "hibernate_session"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
       const parsedArgs = JSON.parse(commandArgs);
@@ -9239,6 +9239,65 @@ async function executeRemoteCommand(
           ...("reason" in outcome && outcome.reason ? { reason: outcome.reason } : {}),
         });
         result = JSON.stringify({ state: outcome.state, files: outcome.files.length });
+        break;
+      }
+      case "rewind_files": {
+        // "Rewind to here" (rewindTree.ts): plan, stage, put back or keep a
+        // rewind of the session's checkout to just before one of its turns.
+        // Routed to the owning device, so this machine holds the checkout.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId: string | undefined = typeof parsed.conversation_id === "string" ? parsed.conversation_id : undefined;
+        const { REWIND_FILES_OPS } = await import("@codecast/shared/contracts");
+        if (!conversationId || !(REWIND_FILES_OPS as readonly string[]).includes(parsed.op)) {
+          error = "rewind_files: missing conversation_id or op";
+          break;
+        }
+        const sessionId = buildReverseConversationCache(readConversationCache())[conversationId];
+        const [target] = sessionId ? collectGitSweepTargets([sessionId]) : [];
+        if (!sessionId || !target) {
+          error = "This machine does not have the session's folder";
+          break;
+        }
+        const root = (await repoRootFor(target.cwd)) ?? target.cwd;
+        const { runRewindFilesCommand } = await import("./rewindFilesCommand.js");
+        // Busy: any agent mid-turn in this checkout, not only this session's.
+        const working = Object.keys(readConversationCache()).filter((sid) => MID_TURN_AGENT_STATUSES.has(currentAgentStatus(sid) ?? ""));
+        let busy = false;
+        for (const t of collectGitSweepTargets(working)) {
+          if (((await repoRootFor(t.cwd)) ?? t.cwd) === root) { busy = true; break; }
+        }
+        try {
+          const lastStop = lastHookStatus.get(sessionId)?.turn_completed_at;
+          const reply = await runRewindFilesCommand(parsed, {
+            root,
+            cwd: target.cwd,
+            busy,
+            lastTurnEnd: lastStop ? lastStop * 1000 : undefined,
+            snapshotsOff: readConfig()?.wip_snapshots_enabled === false,
+            recordLastTurn: lastStop ? () => takeTurnSnapshot(root, new Map([[conversationId, lastStop * 1000]])) : undefined,
+            rows: async () => {
+              if (!syncServiceRef) throw new Error("not connected");
+              // Only this checkout's rows: worktrees share an object store, so another worktree's snapshots would resolve here too.
+              const key = hashPath(root);
+              return (await syncServiceRef.listTreeSnapshots(conversationId)).filter((r) => !r.checkout_key || r.checkout_key === key);
+            },
+            edited: async (after) => (syncServiceRef ? await syncServiceRef.listEditedPaths(conversationId, after) : null),
+          });
+          log(`[REWIND-FILES] ${conversationId.slice(0, 12)} ${parsed.op}${reply.refused ? ` refused: ${reply.refused}` : reply.counts ? ` ${reply.counts.total} files` : ""}`);
+          // The files moved under the snapshot chain: advance its head, so the
+          // next turn's link (the fork's first) starts from the tree as it is now.
+          if (parsed.op === "stage" || parsed.op === "put_back") await createTurnSnapshot(root).catch(() => null);
+          // The conversation row is the staged state's home for every window's Put back chip.
+          if (reply.staged !== undefined && syncServiceRef) {
+            const s = reply.staged;
+            if (!(await syncServiceRef.reportRewindStaged(reply.staged_conversation_id ?? conversationId, s ? { id: s.id, files: s.files.length, staged_at: s.staged_at, at: s.at } : null))) {
+              log(`[REWIND-FILES] could not report the staged rewind for ${conversationId.slice(0, 12)}; the next rewind step reports it again`);
+            }
+          }
+          result = JSON.stringify(reply);
+        } catch (err) {
+          error = `Rewind failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`;
+        }
         break;
       }
       case "release_session": {
@@ -21076,7 +21135,7 @@ async function recordTreeSnapshot(
   root: string,
   snap: TurnSnapshot,
   sessions: Array<{ conversationId: string; turnCompletedAt?: number }>,
-  source: "turn" | "sweep",
+  source: "turn" | "sweep" | "prompt",
 ): Promise<void> {
   if (!syncServiceRef || !sessions.length) return;
   const rows = sessions.map((s) => ({
@@ -21112,6 +21171,27 @@ function requestTurnSnapshot(sessionId: string, turnCompletedAt: number): void {
     }, TURN_SNAPSHOT_COALESCE_MS);
     pendingTurnSnapshots.set(root, { timer, turns });
   })().catch((e) => log(`[WIP] turn snapshot request error: ${(e as Error)?.message ?? e}`));
+}
+
+/**
+ * A prompt was submitted: snapshot the tree now, before the agent starts, so
+ * the turn's link starts at its message ("Rewind to here", rewindTree.ts).
+ * Without it the link starts at the previous turn's end and holds whatever a
+ * person changed in between. Immediate (no coalescing): the agent may write
+ * within a second. Recorded even when the tree is unchanged, as the boundary.
+ */
+function requestPromptSnapshot(sessionId: string): void {
+  if (readConfig()?.wip_snapshots_enabled === false) return;
+  const [target] = collectGitSweepTargets([sessionId]);
+  if (!target) return;
+  void (async () => {
+    const root = (await repoRootFor(target.cwd)) ?? target.cwd;
+    if ((turnSnapshotParkedUntil.get(root) ?? 0) > Date.now()) return;
+    const snap = await createTurnSnapshot(root);
+    if (!snap) return;
+    noteSnapshotCost(root, snap);
+    await recordTreeSnapshot(root, snap, [{ conversationId: target.conversationId }], "prompt");
+  })().catch((e) => log(`[WIP] prompt snapshot error: ${(e as Error)?.message ?? e}`));
 }
 
 async function takeTurnSnapshot(root: string, turns: Map<string, number>): Promise<void> {
@@ -30721,6 +30801,8 @@ async function main(): Promise<void> {
       // The Stop hook is the only event that names the end of a lead turn.
       // Stamp it before the settle resolution below can turn this "idle" into
       // a "waiting" whose status then stops moving (ct-49533).
+      // "thinking" is UserPromptSubmit: the start of a turn, and a rewind's boundary.
+      if (data.status === "thinking" && (!prev || prev.ts !== data.ts)) requestPromptSnapshot(sessionId);
       if (data.turn_completed_at) {
         markTurnCompleted(sessionId, data.turn_completed_at * 1000);
         // The tree at the end of this turn, recorded off the loop (see

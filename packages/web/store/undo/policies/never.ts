@@ -275,6 +275,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setCloudAutoscale: SETTINGS,
   restartSession: MACHINE,
   hibernateSession: MACHINE,
+  rewindFiles: never("machine control: it rewrites files on the session's machine; its own Put back is the way back"),
   moveSessionToDevice: MACHINE,
   markKilling: MACHINE,
   startResourceOffload: MACHINE,
