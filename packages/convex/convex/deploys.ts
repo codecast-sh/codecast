@@ -36,7 +36,6 @@ import { fillDeployRange } from "./deployTargets";
 import { afterFor, shapeView } from "./deploysView";
 import { DEPLOY_FAILED_EVENT, DEPLOY_LIVE_EVENT } from "@codecast/shared/contracts";
 import {
-  DAY,
   carriesForMarker,
   deployRowOf,
   isLiveDeploy,
@@ -46,6 +45,7 @@ import {
   workspaceMerges,
 } from "./deployCarries";
 import {
+  DAY,
   DEPLOY_SHORT_ID_PREFIX,
   DEPLOY_SHORT_ID_RE,
   normalizeDeployTarget,

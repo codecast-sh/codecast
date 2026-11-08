@@ -7,6 +7,8 @@
 // rules here; the server, the CLI and the web all read them.
 import { carryingDeploys, deployIsLive, type AttemptMerge, type DeployRow } from "./causeHistory";
 
+export const DAY = 24 * 60 * 60 * 1000;
+
 /** Short ids of deploys: `dp-N`, minted by counters.nextShortId. */
 export const DEPLOY_SHORT_ID_PREFIX = "dp";
 export const DEPLOY_SHORT_ID_RE = /^dp-\d+$/i;

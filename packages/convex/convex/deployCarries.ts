@@ -6,9 +6,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { extractTaskShortIds } from "./lib/gitRefs";
 import type { DeployRow } from "@codecast/shared/contracts/causeHistory";
 import { mainAtOf } from "./deployTargetsState";
-import { carriedBy, normalizeDeployTarget, type DeployMerge } from "@codecast/shared/contracts/deploys";
+import { DAY, carriedBy, normalizeDeployTarget, type DeployMerge } from "@codecast/shared/contracts/deploys";
 
-export const DAY = 24 * 60 * 60 * 1000;
 /** How far back merges are read for the waiting set and a marker's carries. */
 const MERGE_WINDOW_MS = 90 * DAY;
 /** Merged runs read per workspace (by_workspace_merged). */
