@@ -1212,6 +1212,11 @@ export default defineSchema({
       files: v.optional(v.array(v.string())),
       reason: v.optional(v.string()),
     })),
+    // A rewind of this session's checkout staged by "Rewind to here"
+    // (cli/src/rewindTree.ts), as the daemon that holds it reported it: the
+    // header's Put back chip in every window reads this. Null once put back
+    // or kept.
+    rewind_staged: v.optional(v.union(v.null(), v.object({ id: v.string(), files: v.number(), staged_at: v.number(), at: v.number() }))),
     workflow_run_id: v.optional(v.id("workflow_runs")),
     is_workflow_sub: v.optional(v.boolean()),
     is_workflow_primary: v.optional(v.boolean()),

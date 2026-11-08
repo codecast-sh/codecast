@@ -2132,6 +2132,30 @@ export class SyncService {
     }
   }
 
+  /** A conversation's turn snapshot rows, oldest first (treeSnapshots.listForConversation): what a rewind reads. */
+  async listTreeSnapshots(conversationId: string): Promise<Array<{ sha: string; base_sha: string; prev_sha?: string; taken_at: number; turn_completed_at?: number }>> {
+    if (!this.apiToken) throw new Error("not signed in");
+    return await this.client.query("treeSnapshots:listForConversation" as any, { api_token: this.apiToken, conversation_id: conversationId });
+  }
+
+  /** Files a conversation's own tool calls changed after `after` (treeSnapshots.editedPaths); null on a backend without the query. */
+  async listEditedPaths(conversationId: string, after: number): Promise<string[] | null> {
+    if (!this.apiToken) return null;
+    try {
+      return await this.client.query("treeSnapshots:editedPaths" as any, { api_token: this.apiToken, conversation_id: conversationId, after });
+    } catch {
+      return null;
+    }
+  }
+
+  /** The rewind staged in a session's checkout, or none (treeSnapshots.reportRewindStaged). */
+  async reportRewindStaged(conversationId: string, staged: { id: string; files: number; staged_at: number; at: number } | null): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.mutate("treeSnapshots:reportRewindStaged" as any, { api_token: this.apiToken, conversation_id: conversationId, staged });
+    } catch {}
+  }
+
   /** What a merge_back command did with a worker's worktree (subagentFleet.reportMergeBack). */
   async reportMergeBack(args: { conversation_id: string; state: "merged" | "empty" | "conflict" | "failed"; files?: string[]; reason?: string }): Promise<void> {
     if (!this.apiToken) return;

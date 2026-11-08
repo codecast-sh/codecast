@@ -85,3 +85,61 @@ export const listForConversation = query({
     return rows.reverse();
   },
 });
+
+const EDITED_SCAN_CAP = 5000;
+const EDITED_PATHS_CAP = 2000;
+
+/**
+ * The files a conversation's own tool calls wrote, edited or deleted after
+ * `after` (file_changes), newest first: what a rewind in a checkout shared
+ * with other sessions may count as this session's (cli/src/rewindTree.ts).
+ * Paths are as the tool calls named them, usually absolute.
+ */
+export const editedPaths = query({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    after: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) return [];
+    const rows = await ctx.db
+      .query("file_changes")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .order("desc")
+      .take(EDITED_SCAN_CAP);
+    const out = new Set<string>();
+    for (const row of rows) {
+      if (row.timestamp <= args.after || row.change_type === "commit") continue;
+      out.add(row.file_path);
+      if (out.size >= EDITED_PATHS_CAP) break;
+    }
+    return [...out];
+  },
+});
+
+/**
+ * The daemon that holds a session's checkout says what rewind is staged there
+ * ("Rewind to here", cli/src/rewindTree.ts), or that none is. The row is the
+ * one home of that fact for every window's Put back chip. Only the session's
+ * runner may write it.
+ */
+export const reportRewindStaged = mutation({
+  args: {
+    api_token: v.string(),
+    conversation_id: v.id("conversations"),
+    staged: v.union(v.null(), v.object({ id: v.string(), files: v.number(), staged_at: v.number(), at: v.number() })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || conversation.user_id.toString() !== userId.toString()) return { written: false };
+    const prev = conversation.rewind_staged ?? null;
+    if (JSON.stringify(prev) === JSON.stringify(args.staged)) return { written: false };
+    await ctx.db.patch(args.conversation_id, { rewind_staged: args.staged });
+    return { written: true };
+  },
+});
