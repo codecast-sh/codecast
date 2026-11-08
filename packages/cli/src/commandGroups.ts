@@ -380,11 +380,11 @@ Subcommands:
 --status is your answer to WHO ACTS NEXT, and it decides where the session
 files in the inbox when your turn ends:
   working   still moving (default)
-  blocked   a human must act to unblock you            → Needs Input
+  blocked   a human must act to unblock you            → Needs You
   done      delivered; nothing stalled, review at leisure → Done
   dormant   a machine wakes you — name the wake in the text → Dormant
 done and dormant cover exactly the turn that declares them: after the next
-wake, declare again or the session returns to Needs Input.
+wake, declare again or the session returns to Needs You.
 
 Examples:
   cast state --status dormant "Waiting on CI run 8841 — tr-42 re-checks at 3pm"
@@ -405,7 +405,7 @@ After every turn a review reads the goal and what the turn's tools showed
 (command output, test results, file contents; never what the agent says about
 it) and answers: met, continue with the next step, blocked on the person, or
 paused. Continue sends the next step into the session; met and blocked stop
-the loop and pin the outcome (blocked files the session under Needs Input).
+the loop and pin the outcome (blocked files the session under Needs You).
 It stops on its own at 50 rounds, 3 rounds without progress, or 30 minutes
 with nothing happening. The composer's /goal and the goal bar above it write
 the same goal. (cast goal is the company's goals; this is one session's.)
