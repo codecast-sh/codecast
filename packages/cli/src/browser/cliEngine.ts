@@ -28,9 +28,9 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import {
-  ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, isPaneSession, isRealSession,
+  ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, ownerOfSessionKey, requestTabName, tabNameOf, engineTabs, engineVersion, ensureEngine, findEngine, isPaneSession, isRealSession,
   parseEngineJson, realSessionKey, runEngine, runEngineJson, type EngineRun,
 } from "./engine.js";
 import { engineBrowserFor, isPaneMode, isRealMode, realModeHint, requireRealBridge, splitTargetFlags, walledOffFromExtension } from "./bridge/real.js";
@@ -41,7 +41,7 @@ import { currentSession } from "@platform/cli-kit/subscribe";
 import { bridgeEndpoint, grantTab, requestBrowserProfile } from "./bridge/host.js";
 import { readCdpJson, listTargets, type CdpEndpoint } from "./cdp.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
-import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans, scanLiveOwners, withEndedSession } from "./engineReap.js";
+import { closeSessionTab, describeReap, detachSessionDaemon, listEngineSessions, reapEngineOrphans, scanLiveOwners, withEndedSession } from "./engineReap.js";
 import { engineSnapshotJson, type EngineSnapshotPayload, matchRefs, nearMatches, ordinal, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
 import { type EngineRef, parseEngineRefs, rankByVisibility, withOrdinals } from "./engineRefs.js";
 import {
@@ -68,9 +68,10 @@ import { focusBrowserTabBlocking } from "./focusHttp.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
 import { registerAuditCommand } from "./auditCommand.js";
 import { autoShotsEnabled, clearAutoShots, isMutatingStep, maybeAutoShot, setAutoShots, type AutoShotSource } from "./autoShot.js";
-import { tabFooterLines, TAB_AFFECTING_VERBS, TAB_CLEANUP_NOTE } from "./tabFooter.js";
+import { opensATab, tabFooterLines, TAB_AFFECTING_VERBS, TAB_CLEANUP_NOTE } from "./tabFooter.js";
 import { tokenize } from "./batch.js";
-import { evalInPage, grantPermissions, type PageCtx } from "./pageEval.js";
+import { armVerbDeadline, deadlineSeconds, DEADLINE_ENV, DEFAULT_DEADLINE_S, setStage } from "./deadline.js";
+import { captureFullPage, evalInPage, grantPermissions, type PageCtx } from "./pageEval.js";
 import { ownerKey } from "./owner.js";
 import { runBrowserSync, DEFAULT_SYNC_WAIT_S } from "./sync.js";
 import { cloudHostSignInHint } from "../cloud/browserSync.js";
@@ -163,6 +164,7 @@ async function ctx(choice: TargetChoice = {}): Promise<Ctx> {
   }
   if (!isRealMode(choice, owner)) return { session };
   try {
+    setStage("connecting to the human's Chrome through the extension");
     return await engineBrowserFor(realSessionKey(session), await requireRealBridge());
   } catch (err) {
     die((err as Error).message);
@@ -279,6 +281,7 @@ const PASSTHROUGH: Array<{ verb: string; engine?: string; args: string; desc: st
  *  generated help so it documents the command an agent actually runs. */
 const CAST_HELP_EXTRAS = `Cast additions:
   #e42 and @e42 both work as element refs (they come from \`cast browser snapshot\`)
+  --tab <name>   A tab of your own under this name: parallel workers sharing one session each pass one
   --no-shot      Skip the automatic screenshot after a page-changing command
   --no-capture   Skip the failure context (console, network, screenshot) when a step fails`;
 
@@ -315,9 +318,14 @@ export function verbHelp(p: { verb: string; engine?: string; desc: string }): st
       `(run \`cast browser start\` once to install the engine — the per-flag help comes from it)\n\n${CAST_HELP_EXTRAS}`
     );
   }
-  const body = raw
-    .replace(/\bagent-browser\b/g, "cast browser")
-    .replace(new RegExp(`\\bcast browser ${engineVerb}\\b`, "g"), `cast browser ${p.verb}`);
+  const body = castVoice(raw)
+    .replace(new RegExp(`\\bcast browser ${engineVerb}\\b`, "g"), `cast browser ${p.verb}`)
+    // cast picks the engine session itself (one per agent session); the
+    // engine's own --session would point a verb at another agent's tab.
+    // `--pin-tab` likewise: cast pins every session to its own tab already,
+    // and recovers a closed one itself.
+    .replace(/^[ \t]*--(?:session <name>|pin-tab\b).*\n?/gm, "")
+    .replace(/\n[^\n]*remembers its active tab[\s\S]*?--no-pin-tab[^\n]*\n/, "");
   return `${body}\n\n${CAST_HELP_EXTRAS}`;
 }
 
@@ -332,6 +340,72 @@ const VIEWPORTS: Record<string, [number, number]> = {
   "mobile-small": [320, 568],
 };
 const MOBILE_PRESETS = new Set(["tablet", "mobile", "mobile-small"]);
+
+/**
+ * A viewport argument as a width and height: a preset, `WxH` (also `W*H`,
+ * `W,H`), or a bare width, which takes a preset's height when one has that
+ * width and 900 otherwise. Null when it is none of those. Pure.
+ */
+export function parseViewportSize(size: string): { width: number; height: number; preset?: string } | null {
+  const preset = VIEWPORTS[size];
+  if (preset) return { width: preset[0], height: preset[1], preset: size };
+  const explicit = /^(\d{2,5})\s*[x×*,]\s*(\d{2,5})$/i.exec(size.trim());
+  if (explicit) return { width: parseInt(explicit[1]!, 10), height: parseInt(explicit[2]!, 10) };
+  if (/^\d{2,5}$/.test(size.trim())) {
+    const width = parseInt(size, 10);
+    const match = Object.values(VIEWPORTS).find(([w]) => w === width);
+    return { width, height: match ? match[1] : 900 };
+  }
+  return null;
+}
+
+/** Where a size asked for before any page is open waits for the next `open`. */
+function pendingViewportPath(session: string): string {
+  return path.join(engineHome(), "sessions", session, "viewport");
+}
+
+/**
+ * `viewport <size>`, for the command and for a `do` step alike. With no page
+ * open yet, the size is kept and the next `open` applies it, rather than
+ * failing and leaving every later screenshot at the default size.
+ */
+async function setViewport(size: string, c: Ctx): Promise<{ ok: true; lines: string[] } | { ok: false; message: string; hint?: string }> {
+  const parsed = size === "reset" ? { width: 1440, height: 900 } : parseViewportSize(size);
+  if (!parsed) return { ok: false, message: `unknown size '${size}'`, hint: `use a preset (${Object.keys(VIEWPORTS).join(", ")}), WxH like 1440x900, or a width like 1440` };
+  const { width, height } = parsed;
+  const label = size === "reset" ? "viewport reset" : `${parsed.preset ? `${parsed.preset}: ` : ""}${width}x${height}`;
+  const pinned = await ensurePinnedTab(c.session).then(() => null, (err: Error) => err);
+  if (pinned && !/no open page/.test(pinned.message)) return { ok: false, message: pinned.message };
+  if (pinned) {
+    const file = pendingViewportPath(c.session);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${width} ${height}`);
+    return { ok: true, lines: [`${OK} ${label}, applied when \`cast browser open\` opens this session's page`] };
+  }
+  const res = runEngine(["set", "viewport", String(width), String(height)], c);
+  if (res.status !== 0) return { ok: false, message: castVoice((res.stderr || res.stdout).trim().split("\n")[0] || "could not resize") };
+  const lines = [`${OK} ${label}`];
+  // Say it plainly: a "mobile" page that is secretly non-touch can show a
+  // hover menu no real phone would ever render.
+  if (parsed.preset && MOBILE_PRESETS.has(parsed.preset)) lines.push(fmt.muted("  (size only — touch is not emulated, so hover-only menus still open)"));
+  return { ok: true, lines };
+}
+
+/** The size a `viewport` before the first `open` asked for, applied now that
+ *  the tab exists. A courtesy: the open goes on whatever happens. */
+function applyPendingViewport(c: Ctx): void {
+  const file = pendingViewportPath(c.session);
+  let size: string;
+  try {
+    size = fs.readFileSync(file, "utf-8").trim();
+  } catch {
+    return;
+  }
+  fs.rmSync(file, { force: true });
+  const [w, h] = size.split(/\s+/);
+  if (w && h) runEngine(["set", "viewport", w, h], c);
+}
+
 
 /** The calling codecast session, for the audit trail — same key the built-in
  *  driver stamps, so `cast browser audit` reads one trail whichever engine drove. */
@@ -421,6 +495,19 @@ export interface EngineCall {
   args: string[];
 }
 
+/** `tab ls` and `tab rm <id>`, the shell spellings, in the engine's words.
+ *  Unmapped, the engine reads `ls` as a tab label and fails. */
+export function normalizeTabArgs(args: string[]): string[] {
+  const op = ({ ls: "list", rm: "close" } as Record<string, string>)[args[0] ?? ""];
+  return op ? [op, ...args.slice(1)] : args;
+}
+
+/** Engine text in cast's words: its messages name its own binary
+ *  ("run `agent-browser tab`"), which agents must never run. */
+export function castVoice(text: string): string {
+  return text.replace(/\bagent-browser\b/g, "cast browser");
+}
+
 /**
  * One command in our vocabulary → the engine command lines that carry it out.
  * Pure, so it is testable without a browser. `lastFind` is what a bare action
@@ -436,6 +523,7 @@ export function translate(verb: string, args: string[], lastFind: string | null)
   // `tab switch <ref>` is the footer's wording; the engine switches on a bare
   // `tab <ref>` and reads `switch` as a tab label.
   if (verb === "tab" && a[0] === "switch") return [{ args: ["tab", ...a.slice(1)] }];
+  if (verb === "tab") a = normalizeTabArgs(a);
 
   if (verb === "scroll") {
     // `scroll 800` / `scroll -800` / `scroll --up 400` → `scroll down|up 800`
@@ -602,6 +690,8 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
   // Whichever browser this verb drives is the one the watch stream follows.
   touchBoundTarget(session);
 
+  if (verb === "tab") args = normalizeTabArgs(args);
+  if (verb === "tab" && opensATab(verb, args, false)) openedTab = true;
   if (verb === "tab" && real) {
     const ref = args[/^(close|switch)$/.test(args[0] ?? "") ? 1 : 0];
     if (ref && /^[0-9a-f]{8}$/i.test(ref)) await grantTab(await requireRealBridge(), session, ref.toUpperCase());
@@ -628,7 +718,9 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     // The pre-action hook ran before the browser existed on a cold start;
     // now that it does, bind this session's tab quietly (pinnedTab.ts).
     const created = await ensurePinnedTab(session, url && (/^[a-z]+:/i.test(url) ? url : `https://${url}`));
+    if (opensATab(verb, args, created)) openedTab = true;
     if (created) args = args.filter((arg) => arg !== "--new-tab");
+    applyPendingViewport(o);
     // Your logins for this site, as your real Chrome holds them right now —
     // the clone the browser started from may be hours old (credentials.ts).
     if (url && !real && !pane) await carryLogins(url);
@@ -678,6 +770,7 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
   const verbStarted = Date.now();
   let retried = false;
   let retriedStall = false;
+  let retriedAttach = false;
   for (let i = 0; i < calls.length; i++) {
     const call = calls[i];
     // A snapshot is read until it describes one settled page (snapshotSettle.ts),
@@ -724,6 +817,26 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
         res = { ...res, stderr: `this session's tab is gone — \`cast browser open <url>\` starts a new one\n`, stdout: "" };
       }
     }
+    // Chrome refused to attach to this session's tab (Target.attachToTarget:
+    // "Cannot attach to this target"). The engine never reached the page, so
+    // running again repeats nothing. An `open` does what `stop` then `open`
+    // did by hand: close the tab and start on a fresh one. Any other verb lets
+    // the daemon go and attaches again once, keeping the page it was on.
+    if (res.status !== 0 && !retriedAttach && isUnattachableTab(res.stderr + res.stdout)) {
+      retriedAttach = true;
+      const opening = call.args[0] === "open";
+      if (opening) {
+        await closeSessionTab(session).catch(() => false);
+        const url = call.args.slice(1).find((a) => a && !a.startsWith("-"));
+        if (url) await ensurePinnedTab(session, /^[a-z]+:/i.test(url) ? url : `https://${url}`).then((made) => { if (made) openedTab = true; }, () => false);
+      } else {
+        detachSessionDaemon(session);
+      }
+      res = await runEngine(call.args, { ...o, narrate: engineStepLabel(verb, call.args) });
+      if (res.status !== 0 && isUnattachableTab(res.stderr + res.stdout)) {
+        res = { ...res, stdout: "", stderr: `${UNATTACHABLE_NOTE}\n` };
+      }
+    }
     // The bridge stalled before the verb reached the page: the extension's
     // process was not scheduled. Once, after a pause, the same verb again;
     // the human should see a slow command, not a failed one.
@@ -752,6 +865,7 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     if (res.status === 0 && call.args[0] === "network" && call.args[1] === "har" && call.args[2] === "stop") {
       res = { ...res, stdout: res.stdout + redactHarNote(call.args.slice(3), res.stdout) };
     }
+    res = { ...res, stdout: castVoice(res.stdout), stderr: castVoice(res.stderr) };
     if (res.stdout) process.stdout.write(res.stdout);
     if (res.stderr) process.stderr.write(res.stderr);
     if (res.status !== 0) {
@@ -866,6 +980,13 @@ async function useVaultSignin(url: string, bridge?: CdpEndpoint): Promise<void> 
   }
 }
 
+/** The budget each verb, and each `do` step, gets (deadline.ts). */
+let verbDeadlineS = DEFAULT_DEADLINE_S;
+
+/** This process opened a tab (a first `open`, or `--new-tab`): the cleanup
+ *  reminder prints once, there, rather than after every verb. */
+let openedTab = false;
+
 /** Appended to a tab line when the tab is in the human's real Chrome. */
 export const REAL_TAB_NOTE = " (real Chrome, via the extension)";
 
@@ -880,7 +1001,7 @@ function printFooter(o: Ctx, verb: string, owner: string | null): void {
   if (lines.length && isRealSession(o.session)) lines[lines.length - 1] += fmt.muted(REAL_TAB_NOTE);
   if (lines.length && isPaneSession(o.session)) lines[lines.length - 1] += fmt.muted(PANE_TAB_NOTE);
   for (const line of verb === "open" ? lines.slice(-1) : lines) console.log(line);
-  if (lines.length) console.log(fmt.muted(isPaneSession(o.session)
+  if (lines.length && openedTab) console.log(fmt.muted(isPaneSession(o.session)
     ? "  When finished: `cast browser stop` releases this session's control; the human's desktop pane stays open."
     : TAB_CLEANUP_NOTE));
   if (NAVIGATING_VERBS.has(verb)) {
@@ -1171,29 +1292,96 @@ function findLine(h: EngineRef): string {
   return label === h.name ? h.line : h.line.replace(/"[^"]*"/, JSON.stringify(label));
 }
 
+export interface ShotOptions {
+  /** Where to write; the positional path, -o/--out or --path. */
+  out?: string;
+  full?: boolean;
+  annotate?: boolean;
+  share?: boolean;
+  alt?: string;
+  inline?: boolean;
+  selector?: string;
+  json?: boolean;
+  format?: string;
+  quality?: string;
+}
+
+/** Flags `shot` reads, with the spellings agents reach for. A value-taking
+ *  flag maps to its option name; a bare one to true. */
+const SHOT_FLAGS: Record<string, { key: keyof ShotOptions; value: boolean }> = {
+  "-o": { key: "out", value: true }, "--out": { key: "out", value: true }, "--path": { key: "out", value: true },
+  "-s": { key: "selector", value: true }, "--selector": { key: "selector", value: true }, "--ref": { key: "selector", value: true },
+  "--full": { key: "full", value: false }, "--full-page": { key: "full", value: false },
+  "--annotate": { key: "annotate", value: false }, "--json": { key: "json", value: false }, "--share": { key: "share", value: false },
+  "--alt": { key: "alt", value: true }, "--format": { key: "format", value: true }, "--quality": { key: "quality", value: true },
+};
+
+/**
+ * A `shot` command line (a `do` step, or what commander left unparsed) as
+ * options. A flag `shot` does not have is refused, never passed on: the engine
+ * read a stray `--out` as a selector and failed with "Element not found: --out".
+ * Pure, so it is testable without a browser.
+ */
+export function parseShotArgs(args: readonly string[]): { opts: ShotOptions } | { error: string; hint: string } {
+  const opts: Record<string, unknown> = {};
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const raw = args[i]!;
+    if (raw === "--no-inline") { opts.inline = false; continue; }
+    if (raw === "--no-shot" || raw === "--no-capture") continue;
+    if (!raw.startsWith("-") || raw === "-") { positional.push(raw); continue; }
+    const [flag, inline] = raw.includes("=") ? [raw.slice(0, raw.indexOf("=")), raw.slice(raw.indexOf("=") + 1)] : [raw, undefined];
+    const spec = SHOT_FLAGS[flag!];
+    if (!spec) {
+      return {
+        error: `shot has no ${flag} flag`,
+        hint: "write to a file with a path or -o: cast browser shot /tmp/page.png (--full for the whole page, -s <sel> for one element)",
+      };
+    }
+    if (!spec.value) { opts[spec.key] = true; continue; }
+    const value = inline ?? args[++i];
+    if (value === undefined) return { error: `${flag} needs a value`, hint: "cast browser shot -o /tmp/page.png" };
+    opts[spec.key] = value;
+  }
+  if (positional.length > 1) return { error: `shot takes one path, got ${positional.join(" ")}`, hint: "one element is -s <sel>: cast browser shot -s \"#pricing\" /tmp/pricing.png" };
+  if (positional[0] && opts.out) return { error: `two paths: ${positional[0]} and ${String(opts.out)}`, hint: "give the path once" };
+  if (positional[0]) opts.out = positional[0];
+  return { opts: opts as ShotOptions };
+}
+
 /** `shot`: screenshot to a file, inline in the conversation, optionally shared. */
-async function takeShot(
-  pathArg: string | undefined,
-  o: { full?: boolean; annotate?: boolean; share?: boolean; alt?: string; inline?: boolean; selector?: string; json?: boolean; extra?: string[] },
-  c: Ctx,
-  deps: PublishDeps,
-): Promise<string> {
-  const out = pathArg ?? defaultShotPath();
+async function takeShot(o: ShotOptions, c: Ctx, deps: PublishDeps): Promise<string> {
+  // The engine daemon writes a relative path against its own working
+  // directory, not the agent's: resolve it here, where the agent is.
+  const out = o.out ? path.resolve(o.out) : defaultShotPath();
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  const extra = [...(o.extra ?? [])];
-  if (o.full) extra.push("--full-page");
+  const extra: string[] = [];
+  if (o.full) extra.push("--full");
   if (o.annotate) extra.push("--annotate");
   if (o.json) extra.push("--json");
+  if (o.format) extra.push("--screenshot-format", o.format);
+  if (o.quality) extra.push("--screenshot-quality", o.quality);
   // The engine's screenshot takes `[selector] [path]`: a selector (or ref)
   // clips the capture to that element — one region readable at full size,
   // no post-hoc cropping.
   const target = o.selector ? [engineRef(quoteAttrValues(o.selector))] : [];
   const res = await runEngine(["screenshot", ...target, out, ...extra], { ...c, narrate: "taking a screenshot" });
   if (res.status !== 0) {
-    die((res.stderr || res.stdout).trim().split("\n")[0] || "the screenshot failed");
+    die(castVoice((res.stderr || res.stdout).trim().split("\n")[0] || "the screenshot failed"));
   }
-  if (!fs.existsSync(out)) die(`the engine reported success but wrote no file at ${out}`);
-  if (!pathArg) secureTempFile(out);
+  if (!fs.existsSync(out) && o.full && !o.selector) {
+    // Over the extension bridge the engine's full-page capture reports
+    // success and writes nothing. CDP's captureBeyondViewport does the same
+    // job; if that fails too, a viewport shot beats no picture.
+    const page = await captureFullPage(c);
+    if ("png" in page) fs.writeFileSync(out, page.png);
+    else {
+      const viewport = await runEngine(["screenshot", out, ...extra.filter((x) => x !== "--full")], { ...c, narrate: "taking a screenshot" });
+      if (viewport.status === 0 && fs.existsSync(out)) console.log(`${fmt.warning("!")} the whole-page capture failed (${page.error}); this is the viewport only`);
+    }
+  }
+  if (!fs.existsSync(out)) die(`the engine reported success but wrote no file at ${out}`, "try again without --full, or with -s <sel> for one region");
+  if (!o.out) secureTempFile(out);
   if (o.json) {
     const payload = parseEngineJson<{ annotations?: unknown }>(res);
     const ratio = await runEngine(["eval", "devicePixelRatio", "--json"], { ...c, narrate: "reading screenshot scale" });
@@ -1297,6 +1485,8 @@ async function runFlow(
     const args = [...rest, ...flowFlags];
     if (i !== lastShot && !args.includes("--no-shot")) args.push("--no-shot");
     if (!verb) continue;
+    // Each step gets the whole budget, so a long flow is bounded step by step.
+    armVerbDeadline(verb, verbDeadlineS);
     let ok = true;
     console.log(`${fmt.highlight("›")} ${raw}`);
     try {
@@ -1304,16 +1494,20 @@ async function runFlow(
       // the real Chrome cannot take fails here, before anything touches it.
       const refused = cloneOnlyRefusal(verb, isRealSession(c.session));
       if (refused) throw new Error(`${refused.message} (${refused.hint})`);
-      if (verb !== "open" && verb !== "tab") await ensurePinnedTab(c.session);
+      if (verb !== "open" && verb !== "tab" && verb !== "viewport") await ensurePinnedTab(c.session);
       if (verb === "shot") {
-        const si = args.findIndex((a) => a === "-s" || a === "--selector");
-        const selector = si >= 0 ? args[si + 1] : undefined;
-        const rest = si >= 0 ? args.filter((_, j) => j !== si && j !== si + 1) : args;
-        await takeShot(rest.find((a) => !a.startsWith("--")), { full: args.includes("--full"), annotate: args.includes("--annotate"), json: args.includes("--json"), selector }, c, deps);
+        const shot = parseShotArgs(args);
+        if ("error" in shot) throw new Error(`${shot.error} (${shot.hint})`);
+        await takeShot(shot.opts, c, deps);
+      } else if (verb === "viewport") {
+        const sizeArgs = rest.filter((a) => !a.startsWith("--"));
+        const r = await setViewport(rest.includes("--reset") ? "reset" : sizeArgs.join("x"), c);
+        if (!r.ok) throw new Error(r.hint ? `${r.message} (${r.hint})` : r.message);
+        for (const line of r.lines) console.log(line);
       } else if (verb === "eval") {
         const script = readEvalScript(rest, null);
         const out = await evalInPage(script, c);
-        console.log(out.output);
+        console.log(rest.includes("--json") ? out.output : out.display ?? out.output);
         if (!out.ok) throw new Error(out.hint ?? "eval failed");
       } else if (verb === "find") {
         // The query is the step's own words — flow-level flags are not part
@@ -1342,6 +1536,16 @@ async function runFlow(
   return failed ? 1 : 0;
 }
 
+/** Chrome refused the debugger on this session's tab. */
+export function isUnattachableTab(output: string): boolean {
+  return /Cannot attach to this target/i.test(output);
+}
+
+/** What to do when Chrome still refuses after the one retry. */
+export const UNATTACHABLE_NOTE =
+  "Chrome would not let this session attach to its tab, even on a retry (DevTools or another debugger on the tab, or a tab mid-close). " +
+  "`cast browser stop`, then `cast browser open <url>` starts on a fresh tab; `cast browser extension status` checks the connection.";
+
 /** The engine's one-line verdict, for failure classification. */
 export function engineFailureMessage(stderr: string, stdout: string): string {
   const lines = `${stderr}\n${stdout}`.split("\n").map((l) => l.replace(/^\s*[✗×x]\s*/, "").trim()).filter(Boolean);
@@ -1351,6 +1555,17 @@ export function engineFailureMessage(stderr: string, stdout: string): string {
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
+
+/** Flags agents write for "screenshot this element", which `shot` spells -s/--selector. */
+const SHOT_ELEMENT_FLAGS = new Set(["--element", "--el", "--sel", "--target", "--clip", "--css"]);
+
+/** A flag that names one element is the agent reaching for -s; passed on, its
+ *  value would be read as the output path and the whole page shot. Checked
+ *  before a tab is pinned, so the fix is the first thing the agent reads. */
+function refuseMisnamedShotFlag(args: readonly unknown[]): void {
+  const misnamed = args.find((a): a is string => typeof a === "string" && SHOT_ELEMENT_FLAGS.has(a.split("=")[0]!));
+  if (misnamed) die(`shot has no ${misnamed.split("=")[0]} flag`, `screenshot one element with -s: cast browser shot -s "#pricing" (a CSS selector or a #eNN ref)`);
+}
 
 export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   registerAdvancedClone(br, (program) => registerEngineCommands(program.command("browser"), deps));
@@ -1377,13 +1592,36 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   // and a clone-only verb asked for the real Chrome dies in ctxFor before a
   // tab is pinned in a browser it will then refuse.
   // `pane` offers a page to the reader over the backend and never opens a tab.
-  const NO_TAB_NEEDED = new Set(["open", "do", "status", "tab", "tabs", "start", "stop", "reap", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane", "unsubscribe", "subscriptions", "subscription", "handoff"]);
-  br.hook("preAction", async (_thisCommand, actionCommand) => {
+  const NO_TAB_NEEDED = new Set(["open", "do", "viewport", "status", "tab", "tabs", "start", "stop", "reap", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane", "unsubscribe", "subscriptions", "subscription", "handoff"]);
+  br.option("--tab <name>", "A tab of your own under this name, for parallel workers sharing one session (or CAST_BROWSER_TAB)")
+    .addOption(new Option("--session <name>", "Same as --tab").hideHelp())
+    .option("--deadline <seconds>", `Give up on a verb after this long, naming what it waited on (default ${DEFAULT_DEADLINE_S}, 0 for none; or ${DEADLINE_ENV})`);
+  br.hook("preAction", async (thisCommand, actionCommand) => {
     const verb = actionCommand.name();
     // `--browser <id>` parsed by commander (targetFlags); passthrough verbs carry it raw (splitTargetFlags).
-    const browser = (actionCommand.opts() as { browser?: string }).browser;
-    if (browser) requestBrowserProfile(browser);
-    splitTargetFlags(actionCommand.args);
+    // `--tab`, `--session` and `--deadline` belong to `browser` itself, which
+    // reads them anywhere on the line, before or after the verb.
+    const opts = actionCommand.opts() as { browser?: string };
+    const parent = thisCommand.opts() as { tab?: string; session?: string; deadline?: string };
+    const seconds = deadlineSeconds(parent.deadline);
+    if (seconds === null) die(`--deadline takes seconds, not '${parent.deadline ?? process.env[DEADLINE_ENV]}'`, "cast browser --deadline 180 open <url>  (0 for none)");
+    verbDeadlineS = seconds;
+    // Direct verbs, and the connection check; other groups (extension setup
+    // waits for the human's Pair click) bound their own waits.
+    const bounded = actionCommand.parent === br || (verb === "status" && actionCommand.parent?.name() === "extension");
+    if (bounded) armVerbDeadline(verb, seconds);
+    if (opts.browser) requestBrowserProfile(opts.browser);
+    try {
+      requestTabName(parent.tab ?? parent.session);
+      splitTargetFlags(actionCommand.args);
+    } catch (err) {
+      die((err as Error).message);
+    }
+    if (verb === "shot") {
+      refuseMisnamedShotFlag(actionCommand.args);
+      const parsed = parseShotArgs(actionCommand.args.filter((a): a is string => typeof a === "string"));
+      if ("error" in parsed) die(parsed.error, parsed.hint);
+    }
     if (NO_TAB_NEEDED.has(verb) || actionCommand.parent !== br || actionCommand.args.some((arg) => arg === "--help" || arg === "-h")) return;
     try {
       await ensurePinnedTab((await ctxFor(verb, targetChoiceOf(actionCommand))).session);
@@ -1432,7 +1670,15 @@ The cheap-browsing loop — scope reads instead of dumping whole pages:
   diff snapshot            only what changed since your last snapshot
   wait --text/--url/--fn   wait for the state you mean, not a fixed delay
   eval                     JavaScript in the page; promises are awaited (--stdin heredoc, --file <path>)
-  shot -s <sel>            screenshot ONE element (--annotate numbers refs on a full shot)
+  shot -s <sel>            screenshot ONE element (--annotate numbers refs on a full shot;
+                           --share prints a link to paste elsewhere)
+
+When the human must act on the page, or you wait on it (both return at once; end your turn):
+
+  handoff "<step>"         a card on this tab with Continue (a sign-in, a code, a captcha);
+                           wakes this session when they press it (--show also raises the tab)
+  subscribe --signed-in    wake when the tab leaves its sign-in page; or --text <t>, --url <glob>,
+                           --selector <css>, --change, or a plain description a model judges
 
 The human's Chrome is always the default, including before pairing and after restarts:
 
@@ -1440,8 +1686,8 @@ The human's Chrome is always the default, including before pairing and after res
   target real              restore this session to the human's Chrome
   start                    connect to the extension; never silently launches a separate Chrome
   status / tabs            inspect without creating a tab; page actions need an open URL first
-  show                     bring this session's tab to the front of the human's screen — only when
-                           they asked to see it or must act in it themselves (a sign-in, a prompt)
+  show                     bring this session's tab to the front, only when the human asked to
+                           see it (for a step they must do, use handoff)
   open <url>               a tab of its own there, in the "Cast" tab group;
                            created directly at the URL, without a blank setup tab;
                            act only on tabs you opened. Needs the extension paired once by
@@ -1472,9 +1718,14 @@ The human's Chrome is always the default, including before pairing and after res
   // -------------------------------------------------------------- screenshots
 
   targetFlags(br.command("shot [pathArg]"))
+    .alias("screenshot")
     .description("Screenshot the page — appears inline in this conversation (--annotate labels refs on it, -s clips to one element)")
+    .option("-o, --out <path>", "Where to write the image (same as the positional path; --path works too)")
     .option("-s, --selector <sel>", "Screenshot just this element (CSS selector or #eNN ref)")
-    .option("--full", "Whole scroll height, not just the viewport")
+    .option("--ref <ref>", "Same as -s")
+    .option("--full", "Whole scroll height, not just the viewport (--full-page works too)")
+    .option("--format <fmt>", "png (default) or jpeg")
+    .option("--quality <n>", "JPEG quality, 0-100")
     .option("--annotate", "Number every interactive element on the image; each [N] label is snapshot ref #eN, with a legend")
     .option("--share", "Also upload it and print a link you can paste elsewhere")
     .option("--alt <text>", "Caption for the shared image — say what it shows")
@@ -1482,11 +1733,14 @@ The human's Chrome is always the default, including before pairing and after res
     .option("--json", "Print file metadata as JSON, without image bytes")
     .allowUnknownOption(true)
     .action(async (pathArg: string | undefined, o: any, cmd: any) => {
-      // Anything we do not recognise belongs to the engine, not to us. Only
-      // valueless flags can pass this way: commander cannot know an unknown
-      // flag takes a value, so it would misread the value as the path.
-      const extra = (cmd.args ?? []).filter((a: unknown) => typeof a === "string" && a.startsWith("--"));
-      await takeShot(pathArg, { ...o, extra }, await ctx(o), deps);
+      // What commander left over: the aliases it does not declare (--path,
+      // --full-page) and anything `shot` lacks, which parseShotArgs refuses.
+      const more = parseShotArgs(((cmd.args ?? []) as unknown[]).filter((a): a is string => typeof a === "string"));
+      if ("error" in more) die(more.error, more.hint);
+      const out = more.opts.out ?? pathArg;
+      if (o.out && out && o.out !== out) die(`two paths: ${out} and ${o.out}`, "give the path once");
+      const opts: ShotOptions = { ...o, ...more.opts, out: o.out ?? out, selector: o.selector ?? o.ref ?? more.opts.selector, full: o.full || more.opts.full };
+      await takeShot(opts, await ctx(o), deps);
     });
 
   targetFlags(br.command("do [steps...]"))
@@ -1537,7 +1791,7 @@ frames are superseded before anyone reads them.`,
   // they have already read into their context.
 
   targetFlags(br.command("show"))
-    .description("Bring this session's tab to the front of the human's screen — only when they asked to see the page, or must act in it themselves")
+    .description("Bring this session's tab to the front of the human's screen, only when they asked to see the page (a step they must do on it is `handoff`)")
     .action(async (o: TargetChoice) => {
       process.exit(await showToPerson(o));
     });
@@ -1585,7 +1839,9 @@ frames are superseded before anyone reads them.`,
         if (!tabs.length) console.log(fmt.muted("  no agent tabs in your Chrome"));
         for (const t of tabs) {
           const mine = (t.sessions ?? []).includes(c.session);
-          const who = mine ? "this session" : (t.sessions ?? []).join(", ") || "no session";
+          // A named tab (--tab) of this same agent: its own tab, still this agent's.
+          const sibling = (t.sessions ?? []).find((sid) => ownerOfSessionKey(sid) === ownerOfSessionKey(c.session));
+          const who = mine ? "this session" : sibling ? `this agent's tab ${tabNameOf(sibling) ?? "(default)"}` : (t.sessions ?? []).join(", ") || "no session";
           console.log(`  ${mine ? "*" : "~"} [${t.id}] ${t.title || t.url} - ${t.url}  ${fmt.muted(who)}`);
         }
         console.log(fmt.muted("  * = this session's, ~ = another agent's — `cast browser tab switch <id>` shares one with this session; the human's own tabs are never listed"));
@@ -1640,8 +1896,11 @@ Options:
   --file, -f <p>    Read the script from a file
   -b, --base64 <s>  Script as base64 (rarely needed now — heredocs work)
   --timeout <ms>    How long an awaited promise may take (default 15000)
+  --json            Print the value JSON-encoded exactly (a string comes quoted)
 
-A script that throws prints the page's exception and exits 1.`;
+A string prints as itself, newlines and quotes intact, so there is no need to
+wrap a result in JSON.stringify; other values print as JSON. A script that
+throws prints the page's exception and exits 1.`;
 
   const evalCmd = br.command("eval [script...]")
     .description("Run JavaScript in the page — promises are awaited (--stdin heredoc, --file <path>)")
@@ -1668,6 +1927,8 @@ A script that throws prints the page's exception and exits 1.`;
       }
       const ti = scriptArgs.findIndex((a) => a === "--timeout");
       const timeout = ti >= 0 ? parseInt(scriptArgs[ti + 1] ?? "", 10) || 15_000 : 15_000;
+      // A script given longer than the budget keeps its own limit.
+      if (verbDeadlineS > 0 && timeout / 1000 + 30 > verbDeadlineS) armVerbDeadline("eval", Math.ceil(timeout / 1000) + 30);
       const rest = ti >= 0 ? scriptArgs.filter((_, i) => i !== ti && i !== ti + 1) : scriptArgs;
       let script: string;
       try {
@@ -1676,7 +1937,7 @@ A script that throws prints the page's exception and exits 1.`;
         die((err as Error).message);
       }
       const out = await evalInPage(script, c, timeout);
-      console.log(out.output);
+      console.log(rest.includes("--json") ? out.output : out.display ?? out.output);
       if (!out.ok && out.hint) console.log(fmt.muted(`  ${out.hint}`));
       process.exit(out.ok ? 0 : 1);
     });
@@ -1711,35 +1972,31 @@ sessions' tabs).`,
       process.exit(out.ok ? 0 : 1);
     });
 
-  targetFlags(br.command("viewport [size]"))
+  targetFlags(br.command("viewport [size] [height]"))
     .description("Resize the page, or emulate a device: desktop, laptop, wide, tablet, mobile, mobile-small")
     .option("--reset", "Back to the default size")
-    .action(async (size: string | undefined, o: { reset?: boolean } & TargetChoice) => {
+    .addHelpText(
+      "after",
+      `
+  cast browser viewport 1440x900      # width x height in CSS pixels
+  cast browser viewport 390           # a width alone takes the matching preset's height, else 900
+  cast browser viewport mobile        # a preset
+  cast browser do "viewport 390x844" "open example.com" shot
+
+Before any page is open, the size is kept and applied by the next \`open\`.`,
+    )
+    .action(async (size: string | undefined, height: string | undefined, o: { reset?: boolean } & TargetChoice) => {
       const c = await ctx(o);
-      if (o.reset || size === "reset") {
-        runEngine(["set", "viewport", "1440", "900"], c);
-        return console.log(`${OK} viewport reset`);
-      }
-      if (!size) {
+      if (!size && !o.reset) {
+        await ensurePinnedTab(c.session).catch((err) => die((err as Error).message));
         const res = runEngine(["eval", "JSON.stringify([innerWidth,innerHeight,devicePixelRatio])"], c);
         console.log(res.stdout.trim());
         console.log(fmt.muted(`  presets: ${Object.keys(VIEWPORTS).join(", ")}  ·  or a size like 1024x768`));
         return;
       }
-      const preset = VIEWPORTS[size];
-      const explicit = /^(\d+)x(\d+)$/.exec(size);
-      if (!preset && !explicit) {
-        die(`unknown size '${size}'`, `use a preset (${Object.keys(VIEWPORTS).join(", ")}) or WxH like 1024x768`);
-      }
-      const [w, h] = preset ?? [parseInt(explicit![1], 10), parseInt(explicit![2], 10)];
-      const res = runEngine(["set", "viewport", String(w), String(h)], c);
-      if (res.status !== 0) die((res.stderr || res.stdout).trim().split("\n")[0] || "could not resize");
-      console.log(`${OK} ${size} — ${w}x${h}`);
-      if (preset && MOBILE_PRESETS.has(size)) {
-        // Say it plainly: a "mobile" page that is secretly non-touch can show a
-        // hover menu no real phone would ever render.
-        console.log(fmt.muted("  (size only — touch is not emulated, so hover-only menus still open)"));
-      }
+      const r = await setViewport(o.reset ? "reset" : [size, height].filter(Boolean).join("x"), c);
+      if (!r.ok) die(r.message, r.hint);
+      for (const line of r.lines) console.log(line);
     });
 
   br.command("dialogs")

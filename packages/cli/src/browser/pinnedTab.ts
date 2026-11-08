@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { CdpConnection, cdpHttpTimeout, listTargets, readCdpJson, type CdpEndpoint } from "./cdp.js";
 import {
-  baseSessionKey, engineSession, engineSessionKey, engineStateDir, isPaneSession, isRealSession,
+  baseSessionKey, engineSession, engineSessionKey, engineStateDir, isPaneSession, isRealSession, tabNameOf,
   paneSessionKey, realSessionKey,
 } from "./engine.js";
 import { liveDesktopPaneRegistry } from "./desktopPaneRegistry.js";
@@ -10,6 +10,7 @@ import { readState } from "./instance.js";
 import { bridgeEndpointIfConfigured } from "./bridge/real.js";
 import { grantTab, TabTakenBackError } from "./bridge/host.js";
 import { retryOnStall } from "./stall.js";
+import { setStage } from "./deadline.js";
 import { CAST_TAB_GROUP } from "./bridge/protocol.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import { OWNER_HARNESS_ENV } from "./owner.js";
@@ -128,6 +129,9 @@ export interface CastTab {
 export function tabHolderIsSelf(holder: string, session: string, env: NodeJS.ProcessEnv = process.env): boolean {
   if (holder === session) return true;
   if (baseSessionKey(holder) === baseSessionKey(session)) return true;
+  // A named tab (--tab) is its own: the agent's other tabs, and the older
+  // identities below, belong to its siblings and its parent.
+  if (tabNameOf(session) || tabNameOf(holder)) return false;
   const pane = env.TMUX_PANE;
   if (pane) {
     const paneKey = engineSessionKey(`pane:${paneOwnerId(pane, socketOfTmuxEnv(env.TMUX))}`);
@@ -204,6 +208,7 @@ async function reclaimCastTab(endpoint: CdpEndpoint, session: string, url: strin
 }
 
 export async function ensurePinnedTab(session = engineSession(), url?: string): Promise<boolean> {
+  setStage("checking this session's tab in Chrome");
   const browser = await pinnedTabBrowser(session);
   if (!browser) throw new Error("the browser is unavailable; no tab was opened");
   let bound = readBoundTarget(session);
@@ -264,6 +269,7 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
       conn.close();
     }
   };
+  setStage("opening this session's tab in Chrome (the extension creates it)");
   const r = await retryOnStall(create);
   if (!r?.targetId) throw new Error("the browser did not return the requested tab");
   writeBoundTarget(session, r.targetId, engineStateDir(), url);
