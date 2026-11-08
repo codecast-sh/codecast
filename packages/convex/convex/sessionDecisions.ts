@@ -2026,8 +2026,10 @@ export const answer = mutation({
 });
 
 // `cast decide show`: one decision with its document, for a role reading its
-// ladder or an agent re-reading its own ask.
-export const showForCli = mutation({
+// ladder or an agent re-reading its own ask. A pure read, so a query: as a
+// mutation it queued behind writes and re-ran on every write to the rows it
+// read (a category's agreement history), and `cast decide show` hung for minutes.
+export const showForCli = query({
   args: { api_token: v.string(), decision_id: v.string() },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
