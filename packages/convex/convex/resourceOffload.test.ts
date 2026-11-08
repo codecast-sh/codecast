@@ -66,7 +66,7 @@ test("stale resource evidence and duplicate selections cannot start a transfer",
     const report = (await ctx.db.query("machine_resources").collect())[0];
     await ctx.db.patch(report._id, { received_at: Date.now() - 300000 });
   });
-  await expect(authed.mutation(start, args)).rejects.toThrow("Refresh");
+  await expect(authed.mutation(start, args)).rejects.toThrow("The laptop last reported its resources 5 min ago");
 });
 
 test("live children and combined destination memory prevent unsafe bulk starts", async () => {

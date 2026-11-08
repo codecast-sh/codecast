@@ -53,7 +53,9 @@ export const start = mutation({
     const reports = await ctx.db.query("machine_resources").withIndex("by_user", q => q.eq("user_id", userId)).collect();
     const fresh = (r: typeof reports[number] | undefined) => r && now - r.received_at <= RESOURCE_STALE_MS && now - r.snapshot.sample.at <= RESOURCE_STALE_MS && r.snapshot.sample.at <= now + 30_000;
     const source = reports.find(r => r.device_id === args.source_device_id);
-    if (!fresh(source) || !source) return refuse("Refresh the laptop's resource measurements before moving sessions");
+    if (!fresh(source) || !source) return refuse(source
+      ? `The laptop last reported its resources ${Math.max(1, Math.round((now - Math.min(source.received_at, source.snapshot.sample.at)) / 60_000))} min ago; try again once it reports`
+      : "The laptop has not reported its resources yet; try again once it does");
     const checks = [];
     const groups = new Map<string, string[]>();
     const facts = await movabilityFacts(ctx, userId);

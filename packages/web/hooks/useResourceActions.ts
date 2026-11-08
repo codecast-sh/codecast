@@ -10,6 +10,7 @@ import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceO
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { captureError } from "../lib/analytics";
+import { serverErrorText } from "../lib/errorCause";
 import type { MigrationBatch } from "../lib/migrationPlan";
 import { useHibernationCommands } from "./useHibernationCommands";
 import type { OffloadPlan, OffloadSelection, ResourceActions, ResourceSession } from "../components/resources/types";
@@ -62,9 +63,12 @@ function report(surface: string) {
   return (e: unknown) => {
     const err = e instanceof Error ? e : new Error(String(e));
     captureError(err, { surface });
-    toast.error(err.message);
+    showError(serverErrorText(err));
   };
 }
+
+/** A preflight and the start it precedes fail for the same reason; one toast says it. */
+const showError = (text: string) => toast.error(text, { id: text });
 
 const clientBatchId = () => `rb_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
@@ -82,7 +86,7 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
   const sourceOf = (sel: OffloadSelection[]) => byId.get(sel[0]?.sessionId)?.deviceId;
   const start = (intent: ResourceOffloadIntent) => {
     useInboxStore.getState().startResourceOffload(intent)
-      .then((res: { error?: string } | undefined) => { if (res?.error) toast.error(res.error); })
+      .then((res: { error?: string } | undefined) => { if (res?.error) showError(res.error); })
       .catch(report("resources.start"));
   };
 

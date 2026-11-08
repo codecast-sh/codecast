@@ -24521,41 +24521,54 @@ async function collectResourceSnapshotNow(): Promise<void> {
     // outbound connection pool and file descriptors, starving the message-sync
     // mutations of sockets so they hang to their 60s timeout while the backend is
     // actually idle. A small worker pool caps in-flight metric requests so syncs
-    // always have headroom. Metrics are best-effort and unawaited per-call, so the
-    // pool just paces them across the tick.
-    let metricsReported = 0;
-    let metricsSkipped = 0;
-    if (syncServiceRef) {
-      const METRICS_CONCURRENCY = 4;
-      await runBounded([...resources.entries()], METRICS_CONCURRENCY, async ([sessionId, r]) => {
-        const agentPid = sessionProcessCache.get(sessionId)?.pid;
-        const status = lastSentAgentStatus.get(sessionId);
-        // Skip flat, idle, recently-reported sessions: this is what keeps the
-        // per-tick write burst proportional to ACTIVE sessions rather than the
-        // whole fleet, leaving socket headroom for message sync.
-        // Hold the previously reported start across ps's one-second
-        // resolution, so only a real restart changes the value we send.
-        const agentStartedAt = stableAgentStartedAt(r.agentStartedAt, lastReportedMetrics.get(sessionId)?.agentStartedAt);
-        if (!shouldReportMetrics({ cur: { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt }, prev: lastReportedMetrics.get(sessionId), status, now })) {
-          metricsSkipped++;
-          return;
-        }
-        metricsReported++;
-        lastReportedMetrics.set(sessionId, { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt, at: now });
-        await syncServiceRef!.reportSessionMetrics(
-          sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId), agentStartedAt,
-        ).catch(() => {});
-      }, "Metrics worker");
+    // always have headroom.
+    //
+    // The pool runs beside the tick, never inside it: under load these writes
+    // took most of a minute, and the tick's in-flight guard then held back the
+    // next machine report with them. A machine report older than
+    // RESOURCE_STALE_MS refuses every resource offload, which is the move an
+    // overloaded laptop needs (2026-11-08: ticks every 86s median, 22 of 50
+    // gaps over two minutes at load 600). A tick that finds the last pool still
+    // running skips its own; the next one reports the newer values.
+    if (syncServiceRef && !sessionMetricsInFlight) {
+      sessionMetricsInFlight = true;
+      void pushSessionMetrics(syncServiceRef, resources, now)
+        .catch((err) => log(`[RESOURCES] metrics push failed: ${String(err)}`, "debug"))
+        .finally(() => { sessionMetricsInFlight = false; });
     }
 
     await machineReport;
-
-    if (resources.size > 0) {
-      log(`[RESOURCES] metrics reported=${metricsReported} skipped=${metricsSkipped} (${resources.size} sessions)`);
-      log(`[RESOURCES] ${formatResourcesLog(resources)}`, "debug");
-    }
   } catch (err) {
     log(`[RESOURCES] Collection failed: ${err instanceof Error ? err.message : String(err)}`, "warn");
+  }
+}
+
+let sessionMetricsInFlight = false;
+async function pushSessionMetrics(sync: SyncService, resources: Map<string, SessionResources>, now: number): Promise<void> {
+  let metricsReported = 0;
+  let metricsSkipped = 0;
+  await runBounded([...resources.entries()], 4, async ([sessionId, r]) => {
+    const agentPid = sessionProcessCache.get(sessionId)?.pid;
+    const status = lastSentAgentStatus.get(sessionId);
+    // Skip flat, idle, recently-reported sessions: this is what keeps the
+    // per-tick write burst proportional to ACTIVE sessions rather than the
+    // whole fleet, leaving socket headroom for message sync.
+    // Hold the previously reported start across ps's one-second
+    // resolution, so only a real restart changes the value we send.
+    const agentStartedAt = stableAgentStartedAt(r.agentStartedAt, lastReportedMetrics.get(sessionId)?.agentStartedAt);
+    if (!shouldReportMetrics({ cur: { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt }, prev: lastReportedMetrics.get(sessionId), status, now })) {
+      metricsSkipped++;
+      return;
+    }
+    metricsReported++;
+    lastReportedMetrics.set(sessionId, { cpu: r.cpu, memory: r.memory, pidCount: r.pidCount, agentPid, agentStartedAt, at: now });
+    await sync.reportSessionMetrics(
+      sessionId, r.cpu, r.memory, r.pidCount, agentPid, sessionAwakeIdleMs.get(sessionId), agentStartedAt,
+    ).catch(() => {});
+  }, "Metrics worker");
+  if (resources.size > 0) {
+    log(`[RESOURCES] metrics reported=${metricsReported} skipped=${metricsSkipped} (${resources.size} sessions)`);
+    log(`[RESOURCES] ${formatResourcesLog(resources)}`, "debug");
   }
 }
 
