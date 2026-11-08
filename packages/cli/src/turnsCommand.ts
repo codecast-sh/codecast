@@ -37,7 +37,8 @@ export async function printTurnSnapshots(opts: {
   turn?: string;
   stat: boolean;
 }): Promise<void> {
-  const rows = await fetchTurnSnapshots(opts.conversationId);
+  // Prompt snapshots mark where a turn began (a rewind's boundary); the listing is of turns.
+  const rows = (await fetchTurnSnapshots(opts.conversationId)).filter((r) => r.source !== "prompt");
   if (!rows.length) {
     console.log("No turn snapshots for this session yet.");
     console.log(fmt.muted("The daemon records one at the end of every turn (cast 1.1.144 and later) and the sweep adds one every few minutes; a session that ran before that has none."));
