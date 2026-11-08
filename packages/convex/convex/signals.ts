@@ -1121,10 +1121,14 @@ function signalView(row: Doc<"signals">, task: Doc<"tasks"> | null) {
   };
 }
 
+/** One problem's findings come back whole up to this many: a line run reads all of them, and a cut list reads as the whole. */
+const TASK_SIGNALS_MAX = 2000;
+
 /**
- * `cast signal ls`: one cause's signals, one fingerprint's in the workspace
- * (however old, through its index), or the newest of the workspace or of one
- * project in it.
+ * `cast signal ls`: one cause's signals (all of them, with `total`), one
+ * fingerprint's in the workspace (however old, through its index), or the
+ * newest of the workspace or of one project in it (`more` when the limit cut
+ * the list).
  */
 export const listForCli = query({
   args: {
@@ -1137,7 +1141,9 @@ export const listForCli = query({
   },
   handler: async (ctx, args) => {
     const userId = await authed(ctx, args.api_token);
-    const limit = Math.min(Math.max(args.limit ?? 50, 1), 500);
+    const limit = args.task
+      ? Math.min(Math.max(args.limit ?? TASK_SIGNALS_MAX, 1), TASK_SIGNALS_MAX)
+      : Math.min(Math.max(args.limit ?? 50, 1), 500);
     const source = args.source?.trim().toLowerCase();
     let rows: Doc<"signals">[];
     if (args.task) {
@@ -1151,25 +1157,29 @@ export const listForCli = query({
         .query("signals")
         .withIndex("by_workspace_fingerprint", (q) => q.eq("workspace", db.workspaceKey).eq("fingerprint", fingerprint))
         .order("desc")
-        .take(source ? CANDIDATE_WINDOW : limit);
+        .take(source ? CANDIDATE_WINDOW : limit + 1);
     } else {
       const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
       const project = await resolveWorkspaceProject(ctx, db.workspaceKey, args.project);
       // A named source reads its own range: filtering a window of the workspace's newest found only its last hours.
       rows = source && !project
-        ? await ctx.db.query("signals").withIndex("by_workspace_source_created", (q) => q.eq("workspace", db.workspaceKey).eq("source", source)).order("desc").take(limit)
+        ? await ctx.db.query("signals").withIndex("by_workspace_source_created", (q) => q.eq("workspace", db.workspaceKey).eq("source", source)).order("desc").take(limit + 1)
         : await (project
           ? ctx.db.query("signals").withIndex("by_project_created", (q) => q.eq("project_id", project._id))
           : ctx.db.query("signals").withIndex("by_workspace_created", (q) => q.eq("workspace", db.workspaceKey)))
           .order("desc")
-          .take(source ? CANDIDATE_WINDOW : limit);
+          .take(source ? CANDIDATE_WINDOW : limit + 1);
     }
+    // One problem's list counts every finding it holds; the others say only
+    // whether the limit cut them (reading on to count would cost the range).
     const visible: Doc<"signals">[] = [];
+    let total = 0;
     for (const row of rows) {
       if (source && row.source !== source) continue;
       if (!(await canAccessSignal(ctx, userId, row))) continue;
-      visible.push(row);
-      if (visible.length >= limit) break;
+      total++;
+      if (visible.length < limit) visible.push(row);
+      else if (!args.task) break;
     }
     const tasks = new Map<string, Doc<"tasks"> | null>();
     for (const row of visible) {
@@ -1177,7 +1187,8 @@ export const listForCli = query({
       const key = String(row.task_id);
       if (!tasks.has(key)) tasks.set(key, await ctx.db.get(row.task_id));
     }
-    return { signals: visible.map((row) => signalView(row, row.task_id ? tasks.get(String(row.task_id)) ?? null : null)) };
+    const signals = visible.map((row) => signalView(row, row.task_id ? tasks.get(String(row.task_id)) ?? null : null));
+    return args.task ? { signals, total } : { signals, more: total > visible.length };
   },
 });
 
