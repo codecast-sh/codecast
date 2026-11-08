@@ -869,7 +869,7 @@ export async function performNeedsInputCheck(
   // do NOT return yet: the stall rule below needs the same derivation this
   // push uses. "Stash hides work, not stalls" — a hidden session may be quiet,
   // never quietly stuck, so a HARD block (open question, permission prompt,
-  // dead process) clears the hide and the row surfaces in Needs Input. The
+  // dead process) clears the hide and the row surfaces in Needs You. The
   // push-etiquette guards (pinned, subagents, spawned fleets, schedule runs)
   // apply to the CHIME only and move below the stall block: a folded schedule
   // run stalled on a permission prompt is exactly the invisible-stall trap.
@@ -941,7 +941,7 @@ export async function performNeedsInputCheck(
   // progress and never breaks a hide; neither does the classifier. Clearing
   // both stamps mirrors --needs-attention (agentTasks.completeTaskRun) and the
   // blocked declaration (conversations.setThreadState): one contract, three
-  // doors. No push from here — the row surfacing in Needs Input IS the signal,
+  // doors. No push from here — the row surfacing in Needs You IS the signal,
   // and the machine-turn guard below would suppress the chime anyway.
   if (hidden) {
     const stallKind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });

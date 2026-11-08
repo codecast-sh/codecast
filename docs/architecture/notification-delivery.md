@@ -41,3 +41,13 @@ Sound-category and volume preferences continue to sync across devices. The Sound
 Phone pushes leave our servers: Expo (`exp.host`) relays them to Apple and Google, and Live Activity updates and CallKit rings go to Apple directly. None of them has a BAA with us, so a person in any team whose managed policy sets `regulated_data` gets pushes that name the event and the project folder ("Session waiting for input", "In intake-service") with routing ids only: no message text, tool output, chat text, decision content or session title. Titles count as content because most are generated from the first message. The decision is by recipient, not by the row the push is about, so it also covers that person's personal sessions and every push kind, current or future. The full text stays in the notification row and the push ring, which the app reads from us once opened.
 
 `lib/pushPrivacy.ts` holds the rule. `sendPushNotification` (the only Expo sender), `sendVoipRing` and `collectLiveActivitySessions` apply it. Web and desktop banners are shown by the local OS from data the app already holds, so they pass through no third party and are unchanged.
+
+## Scheduled-run attention
+
+The bell asks for human attention. Clean scheduled runs and retryable failures stay in their result thread or schedule history. Explicit result delivery to an owning session continues through the trigger's existing wake setting.
+
+A spawned run first reports a flagged outcome or exhausted retries to its owning agent. Successful delivery to that owner suppresses the human alert; the owner can resolve it or ask the person for a specific decision. If there is no valid owner, the human alert opens the run (or the originating thread for an inline run).
+
+Flagged completion is displayed as “needs attention”, with the reported reason, rather than “task done”. Exhausted retries display “run stopped”. Both honor the task-activity preference. The bell works without a phone push token; phone push separately requires enabled notifications and a token.
+
+One unread scheduled-run alert is retained per trigger. Later attention reports update its explanation and destination without sending another push. Once read, a later report may notify again. The stored event name `task_completed` remains for compatibility; it denotes a flagged completion on this producer, not routine success.
