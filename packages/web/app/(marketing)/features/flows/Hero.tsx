@@ -1,15 +1,15 @@
 "use client";
 
-import { memo, useRef, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useRef, useState, type ReactNode } from "react";
 import { useNearViewport } from "@/hooks/useNearViewport";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { SOL } from "../../blog/blogChrome";
-import { at, BACK, BAD, FLOOR, GOOD, LINE, PERSON, usePlayOnView, useStill } from "./kit";
+import { at, BACK, BAD, FLOOR, GOOD, LINE, PERSON, usePlayOnView, useStill } from "./base";
 import {
   countEvents, L, slotFill, slotSnapshot, smil, snapshot, STEP_IDS, STEP_LABEL, T0, TALL, untilNextChange, WIDE, zonesAt,
   type Box, type Floor, type Kind, type NodeId, type Piece, type Plan, type TextAt,
 } from "./heroFloor";
-import { CAUSE, ROLE } from "./story";
+import { CAUSE, CHECKOUT, NOW, ROLE, ROLES, SIGNALS_TODAY, SOURCES as STORY_SOURCES } from "./story";
 import "./hero.css";
 
 /*
@@ -41,33 +41,54 @@ const NODE_LINE = "rgba(147,161,161,.32)";
 /** Violet and red lifted for text on the dark floor: quieter than the main path, still readable. */
 const BACK_TEXT = "#a9abec";
 const BAD_TEXT = "#f0625f";
-const LABEL = 13;
-const SMALL = 12;
+/**
+ * Figure text sizes in viewBox units, per layout. The wide plan draws at
+ * about 0.85 to 1.1 of its 1280 units on desktop, the tall one at 0.9 to 1.2
+ * of its 372, so both keep every label at 11px CSS or more.
+ */
+type Fonts = { small: number; label: number };
+const WIDE_FONTS: Fonts = { small: 14, label: 14.5 };
+const TALL_FONTS: Fonts = { small: 12.5, label: 13.5 };
+const FontCtx = createContext<Fonts>(WIDE_FONTS);
+const useFonts = () => useContext(FontCtx);
 
 const KIND_COLOR: Record<Kind, string> = { signal: SOL.base1, line: LINE, person: PERSON, back: BACK, regress: BAD };
 
-const SOURCES: { name: string; state: "flowing" | "quiet" | "stopped"; base?: number; days: number[] }[] = [
-  { name: "New issues", state: "flowing", base: 1892, days: [6, 7, 5, 8, 7, 6, 8, 7, 8, 6, 7, 8, 7, 8] },
-  { name: "Failed jobs", state: "flowing", base: 311, days: [3, 2, 4, 3, 5, 2, 3, 4, 3, 5, 4, 3, 4, 5] },
-  { name: "Eval reds", state: "flowing", base: 73, days: [1, 0, 2, 1, 0, 3, 1, 0, 2, 1, 0, 2, 1, 2] },
-  { name: "Teammate reports", state: "quiet", days: [2, 0, 3, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] },
-  { name: "Judge mistakes", state: "stopped", days: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
-];
+/** The page's sources (story.ts) with a 14-day sparkline each: flowing, quiet (a gap), stopped (nothing in 14 days). */
+const DAYS: Record<string, number[]> = {
+  flowing: [6, 7, 5, 8, 7, 6, 8, 7, 8, 6, 7, 8, 7, 8],
+  quiet: [2, 0, 3, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0],
+  stopped: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+};
+const SOURCES = STORY_SOURCES.map((s, i) => ({
+  name: s.label,
+  state: s.state,
+  base: s.today,
+  days: s.state === "flowing" ? DAYS.flowing.map((v, d) => Math.max(0, v - i * 2 - ((d + i) % 3))) : DAYS[s.state],
+}));
 /** Open problems in Triage: the signal kind and how many signals it holds. */
 const PROBLEMS = [
-  { kind: "bug", base: 214, fill: 0.7 },
-  { kind: "regression", base: 38, fill: 0.42 },
-  { kind: "prompt_miss", base: 12, fill: 0.24 },
+  { kind: "bug", open: 15 },
+  { kind: "regression", open: 5 },
+  { kind: "prompt_miss", open: 3 },
 ];
-const SIGNALS_BASE = 2276;
-const BASE = { onPerson: 1, live: 42, watching: 44 };
+/**
+ * The floor's counts at the still frame are the page's (story.ts NOW); the
+ * part that is on screen at T0 is subtracted so the base plus what moves
+ * reads exactly those numbers, in both layouts.
+ */
+function bases(floor: Floor) {
+  const z = zonesAt(floor, T0);
+  return { onPerson: NOW.onPerson - (z.get("decide") ?? 0), watching: NOW.watching - (z.get("watch") ?? 0) };
+}
 /** Trail behind a moving token: how far back each ghost runs (s) and how strong it is. */
 const TRAIL: [number, number][] = [[0.08, 0.42], [0.16, 0.2], [0.24, 0.09]];
 
 const fmt = (n: number) => n.toLocaleString("en-US");
-const Txt = ({ at: p, size = SMALL, fill = DIMT, weight, children, className }: { at: TextAt; size?: number; fill?: string; weight?: number; children: ReactNode; className?: string }) => (
-  <text x={p.x} y={p.y} textAnchor={p.anchor ?? "start"} fontSize={size} fill={fill} fontWeight={weight} className={className}>{children}</text>
-);
+function Txt({ at: p, size, fill = DIMT, weight, children, className }: { at: TextAt; size?: number; fill?: string; weight?: number; children: ReactNode; className?: string }) {
+  const F = useFonts();
+  return <text x={p.x} y={p.y} textAnchor={p.anchor ?? "start"} fontSize={size ?? F.small} fill={fill} fontWeight={weight} className={className}>{children}</text>;
+}
 
 export function Hero() {
   return (
@@ -78,10 +99,10 @@ export function Hero() {
         </h1>
         <p className="flx-rise mt-5 sm:mt-6 max-w-3xl text-[16px] sm:text-[17px] leading-[1.65]" style={at(0.12, { color: SOL.base1 })}>
           Your session and the line&apos;s agents ship through the same Check, Review and Decide. Fixes trace back to the
-          change that caused them, and that record sets how much an agent may merge alone.
+          change that caused them, and that record sets how much each role may merge without a person.
         </p>
       </div>
-      <div className="relative max-w-[1500px] mx-auto px-5 sm:px-8 pt-8 sm:pt-10 pb-10 sm:pb-14">
+      <div className="relative mx-auto px-5 sm:px-8 pt-8 sm:pt-10 pb-10 sm:pb-14" style={{ maxWidth: 1500 }}>
         <FloorFigure floor={WIDE} className="hidden xl:block" />
         <FloorFigure floor={TALL} className="xl:hidden mx-auto max-w-[440px]" />
       </div>
@@ -102,10 +123,12 @@ function FloorFigure({ floor, className }: { floor: Floor; className: string }) 
   return (
     <div ref={ref} className={`flx-hero-fig ${className}`} data-play={playing ? "" : undefined}>
       <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="block w-full h-auto font-mono" role="img" aria-label={ARIA}>
-        <Defs />
-        <Under plan={floor.plan} />
-        <Tokens floor={floor} live={live} />
-        <Over floor={floor} svgRef={svgRef} live={live} visible={visible} />
+        <FontCtx.Provider value={floor === WIDE ? WIDE_FONTS : TALL_FONTS}>
+          <Defs />
+          <Under plan={floor.plan} />
+          <Tokens floor={floor} live={live} />
+          <Over floor={floor} svgRef={svgRef} live={live} visible={visible} />
+        </FontCtx.Provider>
       </svg>
     </div>
   );
@@ -165,20 +188,22 @@ function LineGlyph({ x, y, c }: { x: number; y: number; c: string }) {
 const STEP_ICON: Record<Exclude<NodeId, "live">, typeof TermGlyph> = { check: TermGlyph, review: BotGlyph, decide: PersonGlyph, land: TermGlyph, deploy: TermGlyph };
 
 function BackLabel({ l, label }: { l: TextAt & { chip: boolean }; label: string }) {
+  const F = useFonts();
   // Plain text where there is no room for a chip, without the ↺ (the dashed violet route says it).
   if (!l.chip) return <Txt at={l} fill={BACK_TEXT} weight={600}>{label.replace("↺ ", "")}</Txt>;
-  const w = label.length * 7.4 + 18;
+  const w = label.length * F.small * 0.6 + 18;
   return (
     <g>
       <rect x={l.x - w / 2} y={l.y - 11} width={w} height={22} rx={6} fill={FLOOR} />
       <rect x={l.x - w / 2} y={l.y - 11} width={w} height={22} rx={6} fill={BACK} fillOpacity={0.2} stroke={BACK} strokeOpacity={0.85} />
-      <text x={l.x} y={l.y + 4.3} textAnchor="middle" fontSize={SMALL} fill={BACK_TEXT} fontWeight={600}>{label}</text>
+      <text x={l.x} y={l.y + 4.3} textAnchor="middle" fontSize={F.small} fill={BACK_TEXT} fontWeight={600}>{label}</text>
     </g>
   );
 }
 
 function Legend({ plan }: { plan: Plan }) {
-  const dot = (c: string) => (x: number, y: number) => <rect x={x - 6} y={y - 4} width={12} height={8} rx={2.5} fill={c} />;
+  const F = useFonts();
+  const dot = (c: string) => function dotMark(x: number, y: number) { return <rect x={x - 6} y={y - 4} width={12} height={8} rx={2.5} fill={c} />; };
   const items: [(x: number, y: number) => ReactNode, string][] = [
     [dot(PERSON), "Work a person starts"],
     [dot(LINE), "Work the line starts"],
@@ -195,7 +220,7 @@ function Legend({ plan }: { plan: Plan }) {
         return (
           <g key={label}>
             {sw(x + 6, y - 4)}
-            <text x={x + 18} y={y} fontSize={SMALL} fill={DIMT}>{label}</text>
+            <text x={x + 18} y={y} fontSize={F.small} fill={DIMT}>{label}</text>
           </g>
         );
       })}
@@ -205,16 +230,14 @@ function Legend({ plan }: { plan: Plan }) {
 
 // ---------- the floor under the tokens ----------
 const Under = memo(function Under({ plan }: { plan: Plan }) {
+  const F = useFonts();
   const { triage, line, edges, labels } = plan;
-  const sparkStep = 5.2;
+  const sparkStep = 4.6;
   return (
     <g>
       {plan.stages.map((s, i) => (
         <g key={s.n} className="flx-fade" style={at(0.15 + i * 0.06)}>
-          <text x={s.x0} y={s.y} fontSize={LABEL} fontWeight={600} fill={INK2}>
-            <tspan fill={SOL.base01}>{s.n}</tspan>
-            <tspan dx={7}>{s.name}</tspan>
-          </text>
+          <text x={s.x0} y={s.y} fontSize={F.label} fontWeight={600} fill={INK2}>{s.name}</text>
           <line x1={s.x0} x2={s.x1} y1={s.y + 10} y2={s.y + 10} stroke={FAINT} />
         </g>
       ))}
@@ -237,7 +260,7 @@ const Under = memo(function Under({ plan }: { plan: Plan }) {
         return (
           <g key={s.name} className="flx-rise" style={at(0.1 + i * 0.05)}>
             <rect {...xywh(src.box)} rx={7} fill={NODE_FILL} stroke={stopped ? BAD : NODE_LINE} strokeOpacity={stopped ? 0.6 : 1} />
-            <Txt at={src.name} weight={600} fill={s.state === "flowing" ? INK2 : DIMT}>{s.name}</Txt>
+            <Txt at={src.name} size={Math.min(F.small, 13)} weight={600} fill={s.state === "flowing" ? INK2 : DIMT}>{s.name}</Txt>
             {s.days.map((v, d) => (
               <rect
                 key={d}
@@ -258,11 +281,11 @@ const Under = memo(function Under({ plan }: { plan: Plan }) {
 
       <g className="flx-rise" style={at(0.45)}>
         <rect {...xywh(triage.box)} rx={9} fill={NODE_FILL} stroke={NODE_LINE} />
-        {triage.title ? <Txt at={triage.title} size={LABEL} weight={700} fill={INK2}>Triage</Txt> : null}
+        {triage.title ? <Txt at={triage.title} size={F.label} weight={700} fill={INK2}>Triage</Txt> : null}
         {triage.rows.map((r, i) => (
           <g key={i}>
             <rect {...xywh(r.box)} rx={3.5} fill={FLOOR} stroke={NODE_LINE} />
-            <rect x={r.box.x + 1} y={r.box.y + 1} width={(r.box.w - 2) * PROBLEMS[i].fill} height={r.box.h - 2} rx={3} fill={LINE} fillOpacity={0.16} />
+            <rect x={r.box.x + 1} y={r.box.y + 1} width={((r.box.w - 2) * PROBLEMS[i].open) / NOW.open} height={r.box.h - 2} rx={3} fill={LINE} fillOpacity={0.16} />
             <Txt at={r.kind} fill={SOL.base1}>{PROBLEMS[i].kind}</Txt>
           </g>
         ))}
@@ -270,7 +293,10 @@ const Under = memo(function Under({ plan }: { plan: Plan }) {
           <rect key={i} x={x - 4} y={y - 4} width={8} height={8} rx={2} fill={LINE} fillOpacity={0.2} stroke={LINE} strokeOpacity={0.7} />
         ))}
         <Txt at={triage.queued}>
-          <tspan fill={INK2} fontWeight={700}>17</tspan> queued
+          <tspan fill={INK2} fontWeight={700}>{NOW.queued}</tspan> queued
+        </Txt>
+        <Txt at={triage.open}>
+          <tspan fill={INK2} fontWeight={700}>{NOW.open}</tspan> open
         </Txt>
       </g>
 
@@ -278,7 +304,7 @@ const Under = memo(function Under({ plan }: { plan: Plan }) {
         <rect {...xywh(line.box)} rx={9} fill={NODE_FILL} stroke={LINE} strokeOpacity={0.4} />
         <rect x={line.box.x} y={line.box.y + 8} width={3} height={line.box.h - 16} rx={1.5} fill={LINE} />
         {line.glyph ? <LineGlyph x={line.glyph[0]} y={line.glyph[1]} c={LINE} /> : null}
-        <Txt at={line.title} size={LABEL} weight={600} fill={INK2}>The line</Txt>
+        <Txt at={line.title} size={F.label} weight={600} fill={INK2}>The line</Txt>
         {line.slots.map((b, k) => <rect key={k} {...xywh(b)} rx={4} fill={FLOOR} stroke={NODE_LINE} />)}
       </g>
 
@@ -410,7 +436,9 @@ function NodeRect({ b, rx, lit, base, dashed }: { b: Box; rx: number; lit: strin
 }
 
 function Step({ id, b, occ, wait, delay }: { id: NodeId; b: Box; occ: Occupant; wait?: boolean; delay: number }) {
-  const lit = OCC_COLOR[occ];
+  const F = useFonts();
+  // Decide is the person's step: whoever's change waits there, it lights blue.
+  const lit = id === "decide" && occ !== "idle" ? PERSON : OCC_COLOR[occ];
   const isLive = id === "live";
   const rx = isLive ? b.h / 2 : 8;
   const cy = b.y + b.h / 2;
@@ -422,18 +450,19 @@ function Step({ id, b, occ, wait, delay }: { id: NodeId; b: Box; occ: Occupant; 
       {Icon ? (
         <>
           <Icon x={b.x + 15} y={cy} c={lit ? SOL.base3 : id === "decide" ? PERSON : SOL.base1} />
-          <text x={b.x + 27} y={cy + 4.5} fontSize={LABEL} fontWeight={700} fill={lit ? SOL.base3 : INK2}>{STEP_LABEL[id]}</text>
+          <text x={b.x + 26} y={cy + 4.5} fontSize={F.small} fontWeight={700} fill={lit ? SOL.base3 : INK2}>{STEP_LABEL[id]}</text>
         </>
       ) : (
-        <text x={b.x + b.w / 2} y={cy + 4.5} textAnchor="middle" fontSize={LABEL} fontWeight={700} fill={lit ? SOL.base3 : LINE}>Live</text>
+        <text x={b.x + b.w / 2} y={cy + 4.5} textAnchor="middle" fontSize={F.label} fontWeight={700} fill={lit ? SOL.base3 : LINE}>Live</text>
       )}
     </g>
   );
 }
 
-function Count({ at: p, n, label, c, size = SMALL }: { at: TextAt; n: number; label?: string; c: string; size?: number }) {
+function Count({ at: p, n, label, c, size }: { at: TextAt; n: number; label?: string; c: string; size?: number }) {
+  const F = useFonts();
   return (
-    <text x={p.x} y={p.y} textAnchor={p.anchor ?? "start"} fontSize={size} fill={c}>
+    <text x={p.x} y={p.y} textAnchor={p.anchor ?? "start"} fontSize={size ?? F.small} fill={c}>
       <tspan key={n} className="flx-hero-tick" fontWeight={700}>{fmt(n)}</tspan>
       {label ? ` ${label}` : null}
     </text>
@@ -441,6 +470,7 @@ function Count({ at: p, n, label, c, size = SMALL }: { at: TextAt; n: number; la
 }
 
 function Over({ floor, svgRef, live, visible }: { floor: Floor; svgRef: React.RefObject<SVGSVGElement | null>; live: boolean; visible: boolean }) {
+  const F = useFonts();
   const plan = floor.plan;
   // Clock time on the SVG's own timeline. It starts at L + T0 (the still
   // frame), so every token has begun and the first frame matches the snapshot.
@@ -468,7 +498,8 @@ function Over({ floor, svgRef, live, visible }: { floor: Floor; svgRef: React.Re
   const ev = (e: string) => countEvents(floor, e, L + T0, t);
   const held = plan.line.slots.map((_, k) => (z.get(`slot:${k}`) ?? 0) > 0);
   const running = held.filter(Boolean).length;
-  const watching = BASE.watching + (z.get("watch") ?? 0);
+  const base = bases(floor);
+  const watching = base.watching + (z.get("watch") ?? 0);
   const session = (z.get("n:session") ?? 0) > 0;
   const { watch, clean, session: sb, triage, labels } = plan;
 
@@ -476,7 +507,7 @@ function Over({ floor, svgRef, live, visible }: { floor: Floor; svgRef: React.Re
     <g>
       <g className="flx-rise" style={at(0.05)}>
         <text x={plan.signalsToday.num.x} y={plan.signalsToday.num.y} fontSize={plan.signalsToday.size} fontWeight={700} fill={SOL.base3} letterSpacing={-0.5}>
-          <tspan key={ev("signal")} className="flx-hero-tick">{fmt(SIGNALS_BASE + ev("signal"))}</tspan>
+          <tspan key={ev("signal")} className="flx-hero-tick">{fmt(SIGNALS_TODAY + ev("signal"))}</tspan>
         </text>
         <Txt at={plan.signalsToday.label}>signals today</Txt>
       </g>
@@ -491,7 +522,7 @@ function Over({ floor, svgRef, live, visible }: { floor: Floor; svgRef: React.Re
       {triage.rows.map((r, i) => (
         <g key={i} className="flx-fade" style={at(0.5)}>
           {z.get(`bar:${i}`) ? <rect className="flx-hero-hit" {...xywh(r.box)} rx={3.5} fill="none" stroke={LINE} strokeWidth={1.3} /> : null}
-          <Count at={r.count} n={PROBLEMS[i].base + ev(`bar:${i}`)} c={INK2} />
+          <Txt at={r.count} fill={INK2} weight={700}>{PROBLEMS[i].open}</Txt>
         </g>
       ))}
       {z.get("queue") ? <rect className="flx-hero-hit" {...xywh(triage.queueHit)} rx={4} fill="none" stroke={LINE} strokeWidth={1.3} /> : null}
@@ -499,7 +530,7 @@ function Over({ floor, svgRef, live, visible }: { floor: Floor; svgRef: React.Re
       <Count at={plan.line.count} n={running} label="running" c={LINE} />
       {plan.line.slots.map((b, k) =>
         held[k] ? null : (
-          <text key={k} x={b.x + b.w - 8} y={b.y + b.h / 2 + 4} textAnchor="end" fontSize={SMALL} fill={SOL.base01} className="flx-fade" style={at(0.8)}>free</text>
+          <text key={k} x={b.x + b.w - 8} y={b.y + b.h / 2 + 4} textAnchor="end" fontSize={F.small} fill={SOL.base01} className="flx-fade" style={at(0.8)}>free</text>
         ),
       )}
 
@@ -517,7 +548,7 @@ function Over({ floor, svgRef, live, visible }: { floor: Floor; svgRef: React.Re
 
       <g className="flx-rise" style={at(1.3)}>
         <NodeRect b={watch.box} rx={9} lit={(z.get("watch") ?? 0) > 0 ? LINE : null} base={LINE} />
-        <Txt at={watch.title} size={LABEL} weight={700} fill={INK2}>Watch</Txt>
+        <Txt at={watch.title} size={F.label} weight={700} fill={INK2}>Watch</Txt>
         <Txt at={watch.days}>7 days</Txt>
         <Count at={watch.count} n={watching} label="watching" c={SOL.base1} />
         <rect {...xywh(clean)} rx={clean.h / 2} fill={NODE_FILL} />
@@ -530,12 +561,12 @@ function Over({ floor, svgRef, live, visible }: { floor: Floor; svgRef: React.Re
           stroke={GOOD}
           strokeOpacity={z.get("clean") ? 1 : 0.7}
         />
-        <text x={clean.x + clean.w / 2} y={clean.y + clean.h / 2 + 4.3} textAnchor="middle" fontSize={SMALL} fontWeight={600} fill={GOOD}>Closed clean</text>
+        <text x={clean.x + clean.w / 2} y={clean.y + clean.h / 2 + 4.3} textAnchor="middle" fontSize={F.small} fontWeight={600} fill={GOOD}>Closed clean</text>
       </g>
 
       <g className="flx-fade" style={at(1.3)}>
-        <Count at={labels.onPerson} n={BASE.onPerson + (z.get("decide") ?? 0)} label="on a person" c={PERSON} />
-        <Count at={labels.liveToday} n={BASE.live + ev("live")} label="live today" c={LINE} />
+        <Count at={labels.onPerson} n={base.onPerson + (z.get("decide") ?? 0)} label="on a person" c={PERSON} />
+        <Count at={labels.liveToday} n={NOW.liveToday + ev("live")} label="live today" c={LINE} />
       </g>
     </g>
   );
@@ -551,33 +582,42 @@ export function HeroReprise({ title, children }: { title: ReactNode; children?: 
   const [ref, playing] = usePlayOnView<HTMLDivElement>();
   const still = useStill();
   const visible = useNearViewport(ref, "0px", { latch: false });
-  const wide = useRef<SVGSVGElement | null>(null);
-  const narrow = useRef<SVGSVGElement | null>(null);
+  const strip = useRef<SVGSVGElement | null>(null);
   const live = playing && !still;
   useWatchEffect(() => {
-    for (const svg of [wide.current, narrow.current]) {
-      if (!svg) continue;
-      if (live && visible) svg.unpauseAnimations();
-      else svg.pauseAnimations();
-    }
+    const svg = strip.current;
+    if (!svg) return;
+    if (live && visible) svg.unpauseAnimations();
+    else svg.pauseAnimations();
   }, [live, visible]);
+  const after = CHECKOUT.after;
+  const rate = Math.floor(((after.settled - after.regretted) / after.settled) * 100);
   return (
     <section className="flx-hero relative overflow-hidden flx-floor-grid" style={{ backgroundColor: FLOOR }}>
       <div ref={ref} className="relative max-w-7xl mx-auto px-5 sm:px-8 py-12 sm:py-16" data-play={playing ? "" : undefined}>
-        <div className="flx-hero-fig">
-          <RepriseStrip svgRef={wide} live={live} narrow={false} className="hidden xl:block" />
-          <RepriseStrip svgRef={narrow} live={live} narrow className="xl:hidden mx-auto max-w-[440px]" />
+        {/* The strip needs the full width to keep every station's label at size; below xl the band is the numbers and the CTA. */}
+        <div className="flx-hero-fig hidden xl:block mb-12">
+          <RepriseStrip svgRef={strip} live={live} />
         </div>
-        <div className="mt-10 grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-10 items-center">
+        <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-10 items-start">
           <div>
             <h2 className="font-mono font-bold text-[28px] sm:text-[38px] leading-[1.1] tracking-[-0.035em] [text-wrap:balance]" style={{ color: SOL.base3 }}>{title}</h2>
-            <div className="mt-6 flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono">
-              <span className="text-[34px] font-bold tracking-[-0.03em]" style={{ color: SOL.base3 }}>8 of 17</span>
-              <span className="text-[14px]" style={{ color: SOL.base1 }}>roles merge without a person</span>
-            </div>
-            <div className="mt-2 font-mono text-[13px]" style={{ color: SOL.base0 }}>
-              <span style={{ color: BAD_TEXT }}>{CAUSE.sha}</span> regretted on {ROLE.name}&apos;s record
-            </div>
+            <dl className="mt-7 grid gap-4 font-mono">
+              <div className="flex flex-wrap items-baseline gap-x-3">
+                <dt className="sr-only">{ROLE.name}</dt>
+                <dd className="text-[34px] font-bold tracking-[-0.03em]" style={{ color: BAD_TEXT }}>{ROLE.name}: {rate}%</dd>
+                <dd className="text-[14px]" style={{ color: SOL.base1 }}>under its {Math.round(CHECKOUT.bar * 100)}% bar, so its next changes wait for a person</dd>
+                <dd className="w-full mt-1 text-[13px]" style={{ color: SOL.base0 }}>
+                  <span style={{ color: BAD_TEXT }}>{CAUSE.sha}</span> settled as regretted, {after.settled - after.regretted} of {after.settled} regret-free
+                </dd>
+              </div>
+              <div className="flex flex-wrap items-baseline gap-x-3">
+                <dt className="sr-only">Roles</dt>
+                {/* ROLES.merging counts Checkout before the trace; under its bar, its merges wait for a person. */}
+                <dd className="text-[22px] font-bold" style={{ color: SOL.base3 }}>{ROLES.merging - 1} of {ROLES.total}</dd>
+                <dd className="text-[14px]" style={{ color: SOL.base1 }}>roles merge without a person, {ROLE.name} waits</dd>
+              </div>
+            </dl>
           </div>
           {children ? <div>{children}</div> : null}
         </div>
@@ -589,29 +629,29 @@ export function HeroReprise({ title, children }: { title: ReactNode; children?: 
 const REPRISE_L = 9;
 const REPRISE_NODES = ["Signals", "Triage", "Build", "Check", "Review", "Decide", "Land", "Deploy", "Live", "Watch"];
 
-function RepriseStrip({ svgRef, live, narrow, className }: { svgRef: React.RefObject<SVGSVGElement | null>; live: boolean; narrow: boolean; className: string }) {
-  // Wide: every station on one line. Narrow: Signals, the path folded to a
-  // dotted run, Live and Watch, so the labels stay full size on a phone.
-  const W = narrow ? 340 : 1216;
-  const H = narrow ? 112 : 124;
+/** The floor as one line of stations, with the story's regression riding the return arc into Signals. */
+function RepriseStrip({ svgRef, live }: { svgRef: React.RefObject<SVGSVGElement | null>; live: boolean }) {
+  const F = useFonts();
+  const W = 1216;
+  const H = 124;
   const y = 34;
-  const names = narrow ? ["Signals", "Live", "Watch"] : REPRISE_NODES;
-  const xs = narrow ? [40, 200, 292] : REPRISE_NODES.map((_, i) => 54 + i * 123);
-  const nodeW = narrow ? 76 : 92;
+  const names = REPRISE_NODES;
+  const xs = REPRISE_NODES.map((_, i) => 54 + i * 123);
+  const nodeW = 92;
   const last = xs[xs.length - 1];
-  const arcY = narrow ? 84 : 92;
+  const arcY = 92;
   const back = `M${last} ${y + 15} V${arcY - 8} Q${last} ${arcY} ${last - 8} ${arcY} H${xs[0] + 8} Q${xs[0]} ${arcY} ${xs[0]} ${arcY - 8} V${y + 15}`;
   const forward = `M${xs[0]} ${y} H${last}`;
   // Where the two forward tokens sit in the still frame: between stations, never under one.
-  const parked = narrow ? [(xs[0] + xs[1]) / 2 - 22, (xs[0] + xs[1]) / 2 + 22] : [(xs[3] + xs[4]) / 2, (xs[6] + xs[7]) / 2];
+  const parked = [(xs[3] + xs[4]) / 2, (xs[6] + xs[7]) / 2];
   const isPerson = (n: string) => n === "Decide";
   const isLive = (n: string) => n === "Live";
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className={`block w-full h-auto font-mono ${className}`} role="img" aria-label={`The same floor: changes move from Signals to Watch, and ${CAUSE.sha}'s regression returns to Signals.`}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="block w-full h-auto font-mono" role="img" aria-label={`The same floor: changes move from Signals to Watch, and ${CAUSE.sha}'s regression returns to Signals.`}>
       <Defs />
-      <path d={forward} stroke="rgba(42,161,152,.55)" strokeWidth={1.25} fill="none" strokeDasharray={narrow ? "2 5" : undefined} />
+      <path d={forward} stroke="rgba(42,161,152,.55)" strokeWidth={1.25} fill="none" />
       <path d={back} stroke={BAD} strokeOpacity={0.6} strokeWidth={1.25} fill="none" strokeDasharray="4 5" />
-      <text x={(xs[0] + last) / 2} y={arcY + 18} textAnchor="middle" fontSize={SMALL} fill={INK2} fontWeight={600}>
+      <text x={(xs[0] + last) / 2} y={arcY + 18} textAnchor="middle" fontSize={F.small} fill={INK2} fontWeight={600}>
         <tspan fill={BAD_TEXT}>↺</tspan> Back to signals
       </text>
       {names.map((n, i) => {
@@ -621,7 +661,7 @@ function RepriseStrip({ svgRef, live, narrow, className }: { svgRef: React.RefOb
           <g key={n}>
             <rect {...xywh(b)} rx={isLive(n) ? 15 : 7} fill={NODE_FILL} />
             <rect {...xywh(b)} rx={isLive(n) ? 15 : 7} fill={c ?? "transparent"} fillOpacity={c ? 0.12 : 0} stroke={c ?? NODE_LINE} strokeOpacity={c ? 0.7 : 1} strokeDasharray={isLive(n) ? "4 3" : undefined} />
-            <text x={xs[i]} y={y + 4.5} textAnchor="middle" fontSize={LABEL} fontWeight={700} fill={isLive(n) ? LINE : INK2}>{n}</text>
+            <text x={xs[i]} y={y + 4.5} textAnchor="middle" fontSize={F.label} fontWeight={700} fill={isLive(n) ? LINE : INK2}>{n}</text>
           </g>
         );
       })}
@@ -644,7 +684,7 @@ function RepriseStrip({ svgRef, live, narrow, className }: { svgRef: React.RefOb
           </>
         ) : null}
         <TokenShape kind="regress" />
-        <text y={-12} textAnchor="middle" fontSize={SMALL} fontWeight={700} fill={BAD_TEXT}>{CAUSE.sha}</text>
+        <text y={-12} textAnchor="middle" fontSize={F.small} fontWeight={700} fill={BAD_TEXT}>{CAUSE.sha}</text>
       </g>
       {live && names[0] === "Signals" ? (
         <rect x={xs[0] - nodeW / 2 - 4} y={y - 19} width={nodeW + 8} height={38} rx={10} fill="none" stroke={BAD} strokeWidth={1.5} opacity={0}>

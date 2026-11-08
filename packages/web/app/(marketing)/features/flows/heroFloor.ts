@@ -99,7 +99,7 @@ export type Plan = {
   stages: { n: number; name: string; x0: number; x1: number; y: number }[];
   signalsToday: { num: TextAt; size: number; label: TextAt };
   sources: { box: Box; name: TextAt; spark: Pt; status: TextAt; port: Pt }[];
-  triage: { box: Box; title: TextAt | null; rows: { box: Box; kind: TextAt; count: TextAt }[]; chips: Pt[]; queued: TextAt; queueHit: Box };
+  triage: { box: Box; title: TextAt | null; open: TextAt; rows: { box: Box; kind: TextAt; count: TextAt }[]; chips: Pt[]; queued: TextAt; queueHit: Box };
   line: { box: Box; title: TextAt; count: TextAt; slots: Box[]; glyph: Pt | null };
   session: { box: Box; glyph: Pt; title: TextAt; sub: TextAt };
   steps: Record<NodeId, Box>;
@@ -168,7 +168,7 @@ function widePlan(): Plan {
   };
   const LIVE_X = 1172;
   const watch: Box = { x: 1104, y: 302, w: 136, h: 68 };
-  const clean: Box = { x: 1118, y: 402, w: 108, h: 26 };
+  const clean: Box = { x: 1108, y: 402, w: 128, h: 26 };
   const WATCH_C: Pt = [LIVE_X, watch.y + watch.h / 2];
   const CLEAN_C: Pt = [LIVE_X, clean.y + clean.h / 2];
   const ARC_Y = 506;
@@ -199,7 +199,7 @@ function widePlan(): Plan {
     signalsToday: { num: { x: 20, y: 80 }, size: 24, label: { x: 20, y: 99 } },
     sources: SOURCE_Y.map((y) => ({
       box: { x: 20, y: y - 19, w: 148, h: 38 },
-      name: { x: 32, y: y - 3 },
+      name: { x: 30, y: y - 3 },
       spark: [32, y + 12] as Pt,
       status: { x: 156, y: y + 13, anchor: "end" as const },
       port: [168, y] as Pt,
@@ -207,6 +207,7 @@ function widePlan(): Plan {
     triage: {
       box: { x: 200, y: 256, w: 146, h: 136 },
       title: { x: 212, y: 276 },
+      open: { x: 334, y: 276, anchor: "end" },
       rows: BAR_Y.map((y) => ({ box: { x: 210, y: y - 8.5, w: 126, h: 17 }, kind: { x: 220, y: y + 4 }, count: { x: 330, y: y + 4, anchor: "end" as const } })),
       chips: [0, 1, 2, 3, 4].map((i) => [230 + i * 11, QUEUE_Y] as Pt),
       queued: { x: 212, y: 380 },
@@ -214,17 +215,17 @@ function widePlan(): Plan {
     },
     line: {
       box: { x: 380, y: 290, w: 186, h: 126 },
-      title: { x: 412, y: 312 },
+      title: { x: 396, y: 312 },
       count: { x: 552, y: 312, anchor: "end" },
       slots: SLOT_Y.map((y) => ({ x: SLOT_X0, y: y - 9, w: SLOT_X1 - SLOT_X0, h: 18 })),
-      glyph: [400, 308],
+      glyph: null,
     },
-    session: { box: { x: 380, y: SESSION_Y - 28, w: 186, h: 56 }, glyph: [398, SESSION_Y - 7], title: { x: 410, y: SESSION_Y - 3 }, sub: { x: 410, y: SESSION_Y + 16 } },
+    session: { box: { x: 380, y: SESSION_Y - 28, w: 186, h: 56 }, glyph: [395, SESSION_Y - 7], title: { x: 405, y: SESSION_Y - 3 }, sub: { x: 392, y: SESSION_Y + 17 } },
     steps,
     watch: { box: watch, title: { x: watch.x + 12, y: watch.y + 24 }, days: { x: watch.x + watch.w - 12, y: watch.y + 24, anchor: "end" }, count: { x: watch.x + 12, y: watch.y + 50 } },
     clean,
     labels: {
-      onPerson: { x: steps.decide.x + 18, y: ROW + 43 },
+      onPerson: { x: steps.decide.x + 6, y: ROW + 64 },
       liveToday: { x: LIVE_X - 10, y: ROW + 41, anchor: "end" },
       sameChecks: { x: steps.check.x, y: ROW + 43 },
       back: { x: 204, y: 529 },
@@ -259,14 +260,14 @@ function widePlan(): Plan {
 /** The tall layout: the same loop top to bottom, for phones and tablets. */
 function tallPlan(): Plan {
   const W = 372;
-  const H = 1062;
+  const H = 1074;
   const SOURCE_Y = [80, 110, 140, 170, 200];
   const BUS = 340;
   const BAR_Y = [272, 292, 312];
   const QUEUE_Y = 336;
   const SLOT_Y = [430, 448, 466, 484];
-  const SLOT_X0 = 202;
-  const SLOT_X1 = 338;
+  const SLOT_X0 = 208;
+  const SLOT_X1 = 350;
   const COL = 180;
   const MERGE_Y = 520;
   const stepAt = (y: number, w = 150): Box => ({ x: COL - w / 2, y: y - 18, w, h: 36 });
@@ -274,12 +275,12 @@ function tallPlan(): Plan {
     check: stepAt(556),
     review: stepAt(604),
     decide: stepAt(652),
-    land: stepAt(710),
-    deploy: stepAt(758),
-    live: stepAt(806, 100),
+    land: stepAt(720),
+    deploy: stepAt(768),
+    live: stepAt(816, 100),
   };
-  const watch: Box = { x: 95, y: 842, w: 170, h: 56 };
-  const clean: Box = { x: 122, y: 918, w: 116, h: 26 };
+  const watch: Box = { x: 95, y: 852, w: 170, h: 56 };
+  const clean: Box = { x: 122, y: 928, w: 116, h: 26 };
   const WATCH_C: Pt = [COL, watch.y + watch.h / 2];
   const CLEAN_C: Pt = [COL, clean.y + clean.h / 2];
   const checkEdge: Pt = [COL, steps.check.y];
@@ -291,7 +292,7 @@ function tallPlan(): Plan {
     const t = signalTarget(bar);
     return bar < 0 ? [signalFrom(src), [BUS, SOURCE_Y[src]], [BUS, QUEUE_Y], t] : [signalFrom(src), [BUS, SOURCE_Y[src]], t];
   };
-  const lineToCheck = (k: number): Pt[] => [q0, [300, 391], [196, 391], [196, SLOT_Y[k]], [SLOT_X0 + 8, SLOT_Y[k]], [346, SLOT_Y[k]], [346, MERGE_Y], [COL, MERGE_Y], checkEdge];
+  const lineToCheck = (k: number): Pt[] => [q0, [300, 391], [202, 391], [202, SLOT_Y[k]], [SLOT_X0 + 8, SLOT_Y[k]], [356, SLOT_Y[k]], [356, MERGE_Y], [COL, MERGE_Y], checkEdge];
   const sessionAt: Pt = [90, 422];
   const sessionToCheck: Pt[] = [sessionAt, [90, MERGE_Y], [COL, MERGE_Y], checkEdge];
   const at = (n: NodeId | "watch" | "clean"): Pt => (n === "watch" ? WATCH_C : n === "clean" ? CLEAN_C : [COL, centre(steps[n])[1]]);
@@ -316,31 +317,33 @@ function tallPlan(): Plan {
     triage: {
       box: { x: 10, y: 252, w: 340, h: 102 },
       title: null,
+      open: { x: 112, y: QUEUE_Y + 4 },
       rows: BAR_Y.map((y) => ({ box: { x: 22, y: y - 8, w: 310, h: 16 }, kind: { x: 32, y: y + 4 }, count: { x: 324, y: y + 4, anchor: "end" as const } })),
       chips: [0, 1, 2, 3, 4].map((i) => [236 + i * 11, QUEUE_Y] as Pt),
       queued: { x: 22, y: QUEUE_Y + 4 },
       queueHit: { x: 226, y: QUEUE_Y - 8, w: 92, h: 16 },
     },
     line: {
-      box: { x: 190, y: 396, w: 160, h: 102 },
-      title: { x: 202, y: 415 },
-      count: { x: 338, y: 415, anchor: "end" },
+      box: { x: 196, y: 396, w: 166, h: 102 },
+      title: { x: 208, y: 415 },
+      count: { x: 352, y: 415, anchor: "end" },
       slots: SLOT_Y.map((y) => ({ x: SLOT_X0, y: y - 7.5, w: SLOT_X1 - SLOT_X0, h: 15 })),
       glyph: null,
     },
-    session: { box: { x: 10, y: 396, w: 160, h: 56 }, glyph: [23, 413], title: { x: 34, y: 417 }, sub: { x: 22, y: 440 } },
+    session: { box: { x: 10, y: 396, w: 176, h: 56 }, glyph: [23, 413], title: { x: 34, y: 417 }, sub: { x: 22, y: 440 } },
     steps,
     watch: { box: watch, title: { x: watch.x + 12, y: watch.y + 22 }, days: { x: watch.x + 12, y: watch.y + 42 }, count: { x: watch.x + watch.w - 12, y: watch.y + 33, anchor: "end" } },
     clean,
     labels: {
-      onPerson: { x: steps.decide.x + steps.decide.w + 10, y: centre(steps.decide)[1] + 4 },
+      onPerson: { x: COL + 10, y: steps.decide.y + steps.decide.h + 21 },
       liveToday: { x: steps.live.x + steps.live.w + 10, y: centre(steps.live)[1] + 4 },
       sameChecks: null,
-      back: { x: 350, y: 994, anchor: "end" },
-      fix: { x: 36, y: centre(steps.check)[1] - 6, chip: false },
+      back: { x: 350, y: 1004, anchor: "end" },
+      // Under the route, so the token on its way back never covers it.
+      fix: { x: 30, y: centre(steps.check)[1] + 20, chip: false },
       revise: { x: 24, y: centre(steps.decide)[1] - 6, chip: false },
     },
-    legend: { cols: [10, 186], rows: [1012, 1034, 1056] },
+    legend: { cols: [10, 190], rows: [1024, 1046, 1068] },
     edges: {
       signals: used.filter(([s]) => s < 3).map(([s, b]) => route(signalPts(s, b)).d),
       silent: [route(signalPts(3, 1)).d, route(signalPts(4, 2)).d],
@@ -361,7 +364,7 @@ function tallPlan(): Plan {
     at,
     fixRoute: route([at("check"), left("check"), [30, centre(steps.check)[1]], [30, 452]]),
     reviseRoute: route([at("decide"), left("decide"), [18, centre(steps.decide)[1]], [18, 452]]),
-    regressRoute: route([WATCH_C, [300, WATCH_C[1]], [300, 976], [366, 976], [366, BAR_Y[1]], [BUS, BAR_Y[1]]]),
+    regressRoute: route([WATCH_C, [300, WATCH_C[1]], [300, 986], [366, 986], [366, BAR_Y[1]], [BUS, BAR_Y[1]]]),
   };
 }
 

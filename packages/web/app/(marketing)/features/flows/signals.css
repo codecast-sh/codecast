@@ -70,6 +70,7 @@
 
 .flx-root .flx-sig-board { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .flx-root .flx-sig-board-head { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; font-weight: 650; color: #586e75; }
+.flx-root .flx-sig-qn { margin-left: 6px; padding: 0 7px; border-radius: 999px; background: rgba(42, 161, 152, .12); color: #2aa198; font-weight: 650; }
 .flx-root .flx-sig-board-n { padding: 0 7px; border-radius: 999px; background: rgba(42, 161, 152, .12); color: #2aa198; }
 .flx-root .flx-sig-problems { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .flx-root .flx-sig-problem, .flx-root .flx-sig-held { position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; background: #fffdf7; border: 1px solid rgba(88, 110, 117, .16); }
@@ -224,7 +225,7 @@
 
 /* Triage and build, round 3: lanes hang wires into one Check node. */
 .flx-root .flx-sig-lanes { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 16px; }
-@media (min-width: 900px) { .flx-root .flx-sig-lanes { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 2%; } }
+@media (min-width: 900px) { .flx-root .flx-sig-lanes { grid-template-columns: minmax(0, 40fr) minmax(0, 58fr); column-gap: 2%; } }
 .flx-root .flx-sig-lanecol { display: flex; flex-direction: column; min-width: 0; }
 .flx-root .flx-sig-wire { display: none; }
 @media (min-width: 900px) { .flx-root .flx-sig-wire { display: block; flex: 1; min-height: 14px; width: 2px; margin: 0 auto; opacity: .45; } }
@@ -237,13 +238,9 @@
 .flx-root .flx-sig-task-b { flex-shrink: 0; padding: 0 7px; border-radius: 4px; border: 1px solid rgba(38, 139, 210, .45); color: #268bd2; font-size: 11px; font-weight: 700; transition: background-color .3s, color .3s; }
 .flx-root .flx-sig-task-b[data-on] { background: #268bd2; color: #fdf6e3; }
 
-.flx-root .flx-sig-strip3 { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, .8fr) minmax(0, 1.1fr); gap: 20px; }
+.flx-root .flx-sig-strip3 { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
 .flx-root .flx-sig-strip3 > li { position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 8px 10px; border-radius: 9px; background: #fffdf7; border: 1px solid rgba(88, 110, 117, .16); }
-.flx-root .flx-sig-strip3 > li + li::before { content: "→"; position: absolute; left: -16px; top: 50%; transform: translateY(-50%); font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; color: #268bd2; }
-@media (max-width: 559px) {
-  .flx-root .flx-sig-strip3 { grid-template-columns: minmax(0, 1fr); gap: 18px; }
-  .flx-root .flx-sig-strip3 > li + li::before { content: "↓"; left: 14px; top: -17px; transform: none; }
-}
+.flx-root .flx-sig-strip3 > li + li::before { content: "↓"; position: absolute; left: 14px; top: -17px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; line-height: 16px; color: #268bd2; }
 .flx-root .flx-sig-cap { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: #93a1a1; }
 .flx-root .flx-sig-edit { display: flex; justify-content: space-between; gap: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: #586e75; }
 .flx-root .flx-sig-edit > span:first-child { overflow-wrap: anywhere; }
@@ -266,3 +263,4 @@
 @media (min-width: 900px) { .flx-root .flx-sig-check { margin-top: 0; } .flx-root .flx-sig-check::before { display: none; } }
 .flx-root .flx-sig-check:hover { box-shadow: 0 0 0 4px rgba(42, 161, 152, .2); }
 .flx-root .flx-sig-check-sub { margin-top: 6px; text-align: center; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; color: #93a1a1; }
+.flx-root .flx-sig-more { padding: 2px 12px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; color: #93a1a1; }

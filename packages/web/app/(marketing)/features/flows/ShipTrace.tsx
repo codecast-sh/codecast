@@ -4,8 +4,9 @@ import { useState, type CSSProperties, type ReactNode } from "react";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { SOL } from "../../blog/blogChrome";
-import { BAD, Card, DIM, GOOD, HAIR, INK, LINE, Label, MUTED, Section, tint, usePlayOnView, useStill } from "./kit";
-import { CAUSE, CHANGE, PROBLEM, ROLE } from "./story";
+import { Card, Label, Section } from "./kit";
+import { BAD, GOOD, INK, LINE, tint, usePlayOnView, useStill } from "./base";
+import { CAUSE, CHANGE, LIVE_LINE, ROLE } from "./story";
 import "./shiptrace.css";
 
 /*
@@ -69,17 +70,18 @@ function Check({ color = GOOD }: { color?: string }) {
 // ---------- Figure 1: deploy targets by path ----------
 
 type TargetName = "backend" | "web" | "cli" | "mobile" | "desktop";
-type Policy = "press" | "push";
+/** `policy` (press or auto) and `runs` (here or push) are separate settings; a target that runs on push deploys itself when main moves. */
+type Policy = "press" | "auto";
 
 /** codecast's own targets and their `when` paths (.codecast/deploy.toml; backend takes the convex ship step's). */
-const TARGETS: { name: TargetName; when: string[]; policy: Policy }[] = [
-  { name: "web", when: ["packages/web/**", "packages/shared/**", "platform/**"], policy: "push" },
+const TARGETS: { name: TargetName; when: string[]; policy: Policy; runs?: "push" }[] = [
+  { name: "web", when: ["packages/web/**", "packages/shared/**", "platform/**"], policy: "press", runs: "push" },
   { name: "backend", when: ["packages/convex/**", "packages/shared/**", "platform/**"], policy: "press" },
   { name: "cli", when: ["packages/cli/**", "packages/shared/**", "platform/**"], policy: "press" },
   { name: "mobile", when: ["packages/mobile/**", "packages/shared/**"], policy: "press" },
   { name: "desktop", when: ["packages/electron/**"], policy: "press" },
 ];
-const POLICY_WORDS: Record<Policy, string> = { press: "on a press", push: "on every push" };
+const POLICY_WORDS: Record<Policy, string> = { press: "on a press", auto: "auto" };
 
 /** Which glob each of the change's files falls under. */
 const FILE_HITS: { path: string; target: TargetName; glob: string }[] = CHANGE.files.map((path) => {
@@ -123,6 +125,7 @@ function TargetRow({ t, step }: { t: (typeof TARGETS)[number]; step: number }) {
       <div className="flx-ship-thead">
         <span className="flx-ship-tname">{t.name}</span>
         <span className="flx-ship-policy" data-policy={t.policy}>{POLICY_WORDS[t.policy]}</span>
+        {t.runs === "push" ? <span className="flx-ship-runs">runs: push</span> : null}
         <span className="flx-ship-state" data-state={st}>
           {st === "going" ? <span className="flx-ship-dot" /> : st === "live" ? <Check color={LINE} /> : null}
           {STATE_WORDS[st]}
@@ -139,7 +142,7 @@ function TargetRow({ t, step }: { t: (typeof TARGETS)[number]; step: number }) {
           <span className="flx-ship-btn" data-pressed={step >= 3 ? "" : undefined}>Deploy {BACKEND_CARRIES.length} commits</span>
           <span className="flx-ship-carries">
             {BACKEND_CARRIES.map((c) => <span key={c.sha} data-landed={c.sha === CHANGE.landed ? "" : undefined}>{c.sha}</span>)}
-            <span className="flx-ship-notfor">1 not for backend</span>
+            <span className="flx-ship-notfor">{DEPLOYS.web.sha} is web only</span>
           </span>
         </In>
       ) : null}
@@ -175,23 +178,29 @@ function TargetsFigure() {
           <div className="mt-1 flex flex-col">
             {TARGETS.map((t) => <TargetRow key={t.name} t={t} step={step} />)}
           </div>
-          <div className="flx-ship-polkey">
-            <span><span className="flx-ship-policy" data-policy="press">on a press</span> a person&apos;s Deploy</span>
-            <span><span className="flx-ship-policy" data-policy="auto">auto</span> when CI on main is green</span>
-            <span><span className="flx-ship-policy" data-policy="push">on every push</span> runs = push</span>
-          </div>
+          <dl className="flx-ship-polkey">
+            <dt>policy</dt>
+            <dd><span className="flx-ship-policy" data-policy="press">on a press</span> a person&apos;s Deploy</dd>
+            <dd><span className="flx-ship-policy" data-policy="auto">auto</span> CI on main green</dd>
+            <dt>runs</dt>
+            <dd><span className="flx-ship-runs">runs: push</span> deploys itself when main moves</dd>
+          </dl>
         </div>
 
         <div className="min-w-0 flex flex-col">
           <div className="flex items-start justify-between gap-3">
-            <Label>main</Label>
+            <Label>main, newest first</Label>
             <Replay onClick={replay} show={canReplay} />
           </div>
           <ol className="flx-ship-main mt-3">
-            {MAIN.map((c, i) => {
+            {[...MAIN.keys()].reverse().map((i) => {
+              const c = MAIN[i];
               const flag = c.sha === DEPLOYS.web.sha && webLive ? ("web" as const) : c.sha === DEPLOYS.backend.sha && backLive ? ("backend" as const) : null;
+              // The cyan run climbs from the landed commit (bottom) to the newest live deploy.
+              const up = i + 1 <= reach;
+              const down = i >= 1 && i <= reach;
               return (
-                <li key={c.sha} className="flx-ship-commit" data-landed={i === 0 ? "" : undefined} data-covered={i <= reach ? "" : undefined} data-seg={i < reach ? "" : undefined}>
+                <li key={c.sha} className="flx-ship-commit" data-landed={i === 0 ? "" : undefined} data-covered={i <= reach ? "" : undefined} data-up={up ? "" : undefined} data-down={down ? "" : undefined}>
                   <span className="flx-ship-node" />
                   <span className="flx-ship-csha">{c.sha}</span>
                   <span className="flx-ship-csub">{c.subject}</span>
@@ -205,17 +214,17 @@ function TargetsFigure() {
           </ol>
           <div className="flx-ship-key"><i aria-hidden /> deploys whose sha has {CHANGE.landed} as an ancestor</div>
 
-          <div className="flx-ship-foot mt-auto">
+          <div className="flx-ship-foot">
             <div className="flx-ship-out">
               <div className="flx-ship-await">
                 <span>cast flow await-deploy</span>
                 <span className="flx-ship-parked" data-on={step >= 6 ? "" : undefined}>{step >= 6 ? "done" : "parked, holds no slot"}</span>
               </div>
-              <In on={webLive}><Check color={LINE} /> Live: {DEPLOYS.web.sha} on web {DEPLOYS.web.dp}</In>
-              <In on={backLive}><Check color={LINE} /> Live: {DEPLOYS.backend.sha} on backend {DEPLOYS.backend.dp}</In>
+              <In on={backLive}><Check color={LINE} /> {LIVE_LINE}</In>
             </div>
             <span className="flx-ship-end" data-on={step >= 6 ? "" : undefined}>Live</span>
           </div>
+          <WatchPanel />
         </div>
       </div>
     </Card>
@@ -283,18 +292,16 @@ function WatchLane({ kind, step }: { kind: "quiet" | "report"; step: number }) {
   );
 }
 
-function WatchFigure() {
+/** The watch, under the deploy it starts from; its own play-once clock. */
+function WatchPanel() {
   const { ref, step, replay, canReplay } = usePlayOnce(WATCH_BEATS);
   const live = step >= 1;
   const anchored = step >= 2;
   return (
-    <Card className="flx-ship-fig relative p-4 sm:p-6">
+    <div className="flx-ship-wpanel">
       <div ref={ref} data-step={step}>
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <Label>Watch on {PROBLEM.task}</Label>
-            <div className="mt-1 font-mono text-[14px] font-semibold" style={{ color: INK }}>{PROBLEM.title}</div>
-          </div>
+          <Label>The watch, 7 days from live</Label>
           <Replay onClick={replay} show={canReplay} />
         </div>
         <div className="flx-ship-watch mt-5">
@@ -322,7 +329,7 @@ function WatchFigure() {
           <WatchLane kind="report" step={step} />
         </div>
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -332,38 +339,49 @@ export function ShipSection() {
       id="ship"
       tone="paper"
       wide
-      title="Land, go live, then a week of quiet"
+      title="Land, deploy and watch"
+      ticket={{ at: 5, state: `watched ${CHANGE.liveOn} to ${CHANGE.watchUntil}`, value: `${CHANGE.deploys.web}, ${CHANGE.deploys.backend}` }}
       lede={
         <p>
-          A change that passes lands on main and goes out with the next deploy of each place it touches. The run parks,
+          A change that passes lands on main and goes out with the next deploy of each target whose paths it touches. The run parks,
           holding no slot, until every one of them is live. The problem it fixed is done after 7 quiet days counted from
           that moment.
         </p>
       }
     >
       <TargetsFigure />
-      <div className="mt-6">
-        <WatchFigure />
-      </div>
     </Section>
   );
 }
 
-// ---------- Production comes back: the nightly trace ----------
+// ---------- Production comes back: the nightly trace (on the dark floor) ----------
 
-const LANE_Y = 100;
+/** The hero's floor vocabulary: base02 nodes with a faint outline, base2 labels, lifted red for text. */
+const N = {
+  fill: SOL.base02,
+  line: "rgba(147,161,161,.32)",
+  lane: "rgba(147,161,161,.45)",
+  ink: SOL.base2,
+  text: SOL.base1,
+  dim: SOL.base0,
+  bad: "#f0625f",
+  good: "#a8bf3a",
+} as const;
+
+const LANE_Y = 112;
 const LANE_X0 = 96;
-const OTHER = { sha: "81d4c6f", subject: "refactor(web): currency" };
+const OTHER = { sha: "81d4c6f", subject: "refactor: currency" };
 const COMMITS = [
-  { x: 168, sha: CAUSE.sha, subject: CAUSE.subject },
+  { x: 172, sha: CAUSE.sha, subject: CAUSE.subject },
   { x: 384, sha: OTHER.sha, subject: OTHER.subject },
-  { x: 560, sha: "d05a7b3", subject: "feat(web): coupons" },
+  { x: 556, sha: "d05a7b3", subject: "feat(web): coupons" },
 ];
 const FIX_X = 770;
-const NIGHT_X = 925;
+const NIGHT_X = 922;
 
 const DIFF_X = 440;
-const DIFF_TOP = 204;
+const DIFF_Y = 162;
+const DIFF_TOP = DIFF_Y + 54;
 const DIFF_STEP = 24;
 const DIFF: { sign: "-" | "+"; text: string; from?: string }[] = [
   { sign: "-", text: "const first = items[0];", from: CAUSE.sha },
@@ -378,34 +396,56 @@ const TALLY = [
   { sha: OTHER.sha, lines: 1, top: false },
 ];
 const RULES = ["bug task", "fix story", "fix subject"] as const;
+const FIX_WORD = "fix(web):";
+const TOTAL_PATH = "packages/web/lib/cart/total.ts";
+const TOTAL_DIFF = CHANGE.diff[TOTAL_PATH];
+const DIFF_HEAD = `total.ts +${TOTAL_DIFF.add} −${TOTAL_DIFF.del}, blamed at ${CHANGE.landed}^`;
 
 // Beats: 1 the nightly read sweeps main, 2 the fix is recognised, 3 its diff,
-// 4 blame arrows, 5 the tally and the regret, 6 the session.
+// 4 blame curves, 5 the tally and the regret, 6 the session.
 const TRACE_BEATS = [500, 1400, 800, 900, 1500, 900];
 
-/** The ≥1024px drawing: main across the top, the diff, blame curves leaving the commit markers. */
+/** A terminal glyph, as the hero draws shell steps. */
+function TermGlyph({ x, y, color }: { x: number; y: number; color: string }) {
+  return (
+    <g transform={`translate(${x} ${y})`} fill="none" stroke={color} strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round">
+      <rect x={0} y={0} width={14} height={12} rx={2.5} />
+      <path d="M3.5 4l2.5 2-2.5 2M7.5 8.5h3" />
+    </g>
+  );
+}
+
+/** The ≥1024px drawing: main across the top, the fix's diff, blame curves into the commit markers. */
 function TraceDrawing({ step }: { step: number }) {
   const commitX = (sha: string) => COMMITS.find((c) => c.sha === sha)!.x;
+  const fixLit = step >= 2;
   return (
-    <svg viewBox="0 0 960 470" preserveAspectRatio="xMidYMid meet" className="flx-trace-svg" role="img" aria-label={`The fix ${CHANGE.landed} on main, its removed lines blamed at its parent, curves back to the commits that wrote them, and ${CAUSE.sha} marked regretted and resolved to its session`}>
+    <svg viewBox="0 0 960 500" preserveAspectRatio="xMidYMid meet" className="flx-trace-svg" role="img" aria-label={`The nightly read finds the fix ${CHANGE.landed} on main, blames its removed lines at its parent, curves them back to the commits that wrote them, and marks ${CAUSE.sha} regretted and resolved to its session`}>
       <defs>
         <marker id="flx-trace-head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0 0L10 5L0 10z" fill={BAD} />
+          <path d="M0 0L10 5L0 10z" fill={N.bad} />
         </marker>
         <marker id="flx-trace-head-dim" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0 0L10 5L0 10z" fill={MUTED} />
+          <path d="M0 0L10 5L0 10z" fill={N.dim} />
         </marker>
       </defs>
 
-      {/* main */}
-      <text x={40} y={LANE_Y + 4} className="flx-trace-t flx-trace-b" fill={DIM}>main</text>
-      <line x1={LANE_X0} y1={LANE_Y} x2={940} y2={LANE_Y} stroke={SOL.base1} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+      {/* the nightly job, a shell step like the hero's */}
+      <g className="flx-trace-in" data-on={step >= 1 ? "" : undefined}>
+        <rect x={646} y={8} width={300} height={34} rx={6} fill={N.fill} stroke={LINE} strokeOpacity={0.7} />
+        <TermGlyph x={658} y={19} color={LINE} />
+        <text x={682} y={30} className="flx-trace-t flx-trace-b" fill={N.ink}>cast line fixloop</text>
+        <line x1={846} y1={14} x2={846} y2={36} stroke={N.line} />
+        <text x={934} y={30} textAnchor="end" className="flx-trace-t flx-trace-s" fill={LINE}>03:30 UTC</text>
+      </g>
 
-      {/* the nightly read sweeps in and settles at its hour */}
+      {/* main */}
+      <text x={40} y={LANE_Y + 4} className="flx-trace-t flx-trace-b" fill={N.dim}>main</text>
+      <line x1={LANE_X0} y1={LANE_Y} x2={944} y2={LANE_Y} stroke={N.lane} strokeWidth={2} />
+
+      {/* the read sweeps main and settles past the newest commit */}
       <g className="flx-trace-night" data-on={step >= 1 ? "" : undefined} style={{ ["--sweep" as string]: `${LANE_X0 - NIGHT_X}px` } as CSSProperties}>
-        <line x1={NIGHT_X} y1={LANE_Y - 50} x2={NIGHT_X} y2={LANE_Y + 30} stroke={LINE} strokeWidth={1.6} strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
-        <text x={944} y={24} textAnchor="end" className="flx-trace-t flx-trace-s" fill={MUTED}>reads what landed</text>
-        <text x={944} y={42} textAnchor="end" className="flx-trace-t flx-trace-b" fill={LINE}>03:30 UTC</text>
+        <line x1={NIGHT_X} y1={44} x2={NIGHT_X} y2={LANE_Y + 26} stroke={LINE} strokeWidth={1.6} strokeDasharray="4 4" />
       </g>
 
       {COMMITS.map((c) => {
@@ -414,25 +454,25 @@ function TraceDrawing({ step }: { step: number }) {
         const blamed = !!t && step >= 4;
         return (
           <g key={c.sha}>
-            <text x={c.x} y={LANE_Y - 40} textAnchor="middle" className="flx-trace-t flx-trace-s" fill={MUTED}>{c.subject}</text>
-            <text x={c.x} y={LANE_Y - 18} textAnchor="middle" className="flx-trace-t flx-trace-b flx-trace-col" fill={regretted ? BAD : blamed ? INK : MUTED}>{c.sha}</text>
-            <circle cx={c.x} cy={LANE_Y} r={8} className="flx-trace-col" fill={regretted ? BAD : SOL.base3} stroke={regretted ? BAD : blamed ? INK : SOL.base1} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+            <text x={c.x} y={LANE_Y - 42} textAnchor="middle" className="flx-trace-t flx-trace-s" fill={N.dim}>{c.subject}</text>
+            <text x={c.x} y={LANE_Y - 20} textAnchor="middle" className="flx-trace-t flx-trace-b flx-trace-col" fill={regretted ? N.bad : blamed ? N.ink : N.text}>{c.sha}</text>
+            <circle cx={c.x} cy={LANE_Y} r={8} className="flx-trace-col" fill={regretted ? BAD : N.fill} stroke={regretted ? BAD : blamed ? N.ink : N.line} strokeWidth={2} />
           </g>
         );
       })}
 
       {/* the fix: this story's landed change */}
       <g>
-        <text x={FIX_X} y={LANE_Y - 40} textAnchor="middle" className="flx-trace-t flx-trace-s" fill={MUTED}>
-          <tspan className="flx-trace-col" fill={step >= 2 ? LINE : MUTED} fontWeight={step >= 2 ? 700 : 400}>fix(web):</tspan>{CHANGE.subject.slice("fix(web):".length)}
+        <text x={FIX_X} y={LANE_Y - 42} textAnchor="middle" className="flx-trace-t flx-trace-s" fill={N.dim}>
+          <tspan className="flx-trace-col" fill={fixLit ? LINE : N.dim} fontWeight={fixLit ? 700 : 400}>{FIX_WORD}</tspan>{CHANGE.subject.slice(FIX_WORD.length)}
         </text>
-        <text x={FIX_X} y={LANE_Y - 18} textAnchor="middle" className="flx-trace-t flx-trace-b" fill={INK}>{CHANGE.landed}</text>
-        <circle cx={FIX_X} cy={LANE_Y} r={15} fill="none" stroke={LINE} strokeWidth={2} vectorEffect="non-scaling-stroke" className="flx-trace-ring" data-on={step >= 2 ? "" : undefined} />
-        <circle cx={FIX_X} cy={LANE_Y} r={8} fill={step >= 2 ? LINE : SOL.base3} stroke={step >= 2 ? LINE : SOL.base1} strokeWidth={2} vectorEffect="non-scaling-stroke" className="flx-trace-col" />
+        <text x={FIX_X} y={LANE_Y - 20} textAnchor="middle" className="flx-trace-t flx-trace-b" fill={N.ink}>{CHANGE.landed}</text>
+        <circle cx={FIX_X} cy={LANE_Y} r={15} fill="none" stroke={LINE} strokeWidth={2} className="flx-trace-ring" data-on={fixLit ? "" : undefined} />
+        <circle cx={FIX_X} cy={LANE_Y} r={8} fill={fixLit ? LINE : N.fill} stroke={fixLit ? LINE : N.line} strokeWidth={2} className="flx-trace-col" />
         {/* the three ways a commit counts as a fix; this one matched on its subject */}
-        <text x={FIX_X} y={LANE_Y + 36} textAnchor="middle" className="flx-trace-t flx-trace-s" fill={DIM}>
+        <text x={FIX_X} y={LANE_Y + 38} textAnchor="middle" className="flx-trace-t flx-trace-s" fill={N.dim}>
           {RULES.map((r, i) => (
-            <tspan key={r} className="flx-trace-col" fill={r === "fix subject" && step >= 2 ? LINE : DIM} fontWeight={r === "fix subject" && step >= 2 ? 700 : 400}>{i ? "  ·  " : ""}{r}</tspan>
+            <tspan key={r} className="flx-trace-col" fill={r === "fix subject" && fixLit ? LINE : N.dim} fontWeight={r === "fix subject" && fixLit ? 700 : 400}>{i ? "  ·  " : ""}{r}</tspan>
           ))}
         </text>
       </g>
@@ -445,24 +485,24 @@ function TraceDrawing({ step }: { step: number }) {
         const top = TALLY.find((r) => r.sha === l.from)?.top;
         const d = `M${DIFF_X - 4} ${y} C ${cx + (DIFF_X - cx) * 0.45} ${y}, ${cx} ${y - 30}, ${cx} ${LANE_Y + 12}`;
         return (
-          <path key={i} d={d} pathLength={1} fill="none" stroke={top ? BAD : MUTED} strokeWidth={1.6} strokeOpacity={top ? 0.85 : 0.6} vectorEffect="non-scaling-stroke" markerEnd={`url(#${top ? "flx-trace-head" : "flx-trace-head-dim"})`} className="flx-trace-arrow" data-on={step >= 4 ? "" : undefined} style={{ transitionDelay: `${i * 140}ms` }} />
+          <path key={i} d={d} pathLength={1} fill="none" stroke={top ? N.bad : N.dim} strokeWidth={1.6} strokeOpacity={top ? 0.9 : 0.7} markerEnd={`url(#${top ? "flx-trace-head" : "flx-trace-head-dim"})`} className="flx-trace-arrow" data-on={step >= 4 ? "" : undefined} style={{ transitionDelay: `${i * 140}ms` }} />
         );
       })}
 
-      {/* the fix's diff */}
+      {/* the fix's diff, as a node on the floor */}
       <g className="flx-trace-in" data-on={step >= 3 ? "" : undefined}>
-        <rect x={DIFF_X} y={150} width={500} height={180} rx={10} fill={SOL.base3} stroke={HAIR} vectorEffect="non-scaling-stroke" />
-        <text x={DIFF_X + 16} y={174} className="flx-trace-t flx-trace-s" fill={MUTED}>total.ts, blamed at {CHANGE.landed}^</text>
+        <rect x={DIFF_X} y={DIFF_Y} width={500} height={192} rx={8} fill={N.fill} stroke={N.line} />
+        <text x={DIFF_X + 16} y={DIFF_Y + 26} className="flx-trace-t flx-trace-s" fill={N.text}>{DIFF_HEAD}</text>
         {DIFF.map((l, i) => {
           const y = DIFF_TOP + i * DIFF_STEP;
           const minus = l.sign === "-";
           return (
             <g key={i}>
-              <rect x={DIFF_X + 8} y={y - 16} width={484} height={21} rx={4} style={{ fill: minus ? tint(BAD, 10) : tint(GOOD, 8) }} />
-              <text x={DIFF_X + 18} y={y} className="flx-trace-t" fill={minus ? BAD : GOOD}>{l.sign}</text>
-              <text x={DIFF_X + 34} y={y} className="flx-trace-t" fill={minus ? INK : MUTED}>{l.text}</text>
+              <rect x={DIFF_X + 8} y={y - 16} width={484} height={21} rx={4} style={{ fill: minus ? tint(BAD, 16) : tint(GOOD, 12) }} />
+              <text x={DIFF_X + 18} y={y} className="flx-trace-t" fill={minus ? N.bad : N.good}>{l.sign}</text>
+              <text x={DIFF_X + 34} y={y} className="flx-trace-t" fill={minus ? N.ink : N.text}>{l.text}</text>
               {l.from ? (
-                <text x={DIFF_X + 482} y={y} textAnchor="end" className="flx-trace-t flx-trace-s flx-trace-fade" data-on={step >= 4 ? "" : undefined} fill={l.from === CAUSE.sha ? BAD : MUTED}>{l.from}</text>
+                <text x={DIFF_X + 482} y={y} textAnchor="end" className="flx-trace-t flx-trace-s flx-trace-fade" data-on={step >= 4 ? "" : undefined} fill={l.from === CAUSE.sha ? N.bad : N.dim}>{l.from}</text>
               ) : null}
             </g>
           );
@@ -477,26 +517,26 @@ function TraceDrawing({ step }: { step: number }) {
           return (
             <g key={r.sha}>
               {Array.from({ length: r.lines }, (_, k) => (
-                <rect key={k} x={cx - w / 2 + k * 26} y={344} width={22} height={12} rx={3} fill={r.top ? BAD : SOL.base1} opacity={r.top ? 0.9 : 0.6} />
+                <rect key={k} x={cx - w / 2 + k * 26} y={366} width={22} height={12} rx={3} fill={r.top ? BAD : N.dim} opacity={r.top ? 0.95 : 0.6} />
               ))}
-              <text x={cx} y={378} textAnchor="middle" className="flx-trace-t flx-trace-b" fill={r.top ? BAD : MUTED}>{r.lines} {r.lines === 1 ? "line" : "lines"}</text>
-              <text x={cx} y={396} textAnchor="middle" className="flx-trace-t flx-trace-s" fill={r.top ? BAD : MUTED} fontWeight={r.top ? 700 : 400}>{r.top ? "top introducer, regretted" : "not top"}</text>
+              <text x={cx} y={400} textAnchor="middle" className="flx-trace-t flx-trace-b" fill={r.top ? N.bad : N.text}>{r.lines} {r.lines === 1 ? "line" : "lines"}</text>
+              <text x={cx} y={418} textAnchor="middle" className="flx-trace-t flx-trace-s" fill={r.top ? N.bad : N.dim} fontWeight={r.top ? 700 : 400}>{r.top ? "top introducer, regretted" : "not top"}</text>
             </g>
           );
         })}
-        <text x={DIFF_X + 8} y={356} className="flx-trace-t flx-trace-s" fill={MUTED}>
-          {CAUSE.sha}.fixed_by += {"{"} {CHANGE.landed}, lines: {CAUSE.lines}, <tspan fill={BAD} fontWeight={700}>top: true</tspan> {"}"}
+        <text x={DIFF_X + 8} y={380} className="flx-trace-t flx-trace-s" fill={N.dim}>
+          {CAUSE.sha}.fixed_by += {"{"} {CHANGE.landed}, lines: {CAUSE.lines}, <tspan fill={N.bad} fontWeight={700}>top: true</tspan> {"}"}
         </text>
       </g>
 
       {/* the regretted commit resolves to the session that wrote it */}
       <g className="flx-trace-in" data-on={step >= 6 ? "" : undefined}>
-        <line x1={commitX(CAUSE.sha)} y1={404} x2={commitX(CAUSE.sha)} y2={428} stroke={BAD} strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
-        <rect x={40} y={428} width={300} height={30} rx={15} style={{ fill: tint(LINE, 13) }} />
-        <circle cx={58} cy={443} r={4.5} fill={LINE} />
-        <text x={70} y={448} className="flx-trace-t" fill={INK} fontWeight={600}>{CAUSE.sessionTitle}</text>
-        <text x={326} y={448} textAnchor="end" className="flx-trace-t flx-trace-s" fill={LINE}>{CAUSE.session}</text>
-        <text x={354} y={448} className="flx-trace-t flx-trace-s" fill={MUTED}>Codecast-Session, the {ROLE.name} line</text>
+        <line x1={commitX(CAUSE.sha)} y1={426} x2={commitX(CAUSE.sha)} y2={452} stroke={N.bad} strokeWidth={1.6} />
+        <rect x={40} y={452} width={300} height={32} rx={16} style={{ fill: tint(LINE, 20) }} stroke={LINE} strokeOpacity={0.5} />
+        <circle cx={60} cy={468} r={4.5} fill={LINE} />
+        <text x={72} y={473} className="flx-trace-t" fill={N.ink} fontWeight={600}>{CAUSE.sessionTitle}</text>
+        <text x={326} y={473} textAnchor="end" className="flx-trace-t flx-trace-s" fill={LINE}>{CAUSE.session}</text>
+        <text x={356} y={473} className="flx-trace-t flx-trace-s" fill={N.dim}>Codecast-Session, the {ROLE.name} line</text>
       </g>
     </svg>
   );
@@ -507,17 +547,17 @@ function TraceStack({ step }: { step: number }) {
   return (
     <div className="flx-trace-stack">
       <In on={step >= 1} className="flx-trace-srow">
+        <span className="flx-trace-job"><svg width="14" height="12" viewBox="0 0 14 12" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><rect x=".7" y=".7" width="12.6" height="10.6" rx="2.5" /><path d="M3.5 3.8l2.5 2-2.5 2M7.5 8.3h3" /></svg>cast line fixloop</span>
         <span className="flx-trace-nchip">03:30 UTC</span>
-        <span className="flx-trace-sdim">reads what landed on main</span>
       </In>
       <div className="flx-trace-sfix" data-on={step >= 2 ? "" : undefined}>
-        <div><b>{CHANGE.landed}</b> <span className="flx-trace-fixword">fix(web):</span>{CHANGE.subject.slice("fix(web):".length)}</div>
+        <div><b>{CHANGE.landed}</b> <span className="flx-trace-fixword">{FIX_WORD}</span>{CHANGE.subject.slice(FIX_WORD.length)}</div>
         <div className="flx-trace-rules">
           {RULES.map((r) => <span key={r} data-hit={r === "fix subject" && step >= 2 ? "" : undefined}>{r}</span>)}
         </div>
       </div>
       <In on={step >= 3} className="flx-trace-sdiff">
-        <div className="flx-trace-sdim">total.ts, blamed at {CHANGE.landed}^</div>
+        <div className="flx-trace-sdim">{DIFF_HEAD}</div>
         {DIFF.map((l, i) => (
           <div key={i} className="flx-trace-sline" data-sign={l.sign}>
             <span className="flx-trace-sgn">{l.sign}</span>
@@ -547,44 +587,44 @@ function TraceStack({ step }: { step: number }) {
 function TraceFigure() {
   const { ref, step, replay, canReplay } = usePlayOnce(TRACE_BEATS);
   return (
-    <Card className="flx-trace-fig relative p-4 sm:p-6">
+    <div className="flx-trace-fig">
       <div ref={ref} data-step={step}>
         <div className="flex items-start justify-between gap-3">
-          <Label>The night after {CHANGE.landed} landed</Label>
+          <span className="font-mono text-[12px] font-semibold" style={{ color: N.dim }}>Nov 4, the night after {CHANGE.landed} landed</span>
           <Replay onClick={replay} show={canReplay} />
         </div>
-        <div className="mt-3">
+        <div className="mt-4">
           <TraceDrawing step={step} />
           <TraceStack step={step} />
         </div>
       </div>
-    </Card>
+    </div>
   );
 }
 
 /** The Loop's foot as the app draws it, and the routine that files confirmed causes. */
 function BackToSignals() {
   return (
-    <div className="mt-6 grid grid-cols-[minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-5">
-      <Card className="p-4 sm:p-5">
-        <Label>The Loop</Label>
-        <div className="flx-trace-foot mt-3">
+    <div className="mt-6 grid grid-cols-[minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4">
+      <div className="flx-trace-panel">
+        <span className="flx-trace-plabel">The Loop</span>
+        <div className="flx-trace-foot">
           <span className="flx-trace-foothead"><span aria-hidden>↺</span> Back to signals</span>
           <span className="flx-trace-footn"><b>2</b> regressed</span>
           <span className="flx-trace-footn"><b>2</b> reopened by a finding</span>
           <span className="flx-trace-footwin">last 14 days</span>
         </div>
-      </Card>
-      <Card className="p-4 sm:p-5">
-        <Label>Weekly fix-loop routine</Label>
-        <div className="flx-trace-route mt-3">
-          <span className="flx-trace-chip" style={{ color: BAD, backgroundColor: tint(BAD, 11) }}>confirmed cause</span>
+      </div>
+      <div className="flx-trace-panel">
+        <span className="flx-trace-plabel">Weekly fix-loop routine</span>
+        <div className="flx-trace-route">
+          <span className="flx-trace-chip" data-tone="bad">confirmed cause</span>
           <span aria-hidden className="flx-trace-arr">→</span>
-          <span className="flx-trace-chip" style={{ color: INK, backgroundColor: tint(SOL.base1, 22) }}>szz:{CAUSE.sha}</span>
+          <span className="flx-trace-chip">szz:{CAUSE.sha}</span>
           <span aria-hidden className="flx-trace-arr">→</span>
           <a href="#signals" className="flx-trace-up"><span aria-hidden>↑</span> Signals, same door</a>
         </div>
-      </Card>
+      </div>
     </div>
   );
 }
@@ -593,19 +633,20 @@ export function TraceSection() {
   return (
     <Section
       id="back"
-      tone="sand"
+      tone="floor"
       wide
-      title="Production comes back to the change that broke it"
+      title="Tracing a fix back to the change that caused it"
+      ticket={{ at: 6, state: `blamed ${CAUSE.lines} lines to ${CAUSE.sha}`, value: CAUSE.sha, valueColor: BAD }}
       lede={
         <>
           <p>
-            Every night at 03:30 UTC codecast reads what landed on main and blames each fix&apos;s removed lines at the
-            commit before it. The commit that gave the fix the most lines is the top introducer, and it is regretted on
-            its author&apos;s record.
+            Every night at 03:30 UTC codecast reads what landed on main and blames the lines each fix removed or changed at
+            the commit before it. The commit that gave the fix the most lines is the top introducer. It counts as regretted
+            when the fix lands inside that change&apos;s window.
           </p>
           <p>
-            A weekly routine files confirmed causes as signals. The Loop&apos;s Back to signals counts are a separate
-            measure: shipped problems a finding reopened in the last 14 days.
+            A weekly routine files confirmed causes as signals. The Loop&apos;s Back to signals counts come from somewhere
+            else. They count shipped problems a finding reopened in the last 14 days.
           </p>
         </>
       }

@@ -2,8 +2,9 @@
 
 import { useState, type CSSProperties } from "react";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
-import { BAD, DIM, GOOD, LINE, MUTED, PERSON, Section, TEXT, at, tint, usePlayOnView, useStepClock, useStill } from "./kit";
-import { CHANGE, PROBLEM } from "./story";
+import { Section } from "./kit";
+import { BAD, DIM, GOOD, LINE, MUTED, PERSON, TEXT, at, tint, usePlayOnView, useStepClock, useStill } from "./base";
+import { CHANGE, NOW, PROBLEM, SIGNALS_TODAY, SOURCES as STORY_SOURCES } from "./story";
 import "./signals.css";
 
 /*
@@ -18,21 +19,25 @@ import "./signals.css";
 type Sig = { id: string; source: string; title: string; key: string; judge?: string; opener?: string };
 type Problem = { key: string; title: string; count: number; fresh?: boolean };
 
-/** Problem names shared by the door and the line's queue (none of them the story's). */
+/**
+ * Problem names shared by the door and the line's queue (none of them the
+ * story's). Every signal here comes from a source that sent today (story
+ * SOURCES: sentry, ci, evals); a problem's signal count on the board is its
+ * findings count in the line's queue.
+ */
 const ONBOARD = "Onboarding skips a tool";
 const SEARCH = "Archived docs rank first";
 const EXPORT = "Export fails in Safari";
 const LOOP = "Agent loops on cast check";
-const RETRY = "Retries hide flaky deploys";
+const SMOKE = "Deploy smoke job fails";
 
 const SIGS: Sig[] = [
   { id: "sentry", source: PROBLEM.source, title: "TypeError in cart/total.ts", key: PROBLEM.key },
   { id: "eval", source: "evals", title: "Onboarding eval red", key: "eval:onboarding-tool-v2", judge: "eval:onboarding-tool" },
-  { id: "report", source: "person", title: EXPORT, key: "report:export-safari", opener: "a person filed it" },
-  { id: "posthog", source: "posthog", title: "Signups down 9% on /pricing", key: "posthog:pricing-signups" },
-  { id: "lesson", source: "lesson", title: RETRY, key: "lesson:retry-deploy", opener: "a lesson did" },
+  { id: "smoke", source: "ci", title: SMOKE, key: "ci:deploy-smoke", opener: "its finder opens them" },
+  { id: "slow", source: "sentry", title: "Slow render on /pricing", key: "sentry:pricing-slow" },
   { id: "search", source: "sentry", title: "Timeout on /api/search", key: "sentry:api-search-timeout", judge: "issue:search-archived" },
-  { id: "agentwatch", source: "agentwatch", title: LOOP, key: "agentwatch:check-loop", opener: "its finder opens them" },
+  { id: "loop", source: "evals", title: LOOP, key: "eval:check-loop", opener: "its finder opens them" },
 ];
 const sigIndex = (id: string) => SIGS.findIndex((s) => s.id === id);
 
@@ -43,11 +48,13 @@ const START: Problem[] = [
 ];
 const START_HELD = 128;
 /**
- * The auto pass. "report" comes twice: the second time its own new problem
+ * The auto pass. "smoke" comes twice: the second time its own new problem
  * holds the key. It ends on the story's Sentry signal joining its problem,
  * which is the still frame.
  */
-const SCRIPT = ["eval", "report", "posthog", "lesson", "report", "search", "agentwatch", "sentry"].map(sigIndex);
+const SCRIPT = ["eval", "smoke", "slow", "loop", "smoke", "search", "sentry"].map(sigIndex);
+/** Problems the pass opens; the board's open count lands on NOW.open at the end. */
+const OPENED_IN_PASS = 2;
 
 const GATES = [
   { name: "Fingerprint", rule: "same key on an open problem" },
@@ -162,6 +169,7 @@ function OneDoor() {
     return `joins: ${targetTitle}`;
   };
   const pips = Math.min(5, view.problems.length);
+  const openNow = NOW.open - OPENED_IN_PASS + view.problems.filter((p) => p.fresh).length;
 
   return (
     <div ref={ref} data-play={playing ? "" : undefined} className="flx-sig-door">
@@ -226,7 +234,7 @@ function OneDoor() {
         <div className="flx-sig-board">
           <div className="flx-sig-board-head">
             <span>Open problems</span>
-            <span className="flx-sig-board-n">{view.problems.length}</span>
+            <span className="flx-sig-board-n">{openNow} open</span>
           </div>
           <ul className="flx-sig-problems">
             {view.problems.map((p) => {
@@ -251,6 +259,7 @@ function OneDoor() {
             })}
           </ul>
           {still ? null : <div className="flx-sig-ghost" aria-hidden>new problems open here</div>}
+          <div className="flx-sig-more">… {openNow - view.problems.length} more open</div>
           <div className="flx-sig-held" data-hit={view.bump === "held" ? "" : undefined}>
             {view.bump === "held" && !still ? <span key={view.n} className="flx-sig-flash" aria-hidden /> : null}
             <span className="flx-sig-held-stack" aria-hidden><i /><i /><i /></span>
@@ -273,16 +282,17 @@ function OneDoor() {
 
 // ─────────────────────────────── Signals: source health ───────────────────────────────
 
-type Src = { name: string; source: string; days: number[]; broken?: "erroring" | "paused" };
+type Src = { name: string; source: string; today: number; days: number[]; broken?: "erroring" | "paused" };
 const WINDOW = 14;
-const SOURCES: Src[] = [
-  { name: "New issues", source: "sentry", days: [5, 8, 3, 6, 9, 4, 7, 5, 6, 8, 4, 6, 7, 5] },
-  { name: "Eval reds", source: "evals", days: [0, 3, 0, 2, 0, 4, 0, 2, 0, 3, 0, 2, 0, 3] },
-  { name: "Teammate reports", source: "person", days: [1, 0, 0, 2, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0] },
-  { name: "Metric alerts", source: "posthog", days: [2, 1, 3, 1, 2, 2, 1, 3, 2, 0, 0, 0, 0, 0] },
-  { name: "AgentWatch findings", source: "agentwatch", days: Array(WINDOW).fill(0) },
-  { name: "Failed jobs", source: "ci", days: [0, 0, 1, 0, 2, 1, 0, 1, 0, 0, 1, 0, 1, 0], broken: "erroring" },
-];
+/** Day series per story source; each one's last day is its `today`, and its state reads as the story says. */
+const DAYS: Record<string, number[]> = {
+  sentry: [1640, 1710, 1580, 1820, 1760, 1690, 1905, 1720, 1810, 1660, 1880, 1790, 1850, 1892],
+  ci: [280, 296, 262, 301, 318, 274, 290, 305, 288, 312, 279, 299, 306, 311],
+  evals: [0, 66, 0, 71, 0, 58, 0, 80, 0, 64, 0, 69, 0, 73],
+  person: [2, 1, 3, 1, 0, 2, 1, 2, 0, 0, 0, 0, 0, 0],
+  judge: Array(WINDOW).fill(0),
+};
+const SOURCES: Src[] = STORY_SOURCES.map((s) => ({ name: s.label, source: s.source, today: s.today, days: DAYS[s.source] ?? Array(WINDOW).fill(0) }));
 type SrcState = "flowing" | "quiet" | "stopped";
 
 /** sourceState in day units: stopped if broken or empty; quiet past max(1, 2 × the lower-median gap). */
@@ -309,6 +319,7 @@ function SourceHealth() {
       <div className="flx-sig-health-head">
         <div className="flex items-baseline gap-3 flex-wrap">
           <span className="flx-sig-health-title"><span className="flx-sig-crumb">Loop ›</span> Sources to watch</span>
+          <span className="flx-sig-tally"><b>{(later ? 0 : SIGNALS_TODAY).toLocaleString("en-US")}</b> signals today</span>
           <span className="flx-sig-tally"><b>{feeding}</b> feeding</span>
           <span className="flx-sig-tally"><b>{rows.length - feeding}</b> silent</span>
         </div>
@@ -325,7 +336,7 @@ function SourceHealth() {
             <div key={src.name} className="flx-sig-row" data-state={r.state}>
               <div className="flx-sig-row-name">
                 <span>{src.name}</span>
-                <code>{src.source}</code>
+                <code>{src.source}{src.today && !later ? ` · ${src.today.toLocaleString("en-US")} today` : ""}</code>
               </div>
               <div className="flx-sig-strip" style={{ ["--n" as string]: WINDOW } as CSSProperties}>
                 {r.days.map((d, i) => (
@@ -388,6 +399,7 @@ export function SignalsSection() {
       id="signals"
       tone="paper"
       wide
+      ticket={{ at: 0, state: "joined at Fingerprint", value: `${PROBLEM.signals} signals` }}
       title="Signals"
       lede={
         <>
@@ -397,8 +409,8 @@ export function SignalsSection() {
             open problem, opens a new one, or stays as evidence.
           </p>
           <p>
-            A source that sends nothing for 14 days, or reports erroring or paused, turns red. One that is late against its own
-            rhythm, but not stopped, turns grey.
+            A source that sends nothing for 14 days, or reports erroring or paused, is stopped and turns red. One that is late
+            against its own rhythm is quiet and stays grey.
           </p>
         </>
       }
@@ -415,10 +427,7 @@ export function SignalsSection() {
 
 const PERSON_STEPS = [1700, 1500, 1700, 1700, 3200];
 const WAYS_BACK = ["Fix check", "Address review", "Revise", "Resolve conflict"];
-const EDITS = [
-  { name: "web/lib/cart/total.ts", add: 9, del: 2 },
-  { name: "convex/checkout.ts", add: 4, del: 1 },
-];
+const EDITS = Object.entries(CHANGE.diff).map(([path, d]) => ({ name: path.replace(/^packages\//, ""), ...d }));
 
 function TermIcon() {
   return (
@@ -506,20 +515,21 @@ function PersonLane({ playing }: { playing: boolean }) {
 
 type QItem = { id: string; title: string; tag: string; score: number | null; findings: number; age: number };
 const QUEUE: QItem[] = [
-  { id: "q1", title: RETRY, tag: "retries", score: 82, findings: 5, age: 2 },
+  { id: "q1", title: SMOKE, tag: "deploy-smoke", score: 82, findings: 2, age: 0 },
   { id: "q2", title: ONBOARD, tag: "onboarding", score: 64, findings: 7, age: 3 },
   { id: "q3", title: SEARCH, tag: "archived-docs", score: 64, findings: 4, age: 5 },
   { id: "q4", title: EXPORT, tag: "safari-export", score: null, findings: 3, age: 1 },
 ];
-const NEWCOMER: QItem = { id: "q5", title: LOOP, tag: "check-loop", score: null, findings: 6, age: 0 };
+const NEWCOMER: QItem = { id: "q5", title: LOOP, tag: "check-loop", score: null, findings: 1, age: 0 };
 const GROUND = [
   { field: "goal", value: "line" },
   { field: "category", value: "prompt" },
   { field: "risk", value: "low" },
   { field: "readiness", value: "ready" },
 ];
-// 0 new problem · 1-4 Ground stamps (4 joins the queue) · 5 pick top → mini-1 · 6 placed
-// 7 laptop's run stops at a card, slot frees · 8 pick next → laptop · 9 placed · 10 rest
+// 0 new problem · 1-4 Ground stamps (4 joins the queue) · 5 pick top → mini-1 (2 free vs 0) · 6 placed
+// 7 two runs stop at a card and free their slots · 8 pick next → mini-1 (2 free vs 1) · 9 placed · 10 rest.
+// The end frame matches story FLOOR: 2 running of 4 online slots, 2 on a person, 17 queued.
 const LINE_STEPS = [1500, 850, 850, 850, 1500, 1500, 1300, 2000, 1500, 1300, 3200];
 
 const rankOf = (q: QItem) => q.score ?? 50;
@@ -531,12 +541,12 @@ function lineAt(f: number) {
   const queue = pool.filter((q) => !started.includes(q.id)).sort(byQueue);
   const picking = f === 5 ? "q1" : f === 8 ? "q2" : null;
   const machines = [
-    { name: "mini-1", runs: 3, online: true, jobs: ["billing", ...(f >= 6 ? [QUEUE[0].tag] : [])] },
-    { name: "laptop", runs: 2, online: true, jobs: [...(f < 7 ? ["docs-404"] : []), ...(f >= 9 ? [QUEUE[1].tag] : [])] },
+    { name: "mini-1", runs: 3, online: true, jobs: [...(f < 7 ? ["billing"] : []), ...(f >= 6 ? [QUEUE[0].tag] : []), ...(f >= 9 ? [QUEUE[1].tag] : [])] },
+    { name: "laptop", runs: NOW.slots - 3, online: true, jobs: [...(f < 7 ? ["docs-404"] : [])] },
     { name: "studio", runs: 4, online: false, jobs: [] as string[] },
   ];
-  const chosen = f === 5 || f === 6 ? "mini-1" : f === 8 || f === 9 ? "laptop" : null;
-  const onPerson = ["banner-copy", ...(f >= 7 ? ["docs-404"] : [])];
+  const chosen = f === 5 || f === 6 || f === 8 || f === 9 ? "mini-1" : null;
+  const onPerson = f >= 7 ? ["billing", "docs-404"] : [];
   return { queue, picking, machines, chosen, onPerson, stamped: Math.min(4, f) };
 }
 
@@ -559,7 +569,7 @@ function LineLane({ playing }: { playing: boolean }) {
           <span style={{ color: DIM }}>every 2 min</span>
         </div>
         <div className="flx-sig-ground-title">
-          <SourceChip source="agentwatch" />
+          <SourceChip source="evals" />
           <span className="min-w-0">{NEWCOMER.title}</span>
         </div>
         <div className="flx-sig-fields">
@@ -578,7 +588,7 @@ function LineLane({ playing }: { playing: boolean }) {
       {/* The queue, in the live flow's order. */}
       <div className="flx-sig-queue">
         <div className="flx-sig-mini-l flex justify-between gap-2 flex-wrap">
-          <span>Queue</span>
+          <span>Queue <b className="flx-sig-qn">{NOW.queued - 3 + s.queue.length}</b></span>
           <span style={{ color: DIM }}>score, findings, age</span>
         </div>
         <div className="flx-sig-qlist" style={{ ["--n" as string]: s.queue.length } as CSSProperties}>
@@ -641,9 +651,9 @@ function LineLane({ playing }: { playing: boolean }) {
         <span className="flx-sig-person-l">On a person</span>
         <span className="flx-sig-person-sub">no slot</span>
         <div className="flex flex-wrap gap-1.5 min-w-0">
-          {s.onPerson.map((t) => (
+          {s.onPerson.length ? s.onPerson.map((t) => (
             <span key={t} className="flx-sig-card-chip">{t}</span>
-          ))}
+          )) : <span className="flx-sig-person-sub">none</span>}
         </div>
       </div>
     </div>
@@ -665,10 +675,10 @@ function WaysIn() {
         </div>
       </div>
       <svg className="flx-sig-merge" viewBox="0 0 1000 60" preserveAspectRatio="none" aria-hidden>
-        <path d="M245 0 C245 36 500 24 500 60" style={{ stroke: PERSON }} />
-        <path d="M755 0 C755 36 500 24 500 60" style={{ stroke: LINE }} />
-        <path className="flx-sig-march" d="M245 0 C245 36 500 24 500 60" style={{ stroke: PERSON }} />
-        <path className="flx-sig-march" d="M755 0 C755 36 500 24 500 60" style={{ stroke: LINE }} />
+        <path d="M200 0 C200 36 500 24 500 60" style={{ stroke: PERSON }} />
+        <path d="M710 0 C710 36 500 24 500 60" style={{ stroke: LINE }} />
+        <path className="flx-sig-march" d="M200 0 C200 36 500 24 500 60" style={{ stroke: PERSON }} />
+        <path className="flx-sig-march" d="M710 0 C710 36 500 24 500 60" style={{ stroke: LINE }} />
       </svg>
       <a href="#checks" className="flx-sig-check">
         <TermIcon />
@@ -685,6 +695,7 @@ export function WaysInSection() {
       id="ways-in"
       tone="sand"
       wide
+      ticket={{ at: 2, state: "frozen from a person's session", value: CHANGE.frozen }}
       title="Triage and build"
       lede={
         <>
@@ -693,7 +704,7 @@ export function WaysInSection() {
             commit on its own branch, so nothing moves in the shared checkout.
           </p>
           <p>
-            The line starts the rest from the problems signals open. Ground labels each new problem, ready ones queue by score, and
+            The line builds everything else, starting from the problems signals open. Ground labels each new problem, ready ones queue by score, and
             each run takes a free slot on a machine.
           </p>
         </>

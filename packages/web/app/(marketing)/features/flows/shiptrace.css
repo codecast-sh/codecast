@@ -63,9 +63,12 @@
 .flx-root .flx-ship-carries [data-landed] { color: #2aa198; font-weight: 700; }
 .flx-root .flx-ship-notfor { color: #93a1a1; }
 
-.flx-root .flx-ship-polkey { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(88, 110, 117, .14); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: #93a1a1; }
-.flx-root .flx-ship-polkey > span { display: inline-flex; align-items: center; gap: 6px; }
-.flx-root .flx-ship-polkey .flx-ship-policy { font-size: 11.5px; }
+.flx-root .flx-ship-runs { display: inline-block; font-size: 12px; padding: 0 8px; border-radius: 999px; border: 1px dashed rgba(88, 110, 117, .45); color: #586e75; white-space: nowrap; }
+.flx-root .flx-ship-polkey { display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: 6px 10px; margin: 10px 0 0; padding-top: 10px; border-top: 1px solid rgba(88, 110, 117, .14); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: #93a1a1; }
+.flx-root .flx-ship-polkey dt { grid-column: 1; color: #657b83; font-weight: 600; }
+.flx-root .flx-ship-polkey dt:first-of-type { grid-row: span 2; align-self: start; padding-top: 2px; }
+.flx-root .flx-ship-polkey dd { grid-column: 2; margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.flx-root .flx-ship-polkey .flx-ship-policy, .flx-root .flx-ship-polkey .flx-ship-runs { font-size: 11.5px; }
 
 /* main, drawn vertically: the landed commit on top, the deploys that contain it lit. */
 .flx-root .flx-ship-main { list-style: none; margin: 0; padding: 0; font-family: var(--font-mono, ui-monospace, monospace); }
@@ -76,11 +79,11 @@
 .flx-root .flx-ship-commit::before { content: ""; position: absolute; left: 7px; width: 2px; top: 0; bottom: 0; background: rgba(147, 161, 161, .5); }
 .flx-root .flx-ship-commit:first-child::before { top: 50%; }
 .flx-root .flx-ship-commit:last-child::before { bottom: 50%; }
-/* The cyan run: from the landed commit down to the furthest live deploy. */
+/* The cyan run: from the landed commit (bottom) up to the newest live deploy. */
 .flx-root .flx-ship-commit::after { content: ""; position: absolute; left: 7px; width: 2px; top: 0; bottom: 0; background: #2aa198; opacity: 0; transition: opacity .4s ease; }
-.flx-root .flx-ship-commit[data-covered]:not([data-seg])::after { bottom: 50%; }
-.flx-root .flx-ship-commit:first-child::after { top: 50%; }
-.flx-root .flx-ship-commit[data-covered]:not(:first-child)::after, .flx-root .flx-ship-commit[data-seg]:first-child::after { opacity: 1; }
+.flx-root .flx-ship-commit[data-up]:not([data-down])::after { bottom: 50%; }
+.flx-root .flx-ship-commit[data-down]:not([data-up])::after { top: 50%; }
+.flx-root .flx-ship-commit[data-up]::after, .flx-root .flx-ship-commit[data-down]::after { opacity: 1; }
 .flx-root .flx-ship-node { grid-area: node; position: relative; z-index: 1; width: 16px; height: 16px; border-radius: 50%; border: 2px solid #93a1a1; background: #fffaf0; transition: border-color .4s, background-color .4s; }
 .flx-root .flx-ship-commit[data-covered] .flx-ship-node { border-color: #2aa198; }
 .flx-root .flx-ship-commit[data-landed] .flx-ship-node { border-color: #2aa198; background: #2aa198; box-shadow: 0 0 0 4px color-mix(in srgb, #2aa198 18%, transparent); }
@@ -152,13 +155,14 @@
 .flx-root .flx-ship-cap[data-kind="report"] { background: #dc322f; box-shadow: 0 8px 20px -12px rgba(220, 50, 47, .9); }
 .flx-root .flx-ship-cap:not([data-on]) { opacity: 0; transform: translateX(8px) scale(.96); }
 .flx-root .flx-ship-ltrack { position: relative; height: 52px; margin-top: 6px; }
+.flx-root .flx-ship-lane[data-kind="report"] .flx-ship-ltrack { height: 62px; }
 .flx-root .flx-ship-lbase { position: absolute; top: 10px; height: 12px; border-radius: 6px; background: rgba(147, 161, 161, .18); }
 .flx-root .flx-ship-lfill { position: absolute; top: 10px; height: 12px; border-radius: 6px; background: #2aa198; transform-origin: left; transition-property: transform, background-color; transition-timing-function: linear, ease; }
 .flx-root .flx-ship-lfill:not([data-run]) { transform: scaleX(0); }
 .flx-root .flx-ship-lfill[data-closed] { background: #859900; }
 .flx-root .flx-ship-lane[data-kind="report"] .flx-ship-lfill { background: linear-gradient(90deg, #2aa198 70%, #dc322f); }
 .flx-root .flx-ship-cleared { position: absolute; top: 10px; height: 12px; border-radius: 6px; background: repeating-linear-gradient(135deg, rgba(220, 50, 47, .18) 0 5px, transparent 5px 10px); transition: opacity .5s .3s; }
-.flx-root .flx-ship-cleared span { position: absolute; left: 50%; top: 20px; transform: translateX(-50%); font-size: 12px; color: #dc322f; white-space: nowrap; }
+.flx-root .flx-ship-cleared span { position: absolute; right: 0; top: 40px; font-size: 12px; color: #dc322f; white-space: nowrap; }
 .flx-root .flx-ship-cleared:not([data-on]) { opacity: 0; }
 .flx-root .flx-ship-early, .flx-root .flx-ship-report, .flx-root .flx-ship-endq { position: absolute; top: 8px; }
 .flx-root .flx-ship-pip { position: absolute; left: -8px; width: 16px; height: 16px; border-radius: 50%; border: 2.5px solid #fffaf0; }
@@ -172,24 +176,31 @@
 .flx-root .flx-ship-endq .flx-ship-pip { background: #859900; }
 .flx-root .flx-ship-endq .flx-ship-plabel { color: #859900; transform: translateX(-90%); }
 
-/* Phone: the same model at full width; dates move to one line, side labels drop. */
-@media (max-width: 639px) {
+/* Narrow (a phone, or the deploy figure's right column): the same model, dates on one line, side labels dropped. */
+.flx-root .flx-ship-wpanel { margin-top: 22px; padding-top: 16px; border-top: 1px solid rgba(88, 110, 117, .14); }
+.flx-root .flx-ship-watch { container: flxwatch / inline-size; }
+@container flxwatch (max-width: 639px) {
   .flx-root .flx-ship-wdates { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 12px; color: #586e75; }
   .flx-root .flx-ship-wdates span:nth-child(2) { color: #2aa198; font-weight: 700; }
   .flx-root .flx-ship-axis { height: 14px; }
   .flx-root .flx-ship-mark b, .flx-root .flx-ship-mark span, .flx-root .flx-ship-tick span { display: none; }
   .flx-root .flx-ship-wide { display: none; }
   .flx-root .flx-ship-window { justify-content: center; }
-  .flx-root .flx-ship-shiftlabel { font-size: 11.5px; }
 }
 
-/* ---------- Production comes back ---------- */
+/* ---------- Production comes back (on the dark floor) ---------- */
+.flx-root .flx-trace-fig { padding: 16px; border-radius: 14px; border: 1px solid rgba(147, 161, 161, .18); background: rgba(7, 54, 66, .45); }
+@media (min-width: 640px) { .flx-root .flx-trace-fig { padding: 24px; } }
+.flx-root .flx-trace-fig .flx-ship-replay { color: #93a1a1; border-color: rgba(147, 161, 161, .35); }
+.flx-root .flx-trace-fig .flx-ship-replay:hover { color: #eee8d5; border-color: rgba(147, 161, 161, .6); }
+
+/* The drawing at ≥1024px (viewBox units: 1 unit is 0.95 to 1.1px there), the stack below it. */
 .flx-root .flx-trace-svg { display: none; width: 100%; max-width: 1060px; height: auto; margin: 0 auto; }
+.flx-root .flx-trace-stack { display: flex; flex-direction: column; gap: 12px; max-width: 640px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; color: #eee8d5; }
 @media (min-width: 1024px) {
   .flx-root .flx-trace-svg { display: block; }
   .flx-root .flx-trace-stack { display: none; }
 }
-/* viewBox units; the drawing shows only at ≥1024px, where 1 unit is 0.95 to 1.1px. */
 .flx-root .flx-trace-t { font-family: var(--font-mono, ui-monospace, monospace); font-size: 13.5px; }
 .flx-root .flx-trace-s { font-size: 12px; }
 .flx-root .flx-trace-b { font-weight: 700; }
@@ -206,51 +217,55 @@
 .flx-root .flx-trace-arrow { stroke-dasharray: 1; stroke-dashoffset: 0; transition: stroke-dashoffset .8s cubic-bezier(.4, 0, .2, 1), opacity .2s; }
 .flx-root .flx-trace-arrow:not([data-on]) { stroke-dashoffset: 1; opacity: 0; }
 
-/* The stacked version below 1024px. */
-.flx-root .flx-trace-stack { display: flex; flex-direction: column; gap: 12px; max-width: 640px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; color: #073642; }
-.flx-root .flx-trace-sdim { font-size: 12px; color: #657b83; }
+/* The stacked version, same palette as the drawing: base02 nodes, base2 text, lifted red. */
+.flx-root .flx-trace-sdim { font-size: 12px; color: #839496; }
 .flx-root .flx-trace-srow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-.flx-root .flx-trace-nchip { padding: 1px 9px; border-radius: 999px; font-weight: 700; color: #2aa198; background: color-mix(in srgb, #2aa198 13%, transparent); }
-.flx-root .flx-trace-sfix { padding: 10px 12px; border-radius: 10px; border: 1.5px solid rgba(147, 161, 161, .45); transition: border-color .4s; }
+.flx-root .flx-trace-job { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(42, 161, 152, .7); background: #073642; color: #2aa198; font-weight: 700; }
+.flx-root .flx-trace-job svg { flex-shrink: 0; }
+.flx-root .flx-trace-nchip { padding: 1px 9px; border-radius: 999px; font-weight: 700; color: #2aa198; background: rgba(42, 161, 152, .16); }
+.flx-root .flx-trace-sfix { padding: 10px 12px; border-radius: 8px; border: 1.5px solid rgba(147, 161, 161, .32); background: #073642; transition: border-color .4s; }
 .flx-root .flx-trace-sfix[data-on] { border-color: #2aa198; }
-.flx-root .flx-trace-sfix b { color: #002b36; }
+.flx-root .flx-trace-sfix b { color: #fdf6e3; }
 .flx-root .flx-trace-fixword { transition: color .4s; }
 .flx-root .flx-trace-sfix[data-on] .flx-trace-fixword { color: #2aa198; font-weight: 700; }
 .flx-root .flx-trace-rules { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.flx-root .flx-trace-rules span { font-size: 12px; padding: 0 8px; border-radius: 999px; color: #93a1a1; border: 1px solid rgba(147, 161, 161, .4); transition: color .4s, border-color .4s; }
+.flx-root .flx-trace-rules span { font-size: 12px; padding: 0 8px; border-radius: 999px; color: #839496; border: 1px solid rgba(147, 161, 161, .35); transition: color .4s, border-color .4s; }
 .flx-root .flx-trace-rules span[data-hit] { color: #2aa198; border-color: #2aa198; font-weight: 700; }
-.flx-root .flx-trace-sdiff { display: flex; flex-direction: column; gap: 3px; padding: 10px; border-radius: 10px; border: 1px solid rgba(88, 110, 117, .2); background: #fdf6e3; }
+.flx-root .flx-trace-sdiff { display: flex; flex-direction: column; gap: 3px; padding: 10px; border-radius: 8px; border: 1px solid rgba(147, 161, 161, .32); background: #073642; }
 .flx-root .flx-trace-sline { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: baseline; gap: 8px; padding: 2px 6px; border-radius: 4px; font-size: 12.5px; }
-.flx-root .flx-trace-sline[data-sign="-"] { background: color-mix(in srgb, #dc322f 10%, transparent); }
-.flx-root .flx-trace-sline[data-sign="+"] { background: color-mix(in srgb, #859900 8%, transparent); color: #657b83; }
+.flx-root .flx-trace-sline[data-sign="-"] { background: rgba(220, 50, 47, .16); }
+.flx-root .flx-trace-sline[data-sign="+"] { background: rgba(133, 153, 0, .12); color: #93a1a1; }
 .flx-root .flx-trace-sline code { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 .flx-root .flx-trace-sgn { font-weight: 700; }
-.flx-root .flx-trace-sline[data-sign="-"] .flx-trace-sgn { color: #dc322f; }
-.flx-root .flx-trace-sline[data-sign="+"] .flx-trace-sgn { color: #859900; }
-.flx-root .flx-trace-sfrom { font-size: 12px; color: #657b83; transition: opacity .4s; }
-.flx-root .flx-trace-sfrom[data-top] { color: #dc322f; font-weight: 700; }
+.flx-root .flx-trace-sline[data-sign="-"] .flx-trace-sgn { color: #f0625f; }
+.flx-root .flx-trace-sline[data-sign="+"] .flx-trace-sgn { color: #a8bf3a; }
+.flx-root .flx-trace-sfrom { font-size: 12px; color: #839496; transition: opacity .4s; }
+.flx-root .flx-trace-sfrom[data-top] { color: #f0625f; font-weight: 700; }
 .flx-root .flx-trace-sfrom:not([data-on]) { opacity: 0; }
-.flx-root .flx-trace-sdown { font-size: 12px; font-weight: 700; color: #dc322f; padding-left: 4px; }
+.flx-root .flx-trace-sdown { font-size: 12px; font-weight: 700; color: #f0625f; padding-left: 4px; }
 .flx-root .flx-trace-stally { display: flex; flex-direction: column; gap: 6px; }
-.flx-root .flx-trace-trow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: #657b83; }
-.flx-root .flx-trace-trow[data-top] { color: #dc322f; font-weight: 700; }
+.flx-root .flx-trace-trow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: #93a1a1; }
+.flx-root .flx-trace-trow[data-top] { color: #f0625f; font-weight: 700; }
 .flx-root .flx-trace-tbars { display: inline-flex; gap: 3px; }
-.flx-root .flx-trace-tbars i { width: 18px; height: 10px; border-radius: 3px; background: #93a1a1; opacity: .6; }
-.flx-root .flx-trace-trow[data-top] .flx-trace-tbars i { background: #dc322f; opacity: .9; }
+.flx-root .flx-trace-tbars i { width: 18px; height: 10px; border-radius: 3px; background: #839496; opacity: .6; }
+.flx-root .flx-trace-trow[data-top] .flx-trace-tbars i { background: #dc322f; opacity: .95; }
 .flx-root .flx-trace-spill { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-.flx-root .flx-trace-pill { display: inline-flex; align-items: center; gap: 8px; padding: 3px 12px; border-radius: 999px; font-weight: 600; background: color-mix(in srgb, #2aa198 13%, transparent); }
+.flx-root .flx-trace-pill { display: inline-flex; align-items: center; gap: 8px; padding: 3px 12px; border-radius: 999px; font-weight: 600; color: #eee8d5; background: rgba(42, 161, 152, .2); box-shadow: inset 0 0 0 1px rgba(42, 161, 152, .5); }
 .flx-root .flx-trace-pill i { width: 8px; height: 8px; border-radius: 50%; background: #2aa198; }
 .flx-root .flx-trace-pill em { font-style: normal; font-weight: 500; font-size: 12px; color: #2aa198; }
 
-/* The Loop's foot, as the app draws it. */
-.flx-root .flx-trace-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 14px; }
-.flx-root .flx-trace-foothead { font-weight: 700; color: #002b36; }
-.flx-root .flx-trace-foothead span { color: #93a1a1; }
-.flx-root .flx-trace-footn { color: #dc322f; }
-.flx-root .flx-trace-footwin { font-size: 12px; color: #93a1a1; }
-.flx-root .flx-trace-route { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; }
-.flx-root .flx-trace-chip { padding: 2px 10px; border-radius: 999px; font-weight: 600; white-space: nowrap; }
-.flx-root .flx-trace-arr { color: #93a1a1; }
-.flx-root .flx-trace-up { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-weight: 700; color: #2aa198; background: color-mix(in srgb, #2aa198 12%, transparent); text-decoration: none; white-space: nowrap; transition: background-color .2s; }
-.flx-root .flx-trace-up:hover { background: color-mix(in srgb, #2aa198 22%, transparent); }
+/* The two small panels under the trace. */
+.flx-root .flx-trace-panel { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 12px; border: 1px solid rgba(147, 161, 161, .18); background: rgba(7, 54, 66, .45); font-family: var(--font-mono, ui-monospace, monospace); }
+.flx-root .flx-trace-plabel { font-size: 12px; font-weight: 600; color: #839496; }
+.flx-root .flx-trace-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; font-size: 14px; }
+.flx-root .flx-trace-foothead { font-weight: 700; color: #eee8d5; }
+.flx-root .flx-trace-foothead span { color: #839496; }
+.flx-root .flx-trace-footn { color: #f0625f; }
+.flx-root .flx-trace-footwin { font-size: 12px; color: #839496; }
+.flx-root .flx-trace-route { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.flx-root .flx-trace-chip { padding: 2px 10px; border-radius: 999px; font-weight: 600; white-space: nowrap; color: #eee8d5; background: rgba(147, 161, 161, .16); }
+.flx-root .flx-trace-chip[data-tone="bad"] { color: #f0625f; background: rgba(220, 50, 47, .16); }
+.flx-root .flx-trace-arr { color: #839496; }
+.flx-root .flx-trace-up { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-weight: 700; color: #2aa198; background: rgba(42, 161, 152, .16); text-decoration: none; white-space: nowrap; transition: background-color .2s; }
+.flx-root .flx-trace-up:hover { background: rgba(42, 161, 152, .28); }
 .flx-root .flx-trace-up:focus-visible { outline: 2px solid #2aa198; outline-offset: 2px; }

@@ -36,6 +36,8 @@ export const CHANGE = {
   landed: "e3f0a71",
   subject: "fix(web): total of an empty cart is 0",
   files: ["packages/web/lib/cart/total.ts", "packages/convex/convex/checkout.ts"],
+  /** Lines added and removed per file; total.ts is the diff the trace blames. */
+  diff: { "packages/web/lib/cart/total.ts": { add: 2, del: 4 }, "packages/convex/convex/checkout.ts": { add: 3, del: 1 } },
   targets: ["web", "backend"] as const,
   deploys: { web: "dp-411", backend: "dp-412" },
   landedOn: "Nov 3",
@@ -57,3 +59,41 @@ export const CAUSE = {
 
 /** The role whose line wrote CAUSE; its merge setting reads its own rate. */
 export const ROLE = { name: "Checkout", lead: "Checkout lead" } as const;
+
+/*
+ * Shared numbers. Every count a section shows that also appears in another
+ * section comes from here, so the page never disagrees with itself.
+ */
+
+/** The sources the Loop watches, with today's count and the silent-source state. */
+export const SOURCES = [
+  { label: "New issues", source: "sentry", today: 1892, state: "flowing" },
+  { label: "Failed jobs", source: "ci", today: 311, state: "flowing" },
+  { label: "Eval reds", source: "evals", today: 73, state: "flowing" },
+  { label: "Teammate reports", source: "person", today: 0, state: "quiet" },
+  { label: "Judge mistakes", source: "judge", today: 0, state: "stopped" },
+] as const;
+export const SIGNALS_TODAY = 2276;
+
+/** Triage and the line right now. Queued never exceeds open. */
+export const NOW = { open: 23, queued: 17, running: 2, slots: 4, onPerson: 2, liveToday: 42, watching: 47 } as const;
+
+/**
+ * Regret-free rates, settled changes only. The Checkout role is part of the
+ * Line bucket. Before the trace, Checkout stood at 92% of 36 settled (its bar
+ * is 90% over at least 20); the trace settles 3e9b2a0 as regretted, which
+ * makes it 33 regret-free of 37 settled = 89%, under its bar, so its next
+ * changes wait for a person.
+ */
+export const RATES = {
+  line: { settled: 164, regretted: 13 }, // 92%
+  person: { settled: 120, regretted: 12 }, // 90%
+  noFlow: { settled: 912, regretted: 146 }, // 84%
+  window: 6,
+} as const;
+export const CHECKOUT = { bar: 0.9, min: 20, before: { settled: 36, regretted: 3 } /* 92% */, after: { settled: 37, regretted: 4 }, dailyLimit: 5 } as const;
+/** Roles that merge without a person before the trace; after it Checkout waits, leaving 7. */
+export const ROLES = { merging: 8, total: 17 } as const;
+
+/** What `cast flow await-deploy` prints when the change is live everywhere it ships. */
+export const LIVE_LINE = "Live: e3f0a71 on web dp-411, backend dp-412.";

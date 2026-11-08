@@ -41,7 +41,7 @@
 .flx-rail a { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px 0 0; text-decoration: none; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; font-weight: 600; color: #93a1a1; white-space: nowrap; transition: color .25s; }
 .flx-rail a::after { content: ""; flex: 1; min-width: 14px; height: 1.5px; margin-left: 4px; background: rgba(88, 110, 117, .22); transition: background-color .4s; }
 .flx-rail li:last-child a::after { display: none; }
-.flx-rail-dot { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid #93a1a1; background: transparent; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700; line-height: 1; color: #93a1a1; transition: background-color .25s, border-color .25s, box-shadow .25s, color .25s; flex-shrink: 0; }
+.flx-rail-dot { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid #93a1a1; background: transparent; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; line-height: 1; color: #93a1a1; transition: background-color .25s, border-color .25s, box-shadow .25s, color .25s; flex-shrink: 0; }
 .flx-rail li[data-state="done"] a { color: #586e75; }
 .flx-rail li[data-state="done"] .flx-rail-dot { background: #2aa198; border-color: #2aa198; color: #fdf6e3; }
 .flx-rail li[data-state="done"] a::after { background: #2aa198; }
@@ -52,3 +52,16 @@
   .flx-rail a { font-size: 12px; padding: 0 6px 0 0; min-width: 34px; }
   .flx-rail li[data-state="ahead"] .flx-rail-name, .flx-rail li[data-state="done"] .flx-rail-name { display: none; }
 }
+
+/* ---------- The ticket: the story's problem at this section's station. ---------- */
+.flx-ticket-stops { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); list-style: none; margin: 0; padding: 0; }
+.flx-ticket-stops li { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.flx-ticket-stops li + li::before { content: ""; position: absolute; top: 4px; right: 50%; width: 100%; height: 1.5px; background: rgba(147, 161, 161, .35); z-index: 0; }
+.flx-ticket-stops li[data-state="done"]::before, .flx-ticket-stops li[data-state="here"]::before { background: var(--c); }
+.flx-ticket-dot { position: relative; z-index: 1; width: 10px; height: 10px; border-radius: 3px; border: 1.5px solid #93a1a1; background: #fffaf0; }
+.flx-dark .flx-ticket-dot { background: #06323d; }
+.flx-ticket-stops li[data-state="done"] .flx-ticket-dot { background: var(--c); border-color: var(--c); }
+.flx-ticket-stops li[data-state="here"] .flx-ticket-dot { border-color: var(--c); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 22%, transparent); }
+.flx-ticket-name { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: #93a1a1; white-space: nowrap; }
+.flx-ticket-stops li[data-state="here"] .flx-ticket-name { color: var(--c); font-weight: 700; }
+@media (max-width: 420px) { .flx-ticket-stops li:not([data-state="here"]) .flx-ticket-name { visibility: hidden; } }
