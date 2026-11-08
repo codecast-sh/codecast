@@ -6507,7 +6507,7 @@ async function executeRemoteCommand(
   // daemon would resume a local copy and answer in parallel with the remote
   // (split-brain). A person reclaims a session from a dead owner with the
   // header chip, which restamps the owner before any command reaches this daemon.
-  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "set_permission_mode", "escape", "rewind", "hibernate_session"]);
+  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "set_permission_mode", "escape", "rewind", "rewind_files", "hibernate_session"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
       const parsedArgs = JSON.parse(commandArgs);
@@ -9239,6 +9239,56 @@ async function executeRemoteCommand(
           ...("reason" in outcome && outcome.reason ? { reason: outcome.reason } : {}),
         });
         result = JSON.stringify({ state: outcome.state, files: outcome.files.length });
+        break;
+      }
+      case "rewind_files": {
+        // "Rewind to here" (rewindTree.ts): plan, stage, put back or keep a
+        // rewind of the session's checkout to just before one of its turns.
+        // Routed to the owning device, so this machine holds the checkout.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId: string | undefined = typeof parsed.conversation_id === "string" ? parsed.conversation_id : undefined;
+        const { REWIND_FILES_OPS } = await import("@codecast/shared/contracts");
+        if (!conversationId || !(REWIND_FILES_OPS as readonly string[]).includes(parsed.op)) {
+          error = "rewind_files: missing conversation_id or op";
+          break;
+        }
+        const sessionId = buildReverseConversationCache(readConversationCache())[conversationId];
+        const [target] = sessionId ? collectGitSweepTargets([sessionId]) : [];
+        if (!sessionId || !target) {
+          error = "This machine does not have the session's folder";
+          break;
+        }
+        const root = (await repoRootFor(target.cwd)) ?? target.cwd;
+        const { runRewindFilesCommand } = await import("./rewindFilesCommand.js");
+        // Busy: any agent mid-turn in this checkout, not only this session's.
+        const working = Object.keys(readConversationCache()).filter((sid) => MID_TURN_AGENT_STATUSES.has(currentAgentStatus(sid) ?? ""));
+        let busy = false;
+        for (const t of collectGitSweepTargets(working)) {
+          if (((await repoRootFor(t.cwd)) ?? t.cwd) === root) { busy = true; break; }
+        }
+        try {
+          const reply = await runRewindFilesCommand(parsed, {
+            root,
+            cwd: target.cwd,
+            busy,
+            rows: async () => {
+              if (!syncServiceRef) throw new Error("not connected");
+              // Only this checkout's rows: worktrees share an object store, so another worktree's snapshots would resolve here too.
+              const key = hashPath(root);
+              return (await syncServiceRef.listTreeSnapshots(conversationId)).filter((r) => !r.checkout_key || r.checkout_key === key);
+            },
+            edited: async (after) => (syncServiceRef ? await syncServiceRef.listEditedPaths(conversationId, after) : null),
+          });
+          log(`[REWIND-FILES] ${conversationId.slice(0, 12)} ${parsed.op}${reply.refused ? ` refused: ${reply.refused}` : reply.counts ? ` ${reply.counts.total} files` : ""}`);
+          // The conversation row is the staged state's home for every window's Put back chip.
+          if (reply.staged !== undefined && syncServiceRef) {
+            const s = reply.staged;
+            void syncServiceRef.reportRewindStaged(reply.staged_conversation_id ?? conversationId, s ? { id: s.id, files: s.files.length, staged_at: s.staged_at, at: s.at } : null);
+          }
+          result = JSON.stringify(reply);
+        } catch (err) {
+          error = `Rewind failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`;
+        }
         break;
       }
       case "release_session": {

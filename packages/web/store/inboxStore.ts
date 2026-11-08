@@ -4,7 +4,7 @@ import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
 import type { InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
-import type { CloudPlacementProgress } from "@codecast/shared/contracts";
+import type { CloudPlacementProgress, RewindFilesOp } from "@codecast/shared/contracts";
 import type { RoleIcon } from "@codecast/shared/contracts/roleIcon";
 import { cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
 import { withoutSecrets } from "@codecast/shared/contracts/secretShapes";
@@ -5848,6 +5848,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   restartSession: (requestId: string, convId: string, ghost?: Record<string, unknown>, repair?: boolean) => Promise<any>;
   moveSessionToDevice: (requestId: string, convId: string, toDeviceId: string, toRemote: boolean, toLabel?: string) => Promise<any>;
   requestAccountSwitch: (requestId: string, args: AccountSwitchArgs, intent?: { profile?: string; email?: string }) => Promise<any>;
+  // One step of "Rewind to here" (lib/rewindFiles): the row paints at once and the daemon's reply settles it.
+  rewindFiles: (requestId: string, convId: string, op: RewindFilesOp, opts?: { message_ts?: number; fingerprint?: string; overwrite?: boolean; path?: string }) => Promise<any>;
   // Local bookkeeping on a command row: the session was seen back (restart) or
   // the account confirmed (switch); dismiss drops a settled row from view.
   confirmSessionCommand: (requestId: string) => void;
@@ -11212,6 +11214,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
       conversation_id: args.conversation_ids?.length === 1 ? args.conversation_ids[0] : null,
       profile: intent?.profile ?? args.profile, email: intent?.email ?? args.email,
     });
+  }),
+
+  // A step of "Rewind to here", run on the session's machine (cli/src/rewindTree.ts).
+  rewindFiles: asyncAction(function (this: Draft, requestId: string, convId: string, op: RewindFilesOp, opts?: { message_ts?: number }) {
+    stampSessionCommand(this, { _id: requestId, conversation_id: convId, command: "rewind_files", kind: "rewind", op, ...(opts?.message_ts !== undefined ? { message_ts: opts.message_ts } : {}) });
   }),
 
   confirmSessionCommand: sync(function (this: Draft, requestId: string) {
