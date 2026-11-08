@@ -153,6 +153,17 @@ export function shippedFixes(o: {
     || (a.state === "regressed" ? (b.reopenedAt ?? 0) - (a.reopenedAt ?? 0) : a.state === "watching" ? (a.until ?? 0) - (b.until ?? 0) : (b.until ?? 0) - (a.until ?? 0)));
 }
 
+type WatchedTask = { status: string; watch_until?: number | null; resolved_at?: number | null; closed_at?: number | null };
+
+/** When a closed cause's watch ended quiet (LE12), or null: swept, it carries resolved_at (stamped at the quiet end,
+ *  its watch_until cleared; a close after it is a later ship of a reopened cause); not swept yet, it still holds its
+ *  past watch_until. The one rule /line, the map, a trace and the Volume chart read "held" by. */
+export function quietWatchEnd(t: WatchedTask, now: number): number | null {
+  if ((t.status !== "done" && t.status !== "dropped") || (typeof t.watch_until === "number" && t.watch_until > now)) return null;
+  if (typeof t.resolved_at === "number" && t.resolved_at >= (t.closed_at ?? 0)) return t.resolved_at;
+  return typeof t.watch_until === "number" ? t.watch_until : null;
+}
+
 /** A station as a person reads it when its graph names no label: "plan_gate" is "Plan gate", and a segment's station
  *  ("decide__decide") is named by its own part. */
 export function stationWords(id: string): string {

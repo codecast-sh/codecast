@@ -123,7 +123,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "open_comment_threads", "open_tasks", "open_tasks_at", "org_role_id", "owned_by_me", "owner_device_id",
       "owner_user_id", "parent_conversation_id", "parent_message_uuid", "pending_api_error",
       "pending_api_error_at", "pending_api_error_kind", "permission_mode", "pr_status", "producing_until",
-      "project_path", "role", "session_error", "session_id", "settle_verdict", "spawned_by_conversation_id",
+      "project_id", "project_path", "rewind_staged", "role", "session_error", "session_id", "settle_verdict", "spawned_by_conversation_id",
       "standing_role_id", "started_at", "status", "subagent_caps", "subagent_slot", "subagent_slot_at", "subagent_slot_device", "subtitle", "team_id", "team_visibility", "thread_state", "thread_state_at",
       "thread_state_msg_count", "thread_state_status", "title", "tmux_session",
       "transcript_revision", "turn_completed_at", "updated_at", "user_id", "user_rest", "workflow_run_activity",

@@ -262,7 +262,15 @@ describe("command groups stay off the boot graph", () => {
     // replay/events.ts with the contracts/replay.ts it reads, which
     // entities/index.ts now loads for the replay link's ?t (parseReplayT,
     // replayTParam). None imports a command group.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(338);
+    // 346 on 2026-11-08, eight leaves: the contracts barrel's claudeBackend,
+    // newSessionDefaults, rewindFiles, sessionAsk and vendorCoverage;
+    // contracts/permissionRules.ts (syncService.ts) and contracts/shellWords.ts
+    // (shellQuote.ts); config/storedConfig.ts (writeConfig's write, split out
+    // of index.ts) and tmuxFleetInventory.ts (split out of tmux.ts). The
+    // 1,961-line contracts/orgProposal.ts and its three leaves arrived with
+    // them for one `cast role authority` validator and went back behind an
+    // import() in that action.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(346);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -324,7 +332,14 @@ describe("command groups stay off the boot graph", () => {
     // contracts/replay.ts (+15.7) and replay/events.ts (+10.2), carried for
     // the two ?t helpers entities/index.ts reads, and vaultMessages.ts (+2.1,
     // moved out of machineMessages.ts, which fell by as much).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4465);
+    // 4519 on 2026-11-08, after orgProposal.ts (~80) and permissionRules.ts
+    // (24.5) went behind import(): the new leaves of 346 (tmuxFleetInventory.ts
+    // +7.2, rewindFiles.ts +4.3, vendorCoverage.ts +4.1, sessionAsk.ts +2.1,
+    // shellWords.ts +1.7) and growth in files already here (index.ts +5.9,
+    // syncService.ts +5.3, triggerPrecheck.ts +4.7, processEnv.ts +2.6,
+    // commandGroups.ts +1.8, teamFeatures.ts +1.7, daemonCommands.ts and
+    // managedPolicy.ts +1.5 each, tmuxRoute.ts +1.4).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4519);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -471,7 +486,19 @@ describe("command groups stay off the boot graph", () => {
     // AppleScript dictionary), terminalHold.ts and contracts/deliveryHold.ts
     // (the held-send reason the daemon writes). All three are leaves the
     // delivery path calls directly; none is a command group.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(540);
+    // 576 on 2026-11-08 (minus three that left: tmuxDeliveryTranscript.ts,
+    // workspace/deployTargetsFile.ts, contracts/deployTargets.ts). Thirty-nine
+    // arrived, none a command group: the Claude Agent SDK backend the daemon
+    // builds in main (claudeSdk/backend, client, paths, pollAnswer, protocol,
+    // select, session, switchBackend, all node-builtin leaves); browser/bridge
+    // host.ts split into frameSessions, guardrails, hostBuild, hostClients,
+    // links, pairing, policy and humanInput, plus laptopLink, retiring and
+    // snapshotSettle under modules already here; the delivery path's
+    // turnClaims, deliveryEchoLedger, permissionPromptWatch, pollMessage,
+    // removalPreview, gitRepoProbe and terminal/terminalHub; fsAtomic,
+    // ghostty, terminalHold, config/storedConfig and tmuxFleetInventory; and
+    // the contracts index.ts names above plus commandRun and deliveryHold.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(576);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
