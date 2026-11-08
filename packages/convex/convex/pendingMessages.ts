@@ -559,7 +559,7 @@ export async function enqueuePendingMessage(
   // The pinned thread state (`cast state`) is the agent's declaration of who
   // acts next. A message from a person IS that person acting, so the
   // declaration has been answered and comes down with the send: a "Complete"
-  // or "Needs input" pin standing over a thread the human just wrote into
+  // or "Needs you" pin standing over a thread the human just wrote into
   // would be the stale claim the whole feature exists to avoid. The agent
   // declares again when it ends the turn. A station's report stays: its run
   // may not have read it yet. A session's relay and a trigger's wake leave the
