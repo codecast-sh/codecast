@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { hibernate, results } from "./sessionCommands";
+import { hibernate, results, rewindFiles } from "./sessionCommands";
 import { enqueueHibernateSession, enqueueResumeSession } from "./daemonCommandUtils";
 import { makeFakeDb } from "./testDb";
 import { normalizeWorkStateFilter } from "./inboxFilters";
@@ -212,4 +212,24 @@ test("an invalid legacy request ID fails closed even when read by command ID", a
   const first = await (hibernate as any)._handler(f.ctx, f.args);
   await f.db.patch(first.command_id, { request_id: "", executed_at: 100, result: "hibernated" });
   await expect((results as any)._handler(f.ctx, { command_ids: [first.command_id] })).rejects.toThrow("Invalid request ID");
+});
+
+test("a rewind step goes to the owning device, binds to its request id, and only the runner may ask", async () => {
+  const f = fixture();
+  const ask = { conversation_id: "conv", request_id: "rw-1", op: "plan", message_ts: 1500 };
+  const first = await (rewindFiles as any)._handler(f.ctx, ask);
+  const again = await (rewindFiles as any)._handler(f.ctx, ask);
+  expect(again.command_id).toBe(first.command_id);
+  expect(f.db._tables.daemon_commands).toHaveLength(1);
+  expect(f.db._tables.daemon_commands[0]).toMatchObject({ command: "rewind_files", request_id: "rw-1", target_device_id: "device", user_id: "owner" });
+  expect(JSON.parse(f.db._tables.daemon_commands[0].args)).toEqual({ conversation_id: "conv", op: "plan", message_ts: 1500 });
+  Object.assign(f.db._tables.daemon_commands[0], { executed_at: 100, result: JSON.stringify({ op: "plan", counts: { total: 2 } }) });
+  expect((await (results as any)._handler(f.ctx, { request_ids: ["rw-1"] }))[0]).toMatchObject({ _id: "rw-1", conversation_id: "conv", executed_at: 100 });
+
+  await expect((rewindFiles as any)._handler(f.ctx, { conversation_id: "conv", request_id: "rw-2", op: "stage" })).rejects.toThrow("names the message");
+  f.db._tables.conversations[0].owner_user_id = "second";
+  f.ctx.auth.getUserIdentity = async () => ({ subject: "second|login" });
+  await expect((rewindFiles as any)._handler(f.ctx, { ...ask, request_id: "rw-3" })).rejects.toThrow("whose machine runs");
+  f.ctx.auth.getUserIdentity = async () => ({ subject: "stranger|login" });
+  await expect((rewindFiles as any)._handler(f.ctx, { ...ask, request_id: "rw-4" })).rejects.toThrow("Not authorized");
 });

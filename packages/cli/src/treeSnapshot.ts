@@ -45,7 +45,7 @@ export const CHAIN_DEPTH_CAP = 400;
 /** How many changed paths a snapshot carries by name; the count is always exact. */
 export const CHANGED_PATHS_CAP = 200;
 const DEPTH_TRAILER = "codecast-depth";
-const TAKEN_TRAILER = "codecast-taken-at";
+export const TAKEN_AT_TRAILER = "codecast-taken-at";
 
 export interface TurnSnapshot {
   /** The snapshot commit: first parent HEAD, second parent the previous snapshot when chained. */
@@ -224,7 +224,7 @@ export async function createTurnSnapshot(
       ``,
       `${BRANCH_TRAILER}: ${branch}`,
       `${DEPTH_TRAILER}: ${depth}`,
-      `${TAKEN_TRAILER}: ${new Date(takenAt).toISOString()}`,
+      `${TAKEN_AT_TRAILER}: ${new Date(takenAt).toISOString()}`,
     ].join("\n");
     const parents = ["-p", head, ...(chain ? ["-p", chain.sha] : [])];
     const sha = await git(cwd, ["commit-tree", tree, ...parents, "-m", message], {
@@ -272,7 +272,7 @@ export async function listChain(cwd: string, sha: string, limit = 500): Promise<
     const parents = (parentsLine ?? "").split(" ").filter(Boolean);
     const message = body.join("\n");
     if (!message.startsWith(WIP_SNAPSHOT_SUBJECT)) break;
-    const taken = parseSnapshotTrailer(message, TAKEN_TRAILER);
+    const taken = parseSnapshotTrailer(message, TAKEN_AT_TRAILER);
     out.push({
       sha: cur, tree, base: parents[0], prev: parents[1], depth: Number(parseSnapshotTrailer(message, DEPTH_TRAILER) ?? 0),
       takenAt: taken ? Date.parse(taken) : undefined, branch: parseSnapshotTrailer(message, BRANCH_TRAILER),
