@@ -123,13 +123,15 @@ function SheetBody({ popup, leave }: { popup: Extract<Popup, { kind: 'sheet' }>;
         {popup.title ? <Text style={styles.sheetTitle} numberOfLines={2}>{popup.title}</Text> : null}
         <Animated.ScrollView style={{ maxHeight: height * 0.6 }} bounces={false}>
           {popup.items.map((item, i) => (
+            <View key={`${i}:${item.label}`}>
+            {/* Dividers start where the words do, as the app's lists draw them. */}
+            {i > 0 ? <View style={[styles.rule, popup.items.some((it) => it.icon) && styles.ruleAfterIcon]} /> : null}
             <Pressable
-              key={`${i}:${item.label}`}
               onPress={() => {
                 Haptics.selectionAsync().catch(() => {});
                 leave(item.onPress);
               }}
-              style={({ pressed }) => [styles.row, i > 0 && styles.rowRule, pressed && styles.pressed]}
+              style={({ pressed }) => [styles.row, pressed && styles.pressed]}
               accessibilityRole="button"
               accessibilityState={{ selected: !!item.selected }}
             >
@@ -144,6 +146,7 @@ function SheetBody({ popup, leave }: { popup: Extract<Popup, { kind: 'sheet' }>;
               </Text>
               {item.selected ? <Feather name="check" size={16} color={Theme.cyan} /> : null}
             </Pressable>
+            </View>
           ))}
         </Animated.ScrollView>
       </View>
@@ -285,14 +288,26 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     gap: Spacing.md,
     paddingHorizontal: Spacing.xl,
   },
-  rowRule: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Theme.borderLight },
+  rule: { height: StyleSheet.hairlineWidth, backgroundColor: Theme.borderLight, marginLeft: Spacing.xl },
+  // Past the icon column (22) and the gap (12).
+  ruleAfterIcon: { marginLeft: Spacing.xl + 22 + Spacing.md },
   rowIcon: { width: 22, textAlign: 'center' },
   rowLabel: { flex: 1, fontSize: 16, fontWeight: '500', color: Theme.text },
   rowSelected: { color: Theme.cyan, fontWeight: '600' },
   pressed: { opacity: 0.55 },
   cancel: { minHeight: 56, alignItems: 'center', justifyContent: 'center' },
   cancelLabel: { fontSize: 16, fontWeight: '700', color: Theme.text },
-  dialog: { paddingHorizontal: Spacing.xl, paddingTop: Spacing.xl, paddingBottom: Spacing.lg },
+  dialog: {
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.xl,
+    paddingBottom: Spacing.lg,
+    overflow: 'visible',
+    shadowColor: '#000',
+    shadowOpacity: 0.22,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 12,
+  },
   dialogTitle: { fontSize: 17, fontWeight: '700', color: Theme.text },
   dialogMessage: { fontSize: 14, lineHeight: 20, color: Theme.textMuted, marginTop: Spacing.sm },
   field: {

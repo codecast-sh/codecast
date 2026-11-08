@@ -352,6 +352,8 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
   const Theme = useTheme();
   const translateX = useRef(new RNAnimated.Value(0)).current;
   const didSwipe = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
 
   // Keep the latest action callbacks reachable from the once-created responder.
   const id = session._id;
@@ -383,7 +385,13 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
         toValue: -400,
         duration: 200,
         useNativeDriver: true,
-      }).start(() => cb.current.onDismiss());
+      }).start(() => {
+        cb.current.onDismiss();
+        // A stashed row usually leaves the list and unmounts. One that stays (a
+        // question still open keeps it under Decisions) slides back rather than
+        // leaving its swipe background in the list.
+        setTimeout(() => { if (mounted.current) springBack(); }, 350);
+      });
     } else {
       springBack();
     }
