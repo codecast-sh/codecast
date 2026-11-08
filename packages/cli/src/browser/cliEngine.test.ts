@@ -33,6 +33,14 @@ describe("carryLogins on the cloud host", () => {
   });
 });
 
+describe("translate: tab", () => {
+  test("tab switch becomes the engine's bare tab <ref>, which it reads as a switch", () => {
+    // The engine has no `switch` operation and would read it as a tab label.
+    expect(translate("tab", ["switch", "t3"], null)).toEqual([{ args: ["tab", "t3"] }]);
+    expect(translate("tab", ["close", "t3"], null)).toEqual([{ args: ["tab", "close", "t3"] }]);
+  });
+});
+
 describe("translate: text", () => {
   test("bare text reads the whole page", () => {
     expect(translate("text", [], null)).toEqual([{ args: ["read"] }]);
