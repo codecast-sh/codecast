@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import {InvalidateSync, type InvalidateSyncOptions} from '../invalidateSync.js';
+import {retryOnIngestCapacity} from './ingestClient.js';
 export type TranscriptRetrySource = {client:string;file:string;sessionId:string};
 type State = {key:string;source:TranscriptRetrySource;due:number;stopped:boolean;running:boolean;revision:object};
 type Registry = {map:Map<string,InvalidateSync>;iterator:MapIterator<[string,InvalidateSync]>};
@@ -40,7 +41,7 @@ export class TranscriptRetryOwner {
         }
         if(this.stopped||state.stopped)return;
         if(!this.options.allowed()){arm();return;}
-        await run();
+        await retryOnIngestCapacity(async()=>{if(!this.stopped&&!state.stopped)await run();});
         if(state.revision===revision)state.due=0;
       }finally{state.running=false;}
     },{...options,onGiveUp:error=>{
