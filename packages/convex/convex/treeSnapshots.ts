@@ -8,9 +8,11 @@ import { v } from "convex/values";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { requireUserOrToken } from "./lib/auth";
 import { canAccessConversation } from "./lib/access";
+import { REWIND_ROWS_CAP } from "@codecast/shared/contracts";
+import type { Id } from "./_generated/dataModel";
 
 const CHANGED_PATHS_CAP = 200;
-const LIST_CAP = 500;
+const LIST_CAP = REWIND_ROWS_CAP;
 
 const snapshotRow = v.object({
   conversation_id: v.id("conversations"),
@@ -24,7 +26,8 @@ const snapshotRow = v.object({
   changed_count: v.number(),
   dirty: v.boolean(),
   checkout_key: v.string(),
-  source: v.union(v.literal("turn"), v.literal("sweep")),
+  // "prompt": the tree when a prompt was submitted, the start of its turn (a rewind's boundary).
+  source: v.union(v.literal("turn"), v.literal("sweep"), v.literal("prompt")),
   taken_at: v.number(),
   turn_completed_at: v.optional(v.number()),
   took_ms: v.optional(v.number()),
@@ -55,7 +58,11 @@ export const record = mutation({
         .query("tree_snapshots")
         .withIndex("by_conversation_sha", (q) => q.eq("conversation_id", row.conversation_id).eq("sha", row.sha))
         .collect();
-      if (existing.some((e) => (e.turn_completed_at ?? null) === (row.turn_completed_at ?? null))) continue;
+      // A prompt snapshot of an unchanged tree repeats the sha of the turn
+      // before it; each prompt still needs its own row, as a rewind's boundary.
+      const same = (e: { source: string; taken_at: number; turn_completed_at?: number }) =>
+        row.source === "prompt" ? e.source === "prompt" && e.taken_at === row.taken_at : e.source !== "prompt" && (e.turn_completed_at ?? null) === (row.turn_completed_at ?? null);
+      if (existing.some(same)) continue;
       await ctx.db.insert("tree_snapshots", {
         ...row,
         changed_paths: row.changed_paths.slice(0, CHANGED_PATHS_CAP),
@@ -83,5 +90,93 @@ export const listForConversation = query({
       .order("desc")
       .take(LIST_CAP);
     return rows.reverse();
+  },
+});
+
+const EDITED_SCAN_CAP = 20_000;
+const EDITED_PATHS_CAP = 5_000;
+const EDITED_TIMES_CAP = 200;
+
+const OTHER_SESSIONS_CAP = 30;
+
+/** One conversation's file changes after `after`, each path with its edit times oldest first. */
+async function editsAfter(ctx: any, conversationId: Id<"conversations">, after: number, scanCap: number): Promise<{ edits: Array<{ path: string; at: number[] }>; complete: boolean }> {
+  const out = new Map<string, number[]>();
+  let scanned = 0;
+  let complete = true;
+  for await (const row of ctx.db
+    .query("file_changes")
+    .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conversationId).gt("timestamp", after))) {
+    if (++scanned > scanCap || out.size > EDITED_PATHS_CAP) {
+      complete = false;
+      break;
+    }
+    if (row.change_type === "commit") continue;
+    const times = out.get(row.file_path) ?? [];
+    // A file edited many times: its first and last edits are what a rewind reads.
+    if (times.length < EDITED_TIMES_CAP) times.push(row.timestamp);
+    else times[times.length - 1] = row.timestamp;
+    out.set(row.file_path, times);
+  }
+  return { edits: [...out].map(([path, at]) => ({ path, at })), complete };
+}
+
+/**
+ * The files a conversation's own tool calls wrote, edited or deleted after
+ * `after` (file_changes), each with its edit times: what a rewind counts as
+ * this session's, and when (cli/src/rewindTree.ts). `complete` is false when
+ * a cap cut the list: a rewind then refuses rather than leave files behind.
+ *
+ * `others`: the same, for the person's other sessions in the same checkout
+ * (git_root) over the same stretch. A file one of them edited too is a
+ * conflict, whatever the snapshots say. `synced_at`: when the conversation
+ * last took a message, so a rewind can wait for the last turn's edits.
+ */
+export const editedPaths = query({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    after: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) return { edits: [], complete: false, others: [], synced_at: 0 };
+    const own = await editsAfter(ctx, args.conversation_id, args.after, EDITED_SCAN_CAP);
+    const others: Array<{ path: string; at: number[] }> = [];
+    if (conversation.git_root) {
+      const siblings = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_git_root", (q) => q.eq("user_id", conversation.user_id).eq("git_root", conversation.git_root))
+        .order("desc")
+        .take(200);
+      const live = siblings.filter((c) => c._id !== conversation._id && (c.updated_at ?? 0) > args.after).slice(0, OTHER_SESSIONS_CAP);
+      for (const c of live) others.push(...(await editsAfter(ctx, c._id, args.after, 2_000)).edits);
+    }
+    return { ...own, others, synced_at: conversation.updated_at ?? 0 };
+  },
+});
+
+/**
+ * The daemon that holds a session's checkout says what rewind is staged there
+ * ("Rewind to here", cli/src/rewindTree.ts), or that none is. The row is the
+ * one home of that fact for every window's Put back chip. Only the session's
+ * runner may write it.
+ */
+export const reportRewindStaged = mutation({
+  args: {
+    api_token: v.string(),
+    conversation_id: v.id("conversations"),
+    staged: v.union(v.null(), v.object({ id: v.string(), files: v.number(), staged_at: v.number(), at: v.number() })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || conversation.user_id.toString() !== userId.toString()) return { written: false };
+    const prev = conversation.rewind_staged ?? null;
+    if (JSON.stringify(prev) === JSON.stringify(args.staged)) return { written: false };
+    await ctx.db.patch(args.conversation_id, { rewind_staged: args.staged });
+    return { written: true };
   },
 });
