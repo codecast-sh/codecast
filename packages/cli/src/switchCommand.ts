@@ -55,11 +55,11 @@ export function registerSwitchCommand(program: Command, deps: PublishDeps): void
     }) => {
       const session = options.session || deps.detectCurrentSessionId();
       if (!session) {
-        console.error("No session given and none detected — pass one with -s <id>");
+        console.error("No session given and none detected: pass one with -s <id>");
         process.exit(1);
       }
       if (!options.agent && options.model === undefined && options.effort === undefined) {
-        console.error("Pass --agent, --model, and/or --effort");
+        console.error("Nothing to switch: pass --agent <name>, --model <name> and/or --effort <level> (e.g. cast switch --model opus)");
         process.exit(1);
       }
 

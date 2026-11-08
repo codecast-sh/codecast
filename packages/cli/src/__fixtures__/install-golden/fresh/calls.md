@@ -6,7 +6,7 @@ Team huddles are transcribed by speaker, and each call gets a title, summary and
 ```bash
 cast calls                        # team call history, live calls first
 cast call <id>                    # one call: summary + action items, and which lines were filmed
-cast call <id> --transcript       # full who-said-what transcript, each line labeled cl-42:15
+cast call <id> --transcript       # full transcript, lines labeled cl-42:15 (cl-42:15-25 reads a range)
 cast call snap cl-42:15           # the call's screen when line 15 was said, as a PNG
 ```
 

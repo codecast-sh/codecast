@@ -8,7 +8,7 @@ import { gzipSync } from "node:zlib";
 import { SCOPE, useCliHarness } from "./externalDataCli.testHarness.js";
 import { VENDOR_CONVERTER_VERSION, needsVendorImport } from "@codecast/shared/contracts/replay";
 import { REPLAY_FRAME_LIMITS } from "@codecast/shared/contracts/replayPlayer";
-import { decodeChunk, fetchReplayFrames, followReplayImport, formatReplayImport, parseEvery, readReplayEvents, reproBaseUrl, snapTimes, type ReplayDetail } from "./replayCommand.js";
+import { recordingJsonRow, decodeChunk, fetchReplayFrames, followReplayImport, formatReplayImport, parseEvery, readReplayEvents, reproBaseUrl, snapTimes, type ReplayDetail } from "./replayCommand.js";
 
 const EVENTS = [
   { type: "nav", t: 0, url: "https://app.test/checkout", title: "Checkout" },
@@ -216,5 +216,13 @@ describe("snap", () => {
   test("a refusal fails with the renderer's words", async () => {
     const fetchImpl = (async () => Response.json({ error: "This replay link has expired" }, { status: 404 })) as any;
     await expect(fetchReplayFrames({ cap: "c", frame_url: "https://replay.test/frame" }, [0], { fetchImpl })).rejects.toThrow("expired");
+  });
+});
+
+describe("cast replay ls --json", () => {
+  test("a PostHog recording carries the replay row's keys, short_id null until imported", () => {
+    const fresh = recordingJsonRow({ id: "rec1", started_at: 10, duration_ms: 2000, url: "https://a.test/", email: "x@a.test", distinct_id: "d1", errors: 2, replay: null, imported: false });
+    expect(fresh).toMatchObject({ short_id: null, external_id: "rec1", provider: "posthog", user: { id: "d1", email: "x@a.test" }, counts: { errors: 2 }, imported: false });
+    expect(recordingJsonRow({ id: "rec2", started_at: null, duration_ms: null, url: null, email: null, distinct_id: null, errors: null, replay: "rp-4", imported: true })).toMatchObject({ short_id: "rp-4", user: null, counts: {} });
   });
 });

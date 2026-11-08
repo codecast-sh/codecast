@@ -58,7 +58,7 @@ A human tracks your work through a dashboard: report status through tasks and pl
 If bound to a plan, post progress and directional decisions there (`cast plan comment <plan_id> "…"`, `-d -r "why"` for a decision). If blocked, say so: **BLOCKED: <reason>** (needs a human), **NEEDS_CONTEXT: <what>** (escalates to the user), **DONE_WITH_CONCERNS: <concern>** (finished, flagged for review). After compaction, reground with `cast task context --current` / `cast plan context --current`, not memory.
 
 ```bash
-cast task create "Title" -p high               # --plan <id>, --parent <id>, --project "<name>", --human
+cast task create "Title" -p high               # --blocked-by "#42", --parent, --plan, --project, --human
 cast task start <id> | done <id> -m "what you verified"
 cast task comment <id> "…" -t progress
 cast task update <id> -t "…" -d "…" -s <status>

@@ -153,11 +153,19 @@ export function parseFilesFlag(raw: string | undefined): string[] | undefined {
   return files.length ? files : undefined;
 }
 
+// Words for how work ended that are not a handoff status. A handoff always
+// moves the task to in_review, so in_review and review mean done.
+const HANDOFF_ALIASES: Record<string, HandoffStatus> = {
+  in_review: "done", review: "done", complete: "done", completed: "done", finished: "done", verified: "done",
+  stuck: "blocked", needs_input: "needs_context", needs_info: "needs_context",
+};
+
 export function parseHandoffStatus(raw: string | undefined): HandoffStatus {
-  if (!raw || !(HANDOFF_STATUSES as readonly string[]).includes(raw)) {
-    throw new Error(`--status must be one of ${HANDOFF_STATUSES.join(", ")}`);
-  }
-  return raw as HandoffStatus;
+  const key = raw?.trim().toLowerCase().replace(/[\s-]+/g, "_") ?? "";
+  if ((HANDOFF_STATUSES as readonly string[]).includes(key)) return key as HandoffStatus;
+  const alias = HANDOFF_ALIASES[key];
+  if (alias) return alias;
+  throw new Error(`--status must be one of ${HANDOFF_STATUSES.join(", ")} (how the work ended; the task moves to in_review either way)`);
 }
 
 export function parseReviewVerdict(raw: string | undefined): ReviewVerdict {

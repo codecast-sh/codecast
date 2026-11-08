@@ -139,6 +139,29 @@ export function taskStatusKey(name: string): string {
   return name.trim().toLowerCase().replace(/[\s_-]+/g, "_");
 }
 
+// Words people and agents reach for that name no status, and the category each
+// means. A team status of the same name always wins over these.
+const TASK_STATUS_ALIASES: Record<string, TaskStatusCategory> = {
+  cancelled: "dropped", canceled: "dropped", cancel: "dropped", wontfix: "dropped", wont_fix: "dropped", abandoned: "dropped",
+  review: "in_review", needs_review: "in_review",
+  wip: "in_progress", doing: "in_progress", started: "in_progress", active: "in_progress",
+  todo: "open", to_do: "open",
+  complete: "done", completed: "done", finished: "done", closed: "done",
+};
+
+/** The category a near-miss status word means (`cancelled` is `dropped`), or undefined. */
+export function taskStatusAlias(ref: string): TaskStatusCategory | undefined {
+  return TASK_STATUS_ALIASES[taskStatusKey(ref).replace(/'/g, "")];
+}
+
+/** The refusal for a status nothing answers to. `blocked` is not a status: what a task waits on is a dependency. */
+export function invalidTaskStatusMessage(ref: string, choices: readonly string[]): string {
+  if (taskStatusKey(ref) === "blocked") {
+    return "A task has no blocked status: record what it waits on with cast task dep <id> --blocked-by <ct-N | #PR | sd-N | 2h>, which keeps it off the ready list until that clears";
+  }
+  return `Invalid task status '${ref}'. Valid: ${choices.join(", ")}`;
+}
+
 /** A team status named by its id or by its name (`cast task update -s today`). */
 export function findTeamTaskStatus(
   statuses: TeamTaskStatus[],

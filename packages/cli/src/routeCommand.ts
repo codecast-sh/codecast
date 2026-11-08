@@ -4,7 +4,7 @@
 // place is read by the semantic router; when it is not confident, the choices
 // come back here: a person at a terminal picks one, a script reads `choices`.
 
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import type { OrgInitDeps } from "./orgInit.js";
 import { readStdinBody } from "./sendBody.js";
 
@@ -44,7 +44,7 @@ export function routeLines(r: RouteCliResult): string[] {
 export function registerRouteCommand(program: Command, deps: OrgInitDeps): void {
   program
     .command("route")
-    .description("Where a request lands in the org, by the one rule: named, anchored, started, or read by the router. Files it as a task for the owner and wakes a role.")
+    .description("File a request with its owner in the org: a task for the owner, and a wake for its role (--dry only says where it would land)")
     .argument("<request>", "The request; '-' reads it from stdin (heredoc-friendly)")
     .option("--to <who>", "Name the owner yourself: @handle, or-N, or me (line 1)")
     .option("--task <ct-N>", "The task it is about (line 2)")
@@ -52,8 +52,10 @@ export function registerRouteCommand(program: Command, deps: OrgInitDeps): void 
     .option("--project <ref>", "The project it is about: title or pr-N (line 2)")
     .option("--team <name|id|personal>", "Workspace (default: the active one)")
     .option("--dry", "Say where it would land and why; write nothing")
+    .addOption(new Option("--dry-run", "Same as --dry").hideHelp())
     .option("--json", "Machine-readable output")
     .addHelpText("after", `
+Examples:
   cast route "Warm the three new sender domains before Monday"
   cast route --to @cold-email "Warm the three new sender domains"
   cast route --plan pl-54 --dry "Add the bounce report to the daily check"
@@ -75,14 +77,14 @@ answers with choices and files nothing; pick one with --to.`)
         ...(options.task ? { task: options.task } : {}),
         ...(options.plan ? { plan: options.plan } : {}),
         ...(options.project ? { project: options.project } : {}),
-        ...(options.dry ? { dry: true } : {}),
+        ...(options.dry || options.dryRun ? { dry: true } : {}),
         from_session: deps.callingSession(),
       });
       if (options.json) { console.log(JSON.stringify(result, null, 2)); if (!result.owner) process.exit(2); return; }
       for (const line of routeLines(result)) console.log(line);
       if (result.owner) return;
       // A person at a terminal picks; a script reads the choices and exits 2.
-      if (!result.choices?.length || !process.stdin.isTTY || !process.stdout.isTTY || options.dry) process.exit(2);
+      if (!result.choices?.length || !process.stdin.isTTY || !process.stdout.isTTY || options.dry || options.dryRun) process.exit(2);
       const readline = await import("node:readline");
       const iface = readline.createInterface({ input: process.stdin, output: process.stdout });
       const answer = await new Promise<string>((resolve) => iface.question(`Which one? [1-${result.choices!.length}, or Enter to leave it] `, resolve));

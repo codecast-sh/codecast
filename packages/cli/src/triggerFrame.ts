@@ -71,16 +71,17 @@ export function buildTriggerFrame(task: any, now: number): string {
   }
   if (runResultThreadOf(task)) {
     parts.push(`- Your summary will be posted as a message in the originating conversation thread.`);
-    parts.push(`- When done, run: cast trigger complete ${handle} --summary "your full response to post in the thread"`);
+    parts.push(`- When done, run: cast trigger complete ${handle} --summary - <<'EOF'   (your full response to post in the thread on the lines after it, then EOF alone on a line)`);
     parts.push(`- Write the summary as if you are replying directly to the user in their conversation.`);
   } else {
-    parts.push(`- When done, run: cast trigger complete ${handle} --summary "brief description of what was done"`);
+    parts.push(`- When done, run: cast trigger complete ${handle} --summary - <<'EOF'   (what was done on the lines after it, then EOF alone on a line)`);
   }
   // Only when a real short id exists: telling an agent to quote a 32-char id
   // and to never paste one in the same breath would be nonsense.
   if (task.short_id) {
     parts.push(`- Refer to this trigger as ${task.short_id} in anything you write — that renders as a rich trigger reference. Never paste its 32-char id into prose.`);
   }
+  parts.push(`- To look again later (a check that is not ready yet), add --again-in 30m (or --again-at 06:00) to the completion: the trigger fires once more then. A running trigger cannot be rescheduled with cast trigger update.`);
   parts.push(`- The completion is this run's declaration of who acts next. A clean one says nobody: the run stays out of the user's inbox and the summary carries the outcome. If you found something the user must read or act on, add --needs-attention: that declares the run blocked on them and keeps it in their inbox.`);
   const lifecycle = triggerLifecycleInstructions(task);
   if (lifecycle) parts.push(lifecycle);

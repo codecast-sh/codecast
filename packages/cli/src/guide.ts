@@ -19,6 +19,7 @@ import {
   guideTopics,
   snippetBySlug,
 } from "@codecast/shared/contracts";
+import { didYouMean, nearMatches } from "./commandSuggestion.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { getVersion } from "./update.js";
 import { c, fmt } from "./colors.js";
@@ -49,11 +50,20 @@ export function guidePayload(descriptor: SnippetDescriptor): GuidePayload {
 
 /** What an unknown topic prints. Names every topic, so a typo costs one run. */
 export function unknownTopicMessage(input: string): string {
+  const slugs = guideTopics().map((t) => t.slug);
+  const near = didYouMean(nearMatches(input, slugs).map((slug) => `'cast guide ${slug}'`));
   return (
     `unknown guide topic: ${input}\n` +
-    `topics: ${guideTopics().map((t) => t.slug).join(", ")}\n` +
+    (near ? `${near}\n` : "") +
+    `topics: ${slugs.join(", ")}\n` +
     `Run 'cast guide --list' for one line each.`
   );
+}
+
+/** The topic a typed name means: the slug itself, any case. */
+function topicFor(input: string): SnippetDescriptor | undefined {
+  const descriptor = snippetBySlug(input) ?? snippetBySlug(input.toLowerCase());
+  return descriptor?.section ? descriptor : undefined;
 }
 
 function printList(json: boolean): void {
@@ -94,8 +104,8 @@ export function registerGuideCommand(program: Command): void {
         printList(options.json === true);
         return;
       }
-      const descriptor = snippetBySlug(topic);
-      if (!descriptor?.section) {
+      const descriptor = topicFor(topic);
+      if (!descriptor) {
         console.error(unknownTopicMessage(topic));
         process.exit(1);
       }

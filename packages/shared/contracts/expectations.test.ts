@@ -66,6 +66,9 @@ describe("parseProposal", () => {
     expect(() => parseProposal(`## edit ex-a-1\ntext: ${"word ".repeat(90)}\n- task ct-1`)).toThrow(/text is 449 characters; a line holds at most 400/);
     expect(() => parseProposal("## add\npart: P\ntext: T.\n- tweet x")).toThrow(/kind "tweet"/);
     expect(() => parseProposal("## add\nwhat is this line\n- task ct-1")).toThrow(/line 2: cannot read/);
+    // Each unreadable line says what that kind of line looks like, and the form follows the list.
+    expect(() => parseProposal("## add\nquote: the words\n- task ct-1")).toThrow(/line 2: cannot read "quote: the words": a change takes text, part, note, reason or status, not quote[\s\S]*The form:\n  # One line/);
+    expect(() => parseProposal("## add\ntext: x\n-call cl-1")).toThrow(/a source reads - <kind> <ref>/);
     expect(() => parseProposal("{ nope")).toThrow(/not valid JSON/);
     expect(() => parseProposal("until: tomorrow-ish\n## add\npart: P\ntext: T.\n- task ct-1")).toThrow(/not a time/);
   });

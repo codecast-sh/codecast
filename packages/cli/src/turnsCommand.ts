@@ -55,7 +55,8 @@ export async function printTurnSnapshots(opts: {
 
   const pick = opts.turn === "last" ? turns[turns.length - 1] : turns.find((t) => t.index === Number(opts.turn));
   if (!pick) {
-    console.error(`No turn ${opts.turn}; --turns lists ${turns.length}.`);
+    const span = turns.length ? `${turns[0].index} to ${turns[turns.length - 1].index}` : "none";
+    console.error(`No turn ${opts.turn}. Pass a turn number (this session has ${span}; --turns lists them) or 'last'.`);
     process.exit(1);
   }
   const r = pick.row;

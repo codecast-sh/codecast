@@ -150,8 +150,9 @@ export async function applyBlockers(deps: GraphDeps, shortId: string, refs: stri
       for (const w of (result?.removed ?? []) as TaskWait[]) console.log(`${c.green}ok${c.reset} ${shortId} is no longer ${waitingOn(w, words)}`);
     }
   }
+  // A hint, so stderr: the last line on stdout stays the ok a caller reads.
   const park = parkAfterBlocking(ctx.sessionId, shortId, added.filter(holdsBack), readTaskPulseFor(ctx.sessionId));
-  if (park) console.log(fmt.muted(park));
+  if (park) console.error(fmt.muted(park));
 }
 
 /** Two spellings of one task id ("CT-012", "ct-12"). */
@@ -161,11 +162,12 @@ function sameTask(a: string, b: string): boolean {
 }
 
 /** After an agent blocks a task: how to park on it when this session holds
- *  it, else that nothing will wake this session when the blockers clear (a
- *  clearing wakes only the session holding the task, TG2). */
+ *  it, else, when it holds another task, that nothing will wake it when the
+ *  blockers clear (a clearing wakes only the session holding the task, TG2).
+ *  A session holding no task is wiring up the graph, not waiting: no hint. */
 export function parkAfterBlocking(sessionId: string | null, shortId: string, open: Blocker[], pulse: TaskPulse | null): string | null {
-  if (!sessionId || !open.length) return null;
-  if (pulse?.started && pulse.task && sameTask(pulse.task, shortId)) return parkingLine(open, shortId);
+  if (!sessionId || !open.length || !pulse?.started || !pulse.task) return null;
+  if (sameTask(pulse.task, shortId)) return parkingLine(open, shortId);
   return `This session does not hold ${shortId}, so nothing wakes it when ${open.length === 1 ? "this clears" : "these clear"} (cast task start ${shortId} to hold it).`;
 }
 

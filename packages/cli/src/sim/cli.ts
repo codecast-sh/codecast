@@ -20,6 +20,8 @@ import { agentTempPath } from "../tempFiles.js";
 import { acquire, heldByCaller, lockDir, poolStatus, readPool, releaseLock, writePool, type PoolEntry } from "./pool.js";
 import { axe, axeBin, boot, bundleIdOf, DEFAULT_POOL_SIZE, ensurePool, hasSimctl, listDevices, listRuntimes, screenshot, shutdown, simctl, why } from "./simctl.js";
 import { describeUi, findElements, formatElement, formatTree, screenPoints, type UiElement } from "./ui.js";
+import { CLEAN_STATUS_BAR, PRIVACY_SERVICES, privacyServices, statusBarArgs, type StatusBarOptions } from "./settings.js";
+import { startRecording, stopRecording } from "./record.js";
 
 const OK = fmt.success(icons.check);
 
@@ -107,10 +109,11 @@ export function registerSimCommand(program: Command, deps: PublishDeps): void {
 A session acquires one pool simulator and every other verb targets it:
 
   cast sim acquire               # takes a free simulator, boots it, prints its UDID
-  cast sim install path/To.app   # then: cast sim launch <bundle-id>
+  cast sim install path/To.app --launch   # prints the bundle id; launches it too
   cast sim shot                  # screenshot into the thread (points: a pixel is a tap coordinate)
   cast sim ui                    # the accessibility tree, each element with its tap point
   cast sim tap --label "Sign in" # or -x 120 -y 640
+  cast sim scroll down           # shows what is further down the page
   cast sim release               # done; the daemon shuts idle simulators down`);
 
   sim
@@ -177,11 +180,14 @@ A session acquires one pool simulator and every other verb targets it:
     .action((udid?: string) => { const id = target(udid); if (!shutdown(id)) die(`could not shut down ${id}`); console.log(`${OK} ${id} shut down`); });
 
   sim
-    .command("install <app>")
+    .command("install <app> [launchArgs...]")
     .description("Install an .app build (a simulator build) and print its bundle id")
     .option("--udid <udid>", "Target simulator")
-    .option("--launch", "Launch it after installing")
-    .action((app: string, o: { udid?: string; launch?: boolean }) => {
+    .option("--launch", "Launch it after installing; arguments after the app go to it (--launch -demo)")
+    // App arguments look like flags (-demo, -FIRDebugEnabled): passed on, never parsed.
+    .allowUnknownOption()
+    .action((app: string, launchArgs: string[], o: { udid?: string; launch?: boolean }) => {
+      if (launchArgs.length && !o.launch) die(`arguments for the app (${launchArgs.join(" ")}) need --launch`, `cast sim install ${app} --launch ${launchArgs.join(" ")}`);
       const id = target(o.udid);
       const abs = path.resolve(app);
       if (!fs.existsSync(abs)) die(`no such app: ${abs}`);
@@ -190,7 +196,7 @@ A session acquires one pool simulator and every other verb targets it:
       const bundle = bundleIdOf(abs);
       console.log(`${OK} installed ${path.basename(abs)}${bundle ? ` (${bundle})` : ""}`);
       if (o.launch && bundle) {
-        const l = simctl(["launch", id, bundle]);
+        const l = simctl(["launch", "--terminate-running-process", id, bundle, ...launchArgs]);
         if (!l.ok) die(`launch failed: ${why(l)}`);
         console.log(`${OK} launched ${bundle} (${l.stdout.trim().split(":").pop()?.trim()})`);
       }
@@ -198,8 +204,10 @@ A session acquires one pool simulator and every other verb targets it:
 
   sim
     .command("launch <bundleId> [args...]")
-    .description("Launch an installed app (terminating a running copy first)")
+    .description("Launch an installed app (terminating a running copy first); arguments after the bundle id go to the app")
     .option("--udid <udid>", "Target simulator")
+    // App arguments look like flags (-demo, -FIRDebugEnabled): passed on, never parsed.
+    .allowUnknownOption()
     .action((bundle: string, args: string[], o: { udid?: string }) => {
       const r = simctl(["launch", "--terminate-running-process", target(o.udid), bundle, ...args]);
       if (!r.ok) die(`launch failed: ${why(r)}`);
@@ -284,15 +292,16 @@ A session acquires one pool simulator and every other verb targets it:
     .option("--nth <n>", "Which match, when several elements match --label")
     .option("--shot", "Screenshot into the thread after the tap")
     .action(async (o: { udid?: string; x?: string; y?: string; label?: string; nth?: string; shot?: boolean }) => {
+      if (!o.label && (o.x === undefined || o.y === undefined)) die("pass --label <text>, or both -x and -y in points", 'cast sim tap --label "Sign in"  (cast sim ui lists labels and tap points)');
+      const nth = o.nth === undefined ? undefined : parseNum(o.nth, "--nth");
       const id = target(o.udid);
       let x: number, y: number, what: string;
       if (o.label) {
-        const el = pick(attempt(() => describeUi(id)).elements, o.label, o.nth ? parseInt(o.nth, 10) : undefined);
+        const el = pick(attempt(() => describeUi(id)).elements, o.label, nth);
         ({ x, y } = el.center);
         what = formatElement({ ...el, depth: 0 });
       } else {
-        if (o.x === undefined || o.y === undefined) die("pass -x and -y, or --label");
-        x = parseNum(o.x, "-x"); y = parseNum(o.y, "-y");
+        x = parseNum(o.x!, "-x"); y = parseNum(o.y!, "-y");
         what = `${x},${y}`;
       }
       axeOrDie(["tap", "-x", String(x), "-y", String(y), "--udid", id]);
@@ -310,27 +319,49 @@ A session acquires one pool simulator and every other verb targets it:
       console.log(`${OK} typed ${body.length} character(s)`);
     });
 
+  const DIRECTIONS = ["up", "down", "left", "right"];
+  // A finger swipe across the middle of the screen, from where it starts to where it ends.
+  const fingerPath = (id: string, finger: string): number[] => {
+    const size = screenPoints(attempt(() => describeUi(id)).elements) ?? { width: 390, height: 844 };
+    const cx = Math.round(size.width / 2), cy = Math.round(size.height / 2);
+    const dy = Math.round(size.height * 0.3), dx = Math.round(size.width * 0.35);
+    const dirs: Record<string, number[]> = { up: [cx, cy + dy, cx, cy - dy], down: [cx, cy - dy, cx, cy + dy], left: [cx + dx, cy, cx - dx, cy], right: [cx - dx, cy, cx + dx, cy] };
+    return dirs[finger]!;
+  };
+  const swipeAlong = (id: string, pts: number[], duration?: string): void => {
+    axeOrDie(["swipe", "--start-x", String(pts[0]), "--start-y", String(pts[1]), "--end-x", String(pts[2]), "--end-y", String(pts[3]), ...(duration ? ["--duration", duration] : []), "--udid", id]);
+  };
+
+  sim
+    .command("scroll [direction]")
+    .description("Scroll the screen one page: down shows what is further down, like cast computer scroll")
+    .option("--udid <udid>", "Target simulator")
+    .option("--direction <dir>", "up | down | left | right (same as the argument)")
+    .action((dir: string | undefined, o: { udid?: string; direction?: string }) => {
+      const scroll = dir ?? o.direction;
+      if (!scroll || !DIRECTIONS.includes(scroll)) die(`scroll takes up, down, left or right${scroll ? `, not '${scroll}'` : ""}`, "cast sim scroll down  (shows what is further down the page)");
+      const id = target(o.udid);
+      // The finger moves against the scroll: scrolling down is a swipe up.
+      const finger = { down: "up", up: "down", right: "left", left: "right" }[scroll]!;
+      swipeAlong(id, fingerPath(id, finger));
+      console.log(`${OK} scrolled ${scroll}`);
+    });
+
   sim
     .command("swipe")
-    .description("Swipe between two points, or scroll the screen by direction")
+    .description("Swipe the finger between two points, or across the screen by direction (to scroll, cast sim scroll)")
     .option("--udid <udid>", "Target simulator")
-    .option("--direction <dir>", "up | down | left | right (the content moves the other way)")
+    .option("--direction <dir>", "up | down | left | right: the way the finger moves, so up shows what is further down")
     .option("--start-x <n>").option("--start-y <n>").option("--end-x <n>").option("--end-y <n>")
     .option("--duration <s>", "Seconds")
     .action((o: { udid?: string; direction?: string; startX?: string; startY?: string; endX?: string; endY?: string; duration?: string }) => {
+      if (o.direction && !DIRECTIONS.includes(o.direction)) die(`--direction is up, down, left or right, not '${o.direction}'`, "it is the way the finger moves; to scroll the page, cast sim scroll down");
+      if (!o.direction && [o.startX, o.startY, o.endX, o.endY].some((v) => v === undefined)) die("pass --direction up|down|left|right, or all four of --start-x --start-y --end-x --end-y");
       const id = target(o.udid);
-      let pts: number[];
-      if (o.direction) {
-        const size = screenPoints(attempt(() => describeUi(id)).elements) ?? { width: 390, height: 844 };
-        const cx = Math.round(size.width / 2), cy = Math.round(size.height / 2);
-        const dy = Math.round(size.height * 0.3), dx = Math.round(size.width * 0.35);
-        const dirs: Record<string, number[]> = { up: [cx, cy + dy, cx, cy - dy], down: [cx, cy - dy, cx, cy + dy], left: [cx + dx, cy, cx - dx, cy], right: [cx - dx, cy, cx + dx, cy] };
-        pts = dirs[o.direction] ?? die("--direction is up, down, left or right");
-      } else {
-        if ([o.startX, o.startY, o.endX, o.endY].some((v) => v === undefined)) die("pass --start-x --start-y --end-x --end-y, or --direction");
-        pts = [parseNum(o.startX!, "--start-x"), parseNum(o.startY!, "--start-y"), parseNum(o.endX!, "--end-x"), parseNum(o.endY!, "--end-y")];
-      }
-      axeOrDie(["swipe", "--start-x", String(pts[0]), "--start-y", String(pts[1]), "--end-x", String(pts[2]), "--end-y", String(pts[3]), ...(o.duration ? ["--duration", o.duration] : []), "--udid", id]);
+      const pts = o.direction
+        ? fingerPath(id, o.direction)
+        : [parseNum(o.startX!, "--start-x"), parseNum(o.startY!, "--start-y"), parseNum(o.endX!, "--end-x"), parseNum(o.endY!, "--end-y")];
+      swipeAlong(id, pts, o.duration);
       console.log(`${OK} swiped ${pts[0]},${pts[1]} → ${pts[2]},${pts[3]}`);
     });
 
@@ -339,8 +370,88 @@ A session acquires one pool simulator and every other verb targets it:
     .description("Press a hardware button: home, lock, side-button, siri, apple-pay")
     .option("--udid <udid>", "Target simulator")
     .action((name: string, o: { udid?: string }) => {
+      const buttons = ["home", "lock", "side-button", "siri", "apple-pay"];
+      if (!buttons.includes(name)) die(`no hardware button '${name}'`, `one of: ${buttons.join(", ")}`);
       axeOrDie(["button", name, "--udid", target(o.udid)]);
       console.log(`${OK} pressed ${name}`);
+    });
+
+  sim
+    .command("statusbar [action]")
+    .description("Set the status bar for screenshots: 9:41, full bars and battery by default; `clear` restores the live one")
+    .option("--udid <udid>", "Target simulator")
+    .option("--time <t>", "Clock text, or an ISO date (default 9:41)")
+    .option("--battery <n>", "Battery level 0-100 (default 100)")
+    .option("--network <type>", "wifi, 4g, lte, 5g, hide, … (default wifi)")
+    .option("--wifi <bars>", "Wi-Fi bars 0-3 (default 3)")
+    .option("--cell <bars>", "Cellular bars 0-4 (default 4)")
+    .option("--carrier <name>", "Carrier name")
+    .action((action: string | undefined, o: StatusBarOptions & { udid?: string }) => {
+      if (action && action !== "clear" && action !== "clean") die(`statusbar takes clear, or nothing, not '${action}'`, "cast sim statusbar  (clean bar)   cast sim statusbar clear  (the live one)");
+      const id = target(o.udid);
+      if (action === "clear") {
+        const r = simctl(["status_bar", id, "clear"]);
+        if (!r.ok) die(`could not clear the status bar: ${why(r)}`);
+        return console.log(`${OK} status bar back to live`);
+      }
+      const built = statusBarArgs(id, o);
+      if ("error" in built) die(built.error);
+      const r = simctl(built.args);
+      if (!r.ok) die(`could not set the status bar: ${why(r)}`);
+      console.log(`${OK} status bar set: ${o.time ?? CLEAN_STATUS_BAR.time}, battery ${o.battery ?? CLEAN_STATUS_BAR.batteryLevel}%, ${o.network ?? CLEAN_STATUS_BAR.dataNetwork}`);
+    });
+
+  sim
+    .command("grant <bundleId> [services...]")
+    .description("Grant an app privacy permissions with no prompt: photos, location, microphone, contacts, … (all for every one)")
+    .option("--udid <udid>", "Target simulator")
+    .option("--revoke", "Deny them instead")
+    .option("--reset", "Back to asking on next use")
+    .addHelpText("after", `\nServices: ${PRIVACY_SERVICES.join(", ")}\n\n  cast sim grant com.example.app photos location\n  cast sim grant com.example.app all --reset\n\nA running app may be terminated by the change; relaunch it with cast sim launch.`)
+    .action((bundle: string, names: string[], o: { udid?: string; revoke?: boolean; reset?: boolean }) => {
+      if (!names.length) die("name the services to grant", `cast sim grant ${bundle} photos location  (services: ${PRIVACY_SERVICES.join(", ")})`);
+      const parsed = privacyServices(names);
+      if ("error" in parsed) die(parsed.error, `services: ${PRIVACY_SERVICES.join(", ")}`);
+      const action = o.reset ? "reset" : o.revoke ? "revoke" : "grant";
+      const id = target(o.udid);
+      for (const service of parsed.services) {
+        const r = simctl(["privacy", id, action, service, bundle]);
+        if (!r.ok) die(`could not ${action} ${service}: ${why(r)}`);
+      }
+      const done = { grant: "granted", revoke: "revoked", reset: "reset" }[action];
+      console.log(`${OK} ${done} ${parsed.services.join(", ")} for ${bundle}`);
+    });
+
+  sim
+    .command("record [action] [file]")
+    .description("Record the screen to a video: record start, then record stop; or record --seconds <n>")
+    .option("--udid <udid>", "Target simulator")
+    .option("--seconds <n>", "Record this long in the foreground, then stop")
+    .addHelpText("after", `
+  cast sim record start            # in the background, while you tap and type
+  cast sim record stop             # finishes the file and prints its path
+  cast sim record --seconds 8 /tmp/flow.mov`)
+    .action(async (action: string | undefined, file: string | undefined, o: { udid?: string; seconds?: string }) => {
+      if (action && !["start", "stop"].includes(action)) {
+        // `record <file> --seconds n`: the first word is the file.
+        file = action;
+        action = undefined;
+      }
+      if (!action && !o.seconds) die("record start, record stop, or record --seconds <n>", "cast sim record start  (then cast sim record stop)");
+      const id = target(o.udid);
+      if (action === "stop") {
+        const r = await stopRecording(id);
+        if ("error" in r) die(r.error);
+        return console.log(`${OK} ${r.file} (${Math.round(r.bytes / 1024)} KB)`);
+      }
+      const out = path.resolve(file ?? agentTempPath("sim", `sim-${id.slice(0, 8)}-${Date.now()}.mov`));
+      const started = await startRecording(id, out);
+      if ("error" in started) die(started.error);
+      if (action === "start") return console.log(`${OK} recording to ${out}; \`cast sim record stop\` finishes it`);
+      await new Promise((r) => setTimeout(r, parseNum(o.seconds!, "--seconds") * 1000));
+      const r = await stopRecording(id);
+      if ("error" in r) die(r.error);
+      console.log(`${OK} ${r.file} (${Math.round(r.bytes / 1024)} KB)`);
     });
 
   sim

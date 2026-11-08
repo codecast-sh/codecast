@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { formatSignalList, signalAddBody, type SignalRow } from "./signalCommand.js";
+import { formatSignalList, signalAddBody, signalListCutNote, type SignalRow } from "./signalCommand.js";
 
 describe("signalAddBody", () => {
   test("source, kind and title are required and named when missing", () => {
@@ -48,8 +48,18 @@ describe("formatSignalList", () => {
     observed_at: 0, created_at: 0, attach: "fingerprint", reopened: true, task_short_id: "ct-9",
   };
   test("one line per signal names the cause and how it attached", () => {
-    expect(formatSignalList([row], 120_000)).toBe("sg-4  sentry/bug  Checkout throws  → ct-9 (same key, reopened it; 2m ago)");
+    expect(formatSignalList([row], 120_000)).toBe("sg-4  sentry/bug  Checkout throws  → ct-9 (same key, reopened it; 2m ago)  key e1");
     expect(formatSignalList([])).toContain("cast signal add");
+  });
+
+  test("a list the limit cut says so; a whole one says nothing", () => {
+    expect(signalListCutNote(61, undefined, { total: 61 })).toBeNull();
+    expect(signalListCutNote(10, 10, { total: 61 })).toBe("10 of 61 shown: -n 61 for all");
+    expect(signalListCutNote(50, undefined, { more: true })).toContain("newest 50");
+    expect(signalListCutNote(12, undefined, { more: false })).toBeNull();
+    // A backend from before the count: a list exactly the default size reads as cut.
+    expect(signalListCutNote(50, undefined, {})).toContain("there may be more");
+    expect(signalListCutNote(49, undefined, {})).toBeNull();
   });
 });
 
@@ -118,6 +128,36 @@ describe("cast signal on the wire", () => {
     answer = () => ({ from: "ct-7", to: "ct-9", moved: 2, created: true });
     await run("move", "--fingerprint", "union:cluster:c1", "--from", "ct-7", "--title", "Held call cards dial outside hours", "--json");
     expect(calls[0]).toEqual({ path: "/cli/signal/move", body: { fingerprint: "union:cluster:c1", from: "ct-7", title: "Held call cards dial outside hours", project_path: "/repo", conversation_id: "s1" } });
+  });
+
+  test("move sg-N looks up each finding's key and problem and moves each pair once, the rest joining a new problem", async () => {
+    const shown: Record<string, any> = {
+      "sg-1": { short_id: "sg-1", fingerprint: "k1", task_short_id: "ct-7" },
+      "sg-2": { short_id: "sg-2", fingerprint: "k1", task_short_id: "ct-7" },
+      "sg-3": { short_id: "sg-3", fingerprint: "k2", task_short_id: "ct-8" },
+    };
+    let lastShow = "";
+    answer = (path) => {
+      if (path === "/cli/signal/show") return { signal: shown[lastShow] };
+      return { from: "ct-7", to: "ct-20", moved: 1, created: calls.filter((c) => c.path === "/cli/signal/move").length === 1 };
+    };
+    const fetchWithShow = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      lastShow = JSON.parse(String(init.body)).signal ?? lastShow;
+      return fetchWithShow(url, init);
+    }) as typeof fetch;
+    await run("move", "sg-1", "sg-2", "sg-3", "--title", "Dials outside hours");
+    const moves = calls.filter((c) => c.path === "/cli/signal/move").map((c) => c.body);
+    expect(moves).toEqual([
+      { fingerprint: "k1", from: "ct-7", title: "Dials outside hours", project_path: "/repo", conversation_id: "s1" },
+      { fingerprint: "k2", from: "ct-8", to: "ct-20", project_path: "/repo", conversation_id: "s1" },
+    ]);
+  });
+
+  test("move with neither findings nor a key posts nothing and shows the form", async () => {
+    await expect(run("move", "--to", "ct-9")).rejects.toThrow(/exit 1/);
+    expect(calls).toHaveLength(0);
+    expect(logs.join("\n")).toContain("cast signal move sg-12");
   });
 
   test("ls --fingerprint asks the server for that one key in the workspace", async () => {

@@ -20,7 +20,7 @@ cast switch --agent codex                        # continue THIS session on anot
 
 Multi-line prompts go through `-` and a heredoc, never `"$(cat file)"`, which mangles formatting. Every launch starts at once and knows only what you give it, so seed each with a sharp, self-contained brief, and tell the human in one line what runs where.
 
-**Workers** are full sessions: `cast send <id>` for follow-ups, `cast read <id>` for results. A worker that settles wakes you with a message naming it, so after delegating you can end your turn; in a shell, `cast sessions <id>… -w --until` waits until they settle (bare `-w` never exits). Report the combined result yourself.
+**Workers** are full sessions: `cast send <id>` for follow-ups, `cast read <id>` for results. A worker that settles wakes you with a message naming it, so after delegating you can end your turn; to wait here, `cast sessions <id>… --until` returns once each has settled. Report the combined result yourself.
 
 **Forks** branch this conversation just before the latest user message. With several directions you take the first in place and each other becomes a branch, so issue one `cast fork` with all of them and carry on with the first. When forking is your own idea, pass `--tip`. A branch receives its direction as its human's next message and reports to nobody: never message, monitor or coordinate branches.
 

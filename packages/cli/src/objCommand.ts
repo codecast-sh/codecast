@@ -2,7 +2,7 @@
 // A kind is a mod's manifest entry (shared/contracts/mods.ts ModObjectKind);
 // these verbs work every kind the same way, so a new kind needs no CLI code.
 
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { OBJECT_SHORT_ID_RE, objectStatusIsDone, type ModObjectKind } from "@codecast/shared/contracts/mods";
@@ -42,10 +42,27 @@ function parseSets(kind: ModObjectKind, sets: string[] | undefined): Record<stri
     const raw = pair.slice(eq + 1);
     const f = kind.fields?.[name];
     if (!f) fail(`${kind.title} has no field "${name}"${kind.fields ? ` (fields: ${Object.keys(kind.fields).join(", ")})` : ""}`);
+    if (raw !== "" && f.options?.length && !f.options.includes(raw)) fail(`${name} must be one of ${f.options.join("|")}, got "${raw}"`);
+    if (raw !== "" && f.type === "number" && !Number.isFinite(Number(raw))) fail(`${name} takes a number, got "${raw}"`);
     out[name] = raw === "" ? null : f.type === "number" ? Number(raw) : f.type === "bool" ? /^(true|yes|1|on)$/i.test(raw) : raw;
   }
   return out;
 }
+
+/** A status the kind declares, or a failure that lists the ones it has. */
+function checkStatus(kind: ModObjectKind, status: string | undefined): void {
+  if (status === undefined) return;
+  if (!kind.statuses?.length) fail(`${kind.title} has no statuses`);
+  if (!kind.statuses.includes(status)) fail(`${kind.title} has no status "${status}"; its statuses: ${kind.statuses.join(", ")}`);
+}
+
+/** `--set` and its synonym `--field`, which agents reach for after reading a kind's fields. */
+function fieldPairs(options: { set?: string[]; field?: string[] }): string[] | undefined {
+  const all = [...(options.set ?? []), ...(options.field ?? [])];
+  return all.length ? all : undefined;
+}
+
+const fieldOption = () => new Option("--field <name=value...>", "Same as --set").hideHelp();
 
 function line(o: any, kind?: ModObjectKind): string {
   const status = o.status ? `[${o.status}]` : "";
@@ -96,7 +113,7 @@ export function registerObjCommand(program: Command, deps: PublishDeps): void {
     .option("--team <name|id|personal>", "Which workspace (default: your active team, as the app shows)")
     .option("--json", "As JSON")
     .action(async (prefix: string, options: { status?: string; all?: boolean; limit?: string; team?: string; json?: boolean }) => {
-      await kindOrFail(deps, prefix);
+      checkStatus(await kindOrFail(deps, prefix), options.status);
       const res = await apiPost(deps, "/cli/objects/list", { prefix, status: options.status, limit: Number(options.limit) || 50, ...(await scope(deps, options.team, false)) }, { read: true });
       const kind: ModObjectKind | undefined = res.kinds?.[prefix];
       const rows = (res.objects ?? []).filter((o: any) => options.all || options.status || !objectStatusIsDone(kind, o.status));
@@ -107,17 +124,22 @@ export function registerObjCommand(program: Command, deps: PublishDeps): void {
 
   obj
     .command("create <prefix> <title>")
-    .description("File a new object; it starts in the kind's first status")
+    .alias("new")
+    .description("File a new object; it starts in the kind's first status. A kind's fields and their allowed values: cast obj kinds")
     .option("--status <name>", "Start in another status")
-    .option("--set <name=value...>", "A field value (repeatable)")
+    .option("--set <name=value...>", "A field value; repeat --set for each field")
+    .addOption(fieldOption())
     .option("--body <markdown>", "Notes in markdown; '-' reads stdin")
     .option("--team <name|id|personal>", "Which workspace it belongs to (default: your active team, as the app shows)")
     .option("--json", "The created object as JSON")
-    .action(async (prefix: string, title: string, options: { status?: string; set?: string[]; body?: string; team?: string; json?: boolean }) => {
+    .addHelpText("after", `\nExample:\n  cast obj create bug "Login button misaligned on Safari" --set severity=p1 --set area=web/auth --body - <<'EOF'\n  Open /login in Safari 18; the button overlaps the footer\n  EOF`)
+    .action(async (prefix: string, title: string, options: { status?: string; set?: string[]; field?: string[]; body?: string; team?: string; json?: boolean }) => {
       const kind = await kindOrFail(deps, prefix);
+      checkStatus(kind, options.status);
+      const fields = parseSets(kind, fieldPairs(options));
       const body = options.body === "-" ? await readStdin() : options.body;
       const where = await scope(deps, options.team, true);
-      const res = await apiPost(deps, "/cli/objects/create", { prefix, title, status: options.status, fields: parseSets(kind, options.set), body, ...(where.team_id ? { team_id: where.team_id } : {}) });
+      const res = await apiPost(deps, "/cli/objects/create", { prefix, title, status: options.status, fields, body, ...(where.team_id ? { team_id: where.team_id } : {}) });
       if (options.json) return console.log(JSON.stringify(res, null, 2));
       console.log(`ok ${res.short_id}  ${title}  ${webBaseUrl().replace(/\/$/, "")}/o/${res.short_id}`);
     });
@@ -147,13 +169,21 @@ export function registerObjCommand(program: Command, deps: PublishDeps): void {
     .description("Change an object's title, status, fields or notes")
     .option("--title <text>", "A new title")
     .option("--status <name>", "A new status")
-    .option("--set <name=value...>", "A field value (repeatable); name= clears it")
+    .option("--set <name=value...>", "A field value; repeat --set for each field; name= clears it")
+    .addOption(fieldOption())
     .option("--body <markdown>", "Replace the notes; '-' reads stdin")
-    .action(async (id: string, options: { title?: string; status?: string; set?: string[]; body?: string }) => {
+    .action(async (id: string, options: { title?: string; status?: string; set?: string[]; field?: string[]; body?: string }) => {
+      if (!OBJECT_SHORT_ID_RE.test(id.toLowerCase())) fail(`"${id}" is not an object id (<prefix>-<number>, like bug-14)`);
       const kind = await kindOrFail(deps, id.toLowerCase().split("-")[0]);
+      checkStatus(kind, options.status);
+      const fields = parseSets(kind, fieldPairs(options));
+      if (options.title === undefined && options.status === undefined && !fields && options.body === undefined) {
+        fail("Nothing to change. Pass --title, --status, --set name=value or --body.");
+      }
       const body = options.body === "-" ? await readStdin() : options.body;
-      const res = await apiPost(deps, "/cli/objects/update", { short_id: id, title: options.title, status: options.status, fields: parseSets(kind, options.set), body });
-      console.log(`ok ${res.short_id}`);
+      const res = await apiPost(deps, "/cli/objects/update", { short_id: id, title: options.title, status: options.status, fields, body });
+      const changed = [options.title !== undefined && "title", options.status && `status ${options.status}`, ...Object.keys(fields ?? {}), options.body !== undefined && "notes"].filter(Boolean);
+      console.log(`ok ${res.short_id}  ${changed.join(", ")}`);
     });
 
   obj

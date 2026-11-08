@@ -14,6 +14,8 @@ import { stdinText } from "./sendBody.js";
 export interface DocDraftingDeps {
   post: (path: string, body: Record<string, any>) => Promise<any>;
   sessionId: () => string | null | undefined;
+  /** How a doc id argument is described and read (index.ts docIdArg), so every doc verb takes the same ids. */
+  docId?: { help: string; parse: (value: string) => string };
 }
 
 type ActionName = keyof typeof import("./docDraftingActions.js");
@@ -26,13 +28,15 @@ function lazy(deps: DocDraftingDeps, name: ActionName) {
 }
 
 export function registerDocDraftingCommands(doc: Command, deps: DocDraftingDeps): void {
+  const idHelp = deps.docId?.help ?? "Document ID";
+  const idParse = deps.docId?.parse ?? ((value: string) => value);
   doc
     .command("drafts")
     .description(
       "List a document's drafting marks: alternatives (with every version), ghosted text, proposed cuts and Lab marks\n\n" +
         "The marks live in the markdown as <span data-alts|data-ghost|data-flag> and show in the doc page with drafting on.",
     )
-    .argument("<id>", "Document ID")
+    .argument("<id>", idHelp, idParse)
     .option("--json", "Machine-readable output")
     .action(lazy(deps, "drafts"));
 
@@ -49,7 +53,7 @@ export function registerDocDraftingCommands(doc: Command, deps: DocDraftingDeps)
         '  cast doc alt <id> "struggle" --drop 1              # drop one version\n' +
         "  cast doc drafts <id>                               # see every set",
     )
-    .argument("<id>", "Document ID")
+    .argument("<id>", idHelp, idParse)
     .argument("<text>", stdinText("The text as it shows now"))
     .argument("[versions...]", "Versions to add")
     .option("--pick <n>", "Show version n (0 is the original)")
@@ -66,7 +70,7 @@ export function registerDocDraftingCommands(doc: Command, deps: DocDraftingDeps)
       "Dim text back without deleting it: it stays in the doc, faded, until revived or cut\n\n" +
         "With --reason trim it is a proposed cut the writer keeps (click) or makes (cast doc cuts).",
     )
-    .argument("<id>", "Document ID")
+    .argument("<id>", idHelp, idParse)
     .argument("<text>", stdinText("Exact text to ghost"))
     .option("--reason <reason>", `Why: "${TRIM_REASON}" marks a proposed cut`)
     .option("--nth <n>", "Which occurrence of the text")
@@ -75,7 +79,7 @@ export function registerDocDraftingCommands(doc: Command, deps: DocDraftingDeps)
   doc
     .command("revive")
     .description("Bring ghosted text back (one stretch, or every ghost with --all)")
-    .argument("<id>", "Document ID")
+    .argument("<id>", idHelp, idParse)
     .argument("[text]", stdinText("Ghosted text to revive"))
     .option("--all", "Revive every ghost")
     .option("--reason <reason>", `Only ghosts with this reason (e.g. ${TRIM_REASON})`)
@@ -85,14 +89,14 @@ export function registerDocDraftingCommands(doc: Command, deps: DocDraftingDeps)
   doc
     .command("cuts")
     .description("Make the proposed cuts: delete text ghosted as a trim (or every ghost with --all)")
-    .argument("<id>", "Document ID")
+    .argument("<id>", idHelp, idParse)
     .option("--all", "Delete every ghosted stretch, not only proposed cuts")
     .action(lazy(deps, "cuts"));
 
   doc
     .command("flag")
     .description(`Mark text with a finding (${LAB_FLAGS.map((f) => f.flag).join(", ")}); --clear removes marks`)
-    .argument("<id>", "Document ID")
+    .argument("<id>", idHelp, idParse)
     .argument("[text]", stdinText("Exact text to mark"))
     .argument("[kind]", "Kind of finding", "weak")
     .option("--note <text>", "Why, in a few words")
@@ -111,7 +115,7 @@ export function registerDocDraftingCommands(doc: Command, deps: DocDraftingDeps)
         "  cast doc overflow <id> --set - <<'EOF'         # replace it\n" +
         "  cast doc overflow <id> --clear",
     )
-    .argument("<id>", "Document ID")
+    .argument("<id>", idHelp, idParse)
     .option("--set <text>", stdinText("Replace the Overflow"))
     .option("--append <text>", stdinText("Add a paragraph to the Overflow"))
     .option("--stash <text>", stdinText("Move this exact text from the doc into the Overflow"))
@@ -130,7 +134,7 @@ export function registerDocDraftingCommands(doc: Command, deps: DocDraftingDeps)
         '  alts "<text>"            suggest versions for one stretch\n\n' +
         "Then: cast doc drafts <id> to read the result, cast doc cuts <id> to make the cuts.",
     )
-    .argument("<id>", "Document ID")
+    .argument("<id>", idHelp, idParse)
     .argument("<tool>", "trim, typos, flag or alts")
     .argument("[arg]", "The flag kind, or the text for alts")
     .option("--level <level>", "Trim level", "slight")

@@ -190,3 +190,35 @@ export function workspaceLabel(ws: Workspace): string {
 export function workspaceHasFeature(roster: WorkspaceRoster, ws: Workspace, key: TeamFeatureKey): boolean {
   return workspaceFeatureEnabled(roster.teams, ws.kind === "team" ? ws.teamId : null, key);
 }
+
+/**
+ * The caller's other workspaces (every team but `current`, and personal when
+ * `current` is a team) where `has` finds the name, so a miss in one workspace
+ * can say where the name lives instead of reading as missing. A probe that
+ * fails counts as absent.
+ */
+export async function otherWorkspacesWith(
+  roster: WorkspaceRoster,
+  current: Workspace,
+  has: (ws: Workspace) => Promise<boolean>,
+): Promise<Workspace[]> {
+  const others: Workspace[] = [
+    ...roster.teams.filter((t) => current.kind !== "team" || t._id !== current.teamId).map((t): Workspace => ({ kind: "team", teamId: t._id, name: t.name })),
+    ...(current.kind === "team" ? [{ kind: "personal" } as Workspace] : []),
+  ];
+  const found = await Promise.all(others.map((ws) => has(ws).catch(() => false)));
+  return others.filter((_, i) => found[i]);
+}
+
+/** `"@cmo" is in Codecast: add --team Codecast`, or null when it is nowhere else. */
+export function elsewhereHint(what: string, hits: Workspace[]): string | null {
+  if (!hits.length) return null;
+  const flag = (ws: Workspace) => {
+    const name = workspaceLabel(ws);
+    return `--team ${/^[\w.-]+$/.test(name) ? name : JSON.stringify(name)}`;
+  };
+  const names = hits.map(workspaceLabel);
+  return hits.length === 1
+    ? `${what} is in ${names[0]}: add ${flag(hits[0])}`
+    : `${what} is in ${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}: add ${flag(hits[0])} (or another of those)`;
+}

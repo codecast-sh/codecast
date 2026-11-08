@@ -107,3 +107,31 @@ test("a wall-clock cadence keeps its time through daylight saving and skips the 
   // A kept slot ahead of now still wins.
   expect(nextArmingAfterRun({ schedule_type: "recurring", interval_ms: D, run_at: friday + 5 * M, cadence_slot_at: friday + D, cadence }, friday + 10 * M).run_at).toBe(friday + D);
 });
+
+test("a run that books a recheck fires at that time, then returns to its cadence", async () => {
+  const { ctx, task, args } = await fixture();
+  const slot = task.run_at;
+  await claim(ctx, args);
+  const recheck = Date.now() + 30 * M;
+  await complete(ctx, { api_token: "test", task_id: task._id, summary: "not yet", rearm_at: recheck });
+  expect(task.status).toBe("scheduled");
+  expect(task.run_at).toBe(recheck);
+  expect(task.cadence_slot_at).toBe(slot + D);
+  await claim(ctx, args);
+  await complete(ctx, args);
+  expect(task.run_at).toBe(slot + D);
+  expect(task.cadence_slot_at).toBeUndefined();
+});
+
+test("a one-shot that books a recheck stays armed instead of finishing", async () => {
+  const { ctx, task, args } = await fixture({ schedule_type: "once", interval_ms: undefined });
+  await claim(ctx, args);
+  const recheck = Date.now() + 30 * M;
+  await complete(ctx, { api_token: "test", task_id: task._id, summary: "not yet", rearm_at: recheck });
+  expect(task.status).toBe("scheduled");
+  expect(task.run_at).toBe(recheck);
+  // Without one it finishes as before.
+  task.status = "running";
+  await complete(ctx, { api_token: "test", task_id: task._id, summary: "done" });
+  expect(task.status).toBe("completed");
+});

@@ -1,7 +1,7 @@
 
 ## Memory
 
-Cross-session recall (cast search / context / feed). Adds `cast search`, `cast context`, and `cast feed` so agents can find prior conversations relevant to their current task. Nothing runs automatically — agents call these when they need context.
+Cross-session recall (cast search / context / feed). Adds `cast search`, `cast context`, and `cast feed` so agents can find prior conversations relevant to their current task. Nothing runs automatically: agents call these when they need context.
 
 Run `cast guide memory` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
 <!-- cast @VERSION@ -->

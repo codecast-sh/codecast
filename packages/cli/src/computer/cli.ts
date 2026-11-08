@@ -287,8 +287,9 @@ Steps read the way the window does, and each takes the single command's flags:
   click "Save" | click #56 | click "Row" --mouse | click --x 10 --y 20
   action <name> [element]   set <element> <value>   scroll <direction> [element]
   drag <from> <to>          each a name, #index, or x,y in window points
-  type <text>   paste <text>   press <key>   hotkey <chord>
+  type <text>   paste <text>   press <key>   hotkey <chord>   (hotkey CmdOrCtrl+A)
   find <text>   (a bare click or action next acts on what it found)
+  type, paste, find and wait take the rest of the step as the text: "paste Draft 2"
   wait <text> [--gone] [--change] [--timeout s]   snapshot [--find t]   shot   sleep <ms>`,
     )
     .action((steps: string[], o) =>

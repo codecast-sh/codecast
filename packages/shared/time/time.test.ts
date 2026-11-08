@@ -7,6 +7,7 @@ import {
   formatDuration,
   formatShortDate,
   parseDuration,
+  parseClockTime,
   relTimeShort,
   wasEdited,
 } from "./index";
@@ -113,7 +114,17 @@ describe("parseDuration", () => {
     expect(parseDuration("2 weeks")).toBe(14 * 86_400_000);
   });
 
+  test("adds up compound durations", () => {
+    expect(parseDuration("4h40m")).toBe(280 * 60_000);
+    expect(parseDuration("2h30m")).toBe(150 * 60_000);
+    expect(parseDuration("1d 12h")).toBe(36 * 3_600_000);
+    expect(parseDuration("5m30s")).toBe(330_000);
+  });
+
   test("refuses what is not a duration, naming the input", () => {
+    expect(() => parseDuration("4h40")).toThrow(/"4h40"/);
+    expect(() => parseDuration("5mo")).toThrow();
+    expect(() => parseDuration("")).toThrow();
     expect(() => parseDuration("soon")).toThrow(/"soon"/);
     expect(() => parseDuration("2026-10-01")).toThrow();
     expect(() => parseDuration("0m")).toThrow(/positive/);
@@ -122,5 +133,31 @@ describe("parseDuration", () => {
   test("formatDuration prints the largest whole unit", () => {
     expect(formatDuration(7_200_000)).toBe("2h");
     expect(formatDuration(30_000)).toBe("30s");
+  });
+});
+
+describe("parseClockTime", () => {
+  const now = Date.UTC(2026, 9, 16, 22, 0); // 2026-10-16 22:00 UTC
+  test("a time of day is its next occurrence, in the named zone", () => {
+    expect(parseClockTime("06:00 UTC", now)).toBe(Date.UTC(2026, 9, 17, 6, 0));
+    expect(parseClockTime("23:30 UTC", now)).toBe(Date.UTC(2026, 9, 16, 23, 30));
+    expect(parseClockTime("6am", now, "UTC")).toBe(Date.UTC(2026, 9, 17, 6, 0));
+    expect(parseClockTime("6:15pm UTC", now)).toBe(Date.UTC(2026, 9, 17, 18, 15));
+    // 09:00 in New York (EDT, UTC-4) is 13:00 UTC, already past today.
+    expect(parseClockTime("09:00 America/New_York", now)).toBe(Date.UTC(2026, 9, 17, 13, 0));
+  });
+  test("an ISO moment reads its offset, else the zone", () => {
+    expect(parseClockTime("2026-10-17T06:00:00Z", now)).toBe(Date.UTC(2026, 9, 17, 6, 0));
+    expect(parseClockTime("2026-10-17T06:00+02:00", now)).toBe(Date.UTC(2026, 9, 17, 4, 0));
+    expect(parseClockTime("2026-10-17 06:00", now, "UTC")).toBe(Date.UTC(2026, 9, 17, 6, 0));
+    expect(parseClockTime("2026-10-17T06:00 Europe/Paris", now)).toBe(Date.UTC(2026, 9, 17, 4, 0));
+  });
+  test("refuses what is not a moment", () => {
+    expect(parseClockTime("6", now)).toBeNull();
+    expect(parseClockTime("25:00", now)).toBeNull();
+    expect(parseClockTime("06:00 Mars/Base", now)).toBeNull();
+    expect(parseClockTime("2026-02-30T06:00", now)).toBeNull();
+    expect(parseClockTime("2026-10-17", now)).toBeNull();
+    expect(parseClockTime("tomorrow", now)).toBeNull();
   });
 });

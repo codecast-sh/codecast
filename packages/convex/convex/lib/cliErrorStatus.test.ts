@@ -30,3 +30,13 @@ test("a ConvexError keeps its code and status; any other throw passes its messag
   expect(cliErrorReply(new Error("Unauthorized: sign in"), "/cli/x")).toEqual({ status: 401, body: { error: "Unauthorized: sign in" } });
   expect(cliErrorReply(new Error("boom"), "/cli/x")).toEqual({ status: 500, body: { error: "boom" } });
 });
+
+test("only a field mismatch blames the version; a wrong value is the call's own", () => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  const extra = cliErrorReply(new Error("ArgumentValidationError: Object contains extra field `x` that is not in the validator."), "/cli/x");
+  const value = cliErrorReply(new Error("ArgumentValidationError: Value does not match validator.\nPath: .conversation_id\nValue: \"abc\""), "/cli/review/add");
+  warn.mockRestore();
+  expect(String(extra.body.error)).toContain("cast update");
+  expect(String(value.body.error)).toContain("Path: .conversation_id");
+  expect(String(value.body.error)).not.toContain("cast update");
+});

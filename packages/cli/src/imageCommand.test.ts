@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { isRemoteTarget, altTextFor } from "./imageCommand.js";
+import { isRemoteTarget, altTextFor, singleValueLines } from "./imageCommand.js";
 
 describe("isRemoteTarget", () => {
   test("http(s) URLs are remote, paths are not", () => {
@@ -38,5 +38,16 @@ describe("shareCallFrame", () => {
     expect(out).toEqual({ url: "https://img/x", markdown: "![cl-42@2:11, Ana's screen](https://img/x)" });
     await expect(shareCallFrame(async () => ({}), file, "rec1", "a")).rejects.toThrow(/no image URL/);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("singleValueLines", () => {
+  const images = [
+    { url: "https://x/a", markdown: "![a](https://x/a)" },
+    { url: "https://x/b", markdown: "![b](https://x/b)" },
+  ];
+  test("one value per file, in order, nothing else", () => {
+    expect(singleValueLines(images, "url")).toEqual(["https://x/a", "https://x/b"]);
+    expect(singleValueLines(images, "markdown")).toEqual(["![a](https://x/a)", "![b](https://x/b)"]);
   });
 });

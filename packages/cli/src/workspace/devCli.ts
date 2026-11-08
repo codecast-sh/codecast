@@ -16,6 +16,7 @@ import {
   checkoutRoot, devServices, ensureService, readRecord, serviceStatus, stopService,
   type DevService, type DevStatus, type StartOptions,
 } from "./dev.js";
+import { countOption } from "../argChecks.js";
 
 function loadServices(names: string[]): { checkout: string; manifest: ReturnType<typeof resolveManifest>; services: DevService[] } {
   const checkout = checkoutRoot();
@@ -95,14 +96,27 @@ export function registerDevCommand(program: Command, deps: PublishDeps): void {
     .description(commandGroup("dev").description)
     .option("--timeout <sec>", "Seconds to wait for each server to answer")
     .option("--json", "Output JSON")
+    .addHelpText("after", `
+Services come from .codecast/workspace.toml ([services.<name>]), or are detected.
+
+  cast dev                   start (or reuse) every service and print each URL
+  cast dev web               only the service named web
+  cast dev status            what runs here, starting nothing
+  cast dev logs web -n 200   the last 200 lines of web's output (-f to follow)
+  cast dev stop web`)
     .action(async (names: string[], o: { timeout?: string; json?: boolean }) => {
+      const timeoutSec = o.timeout === undefined ? undefined : Number(o.timeout);
+      if (timeoutSec !== undefined && !(timeoutSec > 0)) {
+        console.error(`${fmt.error(icons.cross)} --timeout takes seconds, like --timeout 120, not '${o.timeout}'`);
+        process.exit(1);
+      }
       const { checkout, manifest, services } = loadServices(names);
       const secretEnv = vaultEnv(deps, manifest.vault, (line) => console.error(fmt.warning(`  ${line}`)));
       const results: DevStatus[] = [];
       for (const svc of services) {
         const status = await ensureService(svc, {
           checkout, manifest, secretEnv,
-          timeoutSec: o.timeout ? Number(o.timeout) : undefined,
+          timeoutSec,
           onWait: o.json ? undefined : (s, sec) => console.log(fmt.muted(`  ${s.name}: waiting for it to answer (${sec}s)`)),
           onNote: o.json ? undefined : (line) => console.log(fmt.muted(`  ${line}`)),
         });
@@ -141,16 +155,21 @@ export function registerDevCommand(program: Command, deps: PublishDeps): void {
   dev.command("logs")
     .argument("[service]")
     .description("Print a dev server's output")
-    .option("-n, --lines <n>", "Lines from the end", "80")
+    .option("-n, --lines <n>", "Lines from the end", countOption, 80)
     .option("-f, --follow", "Keep printing as it writes")
-    .action((name: string | undefined, o: { lines: string; follow?: boolean }) => {
+    .action((name: string | undefined, o: { lines: number; follow?: boolean }) => {
       const { checkout, services } = loadServices(name ? [name] : []);
+      if (services.length > 1) {
+        console.error(`${fmt.error(icons.cross)} name the service whose output to print: ${services.map((s) => s.name).join(", ")}`);
+        console.error(fmt.muted(`  cast dev logs ${services[0].name}`));
+        process.exit(1);
+      }
       const record = readRecord(checkout, services[0].name);
       if (!record || !fs.existsSync(record.log)) {
         console.error(`${fmt.error(icons.cross)} ${services[0].name} has no log here; start it with cast dev`);
         process.exit(1);
       }
-      const child = spawn("tail", ["-n", o.lines, ...(o.follow ? ["-f"] : []), record.log], { stdio: "inherit" });
+      const child = spawn("tail", ["-n", String(o.lines), ...(o.follow ? ["-f"] : []), record.log], { stdio: "inherit" });
       child.on("exit", (code) => process.exit(code ?? 0));
     });
 }

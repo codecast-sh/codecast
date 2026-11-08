@@ -33,6 +33,18 @@ export type PaneOfferPlan =
   | { ok: false; message: string; hint?: string };
 
 /**
+ * A bare word with no scheme, dot or port (`report`, `notaurl`): a misplaced
+ * argument far more often than a host, and the pane would offer a dead page.
+ * `localhost` and anything spelled with a scheme (`http://mybox`) still pass.
+ */
+function looksLikeAWord(raw: string): boolean {
+  const s = raw.trim();
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) return false;
+  const host = s.split("/")[0]!;
+  return !host.includes(".") && !host.includes(":") && !host.startsWith("[") && host.toLowerCase() !== "localhost";
+}
+
+/**
  * Decide what to send before anything is sent. Two ways to fail and they need
  * different words: an address the pane could never load, and no session to
  * attach the offer to (a human in a bare shell, which is most of the time this
@@ -44,7 +56,7 @@ export function planPaneOffer(
   sessionId: string | null,
 ): PaneOfferPlan {
   const url = normalizePaneUrl(rawUrl);
-  if (!url) {
+  if (!url || looksLikeAWord(rawUrl)) {
     return {
       ok: false,
       message: `'${rawUrl}' is not a web address`,

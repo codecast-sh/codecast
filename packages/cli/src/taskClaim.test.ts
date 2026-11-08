@@ -64,7 +64,10 @@ describe("cast task handoff argument parsing", () => {
   test("blocked and needs_context are the other two execution statuses; anything else is refused", () => {
     expect(buildTaskHandoffBody("ct-9", null, { status: "blocked", evidence: "x" }).execution_status).toBe("blocked");
     expect(buildTaskHandoffBody("ct-9", null, { status: "needs_context", evidence: "x" }).execution_status).toBe("needs_context");
-    expect(() => parseHandoffStatus("in_review")).toThrow(/--status must be one of/);
+    expect(parseHandoffStatus("in_review")).toBe("done");
+    expect(parseHandoffStatus("review")).toBe("done");
+    expect(parseHandoffStatus("needs-context")).toBe("needs_context");
+    expect(() => parseHandoffStatus("shipped")).toThrow(/--status must be one of/);
     expect(() => parseHandoffStatus(undefined)).toThrow();
   });
 

@@ -145,6 +145,25 @@ describe("expandCommandStdinDashes", () => {
     expect(seen.opts.description).toBe("the body");
   });
 
+  test("options take stdin sections in the order they were written (handoff --guide - --evidence -)", () => {
+    const setup = (cmd: any) => {
+      cmd.option("--evidence <text>", stdinText("Evidence")).option("--guide <markdown>", stdinText("Guide"));
+      cmd.hook("preAction", (_: any, action: any) => expandCommandStdinDashes(action, () => "first\n---\nsecond\n"));
+    };
+    const guideFirst = parsed(setup, ["--guide", "-", "--evidence", "-"]).run();
+    expect(guideFirst.opts).toEqual({ guide: "first", evidence: "second" });
+    const evidenceFirst = parsed(setup, ["--evidence=-", "--guide", "-"]).run();
+    expect(evidenceFirst.opts).toEqual({ evidence: "first", guide: "second" });
+  });
+
+  test("a missing section names the flags in order and shows the template", () => {
+    const t = parsed((cmd) => {
+      cmd.option("--evidence <text>", stdinText("Evidence")).option("--guide <markdown>", stdinText("Guide"));
+      cmd.hook("preAction", (_: any, action: any) => expandCommandStdinDashes(action, () => "only one section\n"));
+    }, ["--guide", "-", "--evidence", "-"]);
+    expect(() => t.run()).toThrow('--guide - and --evidence - need 2 stdin sections, in that order, separated by lines containing only "---", but stdin has 1:\n<guide>\n---\n<evidence>');
+  });
+
   test("does not touch stdin when nothing is '-'", () => {
     let reads = 0;
     const t = parsed((cmd) => {

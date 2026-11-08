@@ -1,7 +1,7 @@
 
 ## Workflows
 
-Execution graphs with approval gates (cast workflow). Adds `cast workflow` for running .cast files — directed graphs in DOT syntax where each node is an agent session, a shell command, or a human approval gate. Workflows only run when you explicitly invoke them.
+Execution graphs with approval gates (cast workflow). Adds `cast workflow` for running .cast files: directed graphs in DOT syntax where each node is an agent session, a shell command, or a human approval gate. Workflows only run when you explicitly invoke them.
 
 Run `cast guide workflows` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
 <!-- cast @VERSION@ -->

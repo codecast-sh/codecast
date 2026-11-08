@@ -385,6 +385,19 @@ function parseTime(raw: unknown): number | undefined {
 }
 
 const CITE_LINE = /^- ([a-z_]+) (\S+)(?: \(([^)]+)\))?(?::\s*(.+))?$/;
+/** The markdown form, printed under a proposal that has lines the parser cannot read. */
+const PROPOSAL_FORM = `The form:
+  # One line saying what changed and why
+  ## add
+  part: Calls and callers
+  text: The expected behavior, in one sentence.
+  - call cl-96:58 (2026-09-30): "the words that ground it"
+  ## edit ex-callers-call-4
+  text: The line as it should read now.
+  - chat #callers/<message id> (2026-10-04): "the words behind the change"
+  ## retire ex-callers-call-9
+  reason: Why it no longer holds.
+  - decision sd-401 (2026-10-04): "the ruling that retired it"`;
 const OP_HEAD = /^## (add|edit|retire)(?: (\S+))?\s*$/i;
 const FIELD = /^([a-z_]+):\s*(.*)$/;
 
@@ -418,9 +431,13 @@ export function parseProposal(input: string): ExpectationProposalInput {
       const field = l.match(FIELD);
       if (field && !current && (field[1] === "since" || field[1] === "until" || field[1] === "summary")) { raw[field[1]] = field[2]; return; }
       if (field && current && ["text", "part", "note", "reason", "status"].includes(field[1])) { current[field[1]] = field[2]; return; }
-      errors.push(`line ${i + 1}: cannot read "${l.slice(0, 80)}"`);
+      const why = /^-/.test(l) ? (current ? ": a source reads - <kind> <ref> (<when>): \"<quote>\"" : ": a source goes under a ## add, ## edit or ## retire heading")
+        : field ? (current ? `: a change takes text, part, note, reason or status, not ${field[1]}` : `: before the first ## heading only since, until and summary go, not ${field[1]}`)
+        : /^##/.test(l) ? ": a heading reads ## add, ## edit ex-<project>-<n> or ## retire ex-<project>-<n>"
+        : "";
+      errors.push(`line ${i + 1}: cannot read "${l.slice(0, 80)}"${why}`);
     });
-    if (errors.length) throw new Error(`The proposal has lines it cannot read:\n${errors.join("\n")}`);
+    if (errors.length) throw new Error(`The proposal has lines it cannot read:\n${errors.join("\n")}\n${PROPOSAL_FORM}`);
   }
   if (!Array.isArray(raw?.ops)) throw new Error("The proposal needs an ops list");
   if (raw.ops.length > LIMITS.ops) throw new Error(`At most ${LIMITS.ops} changes in one proposal`);

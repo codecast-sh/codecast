@@ -58,6 +58,24 @@ describe("resolveStatusWrite — category only", () => {
   });
 });
 
+describe("resolveStatusWrite — near-miss words", () => {
+  test("cancelled, wontfix and review mean their category, clearing the refinement", async () => {
+    for (const [word, category] of [["cancelled", "dropped"], ["canceled", "dropped"], ["won't fix", "dropped"], ["review", "in_review"], ["completed", "done"]]) {
+      const r = await resolveStatusWrite(ctx(CUSTOM), TEAM, "in_progress", { status: word });
+      expect(r).toEqual({ status: category as any, statusId: { set: true, value: undefined } });
+    }
+  });
+
+  test("a team status of the same name wins over the alias", async () => {
+    const r = await resolveStatusWrite(ctx([...CUSTOM, { id: "st_cx", name: "Cancelled", category: "done" }]), TEAM, "open", { status: "cancelled" });
+    expect(r).toEqual({ status: "done", statusId: { set: true, value: "st_cx" } });
+  });
+
+  test("blocked points at task dependencies", async () => {
+    await expect(resolveStatusWrite(ctx(CUSTOM), TEAM, "open", { status: "blocked" })).rejects.toThrow(/cast task dep <id> --blocked-by/);
+  });
+});
+
 // The CLI only has `-s <status>`, so a team status must be reachable by name
 // through `status` (cast task update ct-1 -s today).
 describe("resolveStatusWrite — team status named in status", () => {

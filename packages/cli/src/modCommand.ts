@@ -15,6 +15,7 @@ import { tscInTree } from "./check.js";
 import { MOD_NAME_RE } from "@codecast/shared/contracts/mods";
 import { webBaseUrl } from "./config/readLocalConfig.js";
 import { localDeviceName, localHash } from "./mods/localRunner.js";
+import { notFoundLine } from "./argChecks.js";
 
 const cwd = () => process.env.CODECAST_CWD || process.cwd();
 
@@ -364,11 +365,18 @@ export function registerModCommand(program: Command, deps: PublishDeps): void {
     .command("open <name> [pane]")
     .description("Print the link to a mod's pane, its first pane by default (pass it to cast browser open to see it)")
     .action(async (name: string, pane: string | undefined) => {
-      if (!pane) {
-        const res = await apiPost(deps, "/cli/mods/list", {}, { read: true });
-        pane = res.mods?.find((m: any) => m.name === name)?.manifest?.panes?.[0]?.id;
+      const res = await apiPost(deps, "/cli/mods/list", {}, { read: true });
+      const found = res.mods?.find((m: any) => m.name === name);
+      if (!found) {
+        console.error(notFoundLine("mod", name, "cast mod ls"));
+        process.exit(1);
       }
-      console.log(modUrl(name, pane));
+      const panes: string[] = (found.manifest?.panes ?? []).map((p: any) => p.id);
+      if (pane && panes.length && !panes.includes(pane)) {
+        console.error(`Error: ${name} has no pane "${pane}"; its panes: ${panes.join(", ")}`);
+        process.exit(1);
+      }
+      console.log(modUrl(name, pane ?? panes[0]));
     });
 
   mod

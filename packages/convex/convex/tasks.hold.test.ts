@@ -56,9 +56,22 @@ const boardMove = (ctx: any, extra: Record<string, any> = {}) =>
 describe("the hold (the-line.md L5)", () => {
   test("a hand cannot move a held task; the error names the decision and the release path", async () => {
     const { ctx, tables } = await makeCtx();
-    await expect(cliMove(ctx, "hand")).rejects.toThrow("Held at in_review by sd-211: answer it first (cast decide answer sd-211 <n>)");
+    const refused = await cliMove(ctx, "hand").then(() => "", (err: Error) => err.message);
+    expect(refused).toStartWith("Held at in_review by sd-211, a decision for a person to answer");
+    // The session is never told to answer the person's decision itself.
+    expect(refused).not.toContain("decide answer");
+    expect(refused).toContain("cast task dep ct-1 --blocked-by sd-211");
     expect(tables.tasks[0].status).toBe("in_review");
     expect(tables.task_comments).toHaveLength(0);
+  });
+
+  test("a hand's handoff on a held task keeps the evidence and leaves the task at its station", async () => {
+    const { ctx, tables } = await makeCtx({ status: "in_progress" }, [decision({ station: "in_progress" })]);
+    const result = await cliMove(ctx, "hand", { status: "in_review", execution_status: "blocked", verification_evidence: "stopped: waiting on the call" });
+    expect(result.held).toEqual({ decision: "sd-211", station: "in_progress" });
+    expect(tables.tasks[0].status).toBe("in_progress");
+    expect(tables.tasks[0].verification_evidence).toBe("stopped: waiting on the call");
+    expect(tables.session_decisions[0].status).toBe("pending");
   });
 
   test("a person on the board moves past the hold; the decision stays open and a note names it", async () => {

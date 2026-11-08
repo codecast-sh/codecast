@@ -28,6 +28,15 @@ describe("planPaneOffer", () => {
     }
   });
 
+  test("a bare word is refused, while localhost and a schemed host pass", () => {
+    const word = planPaneOffer("notaurl", {}, "sess-1");
+    expect(word.ok).toBe(false);
+    if (!word.ok) expect(word.message).toContain("not a web address");
+    expect(planPaneOffer("localhost", {}, "sess-1").ok).toBe(true);
+    expect(planPaneOffer("http://mybox/report", {}, "sess-1").ok).toBe(true);
+    expect(planPaneOffer("mybox:8080", {}, "sess-1").ok).toBe(true);
+  });
+
   test("no session and no --for: nothing to offer it in", () => {
     const plan = planPaneOffer("localhost:3000", {}, null);
     expect(plan.ok).toBe(false);

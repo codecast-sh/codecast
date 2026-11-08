@@ -13,4 +13,4 @@ Start from the earlier attempts. When a fix for this cause shipped and the probl
 
 Where two approaches are both open, pick one from the record (the principles, the earlier attempts, what the code already does) and give the reason in the plan. When the record cannot carry you to an approach at all, because a fact is missing that reading and running cannot supply, do not plan around the gap: end your turn with `cast state --status blocked -`, saying on stdin what is missing and what you ruled out. The run then stops with your words on the problem, which stays open, and nobody is asked.
 
-Do not change code. Otherwise end your turn by pinning the plan itself as your state: `cast state --status done -`, the plan on stdin.
+Do not change code. Otherwise end your turn with `cast state --status done -`: on stdin, the approach in a few lines and a pointer to the comment that holds the whole plan. The state is a glance and keeps 1200 characters; the comment is where the builder reads the plan.

@@ -231,8 +231,15 @@ function idleTmuxSessions(): Array<{ pane: CodecastPane; idleSec: number }> {
 }
 
 export function runGcCommand(options: { mins?: string; dryRun?: boolean }): void {
-  if (!ensureTmux()) return;
-  const mins = Number.parseInt(options.mins || "60", 10) || 60;
+  const mins = options.mins === undefined ? 60 : Number(options.mins);
+  if (!Number.isInteger(mins) || mins < 1) {
+    console.error(`--mins takes whole minutes, at least 1 (got "${options.mins}"). Example: cast gc --mins 120 --dry-run`);
+    process.exit(1);
+  }
+  if (!ensureTmux()) {
+    process.exitCode = 1;
+    return;
+  }
   const stale = idleTmuxSessions().filter((s) => s.idleSec >= mins * 60);
   if (stale.length === 0) {
     console.log(`No sessions idle for >${mins}m.`);

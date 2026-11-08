@@ -46,6 +46,17 @@ describe("a do step becomes the options the single command would have run", () =
   });
 });
 
+describe("a text step takes the rest of its line", () => {
+  test("unquoted words are one text, whichever name the verb goes by", () => {
+    expect(plan(fresh(), "paste Draft 2").options).toMatchObject({ text: "Draft 2" });
+    expect(plan(fresh(), "paste-text Draft 2").options).toMatchObject({ text: "Draft 2" });
+    expect(plan(fresh(), "type hello world").options).toMatchObject({ text: "hello world" });
+    expect(plan(fresh(), "wait Created January").options).toMatchObject({ text: "Created January" });
+    expect(plan(fresh(), "find Created January").options).toMatchObject({ find: "Created January" });
+    expect(plan(fresh(), 'type "already quoted"').options).toMatchObject({ text: "already quoted" });
+  });
+});
+
 describe("parseStepFlags", () => {
   test("value flags take the next token, switches do not, and --no- negates", () => {
     expect(parseStepFlags(["--element-index", "5", "--mouse", "--no-screenshot", "extra"])).toEqual({

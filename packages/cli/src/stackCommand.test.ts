@@ -25,6 +25,15 @@ describe("cast stack policy parsing", () => {
     expect(describePolicy({})).toBe("no policy");
     expect(formatStackList([])).toContain("No decision stacks");
   });
+  test("ls stops at the limit and says how to see the rest", () => {
+    const now = 10_000_000;
+    const row = (n: number) => ({ _id: `s${n}`, short_id: `ds-${n}`, title: `T${n}`, status: "open" as const, policy: {}, decision_ids: [], total: 0, resolved: 0, pending: 0, created_at: now, updated_at: now });
+    const out = formatStackList([row(3), row(2), row(1)], now, 2);
+    expect(out.split("\n")).toHaveLength(3);
+    expect(out).toContain("ds-2");
+    expect(out).not.toContain("ds-1 ");
+    expect(out).toEndWith("1 more; show them with -n 3.");
+  });
 });
 
 // The due time (the-line.md L10) and the reorder wire shape.

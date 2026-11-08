@@ -44,10 +44,10 @@ You are one session among many. Past conversations hold the decisions, patterns 
 ```bash
 cast search "auth"                 # filters: file:<path> commit:<sha> pr:<n> label: author: after:7d; --mine, -g all teams
 cast read <id> --ask "<question>"  # one session's answer with line citations; no id = this session
-cast read <id> 15:25               # messages 15 to 25 (--full shows tool payloads)
+cast read <id> 15:25               # messages 15 to 25; -n 5 the last 5; --grep "<text>" finds lines
 cast context "implement auth"      # prior sessions relevant to a task
 cast feed                          # what the team is doing now
-cast sessions <id>… -w --until     # wait until they settle, then exit
+cast sessions <id>… --until        # wait until they settle
 cast diff <id> | summary <id> | blame <file>
 cast decisions list | add "title" --reason "why"
 ```

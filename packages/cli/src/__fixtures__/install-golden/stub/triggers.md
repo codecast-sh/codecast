@@ -1,7 +1,7 @@
 
 ## Triggers
 
-Delayed, recurring, and event-driven agent runs (cast trigger). Adds `cast trigger` so agents can queue follow-up work. For example, an agent finishes a PR and sets a trigger to "check CI in 30m" — the follow-up runs later in the same session, or in a fresh linked session with --spawn. Agents only set triggers when they have a reason to.
+Delayed, recurring, and event-driven agent runs (cast trigger). Adds `cast trigger` so agents can queue follow-up work. For example, an agent finishes a PR and sets a trigger to "check CI in 30m", and the follow-up runs later in the same session, or in a fresh linked session with --spawn. Agents only set triggers when they have a reason to.
 
 Run `cast guide triggers` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
 <!-- cast @VERSION@ -->

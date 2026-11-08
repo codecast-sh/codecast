@@ -1,6 +1,8 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import {
   loadWorkspaceRoster,
+  otherWorkspacesWith,
+  elsewhereHint,
   clearWorkspaceCache,
   matchTeam,
   resolveWorkspaceForRead,
@@ -171,5 +173,23 @@ describe("--team personal", () => {
 
   test("an unknown team's message offers personal as a choice", () => {
     expect(unknownTeamMessage(roster(), "ghost")).toContain("personal  your own workspace");
+  });
+});
+
+describe("a name that lives in another workspace", () => {
+  const roster = { teams: [{ _id: "tU", name: "Union" }, { _id: "tC", name: "Codecast" }, { _id: "tA", name: "Acme Labs" }], activeTeamId: "tU" };
+  test("probes every other workspace and names the one that has it", async () => {
+    const probed: string[] = [];
+    const hits = await otherWorkspacesWith(roster, { kind: "team", teamId: "tU", name: "Union" }, async (ws) => {
+      probed.push(workspaceLabel(ws));
+      if (ws.kind === "team" && ws.teamId === "tA") throw new Error("forbidden");
+      return ws.kind === "team" && ws.teamId === "tC";
+    });
+    expect(probed.sort()).toEqual(["Acme Labs", "Codecast", "personal"]);
+    expect(elsewhereHint('"@codecast-cmo"', hits)).toBe('"@codecast-cmo" is in Codecast: add --team Codecast');
+  });
+  test("quotes a name with spaces, and says nothing when no workspace has it", () => {
+    expect(elsewhereHint("x", [{ kind: "team", teamId: "tA", name: "Acme Labs" }])).toBe('x is in Acme Labs: add --team "Acme Labs"');
+    expect(elsewhereHint("x", [])).toBeNull();
   });
 });

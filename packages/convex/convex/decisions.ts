@@ -171,6 +171,7 @@ export const list = mutation({
       alternatives: d.alternatives,
       tags: d.tags,
       session_id: d.session_id,
+      conversation_id: d.conversation_id,
       message_index: d.message_index,
       project_path: d.project_path,
       source: d.source,

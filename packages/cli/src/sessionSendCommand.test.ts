@@ -110,3 +110,33 @@ describe("session send command", () => {
     expect(cli.output.join("\n")).toContain("no live daemon");
   });
 });
+
+describe("a refused send", () => {
+  test("keeps the body and prints the one command that sends it", async () => {
+    const held: Array<{ target: string; body: string }> = [];
+    const program = new Command();
+    registerSessionSendCommand(program, {
+      currentSession: () => "jx7abcd",
+      post: async () => { throw new Error("Not sent. jx7c6zk was killed. Sending would restart it."); },
+      print: () => {},
+      hold: (target, body) => { held.push({ target, body }); return "/tmp/held/jx7c6zk-1.txt"; },
+    });
+    const body = "a long\nmulti-line brief";
+    await expect(program.parseAsync(["send", "jx7c6zk", body], { from: "user" }))
+      .rejects.toThrow("cast send --wake jx7c6zk - < /tmp/held/jx7c6zk-1.txt");
+    expect(held).toEqual([{ target: "jx7c6zk", body }]);
+  });
+
+  test("other failures pass through and keep nothing", async () => {
+    let kept = false;
+    const program = new Command();
+    registerSessionSendCommand(program, {
+      currentSession: () => "jx7abcd",
+      post: async () => { throw new Error("Session not found"); },
+      print: () => {},
+      hold: () => { kept = true; return ""; },
+    });
+    await expect(program.parseAsync(["send", "jx7c6zk", "hi"], { from: "user" })).rejects.toThrow(/^Session not found$/);
+    expect(kept).toBe(false);
+  });
+});

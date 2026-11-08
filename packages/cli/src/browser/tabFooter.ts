@@ -25,6 +25,17 @@ export const TAB_AFFECTING_VERBS = new Set([
 export const TAB_CLEANUP_NOTE =
   "  When you are done, always close this tab and any others you opened, unless the human still needs them. `cast browser tab close <id>` for extras, then `cast browser stop`. Never close the human's tabs or another session's tabs.";
 
+/**
+ * Did this verb open a tab? The cleanup reminder prints after those only: an
+ * `open` that created the session's tab, `open --new-tab`, or `tab new`.
+ * Printed after every verb it drowned real output, and agents piped every
+ * browser call through `tail` or /dev/null to get rid of it.
+ */
+export function opensATab(verb: string, args: readonly string[], created: boolean): boolean {
+  if (verb === "open") return created || args.includes("--new-tab");
+  return verb === "tab" && args[0] === "new";
+}
+
 /** The lines to print, or [] when there is no active tab to name. */
 export function tabFooterLines(tabs: FooterTab[]): string[] {
   const active = tabs.find((t) => t.active && t.targetId) ?? tabs.find((t) => t.targetId);

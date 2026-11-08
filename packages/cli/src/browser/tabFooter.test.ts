@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { tabFooterLines, TAB_AFFECTING_VERBS, TAB_CLEANUP_NOTE } from "./tabFooter.js";
+import { opensATab, tabFooterLines, TAB_AFFECTING_VERBS, TAB_CLEANUP_NOTE } from "./tabFooter.js";
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -34,5 +34,14 @@ describe("tabFooterLines", () => {
     expect(TAB_CLEANUP_NOTE).toContain("cast browser stop");
     expect(TAB_CLEANUP_NOTE).toContain("Never close the human's tabs");
     expect(TAB_CLEANUP_NOTE).not.toContain("When finished:");
+  });
+
+  test("the cleanup reminder belongs to the verb that opened a tab, not every verb", () => {
+    expect(opensATab("open", ["https://a.example"], true)).toBe(true);
+    expect(opensATab("open", ["https://a.example"], false)).toBe(false);
+    expect(opensATab("open", ["https://a.example", "--new-tab"], false)).toBe(true);
+    expect(opensATab("tab", ["new", "https://a.example"], false)).toBe(true);
+    expect(opensATab("tab", ["list"], false)).toBe(false);
+    expect(opensATab("click", ["#e1"], false)).toBe(false);
   });
 });

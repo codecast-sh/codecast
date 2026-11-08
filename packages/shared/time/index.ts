@@ -200,19 +200,80 @@ export function parseEndDate(input: string, now: number = Date.now()): number | 
 }
 
 // "24h", "90m", "1.5h", "2d", "1w", "30s", "500ms" → milliseconds; the long
-// unit spellings ("30min", "2hours", "1day", "2weeks") read the same. The one duration
-// grammar for a length of time a person or a manifest writes: `cast trigger
-// --in/--every`, `cast stack --policy`, `cast connector grant --until`, an app
-// connector watch's `every`. Throws with a message that names the input.
+// unit spellings ("30min", "2hours", "1day", "2weeks") read the same, and parts
+// add up ("4h40m", "1d 12h", "2h30m"). The one duration grammar for a length of
+// time a person or a manifest writes: `cast trigger --in/--every`, `cast stack
+// --policy`, `cast connector grant --until`, an app connector watch's `every`.
+// Throws with a message that names the input.
+const DURATION_PART = /(\d+(?:\.\d+)?)\s*(ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|wks?|w)(?![a-z])\s*/giy;
+
 export function parseDuration(raw: string): number {
-  const m = raw.trim().match(/^(\d+(?:\.\d+)?)\s*(ms|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?|w|wks?|weeks?)$/i);
-  if (!m) throw new Error(`"${raw}" is not a duration (use 30m, 24h, 2d, 1w)`);
-  const n = parseFloat(m[1]);
-  const unit = m[2].toLowerCase();
-  const ms = unit === "ms" ? 1 : unit[0] === "s" ? 1000 : unit[0] === "m" ? MINUTE : unit[0] === "h" ? HOUR : unit[0] === "w" ? 7 * DAY : DAY;
-  const out = Math.round(n * ms);
+  const text = raw.trim();
+  let total = 0;
+  let at = 0;
+  DURATION_PART.lastIndex = 0;
+  for (let m = DURATION_PART.exec(text); m; m = DURATION_PART.exec(text)) {
+    const unit = m[2].toLowerCase();
+    const ms = unit === "ms" ? 1 : unit[0] === "s" ? 1000 : unit[0] === "m" ? MINUTE : unit[0] === "h" ? HOUR : unit[0] === "w" ? 7 * DAY : DAY;
+    total += parseFloat(m[1]) * ms;
+    at = DURATION_PART.lastIndex;
+  }
+  if (!text || at !== text.length) throw new Error(`"${raw}" is not a duration (use 30m, 2h30m, 1d, 1w)`);
+  const out = Math.round(total);
   if (out <= 0) throw new Error("A duration must be positive");
   return out;
+}
+
+// A moment a person names for a run: "06:00", "6:30pm", "9am", each optionally
+// followed by a zone ("06:00 UTC", "09:00 America/New_York"), meaning the next
+// time the clock reads that; or an ISO date and time ("2026-10-17T06:00:00Z",
+// "2026-10-17 06:00", "2026-10-17T06:00 Europe/Paris"). A time without a zone
+// or offset is read in `timeZone`, else this runtime's zone. Null when the
+// text is neither, or names a zone the runtime does not know.
+const CLOCK_TIME = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i;
+const ISO_MOMENT = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/i;
+
+export function parseClockTime(raw: string, now: number = Date.now(), timeZone?: string): number | null {
+  let text = raw.trim();
+  let zone = timeZone;
+  const lastSpace = text.lastIndexOf(" ");
+  const tail = lastSpace > 0 ? text.slice(lastSpace + 1) : "";
+  if (tail && /^[A-Za-z]/.test(tail) && !/^(am|pm)$/i.test(tail)) {
+    const named = /^(utc|gmt|z)$/i.test(tail) ? "UTC" : tail;
+    if (!isKnownTimeZone(named)) return null;
+    zone = named;
+    text = text.slice(0, lastSpace).trim();
+  }
+  const clock = CLOCK_TIME.exec(text);
+  if (clock) {
+    let hour = Number(clock[1]);
+    const minute = Number(clock[2] ?? 0);
+    const meridiem = clock[3]?.toLowerCase();
+    if (!clock[2] && !meridiem) return null;
+    if (meridiem) {
+      if (hour < 1 || hour > 12) return null;
+      hour = (hour % 12) + (meridiem === "pm" ? 12 : 0);
+    }
+    if (hour > 23 || minute > 59) return null;
+    const today = wallClock(now, zone);
+    for (let day = 0; day < 3; day++) {
+      const at = wallTimeIn(Date.UTC(today.year, today.month - 1, today.day + day, hour, minute), zone);
+      if (at > now) return at;
+    }
+    return null;
+  }
+  const iso = ISO_MOMENT.exec(text);
+  if (!iso || iso[4] === undefined) return null;
+  const [y, mo, d, h, mi, sec] = iso.slice(1, 7).map((x) => Number(x ?? 0));
+  const wall = Date.UTC(y, mo - 1, d, h, mi, sec);
+  const back = new Date(wall);
+  if (back.getUTCDate() !== d || back.getUTCMonth() !== mo - 1 || back.getUTCHours() !== h || back.getUTCMinutes() !== mi) return null;
+  const offset = iso[7];
+  if (!offset) return wallTimeIn(wall, zone);
+  if (offset.toUpperCase() === "Z") return wall;
+  const digits = offset.replace(":", "");
+  const minutes = Number(digits.slice(1, 3)) * 60 + Number(digits.slice(3, 5));
+  return wall - (digits[0] === "-" ? -1 : 1) * minutes * MINUTE;
 }
 
 /** The inverse of parseDuration for whole units: 86_400_000 → "1d". */

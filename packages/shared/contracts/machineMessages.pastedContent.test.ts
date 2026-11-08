@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isMachineDeliveredMessage, isPollResponsePayload, isSessionMessage, parseUserMessage, stripInjectionNoise, stripPastedContent } from "./machineMessages";
+import { isMachineDeliveredMessage, isPollResponsePayload, isSessionMessage, parseUserMessage, stripInjectionNoise, stripPastedContent, titleLine } from "./machineMessages";
 
 const paste = (body: string) => `<pasted_content id="a83d">\n${body}\n</pasted_content id="a83d">`;
 
@@ -53,5 +53,13 @@ describe("pasted content", () => {
     expect(isMachineDeliveredMessage(direct)).toBe(false);
     expect(parseUserMessage(direct)).toEqual({ from: "Ada", body: "Please fix this" });
     expect(isPollResponsePayload(paste('{"__cc_poll":true}'))).toBe(true);
+  });
+});
+
+describe("titleLine", () => {
+  test("a title that opens with a paste marker reads as its words on one line", () => {
+    expect(titleLine('<pasted_content id="0c25">\nRequested by Ashot (#te...')).toBe("Requested by Ashot (#te...");
+    expect(titleLine("  Ship\n main  ")).toBe("Ship main");
+    expect(titleLine(null)).toBe("");
   });
 });

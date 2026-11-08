@@ -23,11 +23,30 @@ export async function awaitSessionCommand(commandId: string, io: ParkingIo): Pro
   return { state: "pending", message: "request queued; daemon completion not confirmed yet" };
 }
 
+const HIBERNATE_HELP =
+  "Park an idle session: stop its agent process, keep the transcript\n\n" +
+  "The daemon parks the session only when it is idle (no turn running). The\n" +
+  "next message sent to it (cast send) starts it again, or wake it by hand\n" +
+  "with cast wake. Waits up to 30s for the daemon and prints its result.\n" +
+  "To retire a session for good use cast kill; to take it out of the inbox\n" +
+  "while it keeps running use cast stash.\n\n" +
+  "Example:\n" +
+  "  cast hibernate jx7c6zk";
+
+const WAKE_HELP =
+  "Start a parked (hibernated) session again in its managed pane\n\n" +
+  "Brings the agent back without a message; a live agent is left alone.\n" +
+  "Waits up to 30s for the daemon and prints its result. To wake a session\n" +
+  "with something to do, send it the message instead: cast send <id> --wake.\n" +
+  "A role's standing session: cast role wake @handle \"<message>\".\n\n" +
+  "Example:\n" +
+  "  cast wake jx7c6zk";
+
 export function registerSessionParkingCommands(program: Command, io: ParkingIo): void {
   for (const command of ["hibernate", "wake"] as const) {
     program.command(command)
-      .description(command === "hibernate" ? "Request safe parking of an idle session; show the daemon's result" : "Resume a parked session; show the daemon's result")
-      .argument("<session>", "Session short ID")
+      .description(command === "hibernate" ? HIBERNATE_HELP : WAKE_HELP)
+      .argument("<session>", "Session short ID (e.g. jx7c6zk)")
       .action(async (session: string) => {
         const requested = await io.post(`/cli/sessions/${command === "wake" ? "resume" : "hibernate"}`, { session });
         if (!requested.command_id) {
@@ -36,7 +55,8 @@ export function registerSessionParkingCommands(program: Command, io: ParkingIo):
         }
         io.print(`${requested.short_id}: ${command === "wake" ? "wake requested" : "parking requested"}`);
         const outcome = await awaitSessionCommand(requested.command_id, io);
-        io.print(`${requested.short_id}: ${outcome.state === "skipped" || outcome.state === "failed" ? outcome.state + " — " : ""}${outcome.message}`);
+        io.print(`${requested.short_id}: ${outcome.state === "skipped" || outcome.state === "failed" ? outcome.state + ": " : ""}${outcome.message}`);
+        if (outcome.state === "failed") process.exitCode = 1;
       });
   }
 }

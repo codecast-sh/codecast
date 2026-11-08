@@ -42,7 +42,7 @@ export function readStdinBody(readStdin: () => string = readStdinRaw): string {
  * '-' never splits — a lone `---` line there is content (e.g. a markdown
  * rule), not a separator.
  */
-export function expandStdinArgs(args: string[], readStdin: () => string = readStdinRaw): string[] {
+export function expandStdinArgs(args: string[], readStdin: () => string = readStdinRaw, labels?: string[]): string[] {
   const dashCount = args.filter((a) => a === "-").length;
   if (dashCount === 0) return args;
 
@@ -53,9 +53,13 @@ export function expandStdinArgs(args: string[], readStdin: () => string = readSt
   } else {
     sections = body.split(/\r?\n---\r?\n/);
     if (sections.length !== dashCount) {
-      throw new Error(
-        `${dashCount} '-' arguments need ${dashCount} stdin sections separated by lines containing only "---", but stdin has ${sections.length}`
-      );
+      // Named flags get the order and a template, so the fix is in the error.
+      const named = labels && labels.length === dashCount;
+      const head = named
+        ? `${labels.map((l) => `${l} -`).join(" and ")} need ${dashCount} stdin sections, in that order`
+        : `${dashCount} '-' arguments need ${dashCount} stdin sections`;
+      const template = named ? `:\n${labels.map((l) => `<${l.replace(/^-+/, "")}>`).join("\n---\n")}` : "";
+      throw new Error(`${head}, separated by lines containing only "---", but stdin has ${sections.length}${template}`);
     }
   }
 
@@ -86,35 +90,44 @@ export function takesStdinDash(description: string | undefined): boolean {
 /**
  * Expand every '-' value of a parsed command whose help carries the stdin
  * note, in one stdin read: positionals first (in declared order), then options
- * (in declared order), so a command mixing both still maps `---` sections
- * predictably. Runs after commander parsed the values and before the action
- * sees them, which is why the action handlers never see a bare '-'.
+ * in the order they were written on the command line, so `--guide - --evidence -`
+ * reads the guide first, as it reads. Runs after commander parsed the values
+ * and before the action sees them, which is why the action handlers never see
+ * a bare '-'.
  */
 export function expandCommandStdinDashes(cmd: Command, readStdin: () => string = readStdinRaw): void {
-  type Slot = { get: () => unknown; set: (v: unknown) => void };
+  type Slot = { get: () => unknown; set: (v: unknown) => void; label?: string };
   const slots: Slot[] = [];
   cmd.registeredArguments.forEach((arg, i) => {
     if (!takesStdinDash(arg.description)) return;
     slots.push({ get: () => cmd.processedArgs[i], set: (v) => { cmd.processedArgs[i] = v; } });
   });
-  for (const opt of cmd.options) {
-    if (!takesStdinDash(opt.description)) continue;
+  let root: Command = cmd;
+  while (root.parent) root = root.parent;
+  const argv: string[] = (root as any).rawArgs ?? [];
+  const written = (opt: (typeof cmd.options)[number]) => {
+    const at = argv.findIndex((a) => a === opt.long || a === opt.short || (!!opt.long && a.startsWith(`${opt.long}=`)));
+    return at < 0 ? Infinity : at;
+  };
+  const options = cmd.options.filter((opt) => takesStdinDash(opt.description)).sort((a, b) => written(a) - written(b));
+  for (const opt of options) {
     const key = opt.attributeName();
-    slots.push({ get: () => cmd.getOptionValue(key), set: (v) => cmd.setOptionValue(key, v) });
+    slots.push({ get: () => cmd.getOptionValue(key), set: (v) => cmd.setOptionValue(key, v), label: opt.long ?? opt.short });
   }
 
   // Flatten to one arg list (a variadic contributes each element), expand once, write back.
   const flat: string[] = [];
   const widths: number[] = [];
+  const labels: string[] = [];
   for (const slot of slots) {
     const v = slot.get();
     if (Array.isArray(v)) { widths.push(v.length); flat.push(...v); }
-    else if (typeof v === "string") { widths.push(-1); flat.push(v); }
+    else if (typeof v === "string") { widths.push(-1); flat.push(v); if (v === "-" && slot.label) labels.push(slot.label); }
     else widths.push(0);
   }
   if (!flat.includes("-")) return;
 
-  const expanded = expandStdinArgs(flat, readStdin);
+  const expanded = expandStdinArgs(flat, readStdin, labels);
   let next = 0;
   slots.forEach((slot, k) => {
     const width = widths[k];

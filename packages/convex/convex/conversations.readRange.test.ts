@@ -225,6 +225,25 @@ describe("the read steps against the real queries", () => {
     expect(scans).toHaveLength(1);
   });
 
+  // Agents looped `cast read <id> <n> --full | grep` over dozens of lines to
+  // find one phrase. A --grep read scans once and returns the matches with
+  // the line numbers a plain read prints.
+  test("a grep read returns the matching messages with their true lines, across scan steps", async () => {
+    const heavy = Math.ceil(READ_STEP_BYTES / 3);
+    const rows = [
+      { content: "start" }, { content: "  " }, { content: "set the Retry cap to 3", image: heavy },
+      { content: "unrelated", image: heavy }, { content: "nothing", image: heavy }, { content: "kept the retry cap" },
+    ];
+    const { steps, scans, conversation_id } = await seed(rows);
+    const result = await readConversationRange(steps, { api_token: token, conversation_id, grep: "retry cap" });
+    expect(result.messages.map((m: any) => [m.line, m.content])).toEqual([[2, "set the Retry cap to 3"], [5, "kept the retry cap"]]);
+    expect(result.grep).toEqual({ matches: 2, searched: 5, more: false });
+    expect(result.conversation.message_count_exact).toBe(true);
+    expect(scans.length).toBeGreaterThan(1);
+    const later = await readConversationRange(steps, { api_token: token, conversation_id, grep: "retry cap", start_line: 3 });
+    expect(lines(later)).toEqual([5]);
+  });
+
   test("export pages stop at the byte budget and resume without gaps", async () => {
     const rows = Array.from({ length: 10 }, (_, i) => ({ content: `line ${i + 1}`, image: Math.ceil(READ_STEP_BYTES / 3) }));
     const { t, conversation_id } = await seed(rows);

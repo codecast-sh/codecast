@@ -27,6 +27,8 @@ import {
 } from "@codecast/shared/contracts/keyBindings";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
+import { verbTypoNextStep } from "./commandSuggestion.js";
+import { unknownVerbError } from "./argChecks.js";
 
 const isMac = process.platform === "darwin";
 
@@ -97,7 +99,10 @@ export function registerShortcutsCommand(program: Command, deps: PublishDeps): v
     .argument("[query]", "Filter by action id or words in its name")
     .option("--changed", "Only the actions you rebound")
     .option("--json", "Every action with its default and current chords")
-    .action(async (query: string | undefined, options: { changed?: boolean; json?: boolean }) => {
+    .action(async (_query: string | undefined, options: { changed?: boolean; json?: boolean }, cmd: Command) => {
+      // Unquoted words are one query (`cast shortcuts next session`).
+      const typed: string[] = cmd.args;
+      const query = typed.length ? typed.join(" ") : undefined;
       const list = await readBindings(deps);
       const rows: { action: string; description: string; when?: string; defaults: string[]; current: string[]; changed: boolean; fixed: boolean }[] = [];
       for (const d of SHORTCUTS) {
@@ -120,7 +125,12 @@ export function registerShortcutsCommand(program: Command, deps: PublishDeps): v
         return;
       }
       if (shown.length === 0) {
-        console.log(options.changed ? "No rebound actions; everything is on its defaults." : `No action matches "${query}".`);
+        // Nothing matched and the first word is a verb typo with its arguments after it (`sett a k`).
+        const verbs = ["find", "set", "add", "unbind", "reset"];
+        if (typed.length > 1 && verbTypoNextStep(["shortcuts"], verbs, typed[0])) {
+          fail(unknownVerbError("shortcuts", typed[0], verbs, { bare: "or words to find an action" }));
+        }
+        console.log(options.changed ? "No rebound actions; everything is on its defaults." : `No action matches "${query}". Every action: cast shortcuts`);
         return;
       }
       let lastWhen: string | undefined | null = null;

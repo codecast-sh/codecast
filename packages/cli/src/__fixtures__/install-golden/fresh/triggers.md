@@ -7,13 +7,13 @@ The prompt is the run's whole briefing, and people read it in the dashboard as m
 
 **Where a run happens.** A follow-up that continues this work and fires once or a few times runs here, the default: each firing arrives as a new turn with the full history. A standing duty that repeats (a monitor, a digest, a sweep) gets `--spawn`, a fresh session per run, because an inline repeat reloads this whole history every time and buries the thread. A fresh run knows only its prompt plus the previous run's summary, so write everything it needs into the prompt.
 
-**Where results go.** `--spawn` runs nest under the session that armed them. A once trigger posts its result here without waking you; a repeating one posts nothing on a clean run. You are woken if a run fails, dies without reporting, or completes `--needs-attention`. A fired run ends with `cast trigger complete <id> --summary "..."`: the summary is what the human reads, so state the outcome, and add `--needs-attention` only when they must read or act.
+**Where results go.** `--spawn` runs nest under the session that armed them. A once trigger posts its result here without waking you; a repeating one posts nothing on a clean run. You are woken if a run fails, dies without reporting, or completes `--needs-attention`. A fired run ends with `cast trigger complete <id> --summary -` (stdin): the summary is what the human reads, so state the outcome, and add `--needs-attention` only when they must read or act.
 
 ```bash
 cast trigger add "Check if CI is green on main" --in 30m
 cast trigger add "Respond to new PR review comments" --on pr_comment
 cast trigger add "Review open PRs and summarize findings" --every 4h --spawn
-cast trigger ls | update | pause | run | cancel | log <tr-id>
+cast trigger ls | show | update | pause | run | cancel | log <tr-id>
 ```
 
 `--safe` makes a spawned run read-only. `--precheck "<cmd>"` gates each scheduled firing on a shell check and spends nothing unless it exits 0. `cast trigger add --help` lists every event and option, and `cast guide triggers` has the rest.

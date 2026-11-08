@@ -98,6 +98,14 @@ describe("reviewNotes.add", () => {
     expect(ctx.db._tables.review_comments[0].line_number).toBeUndefined();
   });
 
+  test("a verdict finding names its session by session id and lands on the conversation", async () => {
+    const ctx = context(USER);
+    await addNote(ctx, { conversation_id: "sess-1", author_kind: "agent" });
+    expect(ctx.db._tables.review_comments[0].conversation_id).toBe(CONV);
+    await addNote(ctx, { conversation_id: "no-such-session" });
+    expect(ctx.db._tables.review_comments[1].conversation_id).toBeUndefined();
+  });
+
   test("an empty note is refused", async () => {
     const ctx = context(USER);
     await expect(addNote(ctx, { content: "   " })).rejects.toThrow(/needs a body/);

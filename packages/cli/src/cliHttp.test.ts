@@ -188,3 +188,34 @@ describe("cliSearchRequest", () => {
     expect(bodies.every((b) => b.titles_only)).toBe(true);
   });
 });
+
+describe("a slow backend", () => {
+  test("one stderr line says the CLI is waiting, and none when the answer is quick", async () => {
+    const { WAIT_NOTE_MS } = await import("./cliHttp");
+    expect(WAIT_NOTE_MS).toBeLessThanOrEqual(15_000);
+    const writes: string[] = [];
+    const realWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string) => (writes.push(String(chunk)), true)) as typeof process.stderr.write;
+    try {
+      globalThis.fetch = (async () => new Response("{}")) as unknown as typeof fetch;
+      await cliFetch("https://x/cli/read", { method: "POST" });
+      expect(writes.join("")).not.toContain("waiting on the codecast backend");
+    } finally {
+      process.stderr.write = realWrite;
+    }
+  });
+});
+
+describe("nonJsonError", () => {
+  test("a gateway 502 says what happened and what to do, never a bare status", async () => {
+    const { nonJsonError } = await import("./castApi");
+    const m = nonJsonError("/cli/sessions/state/set", 502, "");
+    expect(m).toContain("not answering (HTTP 502");
+    expect(m).toContain("nothing was saved");
+    expect(m).toContain("Retry in a minute");
+    expect(nonJsonError("/cli/x", 504, "<html>Gateway Timeout</html>")).toContain("read it back");
+    expect(nonJsonError("/cli/x", 504, "", { read: true })).not.toContain("read it back");
+    expect(nonJsonError("/cli/x", 500, "<html><body>boom</body></html>")).toBe("API error (500): boom. Retry in a minute.");
+    expect(nonJsonError("/cli/x", 404, "<html>")).toContain("no /cli/x route");
+  });
+});

@@ -168,14 +168,14 @@ export function registerAgentCommand(program: Command, deps: GroupDeps): void {
   agent
     .command("show")
     .description("A definition or chain in its markdown file form")
-    .argument("<name>")
+    .argument("<name>", "A definition or chain name (cast agent ls lists them)")
     .option("--json", "The stored row instead")
     .action(show);
 
   agent
     .command("export")
     .description("Same as show: the markdown file form, for redirecting to a file")
-    .argument("<name>")
+    .argument("<name>", "A definition or chain name (cast agent ls lists them)")
     .option("--json", "The stored row instead")
     .action(show);
 
@@ -197,7 +197,7 @@ export function registerAgentCommand(program: Command, deps: GroupDeps): void {
     agent
       .command("edit")
       .description("Change a definition's fields; only the flags you pass change")
-      .argument("<name>")
+      .argument("<name>", "The definition to change (cast agent ls lists them)")
       .argument("[prompt...]", stdinText("New system prompt")),
   ).action(async (name: string, parts: string[], options: any) => {
     const existing = await apiPost(deps, "/cli/agents/get", { name }, { read: true });
@@ -225,7 +225,7 @@ export function registerAgentCommand(program: Command, deps: GroupDeps): void {
     .command("rm")
     .alias("remove")
     .description("Delete a definition or chain by name")
-    .argument("<name>")
+    .argument("<name>", "A definition or chain name (cast agent ls lists them)")
     .action(async (name: string) => {
       const def = await apiPost(deps, "/cli/agents/get", { name }, { read: true });
       if (def) {
@@ -288,7 +288,7 @@ export function registerAgentCommand(program: Command, deps: GroupDeps): void {
   chain
     .command("create")
     .description("Create or replace a chain from --step agent:prompt pairs, or --file")
-    .argument("<name>")
+    .argument("<name>", "Lowercase, digits and hyphens: the name cast agent run and --chain take")
     .option("-d, --description <text>", "One line")
     .option("--step <agent:prompt>", "A step: definition name, a colon, then the prompt template ({task}, {previous})", (v: string, acc: string[]) => [...acc, v], [] as string[])
     .option("--file <path>", "A chain file (frontmatter + ## step sections) instead of --step flags; '-' for stdin")
@@ -318,7 +318,7 @@ export function registerAgentCommand(program: Command, deps: GroupDeps): void {
   chain
     .command("rm")
     .description("Delete a chain")
-    .argument("<name>")
+    .argument("<name>", "A chain name (cast agent chain ls lists them)")
     .action(async (name: string) => {
       const ch = await apiPost(deps, "/cli/chains/get", { name }, { read: true });
       if (!ch) fail(`No chain named "${name}".`);
@@ -329,7 +329,7 @@ export function registerAgentCommand(program: Command, deps: GroupDeps): void {
   agent
     .command("run")
     .description("Run a chain on a task (same as cast exec --chain <name>); prints the last step's output")
-    .argument("<chain>")
+    .argument("<chain>", "A chain name (cast agent chain ls lists them)")
     .argument("[task...]", stdinText("The task"))
     .option("-C, --dir <path>", "Working directory (default: current directory)")
     .option("--output-format <fmt>", "text (default) or json (every step's output)")

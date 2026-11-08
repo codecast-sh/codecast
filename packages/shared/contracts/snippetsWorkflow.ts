@@ -32,7 +32,10 @@ export const WORKFLOW_REFERENCE = `
 cast workflow run flow.cast --task ct-N     # or --plan pl-N
 cast workflow list                          # available templates
 cast workflow push                          # push a workflow to the web UI
-cast workflow runs [--task ct-N|--plan pl-N] # status, task, current node, gate
+cast workflow runs [--task ct-N|--plan pl-N] # status, task, current node, gate, a failed run's reason (-l: machine, run id)
+cast workflow show ct-N                     # one run: each station's status, time, outcome and session
+cast workflow cancel ct-N                   # stop a run
+cast workflow resume ct-N --at verify       # a failed run again from a station (id or label)
 cast role line @handle [--set <slug>]       # read or set the workflow a role's tasks run on (default: line)
 cast flow profile                           # this repo's flow: commands, finders, limits, where each value comes from
 cast flow set <key> <value> | unset <key>   # edit .codecast/line.toml in place: checked, then published to the app

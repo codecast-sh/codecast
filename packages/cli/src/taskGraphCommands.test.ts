@@ -106,14 +106,19 @@ describe("parkAfterBlocking", () => {
     expect(parkAfterBlocking("s1", "ct-5", open, { task: "CT-005", started: true })).toMatch(/^Until it clears, run cast state --status dormant "Waiting on PR #42"/);
   });
 
-  test("a session that filed or never held the task is told nothing wakes it", () => {
+  test("a session holding another task is told nothing wakes it", () => {
     const line = "This session does not hold ct-5, so nothing wakes it when this clears (cast task start ct-5 to hold it).";
-    expect(parkAfterBlocking("s1", "ct-5", open, { task: "ct-5" })).toBe(line);
     expect(parkAfterBlocking("s1", "ct-5", open, { task: "ct-6", started: true })).toBe(line);
-    expect(parkAfterBlocking("s1", "ct-5", [...open, { kind: "task", ref: "ct-2", status: "open" }], null)).toMatch(/when these clear/);
+    expect(parkAfterBlocking("s1", "ct-5", [...open, { kind: "task", ref: "ct-2", status: "open" }], { task: "ct-6", started: true })).toMatch(/when these clear/);
   });
 
-  test("nothing to say outside a session or when nothing holds the task", () => {
+  test("a session holding no task is wiring the graph: no hint", () => {
+    expect(parkAfterBlocking("s1", "ct-5", open, null)).toBeNull();
+    // Filed, never started: recorded on the pulse, not held.
+    expect(parkAfterBlocking("s1", "ct-5", open, { task: "ct-5" })).toBeNull();
+  });
+
+  test("nothing to say outside a session or when nothing holds the task back", () => {
     expect(parkAfterBlocking(null, "ct-5", open, null)).toBeNull();
     expect(parkAfterBlocking("s1", "ct-5", [], { task: "ct-5", started: true })).toBeNull();
   });

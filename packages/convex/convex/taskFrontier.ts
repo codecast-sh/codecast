@@ -104,7 +104,7 @@ async function claimRefusal(ctx: ReadCtx, task: Doc<"tasks"> & { assignee_name?:
     return `assigned to ${task.assignee_name ?? (await assigneeNamesFor(ctx, [assignee]))[assignee] ?? assignee}`;
   }
   const hold = await holdingDecisionFor(ctx, task, "in_progress");
-  return hold ? heldError(hold).message : null;
+  return hold ? heldError(hold, task).message : null;
 }
 
 /** The frontier rows this caller may claim, in frontier order. */

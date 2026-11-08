@@ -4,10 +4,10 @@
  *
  * `--subagent` takes an OPTIONAL value (the parent session), so commander reads
  * the next bare word as that value: `cast spawn --subagent "audit the auth flow"`
- * spends the prompt on the parent and then has no task left. That is why every
- * example in the snippet either puts a flag after `--subagent` or separates the
- * prompt with `--`. If the option shape ever changes, the snippet's examples
- * must change with it — that is what fails here.
+ * spends the prompt on the parent. The action hands a value that cannot be a
+ * session id back to the prompts (spawnArgs.ts), and every example in the
+ * snippet still puts a flag after `--subagent` or separates the prompt with
+ * `--`, so the examples hold with or without that recovery.
  *
  * The commander command under test is BUILT FROM the real declarations in
  * index.ts, so it cannot drift from the command the snippet describes.
@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Command } from "commander";
 import { guideText, snippetBySlug } from "@codecast/shared/contracts";
+import { recoverSwallowedPrompt } from "./spawnArgs.js";
 
 const indexSrc = fs.readFileSync(path.join(import.meta.dir, "index.ts"), "utf8");
 
@@ -36,7 +37,15 @@ function spawnFlags(): string[] {
   return flags;
 }
 
-/** A commander command with the real spawn signature, parsed in isolation. */
+/** The prompts argument exactly as the real spawn command declares it. */
+function spawnArgument(): string {
+  const m = spawnBlock().match(/\.argument\(\s*"([^"]+)"/);
+  expect(m).not.toBeNull();
+  return m![1];
+}
+
+/** A commander command with the real spawn signature, parsed in isolation,
+ *  then the action's own recovery of a swallowed prompt. */
 function parseSpawn(argv: string[]): { prompts: string[]; subagent: unknown } {
   const program = new Command();
   program.exitOverride();
@@ -44,9 +53,9 @@ function parseSpawn(argv: string[]): { prompts: string[]; subagent: unknown } {
   let seen: { prompts: string[]; subagent: unknown } | undefined;
   const spawn = program
     .command("spawn")
-    .argument("<prompts...>")
+    .argument(spawnArgument())
     .action((prompts: string[], options: Record<string, unknown>) => {
-      seen = { prompts, subagent: options.subagent };
+      seen = recoverSwallowedPrompt(prompts, options.subagent, () => "stdin body");
     });
   for (const flag of spawnFlags()) spawn.option(flag, "");
   spawn.exitOverride();
@@ -70,12 +79,21 @@ const spawnExamples = guideText(snippetBySlug("forks")!).split("\n")
   .filter((l) => l.startsWith("cast spawn "));
 
 describe("cast spawn --subagent: the option shape the guidance is written for", () => {
-  test("--subagent still takes an optional parent, so a bare prompt after it is swallowed", () => {
+  test("--subagent takes an optional parent, and a task it swallowed is handed back", () => {
     expect(spawnFlags()).toContain("--subagent [parent]");
-    // The footgun itself. Rewrite the snippet's examples if this ever changes.
-    expect(() => parseSpawn(["spawn", "--subagent", "audit the auth flow"])).toThrow(
-      /missing required argument/,
-    );
+    expect(parseSpawn(["spawn", "--subagent", "audit the auth flow"]))
+      .toEqual({ prompts: ["audit the auth flow"], subagent: true });
+    expect(parseSpawn(["spawn", "--subagent", "task A", "task B"]))
+      .toEqual({ prompts: ["task A", "task B"], subagent: true });
+  });
+
+  test("a '-' that --subagent swallowed still reads the heredoc", () => {
+    // The preAction hook expands '-' prompts before the action; this one sat in
+    // the parent slot, so the recovery expands it, never spawning a task of "-".
+    expect(recoverSwallowedPrompt([], "-", () => "audit the auth flow\n"))
+      .toEqual({ prompts: ["audit the auth flow"], subagent: true });
+    expect(recoverSwallowedPrompt(["second task"], "-", () => "first task\n"))
+      .toEqual({ prompts: ["first task", "second task"], subagent: true });
   });
 
   test("the documented separators keep the prompt a prompt and still nest the worker", () => {

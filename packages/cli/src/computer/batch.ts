@@ -132,18 +132,21 @@ export function planStep(ctx: ComputerBatchContext, args: string[]): { verb: Com
   const verb = ALIASES[word];
   if (!verb) throw invalid(`unknown step '${word}'. Steps: ${[...Object.keys(ALIASES).filter((k) => !k.includes("-")), "shot", "sleep"].join(", ")}`);
   const [first, second] = positional;
+  // A step that takes free text takes the rest of the line: `paste Draft 2`
+  // means "Draft 2", never "Draft" with the 2 dropped.
+  const line = positional.length ? positional.join(" ") : undefined;
   switch (verb) {
     case "get-app-state":
       // A snapshot inside a batch is for reading; `shot` is for pictures.
       if (o.screenshot === undefined) o.screenshot = false;
       break;
     case "find":
-      o.find ??= first;
+      o.find ??= line;
       if (!o.find) throw invalid("find needs the text to look for");
       ctx.lastFound = o.find;
       break;
     case "wait":
-      o.text ??= first;
+      o.text ??= line;
       break;
     case "click":
       target(o, first);
@@ -174,7 +177,7 @@ export function planStep(ctx: ComputerBatchContext, args: string[]): { verb: Com
       break;
     case "type-text":
     case "paste-text":
-      o.text ??= first;
+      o.text ??= line;
       break;
     case "press-key":
     case "hotkey":

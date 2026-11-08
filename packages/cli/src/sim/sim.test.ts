@@ -147,3 +147,24 @@ describe("host probe", () => {
     expect(Array.isArray(state.runtimes)).toBe(true);
   }, 130_000);
 });
+
+describe("status bar and privacy settings", () => {
+  test("the default status bar is the screenshot one, with any value overridden", async () => {
+    const { statusBarArgs } = await import("./settings.js");
+    const r = statusBarArgs("U", { battery: "42", carrier: "" });
+    if ("error" in r) throw new Error(r.error);
+    expect(r.args.slice(0, 3)).toEqual(["status_bar", "U", "override"]);
+    const flags = Object.fromEntries(r.args.slice(3).reduce<string[][]>((acc, v, i) => (i % 2 ? acc[acc.length - 1]!.push(v) : acc.push([v]), acc), []));
+    expect(flags).toMatchObject({ "--time": "9:41", "--batteryLevel": "42", "--batteryState": "discharging", "--wifiBars": "3", "--operatorName": "" });
+    expect("error" in statusBarArgs("U", { wifi: "5" })).toBe(true);
+    expect("error" in statusBarArgs("U", { network: "6g" })).toBe(true);
+  });
+
+  test("privacy services take the names agents write and refuse the camera plainly", async () => {
+    const { privacyServices } = await import("./settings.js");
+    expect(privacyServices(["photo", "location", "mic"])).toEqual({ services: ["photos", "location", "microphone"] });
+    const cam = privacyServices(["camera"]);
+    expect("error" in cam && cam.error).toContain("no camera");
+    expect("error" in privacyServices(["bluetooth"])).toBe(true);
+  });
+});

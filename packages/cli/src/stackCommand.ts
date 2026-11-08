@@ -20,7 +20,7 @@
 //
 // Routes: /cli/stack/<verb> in http.ts (decisionStacks.ts).
 import type { Command } from "commander";
-import type { PublishDeps } from "./castApi.js";
+import { nonJsonError, type PublishDeps } from "./castApi.js";
 import { cliFetch } from "./cliHttp.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
@@ -44,6 +44,7 @@ export interface StackRow {
 // The one duration grammar lives in shared/time, so the stack policy, grants
 // and app connector watches read "24h" the same way.
 import { parseDuration, formatDuration } from "@codecast/shared/time";
+import { countOption, unknownVerbError, wrongKindIdError } from "./argChecks.js";
 export { parseDuration, formatDuration };
 
 // `--policy auto-default:24h` on create, and any future `name:value` pair.
@@ -111,17 +112,20 @@ export function resolveReorderIds(members: { _id: string; short_id?: string }[],
   return ids;
 }
 
-export function formatStackList(rows: StackRow[], now: number = Date.now()): string {
+export function formatStackList(rows: StackRow[], now: number = Date.now(), limit = Infinity): string {
   if (rows.length === 0) return "No decision stacks. Create one: cast stack create \"<title>\" [--policy auto-default:24h].";
-  return rows
+  const more = rows.length > limit ? `\n${rows.length - limit} more; show them with -n ${rows.length}.` : "";
+  return rows.slice(0, limit)
     .map((s) => {
       const mark = s.status === "open" ? "●" : "○";
       const progress = `${s.resolved}/${s.total}`;
       const next = s.next_short_id ? `  next ${s.next_short_id}` : "";
       return `${mark} ${s.short_id}  ${s.title}  ${progress} resolved${next}  (${describePolicy(s.policy, undefined, now)}; ${formatAge(now - s.created_at)})`;
     })
-    .join("\n");
+    .join("\n") + more;
 }
+
+const STACK_VERBS = ["create", "ls", "list", "show", "add", "remove", "rm", "reorder", "policy", "delegate"];
 
 function fail(message: string): never {
   console.error(fmt.error(message));
@@ -140,7 +144,7 @@ async function stackApi(deps: PublishDeps, verb: string, body: Record<string, un
   try {
     result = JSON.parse(text);
   } catch {
-    fail(`API error (${response.status}): ${text.slice(0, 200)}`);
+    fail(nonJsonError(`/cli/stack/${verb}`, response.status, text, { read: verb === "ls" || verb === "show" }));
   }
   if (result?.error) fail(String(result.error));
   return result;
@@ -163,11 +167,15 @@ export function registerStackCommand(program: Command, deps: PublishDeps): void 
     .option("--due <when>", "policy: when you mean to have cleared the stack (3h, tomorrow, 2026-09-20); the queue sorts overdue stacks first")
     .option("--no-due", "policy: clear the due time")
     .option("--all", "ls: include done stacks")
+    .option("-n, --limit <n>", "ls: how many stacks to print, newest first", countOption, 20)
     .option("--session <id>", "Session whose team scopes the stack (default: detect current)")
     .option("--json", "Machine-readable output")
     .action(async (sub: string | undefined, rest: string[], options: any) => {
       const usage = 'Usage: cast stack create "<title>" | ls | show ds-N | add ds-N sd-N | remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N … | delegate ds-N @handle';
       if (!sub) fail(usage);
+      if (!STACK_VERBS.includes(sub)) {
+        fail(unknownVerbError("stack", sub, STACK_VERBS, { shown: STACK_VERBS.filter((v) => v !== "list" && v !== "rm") }));
+      }
 
       if (sub === "create") {
         const title = rest.join(" ").trim();
@@ -196,12 +204,15 @@ export function registerStackCommand(program: Command, deps: PublishDeps): void 
         const result = await stackApi(deps, "ls", { include_done: !!options.all });
         const rows: StackRow[] = result.stacks ?? [];
         if (options.json) console.log(JSON.stringify(rows, null, 2));
-        else console.log(formatStackList(rows));
+        else {
+          console.log(formatStackList(rows, Date.now(), options.limit));
+        }
         return;
       }
 
       const target = rest[0];
-      if (!looksLikeStackId(target)) fail(usage);
+      if (!target) fail(`Usage: cast stack ${sub} ds-N${sub === "add" || sub === "remove" || sub === "rm" ? " sd-N" : sub === "reorder" ? " sd-a,sd-b" : sub === "delegate" ? " @handle" : ""}. Stack ids: cast stack ls`);
+      if (!looksLikeStackId(target)) fail(wrongKindIdError(target, { kind: "stack", example: "ds-12", find: "cast stack ls lists them" }));
 
       if (sub === "show") {
         const result = await stackApi(deps, "show", { stack: target });
