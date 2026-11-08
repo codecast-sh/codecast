@@ -139,7 +139,7 @@ const NOUN = {
   lead: { none: "No lead", holds: "leads this project", pick: "No role leads this project yet. Click to pick one", label: "Lead" },
 } as const;
 
-export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChange, onHire, blockedReason, size = "sm", className }: {
+export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChange, onHire, blockedReason, size = "sm", faceOnly, className }: {
   /** The workspace's roles (useOrgRoles): null while they load. */
   roles: OrgRoles;
   ownerRoleId: string | undefined;
@@ -158,6 +158,8 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
    *  renders disabled and says so, instead of a button that does nothing. */
   blockedReason?: string;
   size?: "xs" | "sm";
+  /** A row with no room for the name: the face alone, the name on hover. */
+  faceOnly?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -183,7 +185,7 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
   // closed while the menu is open so the two never stack.
   const inner = role ? (
     <RoleHoverCard role={role} side="top" disabled={open} triggerClassName="inline-flex min-w-0 items-center gap-1.5">
-      <ChipFace role={role} px={px} /><span className="truncate">{role.name}</span>
+      <ChipFace role={role} px={px} />{!faceOnly && <span className="truncate">{role.name}</span>}
     </RoleHoverCard>
   ) : watchers.length ? (
     <>
@@ -197,7 +199,7 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
       <span className="truncate">{watchersLabel(watchers.length)}</span>
     </>
   ) : (
-    <><UserPlus className="w-3 h-3 shrink-0" /><span>{words.none}</span></>
+    <><UserPlus className="w-3 h-3 shrink-0" />{!faceOnly && <span>{words.none}</span>}</>
   );
   const watchersTitle = `${watchers.map((w) => w.name).join(" and ")} both look after this project and it names neither as its lead`;
   const candidates = ownerCandidates(roles);
@@ -241,7 +243,7 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
           aria-expanded={openMenu ? open : undefined}
           aria-label={role ? `${words.label}: ${role.name}, @${role.handle}` : watchers.length ? watchersTitle : blocked ? `${words.none}. ${reason}` : words.none}
         >
-          {inner}{openMenu && <ChevronDown className="w-3 h-3 opacity-60" />}
+          {inner}{openMenu && !faceOnly && <ChevronDown className="w-3 h-3 opacity-60" />}
         </button>
       }
     >

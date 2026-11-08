@@ -83,6 +83,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   authorizeRoomInviter,
+  callsOffReason,
   authorizeRoomNoGrant,
   liveMembers,
   liveSeat,
@@ -290,7 +291,7 @@ export async function linkUsable(
   // shares), then by the team and the person behind it.
   const own = guestLinkRefusal(link, now);
   if (own || !link) return own ?? "not_found";
-  if (!(await teamHasFeature(ctx, link.team_id, "calls"))) return "unavailable";
+  if (await callsOffReason(ctx, link.team_id)) return "unavailable";
   if (!(await creatorStillVouches(ctx, link, now))) return "inviter_gone";
   return null;
 }
@@ -956,7 +957,7 @@ export const requestJoin = mutation({
     // or lost its creator. Only calls being off for the team still closes it.
     // Everything else below is a knock, and a knock needs a link that works.
     if (mine && (mine.status === "admitted" || mine.status === "left")) {
-      if (!(await teamHasFeature(ctx, link.team_id, "calls"))) throw new Error(GUEST_LINK_REFUSAL_TEXT.unavailable);
+      if (await callsOffReason(ctx, link.team_id)) throw new Error(GUEST_LINK_REFUSAL_TEXT.unavailable);
       if (mine.status === "admitted" && (await huddleAlive(ctx, link.room_key, now))) {
         await ctx.db.patch(mine._id, { last_seen: now });
         return { guest_id: String(mine._id), secret: null, status: "admitted" as const };
@@ -1242,7 +1243,7 @@ export const authForGuestToken = internalMutation({
     if (!guestMayJoin(guest.status)) return refuse(guest.status === "removed" ? "removed" : "not_admitted");
     const now = Date.now();
     if (!(await huddleAlive(ctx, guest.room_key, now))) return refuse("ended");
-    if (!(await teamHasFeature(ctx, guest.team_id, "calls"))) return refuse("unavailable");
+    if (await callsOffReason(ctx, guest.team_id)) return refuse("unavailable");
     const notice = await roomNotice(ctx, guest.room_key);
     const agreed = args.accept_notice ?? guest.notice_accepted;
     if (agreed && noticeWidened(agreed, notice)) return refuse("notice_changed");

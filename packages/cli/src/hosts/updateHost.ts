@@ -1,6 +1,8 @@
 /**
  * Keep a host's cast current: `cast hosts update` and the host prep every
- * cloud wake runs (cloud/prepare.ts readyHostHome) both go through here.
+ * cloud wake, placement and migration runs (cloud/prepare.ts readyHostHome)
+ * both go through here. The prep holds a host to at least this laptop's
+ * version before anything starts there (castForPrepare).
  *
  * A host runs the published release, so forced updates and the Settings
  * Update button reach it like any other client. A build of this checkout
@@ -11,7 +13,8 @@
  */
 import { compareVersions } from "../browser/engine.js";
 import { cliSourceVersion, hasHostBuildSource, installLinuxCast, restartHostDaemon } from "../browser/provisionLinux.js";
-import { latestReleaseVersion, type HostCastSource } from "./installRelease.js";
+import { HostCastBehind, latestReleaseVersion, releaseFor, type CastRelease, type HostCastSource } from "./installRelease.js";
+import { getVersion } from "../cliVersion.js";
 import { remoteExec } from "../browser/remote.js";
 import type { RemoteHost } from "../remote/session-move.js";
 import { installMacCast } from "./updateMac.js";
@@ -50,10 +53,10 @@ export function readHostCastVersion(host: RemoteHost, platform: HostCastPlatform
  * onto it. A Linux restart that would end sessions in the daemon's own tmux
  * server is refused unless forced; the refusal is returned, not thrown.
  */
-export function updateHostCast(host: RemoteHost, platform: HostCastPlatform, opts: { restart: boolean; force?: boolean; source?: HostCastSource }, log: (message: string) => void): HostCastUpdate {
+export function updateHostCast(host: RemoteHost, platform: HostCastPlatform, opts: { restart: boolean; force?: boolean; source?: HostCastSource; release?: CastRelease }, log: (message: string) => void): HostCastUpdate {
   const source = opts.source ?? "release";
   if (platform === "darwin") {
-    const version = installMacCast(host, log, source);
+    const version = installMacCast(host, log, source, opts.release);
     if (!opts.restart) return { version };
     // Stop the daemon itself, then have launchd start the service again. A
     // `kickstart -k` takes the job down whole and ended every session on the
@@ -61,7 +64,7 @@ export function updateHostCast(host: RemoteHost, platform: HostCastPlatform, opt
     remoteExec(host, `${MAC_HOST_PATH}; cast stop; sudo -n launchctl kickstart system/${macServiceLabel(host.user)}`, 60_000);
     return { version, restart: { pid: "launchd" } };
   }
-  const { version } = installLinuxCast(host, log, source);
+  const { version } = installLinuxCast(host, log, source, opts.release);
   if (!opts.restart) return { version };
   try {
     return { version, restart: restartHostDaemon(host, { force: opts.force }) };
@@ -72,30 +75,52 @@ export function updateHostCast(host: RemoteHost, platform: HostCastPlatform, opt
 }
 
 /**
- * The prep step: put the latest release on the host only when the host is
- * strictly behind it. Never a downgrade (a host trying a newer checkout build
- * keeps it), and nothing when the release cannot be read. Non-fatal: a host
- * that cannot be updated keeps its build and the placement goes on.
+ * The prep step, run before anything starts on the host (a placement, a
+ * migration): the host runs at least this laptop's cast. A host behind it gets
+ * exactly this laptop's release, not latest, since what the laptop asks of the
+ * host is what its own version knows; the install is proven by reading the
+ * host's version back. A host at or ahead of the laptop is left alone: never a
+ * downgrade (a host on a newer release, or trying a newer checkout build,
+ * keeps it). Throws when the host's cast cannot be brought to this version.
+ * The guarantee is the installed binary: the host daemon moves onto it when
+ * it restarts, which happens here on Linux unless live sessions refuse it,
+ * and never on a Mac (a restart ends its sessions). The returned line says
+ * which.
  */
-export function castForPrepare(host: RemoteHost, platform: HostCastPlatform, log: (message: string) => void, deps: { read?: typeof readHostCastVersion; update?: typeof updateHostCast; latest?: () => string | null } = {}): string {
-  const current = (deps.read ?? readHostCastVersion)(host, platform);
-  const latest = (deps.latest ?? (() => hostCastTarget("release")))();
-  if (!latest) return `cast ${current ?? "missing"} on the host (the latest release could not be read)`;
-  if (current && compareVersions(latest, current) <= 0) return `cast ${current} on the host`;
-  log(`host cast ${current ?? "missing"} is behind the ${latest} release; updating it…`);
+export function castForPrepare(
+  host: RemoteHost,
+  platform: HostCastPlatform,
+  log: (message: string) => void,
+  deps: { read?: typeof readHostCastVersion; update?: typeof updateHostCast; release?: (version: string) => CastRelease; laptop?: () => string } = {},
+): string {
+  const read = deps.read ?? readHostCastVersion;
+  const laptop = (deps.laptop ?? getVersion)();
+  const current = read(host, platform);
+  if (current && compareVersions(current, laptop) >= 0) {
+    return current === laptop ? `cast ${current} on the host` : `cast ${current} on the host, ahead of this laptop's ${laptop}`;
+  }
+  log(`host cast ${current ?? "missing"} is behind this laptop's ${laptop}; installing ${laptop}…`);
+  const fail = (why: string) => new HostCastBehind(`the host runs cast ${current ?? "none"}, behind this laptop's ${laptop}, and ${why}; nothing was started there (cast hosts update to retry)`);
+  let release: CastRelease;
+  try {
+    release = (deps.release ?? releaseFor)(laptop);
+  } catch (err) {
+    throw fail(`cast ${laptop} could not be fetched: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let up: HostCastUpdate;
   try {
     // A Mac restart ends the sessions it runs, so only Linux, whose restart refuses that, moves its daemon here.
-    const up = (deps.update ?? updateHostCast)(host, platform, { restart: platform === "linux" }, log);
-    const line = !up.restart
-      ? `host cast updated to ${up.version}; its daemon moves over on its next restart`
-      : "refused" in up.restart
-        ? `host cast updated to ${up.version}; its daemon keeps the old build until its sessions can stop (cast hosts update --force)`
-        : `host cast updated to ${up.version} and its daemon restarted onto it`;
-    log(line);
-    return line;
+    up = (deps.update ?? updateHostCast)(host, platform, { restart: platform === "linux", release }, log);
   } catch (err) {
-    const line = `host cast update failed, keeping ${current ?? "none"}: ${err instanceof Error ? err.message : String(err)}`;
-    log(line);
-    return line;
+    throw fail(`installing ${laptop} failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  const now = read(host, platform);
+  if (now !== laptop) throw fail(`after installing ${laptop} it reports ${now ?? "no cast"}`);
+  const line = !up.restart
+    ? `host cast updated to ${laptop}; its daemon moves over on its next restart`
+    : "refused" in up.restart
+      ? `host cast updated to ${laptop}; its daemon keeps the old build until its sessions can stop (cast hosts update --force)`
+      : `host cast updated to ${laptop} and its daemon restarted onto it`;
+  log(line);
+  return line;
 }

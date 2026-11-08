@@ -1807,6 +1807,8 @@ describe("call summary request goldens", () => {
     const verdicts: any[] = [];
     const ctx = {
       runQuery: async (ref: any, args: any) => {
+        // The vendor guard asks whether the call's team may send to Anthropic: these fixtures' team may.
+        if (getFunctionName(ref) === "vendorCoverage:refusalFor") return null;
         expect(getFunctionName(ref)).toBe("transcripts:getForSummary");
         return (getForSummary as any)._handler({ db }, args);
       },

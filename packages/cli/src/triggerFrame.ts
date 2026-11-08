@@ -5,7 +5,7 @@
 // scheduler. `now` is a parameter so a frame can be rebuilt at a captured
 // moment.
 import { SAFE_MODE_MANDATE } from "./agentLaunch.js";
-import { pendingEventsBlock, triggerLifecycleInstructions, runResultThreadOf } from "@codecast/shared/contracts";
+import { pendingEventsBlock, precheckMessageBlock, triggerLifecycleInstructions, runResultThreadOf } from "@codecast/shared/contracts";
 
 export function buildTriggerFrame(task: any, now: number): string {
   const parts: string[] = [];
@@ -30,6 +30,12 @@ export function buildTriggerFrame(task: any, now: number): string {
   if (fired) {
     parts.push("");
     parts.push(fired);
+  }
+
+  const reported = precheckMessageBlock(task.precheck_message);
+  if (reported) {
+    parts.push("");
+    parts.push(reported);
   }
 
   if (task.context_summary || task.last_run_summary) {

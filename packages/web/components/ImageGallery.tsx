@@ -31,6 +31,8 @@ type ImageGalleryContextType = {
   // The conversation whose quote batch notes pinned in this transcript join,
   // when the viewer can reply here. Framed pages read it to take notes too.
   quoteTo?: string;
+  // The conversation this transcript shows, for whatever needs to name it (a file saved from it is logged against it).
+  conversationId?: string;
 };
 
 const ImageGalleryContext = createContext<ImageGalleryContextType | null>(null);
@@ -237,7 +239,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
   // so images still mounted across an id change (cached messages painting
   // before the conversation row) register again into the fresh registry.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const ctx = useMemo(() => ({ register, open, openList, quoteTo }), [register, open, openList, quoteTo, conversationId]);
+  const ctx = useMemo(() => ({ register, open, openList, quoteTo, conversationId }), [register, open, openList, quoteTo, conversationId]);
 
   // Keep the active thumb visible as arrow keys / clicks move the selection.
   const activeThumbRef = useRef<HTMLButtonElement | null>(null);

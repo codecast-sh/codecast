@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { shouldPlayWaitingSound } from "../useSyncInboxSessions";
-import type { InboxSession } from "../../store/inboxStore";
+import { requestAnsweredSince, shouldPlayWaitingSound, stillWaiting } from "../useSyncInboxSessions";
+import { useInboxStore, type InboxSession } from "../../store/inboxStore";
 
 const baseSession: InboxSession = {
   _id: "conv1",
@@ -154,5 +154,58 @@ describe("shouldPlayWaitingSound", () => {
 
     result = apply([{ ...baseSession, agent_status: "working", awaiting_input: true }], result.nextWaiting, notified);
     expect(result.play).toBe(false);
+  });
+});
+
+describe("stillWaiting", () => {
+  it("holds while the episode stands and lets go once the person answers or sets it aside", () => {
+    const waiting = { ...baseSession, _id: "convW", agent_status: "working", awaiting_input: true } as InboxSession;
+    const prev = useInboxStore.getState().sessions;
+    const put = (row: InboxSession) => useInboxStore.setState({ sessions: { ...prev, convW: row } });
+    try {
+      put(waiting);
+      const key = "convW:5:awaiting_input";
+      expect(stillWaiting(key)).toBe(true);
+      // The person replied: the agent works on a new message.
+      put({ ...waiting, awaiting_input: false, message_count: 6 });
+      expect(stillWaiting(key)).toBe(false);
+      // Waiting again later is a new episode, not the one the old chime was for.
+      put({ ...waiting, message_count: 7 });
+      expect(stillWaiting(key)).toBe(false);
+      put({ ...waiting, inbox_dismissed_at: Date.now() });
+      expect(stillWaiting(key)).toBe(false);
+    } finally {
+      useInboxStore.setState({ sessions: prev });
+    }
+  });
+});
+
+describe("requestAnsweredSince", () => {
+  it("counts a request answered only when the session moved on after it was written", () => {
+    const asked = 1_000;
+    const prev = useInboxStore.getState().sessions;
+    const put = (row: Partial<InboxSession>) => useInboxStore.setState({ sessions: { ...prev, convR: { ...baseSession, _id: "convR", ...row } as InboxSession } });
+    try {
+      // The request row arrived before the store heard the session stopped:
+      // its status still reads working from before the request. Not answered.
+      put({ agent_status: "working", agent_status_updated_at: asked - 500 });
+      expect(requestAnsweredSince("convR", asked)).toBe(false);
+      // Waiting on the person, as the request says.
+      put({ agent_status: "working", awaiting_input: true, agent_status_updated_at: asked + 10 });
+      expect(requestAnsweredSince("convR", asked)).toBe(false);
+      // Answered: working again, on a status written well after the request.
+      put({ agent_status: "working", agent_status_updated_at: asked + 30_000 });
+      expect(requestAnsweredSince("convR", asked)).toBe(true);
+      // A status a few seconds "after" may be a skewed daemon clock: not proof.
+      put({ agent_status: "working", agent_status_updated_at: asked + 2_000 });
+      expect(requestAnsweredSince("convR", asked)).toBe(false);
+      // A pinned session waiting on a permission still owes its answer, though it never chimes.
+      put({ agent_status: "permission_blocked", is_pinned: true, agent_status_updated_at: asked + 2_000 });
+      expect(requestAnsweredSince("convR", asked)).toBe(false);
+      // A session the store does not hold is never silenced on a guess.
+      expect(requestAnsweredSince("convUnknown", asked)).toBe(false);
+    } finally {
+      useInboxStore.setState({ sessions: prev });
+    }
   });
 });

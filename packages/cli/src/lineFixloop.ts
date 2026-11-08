@@ -129,6 +129,8 @@ export async function blameRemoved(cwd: string, fixSha: string, ranges: RemovedR
 export interface FixloopOptions {
   cwd: string;
   since: string; // git --since
+  /** The revision whose history is traced (default HEAD); the recorder passes the mirror's default branch. */
+  rev?: string;
   config: { auth_token?: string; convex_url?: string };
   bugTaskShas?: Set<string>;
   fixStoryShas?: Set<string>;
@@ -136,7 +138,7 @@ export interface FixloopOptions {
 }
 
 export async function traceFixes(opts: FixloopOptions): Promise<FixTrace[]> {
-  const log = parseLog(await git(["log", `--since=${opts.since}`, "--no-merges", "--format=%H%x00%s%x00%at"], opts.cwd));
+  const log = parseLog(await git(["log", ...(opts.rev ? [opts.rev] : []), `--since=${opts.since}`, "--no-merges", "--format=%H%x00%s%x00%at"], opts.cwd));
   const fixes = selectFixCommits(log, opts);
   const resolve = opts.resolve ?? ((parsed, absFile) => resolveFromParsed(parsed, absFile, opts.config));
   const traces: FixTrace[] = [];

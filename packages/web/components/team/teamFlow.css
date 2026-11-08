@@ -19,12 +19,13 @@
   z-index: -1;
   /* The box reaches far past the shell so the ellipse fades out inside it,
      or is cut only at the scroll area's own edges, where a cut reads as
-     the glow running under the chrome. The ellipse centers on the crest. */
-  inset: -6rem -2rem auto -20rem;
-  height: 26rem;
+     the glow running under the chrome. The ellipse centers on the crest and
+     fits inside the box, so on a full-screen page (/start) no edge shows. */
+  inset: -16rem -2rem auto -34rem;
+  height: 36rem;
   background-color: color-mix(in srgb, var(--team-flow-accent) 36%, transparent);
-  -webkit-mask-image: radial-gradient(36rem 18rem at 22.5rem 8rem, black, transparent 75%);
-  mask-image: radial-gradient(36rem 18rem at 22.5rem 8rem, black, transparent 75%);
+  -webkit-mask-image: radial-gradient(36rem 18rem at 36.5rem 18rem, black, transparent 75%);
+  mask-image: radial-gradient(36rem 18rem at 36.5rem 18rem, black, transparent 75%);
   /* 300ms everywhere the accent lands, matching the crest tile and icon, so a
      new swatch re-tints the whole surface as one move instead of the wash
      trailing the crest it surrounds. */
@@ -357,3 +358,6 @@
     transform: none;
   }
 }
+
+/* A footer label stays on one line; a wrapped "Set up later" reads as two buttons. */
+.tf-footer button { white-space: nowrap; }

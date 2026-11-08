@@ -167,10 +167,11 @@ function LabMenu({ d }: { d: Drafting }) {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
-          className={`draft-lab-button px-2 py-[3px] mx-0.5 text-[10px] tracking-[0.14em] rounded-md border border-dashed transition-colors ${
+          className={`draft-lab-button px-2 py-[3px] mx-0.5 text-[10px] tracking-[0.14em] rounded-md border border-dashed transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
             running ? "draft-accent" : "text-sol-text-dim hover:text-sol-text"
           }`}
-          title="The Lab: marks and trims that never rewrite your words"
+          title={d.labBlock ?? "The Lab: marks and trims that never rewrite your words"}
+          disabled={!!d.labBlock}
         >
           {running ? <Loader2 className="w-3 h-3 animate-spin inline" /> : "LAB"}
         </button>

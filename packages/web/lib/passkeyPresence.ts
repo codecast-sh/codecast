@@ -13,13 +13,14 @@
 // /confirm page in the system browser and waits on the challenge instead.
 // An agent's tab may not set one up (lib/agentTabGuard).
 
+import { approvesPersonsAct } from "@codecast/shared/contracts/commandRun";
 import { useCallback, useMemo } from "react";
 import { useConvex } from "convex/react";
 import type { ConvexReactClient } from "convex/react";
 import { toast } from "sonner";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { NOT_CONFIRMED, approvesSecretRead, isPresenceRequired, type PresenceAction, type PresenceGrant } from "@codecast/shared/contracts/secrets";
+import { NOT_CONFIRMED, isPresenceRequired, type PresenceAction, type PresenceGrant } from "@codecast/shared/contracts/secrets";
 import { isAgentDrivenTab } from "./desktopHandoff";
 import { isDesktopShell, openExternalUrl } from "./desktop";
 import { PERSON_ONLY } from "./agentTabGuard";
@@ -224,7 +225,7 @@ export function usePresence(): (action: PresenceAction, target: string) => Promi
   return useCallback((action: PresenceAction, target: string) => confirmPresence(client, action, target), [client]);
 }
 
-type Answerable = { _id: string; category?: string; options: readonly { label: string }[] };
+type Answerable = { _id: string; category?: string; run?: unknown; options: readonly { label: string }[] };
 
 /**
  * Answering a decision where its Approve opens an Ask first secret: that
@@ -234,7 +235,7 @@ type Answerable = { _id: string; category?: string; options: readonly { label: s
  */
 export function useApproveGate(decision: Answerable | undefined) {
   const confirm = usePresence();
-  const gated = useCallback((index: number) => !!decision && approvesSecretRead(decision, index), [decision]);
+  const gated = useCallback((index: number) => !!decision && approvesPersonsAct(decision, index), [decision]);
   const answer = useCallback(
     <T,>(index: number, send: (presence?: PresenceGrant) => T): T | Promise<T | typeof NOT_CONFIRMED> =>
       decision && gated(index) ? withPresence(() => confirm("approve", decision._id), send, true) : send(),

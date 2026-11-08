@@ -106,10 +106,12 @@ describe("noticeMove", () => {
     expect(noticeMove("verify", "x", true)).toBeNull();
     expect(noticeMove("limit", "x", true)).toEqual({ label: "Open Plan", opensPlan: true });
     expect(noticeMove("limit", "x", false)).toBeNull();
+    // Nobody in the team can lift a vendor stop, so it offers nothing to press.
+    expect(noticeMove("vendor", "x", true)).toBeNull();
   });
 
   test("the web's dot classes follow the shared tone", () => {
-    expect(NOTICE_DOT).toEqual({ error: "bg-sol-red/70", unavailable: "bg-sol-yellow", budget: "bg-sol-orange", time: "bg-sol-blue/70", safety: "bg-sol-red/70", verify: "bg-sol-blue/70", limit: "bg-sol-orange" });
+    expect(NOTICE_DOT).toEqual({ error: "bg-sol-red/70", unavailable: "bg-sol-yellow", budget: "bg-sol-orange", time: "bg-sol-blue/70", safety: "bg-sol-red/70", verify: "bg-sol-blue/70", limit: "bg-sol-orange", vendor: "bg-sol-orange" });
   });
 
   test("a stop moved past drops the invitation to try again", () => {

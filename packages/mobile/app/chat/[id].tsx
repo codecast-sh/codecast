@@ -20,6 +20,8 @@ import { lineGroupKey, buildChatTimeline, dmOtherIds, memberHandle } from '@code
 import { channelHuddleMemberIds, chatRoomKey } from '@codecast/shared/contracts';
 import { HuddleButton } from '@/components/calls/SessionHuddleButton';
 import { MessageRow, DayDivider, NewDivider, ChatAvatar, fromChatView, type MobileChatMessage } from '@/components/chat/MessageRow';
+import { threadRootOf } from '@codecast/web/components/chat/chatTypes';
+import { channelDisplayName } from '@codecast/web/lib/chatViews';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
 import { useSessionIdentityLookup } from '@/components/identity';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
@@ -294,7 +296,7 @@ export default function ChatChannelScreen() {
     if (action.kind === 'react') {
       toggleReaction(message.id, action.emoji);
     } else if (action.kind === 'reply') {
-      pushThread(message.id);
+      pushThread(threadRootOf(message));
     } else if (action.kind === 'copy') {
       copyToClipboard(message.content);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -337,15 +339,9 @@ export default function ChatChannelScreen() {
     [isDm, channel?.dm_key, viewerId],
   );
   const counterpart = dmOthers.length === 1 ? memberById.get(dmOthers[0]) : undefined;
-  const roomName = (() => {
-    if (!isDm) return channel?.name ?? 'channel';
-    if (dmOthers.length === 0) return 'Direct message';
-    const names = dmOthers.map((uid) => {
-      const m = memberById.get(uid);
-      return m?.name || m?.github_username || 'Teammate';
-    });
-    return dmOthers.length > 1 ? names.map((n) => n.split(/\s+/)[0]).join(', ') : names[0];
-  })();
+  const roomName = isDm
+    ? channelDisplayName({ name: channel?.name ?? '', kind: 'dm', dmMemberIds: dmOthers }, teamMembers)
+    : channel?.name ?? 'channel';
   const presence = counterpart?.presence_state as string | undefined;
   const presenceColor =
     presence === 'active' ? Theme.green : presence === 'idle' ? Theme.accent : Theme.textMuted0;

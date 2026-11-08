@@ -1,4 +1,5 @@
 import { forwardRef, useCallback, type FormEventHandler, type ReactElement, type ReactNode, type Ref, type TextareaHTMLAttributes } from "react";
+import { ListEnd } from "lucide-react";
 import { ComposerFade } from "./ComposerFade";
 import { composerColumn, FIELD_SIZING_STYLE } from "./composerLayout";
 import { holdTextareaTextNode } from "../lib/holdTextareaTextNode";
@@ -187,7 +188,9 @@ export const ComposerTextarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttr
  * ("Send and apply 3", from batchSendWords) the button is a violet pill that
  * says what the send does; the bare box ignores it. While a turn runs and
  * there is text, `stopAndSend` joins a Stop square to the disc's left: the
- * square stops the turn and then sends, the arrow sends into the running turn.
+ * square stops the turn and then sends, the arrow sends into the running turn
+ * now, and `queueSend` puts a third choice between them that holds the text
+ * for the end of the turn.
  * `tip` puts the surface's tooltip on each button; a disabled button is wrapped
  * in a span first, since a disabled button gets no pointer events.
  */
@@ -199,6 +202,7 @@ export function ComposerSendButton({
   label,
   stop,
   stopAndSend,
+  queueSend,
   tip,
 }: {
   canSubmit: boolean;
@@ -213,6 +217,8 @@ export function ComposerSendButton({
   stop?: { label: string; onStop: () => void; accel?: string };
   /** Stop the running turn, then send. `wrap` puts a tooltip on the square. */
   stopAndSend?: { onStopAndSend: () => void; wrap?: (square: ReactElement) => ReactNode };
+  /** Hold the text for the end of the running turn. `wrap` puts a tooltip on it. */
+  queueSend?: { onQueue: () => void; wrap?: (button: ReactElement) => ReactNode };
   /** Wraps a button in a tooltip with its words and, when it can act, its key. */
   tip?: (button: ReactElement, label: string, accel?: string) => ReactNode;
 }) {
@@ -251,17 +257,31 @@ export function ComposerSendButton({
       <div className="h-8 rounded-full border border-sol-blue/50 bg-sol-blue/20 flex items-stretch overflow-hidden">
         {stopAndSend.wrap ? stopAndSend.wrap(square) : square}
         <span aria-hidden className="w-px my-2 bg-sol-blue/30" />
+        {queueSend && (() => {
+          const button = (
+            <button
+              type="button"
+              onClick={queueSend.onQueue}
+              className="h-full px-2 flex items-center justify-center text-sol-text-muted transition-colors hover:text-sol-blue hover:bg-sol-blue/30"
+              aria-label="Send when this turn ends"
+              data-cc-queue-send=""
+            >
+              <ListEnd className="w-4 h-4" aria-hidden />
+            </button>
+          );
+          return <>{queueSend.wrap ? queueSend.wrap(button) : button}<span aria-hidden className="w-px my-2 bg-sol-blue/30" /></>;
+        })()}
         {tipped(<button
           type="submit"
           disabled={!canSubmit}
           className={`h-full pl-2 pr-2.5 flex items-center justify-center text-sol-blue transition-colors ${canSubmit ? "hover:bg-sol-blue/30" : "opacity-40 cursor-not-allowed"}`}
-          aria-label="Send"
+          aria-label={queueSend ? "Send now" : "Send"}
           data-cc-send=""
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
           </svg>
-        </button>, sendWords, "enter", canSubmit)}
+        </button>, queueSend && !title ? "Send now" : sendWords, "enter", canSubmit)}
       </div>
     );
   }

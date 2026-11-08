@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import {
   parseEntityUrl,
+  parseSharedEntityUrl,
   isConvexId,
   buildEntityUrl,
   inferEntityTypeFromShortId,
@@ -181,6 +182,17 @@ describe("parseEntityUrl", () => {
   test("a link carrying its share token stays a link: a pill would drop the token", () => {
     expect(parseEntityUrl(`https://codecast.sh/conversation/${CONVEX_ID}?share=45539c23-e9a1-46f1-9d23-7261c49f11ec`)).toBeNull();
     expect(parseEntityUrl(`/conversation/${CONVEX_ID}?share=abc#msg-x`)).toBeNull();
+  });
+
+  test("a shared link still names its object, and opens through the token", () => {
+    expect(parseSharedEntityUrl(`https://codecast.sh/conversation/${CONVEX_ID}?share=45539c23-e9a1-46f1-9d23-7261c49f11ec`)).toEqual({
+      type: "session",
+      id: CONVEX_ID,
+      to: `/conversation/${CONVEX_ID}?share=45539c23-e9a1-46f1-9d23-7261c49f11ec`,
+    });
+    expect(parseSharedEntityUrl(`/conversation/${CONVEX_ID}?share=abc#msg-x`)?.to).toBe(`/conversation/${CONVEX_ID}?share=abc#msg-x`);
+    expect(parseSharedEntityUrl(`https://codecast.sh/conversation/${CONVEX_ID}`)).toBeNull();
+    expect(parseSharedEntityUrl(`https://example.com/conversation/${CONVEX_ID}?share=abc`)).toBeNull();
   });
 
   test("short ids keep their original form", () => {

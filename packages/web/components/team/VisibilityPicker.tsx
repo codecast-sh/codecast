@@ -14,10 +14,14 @@ export function VisibilityPicker({
   value,
   onChange,
   className = "",
+  compact,
 }: {
   value: TeamVisibility;
   onChange: (value: TeamVisibility) => void;
   className?: string;
+  /** One row of four segments with the chosen level's line under it, for a
+   *  step that carries other choices too (the setup flow's Sharing). */
+  compact?: boolean;
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -28,6 +32,40 @@ export function VisibilityPicker({
     refs.current[next]?.focus();
     onChange(VISIBILITY_LEVELS[next].value);
   };
+
+  if (compact) {
+    const current = VISIBILITY_LEVELS.find((l) => l.value === value) ?? VISIBILITY_LEVELS[0];
+    return (
+      <div className={`tf-accent-scope ${className}`}>
+        <div role="radiogroup" aria-label="What teammates see" className="grid grid-cols-4 gap-1 rounded-xl border border-sol-border p-1 max-sm:grid-cols-2">
+          {VISIBILITY_LEVELS.map((level, i) => {
+            const selected = value === level.value;
+            const Icon = level.Icon;
+            return (
+              <button
+                key={level.value}
+                ref={(el) => { refs.current[i] = el; }}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                tabIndex={selected ? 0 : -1}
+                onKeyDown={(e) => onKey(e, i)}
+                onClick={() => onChange(level.value)}
+                data-selected={selected}
+                className={`tf-option flex h-9 items-center justify-center gap-1.5 rounded-lg border text-xs outline-none ${
+                  selected ? "font-medium text-sol-text" : "border-transparent text-sol-text-dim hover:text-sol-text"
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                {level.label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 px-1 text-xs text-sol-text-dim">{current.description}</p>
+      </div>
+    );
+  }
 
   return (
     <div

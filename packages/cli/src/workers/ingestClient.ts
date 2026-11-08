@@ -109,12 +109,41 @@ export async function readTranscriptIngest(input: Omit<IngestJob,'identity' | 'g
 }
 const fileTails = new Map<string, Promise<void>>();
 let transcriptReservations = 0;
+const capacityWaiters = new Set<() => void>();
+/** Every transcript reservation is taken; nothing about this transcript is wrong, so it is worth trying again once one frees. */
+export class IngestCapacityError extends Error {
+  constructor() { super('ingest reservation capacity'); this.name = 'IngestCapacityError'; }
+}
+/** Resolves once a transcript reservation is free, or after timeoutMs, whichever comes first. */
+export function waitForIngestCapacity(timeoutMs: number): Promise<void> {
+  if (transcriptReservations < MAX_QUEUE + MAX_INFLIGHT) return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(timer); capacityWaiters.delete(done); resolve(); };
+    const timer = setTimeout(done, timeoutMs);
+    capacityWaiters.add(done);
+  });
+}
+/**
+ * Run a transcript sync that must not be dropped for want of a reservation.
+ * A catch-up sweep is the only pass that will look at a transcript nobody is
+ * still writing, so a refusal there would leave it unsynced until the next
+ * daemon start; it waits for a slot instead, a bounded number of times.
+ */
+export async function retryOnIngestCapacity<T>(run: () => Promise<T>, {attempts = 10, waitMs = 30_000}: {attempts?: number; waitMs?: number} = {}): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await run(); }
+    catch (error) {
+      if (!(error instanceof IngestCapacityError) || attempt >= attempts) throw error;
+      await waitForIngestCapacity(waitMs);
+    }
+  }
+}
 export async function serializeTranscript<T>(key: string, run: () => Promise<T>, options: {signal?: AbortSignal; timeoutMs?: number} = {}): Promise<T> {
   const inherited = currentTranscriptDeadline();
   return withTranscriptDeadline(async () => {
     const deadline = currentTranscriptDeadline()!;
     deadline.check();
-    if (!inherited && transcriptReservations >= MAX_QUEUE + MAX_INFLIGHT) throw new Error('ingest reservation capacity');
+    if (!inherited && transcriptReservations >= MAX_QUEUE + MAX_INFLIGHT) throw new IngestCapacityError();
     if (!inherited) transcriptReservations++;
     const before = fileTails.get(key);
     let release!: () => void;
@@ -122,7 +151,7 @@ export async function serializeTranscript<T>(key: string, run: () => Promise<T>,
     fileTails.set(key,tail);
     let entered = false;
     const retire = () => {
-      if (!inherited) transcriptReservations--;
+      if (!inherited) { transcriptReservations--; for (const wake of capacityWaiters) wake(); }
       release();
       if (fileTails.get(key) === tail) fileTails.delete(key);
     };

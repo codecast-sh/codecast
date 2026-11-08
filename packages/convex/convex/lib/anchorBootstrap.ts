@@ -35,6 +35,12 @@ export type RoleBootstrap = {
 export const DECISION_DISCUSSION_GUIDANCE =
   "A person may ask you about a decision you present. Answer from its record, not memory (`cast decide show <sd>`, then the task and the run behind it), in plain words. A change they want goes through the decision itself (`cast decide edit`, or their answer at their word with `cast decide answer --for-human`), never around it.";
 
+// How a standing agent talks to the person reading its thread. The thread
+// reads as a chat of the person's messages and what the agent said with
+// `cast say`; everything else it writes stays out of view.
+export const SAY_GUIDANCE =
+  "Talk to people here with `cast say`, in markdown (`cast say -` for more than a line); nothing else you write reaches them. Say each thing once and whole: what you found, what you did, what you need from them, and any page or image they should see. If nothing is for them, stay quiet.";
+
 const andList = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 // Every role's opening is who it is and its job (the Head of People's and the
@@ -49,7 +55,8 @@ function standingRoleWays(role: RoleBootstrap): string {
     `You wake on your routine, when a session under you is waiting, and when someone writes to you; a person can see and change those triggers on your page. Start every turn with \`cast brief\`: what changed, your sessions, and how the people who report to you are doing against their goals.`,
     roleLevelGuidance({ parent: role.parentName, startsOnItsOwn: role.startsOnItsOwn }),
     `The sessions that report to you stay out of the person's inbox; what they need reaches you as messages, and you answer what you can. What you cannot answer goes up to ${role.parentName}: ${up}`,
-    `Answer people here, in plain words, and say where each piece of work went. The person sees only your last message of each turn, so make it stand on its own: what you found, what you did and where it went, what you need from them, and any page, image or canvas they should see. A message from another session is a colleague's, not your person's; answer it with \`cast send <its id>\`.`,
+    SAY_GUIDANCE,
+    `A message from another session is a colleague's, not your person's; answer it with \`cast send <its id>\`.`,
     DECISION_DISCUSSION_GUIDANCE,
     `Your brief is your memory between turns (\`cast brief edit -\`): what you learned, what people asked you to remember, and one dated line per area under \`## Where it stands\`, which is what people read on your page.`,
   ].join("\n\n");
@@ -60,7 +67,7 @@ function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap
   // message, so it posts no hello of its own.
   const close = role.rebrief
     ? "These are your current instructions. Read `cast brief` now and carry on; there is nothing to announce."
-    : isHeadOfPeopleRole(role) ? "Read `cast brief` now." : "Read `cast brief` now, post a one-line hello, then stand by.";
+    : isHeadOfPeopleRole(role) ? "Read `cast brief` now." : "Read `cast brief` now, say a one-line hello, then stand by.";
   const ways = standingRoleWays(role);
   if (role.assistantOpening) return [role.assistantOpening, ways, close].join("\n\n");
   if (isHeadOfPeopleRole(role)) return [headOfPeopleOpening({ workspace, person: role.parentName }), ways, close].join("\n\n");
@@ -135,10 +142,11 @@ export function bootstrapMessage(opts: {
     `- Decline rather than half-do: if a request exceeds what is safe or cannot be finished properly, say so and escalate to a person. Never ship a truncated or guessed result.`,
     `- When the people you serve want different things, or a request turns on a call that is theirs to make, don't pick a side or quietly settle on one. Put it to the people who own it as a \`cast decide\` card (\`--to\` each of them) naming every option and what it costs, and tell them where you were asked that you are waiting on their answer.`,
     `- Know who reads each place you write: this conversation, a channel, a direct message. What someone asks you to keep from others reaches only the people they named, carrying only what those people need, and you don't restate it, or what kind of matter it is, anywhere others can read it, your replies here included.`,
+    `- ${SAY_GUIDANCE}`,
     `- Be concise and additive. Don't repeat yourself across channels.`,
     `- ${DECISION_DISCUSSION_GUIDANCE}`,
     persona ? `\n## Your persona\nAdopt the **${persona}** persona/skill if it is available in this project.` : ``,
     ``,
-    `Save your role to memory now, post a one-line hello confirming you are online and which workspace you serve, then stand by.`,
+    `Save your role to memory now, say a one-line hello confirming you are online and which workspace you serve, then stand by.`,
   ].filter((line) => line !== ``).join("\n");
 }

@@ -72,7 +72,15 @@ function makeScheduler(
     // reported as a failed run.
     getSessionFiling: async () => opts.filing ?? null,
     getInjectFrame: async () => opts.frame ?? null,
-    skipTaskRun: async (taskId: string, _daemonId: string, result: any, reason: string, source?: string) => {
+    // The trigger row keeps a changes/state gate's state between firings.
+    passTaskPrecheck: async (taskId: string, _daemonId: string, _gate: unknown, state?: string, message?: string) => {
+      const task = byId.get(taskId);
+      if (state !== undefined) task.precheck_state = state;
+      task.precheck_message = message;
+      return true;
+    },
+    skipTaskRun: async (taskId: string, _daemonId: string, result: any, reason: string, source?: string, state?: string) => {
+      if (state !== undefined) byId.get(taskId).precheck_state = state;
       calls.skipped.push({
         taskId,
         reason,
@@ -471,6 +479,70 @@ describe("precheck gate", () => {
     expect(calls.skipped).toHaveLength(1);
     expect(calls.failed).toEqual([]);
   });
+
+  it("a changes gate records its output, wakes when it differs and hands the new output to the run", async () => {
+    const out = path.join(dir, "watched");
+    fs.writeFileSync(out, "pr 1\n");
+    const task = injectTask(`cat ${out}`, { precheck_mode: "changes" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.executeTask(task);
+    expect(calls.skipped.map((s) => s.reason)).toEqual(["precheck output recorded; the next change wakes it"]);
+    await scheduler.executeTask(task);
+    expect(calls.skipped.map((s) => s.reason).at(-1)).toBe("precheck output unchanged");
+    expect(calls.injected).toEqual([]);
+    fs.writeFileSync(out, "pr 1\npr 2\n");
+    await scheduler.executeTask(task);
+    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.prompts[0]).toContain("pr 2");
+    expect(calls.prompts[0]).toContain("What this trigger's precheck reported when it woke this run");
+    // The next firing compares against what woke this one.
+    await scheduler.executeTask(task);
+    expect(calls.skipped.map((s) => s.reason).at(-1)).toBe("precheck output unchanged");
+  }, 60_000);
+
+  it("a state gate reads its previous state, keeps the new one either way and wakes on its own verdict", async () => {
+    // Wakes on its third firing, counting in its state.
+    const script = `n=$(printf %s "$CAST_PRECHECK_STATE" | sed 's/[^0-9]//g'); n=$((\${n:-0}+1)); if [ $n -ge 3 ]; then printf '{"wake":true,"state":%d,"message":"fired %d"}' $n $n; else printf '{"wake":false,"state":%d}' $n; fi`;
+    const task: any = injectTask(script, { precheck_mode: "state" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.executeTask(task);
+    expect(task.precheck_state).toBe("1");
+    await scheduler.executeTask(task);
+    expect(task.precheck_state).toBe("2");
+    expect(calls.skipped.map((s) => s.reason)).toEqual(["precheck said not yet", "precheck said not yet"]);
+    await scheduler.executeTask(task);
+    expect(task.precheck_state).toBe("3");
+    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.prompts[0]).toContain("fired 3");
+  }, 60_000);
+
+  it("a run the gate did not wake carries no message from an earlier one", async () => {
+    // Woken at 9:00 with a message; at 10:00 a person presses Run now.
+    const task: any = injectTask("exit 0", { precheck_mode: "changes", precheck_message: "PR #12 opened" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => ({ ...t, last_run_source: "manual", precheck_message: undefined }) });
+    await scheduler.executeTask(task);
+    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.prompts[0]).not.toContain("PR #12 opened");
+  }, 60_000);
+
+  it("the retry of a run its gate woke runs ungated and keeps the message it was woken with", async () => {
+    // Woken by PR #9, the run failed; the gate already holds PR #9's output,
+    // so asking it again would say "unchanged" and PR #9 would never run.
+    const task: any = injectTask("exit 0", { precheck_mode: "changes", precheck_state: "sha256:pr9", retry_count: 1, precheck_message: "PR #9 opened" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.executeTask(task);
+    expect(calls.skipped).toEqual([]);
+    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.prompts[0]).toContain("PR #9 opened");
+  }, 60_000);
+
+  it("a state gate that prints no verdict skips and keeps its state", async () => {
+    const task: any = injectTask("echo hello", { precheck_mode: "state", precheck_state: "7" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
+    await scheduler.executeTask(task);
+    expect(calls.skipped[0].reason).toContain("printed no");
+    expect(task.precheck_state).toBe("7");
+  }, 60_000);
 
   it("a precheck that never answers skips the run rather than stalling the trigger", async () => {
     // The scheduler's gate is the 60s production timeout, so drive the runner

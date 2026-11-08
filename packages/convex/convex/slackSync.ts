@@ -43,6 +43,7 @@ import { externalAuthorValidator } from "./lib/externalAuthor";
 import { chatAttachmentValidator, type ChatAttachment } from "./lib/chatAttachment";
 import { mirrorFiles, recoverLinkedFiles, slackFileLinkLines } from "./lib/slackFiles";
 import { slackApi } from "./lib/slackApi";
+import { slackSend, type SlackSendScope } from "./lib/slackSend";
 import { resolveChatMentions, slackPersonForHandle, teamRoster } from "./lib/mentionResolve";
 import { chatPermalink, isValidEmoji, MAX_CHAT_CONTENT, normalizeChannelName, oneLine } from "./chatText";
 import { botHandle, dmKeyFor, extractMentionHandles, memberHandle } from "@codecast/shared/chat";
@@ -475,7 +476,7 @@ export const commitLink = internalMutation({
       content: `Linked to Slack #${args.slack_channel_name ?? args.slack_channel_id} (${flow}) by ${actor?.name ?? "a teammate"}.`,
       clientId: `${id}:linked`,
     });
-    return { link_id: id, chat_channel_name: chatName, slack_channel_name: args.slack_channel_name ?? null, actor_name: actor?.name ?? null };
+    return { link_id: id, team_id: channel.team_id, chat_channel_name: chatName, slack_channel_name: args.slack_channel_name ?? null, actor_name: actor?.name ?? null };
   },
 });
 
@@ -579,13 +580,15 @@ export const linkChannel = action({
       }
     }
 
+    if (!chatChannelId) return { ok: false, error: "Could not create the channel" };
+    const linkedChannelId = chatChannelId;
     const backfill = args.backfill ?? "none";
     const sinceTs = backfillSinceTs(backfill);
-    let committed: { link_id: Id<"slack_channel_links">; chat_channel_name: string; slack_channel_name: string | null; actor_name: string | null };
+    let committed: { link_id: Id<"slack_channel_links">; team_id: Id<"teams"> | undefined; chat_channel_name: string; slack_channel_name: string | null; actor_name: string | null };
     try {
       committed = await ctx.runMutation(internal.slackSync.commitLink, {
         api_token: args.api_token,
-        chat_channel_id: chatChannelId,
+        chat_channel_id: linkedChannelId,
         slack_channel_id: args.slack_channel_id,
         slack_channel_name: ch.name,
         slack_channel_private: !!ch.is_private,
@@ -600,7 +603,7 @@ export const linkChannel = action({
 
     const flow = DIRECTION_SENTENCE[args.direction ?? "both"];
     const by = committed.actor_name ? ` Set up by ${committed.actor_name}.` : "";
-    await slackApi(token, "chat.postMessage", {
+    await slackSend(ctx, { team_id: committed.team_id, open_url: `${webBaseUrl()}${chatPermalink(linkedChannelId)}` }, token, "chat.postMessage", {
       channel: args.slack_channel_id,
       text: `:link: This channel is now mirrored with codecast #${committed.chat_channel_name}. ${flow}${by}`,
     });
@@ -832,7 +835,9 @@ export const postNotice = internalAction({
   handler: async (ctx, args) => {
     const install = await ctx.runQuery(internal.slackSync.installationById, { id: args.installation_id });
     if (!install) return;
-    await slackApi(install.bot_token, "chat.postMessage", { channel: args.slack_channel_id, text: args.text });
+    await slackSend(ctx, { team_id: install.team_id, open_url: `${webBaseUrl()}/chat` }, install.bot_token, "chat.postMessage", {
+      channel: args.slack_channel_id, text: args.text,
+    });
   },
 });
 
@@ -3069,6 +3074,11 @@ function composeOutbound(c: PushContext) {
   return { text: fallback, blocks: blocks.length > 0 ? blocks : undefined };
 }
 
+// Whose line a push carries and where it reads in full (lib/slackSend).
+function pushScope(c: PushContext): SlackSendScope {
+  return { team_id: c.link.team_id, open_url: `${webBaseUrl()}${chatPermalink(c.channel._id, c.message._id)}` };
+}
+
 async function recoverNotInChannel(install: Install, link: Link, error: string | undefined): Promise<boolean> {
   if (error !== "not_in_channel" || link.slack_channel_private) return false;
   const joined = await slackApi(install.bot_token, "conversations.join", { channel: link.slack_channel_id });
@@ -3118,25 +3128,26 @@ export const pushMessage = internalAction({
       unfurl_links: hasStandalonePreviewLink(c.message.content),
       unfurl_media: true,
     };
-    let resp = await slackApi(c.install.bot_token, "chat.postMessage", params);
+    const scope = pushScope(c);
+    let resp = await slackSend(ctx, scope, c.install.bot_token, "chat.postMessage", params);
     // Posting as the author needs THEM in the Slack channel. When they are not
     // (they read it here, never joined there), the app says it in their name
     // instead of dropping the line.
     if (!resp.ok && c.as_person && c.app_token && (resp.error === "not_in_channel" || resp.error === "channel_not_found")) {
       const named = { ...params, username: slackDisplayName(c.author), icon_url: c.author.image ?? undefined };
-      resp = await slackApi(c.app_token, "chat.postMessage", named);
+      resp = await slackSend(ctx, scope, c.app_token, "chat.postMessage", named);
       if (!resp.ok && (await recoverNotInChannel({ ...c.install, bot_token: c.app_token }, c.link, resp.error))) {
-        resp = await slackApi(c.app_token, "chat.postMessage", named);
+        resp = await slackSend(ctx, scope, c.app_token, "chat.postMessage", named);
       }
     }
     if (!resp.ok && (await recoverNotInChannel(c.install, c.link, resp.error))) {
-      resp = await slackApi(c.install.bot_token, "chat.postMessage", params);
+      resp = await slackSend(ctx, scope, c.install.bot_token, "chat.postMessage", params);
     }
     if (!resp.ok && (resp.error === "missing_scope" || resp.error === "invalid_arguments") && params.username) {
       // An older install without chat:write.customize: post plainly, prefixed.
       const { username, icon_url, ...plain } = params;
       plain.text = `*${username}:* ${text}`;
-      resp = await slackApi(c.install.bot_token, "chat.postMessage", plain);
+      resp = await slackSend(ctx, scope, c.install.bot_token, "chat.postMessage", plain);
     }
     if (!resp.ok) {
       await noteOutboundFailure(ctx, c.link, String(resp.error ?? "unknown"));
@@ -3159,7 +3170,7 @@ export const pushEdit = internalAction({
     const c = await pushableContext(ctx, args.message_id, { option: "edits", ours: true });
     if (!c) return;
     const { text, blocks } = composeOutbound(c);
-    const resp = await slackApi(c.install.bot_token, "chat.update", {
+    const resp = await slackSend(ctx, pushScope(c), c.install.bot_token, "chat.update", {
       channel: c.link.slack_channel_id, ts: c.message.external!.ts, text, blocks: blocks ?? [],
     });
     if (!resp.ok) await noteOutboundFailure(ctx, c.link, `edit: ${resp.error}`);
