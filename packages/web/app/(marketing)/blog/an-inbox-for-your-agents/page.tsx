@@ -64,7 +64,7 @@ export default function AnInboxForYourAgentsPost() {
         <P>
           To triage a fleet you need exactly one bit per session: is the ball in your court?
           Codecast computes that bit continuously, for every session, and calls it{" "}
-          <Code>needs input</Code>. A session needs input when its agent finished the turn and
+          <Code>needs you</Code>. A session needs you when its agent finished the turn and
           stopped, asked you a question, hit a permission prompt, or died with output you
           haven&apos;t seen. Everything else is <Code>working</Code> — which means: leave it
           alone.
@@ -73,7 +73,7 @@ export default function AnInboxForYourAgentsPost() {
           That bit is what turns a pile of terminals into an inbox. Not a log of what
           happened, but a queue of what needs you, with everything else out of the way. In the
           inbox it decides where each card sits: anything that asked you a question goes to
-          the top, then <em>Needs Input</em>, then the sessions that are <em>Working</em>, and
+          the top, then <em>Needs You</em>, then the sessions that are <em>Working</em>, and
           below them the <em>Dormant</em> ones, parked until a timer or another session wakes
           them, each with a line saying what it is waiting for.
         </P>
@@ -139,7 +139,7 @@ export default function AnInboxForYourAgentsPost() {
         <H2>Agents watch it too</H2>
         <P>
           The inbox is live. A card moves the moment its session changes state: you answer a
-          question and the card slides from <em>Needs Input</em> back to <em>Working</em>{" "}
+          question and the card slides from <em>Needs You</em> back to <em>Working</em>{" "}
           before you have looked away. Agents can subscribe to the same changes. An
           orchestrating agent watches its workers with <Code>cast sessions -w --json</Code>,
           which prints one line per state change and nothing otherwise, reads whichever worker

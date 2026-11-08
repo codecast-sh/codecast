@@ -33,14 +33,14 @@ const TOUR_ID = "inbox";
 type CardState = "needs-input" | "working" | "dormant" | "done";
 
 const STATE_META: Record<CardState, { label: string; dot: string; text: string }> = {
-  "needs-input": { label: "needs input", dot: "bg-sol-yellow", text: "text-sol-yellow" },
+  "needs-input": { label: "needs you", dot: "bg-sol-yellow", text: "text-sol-yellow" },
   working: { label: "working", dot: "bg-sol-green", text: "text-sol-green" },
   dormant: { label: "dormant", dot: "bg-sol-blue", text: "text-sol-blue" },
   done: { label: "done", dot: "bg-sol-cyan", text: "text-sol-cyan" },
 };
 
 const STATE_ROWS: { state: CardState; name: string; line: string }[] = [
-  { state: "needs-input", name: "Needs input", line: "Blocked on you: a question, a permission, a finished turn to review." },
+  { state: "needs-input", name: "Needs you", line: "Blocked on you: a question, a permission, a finished turn to review." },
   { state: "working", name: "Working", line: "Producing right now. Nothing to do yet." },
   { state: "dormant", name: "Dormant", line: "Parked on purpose. A machine wakes it; it never asks for your eyes." },
   { state: "done", name: "Done", line: "Delivered. Read it when you like, then clear it." },

@@ -157,7 +157,7 @@ export const COMPARISONS: Comparison[] = [
         points: [
           {
             label: "One inbox for every agent and machine",
-            text: "Sessions sorted by who acts next: needs input, working, idle, done. Pin, stash, label and kill them. Laptop and cloud host sessions sit in the same list.",
+            text: "Sessions sorted by who acts next: needs you, working, idle, done. Pin, stash, label and kill them. Laptop and cloud host sessions sit in the same list.",
           },
           {
             label: "Steer a terminal session from anywhere",

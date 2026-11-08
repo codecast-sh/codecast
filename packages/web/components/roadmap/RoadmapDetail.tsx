@@ -24,7 +24,7 @@ const HAIR = "color-mix(in srgb, var(--sol-border) 30%, transparent)";
 const DIM = "var(--sol-text-dim)";
 const MUTED = "var(--sol-text-muted)";
 const STATE_COLOR: Record<string, string> = { working: "var(--sol-green)", needs_input: "var(--sol-yellow)", dormant: "var(--sol-blue)", done: "var(--sol-text-dim)", idle: "var(--sol-text-dim)" };
-const STATE_WORD: Record<string, string> = { working: "working", needs_input: "needs input", dormant: "dormant", done: "done", idle: "idle" };
+const STATE_WORD: Record<string, string> = { working: "working", needs_input: "needs you", dormant: "dormant", done: "done", idle: "idle" };
 
 type Index = Map<string, { tasks: RoadTask[] }>;
 

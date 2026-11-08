@@ -127,7 +127,7 @@ export function DesktopProvider() {
     }
   };
 
-  // Dock badge = the sidebar's NEEDS INPUT count (same hook, so they can't
+  // Dock badge = the sidebar's NEEDS YOU count (same hook, so they can't
   // drift): sessions where the ball is in the user's court, mine-scoped, over
   // the authoritative inbox set. It used to count `has_pending || is_idle` over
   // the raw never-prune cache — i.e. every finished session ever synced — which

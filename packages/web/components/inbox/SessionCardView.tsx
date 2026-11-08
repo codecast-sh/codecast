@@ -111,8 +111,8 @@ export type SessionCardViewProps = {
   /** The user label the row is filed under, else the project name shows. */
   sessionLabel: string | null;
   variant?: "default" | "working" | "dismissed" | "stashed" | "snoozed";
-  /** The declared status the row's section header already says (Needs input
-   *  under NEEDS INPUT): the card leaves that chip off rather than repeat it. */
+  /** The declared status the row's section header already says (Needs you
+   *  under NEEDS YOU): the card leaves that chip off rather than repeat it. */
   sectionStatus?: ThreadStateStatus;
   forkColorKey?: string;
   // Force the compact child-row look for a session that isn't itself a
@@ -874,5 +874,5 @@ function MetaSep() {
 const USER_REST_CARD_LINE: Record<UserRest, string> = {
   dormant: "Parked — returns on the next wake",
   done: "Filed as done — until the next wake",
-  needs_input: "Filed as needs input — until the next wake",
+  needs_input: "Filed under Needs You — until the next wake",
 };

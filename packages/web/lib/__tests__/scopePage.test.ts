@@ -103,7 +103,7 @@ describe("the panel answers who acts next (F4.3)", () => {
       hand("p1", "dormant", 5), hand("w2", "working", 60), hand("i1", "idle", 1),
     ];
     const groups = groupHands(rows);
-    expect(groups.map((g) => g.label)).toEqual(["Needs input", "Done", "Working", "Dormant", "Idle"]);
+    expect(groups.map((g) => g.label)).toEqual(["Needs you", "Done", "Working", "Dormant", "Idle"]);
     expect(groups.map((g) => g.rows.length)).toEqual([1, 1, 2, 1, 1]);
     expect(groupHands([hand("w1", "working", 1)]).map((g) => g.state)).toEqual(["working"]);
     expect(groupHands([])).toEqual([]);
@@ -126,8 +126,8 @@ describe("the panel answers who acts next (F4.3)", () => {
     // The status branch runs from Questions to the empty state.
     const file = readFileSync(join(import.meta.dir, "../../components/GlobalSessionPanel.tsx"), "utf8");
     const src = file.slice(file.indexOf('renderSection("Decisions"'), file.indexOf("sortedSessions.length === 0"));
-    const STATE: Record<string, string> = { NeedsInput: "needs_input", Done: "done", Working: "working", Dormant: "dormant" };
-    const rendered = [...src.matchAll(/renderSection\("(Needs Input|Done|Working|Dormant)"/g)]
+    const STATE: Record<string, string> = { NeedsYou: "needs_input", Done: "done", Working: "working", Dormant: "dormant" };
+    const rendered = [...src.matchAll(/renderSection\("(Needs You|Done|Working|Dormant)"/g)]
       .map((m) => STATE[m[1].replace(" ", "")]);
     expect(rendered).toEqual(HAND_GROUPS.filter((g) => g.state !== "idle").map((g) => g.state));
     expect(HAND_GROUPS[HAND_GROUPS.length - 1].state).toBe("idle");

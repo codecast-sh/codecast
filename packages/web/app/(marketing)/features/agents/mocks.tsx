@@ -11,7 +11,7 @@ const STATE: Record<string, string> = {
   working: SOL.yellow,
   done: SOL.green,
   dormant: SOL.violet,
-  "needs input": SOL.orange,
+  "needs you": SOL.orange,
 };
 
 function StateDot({ state }: { state: string }) {
@@ -29,7 +29,7 @@ export function InboxNestMock() {
   const workers = [
     { agent: "codex", title: "Load test for the retry pileup", state: "done", id: "jx7aa21" },
     { agent: "gemini", title: "Audit every caller of enqueue()", state: "working", id: "jx7bb34" },
-    { agent: "cursor", title: "Draft the backoff docs", state: "needs input", id: "jx7cc58" },
+    { agent: "cursor", title: "Draft the backoff docs", state: "needs you", id: "jx7cc58" },
   ];
   return (
     <div className="rounded-xl overflow-hidden font-mono" style={frame} role="img" aria-label="An inbox row with three nested worker sessions on Codex, Gemini and Cursor">
@@ -90,7 +90,7 @@ export function SettleMock() {
 /** What the five work states mean: they answer who acts next. */
 export function StatesLegend() {
   const rows: [string, string][] = [
-    ["needs input", "A person has to unblock it: a question, a permission prompt, a dead process with output."],
+    ["needs you", "A person has to unblock it: a question, a permission prompt, a dead process with output."],
     ["working", "The agent is producing right now."],
     ["dormant", "Parked on a wake the system will deliver: a trigger, a background task, its workers."],
     ["done", "The agent delivered. Read it when you like."],

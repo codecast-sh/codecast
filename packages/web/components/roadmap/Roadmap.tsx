@@ -331,7 +331,7 @@ function Row({ r, top, now, x, tOf, selected, folded, onFold, onSelect, drag, on
         <Glyph r={r} accent={accent} />
         <span className={cn("min-w-0 flex-1 truncate", strong ? "text-[13px] font-medium" : "text-[12.5px]")} style={{ color: r.ended ? "var(--sol-text-dim)" : strong ? "var(--sol-text)" : "var(--sol-text-secondary)" }} title={r.title}>{r.title}</span>
         {live > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-1 text-[10.5px] tabular-nums" style={{ color: "var(--sol-green)" }} title={`${r.counts?.working ?? 0} working, ${r.counts?.needs_input ?? 0} need input`}>
+          <span className="inline-flex shrink-0 items-center gap-1 text-[10.5px] tabular-nums" style={{ color: "var(--sol-green)" }} title={`${r.counts?.working ?? 0} working, ${r.counts?.needs_input ?? 0} need you`}>
             <span className="h-[6px] w-[6px] rounded-full" style={{ background: r.counts?.needs_input ? "var(--sol-yellow)" : "var(--sol-green)" }} />{live}
           </span>
         )}

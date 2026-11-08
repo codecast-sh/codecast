@@ -60,7 +60,7 @@ export function teamPulse<T>(
   const push = (key: PulseTone, n: number, word: string) => {
     if (n > 0) segments.push({ key, n, word, tone: key });
   };
-  push("needsInput", needsInput, plural(needsInput, "needs input", "need input"));
+  push("needsInput", needsInput, plural(needsInput, "needs you", "need you"));
   push("here", here, "here");
   push("working", working, plural(working, "agent working", "agents working"));
   push("huddle", huddles, plural(huddles, "huddle", "huddles"));

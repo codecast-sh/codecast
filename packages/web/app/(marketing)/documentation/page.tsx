@@ -162,7 +162,7 @@ const TOUR = [
 
 const INBOX_GROUPS: [string, string, string][] = [
   ["Pinned", SOL.magenta, "Sessions you keep at the top"],
-  ["Needs input", SOL.yellow, "Waiting on an answer or a permission"],
+  ["Needs you", SOL.yellow, "Waiting on an answer or a permission"],
   ["Working", SOL.green, "Running right now"],
   ["Dormant", SOL.blue, "Asleep until a scheduled wake"],
   ["Snoozed", SOL.base01, "Out of the way until a time you chose"],
@@ -558,7 +558,7 @@ export default function DocsPage() {
           <div className="rounded-lg overflow-hidden my-4" style={{ border: `1px solid ${SOL.base2}` }}>
             {[
               ["Ctrl+J / K", "Navigate sessions", "Move up/down in the session queue"],
-              ["Ctrl+I", "Jump to needs input", "First session waiting for your input"],
+              ["Ctrl+I", "Jump to Needs You", "First session waiting for your input"],
               ["Ctrl+P", "Jump to pinned", "Jump to first pinned session"],
               ["Ctrl+Shift+P", "Pin/unpin", "Pin or unpin the current session"],
               ["Ctrl+L", "Label session", "File the session under a label (type to filter or create)"],

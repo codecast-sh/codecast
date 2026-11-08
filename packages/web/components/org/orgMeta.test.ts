@@ -9,7 +9,7 @@ describe("standingLineOf", () => {
   test("a declared status names the colour and keeps the pinned line", () => {
     const line = standingLineOf({ state: "working", state_line: "Rotating the prod key", state_status: "blocked" })!;
     expect(line.color).toBe(THREAD_STATE_STATUS_META.blocked.color);
-    expect(line.label).toBe("needs input");
+    expect(line.label).toBe("needs you");
     expect(line.text).toBe("Rotating the prod key");
   });
 
@@ -63,10 +63,10 @@ describe("changeLine and chipLine", () => {
 // first, so a bar of colours is never the only reading.
 describe("stateWords", () => {
   test("needs input leads, then working, then one more state up to the cap; nothing for an empty card", () => {
-    expect(stateWords({ needs_input: 4, working: 2, done: 9 })).toEqual(["4 need input", "2 working"]);
-    expect(stateWords({ needs_input: 1, dormant: 3 })).toEqual(["1 needs input", "3 dormant"]);
+    expect(stateWords({ needs_input: 4, working: 2, done: 9 })).toEqual(["4 need you", "2 working"]);
+    expect(stateWords({ needs_input: 1, dormant: 3 })).toEqual(["1 needs you", "3 dormant"]);
     expect(stateWords({ done: 2, idle: 5 })).toEqual(["2 done", "5 idle"]);
-    expect(stateWords({ needs_input: 4, working: 2 }, 1)).toEqual(["4 need input"]);
+    expect(stateWords({ needs_input: 4, working: 2 }, 1)).toEqual(["4 need you"]);
     expect(stateWords({ working: 3, dormant: 1, done: 2 }, 3)).toEqual(["3 working", "1 dormant", "2 done"]);
     expect(stateWords({})).toEqual([]);
   });

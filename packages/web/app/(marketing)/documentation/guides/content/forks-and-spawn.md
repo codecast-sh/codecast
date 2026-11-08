@@ -26,7 +26,7 @@ Workers hang under the session that started them, each with its own agent and st
 
 - **Workers nest under their parent.** A worker row sits under the session that started it, with a ↳ arrow. The parent shows its first two; **+N more sub-sessions** expands the rest and **collapse** folds them away. The button at the top of the list hides or shows all subagent sessions at once.
 - **Every worker is a full session.** Click it to read what it did, or write to it like any conversation. A card links back to the session that spawned it.
-- **States say who acts next.** **working** means the agent is producing, **dormant** means it is waiting on something that will wake it, **needs input** means a person has to act, and **done** means it delivered.
+- **States say who acts next.** **working** means the agent is producing, **dormant** means it is waiting on something that will wake it, **needs you** means a person has to act, and **done** means it delivered.
 
 Your agent creates separate inbox threads only when you ask for them, for work you want to steer yourself. Asking for something to run in parallel gets you workers, not a stack of new cards.
 
@@ -69,5 +69,5 @@ To start something new yourself, click **+** (*New session*) in the sidebar or p
 |-----------------|------------|
 | Workers show up as separate cards in your inbox | Ask the agent to start them as workers under its own session next time |
 | The parent looks stuck while its workers run | It is **dormant**, waiting for them. It wakes when they finish |
-| A worker is marked **needs input** | Open it. It may be asking a question or waiting on a permission prompt |
+| A worker is marked **needs you** | Open it. It may be asking a question or waiting on a permission prompt |
 | You can't find a worker | Expand **+N more sub-sessions** under its parent, or show subagent sessions with the button at the top of the list |

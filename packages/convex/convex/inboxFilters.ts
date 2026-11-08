@@ -130,7 +130,7 @@ export function isViableInboxParent(
 //     permission_blocked — the agent received its input back (an AskUserQuestion
 //     answer, or a permissioned tool that just completed). The "working"
 //     PreToolUse hook that normally clears permission_blocked is fire-and-forget
-//     and can be lost under load, latching the session in "Needs Input" forever
+//     and can be lost under load, latching the session in "Needs You" forever
 //     even though the transcript shows it resumed; this is the durable,
 //     hook-independent clear. Gated on tool_results so a free-form user chat
 //     can't clear a genuinely pending prompt (those messages carry none).
@@ -408,6 +408,7 @@ export function normalizeWorkStateFilter(raw: string | undefined | null): WorkSt
     case "busy":
       return "working";
     case "needs-input":
+    case "needs-you":
     case "needs":
     case "needsinput":
     case "blocked":

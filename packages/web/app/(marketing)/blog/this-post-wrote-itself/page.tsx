@@ -125,7 +125,7 @@ export default function ThisPostWroteItselfPost() {
         <P>
           The contract runs both directions. A run that finishes reports a summary, which
           becomes the last-result line on the trigger&apos;s row, so the list of triggers
-          doubles as a status board. A run that gets stuck files itself under <em>needs input</em> in your
+          doubles as a status board. A run that gets stuck files itself under <em>Needs You</em> in your
           inbox, exactly like any blocked agent. Quiet when things work, loud when they
           don&apos;t.
         </P>

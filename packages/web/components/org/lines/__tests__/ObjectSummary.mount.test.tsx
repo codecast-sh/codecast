@@ -94,7 +94,7 @@ async function verifySummaries() {
   assert.equal(q("[data-summary-title]")!.textContent, "Agent Quality");
   const projectFacts = facts();
   assert.match(projectFacts[0]!, /Agent Quality/);
-  assert.match(projectFacts[1]!, /needs input/);
+  assert.match(projectFacts[1]!, /needs you/);
   assert.equal(projectFacts[2], "10 of 18 tasks");
   assert.deepEqual(serves(), ["/goals/in-1"]);
   assert.equal(q("[data-summary-carried]")!.textContent, `Carried by${roleWords(quality).title}`);

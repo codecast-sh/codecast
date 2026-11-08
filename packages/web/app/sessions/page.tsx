@@ -70,7 +70,7 @@ const BUCKET_STYLES: Record<Bucket, { label: string; text: string; dot: string }
 };
 
 const WORK_STATE_STYLES: Record<WorkState, { label: string; cls: string }> = {
-  needs_input: { label: "needs input", cls: "text-rose-300 bg-rose-950/40 border-rose-900/50" },
+  needs_input: { label: "needs you", cls: "text-rose-300 bg-rose-950/40 border-rose-900/50" },
   done:        { label: "done",        cls: "text-cyan-300 bg-cyan-950/30 border-cyan-900/40" },
   working:     { label: "working",     cls: "text-emerald-300 bg-emerald-950/30 border-emerald-900/40" },
   dormant:     { label: "dormant",     cls: "text-sky-300 bg-sky-950/30 border-sky-900/40" },
@@ -659,7 +659,7 @@ export function SessionsView() {
           <div className="flex flex-wrap rounded-md border border-zinc-800/60 overflow-hidden">
             {([
               { value: "all", label: "All", count: counts.total },
-              { value: "needs_input", label: "Needs input", count: triageCounts.needs_input },
+              { value: "needs_input", label: "Needs you", count: triageCounts.needs_input },
               { value: "working", label: "Working", count: triageCounts.working },
               { value: "pinned", label: "Pinned", count: triageCounts.pinned },
               { value: "dismissed", label: "Dismissed", count: triageCounts.dismissed },

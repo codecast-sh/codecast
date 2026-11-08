@@ -11,7 +11,7 @@ import type { OrgParentRef, OrgStandingState, OrgTree, StateCounts } from "./org
 import type { OrgHealth } from "./orgStaffingTypes";
 
 export const ORG_STATE_META: Record<WorkState, { label: string; color: string; chip: string }> = {
-  needs_input: { label: "needs input", color: "var(--sol-yellow)", chip: THREAD_STATE_STATUS_META.blocked.chip },
+  needs_input: { label: "needs you", color: "var(--sol-yellow)", chip: THREAD_STATE_STATUS_META.blocked.chip },
   working: { label: "working", color: "var(--sol-green)", chip: THREAD_STATE_STATUS_META.working.chip },
   dormant: { label: "dormant", color: "var(--sol-blue)", chip: THREAD_STATE_STATUS_META.dormant.chip },
   done: { label: "done", color: "var(--sol-cyan)", chip: THREAD_STATE_STATUS_META.done.chip },
@@ -26,12 +26,12 @@ export const PRESENCE_COLOR: Record<"online" | "away" | "offline", string> = {
 };
 
 /** A card's sessions in words, the states a person acts on first ("4 need
- *  input · 2 working"), at most `max` parts; the rest is for a title. Empty
+ *  you · 2 working"), at most `max` parts; the rest is for a title. Empty
  *  when there is nothing to say. */
 export function stateWords(counts: Partial<StateCounts>, max = 2): string[] {
   const out: string[] = [];
   const n = (k: WorkState) => counts[k] ?? 0;
-  if (n("needs_input")) out.push(`${n("needs_input")} need${n("needs_input") === 1 ? "s" : ""} input`);
+  if (n("needs_input")) out.push(`${n("needs_input")} need${n("needs_input") === 1 ? "s" : ""} you`);
   if (n("working")) out.push(`${n("working")} working`);
   for (const k of ["dormant", "done", "idle"] as const) if (out.length < max && n(k)) out.push(`${n(k)} ${ORG_STATE_META[k].label}`);
   return out.slice(0, max);

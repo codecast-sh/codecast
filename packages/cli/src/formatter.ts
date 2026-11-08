@@ -267,7 +267,7 @@ function formatRole(role: string): string {
 // `cast feed` and `cast monitor` so the colour/label of a state is identical
 // everywhere the CLI shows it.
 const WORK_STATE_LABEL: Record<string, string> = {
-  needs_input: "needs input",
+  needs_input: "needs you",
   done: "done",
   working: "working",
   dormant: "dormant",
@@ -291,7 +291,7 @@ function colorForState(ws: string): string {
 // is_killed from the server (inboxForCLI and the feed).
 //
 // WHERE IT ACTUALLY SHOWS, so nobody expects more than it does: because a
-// killed row classifies as idle, the DEFAULT `cast sessions` view (NEEDS INPUT
+// killed row classifies as idle, the DEFAULT `cast sessions` view (NEEDS YOU
 // + WORKING only, idle collapsed to a "+ N idle" line) renders no card for it
 // at all. The tag appears under -a, --state idle/pinned, and --by-label. Pinning
 // affects sort order, not grouping, so a pinned killed row is still collapsed in
@@ -1206,7 +1206,7 @@ export function formatSessionChangeLine(ch: {
 
 // The `cast sessions` snapshot: a per-user, most-actionable-first view of every
 // session's work state. Renders flat when a --state filter is set, otherwise
-// grouped NEEDS INPUT → WORKING → IDLE. This is the STATIC view (no -w); watch
+// grouped NEEDS YOU → WORKING → IDLE. This is the STATIC view (no -w); watch
 // mode is a change stream rendered line-by-line via formatSessionChangeLine.
 export function formatMonitor(result: MonitorResult, options: MonitorOptions = {}): string {
   const lines: string[] = [];
@@ -1223,7 +1223,7 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
   // the agent (working), a machine (dormant), nobody (idle). Older servers
   // don't send done/dormant; those columns are simply absent then.
   const summary = [
-    `${c.yellow}needs input ${counts.needs_input}${c.reset}`,
+    `${c.yellow}needs you ${counts.needs_input}${c.reset}`,
     ...(counts.done !== undefined ? [`${c.cyan}done ${counts.done}${c.reset}`] : []),
     `${c.green}working ${counts.working}${c.reset}`,
     ...(counts.dormant !== undefined ? [`${c.blue}dormant ${counts.dormant}${c.reset}`] : []),
@@ -1338,12 +1338,12 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
   } else if (options.state) {
     result.sessions.forEach(renderRow);
   } else {
-    // Default view reads top-down as "who acts next": NEEDS INPUT and DONE are
+    // Default view reads top-down as "who acts next": NEEDS YOU and DONE are
     // yours, WORKING is the agent's, DORMANT is a machine's (an armed trigger,
     // an open monitor, a declared wait). Idle sessions are summarized as a
     // one-liner unless -a/--all is passed.
     const groups: Array<[string, string]> = [
-      ["needs_input", `${c.yellow}NEEDS INPUT${c.reset}`],
+      ["needs_input", `${c.yellow}NEEDS YOU${c.reset}`],
       ["done", `${c.cyan}DONE${c.reset}`],
       ["working", `${c.green}WORKING${c.reset}`],
       ["dormant", `${c.blue}DORMANT${c.reset}`],

@@ -49,14 +49,14 @@ export type ThreadStateFreshness = "fresh" | "aging" | "stale";
  * "done" and "dormant" are SETTLE VERDICTS: when the turn that declared them
  * ends, the daemon settles the agent's status to the same word (instead of
  * plain idle), and the inbox files the session under Done / Dormant instead of
- * Needs Input. The verdict covers exactly that one settle. */
+ * Needs You. The verdict covers exactly that one settle. */
 export type ThreadStateStatus = "working" | "blocked" | "done" | "dormant";
 
 /** Human label for each status, shared so the panel chip, the inbox card and
  * the CLI print the same words. */
 export const THREAD_STATE_STATUS_LABEL: Record<ThreadStateStatus, string> = {
   working: "In progress",
-  blocked: "Needs input",
+  blocked: "Needs you",
   done: "Complete",
   dormant: "Dormant",
 };
@@ -66,7 +66,7 @@ export const THREAD_STATE_STATUS_LABEL: Record<ThreadStateStatus, string> = {
 export function parseThreadStateStatus(input: string | null | undefined): ThreadStateStatus | null {
   const word = (input ?? "").trim().toLowerCase().replace(/[_\s]+/g, "-");
   if (["working", "in-progress", "progress", "wip", "active"].includes(word)) return "working";
-  if (["blocked", "needs-input", "input", "waiting", "stuck"].includes(word)) return "blocked";
+  if (["blocked", "needs-input", "needs-you", "input", "waiting", "stuck"].includes(word)) return "blocked";
   if (["done", "complete", "completed", "finished", "delivered"].includes(word)) return "done";
   if (["dormant", "parked", "asleep", "sleeping", "waiting-on"].includes(word)) return "dormant";
   return null;

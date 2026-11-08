@@ -582,7 +582,7 @@ export function SessionMenuItems({
       )}
       {!!session.inbox_snoozed_until && (
         <CtxItem icon={Clock} onSelect={() => useInboxStore.getState().wakeSnoozedSession(id)}>
-          Move to Needs Input now
+          Move to Needs You now
         </CtxItem>
       )}
       {!isSessionSetAside(session) && (
@@ -605,7 +605,7 @@ export function SessionMenuItems({
             Mark done
           </CtxItem>
           <CtxItem icon={CircleDot} onSelect={() => animatedSetSessionRest(id, "needs_input")}>
-            Mark needs input
+            Mark needs you
           </CtxItem>
         </>
       )}

@@ -4,7 +4,7 @@ import { parseStateArgs, formatAge, describeProvenance, staleStateNotice, status
 describe("statusTag", () => {
   test("labels each declared status, colored", () => {
     expect(statusTag("working")).toContain("[in progress]");
-    expect(statusTag("blocked")).toContain("[needs input]");
+    expect(statusTag("blocked")).toContain("[needs you]");
     expect(statusTag("done")).toContain("[complete]");
   });
 

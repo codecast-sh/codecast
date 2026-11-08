@@ -191,7 +191,7 @@ export const TOURS: TourDef[] = [
         id: "state",
         target: "[data-cc-conv-status]",
         title: "The state",
-        body: "Who acts next: needs input is you, working and dormant are the agent, done is yours to read and clear.",
+        body: "Who acts next: Needs You is yours, working and dormant are the agent's, done is yours to read and clear.",
         optional: true,
       },
       {

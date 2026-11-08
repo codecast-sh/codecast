@@ -137,7 +137,7 @@ export function BulkSessionMenuItems({
         Mark {n} done
       </CtxItem>
       <CtxItem icon={CircleDot} onSelect={() => { fileSessionsAsRest(sessions.map((s) => s._id), "needs_input"); onClear?.(); }}>
-        Mark {n} needs input
+        Mark {n} needs you
       </CtxItem>
       <CtxItem icon={Moon} onSelect={() => { fileSessionsAsRest(sessions.map((s) => s._id), "dormant"); onClear?.(); }}>
         Mark {n} dormant

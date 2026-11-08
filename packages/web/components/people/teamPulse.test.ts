@@ -35,12 +35,12 @@ describe("teamPulse", () => {
       1,
     );
     expect(p).toMatchObject({ here: 2, idle: 1, away: 1, offline: 1, working: 5, needsInput: 1, huddles: 1 });
-    expect(pulseText(p)).toBe("1 needs input · 2 here · 5 agents working · 1 huddle · 1 idle · 1 away");
+    expect(pulseText(p)).toBe("1 needs you · 2 here · 5 agents working · 1 huddle · 1 idle · 1 away");
   });
 
   it("drops zero counts and pluralises", () => {
     const p = teamPulse([m("a", "active")], () => fleet({ needsYou: 2 }), 0);
-    expect(pulseText(p)).toBe("2 need input · 1 here");
+    expect(pulseText(p)).toBe("2 need you · 1 here");
   });
 
   it("says nobody is here rather than listing absences", () => {

@@ -131,7 +131,7 @@ export async function warnIfThreadStateStale(deps: PublishDeps): Promise<void> {
   } catch {}
 }
 
-/** Colored "[in progress]" / "[needs input]" / "[complete]" tag, or "" when the
+/** Colored "[in progress]" / "[needs you]" / "[complete]" tag, or "" when the
  * row predates the status field. */
 export function statusTag(status: string | null | undefined): string {
   const parsed = parseThreadStateStatus(status);
@@ -159,7 +159,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
     .description(commandGroup("state").description)
     .option(
       "--status <status>",
-      "Who acts next: working (default) | blocked | done | dormant — files the session under Needs Input / Done / Dormant when the turn ends",
+      "Who acts next: working (default) | blocked | done | dormant — files the session under Needs You / Done / Dormant when the turn ends",
     )
     .option("--for <session>", "Target another session (default: the current one)")
     .option("--json", "Machine-readable output")

@@ -9,7 +9,7 @@ export const PAGE_AGENT_LABELS: Record<PageAgentChip, string> = {
   idle: "idle",
   working: "working",
   updating: "updating",
-  needs_input: "needs input",
+  needs_input: "needs you",
 };
 
 // A send the agent has not picked up yet still reads as "updating" this long,

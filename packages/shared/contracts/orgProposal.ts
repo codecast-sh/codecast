@@ -1446,7 +1446,7 @@ export function takeoverPhrase(handle: string, r: { sessions: unknown[]; kept_in
   const n = typeof r.sessions === "number" ? r.sessions : r.sessions.length;
   if (n === 0) return "";
   const one = n === 1;
-  const parts = [`${n} session${one ? "" : "s"} now report${one ? "s" : ""} to @${handle.replace(/^@/, "")} and leave${one ? "s" : ""} your needs input`];
+  const parts = [`${n} session${one ? "" : "s"} now report${one ? "s" : ""} to @${handle.replace(/^@/, "")} and leave${one ? "s" : ""} Needs You`];
   const kept = typeof r.kept_in_front === "number" ? r.kept_in_front : r.kept_in_front.length;
   if (kept) parts.push(`${kept} of them stay${kept === 1 ? "s" : ""} in front of you with a question still open`);
   if (applied && r.told) parts.push(`${r.told.sessions} told now${r.told.deferred ? `, ${r.told.deferred} will read it on their next turn` : ""}`);
