@@ -219,6 +219,7 @@ export const listFromCLI = mutation({
       name: string | undefined;
       note: string | undefined;
       session_id: string | undefined;
+      conversation_id: Id<"conversations">;
       conversation_title: string;
       message_index: number;
       message_preview: string;
@@ -251,6 +252,7 @@ export const listFromCLI = mutation({
         name: bookmark.name,
         note: bookmark.note,
         session_id: conversation.session_id?.slice(0, 7),
+        conversation_id: conversation._id,
         conversation_title: conversation.title || "New Session",
         message_index: messageIndex,
         message_preview: message.content?.slice(0, 100) || "",
