@@ -268,12 +268,9 @@ function Tool({ label, onClick, pressed, className = "", children }: {
 }
 
 /** A page's verbs: comment on it (where the viewer can reply in this thread),
- *  copy its share link, expand it, open it beside your work, open it in a tab. */
-export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: {
+ *  copy its share link, open it beside your work, open it in a tab. */
+export function PublishedPageActions({ slug, notes }: {
   slug: string;
-  expanded: boolean;
-  /** Absent when the page already fits: there is nothing to expand. */
-  onToggleExpand?: () => void;
   notes?: ReturnType<typeof usePageNotes>;
 }) {
   const [copied, setCopied] = useState(false);
@@ -302,11 +299,6 @@ export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: 
       >
         {copied ? <Check className="h-3.5 w-3.5 text-sol-green" /> : <Link2 className="h-3.5 w-3.5" />}
       </Tool>
-      {onToggleExpand && (
-        <Tool label={expanded ? "Shrink" : "Expand"} onClick={onToggleExpand} pressed={expanded}>
-          {expanded ? <ChevronsDownUp className="h-3.5 w-3.5" /> : <ChevronsUpDown className="h-3.5 w-3.5" />}
-        </Tool>
-      )}
       {/* The pane frames the SERVING origin, so the page arrives under its own
           sandbox CSP and the share page's chrome does not wrap it twice. */}
       <Tool label="Open beside your work" onClick={() => openBrowserPane({ kind: "url", url: pageFrameSrc(slug) })}>
@@ -323,10 +315,13 @@ export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: 
  *  floating over its top corner, the resize edge under it, the caption
  *  below. Folded (`collapsed`), it is the title row alone. All spans, so it
  *  stays valid wherever markdown puts it. */
-export function FramelessPage({ title, href, actions, status, statusPinned, caption, height, stageRef, loaded, pinning, grip, collapsed, onToggleCollapsed, bare = false, children }: {
+export function FramelessPage({ title, href, actions, status, statusPinned, caption, height, stageRef, loaded, pinning, grip, expand, collapsed, onToggleCollapsed, bare = false, children }: {
   title: string;
   href: string;
   actions: ReactNode;
+  /** The page runs past the frame (or was grown): a toggle under it, always in
+   *  view, doubles the frame and shrinks it back. */
+  expand?: { expanded: boolean; onToggle: () => void };
   /** The page is part of the surface around it (a decision's own page): no toolbar, no fold, no resize edge. */
   bare?: boolean;
   /** A quiet status beside the title in the toolbar. */
@@ -401,6 +396,17 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
         {statusPinned && status && <span className="page-embed__status" aria-hidden>{status}</span>}
         {!bare && grip}
       </span>
+      {!bare && expand && (
+        <button
+          type="button"
+          onClick={expand.onToggle}
+          aria-expanded={expand.expanded}
+          className="page-embed__expand mt-1.5 flex items-center gap-1 text-[11px] text-sol-text-dim transition-colors hover:text-sol-text-muted"
+        >
+          {expand.expanded ? <ChevronsDownUp className="h-3 w-3" /> : <ChevronsUpDown className="h-3 w-3" />}
+          {expand.expanded ? "Shrink" : "Expand"}
+        </button>
+      )}
       {caption && <span className="mt-1.5 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
     </span>
   );
@@ -657,7 +663,8 @@ function PublishedPageFrame({ slug, caption, height, decision, whole = false, on
         setLoadedSrc(null);
         setCollapsed((v) => !v);
       }}
-      actions={<PublishedPageActions slug={slug} expanded={tall} onToggleExpand={canToggle && !(whole && reported) ? toggleExpand : undefined} notes={notes} />}
+      actions={<PublishedPageActions slug={slug} notes={notes} />}
+      expand={canToggle && !(whole && reported) ? { expanded: tall, onToggle: toggleExpand } : undefined}
       grip={
         <span className="page-embed__grip" onDoubleClick={() => { setDragged(null); setExpanded(false); }} title="Drag to resize, double-click to fit">
           <HeightGrip target={stageRef} min={EMBED_MIN_HEIGHT} onResized={setDragged} />

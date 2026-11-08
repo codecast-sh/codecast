@@ -52,6 +52,27 @@ describe("permission and gate answers are local-first", () => {
     ]);
   });
 
+  it("an always-allow leaves the session's other cards to the server, which holds every rule", () => {
+    const ask = (id: string, command: string, always: string) => ({ ...perm(id), session_id: "s1", rule_request: { permission: "bash", patterns: [command], always: [always] } });
+    const P3 = "jx7perm00000000000000000000000p3";
+    useInboxStore.getState().syncTable("pendingPermissions", [ask(P1, "npm run build", "npm run build *"), ask(P2, "npm run build --prod", "npm run build *"), ask(P3, "npm run deploy", "npm run deploy *")], permOpts as any);
+    useInboxStore.getState().resolvePermission(P1, "approved", { remember: true });
+    const rows = (useInboxStore.getState() as any).pendingPermissions;
+    expect(rows[P2]).toBeTruthy();
+    expect(rows[P3]).toBeTruthy();
+    // The server's snapshot (P2 approved there) prunes it.
+    useInboxStore.getState().syncTable("pendingPermissions", [ask(P3, "npm run deploy", "npm run deploy *")], permOpts as any);
+    expect((useInboxStore.getState() as any).pendingPermissions[P2]).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a denial with a reason drops the session's other cards", () => {
+    const ask = (id: string) => ({ ...perm(id), session_id: "s1" });
+    useInboxStore.getState().syncTable("pendingPermissions", [ask(P1), ask(P2)], permOpts as any);
+    useInboxStore.getState().resolvePermission(P1, "denied", { message: "not now" });
+    expect((useInboxStore.getState() as any).pendingPermissions[P2]).toBeUndefined();
+  });
+
   it("keeps the card gone when a stale pending push arrives", () => {
     useInboxStore.getState().syncTable("pendingPermissions", [perm(P1)], permOpts as any);
     useInboxStore.getState().resolvePermission(P1, "denied");

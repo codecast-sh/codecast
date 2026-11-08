@@ -146,3 +146,26 @@ describe("performRegisterManagedSession cross-user reclaim", () => {
     expect(rows(db)[0].tmux_session).toBe("cc-new-machine");
   });
 });
+
+describe("performRegisterManagedSession backend", () => {
+  test("the same session moving to an SDK host drops its pane; a pane registration puts it back on tmux", async () => {
+    const db = fixtures({ managedRow: { user_id: DEST } });
+    await performRegisterManagedSession({ db }, DEST as any, { session_id: "sess1", pid: 222, conversation_id: "conv1" as any, backend: "sdk" });
+    expect(rows(db)[0]).toMatchObject({ backend: "sdk" });
+    expect(rows(db)[0].tmux_session).toBeUndefined();
+    // A registration that names neither (a re-register with no pane handle) leaves the SDK mark.
+    await performRegisterManagedSession({ db }, DEST as any, { session_id: "sess1", pid: 222, conversation_id: "conv1" as any });
+    expect(rows(db)[0].backend).toBe("sdk");
+    await performRegisterManagedSession({ db }, DEST as any, { session_id: "sess1", pid: 333, conversation_id: "conv1" as any, tmux_session: "cc-claude-conv1" });
+    expect(rows(db)[0]).toMatchObject({ tmux_session: "cc-claude-conv1" });
+    expect(rows(db)[0].backend).toBeUndefined();
+  });
+
+  test("a new SDK row does not inherit the pane of the row it replaces", async () => {
+    const db = fixtures({ managedRow: { user_id: DEST } });
+    await performRegisterManagedSession({ db }, DEST as any, { session_id: "sess2", pid: 222, conversation_id: "conv1" as any, backend: "sdk" });
+    expect(rows(db)).toHaveLength(1);
+    expect(rows(db)[0]).toMatchObject({ session_id: "sess2", backend: "sdk" });
+    expect(rows(db)[0].tmux_session).toBeUndefined();
+  });
+});

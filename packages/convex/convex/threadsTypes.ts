@@ -44,6 +44,9 @@ export type ThreadInboxEntry = {
   updated_at: number;
   unread: number;
   unread_capped?: boolean;
+  /** The unread part waits on the viewer (threads.ts forYou): counted on the
+   *  Threads badge. Other unread threads are activity. */
+  for_you?: boolean;
   last_reply?: ThreadLastReply | null;
 };
 

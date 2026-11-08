@@ -8,6 +8,8 @@
 // and never before a machine has connected (a new account's first screen is
 // about getting its sessions in, not the colors).
 
+import { useLocation } from "react-router";
+import { isSetupFlowPath } from "../../lib/setupFlow";
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -69,6 +71,8 @@ function showThemeIntro(onAll: () => void) {
 /** Mounted once in the dashboard layout. Renders nothing; raises the card once the page settles. */
 export function ThemeIntroAnywhere() {
   const router = useRouter();
+  // The real URL: the compat usePathname answers with the active tab's path.
+  const inSetupFlow = isSetupFlowPath(useLocation().pathname);
   const phone = useIsPhone();
   const s = useTrackedStore([
     (st) => st.clientStateInitialized,
@@ -88,7 +92,8 @@ export function ThemeIntroAnywhere() {
 
   // eslint-disable-next-line no-restricted-syntax -- arms the rise timer when the facts that gate it change
   useEffect(() => {
-    if (risen.current || !ready || seen) return;
+    // The setup flow on screen keeps the corner quiet (lib/setupFlow).
+    if (risen.current || !ready || seen || inSetupFlow) return;
     const t = window.setTimeout(() => {
       const st = useInboxStore.getState();
       const busy = (st.call?.phase ?? "idle") !== "idle" || !!st.tour || composerHasText() || toast.getToasts().length > 0;
@@ -97,7 +102,7 @@ export function ThemeIntroAnywhere() {
       showThemeIntro(() => router.push(settingsPathFor("general")));
     }, SETTLE_MS);
     return () => window.clearTimeout(t);
-  }, [ready, seen, router]);
+  }, [ready, seen, router, inSetupFlow]);
 
   return null;
 }

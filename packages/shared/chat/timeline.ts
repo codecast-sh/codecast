@@ -7,6 +7,10 @@
 // lives inside a screen component is effectively untested on mobile. Logic that
 // lives here is not.
 
+import { isSilentAgentRow, isVisibleAgentPending } from "./agent";
+import { mentionUserIds, type ChatMentionRef } from "./mentions";
+import { isLiveVoiceRow } from "./voice";
+
 export type TimelineMessage = {
   id: string;
   authorId: string;
@@ -196,53 +200,80 @@ export function buildChatTimeline<M extends TimelineMessage>(
 // ── Unread counts ───────────────────────────────────────────────────────────
 
 export type UnreadTally = {
-  /** Messages after lastReadAt that the viewer did not write. */
+  /** Channel-level lines after the read mark that the viewer did not write. */
   unread: number;
-  /** How many of those mention the viewer. This is the count allowed to shout. */
+  /** How many lines mention the viewer, wherever they live. This is the count
+   *  allowed to shout. */
   mentions: number;
 };
 
+/** A chat row as the server stores it and every client caches it: the fields
+ *  the unread rule reads. */
+export type UnreadRow = {
+  user_id: string;
+  created_at: number;
+  deleted_at?: number;
+  thread_root_id?: string;
+  /** A reply also sent to the channel: it shows in the channel view. */
+  broadcast?: boolean;
+  author_kind?: string;
+  agent_status?: string;
+  mentions?: ReadonlyArray<ChatMentionRef>;
+  mention_scope?: string;
+  voice?: { status?: string } | null;
+  external?: { synced_at?: number } | null;
+};
+
+/**
+ * The unread rule, for the server's rail (convex chat.ts) and for every
+ * client's own tally over the rows it holds. One implementation: when the two
+ * counted differently, a badge the server raised opened onto nothing new, or a
+ * badge the client raised for a row nobody can see never cleared.
+ *
+ * A line counts only when a person can see it and it is news: not a
+ * tombstone, not a silent or still-thinking agent row, not a voice burst still
+ * being spoken (it has not notified), not Slack history landing late (it was
+ * read where it was written). The viewer's own lines never count, and their
+ * newest one reads everything before it (posting is reading), unless an agent
+ * posted it under their id.
+ *
+ * A thread reply does not tick the channel's number: the channel view never
+ * shows it, so reading the channel could not clear it. A broadcast reply does
+ * show there, so it counts. A mention counts wherever it lives, because being
+ * named must never be invisible; in a DM every line is addressed to the viewer.
+ */
 export function tallyUnread(
-  messages: {
-    createdAt: number;
-    authorId: string;
-    mentionsViewer?: boolean;
-    deletedAt?: number;
-    /** Set when the message is a thread reply. */
-    threadRootId?: string;
-    /** A voice burst still being spoken (@codecast/shared/chat isLiveVoiceRow).
-     *  It has not notified yet, so it is not a message to be behind on. */
-    voiceLive?: boolean;
-    /** Posted by an agent under the viewer's id. A bot has no read position,
-     *  so its lines do not count as the viewer reading. */
-    agent?: boolean;
-  }[],
+  rows: ReadonlyArray<UnreadRow>,
   lastReadAt: number | undefined,
   viewerId: string,
+  opts: { isDm?: boolean } = {},
 ): UnreadTally {
-  // Posting is reading, the server's rule (chat.ts postChatMessage): the
-  // viewer's own newest line is a read mark even before the synced read row
-  // catches up, or when that line was sent from another device. It covers
-  // what came strictly before it.
   let ownAt = 0;
-  for (const m of messages) {
-    if (m.authorId === viewerId && !m.agent && m.createdAt > ownAt) ownAt = m.createdAt;
+  for (const m of rows) {
+    if (m.user_id === viewerId && isPersonLine(m) && m.created_at > ownAt) ownAt = m.created_at;
   }
   let unread = 0;
   let mentions = 0;
-  for (const m of messages) {
-    if (m.deletedAt) continue;
-    if (m.voiceLive) continue;
-    if (m.authorId === viewerId) continue;
-    if (lastReadAt !== undefined && m.createdAt <= lastReadAt) continue;
-    if (m.createdAt < ownAt) continue;
-    // The server's rule, mirrored exactly: a thread reply does not tick the
-    // channel's number (the channel view can never clear it), but a mention
-    // counts wherever it lives — being named must never be invisible.
-    if (m.threadRootId === undefined) unread++;
-    if (m.mentionsViewer) mentions++;
+  for (const m of rows) {
+    if (m.user_id === viewerId) continue;
+    if (lastReadAt !== undefined && m.created_at <= lastReadAt) continue;
+    if (m.created_at < ownAt) continue;
+    if (!isUnreadNews(m)) continue;
+    if (m.thread_root_id === undefined || m.broadcast === true) unread++;
+    if (opts.isDm || m.mention_scope === "here" || mentionUserIds(m.mentions).includes(viewerId)) mentions++;
   }
   return { unread, mentions };
+}
+
+const isPersonLine = (m: UnreadRow) => !m.author_kind || m.author_kind === "user";
+
+/** A line a person can see that told them something new. */
+function isUnreadNews(m: UnreadRow): boolean {
+  return !m.deleted_at
+    && !isSilentAgentRow(m)
+    && !isVisibleAgentPending(m.agent_status)
+    && !isLiveVoiceRow(m)
+    && !isHistoryLine(m);
 }
 
 /**

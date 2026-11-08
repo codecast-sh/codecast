@@ -117,6 +117,59 @@ test("PR merge: the button opens the review of what lands where; only the review
   } finally { await done(); }
 }, 120_000);
 
+test("PR bypass: offered only when GitHub says this person may bypass; only the review's button merges past protection", async () => {
+  const { React, q, click, render, done } = await dom();
+  try {
+    const calls: any[] = [];
+    let canBypass = false;
+    const realConvex = await import("convex/react");
+    mock.module("convex/react", () => ({
+      ...realConvex,
+      useAction: () => async (args: any) => {
+        calls.push(args);
+        // The access ask carries no method; a merge does.
+        return "method" in args ? { merged: true } : { held: true, can_bypass: canBypass, merge_state: "BLOCKED", as: "alexfgreen" };
+      },
+      useMutation: () => async () => ({}),
+    }));
+    mock.module("sonner", () => ({ toast: Object.assign(() => {}, { success: () => {}, error: () => {} }) }));
+    const { MergeMenu } = await import("../../pr/PRActions");
+    const w = (globalThis as any).window;
+    const settle = () => React.act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    const openMenu = async () => {
+      await React.act(async () => {
+        q('[aria-label="Merge options"]')!.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+      });
+      await settle();
+    };
+    const pr = { state: "open", repository: "acme/app", number: 7, title: "Ship it", base_ref: "main", head_ref: "ship", head_sha: "abc1234", checks_state: "pending", mergeable: true, mergeable_state: "blocked" };
+
+    await render(React.createElement(MergeMenu, { pr }));
+    await settle();
+    assert.equal((q("[data-pr-merge]") as HTMLButtonElement).disabled, true, "a held merge has no plain button");
+    await openMenu();
+    assert.ok(q("[data-pr-auto-merge]"), "the menu opened");
+    assert.equal(q("[data-pr-merge-bypass]"), null, "nobody without the right is offered it");
+
+    canBypass = true;
+    await render(React.createElement(MergeMenu, { pr: { ...pr, head_sha: "def5678" } }));
+    await settle();
+    if (!q("[data-pr-merge-bypass]")) await openMenu();
+    await click("[data-pr-merge-bypass]");
+    assert.equal(calls.filter((c) => "method" in c).length, 0, "the item alone merges nothing");
+    const review = q("[data-switch-review]")!.textContent!;
+    assert.match(review, /Bypass and merge #7/);
+    assert.match(review, /Bypasses branch protection/);
+    assert.match(review, /Required checks and reviews/);
+    assert.match(review, /alexfgreen/);
+    await click("[data-switch-confirm]");
+    const merges = calls.filter((c) => "method" in c);
+    assert.equal(merges.length, 1);
+    assert.equal(merges[0].bypass, true);
+    assert.equal(merges[0].expected_head_sha, "def5678");
+  } finally { await done(); }
+}, 120_000);
+
 test("bulk kill: idle sessions end at once; a selection with working ones opens the review first", async () => {
   const { React, q, click, render, done } = await dom();
   try {

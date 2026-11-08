@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { actedBlockedConversations, blockedHeadlineCause } from "./ccAccountsShared";
+import { actedBlockedConversations, blockedHeadlineCause, blockedIncidentNotice } from "./ccAccountsShared";
 
 const conv = (kind: string, extra: Record<string, unknown> = {}) => ({
   pending_api_error: true,
@@ -51,5 +51,33 @@ describe("blockedHeadlineCause", () => {
   test("a tie never escalates to safety review", () => {
     expect(blockedHeadlineCause([conv("safety"), conv("limit")])).toBe("usage limits");
     expect(blockedHeadlineCause([conv("safety"), conv("auth")])).toBe("login");
+  });
+});
+
+describe("blockedIncidentNotice", () => {
+  // The 2026-11-07 push: "3 sessions blocked on login · 2 signed out · 1
+  // needs safety review (1 subagent)". The safety stop was a Codex reviewer
+  // worker; its parent session owns it, and the person had nothing to do.
+  test("counts and anchors on top-level sessions; a parked worker is not the person's to act on", () => {
+    const notice = blockedIncidentNotice([
+      conv("auth", { _id: "a", updated_at: 10 }),
+      conv("auth", { _id: "b", updated_at: 20 }),
+      conv("safety", { _id: "w", updated_at: 30, is_subagent: true, parent_conversation_id: "b" }),
+    ]);
+    expect(notice).toMatchObject({
+      title: "2 sessions blocked on login",
+      message: "2 signed out. Sign in to revive them.",
+      newestPark: 20,
+    });
+    expect(notice!.anchor._id).toBe("b");
+  });
+
+  test("a fleet of parked workers alone raises no push", () => {
+    expect(blockedIncidentNotice([conv("safety", { is_subagent: true }), conv("limit", { parent_conversation_id: "p" })])).toBeNull();
+  });
+
+  test("a top-level safety stop says it waits for the person", () => {
+    expect(blockedIncidentNotice([conv("safety", { updated_at: 1 }), conv("limit", { updated_at: 2 })])!.message)
+      .toBe("1 hit a usage limit · 1 stopped for safety review. Safety stops wait for you.");
   });
 });

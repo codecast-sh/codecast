@@ -64,6 +64,55 @@ export function waitingSoundKey(session: InboxSession, queued: Set<string>): str
   return `${session._id}:${session.message_count}:${kind}`;
 }
 
+// The waiting episode a session is in now, or null when it is not waiting on
+// the person or is set aside. Stand down on every TRIAGED row — the full set
+// the server stands down on. This sound and the needs-input push
+// (convex/notifications.ts checkNeedsInput) are deliberate mirrors: the server
+// bails on `inbox_dismissed_at || inbox_stashed_at` outright, and on a killed
+// row via classifyWorkState's `killed` precedence. Setting a session aside is
+// the user saying "not now" whichever gesture they used, so all three belong
+// here. isSub (store) is the other half of the mirror: it stands down on
+// subagents, parent-linked rows AND agent-spawned rows
+// (isAgentSpawnedConversation), matching the server's "subagent" +
+// "agent_spawned" reasons. A worktree is NOT a stand-down reason on either
+// side — a human-started worktree/cloud session chimes and pushes.
+function triaged(session: InboxSession): boolean {
+  return !!(session.inbox_dismissed_at || session.inbox_stashed_at || session.inbox_killed_at);
+}
+
+export function currentWaitingKey(session: InboxSession, queued: Set<string>): string | null {
+  if (triaged(session) || isSub(session)) return null;
+  return waitingSoundKey(session, queued);
+}
+
+/** Whether the store still shows the waiting episode `key` names (a
+ *  `waitingSoundKey`), asked at the moment its chime or banner would go out.
+ *  A session the store does not hold is taken as still waiting. */
+export function stillWaiting(key: string): boolean {
+  const s = useInboxStore.getState();
+  const session = s.sessions[key.split(":")[0]];
+  return !session || currentWaitingKey(session, s.sessionsWithQueuedMessages) === key;
+}
+
+/** Whether the request a banner announces, written at `since`, has been
+ *  answered: the store shows the session no longer waiting, on a status
+ *  written after the request (answering sets the agent moving again). A session
+ *  whose newer status has not reached the store yet still counts as waiting,
+ *  so sync lag never drops a banner for a request that stands. */
+export function requestAnsweredSince(sessionId: string, since: number): boolean {
+  const s = useInboxStore.getState();
+  const session = s.sessions[sessionId];
+  // Whether it still waits, not whether it would chime: a pinned, queued or
+  // agent-spawned session can still owe the person an answer.
+  if (!session || classifySession(session, Date.now()).waiting) return false;
+  // The status is stamped by the daemon's clock and the request by the
+  // server's: a few seconds of slack keeps a skewed clock from reading an
+  // older status as the answer.
+  return (session.agent_status_updated_at ?? 0) > since + STATUS_CLOCK_SLACK_MS;
+}
+
+const STATUS_CLOCK_SLACK_MS = 5_000;
+
 export function shouldPlayWaitingSound(
   sessions: InboxSession[],
   queued: Set<string>,
@@ -75,23 +124,13 @@ export function shouldPlayWaitingSound(
   const nextWaiting = new Map<string, boolean>();
 
   for (const session of sessions) {
-    // Stand down on every TRIAGED row — the full set the server stands down on.
-    // This sound and the needs-input push (convex/notifications.ts
-    // checkNeedsInput) are deliberate mirrors: the server bails on
-    // `inbox_dismissed_at || inbox_stashed_at` outright, and on a killed row via
-    // classifyWorkState's `killed` precedence. Setting a session aside is the
-    // user saying "not now" whichever gesture they used, so all three belong
-    // here. `continue` rather than a falsy key on purpose: leaving the id out of
-    // nextWaiting makes a later revival re-observe the session fresh, so no
-    // chime fires for a waiting episode that began while it was set aside.
-    // isSub (store) is the other half of the mirror: it stands down on
-    // subagents, parent-linked rows AND agent-spawned rows
-    // (isAgentSpawnedConversation), matching the server's "subagent" +
-    // "agent_spawned" reasons. A worktree is NOT a stand-down reason on
-    // either side — a human-started worktree/cloud session chimes and pushes.
-    if (session.inbox_dismissed_at || session.inbox_stashed_at || session.inbox_killed_at) continue;
+    // `continue` for a triaged row rather than a falsy key on purpose: leaving
+    // the id out of nextWaiting makes a later revival re-observe the session
+    // fresh, so no chime fires for a waiting episode that began while it was
+    // set aside.
+    if (triaged(session)) continue;
     const id = session._id.toString();
-    const key = isSub(session) ? null : waitingSoundKey(session, queued);
+    const key = currentWaitingKey(session, queued);
     nextWaiting.set(id, !!key);
     if (!key) continue;
 
@@ -344,7 +383,7 @@ export function useSyncInboxSessions() {
       prevWaitingMapRef.current,
       notifiedWaitingKeysRef.current,
     );
-    for (const key of soundState.keys) soundIdle(key);
+    for (const key of soundState.keys) soundIdle(key, () => stillWaiting(key));
     prevWaitingMapRef.current = soundState.nextWaiting;
     lastLivenessSyncRef.current = Date.now();
   }, []), { coalesceMs: 300 });

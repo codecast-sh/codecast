@@ -282,9 +282,44 @@ export const setRequestedReviewers = internalAction({
 });
 
 /**
+ * Where a pull request stands on merging, as GitHub tells the holder of this
+ * token: its merge state, and whether this identity may bypass the branch's
+ * protection (an admin with admins exempt, or a ruleset bypass actor). The
+ * same two answers `gh pr merge` reads before it offers `--admin`.
+ */
+export const pullRequestMergeability = internalAction({
+  args: { repository: v.string(), pr_number: v.number(), github_access_token: v.string() },
+  handler: async (_ctx, args): Promise<{ id: string; merge_state: string; can_bypass: boolean; head_sha: string | null }> => {
+    const [owner, name] = splitRepository(args.repository);
+    const { data } = await ghGraphQL(
+      `query($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) {
+          pullRequest(number: $number) { id mergeStateStatus viewerCanMergeAsAdmin headRefOid }
+        }
+      }`,
+      { owner, name, number: args.pr_number },
+      args.github_access_token,
+    );
+    const pr = data?.repository?.pullRequest;
+    if (!pr?.id) throw new Error(`Pull request ${args.repository}#${args.pr_number} not found`);
+    return {
+      id: pr.id,
+      merge_state: String(pr.mergeStateStatus ?? "UNKNOWN"),
+      can_bypass: pr.viewerCanMergeAsAdmin === true,
+      head_sha: pr.headRefOid ?? null,
+    };
+  },
+});
+
+/**
  * Merge a pull request. GitHub decides whether it may be merged, so a branch
  * that is behind, conflicted or blocked by a required check comes back as a
  * refusal in its own words rather than something guessed here.
+ *
+ * `bypass_node_id` asks for the merge past branch protection, the way
+ * `gh pr merge --admin` does: GraphQL's mergePullRequest, which merges at once
+ * (skipping a merge queue too) when the token's identity may bypass, and is
+ * refused in GitHub's words when it may not.
  */
 export const mergePullRequest = internalAction({
   args: {
@@ -297,14 +332,32 @@ export const mergePullRequest = internalAction({
     // The head the person looked at. GitHub refuses the merge (409) when the
     // branch has moved since, so a push that lands mid-review is never merged unseen.
     expected_head_sha: v.optional(v.string()),
+    bypass_node_id: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ merged: boolean; sha?: string; message?: string; branch_deleted: boolean }> => {
     const [owner, repo] = splitRepository(args.repository);
-    const data = await githubFetch(
-      `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/merge`,
-      args.github_access_token,
-      { method: "PUT", body: { merge_method: args.method, ...(args.expected_head_sha ? { sha: args.expected_head_sha } : {}) } },
-    );
+    let data: { merged?: boolean; sha?: string; message?: string };
+    if (args.bypass_node_id) {
+      const result = await ghGraphQL(
+        `mutation($id: ID!, $method: PullRequestMergeMethod, $head: GitObjectID) {
+          mergePullRequest(input: { pullRequestId: $id, mergeMethod: $method, expectedHeadOid: $head }) {
+            pullRequest { merged mergeCommit { oid } }
+          }
+        }`,
+        { id: args.bypass_node_id, method: args.method.toUpperCase(), head: args.expected_head_sha ?? null },
+        args.github_access_token,
+        true,
+      );
+      if (result.errors?.length) throw new Error(result.errors.map((e) => e.message).join("; "));
+      const merged = result.data?.mergePullRequest?.pullRequest;
+      data = { merged: !!merged?.merged, sha: merged?.mergeCommit?.oid };
+    } else {
+      data = await githubFetch(
+        `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/merge`,
+        args.github_access_token,
+        { method: "PUT", body: { merge_method: args.method, ...(args.expected_head_sha ? { sha: args.expected_head_sha } : {}) } },
+      );
+    }
 
     // Deleting the branch is a courtesy after the merge, never the point of it:
     // a merge that landed must not report failure because the ref was already

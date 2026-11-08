@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  isPrivateHost,
   checkUrl, denyNavigation, findManifestFile, isInternalUrl, loadMachinePolicy, loadSitePolicy, originOf, parsePattern,
   type SitePolicy,
 } from "./policy.js";
@@ -71,9 +72,51 @@ describe("origin matching", () => {
     expect(checkUrl(p, "https://example.com/other").allowed).toBe(true);
   });
 
-  test("`*` allows everything", () => {
+  test("`*` allows every public site", () => {
     const p = policyOf("*");
     expect(checkUrl(p, "https://anything.at.all").allowed).toBe(true);
+  });
+
+  test("wildcards never match a private address; an exact entry does", () => {
+    const wild = policyOf("*", "*.local", "*.localhost", "*.internal");
+    for (const url of [
+      "http://localhost:3200",
+      "http://127.0.0.1",
+      "http://10.1.2.3",
+      "http://172.20.0.1",
+      "http://192.168.1.1",
+      "http://169.254.169.254/latest/meta-data",
+      "http://100.100.1.1",
+      "http://0.0.0.0:8080",
+      "http://[::1]:3000",
+      "http://[fe80::1]",
+      "http://[fd12::1]",
+      "http://[::ffff:127.0.0.1]",
+      "http://app.localhost",
+    ]) {
+      expect({ url, allowed: checkUrl(wild, url).allowed }).toEqual({ url, allowed: false });
+    }
+    expect(checkUrl(wild, "http://172.32.0.1").allowed).toBe(true);
+    expect(checkUrl(wild, "http://8.8.8.8").allowed).toBe(true);
+    // Names are names: a wildcard that names an internal zone opens it.
+    expect(checkUrl(policyOf("*.corp.internal"), "https://wiki.corp.internal/").allowed).toBe(true);
+    expect(checkUrl(wild, "http://printer.local").allowed).toBe(true);
+    const exact = policyOf("localhost:3200", "169.254.169.254", "printer.local", "[::1]");
+    expect(checkUrl(exact, "http://localhost:3200/inbox").allowed).toBe(true);
+    expect(checkUrl(exact, "http://169.254.169.254/").allowed).toBe(true);
+    expect(checkUrl(exact, "http://printer.local").allowed).toBe(true);
+    expect(checkUrl(exact, "http://[::1]:5000").allowed).toBe(true);
+  });
+
+  test("isPrivateHost judges the name alone", () => {
+    expect(isPrivateHost("LOCALHOST")).toBe(true);
+    expect(isPrivateHost("app.localhost")).toBe(true);
+    expect(isPrivateHost("printer.local")).toBe(false);
+    expect(isPrivateHost("wiki.corp.internal")).toBe(false);
+    expect(isPrivateHost("[::ffff:7f00:1]")).toBe(true);
+    expect(isPrivateHost("example.com")).toBe(false);
+    expect(isPrivateHost("[2606:4700::1111]")).toBe(false);
+    expect(isPrivateHost("300.1.1.1")).toBe(false);
   });
 
   test("blank and malformed patterns never match", () => {
@@ -128,6 +171,13 @@ describe("enforcement decision", () => {
     expect(deny!.message).toContain("evil.example");
     expect(deny!.hint).toContain("/tmp/workspace.toml");
     expect(deny!.hint).toContain('"evil.example"');
+    expect(deny!.hint).toContain("*.wildcard");
+  });
+
+  test("a private host's refusal offers only the exact entry, since no wildcard matches it", () => {
+    const deny = denyNavigation(policyOf("*"), "http://localhost:3200/");
+    expect(deny!.hint).toContain('"localhost"');
+    expect(deny!.hint).not.toContain("wildcard");
   });
 });
 
@@ -207,6 +257,23 @@ describe("loading from disk", () => {
     expect(loadMachinePolicy()).toEqual({ sources: [{ file: configFile, key: "browser_allow", patterns: ["codecast.sh"] }], errors: [] });
     fs.writeFileSync(configFile, JSON.stringify({ browser_allow: "codecast.sh" }));
     expect(loadMachinePolicy()).toEqual({ sources: [], errors: [{ file: configFile, message: "browser_allow must be an array of strings" }] });
+  });
+
+  test("loadMachinePolicy: a torn config.json keeps the list last read whole (none stays none)", () => {
+    fs.mkdirSync(process.env.CODECAST_DIR!, { recursive: true });
+    const configFile = path.join(process.env.CODECAST_DIR!, "config.json");
+    fs.writeFileSync(configFile, JSON.stringify({ auth_token: "x" }));
+    expect(loadMachinePolicy()).toBeNull();
+    fs.writeFileSync(configFile, '{"auth_tok');
+    expect(loadMachinePolicy()).toBeNull();
+    expect(checkUrl(loadMachinePolicy(), "https://example.com").allowed).toBe(true);
+    fs.writeFileSync(configFile, JSON.stringify({ browser_allow: ["codecast.sh"] }));
+    expect(loadMachinePolicy()!.sources[0]!.patterns).toEqual(["codecast.sh"]);
+    fs.writeFileSync(configFile, '{"browser_al');
+    const torn = loadMachinePolicy()!;
+    expect(torn.errors).toEqual([]);
+    expect(checkUrl(torn, "https://codecast.sh/x").allowed).toBe(true);
+    expect(checkUrl(torn, "https://example.com").allowed).toBe(false);
   });
 
   test("loadMachinePolicy never walks up for a project manifest; loadSitePolicy still unions manifest first, machine second", () => {

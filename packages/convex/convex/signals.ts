@@ -1006,7 +1006,8 @@ async function runIngest(ctx: any, filer: Filer, fields: SignalInput, scope: Sco
     return await ctx.runMutation(internal.signals.commit, { ...filer, signal, ...scope, judged_task_id: verdict.judged ?? undefined, similar: verdict.similar || undefined, vector: verdict.vector, ...(verdict.refused ? { await_grouping: true } : {}) });
   }
   if (!inputs.fingerprint_hit && inputs.candidates.length > 0) {
-    const reply = await callModel({ ...attachJudgeRequest(signal, inputs.candidates), label: "Signal attach", timeout_ms: 20_000 });
+    const gate = { ctx, scope: { workspace: scope.team_id ? `team:${scope.team_id}` : null, apiToken: "api_token" in filer ? filer.api_token : null, conversationId: scope.conversation_id } };
+    const reply = await callModel({ ...attachJudgeRequest(signal, inputs.candidates), label: "Signal attach", timeout_ms: 20_000, gate });
     judged = parseAttachJudgeReply(reply?.text, inputs.candidates);
   }
   return await ctx.runMutation(internal.signals.commit, { ...filer, signal, ...scope, judged_task_id: judged ?? undefined });
@@ -2196,7 +2197,7 @@ export const placeHeld = internalAction({
       if (!inputs) continue;
       let judged: Id<"tasks"> | null = null;
       if (inputs.candidates.length) {
-        const reply = await callModel({ ...attachJudgeRequest(inputs.signal, inputs.candidates), label: "Signal attach", timeout_ms: 20_000 });
+        const reply = await callModel({ ...attachJudgeRequest(inputs.signal, inputs.candidates), label: "Signal attach", timeout_ms: 20_000, gate: { ctx, scope: { workspace } } });
         judged = parseAttachJudgeReply(reply?.text, inputs.candidates);
       }
       const placed = await ctx.runMutation(internal.signals.placeHeldKey, { row_id: k._id, judged_task_id: judged ?? undefined, dry_run: args.dry_run });
@@ -2224,7 +2225,7 @@ export const singleInputs = internalQuery({
     if (rows.length !== 1) return null;
     const signal = heldAsSignal(rows[0]);
     const candidates = (await nearestCauses(ctx, rows[0].workspace, signal, task.project_id ?? null)).filter((c) => String(c.task_id) !== String(task._id));
-    return { signal, candidates, user_id: rows[0].user_id };
+    return { signal, candidates, user_id: rows[0].user_id, workspace: rows[0].workspace };
   },
 });
 
@@ -2244,9 +2245,9 @@ export const regroupSingles = internalAction({
   handler: async (ctx, args) => {
     const out: Array<{ task: string; into: string | null }> = [];
     for (const ref of args.tasks) {
-      const inputs: { signal: SignalInput; candidates: CauseCandidate[]; user_id: Id<"users"> } | null = await ctx.runQuery(internal.signals.singleInputs, { task: ref });
+      const inputs: { signal: SignalInput; candidates: CauseCandidate[]; user_id: Id<"users">; workspace: string } | null = await ctx.runQuery(internal.signals.singleInputs, { task: ref });
       if (!inputs || !inputs.candidates.length) { out.push({ task: ref, into: null }); continue; }
-      const reply = await callModel({ ...attachJudgeRequest(inputs.signal, inputs.candidates), label: "Signal attach", timeout_ms: 20_000 });
+      const reply = await callModel({ ...attachJudgeRequest(inputs.signal, inputs.candidates), label: "Signal attach", timeout_ms: 20_000, gate: { ctx, scope: { workspace: inputs.workspace } } });
       const judged = parseAttachJudgeReply(reply?.text, inputs.candidates);
       if (!judged) { out.push({ task: ref, into: null }); continue; }
       const r: { into: string | null } = await ctx.runMutation(internal.signals.foldSingle, { task: ref, into: judged, user_id: inputs.user_id, dry_run: args.dry_run });

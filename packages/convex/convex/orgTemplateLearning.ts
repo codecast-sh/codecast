@@ -164,7 +164,12 @@ export async function performDigest(ctx: Ctx, args: { instance_id: Id<"org_templ
   const brief = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
   const rules = playbookRuleSignals(parsePlaybook(brief?.content).rules, row.learning?.seen);
   const digest: LearningDigest = { redirects: await redirectsOf(ctx, role, since), signals, rules };
-  return { request: digest.redirects.length || signals.length || rules.length ? learningRequest(manifest, digest) : null, signal_keys: [...signals.map((s) => s.key), ...rules.map((r) => r.key)] };
+  return {
+    request: digest.redirects.length || signals.length || rules.length ? learningRequest(manifest, digest) : null,
+    signal_keys: [...signals.map((s) => s.key), ...rules.map((r) => r.key)],
+    // Whose words the request carries (lib/vendorGuard).
+    workspace: row.workspace as string,
+  };
 }
 
 /** The names a lesson from this instance's workspace must not carry. */
@@ -368,9 +373,9 @@ export const learnPass = action({
     const plan: { user_id: Id<"users">; instances: Id<"org_template_instances">[]; remaining: number } = await ctx.runQuery((internal as any).orgTemplateLearning.passPlan, { ...args, now });
     const totals = { template_id: args.template_id, read: 0, failed: 0, filed: [] as LearnedResult["filed"], refused: {} as Partial<Record<LeakKind, number>>, remaining: plan.remaining };
     const one = async (instance_id: Id<"org_template_instances">): Promise<LearnedResult | null> => {
-      const digest: { request: { system: string; prompt: string } | null; signal_keys: string[] } | null = await ctx.runQuery((internal as any).orgTemplateLearning.passDigest, { instance_id, now });
+      const digest: { request: { system: string; prompt: string } | null; signal_keys: string[]; workspace: string } | null = await ctx.runQuery((internal as any).orgTemplateLearning.passDigest, { instance_id, now });
       if (!digest) return null;
-      const reply = digest.request ? (await callModel({ ...digest.request, model: LEARNING_MODEL, max_tokens: 2000, label: "template-learning", timeout_ms: 120_000 }))?.text ?? null : "[]";
+      const reply = digest.request ? (await callModel({ ...digest.request, model: LEARNING_MODEL, max_tokens: 2000, label: "template-learning", timeout_ms: 120_000, gate: { ctx, scope: { workspace: digest.workspace } } }))?.text ?? null : "[]";
       return ctx.runMutation((internal as any).orgTemplateLearning.fileLearned, { instance_id, user_id: plan.user_id, reply, signal_keys: digest.signal_keys, now });
     };
     for (let i = 0; i < plan.instances.length; i += 4) {

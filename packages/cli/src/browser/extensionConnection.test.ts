@@ -1,10 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { createHmac, webcrypto } from 'node:crypto';
-
-const source = readFileSync(new URL('../../../browser-extension/background.js', import.meta.url), 'utf8');
-const statusSource = readFileSync(new URL('../../../browser-extension/status.js', import.meta.url), 'utf8');
+import { createHmac } from 'node:crypto';
+import { chromeStub, loadWorker } from './extensionStub.testutil';
 
 function worker(opts: { delayInitialRead?: boolean } = {}) {
   let config = { token: 'paired-token', port: 41729 };
@@ -13,7 +10,6 @@ function worker(opts: { delayInitialRead?: boolean } = {}) {
   let finishInitialRead = () => {};
   let message: (msg: object, sender: object, reply: () => void) => void;
   const sockets: Socket[] = [];
-  const event = () => ({ addListener() {} });
   class Socket {
     static OPEN = 1;
     static CONNECTING = 0;
@@ -26,7 +22,7 @@ function worker(opts: { delayInitialRead?: boolean } = {}) {
     send(data: string) { this.sent.push(JSON.parse(data)); }
     close() { this.readyState = 3; }
   }
-  const chrome = {
+  const chrome = chromeStub({
     storage: {
       local: { get: async (key: string) => {
         if (key !== 'bridge') return {};
@@ -37,23 +33,11 @@ function worker(opts: { delayInitialRead?: boolean } = {}) {
           return new Promise((resolve) => { finishInitialRead = () => resolve({ bridge: initial }); });
         }
         return { bridge: config };
-      }, set: async () => {} },
-      session: { get: async () => ({}), set: async () => {} },
+      } },
     },
-    runtime: { onStartup: event(), onInstalled: event(), getManifest: () => ({ version: '0.1.0' }),
-      onMessage: { addListener(fn: typeof message) { message = fn; } } },
-    action: { setTitle: async () => {}, setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
-    alarms: { create: async () => {}, onAlarm: event() },
-    tabGroups: { query: async () => [], onCreated: event(), onUpdated: event(), onRemoved: event() },
-    tabs: { query: async () => [], onCreated: event(), onUpdated: event(), onRemoved: event() },
-    debugger: { onEvent: event(), onDetach: event() },
-  };
-  const context = vm.createContext({ chrome, WebSocket: Socket, crypto: webcrypto, TextEncoder,
-    navigator: { userAgent: 'test' }, importScripts() {},
-    setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
+    runtime: { onMessage: { addListener(fn: typeof message) { message = fn; } } },
   });
-  vm.runInContext(statusSource, context);
-  vm.runInContext(source, context);
+  const context = loadWorker({ chrome, globals: { WebSocket: Socket } });
   return {
     context, sockets, reads: () => reads,
     finishInitialRead: () => finishInitialRead(),

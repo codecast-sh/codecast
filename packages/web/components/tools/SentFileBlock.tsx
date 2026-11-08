@@ -18,6 +18,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery } from "../ImageGallery";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { CodeBlock } from "../CodeBlock";
+import { useRecordConversationDownload } from "../../lib/accessLogOpen";
 
 export type { SentFileData };
 
@@ -45,11 +46,14 @@ const MAX_TEXT_PREVIEW_BYTES = 400_000;
 
 function DownloadButton({ url, name }: { url: string; name: string }) {
   const [saving, setSaving] = useState(false);
+  const conversationId = useImageGallery()?.conversationId;
+  const recordDownload = useRecordConversationDownload();
   // Storage lives on another origin, where the `download` attribute is ignored
   // and the file would save under its storage id. Fetching the bytes and
   // saving a blob URL is what keeps the human's copy named `report.pdf`.
   const save = useCallback(async () => {
     setSaving(true);
+    recordDownload(conversationId, name);
     try {
       const response = await fetch(url);
       const blob = await response.blob();
@@ -67,7 +71,7 @@ function DownloadButton({ url, name }: { url: string; name: string }) {
     } finally {
       setSaving(false);
     }
-  }, [url, name]);
+  }, [url, name, conversationId, recordDownload]);
 
   return (
     <button

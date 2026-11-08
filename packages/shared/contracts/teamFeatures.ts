@@ -1,6 +1,7 @@
-// Per-team opt-in features. A team feature is OFF unless the team's admins
-// turned it on: `teams.features` holds only the flags that were set, and an
-// absent flag reads as off. Convex enforces the flag at each feature's access
+// Per-team features. `teams.features` holds only the flags that were set, and
+// an absent flag reads as off. A new team is created with every feature marked
+// onByDefault stored on (DEFAULT_TEAM_FEATURES); teams older than that keep
+// whatever their admins chose. Convex enforces the flag at each feature's access
 // chokepoint, the web and mobile hide every surface of an off feature, and the
 // daemon-side agent snippets that teach a feature follow the flag on the
 // devices of the team's members.
@@ -31,6 +32,14 @@ export interface TeamFeatureDescriptor {
    * team-only feature, off in the personal workspace.
    */
   personal?: boolean;
+  /**
+   * A new team starts with this feature on: createTeam stores it, and the
+   * setup flow (components/onboarding) shows it switched on. Features still in
+   * development and policy switches stay off until an admin turns them on.
+   */
+  onByDefault?: boolean;
+  /** A few words for the setup flow's feature list, where the full desc is too long to scan. */
+  short: string;
 }
 
 export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
@@ -38,18 +47,24 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     key: "chat",
     name: "Team chat",
     desc: "Channels, DMs and threads for the team; agents can post with cast chat.",
+    short: "Channels, DMs and threads, agents included",
+    onByDefault: true,
     snippets: ["chat"],
   },
   {
     key: "calls",
     name: "Calls",
     desc: "Huddles from a channel, a session or a teammate, with live transcription.",
+    short: "Huddles with live transcripts",
+    onByDefault: true,
     snippets: ["calls"],
   },
   {
     key: "org",
     name: "Org",
     desc: "Agent roles that each own an area of work with a standing session, report to a person, and bring you only the decisions that need you. A Head of People proposes the structure.",
+    short: "Agent roles that bring you decisions",
+    onByDefault: true,
     snippets: [],
     personal: true,
   },
@@ -57,6 +72,8 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     key: "line",
     name: "Flows",
     desc: "Changes run through steps your team can see: check, review, decide, ship. A live flow turns problems from your sources into fixes and brings you one card to decide.",
+    short: "Every change runs check, review, decide, ship",
+    onByDefault: true,
     snippets: [],
     personal: true,
   },
@@ -64,24 +81,29 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     key: "changes",
     name: "Changes",
     desc: "A daily edition of what the team shipped and why, written from commits and team-visible sessions. In development.",
+    short: "A daily edition of what the team shipped",
     snippets: [],
   },
   {
     key: "agent_faces",
     name: "Agent faces in calls",
     desc: "An agent added to a call joins it as a face and says its replies out loud. In development.",
+    short: "Agents join calls with a face and a voice",
     snippets: [],
   },
   {
     key: "agent_realtime",
     name: "Real-time agents in calls",
     desc: "An agent's face hears and sees the call and answers at once, handing deeper work to its session. Needs agent faces. In development.",
+    short: "Agents hear the call and answer at once",
     snippets: [],
   },
   {
     key: "ship",
     name: "Ship",
     desc: "A Ship button on sessions with changes, tasks in review and open pull requests: one press commits, opens the PR and shepherds it.",
+    short: "One press commits and opens the PR",
+    onByDefault: true,
     snippets: [],
     personal: true,
   },
@@ -89,11 +111,24 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     key: "member_spend",
     name: "Spend visible to all members",
     desc: "Every member sees each teammate's tokens and spend on activity charts; when off, only admins do.",
+    short: "Everyone sees each teammate's spend",
     snippets: [],
   },
 ];
 
 export const TEAM_FEATURE_KEYS: TeamFeatureKey[] = TEAM_FEATURES.map((f) => f.key);
+
+/** The flags a new team is created with: every feature marked onByDefault, on. */
+export const DEFAULT_TEAM_FEATURES: Partial<Record<TeamFeatureKey, boolean>> = Object.fromEntries(
+  TEAM_FEATURES.filter((f) => f.onByDefault).map((f) => [f.key, true]),
+);
+
+/** The setup features a team has never decided on: what the setup page offers a
+ *  team created before new teams started with them on. */
+export function undecidedSetupFeatures(team: { features?: TeamFeatures | null } | null | undefined): TeamFeatureDescriptor[] {
+  if (!team) return [];
+  return TEAM_FEATURES.filter((f) => f.onByDefault && team.features?.[f.key] === undefined);
+}
 
 /** The stored shape on a team row: only flags that were ever set. */
 export type TeamFeatures = Partial<Record<TeamFeatureKey, boolean>>;

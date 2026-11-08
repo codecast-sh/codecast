@@ -21,6 +21,7 @@ import {
   withoutThreadedQuestions,
   sortCards,
   unreadByChip,
+  forYouFirst,
   visibleChips,
   walkIndex,
   type ThreadCardModel,
@@ -137,7 +138,9 @@ export function ThreadsView({ present, reading }: { present: boolean; reading: b
     visit = newVisit();
     visitsRef.current.set(visitKey, visit);
   }
-  const { fresh, seen } = useMemo(() => arrangeVisit(visit!, chipped), [visit, chipped]);
+  const arranged = useMemo(() => arrangeVisit(visit!, chipped), [visit, chipped]);
+  const fresh = useMemo(() => forYouFirst(arranged.fresh), [arranged]);
+  const seen = arranged.seen;
   const cards = useMemo(() => [...fresh, ...seen], [fresh, seen]);
 
   // ── The cursor ────────────────────────────────────────────────────────────
@@ -218,8 +221,9 @@ export function ThreadsView({ present, reading }: { present: boolean; reading: b
 
   // ── Header + chips ────────────────────────────────────────────────────────
   const viewUnread = counts[chip];
+  const anyUnread = cards.some((c) => c.unread > 0);
   const markAll = useCallback(() => markViewRead(cards, chip, teamId), [cards, chip, teamId]);
-  useShortcutAction("threads.markAllRead", here(() => { if (viewUnread === 0) return false; markAll(); return true; }));
+  useShortcutAction("threads.markAllRead", here(() => { if (!anyUnread) return false; markAll(); return true; }));
   const chipItems = useMemo(
     () => visibleChips(chatOn).map((c) => ({
       key: c.key,
@@ -258,7 +262,7 @@ export function ThreadsView({ present, reading }: { present: boolean; reading: b
     <ThreadsPageCtx.Provider value={ctx}>
       <div className="ch-shell">
         <div className="ch-main">
-          <ThreadsHeader unread={viewUnread} total={cards.length} onMarkAllRead={markAll} />
+          <ThreadsHeader unread={viewUnread} forYou={chip === "all"} anyUnread={anyUnread} total={cards.length} onMarkAllRead={markAll} />
 
           <div className="th-bar">
             <SegmentedToggle value={chip} onChange={setChip} items={chipItems} collapse />

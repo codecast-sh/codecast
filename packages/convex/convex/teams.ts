@@ -21,7 +21,7 @@ import {
 import { authorizeRoom, liveMembers } from "./callRooms";
 import { roomSeatClass, type SeatClass } from "./lib/callSeats";
 import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
-import { teamFeatureEnabled } from "@codecast/shared/contracts";
+import { DEFAULT_TEAM_FEATURES, teamFeatureEnabled } from "@codecast/shared/contracts";
 import { purgeChatMembership } from "./chat";
 import { decommissionAnchorRow } from "./anchors";
 import { readLocalViewRevision } from "./localFirstCommands";
@@ -281,6 +281,9 @@ export const createTeam = mutation({
       invite_code: inviteCode,
       invite_code_expires_at: now + sevenDaysInMs,
       client_key: args.client_key,
+      // A new team starts with every feature that is ready on (chat, calls,
+      // org, flows, ship); its admins turn off what they don't want.
+      features: { ...DEFAULT_TEAM_FEATURES },
       ...(discoverable_domain ? { discoverable_domain } : {}),
     });
     await recordAuthorityEvent(ctx, {
@@ -842,6 +845,12 @@ export const restoreTeam = internalMutation({
     const team = await ctx.db.get(args.team_id);
     if (!team) throw new Error("Team not found");
     if (!team.deleted_at) return { restored: false, members: 0 };
+    // A regulated team's permanent delete (regulatedDeletion.destroyTeam) is never undone.
+    const destroyed = await ctx.db
+      .query("data_deletions")
+      .withIndex("by_target", (q) => q.eq("kind", "team").eq("target_id", String(args.team_id)))
+      .first();
+    if (destroyed) throw new Error("This team's data was permanently deleted; it cannot be restored");
     let seated = 0;
     for (const m of team.deleted_members ?? []) {
       const user = await ctx.db.get(m.user_id);

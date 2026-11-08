@@ -1,3 +1,4 @@
+import { isVideoSrc, MEDIA_ORIGIN } from "@codecast/shared/contracts/castPlayer";
 import { ConvexReactClient } from "convex/react";
 import { countingWebSocket } from "./socketStats";
 import { STORE_SHOTS } from "./storeShots/flag";
@@ -20,6 +21,15 @@ export function isTrustedImageSrc(src: string): boolean {
   if (src.startsWith("data:")) return true;
   const m = /^(https?:\/\/[^/?#]+)(?:[/?#]|$)/i.exec(src);
   return !!m && m[1].toLowerCase() === CONVEX_ORIGIN;
+}
+
+/** A video a message may play without a tap to trust it: an upload in our own
+ *  storage or on our media host (`cast image clip.mp4`). */
+export function isTrustedVideoSrc(src: string): boolean {
+  if (!isVideoSrc(src)) return false;
+  const m = /^(https?:\/\/[^/?#]+)(?:[/?#]|$)/i.exec(src);
+  const origin = m?.[1].toLowerCase();
+  return origin === CONVEX_ORIGIN || origin === MEDIA_ORIGIN;
 }
 
 // Store shots mode (lib/storeShots/flag) swaps in an offline stub: the app
