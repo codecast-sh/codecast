@@ -105,6 +105,9 @@ export interface Config extends CloudSessionSyncSettings {
   codex_args?: string;
   agent_permission_modes?: AgentPermissionModes;
   agent_default_params?: AgentDefaultParams;
+  /** How the daemon runs Claude Code sessions: in a tmux pane (default) or
+   *  through the Agent SDK in a host process (claudeSdk/backend.ts). */
+  claude_backend?: "tmux" | "sdk";
 
   // Managed provider API keys (pl-207) live in their OWN 0600 file
   // (~/.codecast/provider-keys.json, see providerKeyStore.ts) — NOT here — because
