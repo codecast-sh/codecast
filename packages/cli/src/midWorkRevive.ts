@@ -1,10 +1,10 @@
 // Whether a session whose agent process died mid-work is brought back.
 //
 // The watchdog finds sessions whose status file went stale and whose process
-// is gone. For a session that had finished its turn that is the end: marking
-// it completed is right. For one that was still working, or waiting on its own
-// background work (a workflow, a background command, a monitor), the death was
-// an accident: a tmux server restart, a daemon restart, a crash. The work
+// is gone. For a session that had finished its turn and its work that is the
+// end: marking it completed is right. For one waiting on its own background
+// work (a workflow, a background command, a monitor), the death was an
+// accident: a tmux server restart, a daemon restart, a crash. The work
 // inside the process died with it, and before this nothing brought it back, so
 // the session sat "stopped" until a person noticed and typed "continue"
 // (jx7e4fy, 2026-10-03 and twice on 2026-10-05, eight hours each time).
@@ -20,19 +20,24 @@ import path from "node:path";
 import { MID_WORK_REVIVE_MESSAGE, reviveClientId } from "@codecast/shared/contracts";
 import { workflowRunLastActivity } from "./workflowRunLive.js";
 
-// The statuses that mean the turn was not over. "waiting" is the daemon's word
-// for a finished turn that still owns background work. A permission prompt
-// waits on a person. "dormant" waits on a machine: a trigger or a message
-// wakes it through delivery, which resumes a dead process anyway, but a wake
-// the session armed inside its own process (a background command, a Monitor)
-// died with it and never fires. The Implement hand of ct-59998 pinned dormant
-// on a background check and a Monitor, the machine restarted under it, and
-// its run sat waiting on a wake that no longer existed (2026-10-16). So a
-// dormant session is revived when its transcript still holds open background
-// work (ReviveFacts.wakeDiedWithProcess).
-export const REVIVABLE_STATUSES: ReadonlySet<string> = new Set(["working", "thinking", "compacting", "waiting"]);
+// The statuses this module revives: a session whose turn had ENDED but whose
+// work had not. A death mid-turn is the turn claim's (turnClaims.ts): the
+// claim says exactly which turns were open and counts their resumes. What is
+// left here is a finished turn that still owns work. "waiting" is the
+// daemon's word for a finished turn that still owns background work (a
+// workflow, a background command, a monitor). "dormant" waits on a machine: a
+// trigger or a message wakes it through delivery, which resumes a dead
+// process anyway, but a wake the session armed inside its own process (a
+// background command, a Monitor) died with it and never fires. The Implement
+// hand of ct-59998 pinned dormant on a background check and a Monitor, the
+// machine restarted under it, and its run sat waiting on a wake that no
+// longer existed (2026-10-16). So a dormant session is revived when its
+// transcript still holds open background work (ReviveFacts.wakeDiedWithProcess).
+export const REVIVABLE_STATUSES: ReadonlySet<string> = new Set(["waiting"]);
 // What the watchdog asks midWorkReviveDecision about, and keeps the status file of.
 export const REVIVE_CANDIDATE_STATUSES: ReadonlySet<string> = new Set([...REVIVABLE_STATUSES, "dormant"]);
+// Status files kept for the long TTL: the turn or its work was unfinished.
+const UNFINISHED_STATUSES: ReadonlySet<string> = new Set([...REVIVE_CANDIDATE_STATUSES, "working", "thinking", "compacting"]);
 
 // A session silent this long died on work nobody would expect to resume now;
 // the first pass after this ships must not wake sessions that died days ago.
@@ -92,7 +97,7 @@ export type ReviveLifecycle = {
 export const UNFINISHED_STATUS_FILE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 
 export function statusFileExpired(status: string | undefined, mtimeMs: number, now: number, finishedTtlMs: number): boolean {
-  const ttl = REVIVE_CANDIDATE_STATUSES.has(status ?? "") ? UNFINISHED_STATUS_FILE_TTL_MS : finishedTtlMs;
+  const ttl = UNFINISHED_STATUSES.has(status ?? "") ? UNFINISHED_STATUS_FILE_TTL_MS : finishedTtlMs;
   return now - mtimeMs > ttl;
 }
 

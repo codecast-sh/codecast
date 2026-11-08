@@ -45,7 +45,7 @@ import { raiseThreadToInteractiveQos } from "./threadQos.js";
 import { countingSemaphore } from "./semaphore.js";
 import { poolFile } from "./sim/pool.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
-import { applyPolicyInPlace, codexResumeParams, persistedPolicyFor, recoverCodexTurn, registerPolicyPersistenceHandlers, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
+import { MAX_CODEX_RECOVERY_ATTEMPTS, applyPolicyInPlace, codexResumeParams, persistedPolicyFor, recoverCodexTurn, registerPolicyPersistenceHandlers, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
 import { descendantRows, findOtherDaemonRows, isAgentCommand, killProcessTree, liveTmuxServerPid, parseProcessTable, reapTargets, restoreTmuxServerSocket, sameProcess, snapshotProcessTableAsync, staleTmuxServerKillPlan, terminalOfPath, type ProcRow } from "./processTable.js";
 import { ProcessLineage } from "./processLineage.js";
 import {
@@ -66,6 +66,7 @@ import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunL
 import { HibernationWorkScan, subagentFilesAccounted } from "./hibernationWork.js";
 import { governor, sampleLoad, describeLoad, readGovernorState, writeGovernorState, SAMPLE_INTERVAL_MS as GOVERNOR_SAMPLE_INTERVAL_MS } from "./loadGovernor.js";
 import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, isStationHandOpening, stationHandsFirst, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
+import { TurnClaimLedger, TurnClaimRecovery, type TurnClaim } from "./turnClaims.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE, wslDistroName } from "./windowsSupport.js";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
@@ -6439,7 +6440,10 @@ async function killConversationBackends(
     log(`[WORKTREE-GC] ${verdict.action}${"reason" in verdict ? `: ${verdict.reason}` : ""}`);
     // Its folder is gone, so an SDK session can no longer resume where it ran: a later Restart
     // finds its folder the way a tmux resume does.
-    if (verdict.action === "released" && teardown.killedSdk) await claudeSdkBackend?.stop(conversationId, { forget: true });
+    if (verdict.action === "released" && teardown.killedSdk) {
+      turnClaims().releaseConversation(conversationId);
+      await claudeSdkBackend?.stop(conversationId, { forget: true });
+    }
   }
 
   if (!result) result = sessionId ? "no_process" : "no_session";
@@ -7325,6 +7329,7 @@ async function executeRemoteCommand(
               break;
             } catch (err) {
               log(`[claude-sdk] host for ${conversationId.slice(0, 12)} did not start, starting tmux instead: ${err instanceof Error ? err.message : String(err)}`, "warn");
+              turnClaims().releaseConversation(conversationId);
               await claudeSdkBackend.stop(conversationId, { forget: true }).catch(() => {});
             }
           }
@@ -20444,7 +20449,7 @@ async function rehydratePersistedAppServerThreads(requestedConversations: Readon
           },
           start: (input) => server.turnStart(input),
         });
-        if (action === "exhausted") throw new Error("Codex could not continue after three recovery attempts. The saved conversation is intact; send a message to retry.");
+        if (action === "exhausted") throw new Error(`Codex could not continue after ${MAX_CODEX_RECOVERY_ATTEMPTS} recovery attempts. The saved conversation is intact; send a message to retry.`);
         if (action === "continue") {
           log(`[codex-app-server] recovered interrupted turn ${record.activeTurnId?.slice(0, 8)} for conv=${conversationId.slice(0, 12)}`);
           syncServiceRef?.setSessionError(conversationId, undefined, { force: true }).catch(logConvexFailure);
@@ -29350,8 +29355,14 @@ const REVIVE_LEDGER_FILE = process.env.NODE_ENV === "test"
 // runs first among those it may revive (midWorkRevive.stationHandsFirst), so
 // the per-pass cap never holds a run's hand behind interactive sessions.
 async function stationHandsFirstForRevive<T extends { sessionId: string; data: HookStatusData | null }>(files: T[], now: number): Promise<T[]> {
+  const stations = await stationHandSessions(files.filter((f) => REVIVE_CANDIDATE_STATUSES.has(f.data?.status ?? "")).map((f) => f.sessionId), now);
+  return stationHandsFirst(files, (f) => stations.has(f.sessionId));
+}
+
+// Which of these sessions are the hands of a workflow run's station, read from each transcript's opening.
+async function stationHandSessions(sessionIds: string[], now: number): Promise<Set<string>> {
   const stations = new Set<string>();
-  await runBounded(files.filter((f) => REVIVE_CANDIDATE_STATUSES.has(f.data?.status ?? "")), 8, async ({ sessionId }) => {
+  await runBounded(sessionIds, 8, async (sessionId) => {
     const transcript = findReapTranscript(sessionId, now);
     if (!transcript) return;
     const handle = await fs.promises.open(transcript.path, "r");
@@ -29363,7 +29374,97 @@ async function stationHandsFirstForRevive<T extends { sessionId: string; data: H
       await handle.close();
     }
   });
-  return stationHandsFirst(files, (f) => stations.has(f.sessionId));
+  return stations;
+}
+
+// Turn claims (turnClaims.ts, docs/architecture/turn-claims.md): which
+// sessions on this machine are mid-turn. The ledger survives a daemon restart
+// and a reboot; the recovery pass continues each claimed session whose agent
+// process is gone, once per attempt, and stops at the cap with a visible reason.
+// How long a mid-turn session must be silent before a process lookup that finds nothing is believed.
+const WATCHDOG_ACTIVE_STALE_MS = 30 * 60 * 1000;
+const TURN_CLAIMS_FILE = process.env.NODE_ENV === "test"
+  ? path.join(process.env.TMPDIR || "/tmp", `codecast-test-turn-claims-${process.pid}.json`)
+  : path.join(CONFIG_DIR, "turn-claims.json");
+let turnClaimLedger: TurnClaimLedger | null = null;
+function turnClaims(): TurnClaimLedger {
+  return turnClaimLedger ??= new TurnClaimLedger(TURN_CLAIMS_FILE);
+}
+let turnClaimRecovery: TurnClaimRecovery | null = null;
+
+function requestTurnClaimRecovery(): void {
+  if (isSyncPaused() || readDaemonState()?.authExpired) return;
+  void turnClaimRecovery?.request();
+}
+
+function forgetStatusFile(sessionId: string): void {
+  if (isSafeStatusSessionId(sessionId)) void fs.promises.unlink(path.join(AGENT_STATUS_DIR, `${sessionId}.json`)).catch(() => {});
+}
+
+function makeTurnClaimRecovery(syncService: SyncService): TurnClaimRecovery {
+  return new TurnClaimRecovery({
+    ledger: turnClaims(),
+    now: () => Date.now(),
+    log: (line) => log(line),
+    admit: (claim) => {
+      if (governor.admit("revive", claim.sessionId)) return true;
+      log(`[turn-claims] resume of ${claim.sessionId.slice(0, 8)} held: machine ${describeLoad()}`);
+      return false;
+    },
+    order: async (claims) => {
+      const stations = await stationHandSessions(claims.map((c) => c.sessionId), Date.now());
+      return stationHandsFirst(claims, (c) => stations.has(c.sessionId));
+    },
+    inspect: async ({ sessionId, conversationId, claimedAt }) => {
+      const now = Date.now();
+      const sdk = !!claudeSdkBackend?.owns(conversationId);
+      const statusAt = Math.max(claimedAt, (lastHookStatus.get(sessionId)?.ts ?? 0) * 1000);
+      const unknown = { ownedElsewhere: false, lifecycle: null, interruptedByUser: false, limitParked: false, lastLifeAt: statusAt };
+      // A pane's process lookup can miss a live agent, so it is believed only
+      // under the watchdog's rule: a sign of life older than the active
+      // staleness bound, or one from before this boot. Inside that bound the
+      // answer cannot be "exited", so nothing is probed or looked up.
+      if (!sdk && now - statusAt < WATCHDOG_ACTIVE_STALE_MS && statusAt >= MACHINE_BOOTED_AT) return { ...unknown, liveness: "unverifiable" as const };
+      const transcript = findReapTranscript(sessionId, now);
+      const lastLifeAt = Math.max(statusAt, transcript ? await lastSignOfLifeMs(transcript.path) : 0);
+      // An SDK host's pid is definitive.
+      const liveness = sdk
+        ? await claudeSdkBackend!.hostVerdict(conversationId)
+        : await staleSessionVerdictFromProbe(
+          { status: "working", ageMs: now - lastLifeAt, activeStaleMs: WATCHDOG_ACTIVE_STALE_MS, predatesBoot: lastLifeAt < MACHINE_BOOTED_AT },
+          () => findSessionProcess(sessionId, detectSessionAgentType(sessionId)),
+        );
+      if (!authorizesTeardown(liveness)) return { ...unknown, liveness, lastLifeAt };
+      const [ownedElsewhere, lifecycle] = await Promise.all([
+        syncService.getConversationOwnerInfo(conversationId).then((info) => ownedByAnotherDevice(info), () => null),
+        syncService.getConversationLifecycle(conversationId, sessionId).catch(() => null),
+      ]);
+      let tail = "";
+      try { if (transcript) tail = readFileTailSync(transcript.path); } catch {}
+      return {
+        liveness,
+        ownedElsewhere,
+        lifecycle,
+        interruptedByUser: !!tail && transcriptTailEndsInterrupted(tail),
+        limitParked: !!tail && jsonlTailEndsWithLimitBanner(tail),
+        lastLifeAt,
+      };
+    },
+    resume: (claim) => syncService.enqueueUserMessage(claim.conversationId, REVIVE_MESSAGE, reviveClientId(claim.conversationId, Date.now())),
+    settle: (claim: TurnClaim, reason) => {
+      forgetStatusFile(claim.sessionId);
+      // A moved session runs elsewhere, and an SDK host reported its own stop.
+      if (reason === "moved" || claudeSdkBackend?.owns(claim.conversationId)) return;
+      log(`[COMPLETE] turn claim of ${claim.sessionId.slice(0, 8)} conv=${claim.conversationId.slice(0, 12)} released (${reason}), marking completed`);
+      syncService.markSessionCompleted(claim.conversationId).catch(logConvexFailure);
+      sendAgentStatus(syncService, claim.conversationId, claim.sessionId, "stopped");
+    },
+    fail: (claim, message) => {
+      forgetStatusFile(claim.sessionId);
+      syncService.setSessionError(claim.conversationId, message).catch(logConvexFailure);
+      sendAgentStatus(syncService, claim.conversationId, claim.sessionId, "stopped");
+    },
+  });
 }
 
 // One revive attempt for a session the watchdog found dead mid-work: queue the
@@ -29489,7 +29590,7 @@ function startWatchdog(
     // Mark stale agent-status files as completed (session ended without SessionEnd hook)
     try {
       const IDLE_STALE_MS = 10 * 60 * 1000;
-      const ACTIVE_STALE_MS = 30 * 60 * 1000;
+      const ACTIVE_STALE_MS = WATCHDOG_ACTIVE_STALE_MS;
       let revivesThisPass = 0;
       for (const { sessionId, filePath, data } of await stationHandsFirstForRevive(await readAgentStatusFiles(), now)) {
         try {
@@ -29502,6 +29603,12 @@ function startWatchdog(
           if (ageMs < threshold && !predatesBoot) continue;
           const convId = deps.conversationCache[sessionId];
           if (!convId) { await fs.promises.unlink(filePath).catch(() => {}); continue; }
+          // A turn that was still open is the turn claim's to settle or resume
+          // (turnClaims.ts). A status from before the ledger existed opens it.
+          if (MID_TURN_AGENT_STATUSES.has(data.status ?? "")) {
+            if (!turnClaims().get(sessionId)) turnClaims().open(sessionId, convId, data.ts * 1000);
+            continue;
+          }
           // An SDK session's Claude has no tty for the process lookup below to find, and its host
           // says itself when it is gone: idle there is a person not typing, not an exit. Matched by
           // conversation, so a session id left behind by a /clear is skipped too.
@@ -29550,6 +29657,7 @@ function startWatchdog(
     } catch (err) {
       log(`Watchdog: status sweep failed: ${err instanceof Error ? err.message : String(err)}`, "warn");
     }
+    await turnClaimRecovery?.request();
 
     // Tier 3 warm pool (opt-in): after stale files are reaped above, re-warm the most
     // recently-active sessions whose agent has died so a follow-up skips the cold boot.
@@ -30847,7 +30955,7 @@ async function main(): Promise<void> {
   // could not push while the handler was down, and the single-status files
   // below hold only the newest of them, so replaying history then latest is
   // the order the ts guards expect (ct-49531).
-  void drainAllStatusSpools<HookStatusData>(AGENT_STATUS_DIR).then((spooled) => {
+  const statusReplayed = drainAllStatusSpools<HookStatusData>(AGENT_STATUS_DIR).then((spooled) => {
     for (const { sessionId, records } of spooled) {
       for (const data of records) handleStatusData(sessionId, data);
     }
@@ -31035,6 +31143,8 @@ async function main(): Promise<void> {
         data = { ...data, permission_mode: prev.permission_mode };
       }
       lastHookStatus.set(sessionId, data);
+      // The turn claim: opened by the turn's first mid-turn status, released by its end (turnClaims.ts).
+      turnClaims().apply(sessionId, convId, data.status, { sessionBoundary: !!data.session_boundary, at: data.ts * 1000 });
 
       if (data.status === "compacting" || data.status === "thinking" || data.status === "stopped") {
         const existingTimer = idleTimers.get(sessionId);
@@ -31521,11 +31631,13 @@ async function main(): Promise<void> {
       }
     },
     stopped: (convId, sessionId, reason, abandonedCards = []) => {
-      log(`[claude-sdk] session ${shortId(sessionId)} stopped (${reason}); the next message resumes it`);
+      log(`[claude-sdk] session ${shortId(sessionId)} stopped (${reason}); ${turnClaims().get(sessionId) ? "it was mid-turn, so the turn claim pass continues it" : "the next message resumes it"}`);
       for (const id of abandonedCards) syncService.cancelPermissionRequest(id).catch(() => {});
       permissionHookWaiters.releaseSession(sessionId);
       stopManagedSessionHeartbeat(sessionId);
       sendAgentStatus(syncService, convId, sessionId, "stopped");
+      // A host that died mid-turn holds its claim; the pass continues it.
+      if (turnClaims().get(sessionId)) requestTurnClaimRecovery();
     },
     tooOld: (convId, sessionId, version, minimum) => {
       const message = `Claude Code ${version ?? "(unknown)"} is older than ${minimum}, which the SDK backend needs. Update Claude Code (claude update); the next message runs this session in tmux.`;
@@ -31533,7 +31645,7 @@ async function main(): Promise<void> {
       sendAgentStatus(syncService, convId, sessionId, "stopped");
     },
   });
-  void claudeSdkBackend.reattachAll().then((convs) => {
+  const sdkReattached = claudeSdkBackend.reattachAll().then((convs) => {
     for (const conv of convs) {
       const sid = claudeSdkBackend?.sessionFor(conv);
       if (!sid) continue;
@@ -31903,6 +32015,13 @@ async function main(): Promise<void> {
     logError("Startup scan failed", err instanceof Error ? err : new Error(String(err)));
   });
 
+  turnClaimRecovery = makeTurnClaimRecovery(syncService);
+  // The first pass waits for what the previous daemon left on disk: the
+  // statuses hooks spooled while it was down open or release claims, and a
+  // reattached SDK host says itself that it is alive.
+  void Promise.allSettled([statusReplayed, sdkReattached]).then(() => {
+    setTimeout(requestTurnClaimRecovery, 15_000).unref?.();
+  });
   const watchdogInterval = startWatchdog({ ...transcriptDeps, watcher });
 
   const versionCheckInterval = startVersionChecker(syncService);
