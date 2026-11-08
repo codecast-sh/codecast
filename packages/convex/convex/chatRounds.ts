@@ -222,6 +222,7 @@ async function wakeMember(
     .filter((m): m is RoundMember => !!m)
     .map(label);
   const where = `#${opts.channel.name}`;
+  const nonce = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
   const body = buildRoundWake({
     channelName: opts.channel.name,
     channelKind: opts.channel.kind,
@@ -231,15 +232,16 @@ async function wakeMember(
     threadRootId: root._id,
     entries,
     channelEntries,
-    nonce: crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+    nonce,
     done,
     after,
   });
   try {
     return await enqueuePendingMessage(ctx, opts.conversation, root.user_id, {
       content: `<chat-mention channel="${where.replace(/"/g, "'")}" thread="${root._id}" from="round">\n${body}\n</chat-mention>`,
-      // One wake per grant: a restarted lap reuses lap and turn numbers.
-      client_id: `chat-round:${root._id}:${opts.member.key}:${Date.now()}`,
+      // One wake per grant. Neither lap and turn numbers (a restarted lap reuses them) nor the
+      // clock (two grants to one member can land in the same millisecond) tell grants apart.
+      client_id: `chat-round:${root._id}:${opts.member.key}:${nonce}`,
       human: opts.round.by_person,
     });
   } catch {

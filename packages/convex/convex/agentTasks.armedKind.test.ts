@@ -31,11 +31,14 @@ describe("armedTriggerKindFor", () => {
     expect(armedTriggerKindFor([task({ originating_conversation_id: undefined })])).toBe("none");
     expect(armedTriggerKindFor([task({ last_run_failed: true })])).toBe("none");
     expect(armedTriggerKindFor([task({ last_run_needs_attention: true })])).toBe("none");
+    // Paused fires nothing until a person resumes it, so it parks nothing.
+    expect(armedTriggerKindFor([task({ status: "paused" })])).toBe("none");
+    expect(armedTriggerKindFor([task({ schedule_type: "recurring", status: "paused" })])).toBe("none");
   });
 
   test("once for an armed once trigger; standing for recurring / event, and standing wins", () => {
     expect(armedTriggerKindFor([task({})])).toBe("once");
-    expect(armedTriggerKindFor([task({ status: "paused" })])).toBe("once");
+    expect(armedTriggerKindFor([task({ status: "paused" }), task({})])).toBe("once");
     expect(armedTriggerKindFor([task({ schedule_type: "recurring", interval_ms: 1000 })])).toBe("standing");
     expect(armedTriggerKindFor([task({ schedule_type: "event", status: "running" })])).toBe("standing");
     expect(armedTriggerKindFor([task({}), task({ schedule_type: "recurring" }), task({ status: "failed" })])).toBe("standing");
@@ -216,6 +219,7 @@ describe("every agent_tasks writer restamps the home (exhaustive)", () => {
       "args.task_id",       // created_by backlink repair + display summary (inert fields)
       "conv._id",           // conversation rows: agent_task_id backlink / un-stash
       "conversationId",     // refreshArmedTriggerKind's own conversation stamp
+      "existing._id",       // notifyRunAttention re-arms an unread notifications row (not a task row)
       "prev._id",           // superseded run fold (conversation row)
       "runConv._id",        // run conversation fold (conversation row)
       "t._id",              // adminBackfillCreatedBy (inert field)

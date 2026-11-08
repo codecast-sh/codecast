@@ -7,10 +7,8 @@ const joins = [];
 const routes = [];
 const alerts = [];
 let occupied = false;
-mock.module("react-native", () => ({
-  TouchableOpacity: "button", StyleSheet: { create: (styles) => styles },
-  Alert: { alert: (...args) => alerts.push(args) },
-}));
+mock.module("react-native", () => ({ TouchableOpacity: "button", StyleSheet: { create: (styles) => styles } }));
+mock.module("@/lib/popups", () => ({ appAlert: (...args) => alerts.push(args) }));
 mock.module("expo-router", () => ({ useRouter: () => ({ push: (route) => routes.push(route) }) }));
 mock.module("expo-haptics", () => ({ ImpactFeedbackStyle: { Medium: "medium" }, impactAsync: async () => {} }));
 mock.module("@expo/vector-icons", () => ({ Ionicons: "icon" }));

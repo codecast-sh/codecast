@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import {
@@ -4023,6 +4023,25 @@ describe("roles and sessions inside a room (C5)", () => {
     expect(follow.round).toEqual({ opened: true, floor: "jx7alic", queued: 1 });
     expect(waking(ctx)).toEqual(["conv-alice"]);
     expect(pending(ctx).at(-1).content).toContain("and the docs?");
+  });
+
+  test("a second grant to the same member in the same millisecond still wakes it", async () => {
+    // A fast run grants Alice's first floor and her follow-up floor inside one tick:
+    // the second wake must not collapse onto the first, already-read one.
+    setSystemTime(new Date("2026-11-08T12:00:00Z"));
+    try {
+      const ctx = context(ALICE, seed());
+      await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["jx7alic", "jx7bobb"] });
+      const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "what's left?" });
+      read(ctx);
+      await onRoundTurnEnded(ctx, "conv-alice" as any);
+      read(ctx);
+      await onRoundTurnEnded(ctx, "conv-bob" as any);
+      await call(sendMessage, ctx, { channel_id: CHANNEL, thread_root_id: sent.message_id, content: "and the docs?" });
+      expect(waking(ctx)).toEqual(["conv-alice"]);
+    } finally {
+      setSystemTime();
+    }
   });
 
   test("naming members asks only them; a reply can hand the floor on", async () => {

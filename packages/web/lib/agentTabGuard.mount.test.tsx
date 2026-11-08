@@ -8,6 +8,7 @@ import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../test-helpers/globals";
 import { closeDomWindow } from "../test-helpers/domGlobals";
 import { APPROVE_FOR_SESSION, DENY } from "@codecast/shared/contracts/secrets";
+import { RUN_OPTIONS } from "@codecast/shared/contracts/commandRun";
 import { getFunctionName } from "convex/server";
 import { ConvexProvider } from "convex/react";
 import { AGENT_TAB_EVENT, AGENT_TAB_KEY } from "./desktopHandoff";
@@ -56,8 +57,8 @@ describe("heldOption", () => {
     expect(heldOption(approval, 0, false)).toBeUndefined();
     expect(heldOption({ ...approval, category: "product" }, 0, true)).toBeUndefined();
   });
-  test("holds a --run card's Run in an agent's tab, never its Don't run", () => {
-    const run = { category: "billing", run: { argv: ["role", "authority", "@ads"], state: "waiting" }, options: [{ label: "Run" }, { label: "Don't run" }] };
+  test("holds a --run card's Yes in an agent's tab, never its No", () => {
+    const run = { category: "billing", run: { argv: ["role", "authority", "@ads"], state: "waiting" }, options: RUN_OPTIONS };
     expect(heldOption(run, 0, true)).toBe(PERSON_ONLY.approve);
     expect(heldOption(run, 1, true)).toBeUndefined();
     expect(heldOption(run, 0, false)).toBeUndefined();
