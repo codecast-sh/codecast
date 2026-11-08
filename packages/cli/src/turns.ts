@@ -20,7 +20,8 @@ export interface TurnSnapshotRow {
   changed_paths: string[];
   changed_count: number;
   dirty: boolean;
-  source: "turn" | "sweep";
+  /** prompt: the tree when a prompt was submitted, a rewind's boundary rather than a turn. */
+  source: "turn" | "sweep" | "prompt";
   taken_at: number;
   turn_completed_at?: number;
   took_ms?: number;
