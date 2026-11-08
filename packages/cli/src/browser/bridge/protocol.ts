@@ -36,8 +36,11 @@ import { BROWSER_EXTENSION_ID, BROWSER_EXTENSION_STORE_URL } from "@codecast/sha
  * Bumped when a message shape changes incompatibly. Both ends report theirs.
  * 3: tabs.create takes `background` and `group`; tabs carry `group`.
  * 4: the extension face authenticates both ways (see bridgeProof).
+ * 5: events carry `session` for iframe child sessions; the extension
+ *    auto-attaches iframes only when the host's welcome says 5 or higher.
+ *    The host still accepts protocol-4 extensions (no frames from them).
  */
-export const BRIDGE_PROTOCOL = 4;
+export const BRIDGE_PROTOCOL = 5;
 
 /** Default loopback port for the bridge host. Override: CAST_BRIDGE_PORT. */
 export const BRIDGE_DEFAULT_PORT = 41729;
@@ -63,11 +66,17 @@ export function extensionIdOfKey(keyBase64: string): string {
 }
 
 /**
- * The options page with the pairing data in the fragment. The page saves it
- * and connects; a fragment never reaches a server and is cleared on arrival.
+ * The options page with a one-time pairing code (pairing.ts) in the
+ * fragment. The page offers it for one click and the worker exchanges it for
+ * the profile's own key. A fragment never reaches a server and is cleared on
+ * arrival; and the code works once and expires in ten minutes, so the copy
+ * Chrome keeps in its history opens nothing.
  */
-export function bridgePairingUrl(state: { token: string; port: number }): string {
-  return `chrome-extension://${BRIDGE_EXTENSION_ID}/options.html#${new URLSearchParams({ token: state.token, port: String(state.port) })}`;
+export function bridgePairingUrl(pairing: { code: string; port: number; legacyToken?: string }): string {
+  // `legacyToken` is for the Chrome Web Store's 0.1.5, which reads only token+port here; a build that reads codes pairs with the code and never reads it.
+  // Remove once no connecting extension is below the version that reads codes.
+  const frag = new URLSearchParams({ code: pairing.code, ...(pairing.legacyToken ? { token: pairing.legacyToken } : {}), port: String(pairing.port) });
+  return `chrome-extension://${BRIDGE_EXTENSION_ID}/options.html#${frag}`;
 }
 
 /**
@@ -221,6 +230,8 @@ export interface BridgeRequest {
   group?: BridgeGroup;
   method?: string;
   params?: Record<string, unknown>;
+  /** cdp: Chrome's id of a child session (a cross-origin iframe) on the tab; absent for the tab's own. */
+  sessionId?: string;
 }
 
 /** Extension → host reply. Extra result fields ride on the top level. */
@@ -249,12 +260,14 @@ export type BridgeEventMsg =
   | { op: "pong" }
   /** The worker's own keepalive; the host answers pong. */
   | { op: "ping" }
-  /** A chrome.debugger event on an attached tab. */
-  | { op: "event"; tabId: number; method: string; params: Record<string, unknown> }
+  /** A chrome.debugger event on an attached tab; `session` names the child session (cross-origin iframe) it came from. */
+  | { op: "event"; tabId: number; session?: string; method: string; params: Record<string, unknown> }
   /** Chrome's tab list changed (any tab, driven or not). */
   | { op: "tab"; kind: "created" | "removed" | "updated"; tab: BridgeTab }
-  /** The debugger left a tab without us asking — the user hit Cancel on the banner. */
-  | { op: "detached"; tabId: number };
+  /** The debugger left a tab without us asking: the user hit Cancel on the banner,
+   *  or (`reason: "reclaimed"`) took the tab back from the toolbar, after which no
+   *  session keeps a grant on it. */
+  | { op: "detached"; tabId: number; reason?: "reclaimed" };
 
 export interface BridgeTab {
   tabId: number;
@@ -267,7 +280,37 @@ export interface BridgeTab {
   owned?: boolean;
   /** The tab's group with its plain title (never the animated one), absent when ungrouped. */
   group?: BridgeGroup;
+  /** The human lent this tab of theirs to agents from the toolbar; it is `owned` while lent. */
+  lent?: boolean;
+  /** An agent tab whose page opened this one (window.open, target=_blank): every session holding the opener may see it. */
+  opener?: number;
+  /** A step an agent handed the human on this tab (`cast browser handoff`) and where it stands. */
+  handoff?: BridgeHandoff;
+  /** Why no idle cleanup or reaper may close this tab, when one applies. */
+  keep?: BridgeKeepReason;
+  /** The Chrome profile it lives in (links.ts id). Set by the host, never sent by the extension. */
+  profile?: string;
 }
+
+export type BridgeHandoffState = "waiting" | "done" | "expired" | "cancelled";
+export interface BridgeHandoff {
+  id: string;
+  state: BridgeHandoffState;
+}
+
+/**
+ * Tabs the extension's idle cleanup and the CLI's reaper (engineReap.ts) both
+ * leave open: a handoff waiting on the human, a tab the human lent, pinned,
+ * or dragged out of the Cast group, and a tab playing sound.
+ */
+export type BridgeKeepReason = "handoff" | "lent" | "pinned" | "claimed" | "audible";
+
+/**
+ * Methods the extension answers itself on a tab's CDP session, never passed
+ * to Chrome. `Cast.handoff {text, id?, timeoutMs?, raise?}` shows the handoff
+ * card and answers `{id, state, shown, expires}`; `{cancel: true}` takes it down.
+ */
+export const CAST_HANDOFF_METHOD = "Cast.handoff";
 
 // ---------------------------------------------------------------------------
 // Tab id ⇄ CDP target id
