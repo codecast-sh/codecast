@@ -521,4 +521,15 @@ describe("a run's notification opens the run", () => {
     expect(tables.agent_tasks[0].status).toBe("failed");
   });
 
+  test("a failure before a run exists opens the trigger history", async () => {
+    const { ctx, tables } = await world({
+      created_by_conversation_id: undefined, retry_count: 3,
+    }, { users: [{ _id: USER }], notifications: [], conversations: [] });
+    await fail(ctx, { error: "Runner could not start", run_session_uuid: undefined });
+    expect(tables.notifications).toHaveLength(1);
+    expect(tables.notifications[0]).toMatchObject({
+      type: "task_failed", link: "https://codecast.sh/triggers/agent_tasks_owned",
+    });
+  });
+
 });

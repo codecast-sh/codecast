@@ -9,6 +9,7 @@ import { ConversationDiffLayout } from "../../../../components/ConversationDiffL
 import type { ConversationData } from "../../../../components/conversation/types";
 import { useConversationMessages } from "../../../../hooks/useConversationMessages";
 import { useDiffViewerStore } from "../../../../store/diffViewerStore";
+import { ConversationSharePopover } from "../../../../components/ConversationSharePopover";
 
 export default function ConversationDiffPage() {
   const params = useParams();
@@ -48,7 +49,7 @@ export default function ConversationDiffPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <ConversationDiffLayout conversation={conversation as ConversationData} embedded />
+        <ConversationDiffLayout conversation={conversation as ConversationData} embedded headerExtra={<ConversationSharePopover conversation={conversation as any} canManage={(conversation as any).is_own !== false} />} />
       </DashboardLayout>
     </AuthGuard>
   );

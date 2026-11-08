@@ -19,6 +19,7 @@ import { ActivityHeatmap } from "../../../components/ActivityHeatmap";
 import { TimelineCharts, fmtK, fmtDayLabel, type PunchRow } from "../../../components/ActivityCharts";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DocDates } from "../../../components/DocDates";
+import { ShareControl } from "../../../components/ShareControl";
 
 export default function UserProfilePage() {
   return (
@@ -197,6 +198,7 @@ function UserProfileContent() {
             </div>
           )}
         </div>
+        <ShareControl label="person" path={`/team/${profileUser.github_username || profileUser._id}`} />
       </div>
 
       {/* Activity heatmap -- derived from feed data */}

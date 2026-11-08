@@ -337,12 +337,12 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     // dot the phone lights is the dot the desktop shows.
     const markUnread = () => useInboxStore.getState().markSessionUnread(session._id);
     showActionSheet(sessionTitle(session), [
-      { label: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
-      { label: favoriteLabel, onPress: toggleFavorite },
-      { label: 'Mark unread', onPress: markUnread },
-      { label: 'Label…', onPress: () => openLabelPicker(session) },
-      { label: 'Stash', onPress: () => handleStash(session._id) },
-      { label: 'Kill session', destructive: true, onPress: () => holdKill(session._id) },
+      { label: session.is_pinned ? 'Unpin' : 'Pin', icon: 'map-pin', onPress: () => handlePin(session._id) },
+      { label: favoriteLabel, icon: 'star', onPress: toggleFavorite },
+      { label: 'Mark unread', icon: 'circle', onPress: markUnread },
+      { label: 'Label…', icon: 'tag', onPress: () => openLabelPicker(session) },
+      { label: 'Stash', icon: 'archive', onPress: () => handleStash(session._id) },
+      { label: 'Kill session', icon: 'x-octagon', destructive: true, onPress: () => holdKill(session._id) },
     ]);
   }, [handlePin, handleStash, openLabelPicker]);
 

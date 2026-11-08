@@ -73,6 +73,9 @@ import { SessionActionsSheet, type SessionRow, type SessionTile } from '@/compon
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { ApprovalCard, ApprovalPending, ApprovalSettled } from '@/components/hosted/ApprovalCard';
 import { DecisionCard } from '@/components/decisions/DecisionCard';
+import { PermissionRecordLine } from '@/components/decisions/PermissionRecord';
+import { permissionRecord } from '@codecast/shared/contracts/commandRun';
+import { useRunningPermission } from '@codecast/web/hooks/useRunningPermission';
 import { ProposalBatchContext } from '@/components/org/ProposalCard';
 import { usePendingDecisionItems } from '@codecast/web/hooks/useDecisionQueue';
 import { attachReviewToMessage } from '@codecast/web/lib/reviewActions';
@@ -2266,6 +2269,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     const items: SheetItem[] = [
       {
         label: 'Copy text',
+        icon: 'copy',
         onPress: () => {
           Clipboard.setString(messageText);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -2274,17 +2278,19 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       },
       {
         label: 'Copy link',
+        icon: 'link',
         onPress: () => {
           Clipboard.setString(`https://codecast.sh/conversation/${conversationId}#msg-${message._id}`);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           showToast?.('Link copied');
         },
       },
-      { label: 'Share message', onPress: () => { void Share.share({ message: messageText }); } },
+      { label: 'Share message', icon: 'share', onPress: () => { void Share.share({ message: messageText }); } },
     ];
     if (canBookmark) {
       items.push({
         label: isBookmarked ? 'Remove bookmark' : 'Bookmark',
+        icon: 'bookmark',
         onPress: () => {
           // Store action: the list flips now and the toggle rides the outbox.
           useInboxStore.getState().toggleBookmark(conversationId as string, message._id);
@@ -2295,7 +2301,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     }
     if (canFork && message.message_uuid) {
       const uuid = message.message_uuid;
-      items.push({ label: 'Fork from here', onPress: () => onFork!(uuid) });
+      items.push({ label: 'Fork from here', icon: 'git-branch', onPress: () => onFork!(uuid) });
     }
     showActionSheet(undefined, items);
   };
@@ -3225,6 +3231,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const approvals = useConversationApprovals(String(conversation?._id ?? id));
   // A `cast decide` this session waits on docks above the composer, as on the web (SessionDecisionCard).
   const pendingDecisions = usePendingDecisionItems(conversation?._id ? String(conversation._id) : null);
+  // A permission ask said yes to and still running holds the card's place.
+  const runningPermission = useRunningPermission(conversation?._id ? String(conversation._id) : undefined);
   // Where a proposal card's answers collect: this conversation's send, for its owner.
   const proposalBatch = useMemo(() => ({
     conversationId: String(id),
@@ -3641,6 +3649,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const items: SheetItem[] = [
       {
         label: 'Private',
+        icon: 'lock',
         selected: isPrivate,
         // Local-first: optimistically flips is_private on the store row so
         // re-opening the share sheet immediately reflects 'private'.
@@ -3651,11 +3660,13 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       items.push(
         {
           label: 'Team sees the summary',
+          icon: 'users',
           selected: !isPrivate && vis === 'summary',
           onPress: attempt(() => { setTeamVisibility(convId, 'summary'); showToast('Sharing summary with team'); }),
         },
         {
           label: 'Team sees everything',
+          icon: 'eye',
           selected: !isPrivate && vis === 'full',
           onPress: attempt(() => { setTeamVisibility(convId, 'full'); showToast('Sharing full conversation with team'); }),
         },
@@ -3663,6 +3674,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     }
     items.push({
       label: 'Copy share link',
+      icon: 'link',
       onPress: attempt(async () => {
         const token = conversation.share_token ?? await generateShareLink({ conversation_id: convId });
         if (!token) return;
@@ -3672,7 +3684,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     });
     if (conversation.share_token) {
       const url = conversationShareLink(conversation.share_token);
-      items.push({ label: 'Share link via…', onPress: attempt(async () => { await Share.share({ message: url, url }); }) });
+      items.push({ label: 'Share link via…', icon: 'share', onPress: attempt(async () => { await Share.share({ message: url, url }); }) });
     }
     showActionSheet('Sharing', items);
   }, [conversation, id, generateShareLink, setPrivacy, setTeamVisibility, showToast]);
@@ -4551,6 +4563,13 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         return <PlanBlock content={kind.planContent} timestamp={item.timestamp} />;
     }
 
+    // A permission ask's answer is its one-line record, not a bubble. The
+    // answer lands once the step is over, so its record is final.
+    if (kind?.kind === 'decision_answer' && !hosted) {
+      const record = permissionRecord(kind.decision, (useInboxStore.getState().sessionDecisions as Record<string, any>)[kind.decision.id ?? '']?.run);
+      if (record) return <PermissionRecordLine {...record} />;
+    }
+
     // A person's direct send (<user-message from="Name">) is that person's
     // own bubble: the body unwrapped and the sender named. A joint turn names
     // each author over their words; a decision answer quotes its question.
@@ -5141,6 +5160,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             keyboard open the send button sat inside it and the overlay won. */}
         {!hosted && pendingDecisions[0]?.decisionId ? (
           <DecisionCard key={pendingDecisions[0].decisionId} decisionRef={pendingDecisions[0].decisionId} docked />
+        ) : !hosted && runningPermission ? (
+          <RNView style={{ marginHorizontal: 12 }}><PermissionRecordLine question={runningPermission.question} outcome="running" /></RNView>
         ) : null}
         <RNView style={styles.composerLayer}>
           <MessageInput

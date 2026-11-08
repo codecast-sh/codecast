@@ -493,9 +493,9 @@
         "questions": 1,
         "pinned": 3,
         "new": 2,
-        "needs_input": 22,
+        "needs_input": 23,
         "done": 5,
-        "dormant": 7,
+        "dormant": 6,
         "working": 4,
         "idle": 0,
         "snoozed": 1,
@@ -518,7 +518,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "15abc6037e5c2765",
+    "set_digest": "1eb636f462b06964",
     "placements": {
       "anchorblockedz130000000000000000": [
         "needs_input",
@@ -612,12 +612,12 @@
       ],
       "hibernatedstashedz17000000000000": [
         "stashed",
-        "dormant",
+        "needs_input",
         false
       ],
       "hibernatedz100000000000000000000": [
-        "dormant",
-        "dormant",
+        "needs_input",
+        "needs_input",
         false
       ],
       "killedpinnedz1200000000000000000": [
@@ -826,7 +826,6 @@
         "deadafterdonez130000000000000000"
       ],
       "dormant": [
-        "hibernatedz100000000000000000000",
         "userdormantz11000000000000000000",
         "loopfreshz9000000000000000000000",
         "oncehomedonez1200000000000000000",
@@ -855,6 +854,7 @@
         "completedcontentz160000000000000",
         "forkchildz9000000000000000000000",
         "hibernatedaskz130000000000000000",
+        "hibernatedz100000000000000000000",
         "unresponsivenotidlez190000000000",
         "snoozeduez9000000000000000000000"
       ],
