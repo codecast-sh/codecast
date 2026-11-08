@@ -27,7 +27,7 @@ const HEADLINE: Record<HostWake["stage"], string> = {
   no_waker: "Asleep, can't wake",
 };
 
-export function wakeColor(w: HostWake): string {
+function wakeColor(w: HostWake): string {
   if (w.stage === "failed") return "var(--sol-red)";
   if (w.stage === "no_waker") return "var(--sol-yellow)";
   if (w.stage === "asleep") return "var(--sol-text-dim)";
