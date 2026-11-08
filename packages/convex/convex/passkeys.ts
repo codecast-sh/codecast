@@ -41,6 +41,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { consumePresence, grantChallengeId, grantString } from "./lib/presence";
 import { pendingApproval } from "./lib/secretApprovals";
+import { runPresenceLabel } from "./lib/commandRuns";
 import { heldKeysFor } from "./lib/accessKeys";
 import { sha256Hex } from "./lib/hash";
 import { passkeyOrigins, siteUrl } from "./lib/siteUrl";
@@ -174,12 +175,17 @@ async function presenceSubject(ctx: any, userId: Id<"users">, action: PresenceAc
     return row && (await heldKeysFor(ctx, userId)).has(row.workspace) ? { label: row.name } : missing;
   }
   if (action === "approve") {
-    // Only an Ask first read's decision takes it, and its label is the Vault's own words: the asking agent may edit its question.
+    // An Ask first read's decision or a run card takes it. Its label is the Vault's words or the command, never the question the asking agent may edit.
     const id = ctx.db.normalizeId("session_decisions", target);
     const row = id ? await ctx.db.get(id) : null;
-    if (!row || String(row.user_id) !== String(userId)) return missing;
+    if (!row) return missing;
+    if (row.run) {
+      const label = await runPresenceLabel(ctx, row, userId);
+      return label ? { label } : missing;
+    }
+    if (String(row.user_id) !== String(userId)) return missing;
     const approval = await pendingApproval(ctx, row._id);
-    if (!approval) return { error: "Only approving an Ask first read takes Touch ID" };
+    if (!approval) return { error: "Only an Ask first read or a Run card takes Touch ID" };
     const [secret, conversation] = await Promise.all([ctx.db.get(approval.secret_id), ctx.db.get(approval.conversation_id)]);
     return secret && conversation ? { label: `${secret.name} for ${conversation.short_id ?? "a session"}` } : missing;
   }

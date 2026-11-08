@@ -5,7 +5,7 @@
 // sessionDecisions calls in and hands over its delivery, so this file never
 // imports that module graph.
 
-import { RUN_OPTION, approvesCommandRun, clipRunOutput, runResultText, type CommandRun } from "@codecast/shared/contracts/commandRun";
+import { RUN_OPTION, approvesCommandRun, clipRunOutput, commandLine, runResultText, type CommandRun } from "@codecast/shared/contracts/commandRun";
 import { decisionAnswerClientId, parseDecisionAnswer } from "@codecast/shared/contracts/decisionAnswers";
 import type { Doc, Id } from "../_generated/dataModel";
 import { consumePresence, presenceRefusal } from "./presence";
@@ -39,6 +39,12 @@ export async function commandRunRefusal(ctx: Ctx, row: Row, by: By, verdict?: Ve
   if (by.kind !== "user" || !by.signed_in) return `${RUN_OPTION} runs a command in your name: press it on the web or the phone, where you are signed in`;
   if (!(await mayRun(ctx, await ctx.db.get(row.conversation_id), by.user_id))) return `Only the person whose session asked can press ${RUN_OPTION}`;
   return await presenceRefusal(ctx, by.user_id!, "approve", String(row._id), by.presence);
+}
+
+/** What Touch ID confirms for pressing Run on `row`: the command itself, when the run still waits and `userId` may press it; else null. */
+export async function runPresenceLabel(ctx: Ctx, row: Row, userId: Id<"users">): Promise<string | null> {
+  if (row.run?.state !== "waiting") return null;
+  return (await mayRun(ctx, await ctx.db.get(row.conversation_id), userId)) ? commandLine(row.run.argv) : null;
 }
 
 /**
