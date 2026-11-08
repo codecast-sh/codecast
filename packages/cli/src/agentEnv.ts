@@ -28,6 +28,28 @@ export const AGENT_SCRUBBED_ENV_VARS = [
   "CLAUDE_CODE_SESSION_ID",
 ] as const;
 
+// How the daemon is told to prefer the SDK backend for Claude sessions
+// (claudeSdk/select.ts). A person's setting for the daemon, never set inside a session.
+export const SDK_BACKEND_ENV = "CODECAST_CLAUDE_BACKEND";
+
+// Set in a Claude SDK session's environment (claudeSdk/options.ts). The status
+// hook reads it and stands down there: the host reports status and answers
+// permission prompts itself. Distinct from the selector above, so nothing a
+// session runs can carry the selector to a daemon it starts.
+export const SDK_SESSION_ENV = "CODECAST_SDK_SESSION";
+
+// Variables an agent launch drops though they are no session marker (so they
+// stay off the list above, which doctor reports as leaks). MCP_TOOL_TIMEOUT
+// caps every MCP tool call, which fails cast's long running tools and a
+// permission prompt that waits on a person. The selector would otherwise
+// reach a daemon a session's command starts; the session marker would
+// silence the status hook of a pane that inherited it.
+export const AGENT_LAUNCH_UNSET_ENV = ["MCP_TOOL_TIMEOUT", SDK_BACKEND_ENV, SDK_SESSION_ENV] as const;
+
+// A shell-level effort override beats `--effort`, so it is dropped whenever
+// codecast picks the effort.
+export const EFFORT_OVERRIDE_ENV = "CLAUDE_CODE_EFFORT_LEVEL";
+
 // Claude's own override: any session that sees this saves its transcript even
 // with CLAUDE_CODE_CHILD_SESSION inherited (verified 2026-08-28: the footer
 // warning clears and JSONL is written).
@@ -49,8 +71,9 @@ export const CLOUD_ENV_VAR = "CODECAST_CLOUD";
 // silence a daemon-launched claude, and on a cloud host it names the host.
 // Pane-content detection keys off the literal "env -u CLAUDECODE" head
 // (daemon.ts findLaunchLine) — keep it first.
-export function agentEnvScrub(remote = isRemoteDevice()): string {
-  return `env ${AGENT_SCRUBBED_ENV_VARS.map((v) => `-u ${v}`).join(" ")} ${FORCE_PERSISTENCE_VAR}=1${remote ? ` ${CLOUD_ENV_VAR}=1` : ""}`;
+export function agentEnvScrub(remote = isRemoteDevice(), opts: { effortSet?: boolean } = {}): string {
+  const unset = [...AGENT_SCRUBBED_ENV_VARS, ...AGENT_LAUNCH_UNSET_ENV, ...(opts.effortSet ? [EFFORT_OVERRIDE_ENV] : [])];
+  return `env ${unset.map((v) => `-u ${v}`).join(" ")} ${FORCE_PERSISTENCE_VAR}=1${remote ? ` ${CLOUD_ENV_VAR}=1` : ""}`;
 }
 export const AGENT_ENV_SCRUB = agentEnvScrub();
 
@@ -85,6 +108,7 @@ export function launchTokenEnv(token: string | null | undefined): string {
 // Drop the markers from an env object in place and return it.
 export function scrubAgentEnv<T extends Record<string, string | undefined>>(env: T): T {
   for (const v of AGENT_SCRUBBED_ENV_VARS) delete env[v];
+  delete env[SDK_SESSION_ENV];
   return env;
 }
 
