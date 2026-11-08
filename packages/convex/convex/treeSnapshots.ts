@@ -85,3 +85,37 @@ export const listForConversation = query({
     return rows.reverse();
   },
 });
+
+const EDITED_SCAN_CAP = 5000;
+const EDITED_PATHS_CAP = 2000;
+
+/**
+ * The files a conversation's own tool calls wrote, edited or deleted after
+ * `after` (file_changes), newest first: what a rewind in a checkout shared
+ * with other sessions may count as this session's (cli/src/rewindTree.ts).
+ * Paths are as the tool calls named them, usually absolute.
+ */
+export const editedPaths = query({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    after: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) return [];
+    const rows = await ctx.db
+      .query("file_changes")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .order("desc")
+      .take(EDITED_SCAN_CAP);
+    const out = new Set<string>();
+    for (const row of rows) {
+      if (row.timestamp <= args.after || row.change_type === "commit") continue;
+      out.add(row.file_path);
+      if (out.size >= EDITED_PATHS_CAP) break;
+    }
+    return [...out];
+  },
+});

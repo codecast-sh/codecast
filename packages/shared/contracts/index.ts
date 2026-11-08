@@ -8,6 +8,7 @@ export * from "./hibernation";
 export * from "./openTasks";
 export * from "./pendingStatus";
 export * from "./daemonCommands";
+export * from "./rewindFiles";
 export * from "./sshAttach";
 export * from "./agentClients";
 export * from "./executionBinding";
