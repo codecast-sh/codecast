@@ -1,0 +1,232 @@
+/* The browser pane's address bar (AddressField.tsx).
+   At rest it is the header's own ground; a field rises around the text on
+   hover and focus. It sits 6px left of the header's padding so its mark lines
+   up with every other panel's leading icon. */
+
+.ab-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  height: 22px;
+  margin-left: -6px;
+  padding: 0 7px 0 6px;
+  border-radius: 6px;
+  cursor: text;
+  user-select: text;
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+.ab-field:hover:not([data-editing]) {
+  background: color-mix(in srgb, var(--sol-text) 5%, transparent);
+}
+.ab-field[data-editing] {
+  background: var(--sol-bg);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--sol-cyan) 38%, var(--cc-panel-rule)),
+    0 0 0 3px color-mix(in srgb, var(--sol-cyan) 9%, transparent);
+}
+.ab-field[data-rejected][data-editing] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--sol-red) 55%, var(--cc-panel-rule)),
+    0 0 0 3px color-mix(in srgb, var(--sol-red) 10%, transparent);
+  animation: ab-shake 280ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+/* Every refusal shakes, not only the first: the attribute alternates between
+   two names for the same motion, so the animation restarts. */
+.ab-field[data-rejected="even"][data-editing] { animation-name: ab-shake-again; }
+
+/* ---- Mark: the glyph, replaced by the favicon once it has loaded ---------- */
+.ab-mark {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  color: var(--sol-text-dim);
+}
+.ab-glyph { display: inline-flex; transition: opacity 160ms ease; }
+.ab-favicon {
+  position: absolute;
+  inset: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+.ab-mark[data-loaded] .ab-glyph { opacity: 0; }
+/* Many marks are drawn black for white tabs (GitHub's is); on a dark ground a
+   faint halo keeps their outline without tinting the colored ones. */
+.dark .ab-favicon {
+  filter: drop-shadow(0 0 0.6px color-mix(in srgb, white 70%, transparent))
+    drop-shadow(0 0 0.6px color-mix(in srgb, white 40%, transparent));
+}
+.ab-mark[data-loaded] .ab-favicon { opacity: 1; }
+
+/* ---- Text: a real input, drawn over by the two-weight address at rest ----- */
+.ab-text {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-self: stretch;
+  align-items: center;
+}
+.ab-input,
+.ab-shown,
+.ab-row-text {
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+.ab-input {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--sol-text);
+  text-overflow: ellipsis;
+  caret-color: var(--sol-cyan);
+}
+.ab-input::placeholder { color: var(--sol-text-dim); opacity: 0.75; }
+.ab-input::selection { background: color-mix(in srgb, var(--sol-cyan) 32%, transparent); }
+/* At rest the input keeps its text (for width, selection on focus, and screen
+   readers) but the drawn address is the one painted on top. */
+.ab-field:not([data-editing]) .ab-input:not(:placeholder-shown) { color: transparent; }
+[data-squeeze~="1"] .ab-input { min-width: 88px !important; }
+
+.ab-shown {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ab-shown > span { flex: 0 0 auto; }
+.ab-shown > .ab-rest { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ab-host { color: var(--sol-text); }
+.ab-rest { color: color-mix(in srgb, var(--sol-text-dim) 82%, transparent); }
+.ab-field:not(:hover) .ab-host { color: color-mix(in srgb, var(--sol-text) 88%, var(--sol-text-muted)); }
+
+.ab-reject {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  padding-left: 10px;
+  font-size: 10px;
+  color: var(--sol-red);
+  background: linear-gradient(to right, transparent, var(--sol-bg) 10px);
+  pointer-events: none;
+  animation: ab-fade-in 140ms ease-out;
+}
+
+/* ---- Suggestions ----------------------------------------------------------- */
+.ab-list {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  min-width: 280px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--sol-bg);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--sol-border) 70%, transparent),
+    0 8px 24px -8px color-mix(in srgb, black 22%, transparent),
+    0 2px 6px -2px color-mix(in srgb, black 10%, transparent);
+  transform-origin: top center;
+  animation: ab-drop 140ms cubic-bezier(0.23, 1, 0.32, 1);
+  cursor: default;
+}
+.ab-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 5px;
+}
+.ab-row[data-on] { background: color-mix(in srgb, var(--sol-cyan) 11%, transparent); }
+.ab-row[data-on] .ab-host { color: var(--sol-text); }
+.ab-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ab-row-text .ab-host { color: var(--sol-text-muted); }
+
+/* ---- Loading: a sweep along the header's rule that finishes before it goes */
+.ab-progress {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  overflow: hidden;
+  z-index: 10;
+  pointer-events: none;
+}
+.ab-progress > div {
+  height: 100%;
+  width: 28%;
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 80%, transparent) 40%, var(--sol-cyan));
+  border-radius: 2px;
+  animation: indeterminateBar 1.3s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.ab-progress[data-phase="done"] > div {
+  width: 100%;
+  background: color-mix(in srgb, var(--sol-cyan) 70%, transparent);
+  animation: ab-finish 420ms ease-out forwards;
+}
+
+/* A press on reload turns the arrow once, so the click visibly landed even
+   when the page looks the same afterwards. */
+.ab-spin { animation: ab-spin 480ms cubic-bezier(0.23, 1, 0.32, 1); }
+.ab-pop { animation: ab-pop 220ms cubic-bezier(0.23, 1, 0.32, 1); }
+
+@keyframes ab-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-3px); }
+  40% { transform: translateX(3px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(1px); }
+}
+@keyframes ab-shake-again {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-3px); }
+  40% { transform: translateX(3px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(1px); }
+}
+@keyframes ab-drop {
+  from { opacity: 0; transform: translateY(-3px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ab-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ab-finish {
+  0% { opacity: 1; transform: scaleX(0.6); transform-origin: left; }
+  45% { opacity: 1; transform: scaleX(1); transform-origin: left; }
+  100% { opacity: 0; transform: scaleX(1); transform-origin: left; }
+}
+@keyframes ab-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes ab-pop { 0% { transform: scale(0.6); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ab-field[data-rejected][data-editing],
+  .ab-list,
+  .ab-spin,
+  .ab-pop,
+  .ab-reject { animation: none; }
+  .ab-progress > div { animation-duration: 2.6s; }
+}

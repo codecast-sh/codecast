@@ -12,18 +12,18 @@
 // pane-local router, which keeps the tab-path invariant and makes back,
 // reload, drag-to-split and tab restore work with no state of our own.
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useConvex } from "convex/react";
 import {
   ArrowUpRight,
+  Check,
   CircleAlert,
   CircleHelp,
   EyeOff,
   Globe,
   Laptop,
   Link2,
-  Lock,
   LockOpen,
   RotateCw,
   ShieldOff,
@@ -39,7 +39,6 @@ import {
   isLoopbackUrl,
   normalizeUrl,
   unforwardedUrl,
-  pageAddress,
   parseBrowserRoute,
   prefersNativeRoute,
   rememberBrowserTitle,
@@ -50,19 +49,19 @@ import { pageAddressLabel } from "../../lib/browserPaneLinks";
 import { browserPaneRecents, rememberBrowserPaneUrl } from "../../lib/browserPaneRecents";
 import { useTabContext } from "../../lib/tabParams";
 import { isDesktop } from "../../lib/desktop";
-import { copyText } from "../../lib/copyText";
+import { copyToClipboard } from "../../lib/utils";
 import { explainOpenInBrowser, openInBrowser } from "../../lib/popOut";
 import { stageClose, stageExpand } from "../../lib/stage";
 import { forwardHostPort, getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { useSqueezeToFit } from "../../hooks/useSqueezeToFit";
 import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
 import { useInboxStore } from "../../store/inboxStore";
 import { paneOfferOwner } from "../../lib/browserPaneOffer";
 import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
 import { PaneControls } from "../stage/PaneControls";
+import { AddressField } from "./AddressField";
 import { FrameBackend } from "./backends/FrameBackend";
 import { NativeBackend } from "./backends/NativeBackend";
 import { useNativeBrowserPane } from "../../hooks/useNativeBrowserPane";
@@ -131,11 +130,6 @@ export function BrowserPane() {
   // Verbs the backend put in the strip (backends/types.ts). The stream's drive
   // toggle and reconnect live here; a frame registers none.
   const [actions, setActions] = useState<PaneStripAction[]>([]);
-  const [draft, setDraft] = useState<string | null>(null);
-  // The field shows the address without its scheme until someone reaches for
-  // it; then it holds the full URL, selected, ready to be replaced.
-  const [editing, setEditing] = useState(false);
-  const [rejected, setRejected] = useState(false);
   const [askedWhy, setAskedWhy] = useState(false);
   const [graceOver, setGraceOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -148,7 +142,6 @@ export function BrowserPane() {
   useWatchEffect(() => {
     setLiveUrl(null);
     setLiveTitle(null);
-    setDraft(null);
     setAskedWhy(false);
     setGraceOver(false);
   }, [url, source?.kind, reloadToken]);
@@ -174,36 +167,37 @@ export function BrowserPane() {
   const handleActions = useCallback((next: PaneStripAction[]) => setActions(next), []);
 
   const shownUrl = liveUrl ?? url ?? "";
-  const fieldValue = draft ?? (editing ? shownUrl : pageAddress(shownUrl));
+  const reload = useCallback(() => setReloadToken((n) => n + 1), []);
+  // Entering the address already on screen is asking for it again, as in any
+  // browser: the route would not change, so it reloads instead.
   const navigateTo = useCallback(
-    (next: string) => {
+    (next: string): boolean => {
       const normalized = normalizeUrl(next);
-      if (!normalized) {
-        setRejected(true);
-        setTimeout(() => setRejected(false), 1200);
-        return;
-      }
-      setDraft(null);
-      inputRef.current?.blur();
+      if (!normalized) return false;
       // A typed page is a page a person opened, the same as one a gesture
       // opened, so the blank pane offers it back too.
       rememberBrowserPaneUrl(normalized);
-      router.push(browserRoutePath({ kind: "url", url: normalized }));
+      if (normalized === normalizeUrl(shownUrl) || normalized === url) reload();
+      else router.push(browserRoutePath({ kind: "url", url: normalized }));
+      return true;
     },
-    [router],
+    [router, shownUrl, url, reload],
   );
 
-  // Selecting on focus has to wait for the render that swaps the short
-  // address for the full URL: replacing an input's value drops its selection.
-  useLayoutEffect(() => {
-    if (editing) inputRef.current?.select();
-  }, [editing]);
-
-  // The address wins the strip. When it would truncate, the machine badge
-  // folds to its icon first (squeeze level 1, `cq-sq1`); only past that does
-  // the address itself ellipsize. Measured, because no fixed width knows how
-  // long the address is.
-  useSqueezeToFit(headRef, 1, fieldValue);
+  // The load sweep finishes before it goes, so the eye sees the page arrive
+  // rather than a bar that vanished mid-stride.
+  // A blank pane loads nothing; its initial state is not a page on the way.
+  const loading = !!source && state.kind === "loading";
+  const [finishing, setFinishing] = useState(false);
+  const wasLoading = useRef(loading);
+  useWatchEffect(() => {
+    const was = wasLoading.current;
+    wasLoading.current = loading;
+    if (!was || loading) return;
+    setFinishing(true);
+    const t = setTimeout(() => setFinishing(false), 440);
+    return () => clearTimeout(t);
+  }, [loading]);
 
   // The one way out of the app that lands in the person's own browser; a
   // desktop build too old for it says so instead of doing nothing.
@@ -272,7 +266,6 @@ export function BrowserPane() {
   // an address this machine serves: a github.com pane has no machine to name.
   const thisMachine = useThisMachine(loopback && !servedBy);
   const machine = servedBy?.device ?? thisMachine;
-  const secure = shownUrl.startsWith("https://");
   const overlay = paneOverlay({
     state,
     host: url ? displayHost(url) : "",
@@ -281,7 +274,7 @@ export function BrowserPane() {
     elsewhere: !!servedBy,
     askedWhy,
     desktop: isDesktop(),
-    onReload: () => setReloadToken((n) => n + 1),
+    onReload: reload,
     fixes: actions.filter((x) => x.card),
     onOpenOutside: openOutside,
     onNative: goNative,
@@ -291,16 +284,14 @@ export function BrowserPane() {
   return (
     <div className="h-full flex flex-col min-h-0 bg-sol-bg">
       <div ref={headRef} className="cc-panel__head">
-        <ShortcutTooltip label={secure ? "Served over https" : "Served over http"}>
-          <span className="cc-panel__icon">
-            {secure ? <Lock className="w-3 h-3" /> : <Globe className="w-3 h-3" />}
-          </span>
-        </ShortcutTooltip>
         {source && source.kind !== "url" ? (
           // What the agent is looking at, in the words the daemon uses for it:
           // its title, then its address. The session uuid is a handle, not a
           // name, so it only stands in while nothing has been streamed yet.
           <span className="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden text-[11px] font-mono">
+            <span className="cc-panel__icon self-center">
+              <Globe className="w-3 h-3" />
+            </span>
             <span className="flex-shrink-0 truncate text-sol-text-muted">
               {liveTitle || browserPathLabel(path)}
             </span>
@@ -311,39 +302,7 @@ export function BrowserPane() {
             )}
           </span>
         ) : (
-          <input
-            ref={inputRef}
-            value={fieldValue}
-            title={editing ? undefined : shownUrl}
-            spellCheck={false}
-            autoComplete="off"
-            placeholder="Type an address"
-            aria-label="Address"
-            onChange={(e) => setDraft(e.target.value)}
-            onFocus={() => setEditing(true)}
-            onBlur={() => {
-              setEditing(false);
-              setDraft(null);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                navigateTo(draft ?? shownUrl);
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                setDraft(null);
-                inputRef.current?.blur();
-              }
-            }}
-            // The floor is the whole address (1ch per character in a mono
-            // face), so an address that does not fit overflows the strip and
-            // the squeeze folds the badge. At level 1 the floor drops back to
-            // 88px: the address ellipsizes, but never vanishes.
-            style={{ minWidth: `max(88px, ${fieldValue.length + 1}ch)` }}
-            className={`flex-1 [[data-squeeze~='1']_&]:!min-w-[88px] bg-transparent border-0 outline-none text-[11px] font-mono truncate ${
-              rejected ? "text-sol-red" : "text-sol-text-muted focus:text-sol-text"
-            }`}
-          />
+          <AddressField url={shownUrl} inputRef={inputRef} rowRef={headRef} onNavigate={navigateTo} />
         )}
         {loopback && <LoopbackBadge device={machine} elsewhere={!!servedBy} />}
         {source?.kind === "url" && (
@@ -352,24 +311,13 @@ export function BrowserPane() {
               type="button"
               className="cc-panel__btn"
               aria-label="Reload this page"
-              onClick={() => setReloadToken((n) => n + 1)}
+              onClick={reload}
             >
-              <RotateCw className="w-3 h-3" />
+              <RotateCw key={reloadToken} className={`w-3 h-3 ${reloadToken ? "ab-spin" : ""}`} />
             </button>
           </ShortcutTooltip>
         )}
-        {shownUrl && (
-          <ShortcutTooltip label="Copy link to this page">
-            <button
-              type="button"
-              className="cc-panel__btn"
-              aria-label="Copy link to this page"
-              onClick={() => void copyText(shownUrl, "Link copied")}
-            >
-              <Link2 className="w-3 h-3" />
-            </button>
-          </ShortcutTooltip>
-        )}
+        {shownUrl && <CopyLinkButton url={shownUrl} />}
         {source?.kind === "url" && (
           <ShortcutTooltip label="Open in your browser">
             <button
@@ -420,11 +368,11 @@ export function BrowserPane() {
       </div>
 
       <div className="relative flex-1 min-h-0">
-        {state.kind === "loading" && (
+        {(loading || finishing) && (
           // The page is opaque to us, so a skeleton would be a guess; a thin
-          // sweep under the strip is the honest amount to say.
-          <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden z-10">
-            <div className="h-full w-1/4 bg-sol-cyan/70 animate-[indeterminateBar_1.3s_ease-in-out_infinite]" />
+          // sweep along the header's rule is the honest amount to say.
+          <div className="ab-progress" data-phase={loading ? "loading" : "done"}>
+            <div />
           </div>
         )}
         {source ? (
@@ -644,6 +592,34 @@ function paneOverlay(a: {
   }
 
   return null;
+}
+
+/** Copies the page's address; the link turns into a check for a moment, so
+ *  the press answers where the eye already is. A refusal still says so. */
+function CopyLinkButton({ url }: { url: string }) {
+  const [copied, setCopied] = useState(0);
+  useWatchEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(0), 1300);
+    return () => clearTimeout(t);
+  }, [copied]);
+  return (
+    <ShortcutTooltip label={copied ? "Copied" : "Copy link to this page"}>
+      <button
+        type="button"
+        className={`cc-panel__btn ${copied ? "is-on" : ""}`}
+        aria-label="Copy link to this page"
+        onClick={() =>
+          void copyToClipboard(url).then(
+            () => setCopied((n) => n + 1),
+            () => toast.error("Couldn't copy"),
+          )
+        }
+      >
+        {copied ? <Check key={copied} className="w-3 h-3 ab-pop" /> : <Link2 className="w-3 h-3" />}
+      </button>
+    </ShortcutTooltip>
+  );
 }
 
 /** Which machine a loopback pane points at. The path persists across machines

@@ -166,6 +166,17 @@ export function pageAddress(url: string): string {
   return displayHost(url) + path + u.search + u.hash;
 }
 
+/**
+ * pageAddress in its two weights: the host, which says where you are, and the
+ * rest, which says which page. The bar draws the host at full strength and the
+ * path dimmed, the way a person reads an address.
+ */
+export function addressParts(url: string): { host: string; rest: string } {
+  const full = pageAddress(url);
+  const host = displayHost(url);
+  return full.startsWith(host) ? { host, rest: full.slice(host.length) } : { host: full, rest: "" };
+}
+
 // ---------------------------------------------------------------------------
 // Embed mode: the app, framed inside one of its own panes
 // ---------------------------------------------------------------------------

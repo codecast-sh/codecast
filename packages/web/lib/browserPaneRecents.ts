@@ -11,6 +11,8 @@
 // machine pointing at THEIR localhost would be a lie. Keeping the ring local
 // to the window's own profile keeps it true.
 
+import { pageAddress } from "./browserPane";
+
 const KEY = "codecast.browserPaneRecents";
 const CAP = 8;
 
@@ -62,4 +64,43 @@ export function clearBrowserPaneRecents(): void {
   } catch {
     /* see above */
   }
+}
+
+export interface AddressSuggestion {
+  url: string;
+  /** What the bar shows for it: the address without its scheme, unless the
+   *  person typed a scheme, in which case the whole URL. */
+  label: string;
+}
+
+const SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
+
+/**
+ * The recent pages that match what is typed in the address bar, best first:
+ * pages whose address starts with it (so the first can complete the field
+ * inline), then pages whose host or path holds it. Case does not matter, and
+ * a typed "www." is matched with or without one.
+ */
+export function suggestAddresses(typed: string, recents: string[], limit = 6): AddressSuggestion[] {
+  const q = typed.trim().toLowerCase();
+  if (!q) return [];
+  const full = SCHEME.test(q);
+  const ranked: { s: AddressSuggestion; rank: number }[] = [];
+  for (const url of recents) {
+    const label = full ? url : pageAddress(url);
+    const hay = label.toLowerCase();
+    const rank = hay.startsWith(q) ? 0 : hay.startsWith(q.replace(/^www\./, "")) ? 0 : hay.includes(q) ? 1 : -1;
+    if (rank >= 0) ranked.push({ s: { url, label }, rank });
+  }
+  return ranked.sort((a, b) => a.rank - b.rank).slice(0, limit).map((r) => r.s);
+}
+
+/**
+ * The tail the bar fills in after what was typed, selected so the next key
+ * replaces it: the top suggestion's remainder when that suggestion starts
+ * with the typed text, else nothing.
+ */
+export function inlineCompletion(typed: string, top: AddressSuggestion | undefined): string {
+  if (!typed || !top) return "";
+  return top.label.toLowerCase().startsWith(typed.toLowerCase()) ? top.label.slice(typed.length) : "";
 }

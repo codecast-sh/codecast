@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { browserPaneRecents, clearBrowserPaneRecents, rememberBrowserPaneUrl } from "../browserPaneRecents";
+import {
+  browserPaneRecents,
+  clearBrowserPaneRecents,
+  inlineCompletion,
+  rememberBrowserPaneUrl,
+  suggestAddresses,
+} from "../browserPaneRecents";
 
 const KEY = "codecast.browserPaneRecents";
 
@@ -73,5 +79,58 @@ describe("browserPaneRecents", () => {
     rememberBrowserPaneUrl("http://localhost:3000/");
     clearBrowserPaneRecents();
     expect(browserPaneRecents()).toEqual([]);
+  });
+});
+
+describe("suggestAddresses", () => {
+  const recents = [
+    "https://github.com/codecast-sh/codecast/pulls",
+    "http://localhost:3000/inbox",
+    "https://www.example.com/",
+    "http://localhost:5173/",
+  ];
+
+  it("puts addresses that start with the typed text first", () => {
+    expect(suggestAddresses("loc", recents).map((s) => s.label)).toEqual(["localhost:3000/inbox", "localhost:5173"]);
+    expect(suggestAddresses("inbox", recents).map((s) => s.label)).toEqual(["localhost:3000/inbox"]);
+    expect(suggestAddresses("3000", recents)[0].url).toBe("http://localhost:3000/inbox");
+  });
+
+  it("ranks prefix matches above matches inside the address", () => {
+    expect(suggestAddresses("l", recents).map((s) => s.label)).toEqual([
+      "localhost:3000/inbox",
+      "localhost:5173",
+      "github.com/codecast-sh/codecast/pulls",
+      "example.com",
+    ]);
+  });
+
+  it("ignores case and a typed www.", () => {
+    expect(suggestAddresses("GIT", recents)[0].label).toBe("github.com/codecast-sh/codecast/pulls");
+    expect(suggestAddresses("www.exa", recents)[0].url).toBe("https://www.example.com/");
+  });
+
+  it("matches whole URLs once a scheme is typed", () => {
+    expect(suggestAddresses("http://", recents).map((s) => s.label)).toEqual([
+      "http://localhost:3000/inbox",
+      "http://localhost:5173/",
+    ]);
+  });
+
+  it("offers nothing for an empty field or no match", () => {
+    expect(suggestAddresses("  ", recents)).toEqual([]);
+    expect(suggestAddresses("zzz", recents)).toEqual([]);
+  });
+});
+
+describe("inlineCompletion", () => {
+  it("fills in the rest of a prefix match, keeping what was typed", () => {
+    expect(inlineCompletion("Loc", { url: "http://localhost:3000/", label: "localhost:3000" })).toBe("alhost:3000");
+  });
+
+  it("fills in nothing when the top suggestion only contains the text", () => {
+    expect(inlineCompletion("host", { url: "http://localhost:3000/", label: "localhost:3000" })).toBe("");
+    expect(inlineCompletion("", { url: "http://a/", label: "a" })).toBe("");
+    expect(inlineCompletion("a", undefined)).toBe("");
   });
 });
