@@ -11,6 +11,7 @@ import PullRequestsPage from "./pull-requests/Page";
 import CloudPage from "./cloud/Page";
 import CallsPage from "./calls/Page";
 import ModsPage from "./mods/Page";
+import OrgPage from "./org/Page";
 
 /** Each deep dive's body, keyed by its slug in catalog.ts. A page owns everything below the nav. */
 export const FEATURE_PAGES: Record<string, ComponentType> = {
@@ -26,4 +27,5 @@ export const FEATURE_PAGES: Record<string, ComponentType> = {
   "cloud": CloudPage,
   "calls": CallsPage,
   "mods": ModsPage,
+  "org": OrgPage,
 };
