@@ -46,7 +46,7 @@ Phone pushes leave our servers: Expo (`exp.host`) relays them to Apple and Googl
 
 The bell asks for human attention. Clean scheduled runs and retryable failures stay in their result thread or schedule history. Explicit result delivery to an owning session continues through the trigger's existing wake setting.
 
-A spawned run first reports a flagged outcome or exhausted retries to its owning agent. Successful delivery to that owner suppresses the human alert; the owner can resolve it or ask the person for a specific decision. If there is no valid owner, the human alert opens the run (or the originating thread for an inline run).
+A spawned run first reports a flagged outcome or exhausted retries to its owning agent. Successful delivery to that owner suppresses the human alert; the owner can resolve it or ask the person for a specific decision. If there is no valid owner, the human alert opens the run (or the originating thread for an inline run). If no run conversation was created, it opens the trigger history instead.
 
 Flagged completion is displayed as “needs attention”, with the reported reason, rather than “task done”. Exhausted retries display “run stopped”. Both honor the task-activity preference. The bell works without a phone push token; phone push separately requires enabled notifications and a token.
 
