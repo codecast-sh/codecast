@@ -42,22 +42,6 @@ export class IngestDeadline {
     clearTimeout(this.timer);
     this.parentSignal?.removeEventListener('abort',this.abort);
   }
-  // Work the transaction stopped waiting for at its deadline (a pass hung on
-  // something that ignores the signal). The deadline stays in scope for that
-  // work, expired, until it settles, so every checkpoint it reaches throws
-  // and it can never commit; disposing at once would turn those checkpoints
-  // off for it.
-  private outstanding = 0;
-  private ended = false;
-  outlive(work: Promise<unknown>): void {
-    this.outstanding++;
-    const settle = () => { if (--this.outstanding === 0 && this.ended) this.dispose(); };
-    work.then(settle,settle);
-  }
-  close(): void {
-    this.ended = true;
-    if (this.outstanding === 0) this.dispose();
-  }
 }
 const transcriptDeadline = new AsyncLocalStorage<IngestDeadline>();
 export const currentTranscriptDeadline = (): IngestDeadline | undefined => {
@@ -74,7 +58,7 @@ export async function withTranscriptDeadline<T>(run: () => Promise<T>, options: 
   if (previous) { previous.check(); return run(); }
   const deadline = new IngestDeadline(options.timeoutMs,options.signal);
   try { return await transcriptDeadline.run(deadline,run); }
-  finally { deadline.close(); }
+  finally { deadline.dispose(); }
 }
 /** work, or the deadline's reason once it expires or is cancelled, whichever comes first. */
 export function untilDeadline<T>(work: Promise<T>, deadline: IngestDeadline): Promise<T> {

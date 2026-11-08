@@ -63,24 +63,43 @@ test('actual ingest client applies one budget to pages, local reads, fallback an
     closeDaemonWorkers();fs.rmSync(dir,{recursive:true,force:true});
   }
 });
-// 2026-11-05: a pass hung on a local file read for 2h56m kept its transcript's
-// lock, so every later pass spent its budget waiting and failed with "ingest
-// transaction deadline". The lock now ends with the pass's deadline; the hung
-// work keeps its expired deadline, so whatever it does on waking cannot commit.
-test('a pass hung past its deadline releases the lock, and cannot commit when it wakes',async()=>{
-  let release!:()=>void,oldDone!:()=>void,position=0;
+test('expired reservations never release a held continuation into successor state',async()=>{
+  let release!:()=>void,settled=false,position=0;
   const blocked=new Promise<void>(resolve=>{release=resolve;});
-  const oldSettled=new Promise<void>(resolve=>{oldDone=resolve;});
   const order:string[]=[];
   const first=serializeTranscript('held-session',()=>serializeTranscript('held-file',async()=>{
-    try { await blocked;order.push('old resumed');checkTranscriptDeadline();position++; } finally { oldDone(); }
-  }),{timeoutMs:50}).catch(error=>error);
-  expect(await first).toBeInstanceOf(IngestDeadlineExceeded);
-  const next=await serializeTranscript('held-session',()=>serializeTranscript('held-file',async()=>{order.push('new ran');position++;return 'synced';}));
-  expect(next).toBe('synced');
-  release();await oldSettled;
-  expect(order).toEqual(['new ran','old resumed']);
-  expect(position).toBe(1);
+    await blocked;order.push('old resumed');checkTranscriptDeadline();position++;
+  }),{timeoutMs:5}).then(()=>{settled=true;return null;},error=>{settled=true;return error;});
+  const expired=serializeTranscript('held-session',async()=>{order.push('expired ran');},{timeoutMs:5}).catch(error=>error);
+  await new Promise(resolve=>setTimeout(resolve,20));
+  expect(await expired).toBeInstanceOf(IngestDeadlineExceeded);
+  expect(settled).toBe(false);
+  let successorRan=false;
+  const next=serializeTranscript('held-session',async()=>{successorRan=true;order.push('new ran');position++;});
+  await new Promise(resolve=>setImmediate(resolve));expect(successorRan).toBe(false);
+  release();expect(await first).toBeInstanceOf(IngestDeadlineExceeded);await next;
+  expect(order).toEqual(['old resumed','new ran']);expect(position).toBe(1);
+});
+// 2026-11-05: a pass hung on a local file read for 2h56m. Its successors on
+// the same transcript must still wait for it (above), but nothing else may:
+// other transcripts run, and every waiter that gives up returns its slot, so
+// one stuck pass cannot use up the daemon's transcript reservations.
+test('an expired pass still holding its lock blocks its own transcript and no other',async()=>{
+  let release!:()=>void,owning!:()=>void;
+  const blocked=new Promise<void>(resolve=>{release=resolve;});
+  const owned=new Promise<void>(resolve=>{owning=resolve;});
+  const stuck=serializeTranscript('stuck-session',async()=>{owning();await blocked;},{timeoutMs:20}).catch(error=>error);
+  await owned;
+  let successorRan=false;
+  const successor=serializeTranscript('stuck-session',async()=>{successorRan=true;});
+  await expect(serializeTranscript('other-session',async()=>'other synced')).resolves.toBe('other synced');
+  // Long past the holder's deadline, and past any unwinding allowance a
+  // bounded lock might give it: the successor still has not run.
+  await new Promise(resolve=>setTimeout(resolve,1_500));
+  expect(successorRan).toBe(false);
+  release();
+  expect(await stuck).toBeInstanceOf(IngestDeadlineExceeded);
+  await successor;expect(successorRan).toBe(true);
 });
 test('waiters that give up free their slots while the pass ahead is still hung',async()=>{
   let release!:()=>void,owning!:()=>void;

@@ -7,7 +7,7 @@ import { IngestAssembler, ingestRetainedWeight } from './ingestTransport.js';
 import { readIngestJob, ingestIdentity, sameIngestFile, samePersistedFile, sameIngestSnapshot, ingestWalIdentity, sameIngestWal } from './ingestJobs.js';
 import { validIngestPage, type IngestJob, type IngestPage, type IngestResult } from './ingestTypes.js';
 import { validateIngestResult } from './ingestValidation.js';
-import { IngestDeadline, IngestCancelled, currentTranscriptDeadline, checkTranscriptDeadline, withTranscriptDeadline, waitForTranscriptReservation, untilDeadline } from './ingestDeadline.js';
+import { IngestDeadline, IngestCancelled, currentTranscriptDeadline, checkTranscriptDeadline, withTranscriptDeadline, waitForTranscriptReservation } from './ingestDeadline.js';
 import { MAX_QUEUE, MAX_INFLIGHT, MAX_DEADLINE_MS } from './protocol.js';
 export { IngestCancelled, IngestDeadlineExceeded } from './ingestDeadline.js';
 export { ingestIdentity, sameIngestFile, samePersistedFile, sameIngestSnapshot };
@@ -141,12 +141,6 @@ export async function retryOnIngestCapacity<T>(run: () => Promise<T>, {attempts 
     }
   }
 }
-const UNWIND_GRACE_MS = 1_000;
-const settledWithin = (work: Promise<unknown>, ms: number) => new Promise<void>(resolve => {
-  const timer = setTimeout(resolve,ms);
-  const done = () => { clearTimeout(timer); resolve(); };
-  work.then(done,done);
-});
 export async function serializeTranscript<T>(key: string, run: () => Promise<T>, options: {signal?: AbortSignal; timeoutMs?: number} = {}): Promise<T> {
   const inherited = currentTranscriptDeadline();
   return withTranscriptDeadline(async () => {
@@ -167,21 +161,11 @@ export async function serializeTranscript<T>(key: string, run: () => Promise<T>,
       await waitForTranscriptReservation(before,deadline);
       entered = true;
       deadline.check();
-      // The lock is held until the pass settles, or until its deadline ends
-      // plus UNWIND_GRACE_MS, never longer: a pass hung on something that
-      // ignores the signal (a local file read macOS held for 2h56m on
-      // 2026-11-05) used to hold it, and every later pass spent its budget
-      // waiting. A pass that honours the signal unwinds (and releases what it
-      // reserved) within the grace; one that does not keeps its expired
-      // deadline (outlive), so it cannot commit when it wakes.
-      const work = (async () => run())();
-      deadline.outlive(work);
-      let result: T;
-      try { result = await untilDeadline(work,deadline); }
-      catch (error) {
-        if (deadline.signal.aborted) await settledWithin(work,UNWIND_GRACE_MS);
-        throw error;
-      }
+      // The lock is held until the pass has actually settled, even past its
+      // deadline: a successor must never run beside an expired pass that can
+      // still resume (it would rewind positions or drop receipts the
+      // successor just wrote).
+      const result = await run();
       deadline.check();
       return result;
     } finally {
