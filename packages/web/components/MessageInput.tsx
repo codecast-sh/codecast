@@ -9,7 +9,7 @@ import { RevealInBandCtx } from "../lib/revealHost";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { isMac, hasOpenModal, altChordDirection } from "../shortcuts";
-import { armJointSend, jointSendReady, takeJointSend } from "../lib/jointSend";
+import { armJointSend, disarmJointSend, jointSendReady, takeJointSend } from "../lib/jointSend";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { createPortal } from "react-dom";
 import { compressImage } from "../lib/compressImage";
@@ -71,6 +71,7 @@ import { WorkingStatusLine } from "./conversation/sessionChrome";
 import { LiveCompactionCard } from "./conversation/CompactionProgressCard";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
 import { SLASH_QUERY_RE, SLASH_TRIGGER_RE, matchSlashSkills } from "../lib/sessionSkills";
+import { parseSideQuestion, withSideQuestionCommand } from "../lib/builtinCommands";
 import { useSharedDraft } from "../hooks/useSharedDraft";
 import { SharedCarets } from "./SharedCarets";
 import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
@@ -227,7 +228,17 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkTail, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, sessionControl, composerFoot, bareComposer, hero, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef, escapeCloses, sharedDraft }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; /** Branches the session from its latest message and returns the fork's id; the composer then sends into it. */ onForkTail?: () => Promise<string | null>; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => void | Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The session's agent/model control, at the right of the status line. */ sessionControl?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The new-session page's centred card (ComposerShell hero): always expanded, foot inside the box. */ hero?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean>; /** Escape closes the surface around the composer (the compose sheet), so the status line offers no Escape hint. */ escapeCloses?: boolean; /** A session's own composer: becomes one shared draft while anyone else has this session's composer open (hooks/useSharedDraft). */ sharedDraft?: boolean }) {
+/** Write the composer's text to its stored draft. An empty box with no image
+ *  rows is a final (server-tombstoned) clear, so the draft dies everywhere and
+ *  a server copy cannot resurrect on the next boot; with images it keeps them. */
+function commitDraftText(conversationId: string, text: string) {
+  const store = useInboxStore.getState();
+  const existing = store.getDraft(conversationId);
+  if (!text && !existing?.draft_image_storage_ids?.length) store.clearDraftFinal(conversationId);
+  else store.setDraft(conversationId, { ...existing, draft_message: text || null });
+}
+
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkTail, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onSideQuestion, onEscapeClose, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, threadStateNode, composerNode, sessionControl, composerFoot, bareComposer, hero, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef, escapeCloses, sharedDraft }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; /** Branches the session from its latest message and returns the fork's id; the composer then sends into it. */ onForkTail?: () => Promise<string | null>; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; /** `/btw <question>`: a side answer about this session, never sent to the agent ("" for a bare `/btw`). Unset, `/btw` goes to the agent like any text. */ onSideQuestion?: (question: string) => Promise<string | null> | null; /** A panel open beside the composer (the Ask panel): an empty composer's Escape closes it instead of stopping the turn. */ onEscapeClose?: () => void; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => void | Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The session's agent/model control, at the right of the status line. */ sessionControl?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The new-session page's centred card (ComposerShell hero): always expanded, foot inside the box. */ hero?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean>; /** Escape closes the surface around the composer (the compose sheet), so the status line offers no Escape hint. */ escapeCloses?: boolean; /** A session's own composer: becomes one shared draft while anyone else has this session's composer open (hooks/useSharedDraft). */ sharedDraft?: boolean }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -539,7 +550,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return orderMentionItems(mergeMentionSuggestions(channels, [], new Map(), 12, acQuery, identityPrefsNow(), acContext));
     }
     if (acTrigger.type === "/") {
-      return matchSlashSkills(skills, acQuery)
+      // `/btw` opening the message is a side question (onSideQuestion); anywhere else it is the agent's command.
+      const sideQuestion = !!onSideQuestion && !messageRef.current.slice(0, acTrigger.startPos).trim();
+      return matchSlashSkills(sideQuestion ? withSideQuestionCommand(skills) : skills, acQuery)
         .map(s => ({ label: s.name, description: s.description, type: "skill" as string }));
     }
     if (acTrigger.type === "@") {
@@ -569,7 +582,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return orderMentionItems(items);
     }
     return [];
-  }, [acTrigger, acQuery, skills, acCandidates, chatMentionMode, acContext, mentionScope, fileRoot, diskFiles]);
+  }, [acTrigger, acQuery, skills, onSideQuestion, acCandidates, chatMentionMode, acContext, mentionScope, fileRoot, diskFiles]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
 
@@ -805,6 +818,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // where the same z ordering keeps the input on top.
   const composerRootRef = useRef<HTMLDivElement>(null);
   const escapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const escapeQuietUntilRef = useRef(0);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [lightboxImageIndex, setLightboxImageIndex] = useState<number | null>(null);
   const dismissLightbox = useCallback(() => { setLightboxImageIndex(null); textareaRef.current?.focus(); }, []);
@@ -1155,7 +1169,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
     const cursorPos = textareaRef.current?.selectionStart ?? val.length;
     const textBefore = val.slice(0, cursorPos);
-    const slashMatch = (skills?.length ?? 0) > 0 ? textBefore.match(SLASH_TRIGGER_RE) : null;
+    const slashMatch = (skills?.length ?? 0) > 0 || onSideQuestion ? textBefore.match(SLASH_TRIGGER_RE) : null;
     const hashMatch = slashMatch ? null : textBefore.match(CHANNEL_TRIGGER_RE);
     if (slashMatch) {
       setAcTrigger({ type: "/", startPos: cursorPos - slashMatch[1].length - 1 });
@@ -1189,18 +1203,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       scheduleDraftWrite(conversationId, () => {
         if (draftPendingIdRef.current === conversationId) draftPendingIdRef.current = null;
         if (sendingRef.current) return;
-        const existing = useInboxStore.getState().getDraft(conversationId);
-        if (!val && !existing?.draft_image_storage_ids?.length) {
-          // Final (server-tombstoned) clear: the user explicitly emptied the
-          // box, so the draft must die everywhere, not just in this device's
-          // local store — a copy on the server would resurrect on next boot.
-          useInboxStore.getState().clearDraftFinal(conversationId);
-        } else {
-          useInboxStore.getState().setDraft(conversationId, { ...existing, draft_message: val || null });
-        }
+        commitDraftText(conversationId, val);
       });
     }
-  }, [conversationId, skills, queryMentions, cancelPendingDraft]);
+  }, [conversationId, skills, onSideQuestion, queryMentions, cancelPendingDraft]);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);
@@ -1676,6 +1682,29 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     submitRefusedRef.current = true;
     return true;
   };
+  // `/btw <question>` (onSideQuestion): asked beside the conversation, never
+  // sent. Every way out of the composer (send, ⌘↵ queue, ⇧Esc stop and send)
+  // asks this first. The text empties as on a send; pasted images stay, in
+  // memory and in the stored draft; a refused question comes back to the box
+  // unless something new was typed meanwhile.
+  const takeSideQuestion = (message: string): boolean => {
+    const question = onSideQuestion ? parseSideQuestion(message) : null;
+    if (question === null) return false;
+    // Send together armed by the chord or the strip's button: a side question is never a turn.
+    disarmJointSend(conversationId);
+    sendingRef.current = true;
+    cancelPendingDraft();
+    setMessage("");
+    messageRef.current = "";
+    if (composeMode) { composeRef.current?.clear(); setComposeMode(false); setComposeHasContent(false); }
+    commitDraftText(conversationId, "");
+    sendingRef.current = false;
+    void onSideQuestion!(question)?.then((refusal) => {
+      if (refusal && !messageRef.current) { setMessage(message); messageRef.current = message; commitDraftText(conversationId, message); }
+    });
+    return true;
+  };
+
   const handleSubmit = async (e: React.FormEvent, forkTail = false) => {
     e.preventDefault();
     if (allowanceOut) return false;
@@ -1689,6 +1718,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       void handleSubmitRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent, forkTail);
       if (!submitRefusedRef.current) onSubmitWithIntent?.(false);
     })) return false;
+    if (takeSideQuestion(message)) {
+      // Nothing went to the agent: send-and-advance and send-and-stash stay on this session.
+      submitRefusedRef.current = true;
+      return false;
+    }
     suggestionRef.current?.settleSend(message);
     if (onGateSend) {
       // The pending batch rides a gate send the way it rides the main one:
@@ -2052,6 +2086,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const canStopAndSend = turnRunning && canQueryServer && pastedImages.length === 0;
   const stopAndSendComposerText = () => {
     if (!canStopAndSend || !messageRef.current.trim()) return;
+    if (takeSideQuestion(messageRef.current)) return;
     confirmStop(() => queueComposerText(true), true);
   };
 
@@ -2059,7 +2094,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // `stop` also stops that turn, so the text goes in as soon as it has.
   const queueComposerText = (stop = false) => {
     const text = messageRef.current.trim();
-    if (!text) return;
+    if (!text || takeSideQuestion(text)) return;
     sendingRef.current = true;
     try {
       // A real session queues on the server, in the line everyone in it
@@ -2317,6 +2352,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         return;
       }
       const hasText = messageRef.current.trim().length > 0;
+      // An empty composer's Escape closes the panel open beside it before it can stop the turn,
+      // and a quick second press (a double tap to dismiss) stops nothing either.
+      if (!hasText && Date.now() < escapeQuietUntilRef.current) return;
+      if (!hasText && onEscapeClose) { onEscapeClose(); escapeQuietUntilRef.current = Date.now() + 400; return; }
       // A hosted conversation has no agent to send Escape to: an empty
       // composer hands the keys back to the app, so its single-key layer
       // (?, j/k, c) works without the mouse.
@@ -2429,7 +2468,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     ? { label: "Stop", onStop: () => useInboxStore.getState().stopHostedTurn(conversationId) }
     : undefined;
   // A session's turn at work with nothing to send: the disc stops it.
-  const sessionStop = turnRunning && !canSubmit ? { label: "Stop", onStop: interruptTurn, accel: "escape" } : undefined;
+  const sessionStop = turnRunning && !canSubmit ? { label: "Stop", onStop: interruptTurn, accel: onEscapeClose ? undefined : "escape" } : undefined;
   // A session's turn at work with text in the box: a Stop square joins the
   // disc, so stopping first is part of sending.
   const stopAndSend = canStopAndSend && hasContent && !onGateSend && !onWorkflowLaunch ? {
@@ -2666,7 +2705,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     Connected
                   </span>
                 ) : agentStatus === "working" ? (
-                  <WorkingStatusLine startedAt={workingSinceTs} phrase={workingPhrase} conversationId={conversationId} stopHint={!!onSendEscape && !message.trim() && queuedMessages.length === 0} />
+                  <WorkingStatusLine startedAt={workingSinceTs} phrase={workingPhrase} conversationId={conversationId} stopHint={!!onSendEscape && !onEscapeClose && !message.trim() && queuedMessages.length === 0} />
                 ) : agentStatus === "idle" && queuedMessages.length > 0 ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
@@ -2685,7 +2724,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     Connecting...
                   </span>
                 ) : isConversationLive ? (
-                  <WorkingStatusLine startedAt={workingSinceTs} phrase={workingPhrase} conversationId={conversationId} stopHint={!!onSendEscape && !message.trim() && queuedMessages.length === 0} />
+                  <WorkingStatusLine startedAt={workingSinceTs} phrase={workingPhrase} conversationId={conversationId} stopHint={!!onSendEscape && !onEscapeClose && !message.trim() && queuedMessages.length === 0} />
                 ) : isSessionDisconnected ? (
                   isResuming ? (
                     <span className="flex items-center gap-1.5 text-sol-text-dim">

@@ -129,7 +129,7 @@ import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import { AskSessionPanel } from "./conversation/AskSessionPanel";
-import { useAskSession } from "../hooks/useAskSession";
+import { askSideQuestion } from "../lib/sideAnswers";
 import { openSessionAtMessage } from "../lib/openSessionAtMessage";
 import type { MentionItem } from "./editor/MentionList";
 import { HeaderPinMenuItem } from "./anchor/AnchorPanel";
@@ -388,11 +388,19 @@ const ConversationViewInner = (
   // "Ask this session" (a, the palette, the menu, or Ask in the search pill).
   const [askOpen, setAskOpen] = useState(false);
   const askInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const askSession = useAskSession(conversation?._id ? String(conversation._id) : "");
-  const openAskPanel = useCallback(() => {
+  const askConversationId = conversation?._id ? String(conversation._id) : "";
+  const openAskPanel = useCallback((focus = true) => {
     setAskOpen(true);
-    setTimeout(() => askInputRef.current?.focus(), 0);
+    if (focus) setTimeout(() => askInputRef.current?.focus(), 0);
   }, []);
+  const closeAskPanel = useCallback(() => setAskOpen(false), []);
+  // `/btw <question>` in the composer: a side answer in the Ask panel, never a
+  // message to the agent; the composer keeps focus. A bare `/btw` opens the
+  // panel ready to type.
+  const handleSideQuestion = useCallback((question: string) => {
+    openAskPanel(!question);
+    return question ? askSideQuestion(askConversationId, question) : null;
+  }, [askConversationId, openAskPanel]);
   useWatchEffect(() => {
     if (!localSearchQuery) { setDebouncedSearchQuery(""); return; }
     const timer = setTimeout(() => setDebouncedSearchQuery(localSearchQuery), 300);
@@ -4223,7 +4231,7 @@ const ConversationViewInner = (
                     )}
                     {isLocalSearchOpen && !guest && localSearchQuery.trim().length > 2 && (
                       <button
-                        onClick={() => { askSession(localSearchQuery); onClearHighlight(); openAskPanel(); }}
+                        onClick={() => { void askSideQuestion(askConversationId, localSearchQuery); onClearHighlight(); openAskPanel(); }}
                         className="ml-1 px-1 rounded text-[10px] font-medium whitespace-nowrap hover:bg-amber-300/50 dark:hover:bg-amber-700/40 transition-colors"
                         title="Ask this session instead of searching it"
                       >
@@ -4595,7 +4603,7 @@ const ConversationViewInner = (
           top={headerHeight}
           inputRef={askInputRef}
           onCite={(messageId) => openSessionAtMessage(String(conversation._id), messageId)}
-          onClose={() => setAskOpen(false)}
+          onClose={closeAskPanel}
         />
       )}
 
@@ -5041,7 +5049,7 @@ const ConversationViewInner = (
               ) : null}
               <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} sharedDraft={composerPresenceEnabled(conversation) && !onSendOverride && !newSessionPage} status={conversation.status} embedded={embedded} hero={newSessionPage} sessionControl={composerHostsControl && (
                 <HeaderModelControl variant="composer" conversationId={conversation._id} agentType={conversation.agent_type} model={conversation.model} effort={(conversation as any).effort} messageCount={conversation.message_count} canEdit open={sessionControlOpen} onOpenChange={setSessionControlOpen} />
-              )} composerFoot={newSessionPage ? <NewSessionFoot slotRef={setNewSessionFootSlot} dropRef={dropFilesRef} /> : undefined} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (newSessionPage && roleSend.recipient ? sendToRole : workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
+              )} composerFoot={newSessionPage ? <NewSessionFoot slotRef={setNewSessionFootSlot} dropRef={dropFilesRef} /> : undefined} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onSideQuestion={!guest && !newSessionPage && !onSendOverride ? handleSideQuestion : undefined} onEscapeClose={askOpen ? closeAskPanel : undefined} onGateSend={onSendOverride ?? (newSessionPage && roleSend.recipient ? sendToRole : workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
                 {/* Who else is in this box (a teammate's live draft, or "is
                     here" for a share link guest with no face on the roster)
                     and who asks to send into it. Inside the composer, so they
