@@ -770,7 +770,7 @@ describe("classifyWorkState", () => {
   test("waiting (turn ended, background task open) files as DORMANT once settled", () => {
     // The daemon reports "waiting" when a turn ended with a live run_in_background
     // command or Monitor — the harness will re-invoke the agent, so the ball is
-    // NOT in the user's court (never NEEDS INPUT) — but the agent is not producing
+    // NOT in the user's court (never NEEDS YOU) — but the agent is not producing
     // either, so it is parked, not WORKING: it must not inflate the "N agents
     // running" count.
     expect(classifyWorkState(wsi({ agentStatus: "waiting", isIdle: true }))).toBe("dormant");
@@ -835,7 +835,7 @@ describe("classifyWorkState", () => {
 
   test("a blocked pin outranks a standing trigger or loop park", () => {
     // jx7bfp5 (2026-09-06): a daily inject trigger kept filing its home under
-    // Dormant while the card's pin read "Needs input". The standing wake keeps
+    // Dormant while the card's pin read "Needs you". The standing wake keeps
     // firing, but the agent said a human must act, so the card files where
     // the human looks — with a live daemon (idle) and with none at all.
     expect(classifyWorkState(wsi({ agentStatus: "idle", isIdle: true, declaredStatus: "blocked", armedTriggerHome: true }))).toBe("needs_input");
@@ -877,7 +877,7 @@ describe("classifyWorkState", () => {
 
   test("THE RULE: a settled session with content → needs_input (matches the web inbox)", () => {
     // The web inbox has no "idle with content" bucket — a finished turn waiting
-    // to be read is the user's ball, so it files under NEEDS INPUT. The CLI
+    // to be read is the user's ball, so it files under NEEDS YOU. The CLI
     // matches; "idle" is reserved for blank (or killed) sessions.
     expect(classifyWorkState(wsi({ isIdle: true }))).toBe("needs_input");
   });
