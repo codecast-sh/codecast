@@ -97,3 +97,4 @@ test("an unsettled send never leaves on transcript movement alone", () => {
   useInboxStore.getState().setMessages("c", [{ _id: "later", role: "assistant", content: "a later turn", timestamp: Date.now() + 10 * 60_000 }] as any);
   expect(useInboxStore.getState().pendingMessages.c).toEqual([input]);
 });
+

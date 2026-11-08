@@ -19,13 +19,11 @@ describe("SyncService pending-message daemon ownership", () => {
 
     await sync.updateMessageStatus({ messageId: "m1", status: "injected" });
     await sync.retryMessage("m1");
-    await sync.ackInjectedMessages("c1");
     await sync.resetInjectedMessages("c1");
 
     expect(calls.map((c) => c.name)).toEqual([
       "pendingMessages:updateMessageStatus",
       "pendingMessages:retryMessage",
-      "pendingMessages:ackInjectedMessages",
       "pendingMessages:resetInjectedMessages",
     ]);
     for (const call of calls) {
@@ -54,26 +52,6 @@ describe("SyncService pending-message daemon ownership", () => {
     expect(calls[0].name).toBe("pendingMessages:claimPendingMessageForDelivery");
     expect(calls[0].args.message_id).toBe("m1");
     expect(typeof calls[0].args.device_id).toBe("string");
-  });
-
-  test("forwards daemon-vouched transcript associations for send/v2 coverage", async () => {
-    const { sync, calls } = createSyncWithCapturedMutations();
-    await sync.ackInjectedMessages("c1", ["pm1"], [{
-      pendingMessageId: "pm1",
-      transcriptMessageId: "message1",
-    }]);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      name: "pendingMessages:ackInjectedMessages",
-      args: {
-        conversation_id: "c1",
-        message_ids: ["pm1"],
-        delivery_acks: [{
-          pending_message_id: "pm1",
-          transcript_message_id: "message1",
-        }],
-      },
-    });
   });
 });
 
