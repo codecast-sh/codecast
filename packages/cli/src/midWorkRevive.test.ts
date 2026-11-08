@@ -28,14 +28,19 @@ describe("midWorkReviveDecision", () => {
     expect(midWorkReviveDecision(facts())).toEqual({ revive: true });
   });
 
-  test("revives every mid-turn status", () => {
-    for (const status of ["working", "thinking", "compacting", "waiting"]) {
-      expect(midWorkReviveDecision(facts({ status })).revive).toBe(true);
+  test("revives a finished turn that still owned background work", () => {
+    expect(midWorkReviveDecision(facts({ status: "waiting" })).revive).toBe(true);
+  });
+
+  // A death mid-turn is the turn claim's to resume (turnClaims.ts), never this path's too.
+  test("leaves mid-turn statuses to the turn claims", () => {
+    for (const status of ["working", "thinking", "compacting", "permission_blocked"]) {
+      expect(midWorkReviveDecision(facts({ status }))).toEqual({ revive: false, reason: "turn-finished" });
     }
   });
 
-  test("leaves a finished turn, a permission prompt and a trigger wait alone", () => {
-    for (const status of ["idle", "stopped", "permission_blocked", "dormant", undefined]) {
+  test("leaves a finished turn and a trigger wait alone", () => {
+    for (const status of ["idle", "stopped", "dormant", undefined]) {
       expect(midWorkReviveDecision(facts({ status }))).toEqual({ revive: false, reason: "turn-finished" });
     }
   });
