@@ -103,7 +103,7 @@ describe("isInterruptControlMessage", () => {
 
 // End-to-end: the exact bug. A bare-terminal session latched at "working" whose
 // transcript ends in a user interrupt must reconcile to "idle" — which is what
-// lets the server/web route it into NEEDS INPUT. Before the fix the interrupt
+// lets the server/web route it into NEEDS YOU. Before the fix the interrupt
 // read as "active" and reconciledStatus left it (or flipped it back to) working.
 describe("interrupted bare-terminal session reconciles to idle (the full chain)", () => {
   test("working + interrupt tail -> idle", () => {
@@ -680,7 +680,7 @@ describe("classifyTranscriptTail on real transcripts", () => {
 
 // Daemon-side recovery for a permission_blocked latch (the one status reconciledStatus
 // and the pane reconcile both refuse to touch). When the resume "working" hook after a
-// user answers an AskUserQuestion is lost, the session freezes in "Needs Input". The
+// user answers an AskUserQuestion is lost, the session freezes in "Needs You". The
 // transcript distinguishes answered (tail ends in a user turn) from still-pending (tail
 // ends in the assistant tool_use).
 describe("transcriptTailLastRealRole", () => {
