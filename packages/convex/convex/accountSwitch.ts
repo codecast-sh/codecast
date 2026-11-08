@@ -20,7 +20,7 @@ import { classifyApiErrorBanner, blockedContinueClientId, CONTINUE_BANNER_KINDS,
 import {
   actedBlockedConversations,
   skippedBlockedWorkers,
-  blockedHeadlineCause,
+  blockedIncidentNotice,
   ccAccountsValidator,
   decideAutoSwitch,
   fallbackProfiles,
@@ -804,59 +804,31 @@ export async function onFreshApiErrorPark(
 export const blockedNotifyCheck = internalMutation({
   args: { user_id: v.id("users") },
   handler: async (ctx, args) => {
-    const { blocked, totalBlocked, subagentCount } = await listBlockedConversations(
-      ctx,
-      args.user_id,
-      true,
-      true,
-    );
-    if (blocked.length === 0) return { notified: false, reason: "nothing_blocked" };
+    const { blocked } = await listBlockedConversations(ctx, args.user_id, false, true);
+    // Top-level sessions only: a parked worker is its parent session's to
+    // handle, and its park neither raises nor re-raises the push.
+    const notice = blockedIncidentNotice(blocked);
+    if (!notice) return { notified: false, reason: "nothing_blocked" };
     const user = await ctx.db.get(args.user_id);
     if (!user) return { notified: false, reason: "no_user" };
 
     const now = Date.now();
-    const newestPark = Math.max(...blocked.map((c) => c.updated_at ?? 0));
     const state = user.blocked_notify_state;
-    if (state && newestPark <= state.last_park_ts) return { notified: false, reason: "covered" };
+    if (state && notice.newestPark <= state.last_park_ts) return { notified: false, reason: "covered" };
     if (state && now - state.last_notified_at < BLOCKED_NOTIFY_COOLDOWN_MS) {
       return { notified: false, reason: "cooldown" };
     }
 
-    const authCount = blocked.filter((c) => c.pending_api_error_kind === "auth").length;
-    const connCount = blocked.filter((c) => c.pending_api_error_kind === "connection").length;
-    const fatalCount = blocked.filter((c) => c.pending_api_error_kind === "fatal").length;
-    const safetyCount = blocked.filter((c) => c.pending_api_error_kind === "safety").length;
-    const throttleCount = blocked.filter((c) => c.pending_api_error_kind === "throttle").length;
-    const limitCount = blocked.length - authCount - connCount - fatalCount - safetyCount - throttleCount;
-    // Same headline the banner leads with — one shared definition, so the
-    // push and the banner can't name different causes for one incident.
-    const on = blockedHeadlineCause(blocked);
-    const title = `${totalBlocked} session${totalBlocked === 1 ? "" : "s"} blocked on ${on}`;
-    const parts = [
-      limitCount > 0 ? `${limitCount} hit a usage limit` : null,
-      connCount > 0 ? `${connCount} dropped mid-response` : null,
-      fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
-      authCount > 0 ? `${authCount} signed out` : null,
-      safetyCount > 0 ? `${safetyCount} need${safetyCount === 1 ? "s" : ""} safety review` : null,
-      throttleCount > 0 ? `${throttleCount} rate limited by a burst` : null,
-    ].filter(Boolean);
-    const hint = safetyCount > 0 ? "review safety stops in the inbox; they are excluded from automatic recovery" : authCount > 0 ? "sign in to revive them" : "revive them from the inbox";
-    const message =
-      parts.join(" · ") +
-      (subagentCount > 0 ? ` (${subagentCount} subagent${subagentCount === 1 ? "" : "s"})` : "") +
-      ` — ${hint}.`;
-
-    const anchor = [...blocked].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
     // Stamp BEFORE delivering so a racing duplicate check can't double-push.
     await ctx.db.patch(user._id, {
-      blocked_notify_state: { last_notified_at: now, last_park_ts: newestPark },
+      blocked_notify_state: { last_notified_at: now, last_park_ts: notice.newestPark },
     });
     const delivered = await deliverSessionNotificationToParties(
       ctx,
-      anchor,
+      notice.anchor,
       "session_error",
-      title,
-      message,
+      notice.title,
+      notice.message,
     );
     return { notified: delivered };
   },
