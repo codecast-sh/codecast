@@ -107,6 +107,9 @@ describe("a failed run resumed onto the default branch", () => {
   test("the station is checked against the graph, and --onto-main runs only where the run's worktree and checkpoint are", () => {
     expect(() => resumeStation(line(), "nowhere", { runId, projectPath: project, here: true })).toThrow("the run's graph has no station nowhere");
     expect(resumeStation(line(), "verify", { runId, projectPath: project, here: false })).toEqual({ at: "verify", note: null });
+    // A miss lists the stations, and a station's label finds it.
+    expect(() => resumeStation(line(), "nowhere", { runId, projectPath: project, here: true })).toThrow(/its stations: .*plan \(Plan\)/);
+    expect(resumeStation(line(), "Plan", { runId, projectPath: project, here: false })).toEqual({ at: "plan", note: null });
     expect(() => resumeStation(line(), "verify", { ontoMain: true, runId, projectPath: project, here: false })).toThrow("run it on the machine that holds the run");
     expect(() => resumeStation(line(), "verify", { ontoMain: true, runId, projectPath: project, here: true })).toThrow(`no checkpoint of run ${runId}`);
     // Its checkpoint is found wherever its graph put the run's files.
