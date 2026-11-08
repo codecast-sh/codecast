@@ -2707,13 +2707,16 @@ function mergeOverlayFacts(target: Record<string, unknown>, incoming: Record<str
     ...Object.fromEntries(INBOX_FACT_FIELDS.map((key) => [key, incoming[key] ?? null])),
     ...incoming,
   }, [], pending);
+  // An equal structured fact keeps the row's own object: a decoded payload
+  // hands every one over fresh, and a new identity reads as a change to every
+  // reader that compares by reference (row memos, wake signatures).
   for (const key of INBOX_FACT_FIELDS) {
     const next = facts[key] === undefined ? null : facts[key];
-    if (!Object.is(target[key], next)) target[key] = next;
+    if (!sameOverlayValue(target[key], next)) target[key] = next;
   }
   for (const key in facts) {
     if (SESSIONS_STRIP_FIELD_SET.has(key) || INBOX_FACT_FIELD_SET.has(key)) continue;
-    if (!Object.is(target[key], facts[key])) target[key] = facts[key];
+    if (!sameOverlayValue(target[key], facts[key])) target[key] = facts[key];
   }
   return nextPending;
 }

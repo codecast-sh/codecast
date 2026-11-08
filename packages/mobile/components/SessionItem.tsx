@@ -8,8 +8,8 @@ import { apiErrorBadge } from '@codecast/web/lib/apiErrorBadge';
 import { resolveImageThumbs } from '@codecast/web/lib/uiPrefDefaults';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
 import { threadStateView } from '@codecast/web/lib/threadState';
-import { agentStatusAt } from '@codecast/web/lib/liveness';
 import { gestureHandler } from '@/lib/gestureHandler';
+import { sessionRowPropsEqual } from '@/lib/sessionRowEqual';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
@@ -72,7 +72,7 @@ export type SessionData = {
 export * from '@/components/sessionFormat';
 import { useSessionShip } from '@codecast/web/hooks/useSessionShipState';
 import type { SessionShip } from '@codecast/web/lib/ship/sessionShip';
-import { formatRelativeTime, isProducingStatus, sessionTitle, projectColor, statusColor, statusLabel, projectName } from '@/components/sessionFormat';
+import { formatRelativeTime, sessionTitle, projectColor, statusColor, statusLabel, projectName } from '@/components/sessionFormat';
 
 /** Where a session's work is on its way to production, as a small tag in its tone. */
 function ShipTag({ ship }: { ship: SessionShip }) {
@@ -97,28 +97,32 @@ export function ProjectTag({ name, maxFontSizeMultiplier }: { name: string; maxF
   );
 }
 
+// One breath of the pulse (down and back up) as a cosine sampled for native
+// interpolation, so the loop is a single timing the native driver repeats on
+// its own. A looped sequence restarts each leg from JS.
+const PULSE_IN = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1];
+const PULSE_OUT = PULSE_IN.map((t) => MOBILE_PULSE.status.low + (1 - MOBILE_PULSE.status.low) * (1 + Math.cos(2 * Math.PI * t)) / 2);
+
+/** The one live dot a screen shows beside an agent's status (the composer).
+ *  Never in a list row: a pulse per row is a native prop write per row every
+ *  frame, and dozens of live sessions kept the phone busy while idle. */
 export function PulsingDot({ color }: { color: string }) {
-  const Theme = useTheme();
-  const opacity = useRef(new RNAnimated.Value(1)).current;
+  const phase = useRef(new RNAnimated.Value(0)).current;
   useEffect(() => {
     const animation = RNAnimated.loop(
-      RNAnimated.sequence([
-        RNAnimated.timing(opacity, { toValue: MOBILE_PULSE.status.low, duration: MOBILE_PULSE.status.leg, useNativeDriver: true }),
-        RNAnimated.timing(opacity, { toValue: 1, duration: MOBILE_PULSE.status.leg, useNativeDriver: true }),
-      ])
+      RNAnimated.timing(phase, { toValue: 1, duration: 2 * MOBILE_PULSE.status.leg, easing: (t) => t, useNativeDriver: true }),
     );
     animation.start();
     return () => animation.stop();
-  }, [opacity]);
+  }, [phase]);
+  const opacity = phase.interpolate({ inputRange: PULSE_IN, outputRange: PULSE_OUT });
   return <RNAnimated.View style={[styles.statusDot, { backgroundColor: color, opacity }]} />;
 }
 
+// Rows hold still (web's listRowsHoldStill): the colour says the agent is
+// working.
 function StatusDot({ session }: { session: SessionData }) {
-  const Theme = useTheme();
-  const color = statusColor(session);
-  const isAnimated = isProducingStatus(agentStatusAt(session, Date.now())) || session.has_pending;
-  if (isAnimated) return <PulsingDot color={color} />;
-  return <RNView style={[styles.statusDot, { backgroundColor: color }]} />;
+  return <RNView style={[styles.statusDot, { backgroundColor: statusColor(session) }]} />;
 }
 
 // What every row of a list reads from the store, read once by the list and
@@ -329,7 +333,8 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
 }
 
 // Memoized: the inbox holds every row at once, so a store write re-renders
-// only the rows whose props changed. The callbacks take the row's id (or the
+// only the rows whose props changed, and a heartbeat alone changes none
+// (lib/sessionRowEqual). The callbacks take the row's id (or the
 // row) so the list passes the same functions to every row.
 export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onDismiss, onLongPress, roleSessions, onOpenRole, reviveAt }: {
   session: SessionData;
@@ -480,7 +485,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
       ) : card}
     </RNView>
   );
-});
+}, sessionRowPropsEqual);
 
 export const styles = themedStyles((Theme) => StyleSheet.create({
   swipeContainer: {

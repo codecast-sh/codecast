@@ -47,6 +47,7 @@ function heavyRow(i: number, now: number, me: string) {
     is_idle: !(live && i % 3),
     awaiting_input: false,
     has_pending: false,
+    last_turn_allows_park: false,
     thread_state: `Working on item ${i}\nStatus: step ${i % 7} of 7`,
     last_message_preview: `Reviewed the diff for change ${i} and pushed the fix.`,
     subtitle: `Change ${i}`,

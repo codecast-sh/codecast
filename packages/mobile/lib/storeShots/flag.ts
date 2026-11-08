@@ -3,4 +3,4 @@
 // and preview video (packages/mobile/store-shots). Start Metro with
 // EXPO_PUBLIC_STORE_SHOTS=1. Never on in a release build: `__DEV__` is false
 // there, so every `if (STORE_SHOTS)` folds away with the require inside it.
-export const STORE_SHOTS = process.env.EXPO_PUBLIC_STORE_SHOTS === "1";
+export const STORE_SHOTS = __DEV__ && process.env.EXPO_PUBLIC_STORE_SHOTS === "1";
