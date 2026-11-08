@@ -1269,7 +1269,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // which account a switch picks) is local, so the echo must not blank it.
   sessionCommands: {
     persistence: { kind: "collection", key: "sessionCommands", perWindow: true },
-    sync: { isDelta: true, preserveFields: ["kind", "conversation_id", "to_device_id", "to_remote", "to_label", "profile", "email", "started_at", "confirmed_at", "project_id", "edits", "keys"] },
+    sync: { isDelta: true, preserveFields: ["kind", "conversation_id", "to_device_id", "to_remote", "to_label", "profile", "email", "started_at", "confirmed_at", "project_id", "edits", "keys", "op", "message_ts"] },
     feeds: ["sessionCommands.results", "sessionCommands.forConversation"],
   },
   managedSessions: {
