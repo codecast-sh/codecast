@@ -27,6 +27,9 @@ import {
 import type { AgentOption, MoveVerb } from "../lib/sessionControl";
 import { MOVE_VERBS, moveAgentOptions, sessionMoveVerbs } from "../lib/sessionControl";
 import { useCloudAgentOfConversation } from "./cloudAgents/sessionAgent";
+import { BackendRunsInRows } from "./ClaudeBackendControl";
+import { useClaudeBackend } from "../hooks/useSessionCommands";
+import { canSwitchClaudeBackend } from "../lib/claudeBackendControl";
 
 // The unified session control: one panel behind the conversation-header badge
 // holding everything that moves a session between rails — model and effort
@@ -281,6 +284,8 @@ export function SessionControlPanel({
   // One of a cloud agent's attempts (a best-of-N launch, or a branch of one): switched in the branch map.
   const attempts = (model ? cloudAgentLaunch(agentType, model)?.attempts ?? 0 : 0) > 1 || isCloudAgentBranch(agentType, sessionId);
   const { dispatchAction } = useShortcuts();
+  const showBackend = canSwitchClaudeBackend(agentType, sessionId, messageCount);
+  const { backend } = useClaudeBackend(conversationId);
 
   const stateLine = cloudNote
     ?? (!controllable
@@ -379,7 +384,12 @@ export function SessionControlPanel({
         </div>
       )}
 
-      <DropdownMenuSeparator className={controllable || attempts ? "" : "hidden"} />
+      {showBackend && <>
+        <DropdownMenuSeparator className={controllable || attempts ? "" : "hidden"} />
+        <BackendRunsInRows conversationId={conversationId} sectionLabelClassName={SECTION_LABEL} />
+      </>}
+
+      <DropdownMenuSeparator className={controllable || attempts || showBackend ? "" : "hidden"} />
       <div className={SECTION_LABEL}>Move this session</div>
       <div className="pb-1">
         {verbs.map((verb) => {
@@ -395,7 +405,8 @@ export function SessionControlPanel({
               <Icon className="h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-colors group-focus:text-sol-cyan" />
               <span className="flex min-w-0 flex-col">
                 <span className="text-xs text-sol-text">{meta.label}</span>
-                <span className="truncate text-[10px] text-sol-text-dim">{meta.hint}</span>
+                {/* A fork of an SDK session starts in tmux (the SDK path has no fork). */}
+                <span className="truncate text-[10px] text-sol-text-dim">{verb === "fork" && backend === "sdk" ? "A copy on another agent, in a terminal" : meta.hint}</span>
               </span>
               <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-sol-text-dim/60 transition-transform group-focus:translate-x-0.5" />
             </DropdownMenuItem>
