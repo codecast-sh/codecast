@@ -47,7 +47,7 @@ cast read <id> --ask "<question>"  # one session's answer with line citations; n
 cast read <id> 15:25               # messages 15 to 25 (--full shows tool payloads)
 cast context "implement auth"      # prior sessions relevant to a task
 cast feed                          # what the team is doing now
-cast sessions <id>… -w --json      # watch sessions' work state
+cast sessions <id>… -w --until     # wait until they settle, then exit
 cast diff <id> | summary <id> | blame <file>
 cast decisions list | add "title" --reason "why"
 ```

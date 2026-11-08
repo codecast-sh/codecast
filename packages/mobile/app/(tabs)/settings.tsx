@@ -42,7 +42,7 @@ export default function SettingsScreen() {
   const open = (section: string) => router.push(`/settings/${section}` as never);
 
   const handleSignOut = () => {
-    appAlert('Sign Out', 'Are you sure you want to sign out?', [
+    appAlert('Sign out?', undefined, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: signOut },
     ]);
