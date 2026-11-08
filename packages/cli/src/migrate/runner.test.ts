@@ -46,6 +46,7 @@ function world(opts: {
   resumeNeverExecutes?: boolean;
   transferError?: string;
   hostLoginGap?: string;
+  hostCastGap?: string;
   hostRoom?: { refuse?: string; small?: string };
   rehearsalBlockers?: string[];
   rehearsalMissing?: string[];
@@ -94,6 +95,7 @@ function world(opts: {
     deviceOnline: async (d) => { calls.push(["deviceOnline", d]); return opts.deviceOnline ?? true; },
     prepareHost: async (d) => { calls.push(["prepareHost", d]); },
     hostLoginGap: async () => opts.hostLoginGap ?? null,
+    hostCastGap: async () => opts.hostCastGap ?? null,
     hostRoom: async () => opts.hostRoom ?? {},
     rehearse: async (f, bring) => {
       calls.push(["rehearse", bring]);
@@ -277,6 +279,15 @@ describe("migrateRow — a session to the cloud", () => {
     const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
     expect(out.outcome).toBe("failed");
     expect(out.detail).toContain("has no Claude login");
+    expect(w.kinds()).toEqual(["begin", "fail"]);
+  });
+
+  test("a host whose cast cannot be brought to this laptop's version is refused before the session is stopped", async () => {
+    const w = world({ statuses: ["idle"], hostCastGap: "the host runs cast 1.1.200, behind this laptop's 1.1.213, and installing 1.1.213 failed: ssh: timeout" });
+    const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
+    expect(out.outcome).toBe("failed");
+    expect(out.detail).toContain("behind this laptop's 1.1.213");
+    expect(out.detail).toContain("left running here");
     expect(w.kinds()).toEqual(["begin", "fail"]);
   });
 

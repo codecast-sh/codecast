@@ -13,7 +13,7 @@ export const CARD_GATE_NODE_ID = "decide";
  *  workflow with a station of the same name by its graph (isLineRun). */
 export type LineRunEnd = "shipped" | "dropped" | "dissolved" | "parked";
 /** The stations that end a line run, and the end each means. */
-export const LINE_END_NODES: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped", dissolve: "dissolved", park: "parked" };
+export const LINE_END_NODES: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped", dropped: "dropped", dissolve: "dissolved", park: "parked" };
 
 /** A run as isLineRun and lineRunOutcome read it: the stations it visited, and its graph's stations (LE14). */
 export type LineRunStations = {
@@ -65,13 +65,14 @@ export const cardAnswered = (gate: AnsweredGate | null | undefined): boolean =>
   !!gate && gate.gate_node_id === CARD_GATE_NODE_ID && (gate.gate_decision_status === "answered" || !!gate.gate_answer?.trim());
 
 /** The ends every graph shares: a completed watch shipped, a completed drop dropped. */
-const SHARED_ENDS: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped" };
+const SHARED_ENDS: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped", dropped: "dropped" };
 
 /** Another graph's own close stations, by name: AgentWatch closes a cause at
  *  `dissolved_at_investigate` (no fix needed, found at Investigate) and parks
- *  it at `park_built`. The step it closed at is the name's tail. */
+ *  it at `park_built`; onefix closes one at `closed_at_triage` (already fixed,
+ *  or not needed). The step it closed at is the name's tail. */
 function foreignEnd(id: string): LineRunEnd | null {
-  if (/^(?:dissolved|released)_at_\w+$/.test(id)) return "dissolved";
+  if (/^(?:dissolved|released|closed)_at_\w+$/.test(id)) return "dissolved";
   if (/^park(?:_|$)/.test(id)) return "parked";
   return null;
 }

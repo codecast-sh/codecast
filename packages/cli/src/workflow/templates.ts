@@ -32,6 +32,8 @@ import deployCast from "./templates/deploy.cast" with { type: "text" };
 import proveImplementCast from "./templates/prove-implement.cast" with { type: "text" };
 import changeCast from "./templates/change.cast" with { type: "text" };
 import quickChangeCast from "./templates/quick-change.cast" with { type: "text" };
+import judgeCast from "./templates/judge.cast" with { type: "text" };
+import judgeRisk from "./templates/judge/risk.md" with { type: "text" };
 import changeFixCheck from "./templates/change/fix_check.md" with { type: "text" };
 import changeFixReview from "./templates/change/fix_review.md" with { type: "text" };
 import changeRevise from "./templates/change/revise.md" with { type: "text" };
@@ -74,6 +76,8 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "change/fix_review.md": changeFixReview,
   "change/revise.md": changeRevise,
   "change/fix_conflict.md": changeFixConflict,
+  // What the blind risk judge reads (judge.cast).
+  "judge/risk.md": judgeRisk,
 };
 
 /** Replace each quoted `"@<file>"` value naming one of `files` with that file's text as a DOT string. */
@@ -94,6 +98,7 @@ export const BUILTIN_WORKFLOW_TEMPLATES: Readonly<Record<string, string>> = {
   // stations, and the change line that strings them together.
   check: inlineTemplateFiles(checkCast, LINE_TEMPLATE_FILES),
   review: inlineTemplateFiles(reviewCast, LINE_TEMPLATE_FILES),
+  judge: inlineTemplateFiles(judgeCast, LINE_TEMPLATE_FILES),
   eval: inlineTemplateFiles(evalCast, LINE_TEMPLATE_FILES),
   decide: decideCast,
   ship: inlineTemplateFiles(shipCast, LINE_TEMPLATE_FILES),

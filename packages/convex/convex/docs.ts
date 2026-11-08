@@ -39,6 +39,7 @@ import { claimShareToken } from "./publicShare";
 import { packSnapshotContent } from "./lib/docSnapshot";
 import { docTitleFromContent, draftTextNodes, renderDocMentionExcerpt, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
+import { conversationProjectRoot, knownCheckoutRoots } from "./projectPaths";
 export { canAccessDoc };
 
 function generatePlanShortId(): string {
@@ -48,17 +49,13 @@ function generatePlanShortId(): string {
   return id;
 }
 
-function normalizeToRoot(path: string): string {
-  const parts = path.split('/');
-  const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
-  if (srcIndex >= 0 && srcIndex < parts.length - 1) {
-    return parts.slice(0, srcIndex + 2).join('/');
-  }
-  return path;
-}
-
-function repoName(path: string): string {
-  return normalizeToRoot(path).split('/').filter(Boolean).pop() || path;
+/**
+ * The repository folder name a doc's path belongs to: the checkout of a known
+ * session containing it (conversationProjectRoot), else the path's own folder.
+ */
+function repoName(path: string, checkouts: Set<string>): string {
+  const root = conversationProjectRoot({ project_path: path }, checkouts) ?? path;
+  return root.split('/').filter(Boolean).pop() || path;
 }
 
 function docGitRoot(d: any, convMap: Map<string, any>): string | null {
@@ -70,7 +67,7 @@ function docGitRoot(d: any, convMap: Map<string, any>): string | null {
   return null;
 }
 
-function dedupeProjectPaths(paths: string[], docs?: any[], convMap?: Map<string, any>): string[] {
+function dedupeProjectPaths(paths: string[], checkouts: Set<string>, docs?: any[], convMap?: Map<string, any>): string[] {
   const gitRootForPath = new Map<string, string>();
   if (docs && convMap) {
     for (const d of docs) {
@@ -82,8 +79,8 @@ function dedupeProjectPaths(paths: string[], docs?: any[], convMap?: Map<string,
 
   const byName = new Map<string, string>();
   for (const path of paths) {
-    const root = gitRootForPath.get(path) || normalizeToRoot(path);
-    const name = root.split('/').filter(Boolean).pop() || path;
+    const root = gitRootForPath.get(path);
+    const name = root ? root.split('/').filter(Boolean).pop() || path : repoName(path, checkouts);
     const existing = byName.get(name);
     if (!existing || (path.includes('/src/') && !existing.includes('/src/'))) {
       byName.set(name, path);
@@ -92,10 +89,10 @@ function dedupeProjectPaths(paths: string[], docs?: any[], convMap?: Map<string,
   return Array.from(byName.values());
 }
 
-function docRepoName(d: any, convMap: Map<string, any>): string {
+function docRepoName(d: any, convMap: Map<string, any>, checkouts: Set<string>): string {
   const root = docGitRoot(d, convMap);
   if (root) return root.split('/').filter(Boolean).pop() || root;
-  return d.project_path ? repoName(d.project_path) : "";
+  return d.project_path ? repoName(d.project_path, checkouts) : "";
 }
 
 
@@ -197,6 +194,7 @@ async function buildWebDocList(
     limit: requestedCount,
     stripFields: ["content", "embedding", "entries"],
   });
+  const checkouts = knownCheckoutRoots(convMap.values());
 
   let docs: any[];
   let projectPaths: string[] = [];
@@ -205,15 +203,15 @@ async function buildWebDocList(
     if (args.scope === "projects") {
       docs = rawDocs;
       if (args.project_path) {
-        const filterName = repoName(args.project_path);
-        docs = docs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
+        const filterName = repoName(args.project_path, checkouts);
+        docs = docs.filter((d) => d.project_path && docRepoName(d, convMap, checkouts) === filterName);
       }
     } else {
-      const filterName = repoName(args.project_path!);
-      docs = rawDocs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
+      const filterName = repoName(args.project_path!, checkouts);
+      docs = rawDocs.filter((d) => d.project_path && docRepoName(d, convMap, checkouts) === filterName);
     }
     const unscopedDocs = rawDocs.filter((d) => !d.archived_at && !isNoiseDocForWeb(d));
-    projectPaths = dedupeProjectPaths([...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[], unscopedDocs, convMap);
+    projectPaths = dedupeProjectPaths([...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[], checkouts, unscopedDocs, convMap);
   } else {
     docs = rawDocs;
   }
@@ -222,7 +220,7 @@ async function buildWebDocList(
   docs = docs.filter((d) => !d.archived_at && !isNoiseDocForWeb(d) && d.source !== "plan_mode");
 
   if (!projectPaths.length) {
-    projectPaths = dedupeProjectPaths([...new Set(docs.map((d) => d.project_path).filter(Boolean))] as string[], docs, convMap);
+    projectPaths = dedupeProjectPaths([...new Set(docs.map((d) => d.project_path).filter(Boolean))] as string[], checkouts, docs, convMap);
   }
 
   const enriched = docs.map((d) => {
@@ -953,11 +951,12 @@ async function enrichPage(
   args: { doc_type?: string; project_id?: string; project_path?: string; scope?: string },
 ): Promise<any[]> {
   let docs = records;
+  const checkouts = knownCheckoutRoots(convMap.values());
 
   if (args.scope === "projects" || args.project_path) {
     if (args.project_path) {
-      const filterName = repoName(args.project_path);
-      docs = docs.filter((d) => d.project_path && docRepoName(d, convMap) === filterName);
+      const filterName = repoName(args.project_path, checkouts);
+      docs = docs.filter((d) => d.project_path && docRepoName(d, convMap, checkouts) === filterName);
     }
   }
 

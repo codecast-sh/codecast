@@ -17,6 +17,17 @@ import { execFileAsync, spawn, spawnSync } from "./proc.js";
 const JOB_ENV = /^(HOME|PATH|USER|LOGNAME|SHELL|TMPDIR|LANG|LC_[A-Z]+|CODECAST_[A-Z0-9_]+|CAST_[A-Z0-9_]+|BUN_[A-Z0-9_]+)$/;
 const SECRET_ENV = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/;
 
+/**
+ * The desktop app's bundle id. macOS lists every plist in a LaunchAgents or
+ * LaunchDaemons folder under Login Items, and names it, in that list and in its
+ * "can run in the background" banner, after the app this key points at, but only
+ * when the job's executable carries our Team ID and the app is installed. Without
+ * it a signed cast binary shows as "Software from <certificate holder>". A job
+ * run through /bin/sh has no Team ID, so the key does nothing there (it shows as
+ * "sh"). Jobs bootstrapped from a plist anywhere else never reach Login Items.
+ */
+export const DESKTOP_APP_BUNDLE_ID = "sh.codecast.desktop";
+
 /** The variable a job's process finds its own label in, so it can unload itself on the way out. */
 export const LAUNCHD_LABEL_ENV = "CAST_LAUNCHD_LABEL";
 

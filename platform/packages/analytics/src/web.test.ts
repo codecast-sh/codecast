@@ -30,7 +30,11 @@ const analyticsExtensions = {
   autocapture: class Autocapture {},
   historyAutocapture: class HistoryAutocapture {},
 };
-mock.module("posthog-js/dist/extension-bundles.js", () => ({ AnalyticsExtensions: analyticsExtensions }));
+const sessionReplayExtensions = { sessionRecording: class SessionRecording {} };
+mock.module("posthog-js/dist/extension-bundles.js", () => ({
+  AnalyticsExtensions: analyticsExtensions,
+  SessionReplayExtensions: sessionReplayExtensions,
+}));
 
 mock.module("@sentry/react", () => ({
   init: record(sentryCalls, "init"),
@@ -56,6 +60,25 @@ beforeEach(() => {
 });
 
 describe("initAnalytics (web)", () => {
+  it("records the configured sample of sessions with the replay extension loaded", () => {
+    web.initAnalytics({ ...base, sessionReplaySampleRate: 0.1 });
+    const [, options] = last(phCalls, "init") as [string, Record<string, any>];
+    expect(options.disable_session_recording).toBe(false);
+    expect(options.session_recording).toEqual({ sampleRate: 0.1 });
+    expect(options.__extensionClasses).toEqual({ ...analyticsExtensions, ...sessionReplayExtensions });
+  });
+
+  it("never records in development, whatever the sample rate", () => {
+    web.initAnalytics({ ...base, environment: "development", sessionReplaySampleRate: 1 });
+    const [, options] = last(phCalls, "init") as [string, Record<string, any>];
+    expect(options.disable_session_recording).toBe(true);
+    expect(options.__extensionClasses).toBe(analyticsExtensions);
+  });
+
+  it("rejects a sample rate outside 0 to 1", () => {
+    expect(() => web.initAnalytics({ ...base, sessionReplaySampleRate: 10 })).toThrow(/sessionReplaySampleRate/);
+  });
+
   it("initializes PostHog with the donor options and registers super properties", () => {
     web.initAnalytics(base);
     const [key, options] = last(phCalls, "init") as [string, Record<string, unknown>];

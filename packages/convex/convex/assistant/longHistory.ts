@@ -36,6 +36,7 @@ import { historyTools } from "@platform/tidemark/agent";
 import { convexStore } from "@platform/tidemark/stores/convex";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
+import { vendorRefusalFor } from "../lib/vendorGuard";
 import { internalAction, internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "../functions";
 import { callModelMetered, cheapModelCost, estimatedUsage } from "../lib/anthropic";
 import { isRefusalProse } from "../idleSummary";
@@ -427,7 +428,11 @@ export const compress = internalAction({
       }
       if (!userSpent.has(who)) userSpent.set(who, ctx.runQuery(internal.assistant.longHistory.spentToday, { day, who }));
       if ((await userSpent.get(who)!) >= historyDeps.userDayCapUsd) throw new Error("this person's summaries are at today's cap");
-      const { reply, usage } = await historyDeps.call({ system, prompt, max_tokens: historyDeps.summaryMaxTokens, label: "History summary", timeout_ms: 60_000 });
+      // A regulated team's conversation is not summarized while the model's vendor has no BAA; nothing is billed.
+      const gate = { ctx, scope: { conversationId: scope.id as Id<"conversations"> } };
+      const refusal = await vendorRefusalFor(ctx, gate.scope, "anthropic");
+      if (refusal) throw new Error(refusal);
+      const { reply, usage } = await historyDeps.call({ system, prompt, max_tokens: historyDeps.summaryMaxTokens, label: "History summary", timeout_ms: 60_000, gate });
       const usd = cheapModelCost(usage ?? estimatedUsage(system, prompt));
       // A refusal and a summary cut off at its limit are billed like any
       // reply but are no summary. tidemark refuses to store a truncated one.

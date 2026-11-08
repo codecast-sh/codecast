@@ -17,6 +17,7 @@
  */
 
 import type { PageSession } from "./instance.js";
+import { pageForRef } from "./oopif.js";
 
 export class ElementGone extends Error {
   constructor(ref: number) {
@@ -99,17 +100,29 @@ export async function locate(page: PageSession, ref: number): Promise<Point> {
 }
 
 /**
+ * The page object behind a ref. A node of the document before a navigation
+ * can still be scrolled and measured, then fails here ("does not belong to
+ * the document"), so every failure means the element is gone.
+ */
+async function resolveRef(page: PageSession, ref: number): Promise<string> {
+  const r = await page.conn
+    .send<any>("DOM.resolveNode", { backendNodeId: ref }, page.sessionId)
+    .catch(() => null);
+  if (!r?.object?.objectId) throw new ElementGone(ref);
+  return r.object.objectId;
+}
+
+/**
  * Would a click at `pt` reach this element? Returns null when it would, or a
  * description of whatever is on top when it would not.
  */
 export async function hitTest(page: PageSession, ref: number, pt: Point): Promise<string | null> {
   const { conn, sessionId } = page;
-  const { object } = await conn.send<any>("DOM.resolveNode", { backendNodeId: ref }, sessionId);
-  if (!object?.objectId) throw new ElementGone(ref);
+  const objectId = await resolveRef(page, ref);
   const res = await conn.send<any>(
     "Runtime.callFunctionOn",
     {
-      objectId: object.objectId,
+      objectId,
       functionDeclaration: `function(x, y) {
         const top = document.elementFromPoint(x, y);
         if (!top) return "nothing at that point";
@@ -123,7 +136,7 @@ export async function hitTest(page: PageSession, ref: number, pt: Point): Promis
     },
     sessionId,
   );
-  await conn.send("Runtime.releaseObject", { objectId: object.objectId }, sessionId).catch(() => {});
+  await conn.send("Runtime.releaseObject", { objectId }, sessionId).catch(() => {});
   return (res.result?.value as string | null) ?? null;
 }
 
@@ -136,6 +149,7 @@ export interface ClickOptions {
 }
 
 export async function click(page: PageSession, ref: number, opts: ClickOptions = {}): Promise<Point> {
+  ({ page, ref } = await pageForRef(page, ref)); // a ref inside a cross-origin frame acts on its session (oopif.ts)
   const pt = await locate(page, ref);
   if (!opts.force) {
     const blocker = await hitTest(page, ref, pt);
@@ -206,6 +220,7 @@ export async function clickAt(page: PageSession, pt: Point, opts: ClickOptions =
 }
 
 export async function hover(page: PageSession, ref: number): Promise<Point> {
+  ({ page, ref } = await pageForRef(page, ref)); // a ref inside a cross-origin frame acts on its session (oopif.ts)
   const pt = await locate(page, ref);
   await page.conn.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y, button: "none" }, page.sessionId);
   return pt;
@@ -213,6 +228,7 @@ export async function hover(page: PageSession, ref: number): Promise<Point> {
 
 /** Focus an element without clicking — safer for inputs inside labels/links. */
 export async function focus(page: PageSession, ref: number): Promise<void> {
+  ({ page, ref } = await pageForRef(page, ref)); // a ref inside a cross-origin frame acts on its session (oopif.ts)
   await page.conn.send("DOM.focus", { backendNodeId: ref }, page.sessionId).catch(() => {
     throw new ElementGone(ref);
   });
@@ -230,6 +246,7 @@ export interface TypeOptions {
 }
 
 export async function type(page: PageSession, ref: number, text: string, opts: TypeOptions = {}): Promise<void> {
+  ({ page, ref } = await pageForRef(page, ref)); // a ref inside a cross-origin frame acts on its session (oopif.ts)
   const { conn, sessionId } = page;
   await focus(page, ref);
 
@@ -401,13 +418,13 @@ export async function scroll(page: PageSession, deltaY: number, deltaX = 0): Pro
  * the events the page listens for is the only path that works.
  */
 export async function selectOption(page: PageSession, ref: number, value: string): Promise<string> {
+  ({ page, ref } = await pageForRef(page, ref)); // a ref inside a cross-origin frame acts on its session (oopif.ts)
   const { conn, sessionId } = page;
-  const { object } = await conn.send<any>("DOM.resolveNode", { backendNodeId: ref }, sessionId);
-  if (!object?.objectId) throw new ElementGone(ref);
+  const objectId = await resolveRef(page, ref);
   const res = await conn.send<any>(
     "Runtime.callFunctionOn",
     {
-      objectId: object.objectId,
+      objectId,
       functionDeclaration: `function(want) {
         // Most modern UIs render a fake dropdown from divs. Those cannot be
         // driven by setting a value; they need the clicks a user would make,
@@ -432,7 +449,7 @@ export async function selectOption(page: PageSession, ref: number, value: string
     },
     sessionId,
   );
-  await conn.send("Runtime.releaseObject", { objectId: object.objectId }, sessionId).catch(() => {});
+  await conn.send("Runtime.releaseObject", { objectId }, sessionId).catch(() => {});
   const err = res.result?.value as string | null;
   if (err) throw new Error(err);
   return value;
@@ -440,6 +457,7 @@ export async function selectOption(page: PageSession, ref: number, value: string
 
 /** Attach files to an <input type=file> without touching the OS picker. */
 export async function uploadFiles(page: PageSession, ref: number, files: string[]): Promise<void> {
+  ({ page, ref } = await pageForRef(page, ref)); // a ref inside a cross-origin frame acts on its session (oopif.ts)
   await page.conn.send("DOM.setFileInputFiles", { backendNodeId: ref, files }, page.sessionId);
 }
 

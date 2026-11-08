@@ -4,6 +4,7 @@ import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import * as flowMap from "./flowMap";
 import { foldRollup, recountFrom } from "./flowMap";
+import { FUNNEL_DAYS } from "@codecast/shared/contracts/lineFunnel";
 import { DAY_MS, STALLED_MS, normalDay, problemOutcome, sourceState, utcDayKey, windowDays } from "@codecast/shared/contracts/flowMap";
 
 // The flow map (flowMap.ts): the hourly rollup of a workspace's sources and
@@ -112,10 +113,12 @@ describe("a source's normal day and state", () => {
 
 describe("the rollup's fold", () => {
   const days = windowDays(NOW);
-  test("a new row counts the whole window; a fresh one recounts yesterday and today", () => {
-    expect(utcDayKey(recountFrom(null, NOW))).toBe(days[0]);
-    expect(utcDayKey(recountFrom({ rolled_at: NOW - H }, NOW))).toBe(days[12]);
-    expect(utcDayKey(recountFrom({ rolled_at: NOW - 5 * DAY_MS }, NOW))).toBe(days[0]);
+  const kept = windowDays(NOW, FUNNEL_DAYS);
+  test("a new row counts the whole window; a fresh one recounts yesterday and today; one from before the funnel recounts it all", () => {
+    expect(utcDayKey(recountFrom(null, NOW))).toBe(kept[0]);
+    expect(utcDayKey(recountFrom({ rolled_at: NOW - H, funnel: {} }, NOW))).toBe(days[12]);
+    expect(utcDayKey(recountFrom({ rolled_at: NOW - 5 * DAY_MS, funnel: {} }, NOW))).toBe(kept[0]);
+    expect(utcDayKey(recountFrom({ rolled_at: NOW - H }, NOW))).toBe(kept[0]);
   });
   test("keeps the last row's older days, replaces the recounted ones, drops days outside the window", () => {
     const prev = {
@@ -123,7 +126,7 @@ describe("the rollup's fold", () => {
       reopened: [{ task_id: "tasks_old", at: NOW - 30 * DAY_MS }, { task_id: "tasks_kept", at: NOW - 3 * DAY_MS }],
     };
     const out = foldRollup({
-      workspace: WS, now: NOW, from: recountFrom({ rolled_at: NOW - H }, NOW), prev,
+      workspace: WS, now: NOW, from: recountFrom({ rolled_at: NOW - H, funnel: {} }, NOW), prev,
       counts: [{ source: "person", day: days[12], n: 2, last_at: NOW - 20 * H }, { source: "person", day: days[13], n: 1, last_at: NOW - H }],
       reopened: [{ task_id: "tasks_new", at: NOW - H }],
       outcomes: [{ source: "person", outcome: "queued" }, { source: "person", outcome: "failed" }],
@@ -281,6 +284,32 @@ describe("rollup then forTeam", () => {
     expect(map.shipped.map((r) => [r.ref, r.state])).toEqual([["ct-e1", "regressed"], ["ct-w1", "watching"]]);
     expect(map.shipped[0].reopenedBy).toMatchObject({ source: "sdk:union-errors" });
     expect(map.liveFlow!.queued).toBe(3);
+  });
+
+  test("the Volume chart: each problem opened in the window as far as its run got, and why it went no further", async () => {
+    const map = (await rolledMap())!;
+    const f = map.funnel!;
+    expect(f.at).toBe(NOW);
+    const [w7, w30] = f.windows;
+    expect([w7.days, w30.days]).toEqual([7, 30]);
+    // Findings in the last 7 UTC days; the one 40 days old falls outside both.
+    expect(w7.signals).toBe(9);
+    expect(w30.signals).toBe(9);
+    expect(w7.steps.map((s) => s.label)).toEqual(["Problems opened", "Runs started", "Investigate", "Rebase", "Build", "Decide", "Merged", "Live in production", "Closed clean"]);
+    // Opened in the window: ar1, ar2, ar3, p1, p2, e1, w1, jr (ar4 merged into ar3; p3, ar5, old are 40 days old).
+    expect(w7.steps[0]).toMatchObject({ n: 8, drops: { queued: 2, closed: 1 } });
+    // Runs: ar1, ar2 at Build; p1 waiting at Decide; p2 on a person's line at Rebase; e1 shipped and reopened.
+    expect(w7.steps[1].n).toBe(5);
+    const at = (key: string) => w7.steps.find((s) => s.key === key)!;
+    // e1 shipped, so it counts at every station before; this graph has no deploy station, so shipped is live.
+    expect(at("build")).toMatchObject({ n: 4, drops: { here: 2 } });
+    expect(at("decide")).toMatchObject({ n: 2, drops: { waiting: 1 } });
+    expect(at("merged")).toMatchObject({ n: 1, drops: {} });
+    expect(at("live")).toMatchObject({ n: 1, drops: { regressed: 1 } });
+    expect(at("clean").n).toBe(0);
+    const e1 = f.items.find((x) => x.ref === "ct-e1")!;
+    expect(e1).toMatchObject({ run: "workflow_runs_5", why: "regressed", node: "Watch", status: "completed" });
+    expect(f.items.find((x) => x.ref === "ct-p1")).toMatchObject({ why: "waiting", node: "Decide", status: "paused" });
   });
 
   test("a finder's declaration names its row", async () => {

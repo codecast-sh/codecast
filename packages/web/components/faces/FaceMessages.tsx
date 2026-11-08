@@ -87,6 +87,10 @@ function useDmChannelId(memberId: string): string | null {
   });
 }
 
+/** A line a session typed under its person, or an agent's own reply: the
+ *  card is the conversation between two people, so these stay in chat. */
+const typedByAgent = (m: ChatMessageRow) => m.origin === "agent" || m.author_kind === "agent";
+
 /** A place a line was said: the channel itself, or one thread in it. */
 const placeKey = (channelId: string, threadRootId?: string) => `${channelId}:${threadRootId ?? ""}`;
 /** The place a stored line reads in: a reply also sent to the channel reads in the channel. */
@@ -177,7 +181,7 @@ export function FaceMessages({
     if (dmId) {
       for (const id in messages) {
         const m = messages[id];
-        if (m.channel_id !== dmId || (m.thread_root_id && !m.broadcast) || m.deleted_at || !m.content) continue;
+        if (m.channel_id !== dmId || (m.thread_root_id && !m.broadcast) || m.deleted_at || !m.content || typedByAgent(m)) continue;
         dm.push({
           id,
           channelId: dmId,
@@ -213,7 +217,7 @@ export function FaceMessages({
       const mine: Row[] = [];
       for (const id in messages) {
         const m = messages[id];
-        if (String(m.user_id) !== viewerId || m.deleted_at || !m.content || byId.has(id)) continue;
+        if (String(m.user_id) !== viewerId || m.deleted_at || !m.content || typedByAgent(m) || byId.has(id)) continue;
         const from = since.get(placeOfMessage(m));
         if (from === undefined || m.created_at < from) continue;
         const threadRootId = m.thread_root_id && !m.broadcast ? String(m.thread_root_id) : undefined;

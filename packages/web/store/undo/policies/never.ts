@@ -95,6 +95,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   commentOnDecision: SEND,
   dropDecisionComment: LOCAL_ECHO,
   askDecisionSession: SEND,
+  askSideQuestion: never("send: the question goes to the model at once; its answer is private to the asker"),
+  dropSideAnswer: LOCAL_ECHO,
   deleteDecisionComment: DELETE,
   sendLineChat: SEND,
   dropLineChatSend: LOCAL_ECHO,
@@ -165,6 +167,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
 
   // Deletes
   deleteCallRecording: DELETE,
+  deleteCall: DELETE,
   admitGuestKnock: never("door: letting a stranger into a call is not taken back by an undo; remove them"),
   denyGuestKnock: never("door: the guest was told no; they can ask again"),
   removeCallGuest: never("door: the guest was put out of the call; they can be let in again"),
@@ -212,6 +215,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   // Settings
   setAgentDefaultParams: SETTINGS,
   setAgentPermissionModes: SETTINGS,
+  setClaudeBackend: SETTINGS,
   setCapabilityBinding: SETTINGS,
   shareToKit: never("share: it publishes to the team; Remove from kit takes it back"),
   removeKitItem: never("remove: it uninstalls on every machine; share it again to restore"),
@@ -274,6 +278,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setCloudAutoscale: SETTINGS,
   restartSession: MACHINE,
   hibernateSession: MACHINE,
+  switchClaudeBackend: MACHINE,
+  rewindFiles: never("machine control: it rewrites files on the session's machine; its own Put back is the way back"),
   moveSessionToDevice: MACHINE,
   markKilling: MACHINE,
   startResourceOffload: MACHINE,

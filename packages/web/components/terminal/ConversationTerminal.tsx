@@ -40,9 +40,10 @@ import {
   getInstance,
   getTerminalsVersion,
   openTerminal,
+  reconnectTab,
   subscribeTerminals,
 } from "../../lib/terminal/termSessions";
-import { ConnectingNote } from "./TerminalPanel";
+import { ConnectingNote, TerminalSeat } from "./TerminalPanel";
 import { SplitResizeHandle } from "../SplitResizeHandle";
 import {
   conversationTerminalSplits as splits,
@@ -188,14 +189,21 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
     }
   }, [split.termId, status]);
 
-  const reconnect = useCallback(() => {
+  const reconnect = useCallback(async () => {
     const current = splits.get(convKey);
+    const live = current?.termId ? getInstance(current.termId) : null;
+    // A loopback view keeps its seat and its place: ask the daemon again
+    // (it may have moved) and resume rather than repaint.
+    if (current?.termId && live && !live.state.remote && !foreign && !machine?.via_bot) {
+      const endpoint = await getTerminalEndpoint(convex, { deviceId: machine?.device_id });
+      if (endpoint && reconnectTab(current.termId, endpoint)) return;
+    }
     if (current?.termId) {
       closeTab(current.termId);
       current.termId = null;
     }
     void connect();
-  }, [convKey, connect]);
+  }, [convKey, connect, convex, foreign, machine?.device_id, machine?.via_bot]);
 
   const onHandlePointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -236,10 +244,11 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
       <div className="flex items-center h-[24px] px-2 gap-1.5 flex-shrink-0 bg-sol-bg-alt/30 border-b border-sol-border/20 select-none">
         <span
           className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-            status === "open" ? "bg-sol-violet" : isConnecting ? "bg-sol-yellow animate-pulse" : "bg-sol-text-dim/40"
+            status === "open" && !inst?.state.reconnecting ? "bg-sol-violet" : isConnecting || inst?.state.reconnecting ? "bg-sol-yellow animate-pulse" : "bg-sol-text-dim/40"
           }`}
         />
         <span className="text-[10px] font-mono text-sol-text-muted truncate">{target}</span>
+        {inst && status === "open" && <TerminalSeat tab={inst.state} />}
         {isRemote && (
           <span
             className="inline-flex items-center gap-1 px-1 rounded text-[9px] font-mono text-sol-cyan bg-sol-cyan/10 flex-shrink-0"
@@ -257,7 +266,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
         <span className="flex-1" />
         {(status === "exited" || status === "error" || status === "offline" || failure) && (
           <button
-            onClick={reconnect}
+            onClick={() => void reconnect()}
             title="Reconnect"
             className="p-0.5 rounded text-sol-text-dim/50 hover:text-sol-cyan transition-colors"
           >
@@ -287,7 +296,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
               )}
             </span>
             <button
-              onClick={reconnect}
+              onClick={() => void reconnect()}
               className="px-2 py-0.5 rounded border border-sol-border/40 text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
             >
               Reconnect

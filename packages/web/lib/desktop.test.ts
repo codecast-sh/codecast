@@ -503,6 +503,22 @@ describe("notifyNative in a browser", () => {
     }
   });
 
+  test("a request answered during the burst grace never goes up", async () => {
+    const { built, restore } = browserRig(false);
+    try {
+      let pending = true;
+      const shown = notifyNative("t", "b", { conversationId: "br5", kind: "permission_request", key: "row-5" }, { due: () => pending });
+      // The person answers while the gate holds the banner.
+      pending = false;
+      expect(await shown).toBe(false);
+      expect(built.length).toBe(0);
+      expect(await notifyNative("t", "b", { conversationId: "br6", kind: "permission_request", key: "row-6" }, { due: () => true })).toBe(true);
+      expect(built.length).toBe(1);
+    } finally {
+      restore();
+    }
+  });
+
   test("an unfocused tab banners the conversation it shows, once per burst", async () => {
     const { built, restore } = browserRig(false);
     try {

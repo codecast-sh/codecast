@@ -5,6 +5,8 @@
 // report, and the answers right there, or the answer once it is settled.
 // Answering is the store's answerDecision, so the card flips the moment it
 // is pressed and the asking session wakes with the answer.
+import { approvesPersonsAct } from '@codecast/shared/contracts/commandRun';
+import { CommandRunBlock } from '@/components/decisions/CommandRunBlock';
 import { useCallback, useRef } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -25,7 +27,7 @@ import { useSyncDecisionDetail, useDecisionDetail } from '@codecast/web/hooks/us
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import type { AnswerDraft } from '@codecast/web/lib/decisionAnswer';
 import { decisionAnswerLabel } from '@codecast/shared/contracts';
-import { approvesSecretRead } from '@codecast/shared/contracts/secrets';
+
 
 /** How a decision that no longer waits reads, or null while it waits. */
 function settledOf(row: SessionDecisionItem): string | null {
@@ -43,10 +45,10 @@ export const reportUrl = (slug: string) => `https://codecast.sh/a/${slug}`;
  * answer (which adopts a row read by id from outside the viewer's queue).
  * `after` runs once the answer is in.
  */
-export function useDecisionAnswer(source: Parameters<typeof approvesSecretRead>[0] | undefined, decisionId: string, after?: () => void) {
+export function useDecisionAnswer(source: Parameters<typeof approvesPersonsAct>[0] | undefined, decisionId: string, after?: () => void) {
   const confirming = useRef(false);
   return useCallback(async (input: DecisionAnswerInput) => {
-    if (source && 'index' in input && input.index !== undefined && approvesSecretRead(source, input.index)) {
+    if (source && 'index' in input && input.index !== undefined && approvesPersonsAct(source, input.index)) {
       if (confirming.current) return;
       confirming.current = true;
       try {
@@ -106,6 +108,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
         <Pressable onPress={open} accessibilityRole="button" accessibilityHint="Opens the decision">
           {item ? <QueueChip item={item} now={now} /> : null}
           <Text style={styles.question} numberOfLines={3}>{row.question}</Text>
+          {row.run ? <CommandRunBlock run={row.run} compact /> : null}
         </Pressable>
         <View style={styles.compactRow}>
           {inline ? options.map((o, i) => (
@@ -116,7 +119,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
               onPress={() => answer({ index: i })}
               style={[styles.compact, i === (row.blocking ? -1 : row.default_option) && { borderColor: Theme.text }]}
             >
-              {approvesSecretRead(row, i) ? <Feather name="lock" size={11} color={Theme.textMuted} /> : null}
+              {approvesPersonsAct(row, i) ? <Feather name="lock" size={11} color={Theme.textMuted} /> : null}
               <Text style={styles.compactText} numberOfLines={1}>{o.label}</Text>
             </Pressable>
           )) : (
@@ -147,6 +150,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
         {item ? <QueueChip item={item} now={now} /> : null}
         <Text style={styles.question}>{row.question}</Text>
         {item && askingSessionLine(item) && !docked ? <Text style={styles.session} numberOfLines={1}>{askingSessionLine(item)}</Text> : null}
+        {row.run ? <CommandRunBlock run={row.run} compact={docked} /> : null}
       </Pressable>
       {settled ? (
         <View style={styles.settled}>
@@ -171,7 +175,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
             onAnswer={answer}
             look={look}
             proceedingWith={row.blocking ? undefined : row.default_option}
-            guarded={(i) => approvesSecretRead(row, i)}
+            guarded={(i) => approvesPersonsAct(row, i)}
           />
           {kind === 'single' && writing ? (
             <View style={{ gap: 8 }}>

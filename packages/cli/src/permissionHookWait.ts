@@ -11,12 +11,38 @@
 //   {"hookSpecificOutput":{"hookEventName":"PermissionRequest",
 //     "decision":{"behavior":"deny","message":"...","interrupt":true}}}
 //
+// Before any of that, the daemon settles the call against codecast's own
+// rules (permissionHandler.ts settlePermission): a saved approval or a
+// configured deny answers at once, and so does a session nobody watches.
+//
 // A wait that ends without an answer (the bound, the agent moved on, the
 // terminal answered) prints nothing, and the prompt is the terminal's again; a
 // later web answer then falls back to pressing Enter/Escape in the pane.
 
 /** How long a hook holds for a web answer. The terminal dialog works the whole
  *  time; past this the web answer is delivered as a keystroke instead. */
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { boundedRuleRequest, claudeToolRequest, type PermissionRuleRequest } from "@codecast/shared/contracts/permissionRules";
+
+/** The checkout holding `dir`: the nearest directory with a `.git` (a
+ *  worktree has a file there). A stat per level, on the hook's hot path. A
+ *  home directory kept in git (dotfiles) is no project: an edit rule there
+ *  would cover the whole home. */
+export function projectRootOf(dir: string | undefined): string | undefined {
+  if (!dir) return undefined;
+  const home = os.homedir();
+  let start = path.resolve(dir);
+  // The real path, as git reports the conversation's root.
+  try { start = fs.realpathSync(start); } catch { /* keep the resolved path */ }
+  for (let d = start; ; d = path.dirname(d)) {
+    if (d === home || d === "/") return undefined;
+    if (fs.existsSync(path.join(d, ".git"))) return d;
+    if (path.dirname(d) === d) return undefined;
+  }
+}
+
 export const PERMISSION_HOOK_WAIT_MS = 10 * 60 * 1000;
 /** Claude Code's timeout for the PermissionRequest entry: the wait plus room
  *  for the curl and the daemon's 204, so the hook is never killed mid-answer. */
@@ -26,8 +52,22 @@ export interface PermissionHookInput {
   sessionId: string;
   toolName: string;
   preview: string;
+  /** The whole call as a push shows it (glanceCommand), read before the preview's cut. */
+  glance: string;
   permissionMode?: string;
+  /** The subagent that raised the prompt (its type, e.g. "Explore"); absent
+   *  for the session's own agent. Claude Code sends agent_id only for subagents. */
+  subagentType?: string;
+  /** Claude Code's id for that subagent: its transcript is agent-<id>.jsonl. */
+  agentId?: string;
+  /** The agent's own one-line account of the call (a Bash call's description). */
+  intent?: string;
+  /** A Bash call's whole command and the directory it runs in, for the removal preview. */
+  command?: string;
+  cwd?: string;
   suggestions: unknown[];
+  /** The call in codecast's rule terms: what it asks for and what "always" keeps. */
+  ruleRequest: PermissionRuleRequest;
   /** The launch that raised the prompt, so the status it reports passes the launch fence. */
   launchToken?: string;
 }
@@ -36,7 +76,9 @@ export interface PermissionAnswer {
   approved: boolean;
   /** A denial's reason, sent to the model. */
   message?: string;
-  /** Keep Claude's suggested rules (updatedPermissions). */
+  /** Keep the call's rules. Codecast keeps its own server side; Claude's
+   *  suggestions ride back (updatedPermissions) only for a call codecast can
+   *  keep nothing for (keptPatterns empty), as the card's button says. */
   remember?: boolean;
 }
 
@@ -58,11 +100,41 @@ export function parsePermissionHookInput(body: string): PermissionHookInput | nu
     sessionId,
     toolName,
     preview: (first ?? "").slice(0, PREVIEW_MAX),
+    glance: glanceCommand(first ?? ""),
     ...(typeof d.permission_mode === "string" && { permissionMode: d.permission_mode }),
+    ...(typeof input.description === "string" && input.description.trim() && { intent: input.description.trim().slice(0, 200) }),
+    ...(typeof input.command === "string" && input.command && { command: input.command }),
+    ...(typeof d.cwd === "string" && d.cwd && { cwd: d.cwd }),
+    ...(typeof d.agent_id === "string" && d.agent_id && {
+      subagentType: typeof d.agent_type === "string" && d.agent_type ? d.agent_type : "subagent",
+      agentId: d.agent_id,
+    }),
     suggestions: Array.isArray(d.permission_suggestions)
       ? d.permission_suggestions.filter((s: unknown) => s && typeof s === "object")
       : [],
+    // Bounded here as the row stores it, so the card, the server and the
+    // waiter all read the same request.
+    ruleRequest: boundedRuleRequest(claudeToolRequest(toolName, input, typeof d.cwd === "string" && d.cwd ? { cwd: d.cwd, root: projectRootOf(d.cwd) } : {})),
   };
+}
+
+/** A command as a person judges it from a push: without the leading
+ *  `cd <dir> &&` (the push already names the session) and with each heredoc
+ *  body folded to "…". A script body fills a short banner and pushes out what
+ *  follows it, which is often the part Claude Code flagged. */
+export function glanceCommand(command: string): string {
+  const lines = command.replace(/^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)\s*&&\s*/, "").split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    out.push(lines[i]);
+    const tag = lines[i].match(/<<-?\s*(['"]?)([A-Za-z_]\w*)\1/)?.[2];
+    if (!tag) continue;
+    let end = i + 1;
+    while (end < lines.length && lines[end].trim() !== tag) end++;
+    out.push("…");
+    i = end;
+  }
+  return out.join("\n");
 }
 
 /** The hook's stdout for an answer. A denial without a reason stops the turn,
