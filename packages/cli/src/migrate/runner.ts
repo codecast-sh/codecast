@@ -127,6 +127,10 @@ export interface RunnerIo {
   /** Why the cloud host could not run a Claude session now (it has no live
    *  login and this machine has none to give it), or null when it can. */
   hostLoginGap(deviceId: string): Promise<string | null>;
+  /** Why the cloud host's cast cannot be brought to this machine's version
+   *  (hosts/updateHost castForPrepare installs it when behind), or null when
+   *  it runs at least that version. */
+  hostCastGap(deviceId: string): Promise<string | null>;
   /** Whether the cloud host can take one more session now (cloud/hostHeadroom):
    *  `refuse` when it is out of memory, `small` when it has room but less memory
    *  than the session's repo declares it needs to typecheck and run its dev server. */
@@ -276,6 +280,8 @@ export async function migrateRow(
     if (facts.direction === "to_cloud") {
       const gap = await io.hostLoginGap(facts.to_device_id);
       if (gap) return fail(`${facts.to_label ?? "the cloud host"} has no Claude login (${gap}); the session was left running here`);
+      const castGap = await io.hostCastGap(facts.to_device_id);
+      if (castGap) return fail(`${castGap}; the session was left running here`);
       const room = await io.hostRoom(facts.to_device_id, facts);
       if (room.refuse) return fail(`${facts.to_label ?? "the cloud host"} has no room for another session (${room.refuse}); the session was left running here. Free memory there (stop sessions on it) or move it to a bigger host`);
       if (room.small) {

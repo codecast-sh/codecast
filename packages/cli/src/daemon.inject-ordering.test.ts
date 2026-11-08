@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 // inject) used to flip the pending_messages row to "injected" AFTER calling the
 // actual inject. The inject triggers Claude to write the user message to its JSONL
 // within milliseconds; the daemon's JSONL watcher then syncs the message and calls
-// ackInjectedMessages, which only flips "injected" -> "delivered". If the ack runs
+// ackInjectedMessages (the daemon's ack at the time; echoes now settle by delivery id),
+// which only flips "injected" -> "delivered". If the ack runs
 // before the mark (a window observed as narrow as 36ms in David's daemon logs), it
 // finds no injected row and does nothing. The daemon's subsequent mark leaves the
 // row stuck as "injected", and the 120s retry cron resets it to "pending" and the
