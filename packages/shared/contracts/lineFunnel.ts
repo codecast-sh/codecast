@@ -7,6 +7,7 @@
 // flowMap.ts) reads one item per problem, folds the windows and carries a
 // capped list of the items behind each number, so the chart opens every count
 // with no query of its own. Pure.
+import { quietWatchEnd } from "./flowMap";
 import { segmentTopOf } from "./flowPool";
 import { clearsBar, type FlowBar } from "./linePriority";
 import { endedFailing, mergeLeft, runEnd, type AnsweredGate, type LineRunStations } from "./lineRunEnd";
@@ -19,12 +20,12 @@ export const FUNNEL_DAYS = 30;
 export const FUNNEL_ITEM_CAP = 40;
 
 /** Why a problem stopped at a step: its run closed it there (already fixed, not needed), a person dropped it, its run
- *  failed or was cancelled, it stands there now, it waits on a person's card, it waits in the queue for the line (ready
- *  and over the flow's bar), it is held back (not ready, or under the bar), it is under watch, or it came back after
+ *  failed or was cancelled, it stands there now, it waits on a person's card, it is ready and over the flow's bar
+ *  with no run yet (unstarted), it is held back (not ready, or under the bar), it is under watch, or it came back after
  *  it shipped. */
-export type FunnelReason = "closed" | "dropped" | "failed" | "cancelled" | "here" | "waiting" | "queued" | "held" | "watching" | "regressed" | "other";
+export type FunnelReason = "closed" | "dropped" | "failed" | "cancelled" | "here" | "waiting" | "unstarted" | "held" | "watching" | "regressed" | "other";
 /** Display order: what ended first, what still moves after. */
-export const FUNNEL_REASONS: readonly FunnelReason[] = ["closed", "dropped", "failed", "cancelled", "regressed", "other", "here", "waiting", "queued", "held", "watching"];
+export const FUNNEL_REASONS: readonly FunnelReason[] = ["closed", "dropped", "failed", "cancelled", "regressed", "other", "here", "waiting", "unstarted", "held", "watching"];
 
 /** A station step of the funnel: one or more graph nodes a run passes as one (a fan-out and its branches, Push with
  *  Merge and Ready to land). */
@@ -150,6 +151,8 @@ export type FunnelTask = Parameters<typeof clearsBar>[0] & {
   readiness?: string | null;
   waiting_since?: number | null;
   watch_until?: number | null;
+  resolved_at?: number | null;
+  closed_at?: number | null;
   cause?: { merged_into?: unknown; named?: { name: string } | null; scored?: { score: number } | null; signal_count?: number } | null;
 };
 export type FunnelRun = { _id: string; status: string; current_node_id?: string | null } & LineRunStations & AnsweredGate;
@@ -161,7 +164,7 @@ const TITLE_MAX = 140;
  * How far a problem got and why it went no further, from its task and its newest run: the furthest station the run
  * visited (or one after it, since a station is reached once anything past it is), merged when it shipped (runEnd)
  * with the change on the default branch (not mergeLeft), live when its deploy station completed, clean when its task
- * closed done and its watch has passed. Null for a problem merged into another (it counts there).
+ * closed done and its watch ended quiet (flowMap.quietWatchEnd). Null for a problem merged into another (it counts there).
  */
 export function funnelItem(o: {
   task: FunnelTask;
@@ -171,7 +174,7 @@ export function funnelItem(o: {
   labels: ReadonlyMap<string, string>;
   /** Its run waits on a person (paused at a card, a blocking decision names it). */
   waiting?: boolean;
-  /** The live flow's bar: a ready problem with no run under it is held back, over it queued. */
+  /** The live flow's bar: a ready problem with no run under it is held back, over it not started. */
   bar?: Pick<FlowBar, "score" | "findings"> | null;
   now: number;
 }): FunnelItem | null {
@@ -197,7 +200,7 @@ export function funnelItem(o: {
       const deployed = !hasDeploy || nodes.some((n) => n.status === "completed" && stationLevel(n.node_id) === 2 + deploy);
       if (deployed) {
         level = merged + 1;
-        if (task.status === "done" && typeof task.watch_until === "number" && task.watch_until <= now) level = merged + 2;
+        if (task.status === "done" && quietWatchEnd(task, now) != null) level = merged + 2;
       }
     }
   }
@@ -208,7 +211,7 @@ export function funnelItem(o: {
   // Where it stands: the station it is at, else the last it reached before its exit.
   const at = live ? run!.current_node_id : [...nodes].filter((n) => n.status !== "pending" && n.node_id !== "exit").sort((a, b) => (a.completed_at ?? a.started_at ?? 0) - (b.completed_at ?? b.started_at ?? 0)).pop()?.node_id;
   const node = at ? o.labels.get(at) ?? o.labels.get(segmentTopOf(at)) ?? words(at) : null;
-  const name = task.cause?.named?.name ?? task.title;
+  const name = task.cause?.named?.name?.trim() || task.title;
   return {
     task: task._id, ref: task.short_id ?? null, title: name.length > TITLE_MAX ? `${name.slice(0, TITLE_MAX - 1)}…` : name,
     run: run?._id ?? null, at: task.created_at, level, why, node, status: run?.status ?? null,
@@ -217,7 +220,7 @@ export function funnelItem(o: {
 
 function reasonOf(o: { task: FunnelTask; run: FunnelRun | null | undefined; level: number; merged: number; live: boolean; waiting: boolean; bar?: Pick<FlowBar, "score" | "findings"> | null; now: number }): FunnelReason {
   const { task, run } = o;
-  if (!run) return task.status === "dropped" ? "dropped" : task.status === "done" ? "closed" : task.readiness === "ready" && clearsBar(task, o.bar) ? "queued" : "held";
+  if (!run) return task.status === "dropped" ? "dropped" : task.status === "done" ? "closed" : task.readiness === "ready" && clearsBar(task, o.bar) ? "unstarted" : "held";
   if (o.live) return o.waiting ? "waiting" : "here";
   const end = runEnd(run);
   if (end?.kind === "dissolved") return "closed";
@@ -228,11 +231,13 @@ function reasonOf(o: { task: FunnelTask; run: FunnelRun | null | undefined; leve
     if (typeof task.watch_until === "number" && task.watch_until > o.now) return "watching";
     return task.status === "done" ? "other" : "regressed";
   }
-  // Pushed, with the merge left to a person.
-  if (mergeLeft(run) || task.waiting_since) return "waiting";
-  if (run.status === "failed" || endedFailing(run) || stoppedAt(run)) return "failed";
+  // Pushed, with the merge left to a person (its Watch station closes the task all the same).
+  if (mergeLeft(run)) return "waiting";
+  // The problem closed, whatever its run did after (a close station interrupted, a person closing it over a failure).
   if (task.status === "dropped") return "dropped";
   if (task.status === "done") return "closed";
+  if (task.waiting_since) return "waiting";
+  if (run.status === "failed" || endedFailing(run) || stoppedAt(run)) return "failed";
   if (end?.kind === "parked") return "held";
   return "other";
 }
