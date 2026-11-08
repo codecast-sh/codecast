@@ -1,6 +1,5 @@
 "use client";
 
-import { CommandRunView } from "./CommandRunView";
 import { useTaskHref } from "../../lib/taskHrefContext";
 import { useCallback } from "react";
 import Link from "next/link";
@@ -283,7 +282,6 @@ export function DecisionCompactCardView({
             <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
               {decision.question}
             </Link>
-            {decision.run && <CommandRunView run={decision.run} density="line" />}
           </>
         )}
         <HandoffNote decision={decision} className="mt-2" />

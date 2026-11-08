@@ -42,11 +42,3 @@ test("long output keeps its tail", () => {
   expect(out.endsWith("END")).toBe(true);
   expect(out.length).toBe(MAX_RUN_OUTPUT + 1);
 });
-
-test("the run's folder reads with the home folder as ~", () => {
-  const { runFolder } = require("./commandRun");
-  expect(runFolder("/Users/ashot/src/codecast")).toBe("~/src/codecast");
-  expect(runFolder("/home/dev")).toBe("~");
-  expect(runFolder("/srv/app")).toBe("/srv/app");
-  expect(runFolder(undefined)).toBeUndefined();
-});

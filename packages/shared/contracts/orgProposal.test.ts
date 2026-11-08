@@ -657,9 +657,9 @@ describe("orgChangeTakeover and takeoverPhrase", () => {
   });
 
   test("the sentence reads from a result or from counts, and says what was told only after the apply", () => {
-    expect(takeoverPhrase("growth", { sessions: ["a"], kept_in_front: [], over_cap: 0 }, false)).toBe("1 session now reports to @growth and leaves your needs input");
-    expect(takeoverPhrase("@growth", { sessions: 12, kept_in_front: 2, over_cap: 5 }, false)).toBe("12 sessions now report to @growth and leave your needs input; 2 of them stay in front of you with a question still open; 5 more stay where they are until the next change");
-    expect(takeoverPhrase("growth", { sessions: ["a", "b"], kept_in_front: [], over_cap: 0, told: { sessions: 1, deferred: 1 } }, true)).toBe("2 sessions now report to @growth and leave your needs input; 1 told now, 1 will read it on their next turn");
+    expect(takeoverPhrase("growth", { sessions: ["a"], kept_in_front: [], over_cap: 0 }, false)).toBe("1 session now reports to @growth and leaves Needs You");
+    expect(takeoverPhrase("@growth", { sessions: 12, kept_in_front: 2, over_cap: 5 }, false)).toBe("12 sessions now report to @growth and leave Needs You; 2 of them stay in front of you with a question still open; 5 more stay where they are until the next change");
+    expect(takeoverPhrase("growth", { sessions: ["a", "b"], kept_in_front: [], over_cap: 0, told: { sessions: 1, deferred: 1 } }, true)).toBe("2 sessions now report to @growth and leave Needs You; 1 told now, 1 will read it on their next turn");
     expect(takeoverPhrase("growth", { sessions: [], kept_in_front: [], over_cap: 0 }, false)).toBe("");
     expect(takeoverPhrase("growth", null, true)).toBe("");
   });

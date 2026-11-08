@@ -6,9 +6,9 @@
 // Answering is the store's answerDecision, so the card flips the moment it
 // is pressed and the asking session wakes with the answer.
 import { approvesPersonsAct } from '@codecast/shared/contracts/commandRun';
-import { CommandRunBlock } from '@/components/decisions/CommandRunBlock';
+import { approvalButtonLabel } from '@codecast/shared/contracts/assistant';
 import { useCallback, useRef } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import Feather from '@expo/vector-icons/Feather';
@@ -27,6 +27,7 @@ import { useSyncDecisionDetail, useDecisionDetail } from '@codecast/web/hooks/us
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import type { AnswerDraft } from '@codecast/web/lib/decisionAnswer';
 import { decisionAnswerLabel } from '@codecast/shared/contracts';
+import { appAlert } from '@/lib/popups';
 
 
 /** How a decision that no longer waits reads, or null while it waits. */
@@ -56,7 +57,7 @@ export function useDecisionAnswer(source: Parameters<typeof approvesPersonsAct>[
         if (!presence) return;
         input = { ...input, presence };
       } catch (e) {
-        Alert.alert('Touch ID', (e as Error).message);
+        appAlert('Touch ID', (e as Error).message);
         return;
       } finally {
         confirming.current = false;
@@ -108,7 +109,6 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
         <Pressable onPress={open} accessibilityRole="button" accessibilityHint="Opens the decision">
           {item ? <QueueChip item={item} now={now} /> : null}
           <Text style={styles.question} numberOfLines={3}>{row.question}</Text>
-          {row.run ? <CommandRunBlock run={row.run} compact /> : null}
         </Pressable>
         <View style={styles.compactRow}>
           {inline ? options.map((o, i) => (
@@ -120,7 +120,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
               style={[styles.compact, i === (row.blocking ? -1 : row.default_option) && { borderColor: Theme.text }]}
             >
               {approvesPersonsAct(row, i) ? <Feather name="lock" size={11} color={Theme.textMuted} /> : null}
-              <Text style={styles.compactText} numberOfLines={1}>{o.label}</Text>
+              <Text style={styles.compactText} numberOfLines={1}>{row.run ? approvalButtonLabel(o.label) : o.label}</Text>
             </Pressable>
           )) : (
             <Pressable accessibilityRole="button" onPress={open} style={styles.compact}>
@@ -150,7 +150,6 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
         {item ? <QueueChip item={item} now={now} /> : null}
         <Text style={styles.question}>{row.question}</Text>
         {item && askingSessionLine(item) && !docked ? <Text style={styles.session} numberOfLines={1}>{askingSessionLine(item)}</Text> : null}
-        {row.run ? <CommandRunBlock run={row.run} compact={docked} /> : null}
       </Pressable>
       {settled ? (
         <View style={styles.settled}>

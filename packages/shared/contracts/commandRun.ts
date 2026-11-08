@@ -1,15 +1,17 @@
-// A command an agent asks a person to run (`cast decide --run`): a decision
-// whose card shows the exact `cast` command, answered Run or Don't run. A
-// person's Run executes it on the session's machine, outside the session, so
-// it is the person's act; the output comes back to the asking session as the
-// answer. Shared by the CLI (parse on ask), the server (validate, settle,
+// A step only the person may take, asked as a permission (`cast decide --run`):
+// the card is the agent's plain question, answered Yes or Not now, and never
+// shows the command. A person's Yes runs the `cast` command it carries on the
+// session's machine, outside the session, so it is the person's act; the
+// output comes back to the asking session as the answer. Shared by the CLI (parse on ask), the server (validate, settle,
 // deliver), the daemon (run) and the apps (render, gate the Run press).
 
 import { approvesSecretRead } from "./secrets";
 import { shellArg, shellWords } from "./shellWords";
+import { APPROVAL_ANSWERS } from "./approvalAnswers";
 
-export const RUN_OPTION = "Run";
-export const SKIP_OPTION = "Don't run";
+/** The answers are an approval's, so every surface draws the card as one. */
+export const RUN_OPTION = APPROVAL_ANSWERS.approve;
+export const SKIP_OPTION = APPROVAL_ANSWERS.decline;
 export const RUN_OPTIONS: ReadonlyArray<{ label: string }> = [{ label: RUN_OPTION }, { label: SKIP_OPTION }];
 
 /** waiting: on the card. queued: approved, sent to the machine. running: the machine took it. done/failed: it exited (failed = nonzero, or it could not start). skipped: a person chose Don't run, or the card closed unanswered. */
@@ -75,9 +77,4 @@ export function runResultText(run: { argv: readonly string[]; exit_code?: number
   const head = run.state === "done" ? `Ran \`${commandLine(run.argv)}\`: exit 0.` : `Ran \`${commandLine(run.argv)}\`: it failed${run.exit_code !== undefined ? ` (exit ${run.exit_code})` : ""}.`;
   const out = run.output?.trim();
   return out ? `${head}\n\n\`\`\`\n${out}\n\`\`\`` : head;
-}
-
-/** The folder a run happens in, as a person reads it: the home folder as `~`. */
-export function runFolder(cwd: string | undefined): string | undefined {
-  return cwd?.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
 }

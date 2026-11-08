@@ -654,10 +654,10 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       [] as string[]
     )
     .option("--question <text>", stdinText("edit: replace the question"))
-    .option("--context <text>", stdinText("Markdown context for someone who never saw this session: what you would pick and why, the finding that forces the choice, what each answer does; a cast-canvas block renders inline, so options worth comparing can sit side by side"))
+    .option("--context <text>", stdinText("Markdown context for someone who never saw this session, read alone: what went wrong (one real case), what you would pick and why, what cuts against it. Explain everything where you mention it, with no ids, file paths or rule numbers; never repeat the question or options. A cast-canvas block renders inline, so options worth comparing can sit side by side"))
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
     .option("--proposal <xp-N>", "The expectations proposal this decision settles: an answer opening with Apply lands it, one opening with Keep closes it, any other course leaves it open for you")
-    .option("--run <command>", "A cast command only your person may run (a grant, a spend, a publish): the card shows it with Run and Don't run; Run executes it on this machine as theirs and the output comes back as the answer")
+    .option("--run <command>", "Ask permission for a step only your person may take (a grant, a spend, a publish): the question says in plain words what will happen, the card asks Yes or Not now and never shows the command, and Yes runs this cast command on this machine as theirs; its output comes back as the answer")
     .option("--card <card.json>", "A change card (cast card build) the decision is about; the queue draws it natively. Without -o the options are Ship, Revise, Drop")
     .option("--advisory", "Don't block: proceed with --default. Only when the default is cheap to undo — the answer often lands an hour later and may override you")
     .option("--default <n>", "1-based option you proceed with when --advisory (required with it)")
@@ -690,7 +690,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--team <name|id>", "ls --answered-since: the team (default: the active one)")
     .option("-n, --limit <n>", "ls --answered-since: rows per page (default 50, at most 100)")
     .option("--calibration", "ls --answered-since: whether the cards' confidence holds, every answer in the window grouped by the confidence its card gave")
-    .option("--note <text>", stdinText("recommend / pass / escalate: what the person should know that the card does not say (escalate needs one)"))
+    .option("--note <text>", stdinText("recommend / pass / escalate: one or two plain sentences the person needs that the card does not already say; never retell the card, never cite ids (escalate needs one)"))
     .option("--form <k=v>", "answer: a form field value (repeatable)", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--for-human", "answer: from a session, answer as your human. Only when they explicitly told you in this conversation to answer this decision, or agreed to this choice; never on your own judgment")
     .option("--json", "Machine-readable output")
@@ -714,13 +714,13 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       const rawOptions = options.option as string[];
       // LE11: a change card decides Ship, Revise or Drop unless -o says otherwise.
       const card: ChangeCard | undefined = options.card ? (() => { const r = readCardFile(options.card); return "error" in r ? fail(r.error) : r.card; })() : undefined;
-      // --run: the card is the command, answered Run or Don't run (commandRun.ts).
+      // --run: a permission ask, answered Yes or Not now; Yes runs the command (commandRun.ts).
       const runLine: string | undefined = typeof options.run === "string" ? options.run : undefined;
       if (runLine !== undefined) {
         const parsedRun = parseRunCommand(runLine);
         if ("error" in parsedRun) fail(parsedRun.error);
         if (sub) fail("--run asks a new decision; to change the command, cancel the decision and ask again.");
-        if (rawOptions.length || card || options.advisory || options.kind || options.line || options.spec) fail("--run sets the options itself (Run, Don't run) and always blocks: drop -o, --card, --advisory, --kind, --line and --spec.");
+        if (rawOptions.length || card || options.advisory || options.kind || options.line || options.spec) fail("--run sets the answers itself (Yes, Not now) and always blocks: drop -o, --card, --advisory, --kind, --line and --spec.");
       }
       let optionList: DecideOption[] | undefined = runLine !== undefined ? RUN_OPTIONS.map((o) => ({ ...o })) : rawOptions.length > 0 ? rawOptions.map(parseDecideOption) : spec?.options ?? (card && !sub ? CARD_DECISION_OPTIONS.map((o) => ({ ...o })) : undefined);
       // An advisory card proceeds with what the card recommends unless --default names another.
@@ -989,7 +989,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       if (runLine !== undefined) {
         const parsed = parseRunCommand(runLine);
         if ("argv" in parsed) console.log(fmt.muted(`  runs: ${commandLine(parsed.argv)}`));
-        console.log(fmt.muted("\nThe card shows this command with Run and Don't run. Do not run it yourself and do not paste it for them: end your turn. A Run executes it on this machine as theirs, and the answer arrives with its output."));
+        console.log(fmt.muted("\nThe card asks your question with Yes and Not now; it does not show the command. Do not run it yourself and do not paste it for them: end your turn. Yes runs it on this machine as theirs, and the answer arrives with its output."));
         return;
       }
       console.log(fmt.muted("\nThis renders as a card in the conversation and in their queue. Do not repeat the question, options, or reasoning in prose."));

@@ -7,6 +7,7 @@
 // Averil); the values are codecast's product and stay here.
 import { planIn, type PlanCatalog, type PlanSpec as PlatformPlanSpec } from "@platform/assistant/plans";
 import { CHEAP_MODEL } from "./modelOptions";
+import { APPROVAL_ANSWERS } from "./approvalAnswers";
 
 /** `conversations.agent_type` of a hosted conversation: a Convex action runs
  *  its turns, and no device ever claims it. The registry entry is
@@ -196,7 +197,7 @@ export function routineYesWords(repeats: boolean): string {
   return repeats ? `Runs until you pause it. ${ROUTINE_SHOWS_UP}` : "Runs once. What it finds arrives in your inbox.";
 }
 
-export const APPROVAL_ANSWERS = { approve: "Approve", always: "Always allow", decline: "Decline" } as const;
+export { APPROVAL_ANSWERS };
 
 /** What an approval's buttons say on a hosted conversation's card, which asks the way
  *  a person would: Yes, or Not now. The stored labels stay APPROVAL_ANSWERS,

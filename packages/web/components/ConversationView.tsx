@@ -3204,8 +3204,12 @@ const ConversationViewInner = (
   // a short transcript left a screen of empty paper between the two and the
   // card read as a second input. The queue's stepper keeps the decision sheet.
   const hostedOwnCard = !!decisionItem && isHostedAgentType(conversation?.agent_type) && !decisionStepper && decisionItem.source === "decide";
+  // A permission ask (`cast decide --run`) is the same inline approval in any
+  // conversation: the question and Yes / Not now, never a docked sheet.
+  const runAsk = useInboxStore((st) => !!decisionItem?.decisionId && !!st.sessionDecisions[decisionItem.decisionId]?.run);
+  const inlineApproval = hostedOwnCard || (runAsk && !decisionStepper && decisionItem?.source === "decide");
   const hostedTailCard = !conversation || onSendOverride ? null
-    : hostedOwnCard ? <HostedApprovalCard key={decisionItem!.key} item={decisionItem!} keys />
+    : inlineApproval ? <HostedApprovalCard key={decisionItem!.key} item={decisionItem!} keys />
     // The turn parked on an approval before its decision row arrived: hold
     // the card's place in one quiet line.
     : !decisionItem && hostedSettledAnswer ? <HostedApprovalSettled label={hostedSettledAnswer} />
@@ -5053,9 +5057,9 @@ const ConversationViewInner = (
           It renders nothing when the agent has not pinned a state. */}
       {!ownerComposerMounted && !onSendOverride && threadStatePanel}
 
-      {/* A hosted conversation's own approval lives in the transcript's
-          flow (hostedTailCard); the rest dock above the composer. */}
-      {decisionItem && conversation && !onSendOverride && !hostedOwnCard && (
+      {/* A hosted conversation's own approval and a permission ask live in
+          the transcript's flow (hostedTailCard); the rest dock above the composer. */}
+      {decisionItem && conversation && !onSendOverride && !inlineApproval && (
         <SessionDecisionCard key={decisionItem.key} item={decisionItem} stepper={decisionStepper} more={pendingDecision ? pendingDecisions.length - 1 : 0} targetNonce={targetMessageId ? targetNonce : undefined} scrollToMessage={scrollToMessageById} />
       )}
       {/* The decision answering this one brings up: its page loads ahead. */}
