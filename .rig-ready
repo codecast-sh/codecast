@@ -1,0 +1,26 @@
+# cast browser e2e rig: ready (ct-87416, proven 2026-11-07)
+# Run from ~/src/worktrees/browse-port. Pick a unique --name per worker (1-24 of [A-Za-z0-9_-]).
+# Each rig: its own /tmp/cast-browser-rig/<name> HOME, bridge port and headless Chrome for Testing
+# loading THIS worktree's packages/browser-extension. Never touches the live bridge or the human's Chrome.
+# Budget ~2 min for `up` at current load (CAST_RIG_WAIT_S raises the waits).
+
+RIG="bun packages/cli/scripts/browser-rig.ts"
+
+$RIG up --fixtures --name <n>                 # prints the env and fixture URLs; state in /tmp/cast-browser-rig/<n>/state.json
+source /tmp/cast-browser-rig/<n>/env          # ONLY in a subshell: it swaps HOME. Gives $CAST_RIG_FIXTURES, $CAST_RIG_FIXTURES_B
+$RIG exec --name <n> -- open "$CAST_RIG_FIXTURES/delete-list.html"
+$RIG exec --name <n> -- snapshot              # bridge snapshot takes --interactive, not -i/-s
+$RIG exec --name <n> -- click '#e10'
+$RIG exec --name <n> -- shot
+$RIG exec --name <n> --session other -- tabs  # act as a second agent session
+$RIG reload-ext --name <n>                    # picks up edits to packages/browser-extension; prints Chrome's load error if your edit broke it
+$RIG restart-host --name <n>                  # picks up edits to the bridge host source; refuses (old host stays up) if the CLI source does not load
+$RIG status --name <n>
+$RIG down --name <n>                          # stops only pids this rig started, removes its /tmp dir
+
+# exec refuses `show`, `login`, `chrome restart` (they act on the human's Chrome by app name).
+# Fixtures: index, login (POST sets cookie), popup, delete-list, challenge (fake CF 403), cookies, iframe (cross origin).
+# up --engine drives with the real agent-browser engine, as sessions do; without it the rig HOME has no engine and the CLI uses its built-in driver (fewer verbs).
+# Old pieces: up --extension git:HEAD --legacy-pair (the Store's 0.1.5, paired the old way); up/restart-host --cli <main.ts> runs the host from another checkout; exec --cli <main.ts> drives with one.
+#   Old CLI tree: git archive HEAD packages/cli | tar -x -C /tmp/old; symlink /tmp/old/packages/cli/node_modules and /tmp/old/node_modules to this worktree's.
+# Fixture origins are both 127.0.0.1 (same site, no out-of-process iframe); use localhost:<port B> for a cross-site frame.

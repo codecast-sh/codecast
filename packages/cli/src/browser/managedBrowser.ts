@@ -28,7 +28,7 @@ import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
 import { readHosts, ensureUp, toRemoteHost } from "./cloudHost.js";
 import { fmt, icons } from "../colors.js";
 import { isReachable } from "./recovery.js";
-import { hostOwnsBrowser } from "./bridge/real.js";
+import { hostHasNoHumanChrome } from "./bridge/real.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
 
 const OK = `${fmt.success(icons.check)}`;
@@ -126,7 +126,7 @@ export async function startLocalBrowser(o: StartOptions): Promise<InstanceState>
       fs.rmSync(userDataDir, { recursive: true, force: true });
       fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
       if (!o.quiet) console.log(`${OK} fresh profile (logged out of everything)`);
-    } else if (hostOwnsBrowser()) {
+    } else if (hostHasNoHumanChrome()) {
       // A host has no human's Chrome to copy: its profile is its own from the
       // first launch, and logins arrive through `cast browser sync`.
       fs.mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
