@@ -6,7 +6,7 @@
 // the inbox evaluates it against the clock. A launch from cache, a suspension
 // (a phone in the background, a laptop asleep) or a dropped socket leaves the
 // facts as they were while the clock moves on, so every running row slid into
-// Needs Input until the subscription caught up (phone 8, web 4, 2026-10-26).
+// Needs You until the subscription caught up (phone 8, web 4, 2026-10-26).
 // The hold keeps each row where it last was, the sync indicator shows, and one
 // round-trip read (`_probe`: never the subscription's possibly pre-sleep
 // cache) started after the latest hold releases it.
