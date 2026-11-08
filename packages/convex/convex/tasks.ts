@@ -25,12 +25,14 @@ import {
   TERMINAL_TASK_CATEGORIES,
   buildTaskSpawnPrompt,
   findTeamTaskStatus,
+  invalidTaskStatusMessage,
   isActiveTask,
   isTaskStatusCategory,
   isTerminalTaskStatus,
   isHumanOrigin,
   resolveTaskStatus,
   subtaskProgressOf,
+  taskStatusAlias,
   taskStatusChoices,
   teamTaskStatuses,
 } from "@codecast/shared/tasks";
@@ -246,21 +248,27 @@ export async function resolveStatusWrite(
     const statuses = await loadTeamTaskStatuses(ctx, teamId);
     if (namesTeamStatus) {
       const named = findTeamTaskStatus(statuses, status!);
-      if (!named) {
-        throw new Error(`Invalid task status '${status}'. Valid: ${taskStatusChoices(statuses).join(", ")}`);
+      if (named) {
+        if (statusId && statusId !== named.id) {
+          throw new Error(`Status '${status}' does not match status_id '${statusId}'`);
+        }
+        status = undefined;
+        statusId = named.id;
+      } else {
+        // A near-miss word (`cancelled`) means its category; anything else is refused.
+        const alias = taskStatusAlias(status!);
+        if (!alias) throw new Error(invalidTaskStatusMessage(status!, taskStatusChoices(statuses)));
+        status = alias;
       }
-      if (statusId && statusId !== named.id) {
-        throw new Error(`Status '${status}' does not match status_id '${statusId}'`);
+    }
+    if (statusId) {
+      const match = statuses.find((s) => s.id === statusId);
+      if (!match) throw new Error(`Unknown status '${statusId}' for this team`);
+      if (status && status !== match.category) {
+        throw new Error(`Status '${statusId}' is in category '${match.category}', not '${status}'`);
       }
-      status = undefined;
-      statusId = named.id;
+      return { status: match.category, statusId: { set: true, value: match.id === match.category ? undefined : match.id } };
     }
-    const match = statuses.find((s) => s.id === statusId);
-    if (!match) throw new Error(`Unknown status '${statusId}' for this team`);
-    if (status && status !== match.category) {
-      throw new Error(`Status '${statusId}' is in category '${match.category}', not '${status}'`);
-    }
-    return { status: match.category, statusId: { set: true, value: match.id === match.category ? undefined : match.id } };
   }
   assertValidTaskStatus(status);
   if (statusId === "" || (status && status !== currentStatus)) {
@@ -1085,10 +1093,13 @@ export async function holdingDecisionFor(
   return pending.find((d) => d.blocking && d.station === station) ?? null;
 }
 
-// The refusal a session actor gets (L5); the text names the release path.
-export function heldError(hold: any): Error {
+// The refusal a session actor gets (L5). The decision is a person's to
+// answer, never the session's, so the text names what the session can do:
+// record its work on the task and park on the decision.
+export function heldError(hold: any, task?: { short_id?: string }): Error {
   const ref = hold.short_id ?? hold._id;
-  return new Error(`Held at ${hold.station} by ${ref}: answer it first (cast decide answer ${ref} <n>)`);
+  const id = task?.short_id ?? "<task>";
+  return new Error(`Held at ${hold.station} by ${ref}, a decision for a person to answer: the task moves once they do. Record your work with \`cast task comment ${id} - -t review\` (or \`cast task handoff\`, which keeps the evidence and leaves the task here), then park with \`cast task dep ${id} --blocked-by ${ref}\``);
 }
 
 // The note a person leaves when moving a held task past its open decision (L5).
@@ -1770,6 +1781,49 @@ const listArgs = {
     conversation_id: v.optional(v.string()),
 };
 
+// The status categories a search reads, one index range each so finished
+// work cannot crowd open matches out of the bounded take; null reads every
+// status (--all, or a team status name resolved per row afterwards).
+function searchCategories(args: { status?: string; include_done?: boolean }): string[] | null {
+  if (isTaskStatusCategory(args.status)) return [args.status];
+  if (!args.status && !args.include_done) return TASK_STATUS_CATEGORIES.filter((s) => !TERMINAL_TASK_CATEGORIES.includes(s));
+  return null;
+}
+
+const SEARCH_TAKE = 120;
+const RECENT_SCAN = 300;
+
+// `cast task ls -q`: one workspace's tasks matching the words, read in bounded
+// slices. Collecting a large team's open set to filter it in memory ran out of
+// the server's 64 MB (Union, 2026-11). Titles come from the search index; a
+// short id is looked up directly; descriptions are matched over the most
+// recently touched tasks. Rows are keyed by id; the caller's filters run after.
+async function searchWorkspaceTasks(ctx: QueryCtx, workspace: string, query: string, categories: string[] | null): Promise<Map<string, any>> {
+  const out = new Map<string, any>();
+  const keep = (row: any) => { if (row && row.workspace === workspace) out.set(String(row._id), row); };
+  const ranges = categories ?? [null];
+  for (const status of ranges) {
+    const hits = await ctx.db.query("tasks")
+      .withSearchIndex("search_tasks_v2", (s: any) => {
+        const q = s.search("title", query).eq("workspace", workspace);
+        return status ? q.eq("status", status) : q;
+      })
+      .take(categories ? SEARCH_TAKE : SEARCH_TAKE * 2);
+    hits.forEach(keep);
+  }
+  const byShortId = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", query.toLowerCase())).first();
+  keep(byShortId);
+  const lower = query.toLowerCase();
+  const recent = await ctx.db.query("tasks")
+    .withIndex("by_workspace_updated", (q: any) => q.eq("workspace", workspace))
+    .order("desc")
+    .take(RECENT_SCAN);
+  for (const row of recent) {
+    if ((row.description || "").toLowerCase().includes(lower) || (row.title || "").toLowerCase().includes(lower)) keep(row);
+  }
+  return out;
+}
+
 async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & { cursor?: string | null; page_size?: number }) {
   const auth = await verifyApiToken(ctx, args.api_token, false);
   if (!auth) throw new Error("Unauthorized");
@@ -1804,6 +1858,9 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
   let tasks: any[];
   let nextPage: string | null = null;
   let paged = false;
+  // Rows the title search matched by word, kept even where the words are not
+  // one substring of the title.
+  let searched: Map<string, any> | null = null;
   // The assignee and project_id indexes are global — they return rows the
   // caller may not be able to see, so those two branches get an explicit
   // owner-or-team-member filter below. The other branches are already
@@ -1835,6 +1892,9 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
     tasks = got.page;
     paged = true;
     nextPage = got.isDone ? null : got.continueCursor;
+  } else if (args.query?.trim()) {
+    searched = await searchWorkspaceTasks(ctx, db.workspaceKey, args.query.trim(), searchCategories(args));
+    tasks = [...searched.values()];
   } else {
     // The status filters below run in the database first where they can, so
     // rows they would drop never reach JS memory: finished work is most of a
@@ -1917,6 +1977,7 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
   if (args.query) {
     const q = args.query.toLowerCase();
     tasks = tasks.filter((t: any) =>
+      searched?.has(String(t._id)) ||
       (t.title || "").toLowerCase().includes(q) ||
       (t.description || "").toLowerCase().includes(q) ||
       (t.short_id || "").toLowerCase().includes(q),
@@ -2169,6 +2230,22 @@ export const update = mutation({
     // The category every status side effect below keys on. args.status alone
     // is not enough: a status_id-only write still moves the category.
     const statusWrite = await resolveStatusWrite(ctx, task.team_id, task.status, args);
+    // Link conversation if provided. Unresolvable session ref = apply the
+    // update without the link, never reject the update itself (see
+    // resolveSessionConversation).
+    const conv = args.conversation_id
+      ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id)
+      : null;
+    // A session handing off a task held by a decision (L5): the evidence is
+    // recorded and the task stays at its station, where the person's answer
+    // moves it. Any other session move of a held task is refused below.
+    const heldHandoff = conv && args.verification_evidence !== undefined
+      ? await holdingDecisionFor(ctx, task, statusWrite.status, statusWrite.statusId)
+      : null;
+    if (heldHandoff) {
+      statusWrite.status = undefined;
+      statusWrite.statusId = { set: false };
+    }
     // A review approve inside a live line run is one station, not the end:
     // the run decides when the cause is done (LE16), so it stays in review.
     if (args.review_verdict === "approve" && statusWrite.status === "done" && (await liveLineRun(ctx, task))) {
@@ -2287,15 +2364,9 @@ export const update = mutation({
       updates.closed_at = now;
     }
 
-    // Link conversation if provided. Unresolvable session ref = apply the
-    // update without the link, never reject the update itself (see
-    // resolveSessionConversation).
     let linkedConvId: Id<"conversations"> | undefined;
     let startedForRole: any | null = null;
     let releasedOwners: TaskOwnerRef[] = [];
-    const conv = args.conversation_id
-      ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id)
-      : null;
     if (args.review_verdict) {
       updates.review_verdict = {
         verdict: args.review_verdict,
@@ -2307,7 +2378,7 @@ export const update = mutation({
     // The hold (the-line.md L5): a session is refused; a person moves past it
     // and the note below names the decision.
     const hold = await holdingDecisionFor(ctx, task, nextStatus, statusWrite.statusId);
-    if (hold && conv) throw heldError(hold);
+    if (hold && conv) throw heldError(hold, task);
     if (conv) {
       // A conversation in another workspace may still drive the write (an agent
       // working a cross-workspace task); only the conversation↔task linkage is
@@ -2488,6 +2559,8 @@ export const update = mutation({
       // A start of a task still waiting on something says what (TG1), so a
       // session that picked it by name, not from `ready`, learns it.
       open_blockers: nextStatus === "in_progress" ? await openBlockersOf(ctx, task) : undefined,
+      // A handoff recorded on a held task, which stayed at its station (L5).
+      held: heldHandoff ? { decision: heldHandoff.short_id ?? String(heldHandoff._id), station: heldHandoff.station } : undefined,
     };
   },
 });

@@ -348,6 +348,24 @@ describe("signals.ingest", () => {
     expect(found.signals.map((s: any) => s.short_id)).toEqual([evals.short_id]);
   });
 
+  test("ls --task returns every finding on the problem past the workspace default, with the count", async () => {
+    // A line run counted 50 findings on a problem that held more: the list
+    // stopped at the default limit and said nothing.
+    const { add, t, task } = await setup();
+    const first = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart" });
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...row } = (await ctx.db.get(first.signal_id as any)) as any;
+      for (let i = 0; i < 60; i++) await ctx.db.insert("signals", { ...row, short_id: `sg-y${i}`, created_at: row.created_at + 1 + i });
+    });
+    const shortId = (await task(first.task_id)).short_id;
+    const all = await t.query(api.signals.listForCli, { api_token: TOKEN, task: shortId });
+    expect(all.signals).toHaveLength(61);
+    expect(all.total).toBe(61);
+    const some = await t.query(api.signals.listForCli, { api_token: TOKEN, task: shortId, limit: 10 });
+    expect(some.signals).toHaveLength(10);
+    expect(some.total).toBe(61);
+  });
+
   test("ls --fingerprint reads one fingerprint's signals however old, newest first", async () => {
     // A finder asking which cause holds its key must not page the whole
     // workspace: Union's planner read the newest 500 and the reply outgrew
@@ -358,6 +376,8 @@ describe("signals.ingest", () => {
     const again = await add({ fingerprint: "union:cluster:a", title: "Booking link points at localhost" });
     const hit = await t.query(api.signals.listForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:a", limit: 1 });
     expect(hit.signals.map((s: any) => s.short_id)).toEqual([again.short_id]);
+    // The limit cut the list, and the answer says so.
+    expect(hit.more).toBe(true);
     expect(hit.signals[0].task_short_id).toBe((await task(first.task_id)).short_id);
     const none = await t.query(api.signals.listForCli, { api_token: TOKEN, workspace: "personal", fingerprint: "union:cluster:missing" });
     expect(none.signals).toEqual([]);
