@@ -7,12 +7,12 @@
 // facts ride the room's callRooms row (the store's one home for them, fed
 // with the live rooms by the sync bridge), so none of this costs a query of
 // its own, and a server that predates recording simply has no fields.
-import { Alert } from "react-native";
 import * as Haptics from "expo-haptics";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import type { RoomRecordingFields } from "@codecast/web/lib/calls/roomRecordingFields";
 import { STOP_RECORDING_ASK } from "@codecast/web/lib/calls/roomRecordingEnd";
 import { pressRoomRecording } from "@codecast/web/lib/calls/recordingPress";
+import { appAlert } from "@/lib/popups";
 // The mark itself is the web's own hook (Metro-safe), so the pill, the badge
 // and the notice read it exactly as every web surface does.
 export { useRoomRecordingMark } from "@codecast/web/lib/calls/recordingPress";
@@ -28,7 +28,7 @@ export function useRecordingField<K extends keyof RoomRecordingFields>(roomKey: 
  *  recording. */
 export function useConfirmStopRecording(roomKey: string | null): () => void {
   return () =>
-    Alert.alert(STOP_RECORDING_ASK.title, STOP_RECORDING_ASK.body, [
+    appAlert(STOP_RECORDING_ASK.title, STOP_RECORDING_ASK.body, [
       { text: STOP_RECORDING_ASK.keep, style: "cancel" },
       {
         text: STOP_RECORDING_ASK.stop,
@@ -36,7 +36,7 @@ export function useConfirmStopRecording(roomKey: string | null): () => void {
         onPress: () => {
           if (!roomKey) return;
           void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          void pressRoomRecording(roomKey, false, (message) => Alert.alert("Couldn't stop the recording", message));
+          void pressRoomRecording(roomKey, false, (message) => appAlert("Couldn't stop the recording", message));
         },
       },
     ]);

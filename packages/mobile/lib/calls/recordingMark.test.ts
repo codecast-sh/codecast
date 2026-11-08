@@ -7,8 +7,8 @@ let alerts: Array<{ title: string; body: string; buttons: any[] }> = [];
 const presses: Array<{ roomKey: string; on: boolean }> = [];
 let haptics = 0;
 
-mock.module("react-native", () => ({
-  Alert: { alert: (title: string, body: string, buttons: any[]) => alerts.push({ title, body, buttons }) },
+mock.module("@/lib/popups", () => ({
+  appAlert: (title: string, body: string, buttons: any[]) => alerts.push({ title, body, buttons }),
 }));
 mock.module("expo-haptics", () => ({
   impactAsync: async () => void haptics++,

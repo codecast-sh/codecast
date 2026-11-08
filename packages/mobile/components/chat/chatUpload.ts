@@ -9,11 +9,12 @@
 // which paints the row now and delivers when the upload settles (chatSlice
 // sendChatMessage, the same path the web composer takes).
 
-import { ActionSheetIOS, Alert, Linking, Platform } from 'react-native';
+import { Linking } from 'react-native';
 import type { ConvexReactClient } from 'convex/react';
 import { uploadUriToStorage } from '@/lib/uploadToStorage';
 import { optionalNative } from '@/lib/optionalNative';
 import { pendingImageUploads } from '@codecast/web/lib/pendingUploads';
+import { appAlert, showActionSheet } from '@/lib/popups';
 
 // Lazy-required, NEVER statically imported: a native module missing from the
 // installed binary throws during initial JS eval — before expo-updates marks
@@ -48,22 +49,13 @@ export type ChatAttachmentArg = {
 
 export type ImageSource = 'camera' | 'library';
 
-/** Ask where an attachment comes from: a new photo or the library. iOS gets
- *  its native action sheet; Android, the system dialog. Null when dismissed. */
+/** Ask where an attachment comes from: a new photo or the library. Null when dismissed. */
 export function chooseImageSource(): Promise<ImageSource | null> {
   return new Promise((resolve) => {
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options: ['Take Photo', 'Photo Library', 'Cancel'], cancelButtonIndex: 2 },
-        (i) => resolve(i === 0 ? 'camera' : i === 1 ? 'library' : null),
-      );
-      return;
-    }
-    Alert.alert('Attach image', undefined, [
-      { text: 'Take Photo', onPress: () => resolve('camera') },
-      { text: 'Photo Library', onPress: () => resolve('library') },
-      { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
-    ], { cancelable: true, onDismiss: () => resolve(null) });
+    showActionSheet(undefined, [
+      { label: 'Take photo', onPress: () => resolve('camera') },
+      { label: 'Photo library', onPress: () => resolve('library') },
+    ], { onCancel: () => resolve(null) });
   });
 }
 
@@ -75,7 +67,7 @@ export function chooseImageSource(): Promise<ImageSource | null> {
  *  the system picker, which needs no permission; the camera asks once. */
 export async function pickImages(source: ImageSource = 'library'): Promise<PickedImage[]> {
   if (!ImagePicker) {
-    Alert.alert('Not available', 'Image uploads need a build with expo-image-picker.');
+    appAlert('Not available', 'Image uploads need a build with expo-image-picker.');
     return [];
   }
   let result: Awaited<ReturnType<typeof ImagePicker.launchImageLibraryAsync>>;
@@ -83,7 +75,7 @@ export async function pickImages(source: ImageSource = 'library'): Promise<Picke
     if (source === 'camera') {
       const { granted } = await ImagePicker.requestCameraPermissionsAsync();
       if (!granted) {
-        Alert.alert('Camera access is off', 'Turn on camera access for Codecast in Settings to take a photo.', [
+        appAlert('Camera access is off', 'Turn on camera access for Codecast in Settings to take a photo.', [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Open Settings', onPress: () => { void Linking.openSettings(); } },
         ]);
@@ -101,7 +93,7 @@ export async function pickImages(source: ImageSource = 'library'): Promise<Picke
     }
   } catch (err) {
     // The simulator has no camera, and a picker can fail to present.
-    Alert.alert(source === 'camera' ? 'Camera unavailable' : 'Photo library unavailable', err instanceof Error ? err.message : String(err));
+    appAlert(source === 'camera' ? 'Camera unavailable' : 'Photo library unavailable', err instanceof Error ? err.message : String(err));
     return [];
   }
   if (result.canceled) return [];

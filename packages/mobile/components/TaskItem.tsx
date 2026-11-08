@@ -1,10 +1,11 @@
-import { StyleSheet, TouchableOpacity, View as RNView, ActionSheetIOS } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import type { TaskItem as TaskItemType } from "@codecast/web/store/inboxStore";
 import { formatRelativeTime } from "./SessionItem";
+import { showActionSheet } from "@/lib/popups";
 
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type TaskPriority = "urgent" | "high" | "medium" | "low" | "none";
@@ -161,36 +162,13 @@ export function showTaskActions(
   task: TaskItemType,
   onUpdate: (shortId: string, fields: Record<string, any>) => void,
 ) {
-  const currentStatusIdx = STATUS_ORDER.indexOf(task.status as TaskStatus);
-  const statusOptions = STATUS_ORDER.filter((_, i) => i !== currentStatusIdx);
-  const priorityOptions: TaskPriority[] = ["urgent", "high", "medium", "low", "none"];
-  const currentPriority = task.priority;
-
-  ActionSheetIOS.showActionSheetWithOptions(
-    {
-      options: [
-        ...statusOptions.map((s) => `→ ${STATUS_CONFIG[s].label}`),
-        ...priorityOptions
-          .filter((p) => p !== currentPriority)
-          .map((p) => `▲ ${PRIORITY_CONFIG[p].label}`),
-        "Cancel",
-      ],
-      cancelButtonIndex: statusOptions.length + priorityOptions.filter((p) => p !== currentPriority).length,
-      title: task.short_id,
-      message: task.title,
-    },
-    (idx) => {
-      if (idx < statusOptions.length) {
-        onUpdate(task.short_id, { status: statusOptions[idx] });
-      } else {
-        const prioIdx = idx - statusOptions.length;
-        const prioFiltered = priorityOptions.filter((p) => p !== currentPriority);
-        if (prioIdx < prioFiltered.length) {
-          onUpdate(task.short_id, { priority: prioFiltered[prioIdx] });
-        }
-      }
-    },
-  );
+  const priorities: TaskPriority[] = ["urgent", "high", "medium", "low", "none"];
+  showActionSheet(task.title || task.short_id, [
+    ...STATUS_ORDER.filter((st) => st !== task.status)
+      .map((st) => ({ label: `Move to ${STATUS_CONFIG[st].label}`, onPress: () => onUpdate(task.short_id, { status: st }) })),
+    ...priorities.filter((p) => p !== task.priority)
+      .map((p) => ({ label: `Priority ${PRIORITY_CONFIG[p].label}`, onPress: () => onUpdate(task.short_id, { priority: p }) })),
+  ]);
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({

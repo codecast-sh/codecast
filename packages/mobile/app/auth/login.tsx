@@ -1,22 +1,13 @@
 import {
   useState } from 'react';
-import {
-  StyleSheet,
-  TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
-  Image,
-  View,
-} from 'react-native';
+import { StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, Image, View } from 'react-native';
 import { TextInput } from '@/components/Themed';
 import { Text } from '@/components/Themed';
 import { useAuth } from '@/lib/auth';
 import { Link } from 'expo-router';
 import { Theme, Spacing, FontSize, BorderRadius, themedStyles, useTheme } from '@/constants/Theme';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import { appAlert } from '@/lib/popups';
 
 export default function LoginScreen() {
   const Theme = useTheme();
@@ -44,7 +35,7 @@ export default function LoginScreen() {
       const detail = typeof error?.message === 'string' && error.message.trim()
         ? `\n\n${error.message.trim().slice(0, 140)}`
         : '';
-      Alert.alert('Error', `Apple sign in failed. Please try again.${detail}`);
+      appAlert("Couldn't sign in", `Apple sign in failed. Please try again.${detail}`);
     } finally {
       setLoading(false);
     }
@@ -55,7 +46,7 @@ export default function LoginScreen() {
     try {
       await signInWithGitHub();
     } catch (error) {
-      Alert.alert('Error', 'GitHub sign in failed. Please try again.');
+      appAlert("Couldn't sign in", 'GitHub sign in failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -63,7 +54,7 @@ export default function LoginScreen() {
 
   const handleEmailSignIn = async () => {
     if (!email || !password) {
-      Alert.alert('Error', 'Please enter email and password');
+      appAlert("Couldn't sign in", 'Please enter email and password');
       return;
     }
 
@@ -78,11 +69,11 @@ export default function LoginScreen() {
     } catch (error: any) {
       const message = error?.message || 'Sign in failed';
       if (message.includes('Invalid') || message.includes('credentials')) {
-        Alert.alert('Error', 'Invalid email or password');
+        appAlert("Couldn't sign in", 'Invalid email or password');
       } else if (message.includes('not found')) {
-        Alert.alert('Error', 'No account found with this email');
+        appAlert("Couldn't sign in", 'No account found with this email');
       } else {
-        Alert.alert('Error', 'Sign in failed. Please try again.');
+        appAlert("Couldn't sign in", 'Sign in failed. Please try again.');
       }
     } finally {
       setLoading(false);
@@ -95,7 +86,7 @@ export default function LoginScreen() {
     try {
       await verifyEmailCode(email, code.trim());
     } catch {
-      Alert.alert('Error', 'Invalid or expired code. Check the email and try again.');
+      appAlert("Couldn't sign in", 'Invalid or expired code. Check the email and try again.');
     } finally {
       setLoading(false);
     }

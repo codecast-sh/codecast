@@ -1,21 +1,12 @@
 import {
   useState } from 'react';
-import {
-  StyleSheet,
-  TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
-  Image,
-  View,
-} from 'react-native';
+import { StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, Image, View } from 'react-native';
 import { TextInput } from '@/components/Themed';
 import { Text } from '@/components/Themed';
 import { useAuth } from '@/lib/auth';
 import { Link } from 'expo-router';
 import { Theme, themedStyles, useTheme } from '@/constants/Theme';
+import { appAlert } from '@/lib/popups';
 
 export default function SignupScreen() {
   const Theme = useTheme();
@@ -38,7 +29,7 @@ export default function SignupScreen() {
       const detail = typeof error?.message === 'string' && error.message.trim()
         ? `\n\n${error.message.trim().slice(0, 140)}`
         : '';
-      Alert.alert('Error', `Apple sign up failed. Please try again.${detail}`);
+      appAlert("Couldn't sign up", `Apple sign up failed. Please try again.${detail}`);
     } finally {
       setLoading(false);
     }
@@ -49,7 +40,7 @@ export default function SignupScreen() {
     try {
       await signInWithGitHub();
     } catch (error) {
-      Alert.alert('Error', 'GitHub sign up failed. Please try again.');
+      appAlert("Couldn't sign up", 'GitHub sign up failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -57,12 +48,12 @@ export default function SignupScreen() {
 
   const handleEmailSignUp = async () => {
     if (!email || !password) {
-      Alert.alert('Error', 'Please enter email and password');
+      appAlert("Couldn't sign up", 'Please enter email and password');
       return;
     }
 
     if (password.length < 8) {
-      Alert.alert('Error', 'Password must be at least 8 characters');
+      appAlert("Couldn't sign up", 'Password must be at least 8 characters');
       return;
     }
 
@@ -76,9 +67,9 @@ export default function SignupScreen() {
     } catch (error: any) {
       const message = error?.message || 'Sign up failed';
       if (message.includes('already exists')) {
-        Alert.alert('Error', 'An account with this email already exists');
+        appAlert("Couldn't sign up", 'An account with this email already exists');
       } else {
-        Alert.alert('Error', 'Sign up failed. Please try again.');
+        appAlert("Couldn't sign up", 'Sign up failed. Please try again.');
       }
     } finally {
       setLoading(false);
@@ -91,7 +82,7 @@ export default function SignupScreen() {
     try {
       await verifyEmailCode(email, code.trim());
     } catch {
-      Alert.alert('Error', 'Invalid or expired code. Check the email and try again.');
+      appAlert("Couldn't sign up", 'Invalid or expired code. Check the email and try again.');
     } finally {
       setLoading(false);
     }

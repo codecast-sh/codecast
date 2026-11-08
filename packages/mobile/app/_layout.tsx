@@ -1,6 +1,7 @@
 import '@/lib/polyfills';
 import { ComposeHost } from '@/components/session/NewSessionSheet';
 import { UndoBarHost } from '@/components/UndoBar';
+import { PopupHost } from '@/components/PopupHost';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
@@ -31,13 +32,13 @@ import { PERF_PROBE, probeTouchEnd, setProbeRoute } from '@/lib/perfProbe';
 import { startForegroundSyncTrace } from '@/lib/foregroundSyncTrace';
 import { setForegroundRoute, startForegroundResume } from '@/lib/foregroundResume';
 import * as Font from 'expo-font';
-import { Alert } from 'react-native';
 import { setTaskErrorReporter } from '@codecast/web/lib/taskActions';
 import { StoreSyncBridge } from '@/components/StoreSyncBridge';
+import { appAlert } from '@/lib/popups';
 
 // A task write the server refuses (createTaskAndAdopt drops its stub) says so,
 // as web's toast does.
-setTaskErrorReporter((msg) => Alert.alert('Task', msg));
+setTaskErrorReporter((msg) => appAlert('Task', msg));
 
 const CallOverlay = lazy(() => import('@/components/calls/CallOverlay').then((m) => ({ default: m.CallOverlay })));
 
@@ -308,6 +309,7 @@ function RootLayoutNav() {
                 </Stack>
                 <ComposeHost />
                 <UndoBarHost />
+                <PopupHost />
                 {calls ? (
                   <OverlayErrorBoundary>
                     <Suspense fallback={null}>

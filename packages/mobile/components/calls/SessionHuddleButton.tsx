@@ -1,4 +1,4 @@
-import { Alert, TouchableOpacity, StyleSheet } from "react-native";
+import { TouchableOpacity, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
@@ -7,6 +7,7 @@ import { CHANNEL_HUDDLE_WARNING_SIZE, parseRoomKey, sessionRoomKey } from "@code
 import { Text } from "@/components/Themed";
 import { Theme, themedStyles, useTheme } from "@/constants/Theme";
 import { joinCall, startHuddle } from "@/lib/calls/callManager";
+import { appAlert } from "@/lib/popups";
 
 type HuddleTarget = {
   roomKey: string;
@@ -41,7 +42,7 @@ export function useHuddleAction({ roomKey, teamId, ring, anchorTitle, channelMem
   };
   const press = () => {
     if (inRoom === 0 && isChannel && (channelMemberCount ?? 0) > CHANNEL_HUDDLE_WARNING_SIZE) {
-      Alert.alert(
+      appAlert(
         `Buzz everyone in ${anchorTitle || "this channel"}?`,
         `This channel has ${channelMemberCount} members. Starting a huddle will buzz all ${channelMemberCount! - 1} other members.`,
         [{ text: "Cancel", style: "cancel" }, { text: "Start and buzz everyone", onPress: start }],

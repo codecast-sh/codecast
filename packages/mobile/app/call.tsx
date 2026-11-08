@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
-  Alert,
   Image,
   Pressable,
   StyleSheet,
@@ -71,6 +70,7 @@ import { stopRinging } from "@/lib/calls/ringtone";
 import { GuestDoor, GuestInviteRow, useGuestRemover } from "@/components/calls/GuestDoor";
 import { RecordingNotice, recNoticeStyles } from "@/components/calls/RecordingNotice";
 import { useConfirmStopRecording, useRecordingField, useRoomRecordingMark } from "@/lib/calls/recordingMark";
+import { appAlert } from "@/lib/popups";
 
 // The call stage, phone-shaped. The same design intents as the web stage,
 // re-derived for a hand-held portrait screen:
@@ -416,14 +416,14 @@ function useRoomRecordingCooling(roomKey: string | null): boolean {
  *  is undone and said. */
 function useConfirmStartRecording(roomKey: string | null): () => void {
   return () =>
-    Alert.alert(RECORD_ASK.title, RECORD_ASK.lines(roomKey).join("\n\n"), [
+    appAlert(RECORD_ASK.title, RECORD_ASK.lines(roomKey).join("\n\n"), [
       { text: "Cancel", style: "cancel" },
       {
         text: RECORD_ASK.record,
         onPress: () => {
           if (!roomKey) return;
           void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          void pressRoomRecording(roomKey, true, (message) => Alert.alert("Couldn't start recording", message));
+          void pressRoomRecording(roomKey, true, (message) => appAlert("Couldn't start recording", message));
         },
       },
     ]);
@@ -462,7 +462,7 @@ function RecordingBadge({ roomKey, canStart }: { roomKey: string | null; canStar
     if (unavailable) {
       return (
         <Pressable
-          onPress={() => Alert.alert("Recording is unavailable", unavailable)}
+          onPress={() => appAlert("Recording is unavailable", unavailable)}
           hitSlop={8}
           style={({ pressed }) => [styles.recordBtn, styles.recordBtnQuiet, pressed && styles.pressed]}
           accessibilityRole="button"

@@ -1,13 +1,5 @@
 import { useState, useCallback, type ComponentType } from 'react';
-import {
-  StyleSheet,
-  TouchableOpacity,
-  Alert,
-  View as RNView,
-  Platform,
-  Share,
-  Image,
-} from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView, Platform, Share, Image } from 'react-native';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { useRouter } from 'expo-router';
@@ -27,7 +19,8 @@ import { Text as RNText, TextInput } from '@/components/Themed';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useAuth } from '@/lib/auth';
-import { showActionSheet } from '@/lib/actionSheet';
+import { appAlert, appPrompt, showActionSheet } from '@/lib/popups';
+import { showNotice } from '@/lib/undoBar';
 import { DevicesSection } from '@/components/DevicesSection';
 import { liveActivityNative } from '@/modules/codecast-live-activity';
 import { SettingsScroll, SettingsGroup, ToggleRow, NavRow, SettingsSwitch, settingsStyles } from './SettingsUI';
@@ -132,7 +125,7 @@ function ProfilePage() {
   }, [setMyStatus, currentUser?.status]);
 
   const handleDeleteAccount = () => {
-    Alert.alert(
+    appAlert(
       'Delete Account',
       'This will permanently delete your account and all your data. This action cannot be undone.',
       [
@@ -140,35 +133,31 @@ function ProfilePage() {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
-            Alert.prompt(
-              'Confirm Deletion',
-              'Type DELETE to confirm account deletion:',
-              async (text) => {
-                if (text?.toUpperCase() === 'DELETE') {
-                  setIsDeleting(true);
-                  try {
-                    const result = await deleteAccountMutation({});
-                    if (result.completed) {
-                      await signOut();
-                      router.replace('/auth/login');
-                    } else {
-                      Alert.alert('Partial Deletion', result.message, [
-                        { text: 'OK', onPress: () => handleDeleteAccount() }
-                      ]);
-                    }
-                  } catch (error) {
-                    Alert.alert('Error', 'Failed to delete account. Please try again.');
-                  } finally {
-                    setIsDeleting(false);
-                  }
-                } else if (text) {
-                  Alert.alert('Error', 'Please type DELETE to confirm');
+          onPress: () => appPrompt('Type DELETE to confirm', {
+            message: 'Your account and all its data go for good.',
+            placeholder: 'DELETE',
+            confirm: 'Delete account',
+            destructive: true,
+            accepts: (text) => text.trim().toUpperCase() === 'DELETE',
+            onSubmit: async () => {
+              setIsDeleting(true);
+              try {
+                const result = await deleteAccountMutation({});
+                if (result.completed) {
+                  await signOut();
+                  router.replace('/auth/login');
+                } else {
+                  appAlert('Partial deletion', result.message, [
+                    { text: 'OK', onPress: () => handleDeleteAccount() }
+                  ]);
                 }
-              },
-              'plain-text'
-            );
-          },
+              } catch (error) {
+                appAlert("Couldn't delete the account", 'Please try again.');
+              } finally {
+                setIsDeleting(false);
+              }
+            },
+          }),
         },
       ]
     );
@@ -388,7 +377,7 @@ function SecurityPage() {
       await disableBiometric();
     } else {
       await enableBiometric();
-      Alert.alert('Biometric Unlock Enabled', 'You can now use Face ID or Touch ID to unlock the app');
+      showNotice('Face ID unlock is on');
     }
   };
   return (
@@ -421,21 +410,21 @@ function TeamPage() {
   const handleCopyInvite = useCallback(async () => {
     if (!inviteUrl) return;
     await copyToClipboard(inviteUrl);
-    Alert.alert('Copied', 'Invite link copied to clipboard');
+    showNotice('Invite link copied');
   }, [inviteUrl]);
 
   const handleRegenerateInvite = useCallback(async () => {
     if (!activeTeamId || !currentUser?._id) return;
-    Alert.alert('Regenerate Invite', 'This will invalidate the current invite link.', [
+    appAlert('Regenerate Invite', 'This will invalidate the current invite link.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Regenerate',
         onPress: async () => {
           try {
             await regenerateInvite({ team_id: activeTeamId, requesting_user_id: currentUser._id as Id<"users"> });
-            Alert.alert('Done', 'New invite code generated');
+            showNotice('New invite link made');
           } catch (_e) {
-            Alert.alert('Error', 'Only admins can regenerate invite codes');
+            appAlert('Error', 'Only admins can regenerate invite codes');
           }
         },
       },

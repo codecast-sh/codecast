@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import { StyleSheet, FlatList, TouchableOpacity, View as RNView, ActionSheetIOS, Alert, Platform } from 'react-native';
+import { StyleSheet, FlatList, TouchableOpacity, View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -19,6 +19,7 @@ import { ChatAvatar } from './MessageRow';
 import { LivePulse, LiveRoomCard, type LiveRoomRow } from '@/components/calls/LiveRooms';
 import { joinCall, startHuddle } from '@/lib/calls/callManager';
 import { isPerson } from '@codecast/shared/team/memberKind';
+import { showActionSheet } from '@/lib/popups';
 
 // The Chat tab's home list: live huddles first, then channels, then direct
 // messages, then the team's people. One FlatList, four kinds of row.
@@ -191,32 +192,13 @@ export function ChatHomeList({
   const channelActions = (channel: ChatRailChannel) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const level = channel.notifyLevel;
-    const options = [
-      ...((channel.unreadCount ?? 0) > 0 ? ['Mark as read'] : []),
-      `${level === 'all' ? '✓ ' : ''}Notify for everything`,
-      `${level === 'mentions' ? '✓ ' : ''}Notify for mentions only`,
-      `${level === 'none' ? '✓ ' : ''}Mute`,
-      'Cancel',
-    ];
-    const run = (index: number) => {
-      const picked = options[index];
-      if (!picked || picked === 'Cancel') return;
-      const store = useInboxStore.getState();
-      if (picked === 'Mark as read') store.markChannelRead(channel.id);
-      else if (picked.endsWith('everything')) store.setChannelNotifyLevel(channel.id, 'all');
-      else if (picked.endsWith('mentions only')) store.setChannelNotifyLevel(channel.id, 'mentions');
-      else if (picked.endsWith('Mute')) store.setChannelNotifyLevel(channel.id, 'none');
-    };
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options, cancelButtonIndex: options.length - 1, title: displayName(channel) },
-        run,
-      );
-    } else {
-      Alert.alert(displayName(channel), undefined, options.map((text, i) => ({
-        text, onPress: () => run(i), style: text === 'Cancel' ? ('cancel' as const) : undefined,
-      })));
-    }
+    const store = useInboxStore.getState();
+    showActionSheet(displayName(channel), [
+      ...((channel.unreadCount ?? 0) > 0 ? [{ label: 'Mark as read', onPress: () => store.markChannelRead(channel.id) }] : []),
+      { label: 'Notify for everything', selected: level === 'all', onPress: () => store.setChannelNotifyLevel(channel.id, 'all') },
+      { label: 'Notify for mentions only', selected: level === 'mentions', onPress: () => store.setChannelNotifyLevel(channel.id, 'mentions') },
+      { label: 'Mute', selected: level === 'none', onPress: () => store.setChannelNotifyLevel(channel.id, 'none') },
+    ]);
   };
 
   return (

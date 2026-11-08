@@ -5,7 +5,7 @@
 // The sheet opens with the keyboard down so every choice is in view; agent,
 // machine, folder, model and the rest are pre-filled and only need a tap when
 // the default is wrong.
-import { StyleSheet, TouchableOpacity, View as RNView, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActionSheetIOS } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView, Modal, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { Component, useState, useRef, useMemo, type ReactNode } from 'react';
 import { router as appRouter, useRouter } from 'expo-router';
@@ -19,6 +19,7 @@ import {
 import { defaultMachineId, intendedMachineId, listedMachines, savedDefaultProject } from '@codecast/web/lib/machinePicker';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { OptionSheet } from '@/components/OptionSheet';
+import { appAlert, showActionSheet } from '@/lib/popups';
 import { SettingsSwitch } from '@/components/settings/SettingsUI';
 import { useAgentsByUse, useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from '@codecast/web/hooks/usePinnedAgents';
 import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
@@ -113,7 +114,7 @@ function watchSessionCreate(stubId: string, ready: Promise<string>, create: (stu
     const store = useInboxStore.getState();
     if (store.getConvexId(stubId) || mobileCreateFailureDisposition(error) === "accepted-pending") return;
     console.warn("[session] create refused", error);
-    Alert.alert("Session didn't start", "The server didn't confirm the new session. Retrying is safe.", [
+    appAlert("Session didn't start", "The server didn't confirm the new session. Retrying is safe.", [
       { text: "Not now", style: "cancel" },
       {
         text: "Retry",
@@ -403,23 +404,10 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
   const openBucketPicker = () => {
     const clear = () => setBucketPick(null);
     const pick = (b: BucketItem) => setBucketPick(b._id === effectiveBucketId ? null : b._id);
-    if (Platform.OS === 'ios') {
-      const names = labels.map((b) => (b._id === effectiveBucketId ? `✓ ${b.name}` : b.name));
-      const options = [...names, 'No label', 'Cancel'];
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options, cancelButtonIndex: options.length - 1, title: 'Label' },
-        (index) => {
-          if (index < labels.length) pick(labels[index]);
-          else if (index === labels.length) clear();
-        },
-      );
-    } else {
-      Alert.alert('Label', undefined, [
-        ...labels.map((b) => ({ text: b._id === effectiveBucketId ? `✓ ${b.name}` : b.name, onPress: () => pick(b) })),
-        { text: 'No label', onPress: clear },
-        { text: 'Cancel', style: 'cancel' as const },
-      ]);
-    }
+    showActionSheet('Label', [
+      ...labels.map((b) => ({ label: b.name, selected: b._id === effectiveBucketId, onPress: () => pick(b) })),
+      { label: 'No label', selected: !effectiveBucketId, onPress: clear },
+    ]);
   };
 
   // The folder chips, web's ProjectSwitcher on a phone: the picked folder

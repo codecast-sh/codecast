@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Pressable, Share, StyleSheet, View } from "react-native";
+import { Pressable, Share, StyleSheet, View } from "react-native";
 import * as Haptics from "expo-haptics";
 import { useMutation } from "convex/react";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
@@ -14,6 +14,7 @@ import { Text } from "@/components/Themed";
 // contrast reads are the right ones here too.
 import { SolarizedLight as Theme } from "@/constants/Theme";
 import { useAuth } from "@/lib/auth";
+import { appAlert } from "@/lib/popups";
 
 // THE DOOR, ON A PHONE: somebody from outside the team, on a guest link,
 // asking to be let in (callGuests.ts has the rules).
@@ -74,9 +75,9 @@ export function useGuestRemover(roomKey: string | null): ((guestId: string, name
     // Off the faces now; a refusal puts them back and says why.
     const out = (revokeLink: boolean) => {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      void removeGuest(roomKey, guestId, revokeLink, (message) => Alert.alert("Couldn't remove them", message));
+      void removeGuest(roomKey, guestId, revokeLink, (message) => appAlert("Couldn't remove them", message));
     };
-    Alert.alert(`Remove ${name} (guest)?`, "They leave the call at once. Turning off their link also stops anyone new from using it.", [
+    appAlert(`Remove ${name} (guest)?`, "They leave the call at once. Turning off their link also stops anyone new from using it.", [
       { text: "Cancel", style: "cancel" },
       { text: "Remove", style: "destructive", onPress: () => out(false) },
       { text: "Remove and turn off link", style: "destructive", onPress: () => out(true) },
@@ -111,14 +112,14 @@ export function GuestInviteRow({ roomKey }: { roomKey: string | null }) {
       const url = guestLinkUrl(link.path);
       await Share.share({ message: `Join my call on codecast: ${url}`, url });
     } catch (err) {
-      Alert.alert("Couldn't make a guest link", humanizeConvexError(err, "Something went wrong"));
+      appAlert("Couldn't make a guest link", humanizeConvexError(err, "Something went wrong"));
     } finally {
       setBusy(null);
     }
   };
   const turnOff = () => {
     if (!mine) return;
-    Alert.alert("Turn off your guest link?", "Nobody new can use it. Guests already in the call stay.", [
+    appAlert("Turn off your guest link?", "Nobody new can use it. Guests already in the call stay.", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Turn off",
@@ -126,7 +127,7 @@ export function GuestInviteRow({ roomKey }: { roomKey: string | null }) {
         onPress: () => {
           setBusy("off");
           void revoke({ link_id: mine.link_id as any })
-            .catch((err: unknown) => Alert.alert("Couldn't turn the link off", humanizeConvexError(err, "Something went wrong")))
+            .catch((err: unknown) => appAlert("Couldn't turn the link off", humanizeConvexError(err, "Something went wrong")))
             .finally(() => setBusy(null));
         },
       },
@@ -202,8 +203,8 @@ export function GuestDoor({ roomKey }: { roomKey: string | null }) {
 
   const answer = (k: GuestKnock, how: "admit" | "deny" | "deny_link") => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (how === "admit") void admitGuest(k.guest_id!, k.from_name, (message) => Alert.alert("Couldn't let them in", message));
-    else void denyGuest(k.guest_id!, how === "deny_link", (message) => Alert.alert("Couldn't turn them away", message));
+    if (how === "admit") void admitGuest(k.guest_id!, k.from_name, (message) => appAlert("Couldn't let them in", message));
+    else void denyGuest(k.guest_id!, how === "deny_link", (message) => appAlert("Couldn't turn them away", message));
   };
 
   return (
