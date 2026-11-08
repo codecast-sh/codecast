@@ -460,7 +460,7 @@ describe("cast read --ask output", () => {
     expect(out).toContain("claude-haiku-4-5 · read 118 lines, 20 matched, showed 118 · 23.5k in / 312 out, $0.025 · 8.4s");
   });
 
-  test("an incomplete read says which stretch it skipped, and tail citations open with -n", async () => {
+  test("an incomplete read says which stretch it skipped, and tail citations read back from the end", async () => {
     const { formatAskResult } = await import("./formatter");
     const out = strip(formatAskResult({
       conversation: { id: "x", short_id: "jx7csbd", title: "Whale", lines: 3000 },
@@ -477,7 +477,7 @@ describe("cast read --ask output", () => {
       took_ms: 90_000,
     }));
     expect(out).toContain("3000+ lines");
-    expect(out).toContain("read: cast read jx7csbd 12  cast read jx7csbd -n 40");
+    expect(out).toContain("read: cast read jx7csbd -40  cast read jx7csbd -4  cast read jx7csbd 12");
     expect(out).toContain("read 3000 lines (too long to read whole: msg 1500 to -1500 not read)");
   });
 });
@@ -522,16 +522,71 @@ describe("formatReadResult fits a page an agent can read whole", () => {
     expect(out).toContain("  -1: ");
     expect(out).not.toContain("  -4: ");
     expect(out).toContain("7 older messages cut");
+    expect(out).toContain("read further back: cast read jx7abcd -10:-4");
   });
 
-  test("one message larger than the budget still prints", () => {
+  test("one message larger than the budget is cut, naming the rest", () => {
     const out = strip(formatReadResult({ conversation, messages: [said(1, "y".repeat(5000)), said(2, "z")] }, { maxChars: 100 }));
-    expect(out).toContain("y".repeat(5000));
+    expect(out).not.toContain("y".repeat(5000));
+    expect(out).toContain("whole: cast read jx7abcd 1 --full --json");
     expect(out).toContain("continue: cast read jx7abcd 2:2");
+  });
+
+  // Every block kept and still past the budget used to index past the end
+  // (`blocks[kept.length].line` of undefined): -n 4 --full on a worker's report.
+  test("a read of one message larger than the budget does not crash", () => {
+    const out = strip(formatReadResult({ conversation, messages: [said(-1, "w".repeat(5000))] }, { maxChars: 100 }));
+    expect(out).toContain("message -1 is");
+    expect(out).toContain("whole: cast read jx7abcd -1 --full --json");
+  });
+
+  test("a short read names the total and how to reach the end", () => {
+    const messages = Array.from({ length: 20 }, (_, i) => said(i + 1, "hi"));
+    const out = strip(formatReadResult({ conversation: { ...conversation, message_count: 108 }, messages }));
+    expect(out).toContain("lines 1-20 of 108; next: cast read jx7abcd 21:40; latest: cast read jx7abcd -n 10");
+  });
+
+  test("a tail read on a long session names the earlier range, and says the total is a guess", () => {
+    const messages = Array.from({ length: 5 }, (_, i) => said(i - 5, "hi"));
+    const out = strip(formatReadResult({ conversation: { ...conversation, message_count: 9000, message_count_exact: false }, messages }));
+    expect(out).toContain("the last 5 of about 9000 lines, counted back from the end; earlier: cast read jx7abcd -10:-6");
+  });
+
+  test("a grep read counts its matches and pages on from the last one", () => {
+    const out = strip(formatReadResult({ conversation, messages: [said(4, "retry cap"), said(31, "retry cap")], grep: { matches: 2, searched: 900, more: true } }, { grep: "retry cap" }));
+    expect(out).toContain('2+ messages contain "retry cap"; more: cast read jx7abcd 32: --grep "retry cap"');
   });
 
   test("no budget prints everything", () => {
     const messages = Array.from({ length: 10 }, (_, i) => said(i + 1, "x".repeat(1000)));
     expect(strip(formatReadResult({ conversation, messages }))).toContain("  10: ");
+  });
+});
+
+// 2487 of 2578 searches were piped through head or grep, and match "lines"
+// were the match's rank, which agents passed to `cast read` as positions.
+describe("cast search output", () => {
+  const result = {
+    total_matches: 2,
+    conversations: [{
+      id: "jx7abcd1234", title: "Retry work", project_path: "/p", updated_at: new Date().toISOString(), message_count: 300,
+      matches: [{ line: 1, role: "user", content: "the retry cap", timestamp: "", message_id: "k57msg" }, { line: 2, role: "assistant", content: "kept the retry cap", timestamp: "" }],
+      context: [],
+    }],
+  };
+
+  test("matches print without rank numbers, a message id opens the match in place, and the footer names --grep", async () => {
+    const { formatSearchResults } = await import("./formatter");
+    const out = strip(formatSearchResults(result as any, { text: "retry cap" }));
+    expect(out).not.toMatch(/^\s+1: /m);
+    expect(out).toContain("↳ cast read jx7abcd#k57msg -c 3");
+    expect(out).toContain('cast read <id> --grep "retry cap"');
+  });
+
+  test("-l prints one line per session with its match count", async () => {
+    const { formatSearchSessions } = await import("./formatter");
+    const out = strip(formatSearchSessions(result as any, { text: "retry cap" })).split("\n");
+    expect(out[0]).toMatch(/^jx7abcd  2 matches +Retry work  .*300 msgs/);
+    expect(out[1]).toBe('inside one: cast read <id> --grep "retry cap"');
   });
 });
