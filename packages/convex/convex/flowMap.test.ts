@@ -297,7 +297,7 @@ describe("rollup then forTeam", () => {
     expect(w30.signals).toBe(9);
     expect(w7.steps.map((s) => s.label)).toEqual(["Problems opened", "Runs started", "Investigate", "Rebase", "Build", "Decide", "Merged", "Live in production", "Closed clean"]);
     // Opened in the window: ar1, ar2, ar3, p1, p2, e1, w1, jr (ar4 merged into ar3; p3, ar5, old are 40 days old).
-    expect(w7.steps[0]).toMatchObject({ n: 8, drops: { queued: 2, closed: 1 } });
+    expect(w7.steps[0]).toMatchObject({ n: 8, drops: { unstarted: 2, closed: 1 } });
     // Runs: ar1, ar2 at Build; p1 waiting at Decide; p2 on a person's line at Rebase; e1 shipped and reopened.
     expect(w7.steps[1].n).toBe(5);
     const at = (key: string) => w7.steps.find((s) => s.key === key)!;

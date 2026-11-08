@@ -28,6 +28,7 @@ import { useQuery } from 'convex/react';
 import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { bootMark } from '@/lib/bootProfile';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
+import { holdKill, useUndoBar } from '@/lib/undoBar';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
@@ -39,19 +40,21 @@ import { LivePulse } from '@/components/calls/LiveRooms';
 // Stashed/Killed bucket row — the web SessionCard's hidden variants. Tap opens
 // the session; explicit buttons restore (both) and kill (stashed only — a
 // killed session's agent is already torn down).
-function HiddenSessionRow({ session, variant, onPress, onRestore, onKill }: {
+function HiddenSessionRow({ session, variant, onPress, onRestore, onKill, held }: {
   session: SessionData;
   variant: "stashed" | "killed";
   onPress: () => void;
   onRestore: () => void;
   onKill?: () => void;
+  /** Its kill is waiting behind the undo bar. */
+  held?: boolean;
 }) {
   const Theme = useTheme();
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
 
   return (
-    <TouchableOpacity onPress={onPress} style={styles.dismissedItem} activeOpacity={0.6}>
+    <TouchableOpacity onPress={onPress} style={[styles.dismissedItem, held && styles.heldKill]} disabled={held} activeOpacity={0.6}>
       <RNView style={sessionStyles.conversationHeader}>
         <RNView style={sessionStyles.titleRow}>
           <FontAwesome
@@ -199,7 +202,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // Store actions, not the raw convex mutation: the hide data-transition is
   // what triggers the server-side agent teardown, and the store's optimistic
   // move + reconcile keep the row's bucket honest (same path as web).
-  const killSession = useInboxStore((s) => s.killSession);
   const killSessions = useInboxStore((s) => s.killSessions);
   const collapsedSections = useInboxStore((s) => s.collapsedSections);
   const toggleCollapsedSection = useInboxStore((s) => s.toggleCollapsedSection);
@@ -266,12 +268,10 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     pinSession(conversationId);
   }, [pinSession]);
 
-  const confirmKill = useCallback((conversationId: string) => {
-    Alert.alert('Kill Session', 'Stop the agent and move this session to Killed?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Kill', style: 'destructive', onPress: () => killSession(conversationId) },
-    ]);
-  }, [killSession]);
+  // A single kill waits behind the undo bar (lib/undoBar) and stops the agent
+  // only when the bar drains, so Undo takes it back whole. Until then the row
+  // stays where it is, dimmed.
+  const heldKillId = useUndoBar((s) => s.heldKillId);
 
   const confirmKillAllStashed = useCallback((ids: string[]) => {
     Alert.alert('Kill all stashed', `Stop every stashed session? (${ids.length})`, [
@@ -370,7 +370,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           else if (index === 2) markUnread();
           else if (index === 3) openLabelPicker(session);
           else if (index === 4) handleStash(session._id);
-          else if (index === 5) confirmKill(session._id);
+          else if (index === 5) holdKill(session._id);
         },
       );
     } else {
@@ -380,11 +380,11 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         { text: 'Mark unread', onPress: markUnread },
         { text: 'Label…', onPress: () => openLabelPicker(session) },
         { text: 'Stash', onPress: () => handleStash(session._id) },
-        { text: 'Kill Session', style: 'destructive', onPress: () => confirmKill(session._id) },
+        { text: 'Kill Session', style: 'destructive', onPress: () => holdKill(session._id) },
         { text: 'Cancel', style: 'cancel' },
       ]);
     }
-  }, [handlePin, handleStash, confirmKill, openLabelPicker]);
+  }, [handlePin, handleStash, openLabelPicker]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -419,7 +419,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
 
   const openRole = useCallback((roleShortId: string) => router.push(`/org/${roleShortId}`), [router]);
 
-  const renderSessionItem = useCallback((s: InboxSession) => (
+  const renderSessionItem = useCallback((s: InboxSession) => {
+    const row = (
     <SwipeableSessionItem
       key={s._id}
       session={s as SessionData}
@@ -433,7 +434,11 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       clock={rowMinute}
       reviveAt={reviveByConv[s._id]}
     />
-  ), [openSession, currentId, handleStash, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead]);
+    );
+    return s._id === heldKillId
+      ? <RNView key={s._id} style={styles.heldKill} pointerEvents="none">{row}</RNView>
+      : row;
+  }, [openSession, currentId, handleStash, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
@@ -642,7 +647,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
                 variant="stashed"
                 onPress={() => openSession(s._id)}
                 onRestore={() => handleRestore(s._id)}
-                onKill={() => confirmKill(s._id)}
+                onKill={() => holdKill(s._id)}
+                held={heldKillId === s._id}
               />
             ))
           )}
@@ -669,7 +675,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         </RNView>
       )}
     </RNView>
-  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, openSession, handleRestore, confirmKill, confirmKillAllStashed, scheme]);
+  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, openSession, handleRestore, confirmKillAllStashed, heldKillId, scheme]);
 
   // What the inbox is narrowed to, named in the title: a label or a project
   // picked in the slide-out panel. The clear mark beside it goes back to all.
@@ -1006,6 +1012,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     textAlign: 'center',
     paddingVertical: 20,
   },
+  // A row whose kill is waiting behind the undo bar.
+  heldKill: { opacity: 0.4 },
   dismissedItem: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: 8,
