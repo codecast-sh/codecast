@@ -287,6 +287,9 @@ const noCast = path.join(runDir, ".nocast");
 fs.rmSync(configDir, { recursive: true, force: true });
 fs.mkdirSync(configDir, { recursive: true });
 fs.mkdirSync(noCast, { recursive: true });
+// The guard's help state directory (prompt-dry-run-bin/cast help_state): made
+// here, because a mkdir inside the run's sandbox can be refused under /tmp.
+fs.mkdirSync(path.join(runDir, ".cast-help"), { recursive: true });
 if (claudeMdFile) fs.copyFileSync(claudeMdFile, path.join(configDir, "CLAUDE.md"));
 
 /** Install the --seed transcript as a session claude can resume from the
@@ -424,7 +427,7 @@ if (readOnly && !call) {
 function guardPreflight(): string | null {
   const dir = path.join(runDir, ".preflight");
   fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(path.join(dir, ".cast-help"), { recursive: true });
   const probe = 'cast task --help >/dev/null || exit 10; grep -q "^HELP task --help" "$RUN_DIR/calls.log" || exit 11';
   const r = spawnSync(sandbox!.prefix[0], [...sandbox!.prefix.slice(1), "bash", "-c", probe], { env: { ...env, RUN_DIR: dir }, encoding: "utf8", timeout: 120_000 });
   fs.rmSync(dir, { recursive: true, force: true });

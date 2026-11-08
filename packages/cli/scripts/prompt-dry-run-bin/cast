@@ -119,8 +119,8 @@ has_arg() { local w="$1" a; shift; for a in "$@"; do [ "$a" = "$w" ] && return 0
 has_flag() { local f="$1" a; shift; for a in "$@"; do [[ "$a" == "$f"* ]] && return 0; done; return 1; }
 is_read() {
   case "${1:-}" in
-    task|project|plan|doc|initiative|trigger|anchor|role|org)
-      case "${2:-}" in show|ls|context|wakes|grep|status|search|inputs|health|log|history|where|feed|loose|"") return 0 ;; esac
+    task|project|plan|doc|initiative|goal|trigger|anchor|role|org)
+      case "${2:-}" in show|ls|list|context|wakes|grep|status|search|inputs|health|log|history|where|feed|loose|ready|updates|timeline|"") return 0 ;; esac
       # `plan replay` prints a plan's history; no other group has the verb.
       [ "${1:-}" = plan ] && [ "${2:-}" = replay ] && return 0
       [ "${1:-}" = org ] && [ "${2:-}" = review ] && ! has_arg --spawn "$@" ;;
@@ -134,7 +134,24 @@ is_read() {
     # account's, not the rep's ledger's). A served world answers both from its
     # record, before this list is consulted.
     read) ! has_flag --ack "$@" ;;
-    link|search|feed|sessions|diff|summary|calls|goals) return 0 ;;
+    link|links|search|feed|sessions|diff|summary|calls|goals|overview|ov|context|similar|owners|timeline|agent-context) return 0 ;;
+    # git blame with sessions; --install-fugitive writes vim config, --open opens a browser.
+    blame) ! has_flag --install-fugitive "$@" && ! has_flag --open "$@" ;;
+    # Recorded decisions and saved patterns, listed or looked up; add and delete write.
+    decisions) case "${2:-}" in add|delete) return 1 ;; *) return 0 ;; esac ;;
+    learn) case "${2:-}" in add|delete) return 1 ;; *) return 0 ;; esac ;;
+    # Only the listing; a bare `bookmark <id> <n>` and --delete write.
+    bookmark) has_flag --list "$@" ;;
+    # Agent definitions and chains printed; create, edit, import, rm and run write or start sessions.
+    agent|agents) case "${2:-}" in ls|list|show|export|"") return 0 ;; *) return 1 ;; esac ;;
+    # The vault's metadata only: get, env, otp and run hand out values, the rest write.
+    vault|secrets) case "${2:-}" in ls|show|"") return 0 ;; *) return 1 ;; esac ;;
+    # What worktrees hold that main lacks; hold, release, level and prune change trees.
+    land) case "${2:-}" in scan|diff) return 0 ;; *) return 1 ;; esac ;;
+    # Replays listed and read as text; snap renders frames, repro writes a file, import starts a job.
+    replay) case "${2:-}" in ls|list|show) return 0 ;; *) return 1 ;; esac ;;
+    # Workspaces listed or inspected; acquire, destroy, heal and the rest change worktrees.
+    workspace|ws) case "${2:-}" in ls|list|status|path) return 0 ;; *) return 1 ;; esac ;;
     # A published page's reads; comments --resolve, set, rollback and rm write.
     publish) case "${2:-}" in ls|versions|viewers|links) return 0 ;; comments) ! has_flag --resolve "$@" ;; *) return 1 ;; esac ;;
     # A pull request's reads; comment, review, resolve, merge and close write.
@@ -173,6 +190,12 @@ is_read() {
     connector) case "${2:-}" in ls|readers) return 0 ;; *) return 1 ;; esac ;;
     # A finder's observations; add, move, merge and split write.
     signal) case "${2:-}" in ls|show) return 0 ;; *) return 1 ;; esac ;;
+    # Mod objects' reads; create, set, done, archive and restore write.
+    obj|objects) case "${2:-}" in kinds|ls|list|show) return 0 ;; *) return 1 ;; esac ;;
+    # A mod's reads; new, push, publish, enable, call and the rest write.
+    mod|mods) case "${2:-}" in ls|logs|versions|inspect|guide|local|open) return 0 ;; *) return 1 ;; esac ;;
+    # Shortcuts listed or looked up; set, add, unbind and reset rebind.
+    shortcuts|hotkeys) case "${2:-}" in set|add|unbind|reset) return 1 ;; *) return 0 ;; esac ;;
     # Workflow runs and templates listed, a file validated; run, reask, create, push and install write.
     workflow) case "${2:-}" in runs|list|validate) return 0 ;; *) return 1 ;; esac ;;
     *) return 1 ;;
@@ -235,7 +258,10 @@ show_help() {
   mark HELP
   exec env CODECAST_DIR="$state" CODECAST_NO_AUTO_UPDATE=1 "$bin" "$@" --help
 }
-help_state() { local s="${RUN_DIR:-$PWD}/.cast-help"; mkdir -p "$s"; printf '%s' "$s"; }
+# prompt-dry-run.ts creates this before the agent starts: inside the run's
+# sandbox a mkdir under /tmp can be refused. The mkdir stays for a guard run
+# by hand, outside the harness.
+help_state() { local s="${RUN_DIR:-$PWD}/.cast-help"; [ -d "$s" ] || mkdir -p "$s" 2>/dev/null; printf '%s' "$s"; }
 
 # The leading command words: lowercase words, up to the first flag or other text.
 command_words=()
@@ -244,8 +270,10 @@ for a in "$@"; do [[ "$a" =~ ^[a-z][a-z0-9-]*$ ]] || break; command_words+=("$a"
 # Help: asked for when --help comes before any `--`. Only the leading command
 # words go through, so a --help commander would take as an option's value
 # never reaches an action.
-wants_help() { local a; for a in "$@"; do [ "$a" = "--" ] && return 1; [ "$a" = "--help" ] && return 0; done; return 1; }
+wants_help() { local a; for a in "$@"; do [ "$a" = "--" ] && return 1; [ "$a" = "--help" ] || [ "$a" = "-h" ] && return 0; done; return 1; }
 if wants_help "$@"; then show_help ${command_words[@]+"${command_words[@]}"}; fi
+# `cast help <command words>` is commander's spelling of the same.
+if [ "${1:-}" = help ]; then show_help ${command_words[@]+"${command_words[@]:1}"}; fi
 
 # The CLI's own command tree (`cast agent-context --json`), read once per run
 # under the help state directory and kept beside it.
