@@ -400,6 +400,24 @@ Examples:
     load: () => import("./stateCommand.js").then((m) => m.registerStateCommand),
   },
   {
+    token: "loop",
+    description: `Keep this session working toward a goal until a review says it is met
+
+After every turn a review reads the goal and what the turn's tools showed
+(command output, test results, file contents; never what the agent says about
+it) and answers: met, continue with the next step, blocked on the person, or
+paused. Continue sends the next step into the session; met and blocked stop
+the loop and pin the outcome (blocked files the session under Needs Input).
+It stops on its own at 50 rounds, 3 rounds without progress, or 30 minutes
+with nothing happening. The composer's /goal and the goal bar above it write
+the same goal. (cast goal is the company's goals; this is one session's.)
+
+  cast loop set "Make bun test packages/billing pass"
+  cast loop show                 # state, round, the review's last finding
+  cast loop pause | resume | clear`,
+    load: () => import("./loopCommand.js").then((m) => m.registerLoopCommand),
+  },
+  {
     token: "say",
     args: ["[text...]"],
     description: `Tell the person reading this thread something: the reply they see
