@@ -4,6 +4,7 @@
 import { isConvexId } from "../store/inboxStore";
 import type { PresenceRow } from "../hooks/useDocPresence";
 import type { ChatMember } from "./chatViews";
+import { parseSideQuestion } from "./builtinCommands";
 
 /**
  * Whether a conversation can carry composer co-presence. It must be a real
@@ -17,9 +18,10 @@ export function composerPresenceEnabled(conversation: { _id: unknown } | null | 
   return !!conversation && isConvexId(String(conversation._id));
 }
 
-/** The rows in a presence list that are forming words right now. */
+/** The rows in a presence list that are forming words right now. A side
+ *  question being typed (`/btw`) is its author's own: never shown, sent or joined. */
 export function typingRows(present: readonly PresenceRow[]): PresenceRow[] {
-  return present.filter((p) => !!p.draft_text && p.draft_text.trim().length > 0);
+  return present.filter((p) => !!p.draft_text && p.draft_text.trim().length > 0 && parseSideQuestion(p.draft_text) === null);
 }
 
 /**
