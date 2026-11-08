@@ -1,6 +1,6 @@
-import { Alert, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { showActionSheet } from '@/lib/actionSheet';
+import { appAlert, showActionSheet } from '@/lib/popups';
 import { Text as RNText } from '@/components/Themed';
 import { useState, useCallback } from 'react';
 import { useRouter } from 'expo-router';
@@ -61,7 +61,7 @@ export function TriggerDock({ rows, unreadCount, nextRunAt }: {
       {
         label: ending.label,
         destructive: true,
-        onPress: () => Alert.alert(ending.ask, taskDisplayTitle(task), [
+        onPress: () => appAlert(ending.ask, taskDisplayTitle(task), [
           { text: 'Keep', style: 'cancel' },
           { text: ending.label, style: 'destructive', onPress: () => act(task._id, 'cancel') },
         ]),

@@ -4,7 +4,7 @@
 // the new session sheet's first message both draw it, so a first message can
 // carry what a reply can.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, KeyboardAvoidingView, Platform, View as RNView, Image, Alert, ActivityIndicator, Modal, useWindowDimensions, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, KeyboardAvoidingView, Platform, View as RNView, Image, ActivityIndicator, Modal, useWindowDimensions, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 import { useConvex } from 'convex/react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
@@ -20,6 +20,7 @@ import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { startUpload, forgetUpload, chooseAndPickImages } from '@/components/chat/chatUpload';
 import type { useComposerField } from '@/lib/composerField';
+import { appAlert } from '@/lib/popups';
 
 // A send with attachments and no text carries this as its content.
 export const IMAGE_ONLY_CONTENT = '[image]';
@@ -100,7 +101,7 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
           return;
         }
         removeImage(uri);
-        Alert.alert('Upload failed', 'Could not upload image');
+        appAlert('Upload failed', 'Could not upload image');
       });
     }
   };

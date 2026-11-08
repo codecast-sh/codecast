@@ -7,7 +7,7 @@ import { Text, TextInput } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { projectColor } from '@/components/SessionItem';
 import { labelHexColor } from '@/lib/labelColors';
-import { showActionSheet } from '@/lib/actionSheet';
+import { showActionSheet } from '@/lib/popups';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { useInboxFilterCounts } from '@/components/inbox/InboxLensBar';
 import { DrawerHeading as Heading, DrawerRow as Row } from '@/components/nav/DrawerRow';
