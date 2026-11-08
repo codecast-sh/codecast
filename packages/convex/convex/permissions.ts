@@ -582,7 +582,7 @@ export const prunePendingPermissions = internalMutation({
 });
 
 // A machine that has not beaten for this long is asleep or gone: nobody can
-// answer its prompts from here, and Needs Input should stop saying it waits.
+// answer its prompts from here, and Needs You should stop saying it waits.
 export const PERMISSION_DEVICE_LAPSE_MS = 5 * 60 * 1000;
 
 // Pending prompts whose machine stopped beating are cancelled, the same state a
