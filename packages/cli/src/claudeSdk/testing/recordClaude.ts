@@ -5,7 +5,7 @@
 // written (recording.ts). Used by scripts/record-claude-sdk.ts.
 
 import * as fs from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn } from "../../proc.js";
 import { createInterface } from "node:readline";
 import { scrub, type RecordedLine } from "./recording.js";
 

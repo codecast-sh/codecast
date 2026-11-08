@@ -6,7 +6,7 @@ codecast continues that turn once, with a capped number of attempts, and
 leaves every other session alone. It knows which sessions were mid-turn from
 a claim written when the turn started, not from heartbeats or pane scrapes.
 
-The shape comes from opencode (`packages/core/src/session/execution.ts`,
+The shape comes from opencode (`opencode/packages/core/src/session/execution.ts`,
 `execution/restart.ts`, `specs/v2/session.md`: "Execution Is Process-Local",
 "Recovery Boundaries Stay Explicit"). Code: `packages/cli/src/turnClaims.ts`,
 wired in `daemon.ts` (search `turnClaims()`).
