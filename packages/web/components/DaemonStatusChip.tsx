@@ -15,6 +15,8 @@ import { deviceDisplayName, isRemoteHost } from "@codecast/shared/contracts";
 import { HoverCard } from "./ui/HoverCard";
 import { StatusPanelHeader, StatusPanelSection } from "./StatusPanel";
 import { useHooksReminderHidden } from "../lib/hooksReminder";
+import { useHostWake } from "../hooks/useHostWake";
+import { SessionHostWakeChip } from "./HostWakeStatus";
 
 // Two shapes for one story. The pill, with its glow and pulsing dot, is for a
 // daemon that is making a message late right now: it has to be seen. The
@@ -119,6 +121,7 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
     return deviceDisplayName({ label: d.label ?? "", platform: d.platform ?? "", is_remote: isRemoteHost(d) });
   });
   const health = useDaemonHealth(ownerDeviceId);
+  const wake = useHostWake(ownerDeviceId);
   const { offline: appOffline } = useAppOffline();
   const [mounted, setMounted] = useState(false);
 
@@ -127,6 +130,8 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
   });
 
   if (!mounted || appOffline || !ownerName || ownerDeviceId === localDeviceId) return null;
+  // A cloud host asleep or waking is not a broken daemon: its own chip.
+  if (wake) return <SessionHostWakeChip wake={wake} />;
   // blocksDelivery, not merely degraded: this chip sits on ONE session and says
   // its messages are running late, so it may only fire on a live symptom. An
   // hour total past the SLO belongs on the header chip and the devices page.

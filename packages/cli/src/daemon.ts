@@ -4041,9 +4041,12 @@ async function wakeCloudDevice(deviceId: string, label?: string): Promise<void> 
   cloudWakeInFlight.add(deviceId);
   try {
     log(`[CLOUD] waking ${host.id} (${label ?? deviceId.slice(0, 8)}) — work is queued for it`);
-    const res = await runCastCommand(["cloud", "wake", host.id], { timeoutMs: 6 * 60 * 1000 });
-    if (res.code === 0) log(`[CLOUD] ${host.id} is up: ${res.stdout.trim().split("\n").pop()}`);
-    else log(`[CLOUD] wake of ${host.id} failed (exit ${res.code}): ${childErrorDetail(res.stderr, res.stdout)}`, "warn");
+    // Through the host reports, like the web's Wake button: "wake running",
+    // then its outcome, reach the host's row, and the session waiting on this
+    // host shows each as it happens.
+    const res = await (await hostReports()).run(deviceId, "wake", ["cloud", "wake", host.id], 6 * 60 * 1000);
+    if (res.ok) log(`[CLOUD] ${host.id} is up: ${res.tail.split(" · ").pop()}`);
+    else log(`[CLOUD] wake of ${host.id} failed (exit ${res.code}): ${res.tail}`, "warn");
   } finally {
     cloudWakeInFlight.delete(deviceId);
   }

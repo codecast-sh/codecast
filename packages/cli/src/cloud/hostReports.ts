@@ -72,9 +72,10 @@ export interface HostReportsDeps {
   log: (line: string) => void;
 }
 
-/** The daemon's side: periodic reports, and the web's actions with their outcomes folded into the next report. */
+/** The daemon's side: periodic reports, and every action on a host (the web's, and the wakes queued work asks for) with its outcome folded into the next report. */
 export class HostReports {
   private lastAction = new Map<string, NonNullable<CloudHostReport["last_action"]>>();
+  private lastReport = new Map<string, CloudHostReport>();
   private running: Promise<void> | null = null;
 
   constructor(private deps: HostReportsDeps) {}
@@ -92,22 +93,39 @@ export class HostReports {
     try { rows = JSON.parse(r.stdout.trim().split("\n").pop() ?? "[]"); } catch { this.deps.log(`[HOSTS] report failed: ${r.stderr.trim().split("\n").pop() ?? `exit ${r.code}`}`); return; }
     for (const row of rows) {
       if (!row.report) { this.deps.log(`[HOSTS] report for ${row.host_device_id.slice(0, 8)} failed: ${row.error}`); continue; }
-      const last = this.lastAction.get(row.host_device_id);
-      await this.deps.report(row.host_device_id, { ...row.report, ...(last ? { last_action: last } : {}) });
+      this.lastReport.set(row.host_device_id, row.report);
+      await this.send(row.host_device_id, row.report);
     }
+  }
+
+  private async send(hostDeviceId: string, report: CloudHostReport): Promise<void> {
+    const last = this.lastAction.get(hostDeviceId);
+    await this.deps.report(hostDeviceId, { ...report, ...(last ? { last_action: last } : {}) });
+  }
+
+  /**
+   * One action's child, with the web watching: "running" goes out the moment
+   * it starts (on the last report, or a fresh pass when there is none yet),
+   * and the outcome rides a fresh report once it ends.
+   */
+  async run(hostDeviceId: string, action: CloudHostAction, cmd: string[], timeoutMs: number): Promise<{ ok: boolean; code: number | null; tail: string }> {
+    this.lastAction.set(hostDeviceId, { action, status: "running", at: Date.now() });
+    const known = this.lastReport.get(hostDeviceId);
+    void (known ? this.send(hostDeviceId, known) : this.refresh())
+      .catch((err) => this.deps.log(`[HOSTS] ${action} start report failed: ${err instanceof Error ? err.message : String(err)}`));
+    const r = await this.deps.runCast(cmd, { timeoutMs });
+    const tail = `${r.stdout}\n${r.stderr}`.trim().split("\n").filter(Boolean).slice(-2).join(" · ").replace(/\x1b\[[0-9;]*m/g, "").slice(0, 400);
+    this.lastAction.set(hostDeviceId, { action, status: r.code === 0 ? "ok" : "failed", ...(tail ? { detail: tail } : {}), at: Date.now() });
+    await this.refresh();
+    return { ok: r.code === 0, code: r.code, tail };
   }
 
   async act(args: { host_device_id: string; action: CloudHostAction; image_id?: string; instance_type?: string }): Promise<string> {
     const hostId = this.deps.hostIdForDevice(args.host_device_id);
     if (!hostId) throw new Error("this laptop does not manage that cloud host");
     const cmd = hostActionArgs(args.action, hostId, args.image_id, args.instance_type);
-    const started = Date.now();
-    this.lastAction.set(args.host_device_id, { action: args.action, status: "running", at: started });
-    const r = await this.deps.runCast(cmd, { timeoutMs: 30 * 60_000 });
-    const tail = `${r.stdout}\n${r.stderr}`.trim().split("\n").filter(Boolean).slice(-2).join(" · ").replace(/\x1b\[[0-9;]*m/g, "").slice(0, 400);
-    this.lastAction.set(args.host_device_id, { action: args.action, status: r.code === 0 ? "ok" : "failed", ...(tail ? { detail: tail } : {}), at: Date.now() });
-    await this.refresh();
-    if (r.code !== 0) throw new Error(tail || `cast ${cmd.join(" ")} exited ${r.code}`);
-    return tail;
+    const r = await this.run(args.host_device_id, args.action, cmd, 30 * 60_000);
+    if (!r.ok) throw new Error(r.tail || `cast ${cmd.join(" ")} exited ${r.code}`);
+    return r.tail;
   }
 }

@@ -23,7 +23,8 @@ describe("HostReports", () => {
   test("a successful action runs the child and folds its outcome into the next report", async () => {
     const { r, sent, calls } = rig();
     await r.act({ host_device_id: "dev-h", action: "wake" });
-    expect(calls[0]).toEqual(["hosts", "wake", "i-1"]);
+    // With no report yet, a pass starts beside the action so "running" reaches the web.
+    expect(calls).toContainEqual(["hosts", "wake", "i-1"]);
     expect(sent.at(-1).rep.last_action).toMatchObject({ action: "wake", status: "ok", detail: "woke i-1" });
   });
 
@@ -31,6 +32,29 @@ describe("HostReports", () => {
     const { r, sent } = rig(1);
     await expect(r.act({ host_device_id: "dev-h", action: "sleep" })).rejects.toThrow("Access denied");
     expect(sent.at(-1).rep.last_action).toMatchObject({ action: "sleep", status: "failed", detail: "Access denied" });
+  });
+
+  test("a wake reports running before the boot ends, on the last report it has", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    const sent: any[] = [];
+    const r = new HostReports({
+      runCast: async (args) => {
+        if (args[1] === "report") return { code: 0, stdout: JSON.stringify([{ host_device_id: "dev-h", report: report() }]), stderr: "" };
+        await gate;
+        return { code: 0, stdout: "up", stderr: "" };
+      },
+      report: async (id, rep) => { sent.push({ id, rep }); },
+      hostIdForDevice: () => "i-1",
+      log: () => {},
+    });
+    await r.refresh();
+    const done = r.run("dev-h", "wake", ["cloud", "wake", "i-1"], 1000);
+    await Promise.resolve();
+    expect(sent.at(-1).rep.last_action).toMatchObject({ action: "wake", status: "running" });
+    release();
+    expect(await done).toMatchObject({ ok: true, tail: "up" });
+    expect(sent.at(-1).rep.last_action).toMatchObject({ action: "wake", status: "ok" });
   });
 
   test("a host this laptop does not manage is refused", async () => {

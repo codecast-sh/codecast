@@ -4,13 +4,16 @@ import { describeDaemonHealth } from "../lib/daemonHealthCopy";
 import { withDaemonHealth, type PendingBannerState } from "../lib/pendingBanner";
 import { copyToClipboard } from "../lib/utils";
 import { useInboxStore } from "../store/inboxStore";
+import { useHostWake } from "../hooks/useHostWake";
+import { HostWakeNote } from "./HostWakeStatus";
 
 // Wraps the per-message pending UI ("starting up…" / "hasn't reached the agent"
 // + kill & restart). When the DAEMON is the reason the message is late, it
 // renders a daemon note in their place — same words as the header chip — with
 // the command to run instead of a restart that would travel through the very
-// daemon that is struggling. Mounted only for a pending message that has
-// something to say, so the daemon-health subscription is not paid per bubble.
+// daemon that is struggling. When the machine is a cloud host that is asleep
+// or waking, it shows the wake's steps instead (HostWakeStatus). Mounted only
+// for a pending message, so the subscriptions are not paid per bubble.
 export function PendingDeliveryNote({
   state,
   restartInFlight,
@@ -32,7 +35,12 @@ export function PendingDeliveryNote({
     conversationId ? (s.sessions[conversationId]?.owner_device_id as string | undefined) : undefined,
   );
   const health = useDaemonHealth(ownerDeviceId);
+  const wake = useHostWake(ownerDeviceId);
   const [copied, setCopied] = useState(false);
+  // The host is asleep or waking: say where the wake is from the first moment,
+  // not after the stuck-message grace, and never offer a restart that cannot
+  // reach a machine that is booting. A restart already clicked keeps its UI.
+  if (wake && !restartInFlight) return <HostWakeNote wake={wake} onCancel={onCancel} cancelling={cancelling} />;
   const resolved = withDaemonHealth(state, { daemonDegraded: holdsUndeliveredMessage(health), restartInFlight });
   if (resolved !== "daemon") return <>{children}</>;
   const copy = describeDaemonHealth(health);

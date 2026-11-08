@@ -102,6 +102,9 @@ export type Device = {
   /** A cloud host's own readiness (its heartbeat) and its managing laptop's report (Settings > Machines). */
   host_readiness?: import("@codecast/shared/contracts").HostReadiness;
   cloud_host?: import("@codecast/shared/contracts").CloudHostReport;
+  /** Work waiting for this host since then (its next beat clears it), and the server's own start of it when it owns one (lib/hostWake). */
+  wake_requested_at?: number;
+  cloud_wake?: { request_at: number; status: "pending" | "starting" | "awake" | "failed"; attempt: number; last_error?: string };
   /** Autoscale with this host as the template (devices.cloud_autoscale). */
   cloud_autoscale?: import("@codecast/shared/contracts").CloudAutoscale;
   /** What keeps this machine from reading a cloud agent provider (its heartbeat): it is not connected to that one. */

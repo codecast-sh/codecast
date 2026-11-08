@@ -1260,6 +1260,19 @@ export const listDevices = query({
         // A cloud host's readiness and its laptop's report: each changes only when its content does.
         host_readiness: d.host_readiness ?? undefined,
         cloud_host: d.cloud_host ?? undefined,
+        // A wake in progress (web: lib/hostWake): work is waiting for the host
+        // since wake_requested_at (its next beat clears it), and, when the
+        // server starts it itself, how far that start has got. The lease fields
+        // stay out: they change on every attempt and nothing shows them.
+        wake_requested_at: d.wake_requested_at ?? undefined,
+        cloud_wake: d.cloud_wake
+          ? {
+              request_at: d.cloud_wake.request_at,
+              status: d.cloud_wake.status,
+              attempt: d.cloud_wake.attempt,
+              ...(d.cloud_wake.last_error ? { last_error: d.cloud_wake.last_error } : {}),
+            }
+          : undefined,
         cloud_autoscale: d.cloud_autoscale ?? undefined,
         // Per-device daemon health (web: useDaemonHealth).
         daemon_started_at: d.daemon_started_at ?? undefined,

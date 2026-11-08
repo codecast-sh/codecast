@@ -740,7 +740,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       {isPending && holdReason && holdScreen && holdScreenOpen && (
         <HeldTerminalScreen className="mt-2 ml-8" screen={holdScreen} onSendAnyway={() => { void handleSendAnyway(); }} sending={sendingAnyway} />
       )}
-      {isPending && !holdReason && bannerState !== "none" && (
+      {/* Mounted for every waiting message, not only past the grace: a host that
+          is asleep says so the moment the message is sent (PendingDeliveryNote). */}
+      {isPending && !holdReason && !messageReachedSession && (
       <PendingDeliveryNote state={bannerState} restartInFlight={retrying} conversationId={conversationId} onCancel={handleCancelPending} cancelling={cancelState !== "idle"}>
       {/* A hosted conversation says its wait once, in the composer's status line. */}
       {bannerState === "queued" && !hostedConversation && (
