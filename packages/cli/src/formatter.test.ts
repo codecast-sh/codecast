@@ -115,7 +115,7 @@ describe("formatMonitor renders the killed marker", () => {
 
 // Where the badge actually shows. A killed row classifies as idle
 // (classifyWorkState gives kill precedence), and the DEFAULT view renders only
-// NEEDS INPUT + WORKING, collapsing idle to a "+ N idle" line — so plain
+// NEEDS YOU + WORKING, collapsing idle to a "+ N idle" line — so plain
 // `cast sessions` shows no card for a killed session at all, pinned or not.
 // That is intended (a killed row IS idle, and idle rows collapse), but the
 // feature is narrower than "the snapshot badges killed rows" suggests, so it
