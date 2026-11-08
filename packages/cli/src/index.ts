@@ -2,6 +2,7 @@
 import { LOGIN_PATH_FILENAME, recordLoginShellPath } from "./loginShellPath.js";
 import { DEFAULT_WEB_URL } from "./config/readLocalConfig.js";
 import { pickFields } from "./jsonFields.js";
+import { parseUntilStates, untilReached } from "./sessionsUntil.js";
 import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
 import { registerSyncVerbs } from "./cloud/syncCli.js";
 import { headForward, isSeatedAnchor } from "./anchorAlias.js";
@@ -6966,6 +6967,7 @@ program
     "  cast sessions                  # state snapshot of your sessions\n" +
     "  cast sessions -w               # stream state changes live\n" +
     "  cast sessions jx7abc jx7def -w # watch an explicit set of sessions\n" +
+    "  cast sessions jx7abc jx7def -w --until   # exit once both have settled (wait from a background shell)\n" +
     "  cast sessions --label fleet -w --json   # NDJSON events for one label's sessions\n" +
     "  cast sessions --state needs-input   # only what's waiting on you\n" +
     "  cast sessions --team -w        # stream the whole team's state changes\n" +
@@ -6989,6 +6991,7 @@ program
   .option("-n, --limit <n>", "Max sessions to show", "200")
   .option("-M, --messages", "Show conversation messages instead of work state (live with -w)")
   .option("--json", "Output as JSON (with -w: NDJSON, one event object per line)")
+  .option("--until [states]", "With -w: exit once every watched session is in one of these states (comma list; default settled = anything but working), printing each one's final state. Use it to wait on workers from a background shell")
   .action(async (sessionIds, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -6996,6 +6999,19 @@ program
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+    let untilStates: Set<string> | null = null;
+    if (options.until !== undefined) {
+      if (!options.watch || options.messages) {
+        console.error("--until works with -w on work states (not with --messages).");
+        process.exit(1);
+      }
+      try {
+        untilStates = parseUntilStates(options.until);
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e));
+        process.exit(1);
+      }
+    }
 
     // Session ids are a QUERY filter: any number of them narrows every view to
     // that explicit set (full ids or unambiguous prefixes like the short jx7 id).
@@ -7285,6 +7301,7 @@ program
     //   gone       — session left the set (stopped matching --state, or dismissed)
     let prevRows: Record<string, { state: string; title: string | null; session_id: string | null }> = {};
     let firstFrame = true;
+    let seenAny = false;
     const emit = (ev: { event: string; id: string; session_id: string | null; title: string | null; from: string | null; to: string | null; is_pinned?: boolean; is_live?: boolean; label?: string | null }) => {
       if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), ...ev, is_pinned: !!ev.is_pinned, is_live: !!ev.is_live, label: ev.label ?? null }));
       else console.log(formatSessionChangeLine({ id: ev.id, title: ev.title, from: ev.from, to: ev.to, is_pinned: !!ev.is_pinned, is_live: !!ev.is_live }));
@@ -7317,6 +7334,17 @@ program
       }
       prevRows = cur;
       firstFrame = false;
+      if (untilStates) {
+        seenAny ||= Object.keys(cur).length > 0;
+        if (untilReached(untilStates, cur, seenAny)) {
+          for (const [id, r] of Object.entries(cur)) {
+            if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), event: "until", id, session_id: r.session_id, title: r.title, to: r.state }));
+            else console.log(`${id.slice(0, 7)}  ${r.state.replace("_", " ")}  ${r.title ?? ""}`);
+          }
+          try { stateClient.close(); } catch {}
+          process.exit(0);
+        }
+      }
     };
 
     if (!teamMode) {
@@ -14352,6 +14380,9 @@ const chat = program
 // the page), so a line carries a real name — including an author who has since
 // left the team. `--json` carries the whole row for anything that needs more.
 function printChatMessage(row: any, authors?: Map<string, any>) {
+  // A closed "thinking" row (chatSessionReplies): an agent that read the line
+  // and did not answer here. It says nothing, so it prints nothing.
+  if (row.deleted_at && row.agent_status === "passed") return;
   const author = authors?.get(String(row.user_id));
   const humanName = author?.name || String(row.user_id).slice(0, 7);
   // A session-typed line wears the session's name (snapshotted server-side at
