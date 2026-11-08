@@ -4,16 +4,13 @@ import { daemonWorkersEnabled } from "../workers/bridge.js";
 import type http from "http";
 import type { Duplex } from "stream";
 import { WebSocketServer, WebSocket } from "ws";
-import { TmuxControlClient, shellSafe, type ControlClientMode } from "./controlClient.js";
+import { shellSafe, type ControlClientMode } from "./controlClient.js";
+import { TerminalHub, type HubOptions, type JoinRequest } from "./terminalHub.js";
 import { tmuxRunAsync, hasTmux } from "../tmux.js";
 import { isManagedTmuxName } from "../resumeCommand.js";
 
 export const TERM_SESSION_PREFIX = "cast-term-";
 const WS_PATH = "/term/ws";
-// Above this many unsent bytes on the socket we stop reading tmux output
-// (backpressure) instead of buffering a runaway `yes`-style flood in memory.
-const HIGH_WATER_BYTES = 1_000_000;
-const DRAIN_POLL_MS = 50;
 
 // Origins allowed to open terminal sockets. The WS handshake is NOT subject to
 // CORS, so this server-side check is the only thing standing between an
@@ -34,6 +31,8 @@ export interface TerminalServerOptions {
    * be one of the panel's own shells; the daemon keeps only managed panes.
    */
   onInput?: (target: string, data: Buffer) => void;
+  /** Ring, linger and seat-hold sizes; tests shrink them. */
+  hub?: Pick<HubOptions, "lingerMs" | "controlHoldMs" | "ringBytes">;
 }
 
 interface HelloMessage {
@@ -46,8 +45,14 @@ interface HelloMessage {
   cwd?: string;
   /** attach: tmux session name (from managed_sessions.tmux_session) */
   target?: string;
-  /** attach: request write access (default read-only) */
+  /** attach: may this view hold control (default: watch only). A created
+   *  shell can always hold it. */
   interactive?: boolean;
+  /** Stable id of the terminal view across reconnects: lets a view reclaim
+   *  its own seat, and replaces its own stale socket. */
+  viewId?: string;
+  /** Where this view left off: replay from here if the ring still holds it. */
+  resume?: { stream: string; offset: number };
   cols: number;
   rows: number;
   colors?: { foreground?: string; background?: string };
@@ -331,7 +336,8 @@ export function handleTerminalHttp(
 /** Wire the terminal WebSocket endpoint onto an existing HTTP server. */
 export function attachTerminalServer(server: http.Server, opts: TerminalServerOptions): { close(): void } {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  const live = new Set<ConnectionHandle>();
+  // One hub per terminal, shared by every socket viewing it (terminalHub.ts).
+  const hubs = new Map<string, TerminalHub>();
 
   const detach = onWsUpgrade(server, WS_PATH, (req, socket, head) => {
     if (!originAllowed(req.headers.origin, opts)) {
@@ -340,7 +346,7 @@ export function attachTerminalServer(server: http.Server, opts: TerminalServerOp
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, opts, live));
+    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, opts, hubs));
   });
 
   return {
@@ -349,20 +355,26 @@ export function attachTerminalServer(server: http.Server, opts: TerminalServerOp
       // Shutdown: the process is about to exit, so each attach must hand its
       // pane back NOW, from outside the control channel — the socket close
       // event (and the in-band restore it would trigger) arrives too late.
-      for (const h of live) h.shutdown();
+      for (const hub of [...hubs.values()]) hub.shutdown();
       for (const ws of wss.clients) ws.terminate();
       wss.close();
     },
   };
 }
 
-interface ConnectionHandle {
-  shutdown(): void;
+const VIEW_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
+/** The hello's resume point, if it is well formed. */
+export function parseResume(raw: unknown): JoinRequest["resume"] {
+  if (!raw || typeof raw !== "object") return null;
+  const { stream, offset } = raw as { stream?: unknown; offset?: unknown };
+  if (typeof stream !== "string" || !/^[0-9a-f]{1,32}$/.test(stream)) return null;
+  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) return null;
+  return { stream, offset };
 }
 
-function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<ConnectionHandle>): void {
-  let client: TmuxControlClient | null = null;
-  let drainTimer: NodeJS.Timeout | null = null;
+function handleConnection(ws: WebSocket, opts: TerminalServerOptions, hubs: Map<string, TerminalHub>): void {
+  let hub: TerminalHub | null = null;
   let closed = false;
 
   const sendJson = (obj: unknown) => {
@@ -372,22 +384,8 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<
     sendJson({ type: "error", message });
     ws.close(4000, message.slice(0, 100));
   };
-  let sessionLabel = "?";
-  const cleanup = (sync = false) => {
-    if (closed) return;
-    closed = true;
-    live.delete(handle);
-    if (drainTimer) clearInterval(drainTimer);
-    if (client) {
-      const back = client.restoresTo;
-      opts.log(`[TERM] detach ${sessionLabel}${back ? ` (window back to ${back}${sync ? ", shutdown" : ""})` : ""}`);
-      if (sync) client.closeSync();
-      else client.close();
-    }
-    client = null;
-  };
-  const handle: ConnectionHandle = { shutdown: () => cleanup(true) };
-  live.add(handle);
+  ws.on("close", () => { closed = true; });
+  ws.on("error", () => { closed = true; });
 
   // The first message must be the hello; nothing is spawned until the token
   // inside it checks out.
@@ -410,7 +408,8 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<
     const cols = clampDim(hello.cols, 200);
     const rows = clampDim(hello.rows, 50);
 
-    let mode: ControlClientMode;
+    let key: string;
+    let makeMode: () => Promise<ControlClientMode | null>;
     if (hello.mode === "create") {
       let name = hello.name ?? `${TERM_SESSION_PREFIX}${crypto.randomBytes(3).toString("hex")}`;
       try {
@@ -420,121 +419,109 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, live: Set<
       }
       if (!name.startsWith(TERM_SESSION_PREFIX)) return fail("bad session name");
       const cwd = typeof hello.cwd === "string" && hello.cwd.startsWith("/") ? hello.cwd : undefined;
-      // Fresh vs reattach decides the seeding strategy (see controlClient).
-      const fresh = (await tmuxRunAsync(["has-session", "-t", name])).status !== 0;
-      if (closed) return;
-      mode = { kind: "create", sessionName: name, cwd, fresh };
+      key = `create:${name}`;
+      makeMode = async () => {
+        // Fresh vs reattach decides how the first viewer gets its screen.
+        const fresh = (await tmuxRunAsync(["has-session", "-t", name])).status !== 0;
+        return { kind: "create", sessionName: name, cwd, fresh };
+      };
     } else if (hello.mode === "attach") {
       const target = hello.target ?? "";
       // Attach only to sessions this product owns: agent sessions the daemon
       // manages, or the panel's own terminals. Never arbitrary tmux sessions.
       if (!/^[a-zA-Z0-9_.:-]+$/.test(target)) return fail("bad target");
       if (!isManagedTmuxName(target) && !target.startsWith(TERM_SESSION_PREFIX)) return fail("target not allowed");
-      const exists = (await tmuxRunAsync(["has-session", "-t", target])).status === 0;
-      // The socket may have gone away during the probe.
-      if (closed) return;
-      if (!exists) return fail("session not found");
-      mode = { kind: "attach", target, readOnly: !hello.interactive };
+      key = `attach:${target}`;
+      makeMode = async () => {
+        const exists = (await tmuxRunAsync(["has-session", "-t", target])).status === 0;
+        return exists ? { kind: "attach", target } : null;
+      };
     } else {
       return fail("bad mode");
     }
 
-    client = new TmuxControlClient(mode, {
-      onOutput(data) {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        ws.send(data);
-        if (ws.bufferedAmount > HIGH_WATER_BYTES && client && !drainTimer) {
-          client.pauseOutput();
-          drainTimer = setInterval(() => {
-            if (ws.bufferedAmount < HIGH_WATER_BYTES / 4) {
-              if (drainTimer) clearInterval(drainTimer);
-              drainTimer = null;
-              client?.resumeOutput();
-            }
-          }, DRAIN_POLL_MS);
-          drainTimer.unref?.();
-        }
-      },
-      onExit(reason) {
-        sendJson({ type: "exit", reason });
-        ws.close(1000);
-        cleanup();
-      },
-      onReseed({ cols, rows, seed }) {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        // JSON first so the client resets + resizes before the seed bytes land.
-        sendJson({ type: "reseed", cols, rows });
-        if (seed.length > 0) ws.send(seed);
-      },
-    });
-
-    client
-      .start(cols, rows, hello.colors)
-      .then(({ cols: c, rows: r, seed, sessionName }) => {
-        if (hello.mode === "create") terminalSessionSnapshot.invalidate();
-        if (ws.readyState !== WebSocket.OPEN) return cleanup();
-        sendJson({
-          type: "ready",
-          cols: c,
-          rows: r,
-          sessionName,
-          readOnly: client?.isReadOnly ?? false,
-          mode: hello.mode,
+    hub = hubs.get(key) ?? null;
+    if (!hub || hub.isDisposed) {
+      const mode = await makeMode();
+      // The socket may have gone away during the probe.
+      if (closed) return;
+      if (!mode) return fail("session not found");
+      // Another socket may have created it while we probed.
+      hub = hubs.get(key) ?? null;
+      if (!hub || hub.isDisposed) {
+        const created: TerminalHub = new TerminalHub(mode, {
+          ...opts.hub,
+          log: opts.log,
+          onInput: opts.onInput,
+          onDispose: () => {
+            if (hubs.get(key) === created) hubs.delete(key);
+          },
         });
-        if (seed.length > 0) ws.send(seed);
-        sessionLabel = sessionName;
-        opts.log(`[TERM] ${hello.mode} ${sessionName} (${c}x${r}${client?.isReadOnly ? ", read-only" : ""})`);
-      })
-      .catch((err) => {
-        const message = typeof err?.message === "string" && err.message ? err.message : "failed to start terminal";
-        opts.log(`[TERM] start failed: ${message}`);
-        fail(message);
-        // Reap the control client now — a hung tmux child would otherwise
-        // linger until the ws close event wanders in.
-        cleanup();
-      });
+        hub = created;
+        hubs.set(key, created);
+      }
+    }
+    const h = hub;
+
+    try {
+      await h.start(cols, rows, hello.colors);
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : "failed to start terminal";
+      opts.log(`[TERM] start failed: ${message}`);
+      // Reap the control client now — a hung tmux child would otherwise
+      // linger until every socket's close event wanders in.
+      h.shutdown();
+      return fail(message);
+    }
+    if (hello.mode === "create") terminalSessionSnapshot.invalidate();
+    if (closed || h.isDisposed) {
+      h.lingerIfIdle();
+      return;
+    }
 
     ws.on("message", (data, isBinary) => {
-      if (!client) return;
       if (isBinary) {
-        const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
-        client.sendInput(bytes);
-        if (mode.kind === "attach" && !client.isReadOnly) opts.onInput?.(mode.target, bytes);
+        h.input(ws, Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer));
         return;
       }
+      let msg: { type?: unknown; cols?: unknown; rows?: unknown; colors?: unknown };
       try {
-        const msg = JSON.parse(data.toString("utf8"));
-        if (msg.type === "resize") {
-          // An attach reshapes the AGENT's screen, so it has a floor a panel
-          // shell doesn't: below ~80x12 Claude Code's renderer drops and
-          // splices lines, and that lands in the agent's scrollback for
-          // good. Current clients never ask for less (termSessions.ts) and
-          // scroll the pane instead; this is the backstop for older ones.
-          const attach = hello.mode === "attach";
-          client.resize(
-            clampDim(msg.cols, 500, attach ? ATTACH_MIN_COLS : 2),
-            clampDim(msg.rows, 200, attach ? ATTACH_MIN_ROWS : 2),
-          );
-        } else if (msg.type === "colors") {
-          void client.setColors(msg.colors).catch((err) => {
-            const message = err instanceof Error ? err.message : "failed to update terminal colors";
-            opts.log(`[TERM] color update failed: ${message}`);
-            fail(message);
-            cleanup();
-          });
-        } else if (msg.type === "kill") {
-          void client.killSession().then(() => {
-            sendJson({ type: "exit", reason: "killed" });
-            ws.close(1000);
-            cleanup();
-          });
-        }
-      } catch {}
+        msg = JSON.parse(data.toString("utf8"));
+      } catch {
+        return;
+      }
+      if (msg.type === "resize") {
+        // An attach reshapes the AGENT's screen, so it has a floor a panel
+        // shell doesn't: below ~80x12 Claude Code's renderer drops and
+        // splices lines, and that lands in the agent's scrollback for
+        // good. Current clients never ask for less (termSessions.ts) and
+        // scroll the pane instead; this is the backstop for older ones.
+        const attach = hello.mode === "attach";
+        h.resize(
+          ws,
+          clampDim(msg.cols, 500, attach ? ATTACH_MIN_COLS : 2),
+          clampDim(msg.rows, 200, attach ? ATTACH_MIN_ROWS : 2),
+        );
+      } else if (msg.type === "colors") {
+        void h.setColors(ws, msg.colors).catch((err) => {
+          const message = err instanceof Error ? err.message : "failed to update terminal colors";
+          opts.log(`[TERM] color update failed: ${message}`);
+          fail(message);
+        });
+      } else if (msg.type === "takeover") {
+        void h.takeover(ws);
+      } else if (msg.type === "kill") {
+        void h.kill(ws);
+      }
     });
-  });
 
-  ws.on("close", () => cleanup());
-  ws.on("error", () => cleanup());
+    const viewId = typeof hello.viewId === "string" && VIEW_ID.test(hello.viewId) ? hello.viewId : null;
+    const resume = parseResume(hello.resume);
+    // A created shell is always writable; an attach only when asked.
+    const canControl = hello.mode === "create" || !!hello.interactive;
+    await h.join(ws, { viewId, canControl, resume });
+    opts.log(`[TERM] ${hello.mode} ${hello.mode === "create" ? key.slice(7) : hello.target} (${h.viewerCount} viewer${h.viewerCount === 1 ? "" : "s"}${resume ? ", resume" : ""})`);
+  });
 }
 
 // Same floor as the web client's MIN_FIT_COLS/ROWS (termSessions.ts).
