@@ -8,6 +8,7 @@ import { cliJustConnected, markCliConnected } from "../lib/cliConnected";
 import { bridge, type DaemonSetupState } from "../lib/desktop";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { TerminalSquare } from "lucide-react";
+import { useInboxStore } from "../store/inboxStore";
 
 interface EmptyStateProps {
   title: string;
@@ -127,7 +128,12 @@ function FakeSessionCard({ session, className = "" }: { session: typeof FAKE_SES
 
 /** `onStart` fires when the person asks for the command (the first-run
  *  card counts it as choosing their own machine). */
-function SetupTokenCommand({ onStart }: { onStart?: () => void }) {
+// The setup button's face: the inbox card's yellow, or the surrounding flow's
+// accent (.tf-primary, the setup flow's team color) when a flow hosts it.
+const setupButtonClass = (accent?: boolean) =>
+  accent ? "tf-primary text-sm font-medium rounded-xl" : "bg-sol-yellow/20 hover:bg-sol-yellow/30 text-sol-yellow text-sm font-medium rounded-xl border border-sol-yellow/30 transition-colors";
+
+function SetupTokenCommand({ onStart, accent, auto }: { onStart?: () => void; accent?: boolean; auto?: boolean }) {
   const [copied, setCopied] = useState(false);
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [tokenExpiry, setTokenExpiry] = useState<number | null>(null);
@@ -153,6 +159,11 @@ function SetupTokenCommand({ onStart }: { onStart?: () => void }) {
       setIsGenerating(false);
     }
   };
+  // On a screen whose whole job is this install (the setup flow), the command
+  // is ready on arrival instead of behind a button.
+  useMountEffect(() => {
+    if (auto) void generateSetupToken();
+  });
 
   const [now, setNow] = useState(Date.now());
   useWatchEffect(() => {
@@ -173,7 +184,7 @@ function SetupTokenCommand({ onStart }: { onStart?: () => void }) {
       <button
         onClick={generateSetupToken}
         disabled={isGenerating}
-        className="w-full px-4 py-3 bg-sol-yellow/20 hover:bg-sol-yellow/30 text-sol-yellow text-sm font-medium rounded-xl border border-sol-yellow/30 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+        className={`w-full px-4 py-3 ${setupButtonClass(accent)} disabled:opacity-50 flex items-center justify-center gap-2`}
       >
         {isGenerating ? (
           <>
@@ -228,7 +239,7 @@ const setupError = (e?: string) => SETUP_ERRORS.find((k) => k === e) ?? "threw";
 // In the desktop app there is no terminal step: one click mints a setup token
 // and the shell runs the installer with it. A browser tab, an older shell or a
 // failed run falls back to the command to paste.
-export function SetupThisMachine({ onConnected, onStart }: { onConnected: () => void; onStart?: () => void }) {
+export function SetupThisMachine({ onConnected, onStart, accent, auto }: { onConnected: () => void; onStart?: () => void; accent?: boolean; auto?: boolean }) {
   const createSetupToken = useMutation(api.apiTokens.createSetupToken);
   const [machine, setMachine] = useState<DaemonSetupState | null>(null);
   const [phase, setPhase] = useState<"idle" | "running" | "failed">("idle");
@@ -245,7 +256,7 @@ export function SetupThisMachine({ onConnected, onStart }: { onConnected: () => 
             Setup did not finish from here. Paste this in a terminal instead:
           </p>
         )}
-        <SetupTokenCommand onStart={phase === "failed" ? undefined : onStart} />
+        <SetupTokenCommand onStart={phase === "failed" ? undefined : onStart} accent={accent} auto={auto && phase !== "failed"} />
       </>
     );
   }
@@ -272,7 +283,7 @@ export function SetupThisMachine({ onConnected, onStart }: { onConnected: () => 
       <button
         onClick={start}
         disabled={phase === "running"}
-        className="w-full px-4 py-3 bg-sol-yellow/20 hover:bg-sol-yellow/30 text-sol-yellow text-sm font-medium rounded-xl border border-sol-yellow/30 transition-colors disabled:opacity-60"
+        className={`w-full px-4 py-3 ${setupButtonClass(accent)} disabled:opacity-60`}
       >
         {phase === "running" ? "Setting up this machine…" : "Set up this machine"}
       </button>
@@ -357,6 +368,7 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
                     </p>
                     <SetupThisMachine onConnected={onConnected} onStart={chooseMachine} />
                   </section>
+                  <StartTeamLink />
                 </div>
               </>
             )}
@@ -364,6 +376,18 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
         </div>
       </div>
     </div>
+  );
+}
+
+// A person who skipped the setup flow and has no team yet keeps one way back
+// to it: chat, calls and the rest live in a team.
+function StartTeamLink() {
+  const teamless = useInboxStore((s) => (s.teams ?? []).length === 0);
+  if (!teamless) return null;
+  return (
+    <a href="/start" className="mt-3 block text-center text-sm text-sol-text-muted transition-colors hover:text-sol-text">
+      Start a team: chat, calls, tasks and shared agents →
+    </a>
   );
 }
 
