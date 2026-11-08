@@ -676,9 +676,14 @@ export class SyncService {
   // what triggers the auto-resume that adopts the freshly swapped credential.
   // `human`: a person wrote it (a cloud agent's launch prompt), so it counts
   // like the composer's messages.
+<<<<<<< main
   // Resolves to whether the server queued it: null means it declined (a crash
   // revive under recovery mode "off").
   /** Queue a message for the conversation's session; the new row's id, or null when the server declined it (recovery off). */
+=======
+  // Resolves to the queued row's id, or null when the server declined it (a
+  // crash revive under recovery mode "off").
+>>>>>>> track
   async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<string | null> {
     await this.throttle();
     const queued = await this.mutate("pendingMessages:sendMessageToSession" as any, {
@@ -1789,7 +1794,8 @@ export class SyncService {
    * Owner device of a conversation, with whether that owner is a remote box and
    * online. Lets a local daemon distinguish "another laptop owns this, back off"
    * from "a remote owns this but can only serve an explicitly-moved session — if I
-   * have the checkout I should reclaim it." null if unknown/unowned.
+   * have the checkout I should reclaim it." null if unknown/unowned, or when
+   * the lookup failed; `strict` throws on the failure instead.
    */
   /** Null when no device owns it, or when the lookup failed; `strict` throws on the failure instead. */
   async getConversationOwnerInfo(
@@ -1828,6 +1834,8 @@ export class SyncService {
    * A and B return `hideStateKnown: true`; C is marked degraded so callers can
    * refuse to act on it. Returns null when nothing resolves, which callers read
    * as "unknown" and handle per their own fail-open/fail-closed policy.
+   * `strict` throws when the server could not be asked instead, so a caller
+   * that must tell "deleted" from "offline" can.
    */
   /**
    * Null when no such conversation, or (default) when it could not be asked;

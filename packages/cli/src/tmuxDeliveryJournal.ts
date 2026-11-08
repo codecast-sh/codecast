@@ -178,12 +178,24 @@ export async function pendingMessageFinished(
  * Where a queued message ends up: delivered (or deleted with its session),
  * cancelled by a person, stalled (failed or undeliverable: the server puts it
  * back only once its session is up and idle again), or open (pending,
+<<<<<<< main
  * injected). Throws when the lookup itself failed.
  */
 export async function pendingMessageOutcome(
   lookup: { getPendingMessageStatus(messageId: string): Promise<string> },
   messageId: string,
 ): Promise<"delivered" | "cancelled" | "stalled" | "open"> {
+=======
+ * injected).
+ */
+export type PendingMessageOutcome = "delivered" | "cancelled" | "stalled" | "open";
+
+/** A queued message's outcome. Throws when the lookup itself failed. */
+export async function pendingMessageOutcome(
+  lookup: { getPendingMessageStatus(messageId: string): Promise<string> },
+  messageId: string,
+): Promise<PendingMessageOutcome> {
+>>>>>>> track
   try {
     const status = await lookup.getPendingMessageStatus(messageId);
     if (status === "failed" || status === "undeliverable") return "stalled";

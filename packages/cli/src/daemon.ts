@@ -14,7 +14,11 @@ import { handoffParentSessionId, linkPlanHandoffChild, planHandoffTarget } from 
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
+<<<<<<< main
 import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath } from "@codecast/shared/contracts";
+=======
+import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, pairDeliveryAcks } from "@codecast/shared/contracts";
+>>>>>>> track
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
@@ -7439,6 +7443,7 @@ async function executeRemoteCommand(
                 conversationId,
                 sessionId: assignedClaudeSessionId,
                 cwd,
+<<<<<<< main
                 binary,
                 binaryArgs,
                 definition: requestedDefinition,
@@ -7447,6 +7452,26 @@ async function executeRemoteCommand(
                 launchToken,
                 account: requestedAccount,
               });
+=======
+                executable: binary,
+                args: [...binaryArgs, ...(definition?.args ?? [])],
+                // The variables the tmux launch line sets, as values (no shell quoting to undo).
+                env: {
+                  ...worktreeEnv(cwd),
+                  ...(hostAgentSocket() ? { SSH_AUTH_SOCK: hostAgentSocket()! } : {}),
+                  ...(worktreeResult ? { AGENT_RESOURCE_INDEX: String(worktreeResult.portIndex) } : {}),
+                  ...stableEnvVars,
+                  [LAUNCH_TOKEN_VAR]: launchToken,
+                  ...(isRemoteDevice() ? { [CLOUD_ENV_VAR]: "1" } : {}),
+                },
+                ...(definition?.appendSystemPrompt ? { appendSystemPrompt: definition.appendSystemPrompt } : {}),
+                spawnPrefix: disclaimArgv(),
+              };
+              // A start replaces whatever host ran the conversation, on purpose.
+              turnClaims().releaseConversation(conversationId);
+              await claudeSdkBackend.start(conversationId, spec, requestedAccount);
+              await bindSdkSession(conversationId, assignedClaudeSessionId, cwd);
+>>>>>>> track
               const resultObj: Record<string, any> = { sdk_session: assignedClaudeSessionId, agent_type: agentType, project_path: cwd };
               if (worktreeResult) {
                 resultObj.worktree_name = worktreeResult.worktreeName;
@@ -29632,6 +29657,7 @@ async function stationHandSessions(sessionIds: string[], now: number): Promise<S
     }
   });
   return stations;
+<<<<<<< main
 }
 
 // Turn claims (turnClaims.ts, docs/architecture/turn-claims.md): which
@@ -29732,6 +29758,110 @@ function makeTurnClaimRecovery(syncService: SyncService): TurnClaimRecovery {
   });
 }
 
+=======
+}
+
+// Turn claims (turnClaims.ts, docs/architecture/turn-claims.md): which
+// sessions on this machine are mid-turn. The ledger survives a daemon restart
+// and a reboot; the recovery pass continues each claimed session whose agent
+// process is gone, once per attempt, and stops at the cap with a visible reason.
+const TURN_CLAIMS_FILE = process.env.NODE_ENV === "test"
+  ? path.join(process.env.TMPDIR || "/tmp", `codecast-test-turn-claims-${process.pid}.json`)
+  : path.join(CONFIG_DIR, "turn-claims.json");
+let turnClaimLedger: TurnClaimLedger | null = null;
+function turnClaims(): TurnClaimLedger {
+  return turnClaimLedger ??= new TurnClaimLedger(TURN_CLAIMS_FILE, Date.now, (continueId) => {
+    // A claim that ended, or an attempt superseded: its continue must not arrive later as a stray restart notice.
+    syncServiceRef?.cancelPendingMessage(continueId).catch(() => {});
+  });
+}
+let turnClaimRecovery: TurnClaimRecovery | null = null;
+// Sessions whose pane this daemon saw disappear (handleDeadSession): an
+// observed exit, so the pane time rule does not apply. Cleared by the
+// session's next status.
+const observedDeadPanes = new Set<string>();
+
+// Opened by the boot pass, once the spool replay and the SDK reattach are done:
+// a pass before then would read claims whose Stop is still in the spool.
+let turnClaimBootDone = false;
+
+function requestTurnClaimRecovery(): Promise<void> {
+  if (!turnClaimBootDone || isInWakeGrace() || isSyncPaused() || readDaemonState()?.authExpired) return Promise.resolve();
+  return turnClaimRecovery?.request() ?? Promise.resolve();
+}
+
+function forgetStatusFile(sessionId: string): void {
+  if (isSafeStatusSessionId(sessionId)) void fs.promises.unlink(path.join(AGENT_STATUS_DIR, `${sessionId}.json`)).catch(() => {});
+}
+
+function makeTurnClaimRecovery(syncService: SyncService): TurnClaimRecovery {
+  return new TurnClaimRecovery({
+    ledger: turnClaims(),
+    now: () => Date.now(),
+    log: (line) => log(line),
+    admit: (claim) => admitRevive(claim.sessionId, `[turn-claims] resume of ${claim.sessionId.slice(0, 8)}`),
+    order: async (claims) => {
+      const stations = await stationHandSessions(claims.map((c) => c.sessionId), Date.now());
+      return stationHandsFirst(claims, (c) => stations.has(c.sessionId));
+    },
+    inspect: async (claim) => {
+      const { sessionId, conversationId, claimedAt } = claim;
+      const now = Date.now();
+      const sdk = !!claudeSdkBackend?.owns(conversationId);
+      const statusAt = Math.max(claimedAt, (lastHookStatus.get(sessionId)?.ts ?? 0) * 1000);
+      const recentResumes = recentRevives(priorRevives(REVIVE_LEDGER_FILE, conversationId), now);
+      // Is the claim's continue still queued, or did a person cancel it? Asked
+      // up front while the resume has not reported back (it decides whether the
+      // attempt is still in flight), and otherwise only once the process is gone.
+      // Stalled (failed, undeliverable): delivery gave up on a session that
+      // never came up, so the attempt is spent like one that landed.
+      const askContinue = (): Promise<ClaimFacts["continueState"]> => claim.continueId && !claim.continuedAt
+        ? pendingMessageOutcome(syncService, claim.continueId).catch(() => "unknown" as const)
+        : Promise.resolve("unknown");
+      let continueState = awaitingResume(claim) ? await askContinue() : "unknown";
+      const unknown = { ownedElsewhere: false, lifecycle: undefined, interruptedByUser: false, limitParked: false, lastLifeAt: statusAt, recentRevives: recentResumes, continueState };
+      // Delivery is bringing the session back right now (a person's message, a
+      // restart): whatever it starts reports its own statuses.
+      if (resumeInFlight.has(sessionId) || restartingSessionIds.has(sessionId)) return { ...unknown, liveness: "unverifiable" as const };
+      // Inside the pane's time rule the answer cannot be "exited", so nothing is probed or looked up.
+      if (!sdk && !paneStaleEnough("working", now - statusAt, statusAt < MACHINE_BOOTED_AT || observedDeadPanes.has(sessionId))) return { ...unknown, liveness: "unverifiable" as const };
+      // The process first: it answers most passes (a live pane mid-turn) with
+      // no server lookup at all.
+      const transcript = findReapTranscript(sessionId, now);
+      const lastLifeAt = Math.max(statusAt, transcript ? await lastSignOfLifeMs(transcript.path) : 0);
+      // An SDK host's pid is definitive.
+      const liveness = sdk
+        ? await claudeSdkBackend!.hostVerdict(conversationId)
+        : await staleSessionVerdictFromProbe(
+          { status: "working", ageMs: now - lastLifeAt, predatesBoot: lastLifeAt < MACHINE_BOOTED_AT || observedDeadPanes.has(sessionId) },
+          () => findSessionProcess(sessionId, detectSessionAgentType(sessionId)),
+        );
+      if (!authorizesTeardown(liveness)) return { ...unknown, liveness, lastLifeAt };
+      if (!awaitingResume(claim)) continueState = await askContinue();
+      const facts = await deadSessionFacts(syncService, sessionId, conversationId, now, { lastLifeAt });
+      const ownedElsewhere = await syncService.getConversationOwnerInfo(conversationId, { strict: true }).then((info) => ownedByAnotherDevice(info), () => null);
+      // The claim's own continue keeps the flag set while it is stalled, and
+      // the flag cannot say whose message it is; then continueState judges.
+      // Any other time a pending message is someone else's, and holds.
+      return { ...facts, liveness, ownedElsewhere, lastLifeAt, recentRevives: recentResumes, continueState, messagePending: !!facts.lifecycle?.hasPendingMessages && !(claim.continueId && continueState === "stalled") };
+    },
+    // Numbered by claim and attempt: the server dedupes a client id within the minute.
+    resume: (claim) => queueRevive(syncService, claim.conversationId, Date.now(), `${Math.floor(claim.claimedAt / 1000)}a${claim.attempts}`),
+    settle: (claim: TurnClaim, reason) => {
+      // A moved session runs elsewhere, and an SDK host reported its own stop.
+      if (reason === "moved" || claudeSdkBackend?.owns(claim.conversationId)) return forgetStatusFile(claim.sessionId);
+      markDeadSessionCompleted(syncService, claim.conversationId, claim.sessionId, `turn claim of ${claim.sessionId.slice(0, 8)} conv=${claim.conversationId.slice(0, 12)} released (${reason})`);
+    },
+    // The ledger withdraws a continue still queued (turnClaims' withdraw), so it cannot resume the session behind this message.
+    fail: (claim, message) => {
+      forgetStatusFile(claim.sessionId);
+      syncService.setSessionError(claim.conversationId, message).catch(logConvexFailure);
+      sendAgentStatus(syncService, claim.conversationId, claim.sessionId, "stopped");
+    },
+  });
+}
+
+>>>>>>> track
 // What both revive paths read about a session whose process is gone: whether
 // the person still holds it, and its transcript's say (an interrupt, a usage
 // limit, its last sign of life).
@@ -29920,6 +30050,11 @@ function startWatchdog(
           // (turnClaims.ts). A status from before the ledger existed opens it.
           // A claim released since (a kill, a restart) refuses it: then the
           // file is stale, and the sweep below settles it as before.
+<<<<<<< main
+=======
+          // A claimed session is the pass's whatever its file says (a death during an automatic compaction).
+          if (turnClaims().get(sessionId)) continue;
+>>>>>>> track
           if (claimTransition(data.status ?? "") === "open" && turnClaims().open(sessionId, convId, data.ts * 1000)) continue;
           // An SDK session's Claude has no tty for the process lookup below to find, and its host
           // says itself when it is gone: idle there is a person not typing, not an exit. Matched by

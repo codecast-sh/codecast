@@ -18,7 +18,7 @@ import "./flowVolume.css";
 
 const REASON_WORDS: Record<FunnelReason, string> = {
   closed: "closed, no fix", dropped: "dropped", failed: "failed", cancelled: "cancelled", regressed: "came back", other: "other",
-  here: "here now", waiting: "on a person", queued: "queued", held: "under the bar", watching: "watching",
+  here: "here now", waiting: "on a person", queued: "queued", held: "held back", watching: "watching",
 };
 
 /** What the list under the chart shows: the signals by source, everyone who reached a step, or those who stopped there for one reason. */
