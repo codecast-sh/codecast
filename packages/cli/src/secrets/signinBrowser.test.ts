@@ -369,6 +369,32 @@ describe("bridgeBrowserConn", () => {
     expect(closed).toBe(true);
   });
 
+  // The bridge answers a socket's cookie calls only for the sites its tabs
+  // show (bridge/guardrails.ts), so the scratch tab parks at the site first.
+  test("with sites, the jar calls run in a scratch tab parked at each site's origin", async () => {
+    const sent: Array<[string, any, string | undefined]> = [];
+    let n = 0;
+    const inner = {
+      async send(method: string, params?: any, sessionId?: string): Promise<any> {
+        sent.push([method, params, sessionId]);
+        if (method === "Target.createTarget") return { targetId: `T${++n}` };
+        if (method === "Target.attachToTarget") return { sessionId: `S${params.targetId.slice(1)}` };
+        if (method === "Runtime.evaluate") return { result: { value: `https://${n === 1 ? "example.com" : "other.org"} complete` } };
+        return {};
+      },
+      on: () => () => {},
+      waitFor: async () => ({ method: "", params: {} }) as CdpEvent,
+      close: () => {},
+    };
+    const conn = await bridgeBrowserConn({ port: 1, token: "t" }, async () => inner, ["example.com", "other.org"]);
+    await conn.send("Storage.getCookies");
+    await conn.dispose!();
+    const navigated = sent.filter(([m]) => m === "Page.navigate").map(([, p, sid]) => [p.url, sid]);
+    expect(navigated).toEqual([["https://example.com/__cast_vault__", "S1"], ["https://other.org/__cast_vault__", "S2"]]);
+    expect(sent.find(([m]) => m === "Storage.getCookies")?.[2]).toBe("S1");
+    expect(sent.filter(([m]) => m === "Target.closeTarget").map(([, p]) => p.targetId).sort()).toEqual(["T1", "T2"]);
+  });
+
   test("opens no tab when nothing reads the jar", async () => {
     const sent: string[] = [];
     const inner = { send: async (m: string) => (sent.push(m), {}), on: () => () => {}, waitFor: async () => ({}) as CdpEvent, close: () => {} };

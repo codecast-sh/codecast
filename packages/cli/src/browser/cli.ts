@@ -58,10 +58,10 @@ import { registerAuditCommand } from "./auditCommand.js";
 import { runBatch, type BatchContext } from "./batch.js";
 import { printStepResults, readStepPlan } from "../stepBatch.js";
 import { provisionCredentials } from "./credentials.js";
-import { bridgeEndpoint } from "./bridge/host.js";
+import { bridgeEndpoint, requestBrowserProfile } from "./bridge/host.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import {
-  hostOwnsBrowser, isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
+  hostOwnsBrowser, selectHostBrowser, isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
 } from "./bridge/real.js";
 import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
 import { runBrowserSync, DEFAULT_SYNC_WAIT_S } from "./sync.js";
@@ -76,6 +76,8 @@ import type { PublishDeps } from "../castApi.js";
 import { fmt, icons } from "../colors.js";
 import { commandGroup } from "../commandGroups.js";
 import { registerPaneOfferCommand } from "./paneOffer.js";
+import { registerTypeSecretCommand } from "./secretType.js";
+import { registerFlightCommand } from "./flightRecorder.js";
 
 // colors.ts exposes semantic helpers, not raw colour names.
 const OK = `${fmt.success(icons.check)}`;
@@ -287,6 +289,15 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .command("browser")
     .alias("br")
     .description(commandGroup("browser").description);
+  // On a cloud host: the laptop's Chrome when its link is healthy, else the
+  // host's own (bridge/laptopLink.ts). First, so every later hook and verb
+  // sees the choice.
+  br.hook("preAction", async (_br, action) => {
+    await selectHostBrowser();
+    // `--browser <id>`: the Chrome profile this session's new tabs open in (bridge/host.ts).
+    const browser = (action.opts() as { browser?: string }).browser;
+    if (browser) requestBrowserProfile(browser);
+  });
 
   // The host group is shared with the top-level `cast hosts`: same builder,
   // two mount points, so the documented `cast browser hosts ...` keeps working.
@@ -296,6 +307,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   // to attach to — so it is registered here, above the engine handover, and
   // works on a machine with no browser installed at all.
   registerPaneOfferCommand(br, deps, "pane", "Offer a page to your human as a pane beside this session");
+
+  // Verbs that speak CDP to the session's tab themselves, under either driver
+  // (sessionTab.ts): typing a Vault secret unseen, and the rolling recorder.
+  registerTypeSecretCommand(br, deps);
+  registerFlightCommand(br, deps);
 
   // The agent-browser engine drives everything it covers, which is nearly all
   // of it. Our own CDP driver stays behind it as a fallback for a machine that
