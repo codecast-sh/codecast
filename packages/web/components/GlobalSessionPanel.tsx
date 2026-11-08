@@ -1444,7 +1444,7 @@ export function MonitorBars({ session, isActive }: {
 // the user parked the card — this row states the reason from what the row
 // itself carries, so a Dormant card never sits there unexplained.
 //
-// variant "claim" is the honest inverse, for a card filed under NEEDS INPUT
+// variant "claim" is the honest inverse, for a card filed under NEEDS YOU
 // whose pinned state still declares dormant: the agent SAYS a machine wakes
 // it, but the system can verify no armed trigger, watch, loop or run — either
 // the wake already landed and the agent never re-declared, the wake lives
@@ -1452,7 +1452,7 @@ export function MonitorBars({ session, isActive }: {
 // bare claim simply outlived its trust (DORMANT_CLAIM_TTL_MS of quiet with no
 // verifiable wake — the classifier promotes it here so a wake that never
 // comes cannot strand a session in Dormant). Without this row the card reads
-// as a contradiction: a "Dormant" chip sitting in Needs Input with nothing
+// as a contradiction: a "Dormant" chip sitting in Needs You with nothing
 // under it. The row names the claim and marks it unverified, so the reader
 // knows why the card still asks for them.
 function DormantReasonRow({ session, isActive, hasOtherRows, variant, onOpen }: {
@@ -1630,7 +1630,7 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
   activeSessionId?: string | null;
   // "parked": the card sits in the Dormant bucket — its wake MUST show, so the
   // reason row is the fallback when no trigger/workflow/watch bar draws.
-  // "claim": the card sits in Needs Input while its pinned state declares
+  // "claim": the card sits in Needs You while its pinned state declares
   // dormant — the row renders the claimed wake as unverified so the
   // contradiction explains itself.
   wake?: "parked" | "claim";
@@ -2132,7 +2132,7 @@ function SessionListPanelImpl({
     s => s.showFavorites,
     s => s.favorites,
     s => s.recentFreezeOrder,
-    // Explicit decisions (cast decide) split their sessions out of Needs Input
+    // Explicit decisions (cast decide) split their sessions out of Needs You
     // into their own Questions section.
     s => decisionsSectionSig(s.sessionDecisions),
     // Local answered/dismissed marks — drop a question from the section in the
@@ -2716,7 +2716,7 @@ function SessionListPanelImpl({
   }, [staleSessions, dismissStaleMutation, snoozeStalePrompt]);
 
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
-  // Cap how many rows each section renders. A section like "Needs Input" can
+  // Cap how many rows each section renders. A section like "Needs You" can
   // accumulate thousands of finished sessions (the store never prunes), and
   // rendering them all materializes tens of thousands of DOM nodes in this
   // always-mounted panel — every heartbeat then re-reconciles the whole tree,
@@ -3828,11 +3828,11 @@ function SessionListPanelImpl({
         })}
         {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { count: countOf(statusPinned, pinned, placed.counts.pinned) })}
         {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
-        {/* Needs Input, Done and Dormant take a dragged card: the drop is the
+        {/* Needs You, Done and Dormant take a dragged card: the drop is the
             user's rest verdict (setSessionRest), the same stamp the context
             menu and the dormant chord write. Working is not a target — nobody
             can file a row as "the agent is producing". */}
-        {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
+        {renderSection("Needs You", statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
         {renderSection(STOPPED_SECTION.label, filteredStopped, "text-sol-red", undefined, undefined, {
           key: "hosted_stopped",
           headerAction: <RetryStoppedButton rows={filteredStopped} />,

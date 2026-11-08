@@ -126,7 +126,7 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
   onMobileClose?: () => void;
 }) {
   // The open decisions the viewer owns, as Mine lists them. A session parked
-  // on a terminal question counts on the inbox's Needs Input instead.
+  // on a terminal question counts on the inbox's Needs You instead.
   const pending = useOwnedDecisionCount();
   if (pending === 0) return null;
   return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} />;
