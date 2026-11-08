@@ -18,6 +18,7 @@ import { sdkHostDir, writeFileAtomic } from "./paths.js";
 import { askAnswerFromPoll, AUTO_ALLOW_TOOLS, planAnswerFromPoll, QUESTION_TOOLS } from "./pollAnswer.js";
 import type { SdkActivity, SdkImage, SdkPermissionAnswer, SdkPermissionRequest, SdkTurnError } from "./protocol.js";
 import { parsePollMessage } from "../pollMessage.js";
+import type { LivenessVerdict } from "@codecast/shared/contracts";
 
 export interface ClaudeSdkBackendDeps {
   log: (line: string) => void;
@@ -185,6 +186,20 @@ export class ClaudeSdkBackend {
   isRunning(conversationId: string): boolean {
     const l = this.live.get(conversationId);
     return !!l && !l.client.gone;
+  }
+
+  /**
+   * Is the conversation's host process there? A start, attach or resume in
+   * progress cannot answer yet. A host pid is definitive, unlike a pane probe:
+   * no state file, or a pid that is gone, is an observed exit.
+   */
+  async hostVerdict(conversationId: string): Promise<LivenessVerdict> {
+    if (this.isRunning(conversationId)) return "live";
+    if (this.locks.has(conversationId) || this.starting.has(conversationId)) return "unverifiable";
+    const b = this.bindings.get(conversationId);
+    if (!b) return "exited";
+    const state = readHostState(b.hostId, this.dir);
+    return state && await hostProcessAlive(state.pid) ? "live" : "exited";
   }
 
   /**
