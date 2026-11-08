@@ -295,13 +295,13 @@ export const HEARTBEAT_ALIVE_MS =
 //     passes (tmux health checks, WIP snapshot sweeps), so a busy fleet can
 //     miss heartbeats for minutes while provably alive — syncing messages every
 //     few seconds. Coercing on heartbeat age alone filed every actively-working
-//     session under NEEDS INPUT during such a stall (2026-07-20). Fresh message
+//     session under NEEDS YOU during such a stall (2026-07-20). Fresh message
 //     traffic is proof of life that vetoes the coercion. The turn sitting in a
 //     long SILENT tool call has no such traffic to veto with, so for it the
 //     window is the only defence and it has to clear the real write cadence —
 //     which is what HEARTBEAT_ALIVE_MS is now derived to do. It did not before:
 //     a session running subagents, quiet for five minutes, read as stopped and
-//     filed under NEEDS INPUT while its daemon was beating (2026-09-17).
+//     filed under NEEDS YOU while its daemon was beating (2026-09-17).
 //   - conversation quiet past the trust TTL with a live heartbeat → the daemon
 //     lost the turn's idle transition and re-asserts "working" forever; reads as
 //     "idle" (not "stopped") because the fresh heartbeat means the process is

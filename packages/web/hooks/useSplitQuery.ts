@@ -147,7 +147,7 @@ export async function querySplitWhole(
  * on a busy account, and a phone downloads the whole result slower than that:
  * when a cancelled fetch was thrown away, every push started a fetch the next
  * push cancelled, the cache never filled, and the replica's liveness facts
- * froze, so heartbeat deadlines lapsed locally and rows fell into Needs Input
+ * froze, so heartbeat deadlines lapsed locally and rows fell into Needs You
  * (phone 8, web 4, 2026-10-26). Seeding is safe: every rebuild is checked
  * against the server's hash.
  */
