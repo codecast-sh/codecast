@@ -15,6 +15,7 @@ import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { mixColor } from '@/lib/solColor';
+import { showNotice } from '@/lib/undoBar';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ConversationSkeleton } from '@/components/SkeletonLoader';
 import { MobileAgentSpeaker, MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
@@ -139,29 +140,6 @@ import {
 } from '@codecast/shared/render';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CollapsibleBody, FadeGradient as LinearGradient, blendOver } from '@/components/CollapsibleBody';
-
-function Toast({ message, visible }: { message: string; visible: boolean }) {
-  const Theme = useTheme();
-  const opacity = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    if (visible) {
-      Animated.sequence([
-        Animated.timing(opacity, { toValue: 1, duration: 150, useNativeDriver: true }),
-        Animated.delay(1200),
-        Animated.timing(opacity, { toValue: 0, duration: 300, useNativeDriver: true }),
-      ]).start();
-    }
-  }, [visible, message]);
-
-  if (!visible) return null;
-
-  return (
-    <Animated.View style={[styles.toast, { opacity }]} pointerEvents="none">
-      <RNText style={styles.toastText}>{message}</RNText>
-    </Animated.View>
-  );
-}
 
 type ToolCall = {
   id: string;
@@ -3157,12 +3135,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const flatListLayoutHeightRef = useRef(0);
   const lastContentHeightRef = useRef(0);
   const [newMessageCount, setNewMessageCount] = useState(0);
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastKey, setToastKey] = useState(0);
-  const showToast = useCallback((msg: string) => {
-    setToastMessage(msg);
-    setToastKey(k => k + 1);
-  }, []);
+  const showToast = showNotice;
   const [collapsed, setCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchVisible, setSearchVisible] = useState(false);
@@ -5191,7 +5164,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           />
         </RNView>
       </KeyboardAvoidingView>
-      <Toast key={toastKey} message={toastMessage} visible={!!toastMessage && toastKey > 0} />
       {shareSelectionMode && (
         <RNView style={styles.shareSelectionBar}>
           <RNText style={styles.shareSelectionCount}>
@@ -6266,21 +6238,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 40,
   },
-  toast: {
-    position: 'absolute',
-    bottom: 100,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    zIndex: 1000,
-  },
-  toastText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '500',
-  },
+
   contentGradientOverlay: {
     position: 'absolute',
     bottom: 0,

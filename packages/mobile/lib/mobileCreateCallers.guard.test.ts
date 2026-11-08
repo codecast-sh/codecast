@@ -96,8 +96,11 @@ describe("mobile new-session launch options", () => {
   // is not a no-op: a target short-circuits routing past the rung that prefers
   // the machine holding the checkout, and stable_mode overrides `cast stable`.
   test("only explicit non-default picks are stamped", () => {
-    // The folder list is scoped only by an explicit machine pick.
-    expect(sheetSource).toContain("useScopedRecentProjects({ scopedDeviceId: deviceId,");
+    // The folder list is scoped only by intent: an explicit machine pick, else
+    // the machine the person's saved default or last hand pick names. A
+    // heuristic default never scopes it.
+    expect(sheetSource).toContain("const scopedDeviceId = deviceId ?? intendedDeviceId;");
+    expect(sheetSource).toContain("useScopedRecentProjects({ scopedDeviceId,");
     // The sheet paints from the store on open: machines and folders are fed
     // app-wide (StoreSyncBridge), never queried when the sheet appears.
     expect(sheetSource).not.toContain("api.devices.listDevices");
@@ -106,7 +109,8 @@ describe("mobile new-session launch options", () => {
     expect(sheetSource).toContain("devices.length > 0 &&");
 
     const builder = sourceBetween("const launchStampsForCreate", "const finishSessionCreate");
-    expect(builder).toContain("deviceId && deviceId !== defaultDeviceId ? deviceId : undefined");
+    // A pick equal to the heuristic default is left to routing; intent is stamped.
+    expect(builder).toContain("(deviceId && deviceId !== defaultDeviceId ? deviceId : intendedDeviceId) ?? undefined");
     expect(builder).toContain('model: model !== "default" ? model : undefined');
     expect(builder).toContain('effort: effort !== "default" ? effort : undefined');
     expect(builder).toContain('stable_mode: stableMode !== "auto" ? stableMode : undefined');

@@ -163,6 +163,16 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           </button>
         </div>
 
+        {/* ── The team thread (ct-74449): people and the session that owns the
+            decision. It sits under the button that opens it, above the
+            evidence, so what the team said is read before the card. ── */}
+        {(discussOpen || discussion.rows.length > 0) && (
+          <section className="mt-5" id="discuss" data-decision-discuss-section>
+            <h2 className="decision-kicker mb-3">Comments</h2>
+            <DecisionDiscussion decisionId={decision._id} open={discussOpen} onOpenChange={setDiscussOpen} bare noAsk />
+          </section>
+        )}
+
         {/* Sticky, so it is a sibling of the page's sections, not inside the header. */}
         {verdictBar && decision.card && heldNote && <div className="mt-4">{heldNote}</div>}
         {verdictBar && decision.card && (
@@ -234,15 +244,6 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             </div>
           )}
         </section>}
-
-        {/* ── The team thread (ct-74449): people and the session that owns the
-            decision; the button by the status opens it, so it shows once in use ── */}
-        {(discussOpen || discussion.rows.length > 0) && (
-          <section className="mt-8" id="discuss" data-decision-discuss-section>
-            <h2 className="decision-kicker mb-3">Comments</h2>
-            <DecisionDiscussion decisionId={decision._id} open={discussOpen} onOpenChange={setDiscussOpen} bare noAsk />
-          </section>
-        )}
 
         {/* ── Answer ── */}
         {a.answerSection && <section className="mt-8 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">

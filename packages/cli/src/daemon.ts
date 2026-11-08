@@ -30374,8 +30374,6 @@ async function main(): Promise<void> {
     authToken: config.auth_token,
     userId: config.user_id,
   });
-  // Every echo this daemon uploads names the delivery it settles.
-  syncService.setDeliveryEchoes(deliveryEchoLedger());
   syncServiceRef = syncService;
   // Before any transcript is read: redactSecrets replaces this machine's real
   // secret values from here on (knownValueRedaction.ts).
@@ -30409,6 +30407,9 @@ async function main(): Promise<void> {
   // routes attached below need; /hook/status answers 503 until its handler
   // registers at the end of boot (setHookStatusSink).
   hookServer = startHookServer();
+  // Every echo this daemon uploads names the delivery it settles. Nothing
+  // above has awaited since syncService was built, so no upload precedes it.
+  syncService.setDeliveryEchoes(deliveryEchoLedger());
 
   // Open the Convex WebSocket now, before the tmux warm restart. That scan
   // awaits every managed pane (133s for 135 sessions on 2026-09-15) and used

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { autoDeployCore, carriesForMarker, DEPLOY_SETTLE_MS, recordDeployMarker, report, request, stage } from "./deploys";
+import { autoDeployCore, DEPLOY_SETTLE_MS, recordDeployMarker, report, request, stage } from "./deploys";
+import { carriesForMarker } from "./deployCarries";
 import schema from "./schema";
 import { schemaIndexes } from "./testDb";
 import { backfill } from "./deploysBackfill";

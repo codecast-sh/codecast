@@ -79,6 +79,11 @@ describe("funnelItem", () => {
     expect(item(task({ status: "done", watch_until: NOW - DAY }), r)).toMatchObject({ level: level("clean"), why: null });
   });
 
+  test("a watch the sweep ended quiet (resolved_at, watch_until cleared): closed clean", () => {
+    const r = run({ nodes: ["bind", "triage", "build", "push", "merge", "deploy", "watch", "exit"] });
+    expect(item(task({ status: "done", closed_at: NOW - 9 * DAY, resolved_at: NOW - 2 * DAY }), r)).toMatchObject({ level: level("clean"), why: null });
+  });
+
   test("shipped and reopened: regressed", () => {
     const r = run({ nodes: ["bind", "triage", "build", "push", "merge", "deploy", "watch", "exit"] });
     expect(item(task({ status: "open" }), r)).toMatchObject({ level: level("live"), why: "regressed" });
@@ -98,15 +103,25 @@ describe("funnelItem", () => {
     expect(item(task({ status: "dropped" }), run({ nodes: ["bind", "triage", "build", "dropped", "exit"] }))).toMatchObject({ level: level("build"), why: "dropped" });
   });
 
-  test("no run: queued when ready and over the bar, held back when not ready or under it; merged into another problem counts nowhere", () => {
-    expect(item(task({ readiness: "ready" }), null)).toMatchObject({ level: 0, why: "queued", run: null, status: null });
+  test("a closed problem reads closed though its close station was interrupted and the run failed", () => {
+    const r = run({ status: "failed", current_node_id: "closed_at_build", node_statuses: [...done("bind", "triage", "harm", "queue", "build"), { node_id: "closed_at_build", status: "failed", started_at: 2000 }] });
+    expect(item(task({ status: "done" }), r)).toMatchObject({ level: level("build"), why: "closed", node: "Closed", status: "failed" });
+  });
+
+  test("no run: not started when ready and over the bar, held back when not ready or under it; merged into another problem counts nowhere", () => {
+    expect(item(task({ readiness: "ready" }), null)).toMatchObject({ level: 0, why: "unstarted", run: null, status: null });
     expect(item(task({ readiness: "not_ready" }), null)!.why).toBe("held");
     const bar = { score: 60, findings: 3 };
     const at = (t: FunnelTask) => funnelItem({ task: t, run: null, stations, labels, bar, now: NOW })!.why;
     expect(at(task({ readiness: "ready", cause: { scored: { score: 40 }, signal_count: 1 } }))).toBe("held");
-    expect(at(task({ readiness: "ready", cause: { scored: { score: 40 }, signal_count: 3 } }))).toBe("queued");
-    expect(at(task({ readiness: "ready", cause: { scored: { score: 80 }, signal_count: 1 } }))).toBe("queued");
+    expect(at(task({ readiness: "ready", cause: { scored: { score: 40 }, signal_count: 3 } }))).toBe("unstarted");
+    expect(at(task({ readiness: "ready", cause: { scored: { score: 80 }, signal_count: 1 } }))).toBe("unstarted");
     expect(item(task({ cause: { merged_into: "t9" } }), null)).toBeNull();
+  });
+
+  test("named by its cause, else its title when the cause's name is blank", () => {
+    expect(item(task({ cause: { named: { name: "The broker double-books" } } }), null)!.title).toBe("The broker double-books");
+    expect(item(task({ cause: { named: { name: "" } } }), null)!.title).toBe("A problem");
   });
 
   test("a blocking decision on the run reads as waiting", () => {
@@ -118,7 +133,7 @@ describe("foldFunnel", () => {
   const mk = (i: number, o: Partial<FunnelItem>): FunnelItem => ({ task: `t${i}`, ref: `ct-${i}`, title: `p${i}`, run: `r${i}`, at: NOW - DAY, level: 1, why: "here", node: null, status: "running", ...o });
   test("counts reach each step, drops split by why, windows by when the problem opened, signals by UTC day", () => {
     const items = [
-      mk(1, { level: 0, why: "queued", run: null }),
+      mk(1, { level: 0, why: "unstarted", run: null }),
       mk(2, { level: level("triage"), why: "closed" }),
       mk(3, { level: level("triage"), why: "closed", at: NOW - 10 * DAY }),
       mk(4, { level: level("decide"), why: "waiting" }),
@@ -134,7 +149,7 @@ describe("foldFunnel", () => {
     expect(n(w7)).toEqual([4, 3, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1]);
     expect(w7.steps[level("triage")].drops).toEqual({ closed: 1 });
     expect(w30.steps[level("triage")].drops).toEqual({ closed: 2 });
-    expect(w7.steps[0].drops).toEqual({ queued: 1 });
+    expect(w7.steps[0].drops).toEqual({ unstarted: 1 });
     expect(funnelItemsOf(f, 7, level("triage")).map((x) => x.task).sort()).toEqual(["t2", "t4", "t5"]);
     expect(funnelItemsOf(f, 30, level("triage"), "closed").map((x) => x.task)).toEqual(["t2", "t3"]);
   });

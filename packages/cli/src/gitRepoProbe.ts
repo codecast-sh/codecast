@@ -1,4 +1,4 @@
-import { execFile } from "child_process";
+import { execFile } from "./proc.js";
 
 /**
  * True only when git itself says `cwd` is outside any repository. A timeout, a

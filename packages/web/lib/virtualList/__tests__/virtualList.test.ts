@@ -79,8 +79,10 @@ describe("attributeMeasurementsByKey", () => {
 
 describe("createScrollHold", () => {
   afterEach(() => setSystemTime());
+  // onChange re-aims in a microtask (it fires inside React's commit).
+  const settle = () => Promise.resolve();
 
-  test("a bottom hold re-aims when rows grow after the library let go", () => {
+  test("a bottom hold re-aims when rows grow after the library let go", async () => {
     const { v, el, runFrames } = setup(Array.from({ length: 50 }, (_, i) => `k${i}`));
     const hold = createScrollHold(v, () => el as any);
     hold.set("bottom", { holdMs: 1000 });
@@ -89,11 +91,12 @@ describe("createScrollHold", () => {
     // An image in a row above loads 300ms later: the library's loop is done.
     v.resizeItem(40, 600);
     hold.onChange();
+    await settle();
     runFrames();
     expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
   });
 
-  test("an idle hold writes nothing when sizes have not moved", () => {
+  test("an idle hold writes nothing when sizes have not moved", async () => {
     const { v, el, runFrames, writes } = setup(Array.from({ length: 50 }, (_, i) => `k${i}`));
     const hold = createScrollHold(v, () => el as any);
     hold.set("bottom", { holdMs: 1000 });
@@ -101,10 +104,11 @@ describe("createScrollHold", () => {
     const n = writes.length;
     hold.onChange();
     hold.onChange();
+    await settle();
     expect(writes.length).toBe(n);
   });
 
-  test("a released hold leaves the reader where they are", () => {
+  test("a released hold leaves the reader where they are", async () => {
     const { v, el, runFrames } = setup(Array.from({ length: 50 }, (_, i) => `k${i}`));
     const hold = createScrollHold(v, () => el as any);
     hold.set("bottom", { holdMs: 1000 });
@@ -113,12 +117,13 @@ describe("createScrollHold", () => {
     el.scrollTop = 2000;
     v.resizeItem(45, 400); // below the view: only a hold could move the reader
     hold.onChange();
+    await settle();
     runFrames();
     expect(el.scrollTop).toBe(2000);
     expect(hold.active).toBe(false);
   });
 
-  test("the bail predicate ends the hold", () => {
+  test("the bail predicate ends the hold", async () => {
     const { v, el, runFrames } = setup(Array.from({ length: 50 }, (_, i) => `k${i}`));
     let scrolledUp = false;
     const hold = createScrollHold(v, () => el as any);
@@ -128,12 +133,13 @@ describe("createScrollHold", () => {
     el.scrollTop = 1000;
     v.resizeItem(45, 500);
     hold.onChange();
+    await settle();
     runFrames();
     expect(el.scrollTop).toBe(1000);
     expect(hold.active).toBe(false);
   });
 
-  test("the hold lapses after its visible budget", () => {
+  test("the hold lapses after its visible budget", async () => {
     const { v, el, runFrames } = setup(Array.from({ length: 50 }, (_, i) => `k${i}`));
     setSystemTime(new Date(1_000_000));
     const hold = createScrollHold(v, () => el as any);
@@ -143,11 +149,12 @@ describe("createScrollHold", () => {
     el.scrollTop = 1000;
     v.resizeItem(45, 500);
     hold.onChange();
+    await settle();
     expect(hold.active).toBe(false);
     expect(el.scrollTop).toBe(1000);
   });
 
-  test("an index hold keeps the row at the top while rows above it measure in", () => {
+  test("an index hold keeps the row at the top while rows above it measure in", async () => {
     const { v, el, runFrames } = setup(Array.from({ length: 50 }, (_, i) => `k${i}`));
     const hold = createScrollHold(v, () => el as any);
     hold.set({ index: 30, align: "start" }, { holdMs: 8000 });
@@ -155,6 +162,7 @@ describe("createScrollHold", () => {
     expect(el.scrollTop).toBe(3000);
     v.resizeItem(5, 250);
     hold.onChange();
+    await settle();
     runFrames();
     expect(el.scrollTop).toBe(3150);
   });
