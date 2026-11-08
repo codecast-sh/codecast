@@ -23,7 +23,8 @@ import {
 import { JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
 import { flowFamily, flowRouteFor, type FlowRouteRow } from "./lib/flowRoute";
 import { eventSourceWords, sourceWords } from "./lib/flowMapLabels";
-import { flowHands, flowHold } from "./liveFlows";
+import { flowHands, flowHold, flowRoles } from "./liveFlows";
+import { lineOwnerOf } from "./orgLine";
 import { flowFunnelValidator, flowMapOutcomesValidator } from "./flowMapSchema";
 import { FUNNEL_DAYS, foldFunnel, funnelItem, funnelStations, type FunnelItem, type FunnelStation } from "@codecast/shared/contracts/lineFunnel";
 import { runsWaitingOnAPerson } from "./lib/linePlacement";
@@ -127,19 +128,25 @@ export function foldFindings(rows: ReadonlyArray<{ source: string; created_at: n
 const stationV = v.object({ key: v.string(), label: v.string(), ids: v.array(v.string()) });
 const funnelArgV = v.object({
   stations: v.array(stationV), labels: v.array(v.object({ id: v.string(), label: v.string() })),
-  bar: v.union(v.object({ score: v.number(), findings: v.number() }), v.null()), now: v.number(),
+  bar: v.union(v.object({ score: v.number(), findings: v.number() }), v.null()),
+  /** The flow's team and the sources it takes (none: every source), for what the live queue asks of a problem besides the bar. */
+  team_id: v.union(v.string(), v.null()), sources: v.array(v.string()),
+  now: v.number(),
 });
+type FunnelSetup = { stations: FunnelStation[]; labels: Array<{ id: string; label: string }>; bar: { score: number; findings: number } | null; team_id: string | null; sources: string[] };
 
 /** The live flow's station steps for the Volume chart, its stations' labels by node id, and its bar. */
 export const funnelSetup = internalQuery({
   args: { workspace: v.string() },
-  handler: async (ctx, { workspace }): Promise<{ stations: FunnelStation[]; labels: Array<{ id: string; label: string }>; bar: { score: number; findings: number } | null }> => {
+  handler: async (ctx, { workspace }): Promise<FunnelSetup> => {
     const { flow, spine } = await flowSetup(ctx, workspace);
     const nodes: Array<{ id: string; label?: string; type?: string }> = spine?.nodes ?? [];
     return {
       stations: funnelStations(nodes, spine?.edges ?? []),
       labels: nodes.map((n) => ({ id: n.id, label: n.label || stationWords(n.id) })),
       bar: flow?.bar ? { score: flow.bar.score, findings: flow.bar.findings } : null,
+      team_id: flow?.team_id ? String(flow.team_id) : null,
+      sources: flow?.sources ?? [],
     };
   },
 });
@@ -151,6 +158,18 @@ export const problemsPage = internalQuery({
   handler: async (ctx, args) => {
     const labels = new Map((args.funnel?.labels ?? []).map((l) => [l.id, l.label]));
     const items: FunnelItem[] = [];
+    // Whether an active role owns a problem (orgLine.lineOwnerOf, as the live queue asks): it reads only the
+    // problem's project and plan, so it is resolved once per pair on the page.
+    const team = args.funnel ? flowRoles({ team_id: args.funnel.team_id }, await ctx.db.query("org_roles").collect()) : [];
+    const ownedBy = new Map<string, boolean>();
+    const owned = async (t: any): Promise<boolean> => {
+      const key = `${t.project_id ?? ""}|${t.plan_id ?? ""}`;
+      if (!ownedBy.has(key)) {
+        const owner = await lineOwnerOf(ctx, { source: "signal", project_id: t.project_id, plan_id: t.plan_id }, team);
+        ownedBy.set(key, !!owner && owner.status === "active" && !owner.handing_over?.retire);
+      }
+      return ownedBy.get(key)!;
+    };
     const page = await ctx.db.query("tasks").withIndex("by_workspace_source_status", (q: any) => q.eq("workspace", args.workspace).eq("source", "signal").eq("status", args.status)).paginate({ cursor: args.cursor, numItems: 150 });
     let open = 0, scored = 0, queued = 0;
     const outcomes: Array<{ source: string; outcome: string }> = [];
@@ -167,7 +186,12 @@ export const problemsPage = internalQuery({
       // A problem with no finding left on it has no source to count under.
       const source = outcome ? await problemSource(ctx, t._id) : null;
       if (outcome && source) outcomes.push({ source, outcome });
-      const item = args.funnel ? funnelItem({ task: { ...t, _id: String(t._id) }, run: run ? { ...run, _id: String(run._id) } : null, stations: args.funnel.stations, labels, bar: args.funnel.bar, now: args.funnel.now }) : null;
+      const f = args.funnel;
+      const noRun = !run && t.status === "open";
+      const item = f ? funnelItem({
+        task: { ...t, _id: String(t._id) }, run: run ? { ...run, _id: String(run._id) } : null, stations: f.stations, labels, bar: f.bar, now: f.now,
+        ...(noRun ? { owned: await owned(t), sourceTaken: !f.sources.length || (!!source && f.sources.includes(source)) } : {}),
+      }) : null;
       if (item) items.push(item);
     }
     return { open, scored, queued, outcomes, items, cursor: page.isDone ? null : page.continueCursor };
@@ -311,7 +335,7 @@ async function rollupWorkspace(ctx: any, workspace: string, now: number): Promis
   let open = 0, scored = 0, queued = 0;
   // One read serves both: a source's outcomes and the Volume chart's problems span the same 30 days.
   const since = now - FLOW_MAP_OUTCOME_DAYS * DAY_MS;
-  const setup: { stations: FunnelStation[]; labels: Array<{ id: string; label: string }>; bar: { score: number; findings: number } | null } = await ctx.runQuery((internal as any).flowMap.funnelSetup, { workspace });
+  const setup: FunnelSetup = await ctx.runQuery((internal as any).flowMap.funnelSetup, { workspace });
   const funnel = { ...setup, now };
   for (const status of PROBLEM_STATUSES) {
     cursor = null;
