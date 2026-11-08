@@ -180,7 +180,6 @@ import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathReso
 import type { DoctorDeps } from "./doctor.js";
 import { CHECK_CONFIG_REL_PATH } from "./checkConfigPath.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
-import { adoptConversationForResume, describeResumeOwnership, type ResumeOwnershipResult } from "./resumeOwnership.js";
 import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
@@ -8461,13 +8460,13 @@ async function ensureLocalSession(
 async function launchSession(sessionId: string, agentType?: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null, reconCtx?: ReconstitutionContext): Promise<void> {
   const client = fromConvexAgentType(agentType);
   if (client === "codex") {
-    if (reconCtx) await adoptForForegroundResume(reconCtx.conversationId, projectPath);
+    if (reconCtx) await (await import("./resumeOwnership.js")).adoptForForegroundResume(reconCtx.conversationId, projectPath);
     launchCodex(sessionId, extraArgs, showArgsHint, projectPath);
     return;
   }
   if (client === "claude") {
     const resolvedId = await ensureLocalSession(sessionId, projectPath, reconCtx);
-    if (reconCtx) await adoptForForegroundResume(reconCtx.conversationId, projectPath);
+    if (reconCtx) await (await import("./resumeOwnership.js")).adoptForForegroundResume(reconCtx.conversationId, projectPath);
     launchClaude(resolvedId, extraArgs, showArgsHint, projectPath);
     return;
   }
@@ -8482,37 +8481,6 @@ async function launchSession(sessionId: string, agentType?: string, extraArgs?: 
       : "Resume it from the codecast web app instead.",
   );
   process.exit(1);
-}
-
-// The agent is about to run in this terminal, so this machine must own the
-// conversation or the web keeps sending its messages to the machine it left
-// (resumeOwnership.ts). The path is the one the launch below will run in.
-async function adoptForForegroundResume(conversationId: string, projectPath?: string | null): Promise<void> {
-  const cwd = projectPath && fs.existsSync(projectPath) ? projectPath : process.cwd();
-  let result: ResumeOwnershipResult;
-  try {
-    const { convexClient } = await import("./remote/convexClient.js");
-    const { client, token, api } = await convexClient({ timeoutMs: 10_000 });
-    result = await adoptConversationForResume({
-      thisDeviceId: deviceId(),
-      getOwnerDeviceId: async () => {
-        const info = await client.query(api.devices.getConversationOwner, { api_token: token, conversation_id: conversationId });
-        if (!info) throw new Error("conversation not found");
-        return info.owner_device_id ?? null;
-      },
-      moveHere: (path) => client.mutation(api.devices.moveSessionToDevice, {
-        api_token: token,
-        conversation_id: conversationId,
-        owner_device_id: deviceId(),
-        project_path: path,
-        resume: false,
-      }),
-    }, cwd);
-  } catch (err) {
-    result = { kind: "failed", error: err instanceof Error ? err.message : String(err) };
-  }
-  const line = describeResumeOwnership(result, conversationId);
-  if (line) console.log(result.kind === "failed" ? `${c.yellow}!${c.reset} ${line}` : line);
 }
 
 function launchCodex(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
