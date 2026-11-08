@@ -425,7 +425,7 @@ export function CardRestoreCluster({
             </ShortcutTooltip>
           )}
           {onRestore && (
-            <ShortcutTooltip label={variant === "snoozed" ? "Move to Needs Input now" : "Restore"} side="left">
+            <ShortcutTooltip label={variant === "snoozed" ? "Move to Needs You now" : "Restore"} side="left">
               <button
                 onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan bg-sol-bg/95 shadow-sm border border-sol-border/30"
