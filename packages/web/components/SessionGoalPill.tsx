@@ -50,11 +50,11 @@ export const SessionGoalPill = memo(function SessionGoalPill({ conversationId, s
               {goal.status !== "active" && goal.reason && !open && (
                 <span className="hidden min-w-0 max-w-[40%] shrink truncate text-[12px] text-sol-text-muted sm:inline" title={goal.reason}>{goal.reason}</span>
               )}
-              <span className="shrink-0 tabular-nums text-[11px] text-sol-text-dim" title="Rounds delivered of the cap" data-goal-rounds>
+              <span className="shrink-0 tabular-nums text-[11px] text-sol-text-dim" title="Rounds delivered of the limit" data-goal-rounds>
                 round {goal.rounds}/{goal.max_rounds}
               </span>
               {goal.stalls > 0 && (
-                <span className="shrink-0 tabular-nums text-[11px] text-sol-yellow" title="Rounds without progress of the cap">
+                <span className="shrink-0 tabular-nums text-[11px] text-sol-yellow" title="Rounds without progress of the limit">
                   {goal.stalls}/{goal.max_stalls} stalled
                 </span>
               )}

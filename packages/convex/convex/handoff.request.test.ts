@@ -74,6 +74,8 @@ describe("handoff request golden", () => {
         "./_generated/server.ts": () => import("./_generated/server"),
   "./syncOutbox.ts": () => import("./syncOutbox"),
         "./handoff.ts": () => import("./handoff"),
+        // Every model call asks the vendor guard (lib/vendorGuard) through this query.
+        "./vendorCoverage.ts": () => import("./vendorCoverage"),
       });
       const conversation_id = await t.run(async (ctx) => {
         const user_id = await ctx.db.insert("users", { name: "Fixture" } as any);

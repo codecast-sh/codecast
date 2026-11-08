@@ -31,7 +31,8 @@ import { nextShortId } from "./counters";
 import { enqueueConfigCommand } from "./users";
 import { deployTeamFor, findDeployTeam } from "./changesDeploy";
 import { resolveTeamForRepository } from "./githubWebhooks";
-import { lineDeployTargets, recordDeployMarker } from "./deploys";
+import { recordDeployMarker } from "./deploys";
+import { lineDeployTargets } from "./deployCarries";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
 import { DEPLOY_SHORT_ID_PREFIX } from "@codecast/shared/contracts/deploys";
 import {
@@ -737,7 +738,7 @@ export const backfillDeployRanges = internalMutation({
   args: { team_id: v.id("teams"), target: v.string(), take: v.optional(v.number()) },
   handler: async (ctx, args) => {
     let ranged = 0, linked = 0, uncarried = 0;
-    // A target no line deploys to carries no line fixes (deploys.carriesForMarker); earlier markers gave it them all.
+    // A target no line deploys to carries no line fixes (deployCarries.carriesForMarker); earlier markers gave it them all.
     const lineTarget = (await lineDeployTargets(ctx, teamKey(args.team_id))).has(args.target);
     // Oldest first, so each deploy's previous live deploy is already settled when its range is read.
     for (const d of (await targetDeploys(ctx, teamKey(args.team_id), args.target, args.take ?? 60)).reverse()) {

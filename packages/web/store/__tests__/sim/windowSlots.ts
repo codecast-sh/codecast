@@ -77,6 +77,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // the rest of store/
   "store/gestureBridge.ts:sourceToken": "window",
   "store/gestureBridge.ts:channelFactory": { shared: "set once per realm by the sim's device bridge" },
+  "store/workProjects.ts:memo": { shared: "keyed on the sessions, tasks and plans refs it was built from; another window's state has its own refs, so it misses and rebuilds" },
   "store/viewNav.ts:pendingSource": "window",
   "store/viewNav.ts:appliedNavCount": "window",
   // Whether this window opened fresh onto the feed home: read from its own address once.
@@ -205,6 +206,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/settingsSections.ts:pendingAnchor": { shared: "the fragment a clicked settings link carried, read once by the panel that opens; the sim clicks no links" },
   "lib/analytics.ts:runtime": ANALYTICS,
   "lib/analytics.ts:initPromise": ANALYTICS,
+  "lib/analytics.ts:regulated": ANALYTICS,
+  "lib/analytics.ts:replayRecorder": ANALYTICS,
   "lib/appWindowRegistry.ts:present": DESKTOP,
   "lib/appWindowRegistry.ts:channel": DESKTOP,
   "lib/appWindowRegistry.ts:installed": DESKTOP,
@@ -251,6 +254,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/migrationPlan.ts:CLAUDE_TYPES": CONSTANT,
   "lib/migrationPlan.ts:MID_TURN_STATUSES": CONSTANT,
   "lib/notificationDelivery.ts:current": { shared: "browser notifications; the sim installs no delivery" },
+  "lib/notificationDelivery.ts:resyncFocusHold": { shared: "browser notifications; the sim installs no delivery" },
   "lib/notificationGate.ts:COMPLETION_KINDS": CONSTANT,
   "lib/openIntent.ts:splitOpener": NO_REACT,
   "lib/openIntent.ts:intent": OPEN_INTENT,

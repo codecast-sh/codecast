@@ -113,15 +113,6 @@ export function AccessLogPanel({ teamId }: { teamId: Id<"teams"> }) {
   );
 }
 
-/** Whether the active team is one the viewer administers with regulated mode on. */
-export function useActiveTeamLogsAccess(): boolean {
-  return useInboxStore((s) => {
-    const active = s.clientState.ui?.active_team_id;
-    const team = active ? s.teams.find((t) => t?._id === active) : null;
-    return !!team && team.role === "admin" && parseTeamPolicy((team as any).policy).regulated_data === true;
-  });
-}
-
 /** Team settings' way in, beside Managed devices: shown only for a regulated team. */
 export function AccessLogLink({ teamId }: { teamId: string }) {
   const regulated = useInboxStore((s) => parseTeamPolicy((s.teams || []).find((t: any) => String(t._id) === teamId)?.policy).regulated_data === true);

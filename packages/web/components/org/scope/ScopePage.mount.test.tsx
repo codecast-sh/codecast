@@ -144,13 +144,16 @@ async function verifyScopePage() {
   const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
   const text = () => document.body.textContent ?? "";
   const click = async (el: Element | null) => { assert.ok(el, "missing element"); await act(async () => { (el as HTMLElement).click(); }); };
+  // The page's tour reads the router's own URL (no tour over the setup flow).
+  const { MemoryRouter } = await import("react-router");
+  const page = (id: string) => React.createElement(MemoryRouter, null, React.createElement(ScopePageInner, { id }));
   // A fresh mount per scenario: the panel's first state is decided at mount.
   const mount = async (id: string) => {
     await act(async () => root.unmount());
     root = createRoot(document.getElementById("root")!);
-    await act(async () => root.render(React.createElement(ScopePageInner, { id })));
+    await act(async () => root.render(page(id)));
   };
-  const rerender = (id: string) => act(async () => root.render(React.createElement(ScopePageInner, { id })));
+  const rerender = (id: string) => act(async () => root.render(page(id)));
 
   // The fixture's growth role gets a standing session on the role itself
   // (org.tree stamps it from the conversation carrying standing_role_id).

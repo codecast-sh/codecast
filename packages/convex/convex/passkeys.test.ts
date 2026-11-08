@@ -402,7 +402,7 @@ test("an Ask first decision cannot be edited by its asker, and only such a decis
   expect((await t.run((ctx: any) => ctx.db.get(row._id))).question).toBe(row.question);
   // An ordinary decision of Ana's mints no approve grant.
   const plain = await t.mutation(api.sessionDecisions.ask, { api_token: ANA_TOKEN, session_id: "sess-ana-1", question: "Ship it?", options: [{ label: "Yes" }, { label: "No" }] });
-  expect((await as(ana).action(api.passkeys.presenceBegin, { action: "approve", target: String(plain.id), origin: ORIGIN })).error).toMatch(/Only approving an Ask first read/);
+  expect((await as(ana).action(api.passkeys.presenceBegin, { action: "approve", target: String(plain.id), origin: ORIGIN })).error).toMatch(/Only an Ask first read or a Run card/);
 });
 
 test("removing a passkey takes a grant for it; renaming does not", async () => {
@@ -420,4 +420,24 @@ test("removing a passkey takes a grant for it; renaming does not", async () => {
   expect(begun.options.allowCredentials.map((c: any) => c.id).sort()).toEqual([first.credentialId, second.credentialId].sort());
   expect(await as(ana).mutation(api.passkeys.remove, { id, grant })).toMatchObject({ removed: true });
   expect((await as(ana).query(api.passkeys.list, {})).map((p: any) => p.name)).toEqual(["MacBook Touch ID"]);
+});
+
+test("pressing Run on a run card opens a Touch ID challenge naming the command, and its grant runs it", async () => {
+  const { t, as, ana, ben } = await seed();
+  const auth = await softAuthenticator();
+  await enroll(as(ana), auth);
+  const asked = await t.mutation(api.sessionDecisions.ask, { api_token: ANA_TOKEN, session_id: "sess-ana-1", question: "List tasks?", options: [], run: "cast task ls -q 'Inline CLI approval'" });
+  const id = String(asked.id);
+  const { finished, begun, grant } = await confirm(t, as(ana), auth, "approve", id);
+  expect(begun.error).toBeUndefined();
+  expect(finished.error).toBeUndefined();
+  expect((await as(ana).query(api.passkeys.challenge, { challenge_id: begun.challenge_id })).label).toBe("cast task ls -q 'Inline CLI approval'");
+  await as(ana).mutation(api.sessionDecisions.resolve, { decision_id: id, status: "answered", answer_index: 0, grant });
+  const row = await t.run((ctx: any) => ctx.db.get(id));
+  expect(row.status).toBe("answered");
+  expect(row.run.state).not.toBe("waiting");
+  // Another person cannot open a challenge for it.
+  await enroll(as(ben), await softAuthenticator());
+  const asked2 = await t.mutation(api.sessionDecisions.ask, { api_token: ANA_TOKEN, session_id: "sess-ana-1", question: "Again?", options: [], run: "cast task ls" });
+  expect((await as(ben).action(api.passkeys.presenceBegin, { action: "approve", target: String(asked2.id), origin: ORIGIN })).error).toMatch(/Nothing to confirm/);
 });

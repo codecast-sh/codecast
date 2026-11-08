@@ -29,6 +29,7 @@
     "@platform/agent": "file:../../platform/packages/agent",
     "@platform/assistant": "file:../../platform/packages/assistant",
     "@platform/design": "file:../../platform/packages/design",
+    "@platform/engine": "file:../../platform/packages/engine",
     "@platform/flags": "file:../../platform/packages/flags",
     "@react-navigation/native": "^7.1.8",
     "@sentry/cli": "3.4.0",

@@ -115,7 +115,7 @@ naming only a version) is read by time, live at or after the merge.
 
 A placed deploy (a `cut_at`, after a placed live deploy on its target) also
 carries every problem named by a commit in its own range on main: after the
-previous deploy's cut, at or before its own (`deploys carriesForMarker`). The
+previous deploy's cut, at or before its own (`deployCarries carriesForMarker`). The
 commits table keeps every landing a problem had, by a run or by hand, each with
 its place on main, while `tasks.landed` keeps only the newest, so for a placed
 deploy `tasks.landed` decides nothing. A commit counts for a problem only when

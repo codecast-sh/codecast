@@ -60,7 +60,8 @@ import { ghostRestartContextFor, deriveRestartStage } from "../../../hooks/useSe
 import { useConversationCommands } from "../../../hooks/useSessionCommands";
 import { requestSessionRestart } from "../../../lib/sessionCommands";
 import { CastCommandBlock } from "./castBlocks";
-import { RewindReview, useCanRewindFiles } from "../RewindToHere";
+import { RewindReview } from "../RewindToHere";
+import { useCanRewindFiles } from "../../../hooks/useCanRewindFiles";
 import { requestRewind } from "../../../lib/rewindFiles";
 import { AskUserQuestionBlock, ImageBlock, MonitorBlock, PlanModeBlock, ThinkingBlock } from "./interactiveBlocks";
 import { useImageSrc } from "../../../hooks/useImageSrc";
