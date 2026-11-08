@@ -96,15 +96,28 @@ await test("inbox-heartbeat", "a rename that arrives through the feed reaches it
   expect(document.querySelector(`[data-session-id="${id}"] [data-sv-title]`)?.textContent).toBe("Renamed by the server");
 });
 
-await test("diff", "opening a long diff commits once, draws in 11 DOM mutation records, reads no layout and writes nothing to the store", async () => {
+await test("diff", "opening a long diff draws its first 150 rows in 2 commits and 18 DOM mutation records, with 32 layout reads and no store writes", async () => {
   await setup("diff");
   for (const r of await twice()) {
-    expect({ ...pick(r, ["commits", "domMutations", "layoutReads", "storeWrites", "convexQueries", "convexSubscribes"]), reads: r.detail.layoutReads }).toEqual({
-      commits: 1, domMutations: 11, layoutReads: 0, storeWrites: 0, convexQueries: 0, convexSubscribes: 0, reads: [],
+    expect({ ...pick(r, ["commits", "domMutations", "layoutReads", "storeWrites", "convexQueries", "convexSubscribes", "diffLines"]), reads: r.detail.layoutReadKinds }).toEqual({
+      // PierreDiff mounts an empty host, finds the scroller around it in a
+      // layout effect, and mounts the viewer under that scroller's
+      // Virtualizer: two commits before paint.
+      commits: 2,
+      // The host going in, then the viewer's own draw in its shadow root.
+      domMutations: 18,
+      storeWrites: 0, convexQueries: 0, convexSubscribes: 0,
+      // Windowed (components/diff/virtualizer.ts): the 800px viewport plus
+      // 1,000px of overscan below it (the diff opens at the top) is 128 rows
+      // of 22px, drawn in Pierre's blocks of 50: 150 rows, lines 1 to 145 and
+      // the removed side of the 5 changes among them, of the file's 1,612.
+      diffLines: 150,
+      // Windowing reads layout. scrollRoot walks up to the scroller through
+      // getComputedStyle (3 ancestors); Pierre's Virtualizer measures the
+      // scroller's height and scrollHeight and the file's offset in it.
+      layoutReads: 32,
+      reads: ["getBoundingClientRect x23", "scrollHeight x4", "getComputedStyle x3", "offsetHeight x2"],
     });
-    // Pierre draws every line, unwindowed: the file's 1,560 lines plus the
-    // removed side of its 52 changed lines.
-    expect(r.counts.diffLines).toBe(1612);
   }
 });
 

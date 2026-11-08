@@ -27,9 +27,13 @@ const w = dom.window as any;
 const ROW = 50;
 const VIEWPORT = 800;
 let layoutReads: string[] = [];
-const readSite = (name: string) => `${name} ${new Error().stack!.split("\n").find((l) => l.includes("/packages/web/") && !l.includes("/perf/"))?.trim().replace(/^at /, "") ?? "?"}`;
+// Named by the first app frame, or the diff viewer's own (it measures outside the app).
+const readSite = (name: string) => `${name} ${new Error().stack!.split("\n").find((l) => (l.includes("/packages/web/") && !l.includes("/perf/") && !l.includes("/node_modules/")) || l.includes("/@pierre/diffs/"))?.trim().replace(/^at /, "").replace(/\/\S*\/node_modules\//, "") ?? "?"}`;
 const offsets = new WeakMap<Element, number>();
-const heightOf = (el: Element) => ((el as HTMLElement).style?.height === "0px" ? 0 : el.hasAttribute("data-sv-feed") ? VIEWPORT : ROW);
+// A scroller a workload mounts its subject in (`data-perf-viewport`) is a
+// viewport tall, like a virtualized feed.
+const isViewport = (el: Element) => el.hasAttribute("data-sv-feed") || el.hasAttribute("data-perf-viewport");
+const heightOf = (el: Element) => ((el as HTMLElement).style?.height === "0px" ? 0 : isViewport(el) ? VIEWPORT : ROW);
 // A virtualized feed is as tall as its spacer says.
 const scrollHeightOf = (el: Element) => el.hasAttribute("data-sv-feed") ? Math.max(VIEWPORT, Number.parseFloat(el.querySelector<HTMLElement>('div[style*="position: relative"][style*="height"]')?.style.height || "0")) : heightOf(el);
 const geometry = (name: string, value: (el: HTMLElement) => number) => ({ get(this: HTMLElement) { layoutReads.push(readSite(name)); return value(this); }, configurable: true });
@@ -81,6 +85,23 @@ for (const proto of [w.ShadowRoot.prototype, w.Document.prototype]) {
   if (!("adoptedStyleSheets" in proto)) Object.defineProperty(proto, "adoptedStyleSheets", { get() { return this.__adopted ?? []; }, set(v) { this.__adopted = v; }, configurable: true });
 }
 class NoopObserver { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } }
+// Reports each observed element as on screen once, as a browser does on
+// observe for an element inside its root's margin. Only the diff workload
+// installs it (Pierre's Virtualizer tracks which diffs are visible through
+// one); the others keep NoopObserver, so no load-more sentinel fires there.
+class VisibleObserver {
+  targets = new Set<Element>();
+  constructor(private callback: IntersectionObserverCallback) {}
+  observe(el: Element) {
+    this.targets.add(el);
+    queueMicrotask(() => {
+      if (this.targets.has(el) && el.isConnected) this.callback([{ target: el, isIntersecting: true, intersectionRatio: 1 } as unknown as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+    });
+  }
+  unobserve(el: Element) { this.targets.delete(el); }
+  disconnect() { this.targets.clear(); }
+  takeRecords() { return []; }
+}
 // Reports each observed element's fixed size once, as a browser does on observe.
 class SizeObserver {
   targets = new Set<Element>();
@@ -102,7 +123,7 @@ for (const [key, value] of Object.entries({
   window: w, document: w.document, navigator: w.navigator, localStorage: w.localStorage, sessionStorage: w.sessionStorage,
   location: w.location, history: w.history, indexedDB, IDBKeyRange,
   HTMLElement: w.HTMLElement, HTMLTextAreaElement: w.HTMLTextAreaElement, HTMLInputElement: w.HTMLInputElement, HTMLAnchorElement: w.HTMLAnchorElement,
-  Element: w.Element, Node: w.Node, Text: w.Text, DocumentFragment: w.DocumentFragment, ShadowRoot: w.ShadowRoot, SVGElement: w.SVGElement,
+  Element: w.Element, Node: w.Node, Text: w.Text, Document: w.Document, DocumentFragment: w.DocumentFragment, ShadowRoot: w.ShadowRoot, SVGElement: w.SVGElement,
   Event: w.Event, CustomEvent: w.CustomEvent, KeyboardEvent: w.KeyboardEvent, MouseEvent: w.MouseEvent, WheelEvent: w.WheelEvent, FocusEvent: w.FocusEvent,
   MutationObserver: w.MutationObserver, CSSStyleSheet, DOMRect: w.DOMRect, DOMParser: w.DOMParser, customElements: w.customElements, getComputedStyle,
   ResizeObserver: SizeObserver, IntersectionObserver: NoopObserver, matchMedia: w.matchMedia,
@@ -285,6 +306,9 @@ async function until(check: () => boolean, what: string, maxMs = 30_000) {
   }
 }
 
+// "name xN" per distinct value, most frequent first.
+const tally = (xs: string[]) => [...xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0) + 1), new Map<string, number>())].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([x, n]) => `${x} x${n}`);
+
 // Everything one action caused: React commits, store writes, Convex asks, DOM
 // mutations and forced layouts.
 async function measure(action: () => Promise<void>): Promise<Report> {
@@ -319,7 +343,7 @@ async function measure(action: () => Promise<void>): Promise<Report> {
       convexSubscribes: convexAsked.subscribe.length, convexQueries: convexAsked.query.length,
       convexMutations: convexAsked.mutation.length, convexActions: convexAsked.action.length,
     },
-    detail: { layoutReads: [...new Set(reads)], storeKeys: [...storeKeys], rendered: [...rendered].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} x${n}`), ...convexAsked },
+    detail: { layoutReads: [...new Set(reads)], layoutReadKinds: tally(reads.map((r) => r.split(" ")[0])), storeKeys: [...storeKeys], rendered: [...rendered].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} x${n}`), ...convexAsked },
   };
 }
 
@@ -441,7 +465,10 @@ async function setupInboxHeartbeat(): Promise<Bench> {
 
 // Opening a long diff: a 1,560-line TypeScript file with every 20th line
 // changed, shown whole (expandUnchanged) in the diff viewer, from mount until
-// its last line is drawn.
+// its window is drawn. A diff past VIRTUALIZE_LINE_THRESHOLD draws windowed
+// under the Virtualizer of the scroller around it (components/diff/
+// virtualizer.ts), so it mounts in a scroller a viewport tall, at the top, as
+// it sits in a transcript or the diff panel.
 const DIFF_LINES = 1560;
 function longFile(changed: boolean): string {
   const out: string[] = [];
@@ -463,8 +490,19 @@ async function setupDiff(): Promise<Bench> {
   seedStore(200);
   mount();
   const [oldStr, newStr] = [longFile(false), longFile(true)];
-  const view = <DiffView oldStr={oldStr} newStr={newStr} fileName="src/routes.ts" language="typescript" maxLines={100_000} expandUnchanged showLineNumbers />;
-  const show = async () => { await render(view); await until(() => diffLines() >= DIFF_LINES, "the diff's lines to draw", 120_000); await settle(); };
+  (globalThis as any).IntersectionObserver = w.IntersectionObserver = VisibleObserver;
+  const view = (
+    <div data-perf-viewport style={{ overflowY: "auto", height: VIEWPORT }}>
+      <DiffView oldStr={oldStr} newStr={newStr} fileName="src/routes.ts" language="typescript" maxLines={100_000} expandUnchanged showLineNumbers />
+    </div>
+  );
+  // The viewer draws outside React (on animation frames), so the window is
+  // drawn once its line count holds still, not when React stops committing.
+  const show = async () => {
+    await render(view);
+    await until(() => diffLines() > 0, "the diff's lines to draw", 120_000);
+    for (let drawn = -1; drawn !== diffLines();) { drawn = diffLines(); await settle(); }
+  };
   const hide = async () => { await act(async () => { root.render(null); }); await settle(); };
   // The first open loads the renderer and the language; every run after is
   // a diff opened in a warm app.
