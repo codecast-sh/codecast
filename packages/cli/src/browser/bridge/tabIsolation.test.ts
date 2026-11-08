@@ -147,6 +147,33 @@ test("a closed owned tab is replaced on open without adopting another tab", asyn
   expect(extension.tabs.map(t => t.url)).toEqual([humanUrl, "https://after.example/"]);
 });
 
+test("a tab the human took back stops the session with the reason, never a quiet switch to another tab", async () => {
+  const session = "env-takeback-real";
+  await ensurePinnedTab(session, "https://first.example/");
+  const other = (await (await connect(session)).send("Target.createTarget", { url: "https://other.example/" })).targetId;
+  const taken = readBoundTarget(session)!;
+  const tab = extension.tabs.find((t) => targetIdOfTab(t.tabId) === taken)!;
+  // Take back, as background.js does it: out of the Cast group, then `detached` with the reason.
+  delete tab.group;
+  tab.owned = false;
+  extension.ws.send(JSON.stringify({ op: "detached", tabId: tab.tabId, reason: "reclaimed" }));
+  await Bun.sleep(100);
+
+  await expect(ensurePinnedTab(session)).rejects.toThrow(`the human took tab ${taken} back from agents; do not touch it again unless they lend it to you`);
+  await expect(ensurePinnedTab(session)).rejects.toThrow("took tab");
+  expect(readBoundTarget(session)).toBe(taken);
+  expect(readBoundTarget(session)).not.toBe(other);
+
+  // `open` moves on to a tab of the session's own, which it then navigates.
+  await ensurePinnedTab(session, "https://next.example/");
+  expect(readBoundTarget(session)).toBe(other);
+
+  // Lent again and taken explicitly (tab switch): the session may hold it as its own once more.
+  tab.owned = true;
+  await grantTab(endpoint(), session, taken);
+  expect(await grantTab(endpoint(), session, taken, { own: true })).toBe(true);
+});
+
 test("scoped target commands require an existing grant; explicit agent sharing still works", async () => {
   const a = await connect("env-owner-real");
   const b = await connect("env-stranger-real");

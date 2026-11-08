@@ -14,6 +14,7 @@ import { sessionPanePath, startPaneDrag } from "../../lib/stage";
 import { identityPrefsOf, identityRowOf, identitySig, roleLookingAfter } from "../../lib/sessionIdentity";
 import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 import { clickBucketChip, clickProjectChip } from "../../store/chipFilterClicks";
+import { workProjectSig } from "../projects/SessionWorkProject";
 import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
 import { useNowWhen } from "../../hooks/useCoarseNow";
@@ -25,7 +26,7 @@ import { viewersOf, viewersSig } from "../presence/memberPresence";
 import { rosterDeviceOf, deviceWakesOnUse } from "../DeviceBadge";
 import { localDeviceIdOf } from "../../hooks/useLocalDeviceId";
 import { useTipActions, checkMilestone } from "../../tips";
-import { formatIdleDuration } from "../../lib/sessionCard";
+import { formatIdleDuration, sessionCardTitle } from "../../lib/sessionCard";
 import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { useInboxSelection } from "../../lib/inboxSelection";
@@ -69,6 +70,12 @@ function leadRoleOf(session: { org_role_id?: string | null; standing_role_id?: s
     if (r.standing_role_id && String(r.standing_role_id) === String(session.org_role_id) && r.role) return r.role;
   }
   return null;
+}
+
+// The card's name off its own store row: the hosted name rule for hosted
+// rows, the session's title otherwise.
+function liveCardTitle(s: Parameters<typeof hostedRowTitle>[0], cardId: string, hosted: boolean, session: InboxSession): string {
+  return hosted ? hostedRowTitle(s, cardId) : sessionCardTitle(s.sessions[cardId] ?? session);
 }
 
 // Store actions the card reaches, the same for every card.
@@ -153,14 +160,18 @@ export const SessionCard = memo(function SessionCard({
     // so a streamed message wakes the card only when the answer changes.
     (s) => (hosted ? hostedStopOf(s.sessions[cardId] ?? session, s.messages[cardId]) : null),
     (s) => (hosted ? awaitingOkIds(s.sessionDecisions).has(cardId) : false),
-    // The hosted name rule (hostedRowTitle), so the rail and the header name a
-    // conversation the same way from its first seconds on. A string, so only a
-    // changed name wakes the card.
-    (s) => (hosted ? hostedRowTitle(s, cardId) : ""),
+    // The card's name, read off its own row: the list wakes on structure only
+    // (sessionStructuralSig leaves the title out), so a rename that arrives
+    // through the feed reaches the card here. Hosted rows use the hosted name
+    // rule (hostedRowTitle), so the rail and the header agree from the first
+    // seconds on. A string, so only a changed name wakes the card.
+    (s) => liveCardTitle(s, cardId, hosted, session),
     // Where its work is on its way to production, as the chip's words.
     (s) => sessionShipSig(s as any, cardId),
+    // The project it works in, as one short string.
+    (s) => workProjectSig(s as any, cardId),
   ]);
-  const liveTitle = hosted ? hostedRowTitle(st, cardId) : "";
+  const liveTitle = liveCardTitle(st, cardId, hosted, session);
   const meId = st.currentUser?._id?.toString?.() ?? null;
   const viewers = viewersOf(st.teamMembers, cardId, meId);
   const stoppedKind = hosted ? hostedStopOf(st.sessions[cardId] ?? session, st.messages[cardId]) : null;
@@ -314,6 +325,7 @@ export const SessionCard = memo(function SessionCard({
       {...rest}
       {...(unsentDraft ? { isUnread: false } : {})}
       session={session}
+      workProject={workProjectSig(st as any, cardId)}
       liveTitle={draftTitle || liveTitle || undefined}
       roleAbove={roleAbove}
       now={coarseNow}

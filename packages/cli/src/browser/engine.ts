@@ -39,6 +39,7 @@ import { frontAppPid, restoreFocusIfStolen } from "./focusGuard.js";
 import { readState } from "./instance.js";
 import { agentTabStampSource } from "./observe.js";
 import { ownerKey } from "./owner.js";
+import { MUTATION_CLOCK_SOURCE } from "./snapshotSettle.js";
 
 /** Pinned: agent-browser is pre-1.0, so an unpinned upgrade can move the CLI
  *  surface under us. Bump deliberately, with the parity tests re-run. */
@@ -262,7 +263,9 @@ export function engineStateDir(env: NodeJS.ProcessEnv = process.env): string {
 /**
  * The page init script the engine runs before any script of every document
  * it drives: the agent-tab stamp (observe.ts agentTabStampSource), which is
- * how a codecast page knows not to hand an agent's tab to the desktop app.
+ * how a codecast page knows not to hand an agent's tab to the desktop app,
+ * and the mutation clock a snapshot reads to know whether the page moved
+ * while it was captured (snapshotSettle.ts).
  * The built-in driver and the extension stamp their tabs themselves; engine
  * sessions have no CDP session of cast's own, so the engine carries it.
  *
@@ -270,9 +273,13 @@ export function engineStateDir(env: NodeJS.ProcessEnv = process.env): string {
  * changes, so the path on the command line is identical on every call
  * (runEngine's flags must never vary between commands).
  */
+export function agentTabInitSource(): string {
+  return `${agentTabStampSource()};\n${MUTATION_CLOCK_SOURCE};\n`;
+}
+
 export function agentTabInitScript(home = engineHome()): string {
   const file = path.join(home, "agent-tab.js");
-  const source = agentTabStampSource();
+  const source = agentTabInitSource();
   try {
     if (fs.readFileSync(file, "utf-8") === source) return file;
   } catch {}

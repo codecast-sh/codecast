@@ -177,16 +177,30 @@ describe("codecast-status hook event mapping", () => {
     expect(out.message).toBe("Bash: rm -rf build");
   });
 
-  // A hook's "ask" (cc-plugin-privacy) raises a real dialog under bypass mode.
-  // The daemon suppresses bypass permission_blocked as a phantom unless it knows a
-  // dialog is on screen, so the PermissionRequest says so (jx7e7zm sat 9 hours).
+  // A bypass-mode session never waits on a permission: the hook allows Claude
+  // Code's own rm check and any hook's "ask" at once, and reports nothing.
+  test("PermissionRequest in bypass mode is allowed at once and reports nothing", () => {
+    const payload = {
+      session_id: "perm-bypass",
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_input: { command: "python3 - <<'EOF'\nprint(1)\nEOF" },
+      permission_mode: "bypassPermissions",
+    };
+    const out = execFileSync("bash", [hookFile], { input: JSON.stringify(payload), env: { ...process.env, HOME: home } }).toString();
+    expect(JSON.parse(out).hookSpecificOutput.decision).toEqual({ behavior: "allow" });
+    expect(fs.existsSync(statusFile("perm-bypass"))).toBe(false);
+  });
+
+  // The daemon suppresses a blocked status as a phantom unless it knows a dialog
+  // is on screen, so the PermissionRequest says so (jx7e7zm sat 9 hours).
   test("PermissionRequest marks a dialog on screen; a Notification does not", () => {
     const req = runHook({
       session_id: "perm-dialog",
       hook_event_name: "PermissionRequest",
       tool_name: "Bash",
       tool_input: { command: "cast task comment ct-1 hi" },
-      permission_mode: "bypassPermissions",
+      permission_mode: "acceptEdits",
     });
     expect(req.status).toBe("permission_blocked");
     expect(req.dialog).toBe("1");
@@ -397,5 +411,15 @@ describe("codecast-status hook reads agent_id from the envelope only", () => {
       tool_input: { agent_id: "not-a-subagent" },
     });
     expect(out.status).toBe("working");
+  });
+});
+
+describe("a Claude SDK session", () => {
+  // Its host reports status and answers permission prompts itself (claudeSdk/backend.ts).
+  test("the hook stands down and records nothing", () => {
+    const payload = { hook_event_name: "Stop", session_id: "sdk-session-0001" };
+    execFileSync("bash", [hookFile], { input: JSON.stringify(payload), env: { ...process.env, HOME: home, CODECAST_SDK_SESSION: "1" } });
+    expect(fs.existsSync(statusFile(payload.session_id))).toBe(false);
+    expect(reported(payload)).toBe(true);
   });
 });

@@ -803,7 +803,7 @@ export const storyInputAudit = internalQuery({
       const row = rows.find((c) => String(c.team_id) === String(story.team_id) && normalizeRepository(c.repository) === normalizeRepository(story.repository));
       if (row) commits.push(projectCommit(row));
     }
-    return { story_key: story.story_key, headline: story.headline, input: storyPromptInput(story, commits, sessions, prs) };
+    return { story_key: story.story_key, team_id: story.team_id, headline: story.headline, input: storyPromptInput(story, commits, sessions, prs) };
   },
 });
 
@@ -1194,7 +1194,7 @@ async function proseForStory(ctx: ActionCtx, storyId: Id<"change_stories">, dayE
 
   const input = storyPromptInput(story, commits, sessions, prs);
   const req = storyRequest(input);
-  const reply = await callModel({ ...req, label: "Changes story", timeout_ms: STORY_TIMEOUT_MS });
+  const reply = await callModel({ ...req, label: "Changes story", timeout_ms: STORY_TIMEOUT_MS, gate: { ctx, scope: { workspace: `team:${story.team_id}` } } });
   if (!reply) return await write({ status: "failed" });
   const usage = usageOf(req.model, reply.usage);
   budget.spent += usage.cost_usd;
@@ -1232,7 +1232,7 @@ async function proseForEdition(
   if (!hasModelKey()) return "held";
 
   const req = editionRequest(load.input);
-  const reply = await callModel({ ...req, label: "Changes edition", timeout_ms: EDITION_TIMEOUT_MS });
+  const reply = await callModel({ ...req, label: "Changes edition", timeout_ms: EDITION_TIMEOUT_MS, gate: { ctx, scope: { workspace: `team:${args.team_id}` } } });
   if (!reply) {
     await write({ status: "failed" });
     return "failed";

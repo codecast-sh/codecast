@@ -119,6 +119,8 @@ export const APP_SURFACE_EXCLUDED_PATHS = new Set<string>([
   "settings/accounts/link-github",
   "settings/team/create",
   "settings/team/join",
+  "settings/team/features",
+  "start",
   "settings/integrations/github-app",
   "review/batch",
   // Slack's OAuth return leg: needs ?code&state from Slack, then bounces away.

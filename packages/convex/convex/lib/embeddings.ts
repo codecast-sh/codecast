@@ -5,6 +5,8 @@
 // fails; grouping then falls back to the attach judge's word overlap.
 
 import { FINDING_VECTOR_DIMENSIONS } from "../momentsSchema";
+import { openaiFetch } from "./openai";
+import type { VendorGate } from "./vendorGuard";
 
 export const EMBEDDING_MODEL = "text-embedding-3-small";
 /** Dollars per input token for the model (US$0.02 per million). */
@@ -22,19 +24,20 @@ export function embeddingWorstCase(text: string): number {
   return Math.ceil(Math.min(text.length, MAX_CHARS) / 2) * PRICE_PER_TOKEN;
 }
 
-export async function embedText(text: string, opts: { timeout_ms?: number } = {}): Promise<Embedded | null> {
-  const key = process.env.OPENAI_API_KEY;
+/** Null also when the gate's team may not send to OpenAI (lib/vendorGuard). */
+export async function embedText(gate: VendorGate, text: string, opts: { timeout_ms?: number } = {}): Promise<Embedded | null> {
   const input = text.trim().slice(0, MAX_CHARS);
-  if (!key || !input) return null;
+  if (!input) return null;
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), opts.timeout_ms ?? 15_000);
   try {
-    const res = await fetch("https://api.openai.com/v1/embeddings", {
+    const res = await openaiFetch(gate, "/v1/embeddings", {
       method: "POST",
       signal: abort.signal,
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: EMBEDDING_MODEL, input }),
     });
+    if (!res) return null;
     if (!res.ok) {
       console.error("Embedding API error:", res.status, (await res.text()).slice(0, 300));
       return null;

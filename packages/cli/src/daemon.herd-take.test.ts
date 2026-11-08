@@ -7,6 +7,12 @@ import { launchAccountPrefix } from "./ccAccounts.js";
 import { HIBERNATE_SUBAGENT_QUIET_MS } from "./hibernation.js";
 import { buildClaudeResumeCommand, herdTakeDeps, herdTakeForTests, hibernationConcurrencyForTests, liveOutsideTmux, resetSubagentActivityForTests, typedLaunchLine } from "./daemon.js";
 import { functionBlock } from "./test-helpers/sourceRegion.js";
+import { afterAll as restoreCodecastDirAfterAll } from "bun:test";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+
+// Deliveries these tests make record into the delivery echo ledger in CODECAST_DIR.
+const codecastDir = isolateCodecastDir();
+restoreCodecastDirAfterAll(() => codecastDir.restore());
 
 const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 

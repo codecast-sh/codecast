@@ -35,8 +35,12 @@ function toolbarVerbs(html: string): string[] {
 }
 
 describe("PublishedPageEmbed header actions", () => {
-  test("copy link to the published page is first, then expand, the two ways to open it, and collapse", () => {
-    expect(toolbarVerbs(markup("my-page"))).toEqual(["Copy link", "Expand", "Open beside your work", "Open in a new tab", "Collapse"]);
+  test("copy link to the published page is first, then the two ways to open it, and collapse", () => {
+    expect(toolbarVerbs(markup("my-page"))).toEqual(["Copy link", "Open beside your work", "Open in a new tab", "Collapse"]);
+  });
+
+  test("a page taller than its frame shows Expand under it, outside the hover toolbar", () => {
+    expect(markup("my-page")).toMatch(/<button[^>]*class="page-embed__expand[^"]*"[^>]*>.*?Expand<\/button>/);
   });
 
   test("open points at the public share URL, not the serving origin", () => {
@@ -116,12 +120,15 @@ describe("PublishedPageEmbed height", () => {
       expect(stage()).toBe("420px");
       await report(3000, 700);
       expect(stage()).toBe("700px");
-      await act(() => (container.querySelector('[aria-label="Expand"]') as HTMLButtonElement).click());
+      await act(() => (container.querySelector(".page-embed__expand") as HTMLButtonElement).click());
       expect(stage()).toBe("1400px");
-      await act(() => (container.querySelector('[aria-label="Shrink"]') as HTMLButtonElement).click());
+      expect(container.querySelector(".page-embed__expand")!.textContent).toBe("Shrink");
+      await act(() => (container.querySelector(".page-embed__expand") as HTMLButtonElement).click());
       expect(stage()).toBe("700px");
       await report(500, 700);
       expect(stage()).toBe("500px");
+      // A page that fits has nothing to expand.
+      expect(container.querySelector(".page-embed__expand")).toBeNull();
     } finally {
       await act(() => root.unmount());
       container.remove();

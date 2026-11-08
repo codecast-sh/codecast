@@ -10,7 +10,7 @@
 // It exists because nobody working on these cues can play them out loud. Every
 // peak in a comment or a test comes from here.
 
-import type { CueSpec } from "./cueSpec";
+import { SAMPLE_PEAK, type CueSpec } from "./cueSpec";
 
 export const RENDER_SAMPLE_RATE = 48_000;
 
@@ -132,6 +132,7 @@ export function cueDuration(spec: CueSpec): number {
   let end = 0;
   for (const n of spec.tones ?? []) end = Math.max(end, n.start + n.dur);
   for (const n of spec.noise ?? []) end = Math.max(end, n.start + n.dur);
+  if (spec.sample) end = Math.max(end, spec.sample.dur);
   return end;
 }
 
@@ -171,10 +172,12 @@ export function renderCue(spec: CueSpec, sampleRate = RENDER_SAMPLE_RATE): Float
   return out;
 }
 
-/** The loudest sample the speaker gets. The number every cue is judged by. */
+/** The loudest sample the speaker gets. The number every cue is judged by.
+ *  A recorded voice is not rendered (there is no decoder here); its files are
+ *  normalized to SAMPLE_PEAK, so its peak is that times the master. */
 export function cuePeak(spec: CueSpec, sampleRate = RENDER_SAMPLE_RATE): number {
   const samples = renderCue(spec, sampleRate);
-  let peak = 0;
+  let peak = spec.sample ? spec.master * SAMPLE_PEAK : 0;
   for (let i = 0; i < samples.length; i++) peak = Math.max(peak, Math.abs(samples[i]));
   return peak;
 }

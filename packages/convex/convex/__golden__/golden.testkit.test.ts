@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callModel } from "../lib/anthropic";
+import { NO_TEAM_CONTENT_GATE } from "../lib/vendorGuard";
 import { captureFetch, loadGolden, recordGolden, type GoldenCase } from "./golden.testkit";
 
 const A: GoldenCase = { case: "a", body: "body a" };
@@ -70,7 +71,7 @@ describe("captureFetch", () => {
     const stub = captureFetch("the stubbed reply");
     stub.install();
     try {
-      const reply = await callModel({ prompt: "say it", max_tokens: 10, label: "stub test" });
+      const reply = await callModel({ prompt: "say it", max_tokens: 10, label: "stub test", gate: NO_TEAM_CONTENT_GATE });
       expect(reply?.text).toBe("the stubbed reply");
       expect(stub.bodies).toHaveLength(1);
     } finally {

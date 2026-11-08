@@ -1,4 +1,5 @@
 import { SeatKillDialog } from "./org/SeatKillDialog";
+import { PendingAgentFeatures } from "./onboarding/usePendingAgentFeatures";
 import { LiveRunsCheck } from "../hooks/useLiveRunsCheck";
 import { useSyncMetricSeries } from "../hooks/useMetricSeries";
 import { useSyncOpsSources } from "../hooks/useSyncOps";
@@ -87,7 +88,7 @@ import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectToast";
 import { agentFleetCounts } from "../lib/liveness";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { pathOnMyMachines } from "../lib/machinePicker";
+import { pathOnMyMachines, savedDefaultProject } from "../lib/machinePicker";
 import { liveMachineRoster } from "../hooks/useSyncDevices";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, useShortcuts } from "../shortcuts";
 import { useFollowMode } from "../hooks/useFollowMode";
@@ -374,7 +375,7 @@ function HostFeeders() {
   useSyncMachineResources();
   // Every run the store holds as live, checked against the server's live runs, so no surface shows an ended run as
   // live; a leaf of its own, so its wakes re-render nothing here.
-  return <LiveRunsCheck />;
+  return <><LiveRunsCheck /><PendingAgentFeatures /></>;
 }
 
 /** The store's feeders and write wiring for one window. An embedded pane
@@ -799,6 +800,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     // Only a LIVE roster may veto a path: the persisted roster paints chips at
     // boot but a stale copy must not block a freshly cloned checkout.
     const seedable = (p: string | null | undefined) => pathOnMyMachines(liveMachineRoster(store), p);
+    // The project the person saved as their default outranks every guess below.
+    const saved = savedDefaultProject(store.clientState.ui, liveMachineRoster(store));
+    if (saved) return { path: saved, gitRoot: saved, agentType: store.currentConversation.agentType };
     const selected = sessionListActiveId
       ? (store.sessions[sessionListActiveId]
           ?? store.conversations[sessionListActiveId])

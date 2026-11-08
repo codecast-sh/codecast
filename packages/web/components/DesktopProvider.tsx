@@ -35,7 +35,7 @@ import { track } from "../lib/analytics";
 import { runPlaced } from "../lib/desktopApps";
 import { deepLinkSessionId } from "../lib/pathLabel";
 import { cleanNotificationBody } from "../lib/notificationText";
-import { notificationActor, notificationRoute } from "../lib/notificationTypes";
+import { notificationActor, notificationRoute, notificationTypeLabel, sessionLabel } from "../lib/notificationTypes";
 import { recordNotificationMiss } from "../lib/notificationNudge";
 import { isChatContextOnScreen } from "../lib/chatFocus";
 import { useOsPermission } from "../hooks/useOsPermissions";
@@ -46,6 +46,7 @@ import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { usePresenceReporter } from "../hooks/usePresenceReporter";
 import { useNotificationDelivery } from "../hooks/useNotificationDelivery";
 import { agentAlertsSuppressed } from "../lib/notificationDelivery";
+import { requestAnsweredSince } from "../hooks/useSyncInboxSessions";
 
 import { useMountEffect } from "../hooks/useMountEffect";
 import { Button } from "./ui/button";
@@ -62,9 +63,25 @@ const BANNER_FRESH_MS = 3 * 60_000;
 // The engine is loaded lazily, on the desktop only: this provider wraps every
 // page, and the walkie pulls the media stack in with it.
 let walkie: typeof import("../lib/calls/walkie") | null = null;
+
+const SESSION_BANNER_TYPES = new Set(["session_idle", "permission_request", "session_error"]);
+
+/** A session row's banner names the session, from the row's conversation or the
+ *  local store, so rows written before the server titled them read right too.
+ *  A ready session needs no event word; the rest say what happened. */
+function sessionBannerTitle(n: { type?: unknown; conversation_id?: unknown; conversation?: any }): string | null {
+  const type = typeof n.type === "string" ? n.type : "";
+  if (!n.conversation_id || !SESSION_BANNER_TYPES.has(type)) return null;
+  const st = useInboxStore.getState() as any;
+  const id = String(n.conversation_id);
+  const conv = n.conversation ?? st.conversations?.[id] ?? st.sessions?.[id];
+  const name = sessionLabel(conv);
+  if (!name) return null;
+  return type === "session_idle" ? name : `${name} · ${notificationTypeLabel(type, conv?.agent_type)}`;
+}
+
 /** Exported for the call seam tests: a LiveKit reconnect must read as still
  *  in the huddle, which this answers from the store's `phase` alone. */
-
 export function DesktopProvider() {
   const router = useRouter();
   const initRef = useRef(false);
@@ -127,6 +144,9 @@ export function DesktopProvider() {
 
   const notifications = useQueryNoThrow(api.notifications.list, {}).data;
   useNotificationDelivery(isAuthenticated && notifications !== undefined);
+  // The latest rows, for a banner asking at show time whether its row still stands.
+  const notificationsRef = useRef(notifications);
+  notificationsRef.current = notifications;
   const mountedAtRef = useRef<number>(Date.now());
   const seenIdsRef = useRef<Set<string>>(new Set());
   const initializedRef = useRef(false);
@@ -171,7 +191,7 @@ export function DesktopProvider() {
         Date.now() - n.created_at < BANNER_FRESH_MS
       ) {
         const actor = notificationActor(n).name;
-        const title = actor ? `${actor}` : "Codecast";
+        const title = sessionBannerTitle(n) || actor || n.title?.trim() || "Codecast";
         const body = cleanNotificationBody(n.message) || n.message;
         // The same click target the bell computes: a chat banner lands on the
         // message, a task banner on the task — not just "the app, focused".
@@ -199,13 +219,23 @@ export function DesktopProvider() {
         // open window into one banner; `kind` is the row's type, which decides
         // which of two banners for one conversation wins a same-moment race
         // (a completion beats the permission request it arrived with).
+        // A request is announced only while it stands: a row read before the
+        // banner goes up (claims, the burst grace) means no banner, and so
+        // does a permission answered in the session meanwhile. A finished
+        // turn has no such answer to watch: a late message from the agent
+        // sets it "working" too, so only the read counts there.
+        const sessionId = n.conversation_id ? String(n.conversation_id) : undefined;
+        const stillUnread = () => !notificationsRef.current?.find((row) => row._id === n._id)?.read;
+        const due = n.type === "permission_request" && sessionId
+          ? () => stillUnread() && !requestAnsweredSince(sessionId, n.created_at)
+          : n.type === "session_idle" ? stillUnread : undefined;
         notifyNative(title, body, {
           conversationId: n.conversation_id,
           route,
           key: String(n._id),
           kind: typeof n.type === "string" ? n.type : undefined,
           force,
-        });
+        }, { due });
         // A banner this row deserved could not be shown: the app is unfocused
         // (a focused app is announced by the toast/bell — nothing missed) and
         // the OS-level permission is not granted, so the notifyNative above

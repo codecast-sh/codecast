@@ -366,6 +366,7 @@ function titleFixtures(): TitleFixture[] {
 
 const titleModules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  "./vendorCoverage.ts": () => import("./vendorCoverage"),
   "./syncOutbox.ts": () => import("./syncOutbox"),
   "./titleGeneration.ts": () => import("./titleGeneration"),
 };

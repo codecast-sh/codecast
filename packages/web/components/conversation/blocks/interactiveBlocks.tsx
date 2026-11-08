@@ -11,7 +11,7 @@ import { MessageReview } from "../../MessageReview";
 import { fmtDuration } from "../../triggerCadence";
 import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, type MonitorStatus } from "../../monitorRows";
 import { OptionPreview } from "../../tools/AskUserQuestionToolView";
-import { buildPollPayload, parsePollAnswers, pollClosedLabel, pollDeadline, pollKeyForOption, POLL_TIMED_OUT, SYNTHETIC_POLL_OPTION } from "../../../lib/pollPayload";
+import { buildPollPayload, pollCardAnswers, pollClosedLabel, pollDeadline, pollKeyForOption, POLL_TIMED_OUT, SYNTHETIC_POLL_OPTION } from "../../../lib/pollPayload";
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { useInboxStore } from "../../../store/inboxStore";
 import { Radar, Terminal } from "lucide-react";
@@ -274,12 +274,7 @@ function AskUserQuestionCard({ tool, result, onSendMessage, parsedInput, deadlin
   // multi-question "pick everything, then submit" flow.
   const needsSubmit = isMultiQuestion || anyMultiSelect;
 
-  let answers: Record<string, string> = {};
-  if (parsedInput.answers && typeof parsedInput.answers === "object") {
-    answers = parsedInput.answers;
-  } else {
-    answers = parsePollAnswers(questions, result?.content);
-  }
+  const answers = pollCardAnswers(questions, parsedInput.answers, result);
 
   const expired = !!deadline?.expired;
   const isInteractive = !result && !!onSendMessage && !sent && !expired;

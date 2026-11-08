@@ -8,6 +8,7 @@ import { closesArgument, closesSummary, earlierFixes } from "../causeHistory";
 import { cameBackCount, notDeployed, problemLine, problemState } from "../timeline";
 import { problemBand } from "../problemPage";
 import { overviewWindow, rowStrip } from "../problemsOverview";
+import { carriedBy, waitingMerges, type DeployMerge } from "@codecast/shared/contracts/deploys";
 import { buildLineModel, carryingDeploys, decisionSaid, findingNeverShipped, historyBrief, type DeployRow, type LineModelRows, type OccurrenceRow } from "../lineModel";
 import type { MapDecision, MapRun } from "../lineMap";
 import { agentwatchGraph } from "./agentwatchGraph.fixture";
@@ -199,6 +200,29 @@ describe("carryingDeploys", () => {
     const staging = deploy({ _id: "stg", at: shippedAt + 2 * HOUR, sha: SHA, environment: "Staging", source: "union", via: "source" });
     const prod = deploy({ _id: "prod", at: shippedAt + DAY, sha: SHA, environment: "production", source: "union", via: "source" });
     expect(carryingDeploys(merge, [local, staging, prod], "r").map((d) => d.id)).toEqual(["prod"]);
+  });
+
+  // Union, Nov 6: dp-412 was cut at 00:07 and went live at 01:06; ct-63003 merged at 00:14 and ct-74781 at 00:36, so
+  // neither was in its code. Both first went live in dp-428, cut later.
+  test("a deploy cut before the merge does not carry it, though it went live after", () => {
+    const at = (h: number, m: number) => Date.UTC(2026, 10, 6, h, m);
+    const dp412 = deploy({ _id: "dp-412", at: at(1, 6), cut_at: at(0, 7), sha: "ada74813b", environment: "production", source: "union", via: "source" });
+    const dp428 = deploy({ _id: "dp-428", at: at(15, 47), cut_at: at(15, 30), sha: "4622112ed", environment: "production", source: "union", via: "source" });
+    const merges: DeployMerge[] = [
+      { run_id: "r1", task_id: "ct-63003", sha: "34763edfbd", branch: "b", into: "main", at: at(0, 14) },
+      { run_id: "r2", task_id: "ct-74781", sha: "5555555555", branch: "b", into: "main", at: at(0, 36) },
+    ];
+    expect(carryingDeploys({ sha: "34763edfbd", branch: "b", into: "main", at: at(0, 14), prUrl: null, repository: null }, [dp412, dp428], "r1").map((d) => d.id)).toEqual(["dp-428"]);
+    expect(carriedBy(dp412, merges, [dp412, dp428])).toEqual([]);
+    expect(carriedBy(dp428, merges, [dp412, dp428]).map((c) => c.task_id)).toEqual(["ct-63003", "ct-74781"]);
+    // Before dp-428 exists, both still wait.
+    expect(waitingMerges(merges, [dp412]).map((m) => m.task_id)).toEqual(["ct-63003", "ct-74781"]);
+    // A merge that reached main before the cut is carried, by its commit's place on main when known, else by its time.
+    const early: DeployMerge = { run_id: "r3", task_id: "ct-1", sha: "6666666666", branch: "b", into: "main", at: at(0, 9), main_at: at(0, 5) };
+    expect(carriedBy(dp412, [early], [dp412, dp428]).map((c) => c.task_id)).toEqual(["ct-1"]);
+    expect(carriedBy(dp412, [{ ...early, at: at(0, 6), main_at: undefined }], [dp412, dp428]).map((c) => c.task_id)).toEqual(["ct-1"]);
+    // A deploy with no place on main is read by time, as before.
+    expect(carriedBy({ ...dp412, cut_at: null }, merges, [{ ...dp412, cut_at: null }]).map((c) => c.task_id)).toEqual(["ct-63003", "ct-74781"]);
   });
 });
 

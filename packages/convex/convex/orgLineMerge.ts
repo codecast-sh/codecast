@@ -23,6 +23,7 @@ import { performSetAuthority } from "./orgRoles";
 import { insertTaskComment } from "./tasks";
 import { getAuthenticatedUserId, tellRole } from "./pendingMessages";
 import { roleOfRun } from "./lib/actor";
+import { roleMergeAllowance } from "./lib/regretRead";
 
 /** The pull request a handoff named in its evidence ("PR: <url>", taskClaim
  *  handoffCommentText), or null. */
@@ -38,9 +39,16 @@ export function prUrlFromEvidence(evidence: string | null | undefined): string |
 export async function performSetLineMerge(
   ctx: any,
   userId: Id<"users">,
-  args: { role_id: string; on: boolean; per_day?: number; from_session?: string; api_token?: string; human_decision?: string },
+  args: { role_id: string; on: boolean; per_day?: number; rate?: { bar: number; min: number } | null; from_session?: string; api_token?: string; human_decision?: string },
 ): Promise<any> {
   let role = await requireRole(ctx, userId, args.role_id, "admin");
+  // The mode is a person's alone (regret.md R7): only a signed-in person's request, which the web sends from its
+  // confirm review, may set it; a token (a terminal, an agent's session) may not.
+  if (args.rate !== undefined && (args.api_token || args.from_session)) throw new Error("Only a person sets how the merge step decides, from the role's settings");
+  if (args.rate) {
+    if (!(args.rate.bar > 0 && args.rate.bar <= 1)) throw new Error("The rate's bar is a share above 0 and at most 1 (0.9 is 90%)");
+    if (!(Number.isInteger(args.rate.min) && args.rate.min >= 1)) throw new Error("The rate needs a whole number of finished changes, at least 1");
+  }
   if (role.status === "retired") throw new Error("That role is retired");
   const now = Date.now();
   if (args.on) {
@@ -64,8 +72,20 @@ export async function performSetLineMerge(
       old_value: String(was), new_value: String(args.on), created_at: now,
     });
   }
+  // The mode (regret.md R7): a bar sets the rate, null goes back to the count, absent leaves it.
+  if (args.rate !== undefined) {
+    const before = role.line_merge_rate ? `${role.line_merge_rate.bar}/${role.line_merge_rate.min}` : "count";
+    const after = args.rate ? `${args.rate.bar}/${args.rate.min}` : "count";
+    if (before !== after) {
+      await ctx.db.patch(role._id, { line_merge_rate: args.rate ? { bar: args.rate.bar, min: args.rate.min, set_by: userId, set_at: now } : undefined, updated_at: now });
+      await ctx.db.insert("org_role_history", {
+        role_id: role._id, user_id: userId, actor_type: "user", action: "line_merge", field: "line_merge_rate",
+        old_value: before, new_value: after, created_at: now,
+      });
+    }
+  }
   const updated = await ctx.db.get(role._id);
-  return { ...updated, merge: mergeAllowance(updated, now) };
+  return { ...updated, merge: await roleMergeAllowance(ctx, updated, now, true) };
 }
 
 async function requireToken(ctx: any, apiToken: string): Promise<Id<"users">> {
@@ -102,7 +122,7 @@ async function personShipped(ctx: any, run: any): Promise<string | null> {
   return /^ship\b/i.test(label.trim()) ? decision.answered_by.id : null;
 }
 
-const PERSON_ALLOWANCE = { on: true, used: 0, limit: null, grant: null, allowed: true, reason: null };
+const PERSON_ALLOWANCE = { on: true, used: 0, limit: null, grant: null, allowed: true, reason: null, mode: "count" as const, bar: null, measured: null };
 
 /** Before the merge: may this run's line merge now? Never writes. */
 export const check = query({
@@ -113,7 +133,7 @@ export const check = query({
     const task: any = run.task_id ? await ctx.db.get(run.task_id) : null;
     // A trial project's run never merges, whatever graph it runs (lineTrial.ts).
     const trial = (await trialProjectOf(ctx, task)) ? { allowed: false, reason: "a trial project's run stops at the card: nothing merges" } : {};
-    return { role: role ? { short_id: role.short_id, handle: role.handle, name: role.name } : null, task: task ? { short_id: task.short_id, title: task.title, pr_url: prUrlFromEvidence(task.verification_evidence) } : null, ...(role ? mergeAllowance(role, Date.now()) : PERSON_ALLOWANCE), ...trial };
+    return { role: role ? { short_id: role.short_id, handle: role.handle, name: role.name } : null, task: task ? { short_id: task.short_id, title: task.title, pr_url: prUrlFromEvidence(task.verification_evidence) } : null, ...(role ? await roleMergeAllowance(ctx, role, Date.now()) : PERSON_ALLOWANCE), ...trial };
   },
 });
 
@@ -137,7 +157,7 @@ export async function recordMergeCore(ctx: any, userId: Id<"users">, args: { run
     }
     return { used: 0, limit: null, over: false, reported: false };
   }
-  const allowance = mergeAllowance(role, now);
+  const allowance = await roleMergeAllowance(ctx, role, now);
   const counters = countersFor(role, now);
   const used = (counters.merges ?? 0) + 1;
   await ctx.db.patch(role._id, { counters: { ...counters, merges: used }, updated_at: now });
@@ -165,7 +185,7 @@ export const record = mutation({
 });
 
 export const setLineMerge = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string(), on: v.boolean(), per_day: v.optional(v.number()), from_session: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), role_id: v.string(), on: v.boolean(), per_day: v.optional(v.number()), rate: v.optional(v.union(v.null(), v.object({ bar: v.number(), min: v.number() }))), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => {
     const userId = await getAuthenticatedUserId(ctx, api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");

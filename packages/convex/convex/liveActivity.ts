@@ -38,6 +38,7 @@ import { needsInputKind, HEARTBEAT_ALIVE_MS } from "./inboxFilters";
 import { isAgentSpawnedConversation } from "./ccAccountsShared";
 import { APNS_BUNDLE_ID, apnsTokenIsDead, sendApns, type ApnsEnvironment } from "./apns";
 import { readPresence } from "./pushRouter";
+import { pushesStrippedFor } from "./lib/pushPrivacy";
 import {
   LIVE_ACTIVITY_ATTRIBUTES_TYPE,
   LIVE_ACTIVITY_DETAIL_LIMIT,
@@ -273,6 +274,13 @@ export function liveActivitySessionOf(
   };
 }
 
+// A strip row with its words taken out: the project as its title, and a
+// detail only the status implies.
+export function stripLiveActivitySession(row: LiveActivitySessionInput): LiveActivitySessionInput {
+  const detail = row.status === "waiting" ? "Waiting for your input" : row.status === "failed" ? "The agent stopped" : null;
+  return { ...row, title: row.project ?? "Session", detail };
+}
+
 // Every session that belongs on the user's strip right now. Managed rows are
 // read back far enough to catch a failure still inside its linger; the
 // derivation drops what has expired.
@@ -287,6 +295,9 @@ export async function collectLiveActivitySessions(
   });
   const out: LiveActivitySessionInput[] = [];
   const seen = new Set<string>();
+  // The strip's state rides every APNs push: a regulated recipient's names
+  // the project and the status, never the session's words (pushPrivacy.ts).
+  const strip = managed.length > 0 && (await pushesStrippedFor(ctx, userId));
   for (const session of managed) {
     if (!session.conversation_id) continue;
     const key = session.conversation_id.toString();
@@ -296,7 +307,7 @@ export async function collectLiveActivitySessions(
     if (!isStripCandidate(conv)) continue;
     const verdict = await deriveConversationVerdict(ctx, conv, session, now);
     const row = liveActivitySessionOf(conv, verdict, session.agent_status_updated_at ?? conv.updated_at);
-    if (row) out.push(row);
+    if (row) out.push(strip ? stripLiveActivitySession(row) : row);
   }
   return out;
 }

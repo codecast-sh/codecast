@@ -5,7 +5,10 @@
 // everything that needs Web Crypto or storage.store lives in artifactsHttp.ts.
 //
 // Access model: the slug is an unguessable secret — anyone holding the URL can
-// view, unless gates (password / email wall / expiry) are set. Two further
+// view, unless gates (password / email wall / expiry) are set. A page whose
+// data belongs to a regulated team (its policy's regulated_data) carries a
+// team gate instead: only that team's signed-in members are handed its token,
+// so the link alone opens nothing (lib/artifactGates, teamGateFor below). Two further
 // secrets exist per artifact: owner_key (management from the served page,
 // travels only in the #o= fragment) and edit_key (link collaborators,
 // #ed= fragment). Blob invariant: every storage_id in the artifact tables is
@@ -29,11 +32,17 @@ import { describePageAnchor, pageAgentChip, parsePageAnchor } from "@codecast/sh
 import { deliveredOutcome, failedOutcome, type SendWaiting } from "@codecast/shared/comments";
 import { sessionWaiting } from "./lib/sendOutcome";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
-import { isVisibilityShareable } from "./privacy";
+import { isTeamMember, isVisibilityShareable } from "./privacy";
 import { computeWorkspaceKey, resolveWorkspaceKey, type WorkspaceKey } from "./lib/accessKeys";
-import { pageThreadParticipants, purgeThread, touchThread } from "./threadReads";
+import { pageThreadParticipants, touchThread } from "./threadReads";
 import { evidencePatch, resolveEvidenceBinding } from "./taskEvidence";
-import { eTokenFor, gateFailure, isExpired, kTokenFor } from "./lib/artifactGates";
+import { eTokenFor, gateFailure, isExpired, isGated, kTokenFor, mTokenFor, teamGateMessage } from "./lib/artifactGates";
+import { regulatedTeamFor } from "./lib/teamPolicyGuard";
+import { isRegulatedTeam } from "./lib/accessLog";
+import { purgeRow } from "./lib/purgeTree";
+import { artifactPlan } from "./lib/deletionPlans";
+import { mayDeleteRegulated, startDeletion } from "./regulatedDeletion";
+import { recordRowAccess } from "./lib/accessLog";
 import { decisionPageSlugs, findDecision, userMayRead } from "./lib/decisionAccess";
 import { bumpWindow } from "./ipRateLimit";
 
@@ -142,6 +151,7 @@ export function lineDiff(aText: string, bText: string): { ops: DiffOp[]; truncat
 
 export function accessSummary(a: Doc<"artifacts">) {
   return {
+    team_only: !!a.team_gate,
     has_password: !!a.password_hash,
     email_gate: !!a.email_gate,
     expires_at: a.expires_at ?? null,
@@ -301,8 +311,10 @@ export const bySlug = internalQuery({
       session_title = conv?.title ?? null;
       session_short_title = conv?.short_title ?? null;
     }
+    const gateTeam = artifact.team_gate ? await ctx.db.get(artifact.team_gate) : null;
     return {
       ...artifact,
+      team_gate_name: gateTeam?.name ?? null,
       author_name: user?.name ?? null,
       session_title,
       session_short_title,
@@ -588,6 +600,8 @@ const accessPatchValidator = v.object({
   edit_key: v.optional(v.string()),
   hide_session: v.optional(v.boolean()),
   comments_disabled: v.optional(v.boolean()),
+  // Set only by the server (teamGateFor); nothing clears it.
+  team_gate: v.optional(v.id("teams")),
 });
 
 type AccessPatch = {
@@ -598,10 +612,12 @@ type AccessPatch = {
   edit_key?: string;
   hide_session?: boolean;
   comments_disabled?: boolean;
+  team_gate?: Id<"teams">;
 };
 
 function buildAccessPatch(set: AccessPatch): Partial<Doc<"artifacts">> {
   const patch: Record<string, unknown> = {};
+  if (set.team_gate) patch.team_gate = set.team_gate;
   if (set.password_hash !== undefined) patch.password_hash = set.password_hash ?? undefined;
   if (set.email_gate !== undefined) patch.email_gate = set.email_gate || undefined;
   if (set.expires_at !== undefined) patch.expires_at = set.expires_at ?? undefined;
@@ -613,6 +629,67 @@ function buildAccessPatch(set: AccessPatch): Partial<Doc<"artifacts">> {
   if (set.comments_disabled !== undefined) patch.comments_disabled = set.comments_disabled || undefined;
   return patch as Partial<Doc<"artifacts">>;
 }
+
+/** The regulated team a page answers to, or null: the team of its workspace
+ * (pageWorkspace: the task or plan it is evidence for, else its session), of
+ * any other workspace it reads (a live-data declaration), or of the device that
+ * publishes it. A page already gated keeps its gate. */
+export async function teamGateFor(
+  ctx: { db: QueryCtx["db"] },
+  row: Pick<Doc<"artifacts">, "user_id" | "task_id" | "plan_id" | "session_conversation_id" | "team_gate">,
+  scope: { apiToken?: string | null; workspaces?: Array<string | null | undefined> } = {},
+): Promise<{ team_id: Id<"teams">; team_name: string } | null> {
+  if (row.team_gate) {
+    const team = await ctx.db.get(row.team_gate);
+    return { team_id: row.team_gate, team_name: team?.name ?? "this team" };
+  }
+  const workspaces = [await pageWorkspace(ctx, row as Doc<"artifacts">, new Map()), ...(scope.workspaces ?? [])];
+  for (const workspace of workspaces) {
+    const team = await regulatedTeamFor(ctx, { workspace, apiToken: scope.apiToken });
+    if (team) return team;
+  }
+  return null;
+}
+
+/** The refusal for an access change a team-gated page cannot take, else null. */
+export function teamGateRefusal(teamName: string, set: { edit_mode?: string }): string | null {
+  if (set.edit_mode === "link") {
+    return `${teamName} marks this page's data as regulated, so it is for the team's signed-in members only and cannot get a public edit link.`;
+  }
+  return null;
+}
+
+/** The fields a page takes on when it is gated to a team: the gate, and no public edit link. */
+function gatePatch(row: Pick<Doc<"artifacts">, "team_gate" | "edit_mode"> | null, teamId: Id<"teams"> | undefined): Record<string, unknown> {
+  if (!teamId || row?.team_gate) return {};
+  return { team_gate: teamId, ...(row?.edit_mode === "link" ? { edit_mode: undefined, edit_key: undefined } : {}) };
+}
+
+export const publishGate = internalQuery({
+  args: {
+    user_id: v.id("users"),
+    api_token: v.string(),
+    existing_id: v.optional(v.id("artifacts")),
+    session_conversation_id: v.optional(v.id("conversations")),
+    task_id: v.optional(v.id("tasks")),
+    plan_id: v.optional(v.id("plans")),
+    data_workspace: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = args.existing_id ? await ctx.db.get(args.existing_id) : null;
+    return await teamGateFor(
+      ctx,
+      {
+        user_id: args.user_id,
+        team_gate: existing?.team_gate,
+        task_id: args.task_id ?? existing?.task_id,
+        plan_id: args.plan_id ?? existing?.plan_id,
+        session_conversation_id: args.session_conversation_id ?? existing?.session_conversation_id,
+      },
+      { apiToken: args.api_token, workspaces: [args.data_workspace] },
+    );
+  },
+});
 
 const assetInputValidator = v.array(
   v.object({
@@ -779,7 +856,7 @@ export const upsertFromPublish = internalMutation({
     const now = Date.now();
 
     if (existing) {
-      const accessPatch = args.access ? buildAccessPatch(args.access) : {};
+      const accessPatch = { ...(args.access ? buildAccessPatch(args.access) : {}), ...gatePatch(existing, args.access?.team_gate) };
       // Identical bytes → no version bump: drop the freshly stored blobs, but
       // still apply access changes and provenance so `--password x` on an
       // unchanged file works.
@@ -842,7 +919,7 @@ export const upsertFromPublish = internalMutation({
       slug = newSlug();
     }
     const ownerKey = args.owner_key ?? newSecret();
-    const accessPatch = args.access ? buildAccessPatch(args.access) : {};
+    const accessPatch = { ...(args.access ? buildAccessPatch(args.access) : {}), ...gatePatch(null, args.access?.team_gate) };
 
     const id = await ctx.db.insert("artifacts", {
       slug,
@@ -930,6 +1007,7 @@ export const applyManage = internalMutation({
         edit_key: v.optional(v.string()),
         hide_session: v.optional(v.boolean()),
         comments_disabled: v.optional(v.boolean()),
+        team_gate: v.optional(v.id("teams")),
       }),
     ),
     resolve_comment_id: v.optional(v.id("artifact_comments")),
@@ -938,7 +1016,12 @@ export const applyManage = internalMutation({
   handler: async (ctx, args) => {
     if (args.set) {
       const { title, ...access } = args.set;
-      const patch: Record<string, unknown> = buildAccessPatch(access);
+      const row = await ctx.db.get(args.artifact_id);
+      if (!row) throw new Error("Page not found");
+      const gate = await teamGateFor(ctx, { ...row, team_gate: row.team_gate ?? access.team_gate });
+      const refusal = gate ? teamGateRefusal(gate.team_name, access) : null;
+      if (refusal) throw new Error(refusal);
+      const patch: Record<string, unknown> = { ...buildAccessPatch(access), ...gatePatch(row, gate?.team_id) };
       if (title !== undefined) patch.title = title.slice(0, 200);
       if (Object.keys(patch).length) await ctx.db.patch(args.artifact_id, patch as Partial<Doc<"artifacts">>);
     }
@@ -968,6 +1051,9 @@ export const recordView = mutation({
     email: v.optional(v.string()),
     k: v.optional(v.string()),
     e: v.optional(v.string()),
+    m: v.optional(v.string()),
+    // The signed-in reader's page identity (/pages/auth), so a regulated team's audit log names them.
+    identity_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const artifact = await ctx.db
@@ -975,7 +1061,15 @@ export const recordView = mutation({
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
     if (!artifact) return { ok: false };
-    if (await gateFailure(artifact, { k: args.k, e: args.e })) return { ok: false };
+    if (await gateFailure(artifact, { k: args.k, e: args.e, m: args.m })) return { ok: false };
+    // A regulated team's page: one audit entry per reader per open (lib/accessLog),
+    // ahead of the view budget: repeats collapse there, so an over-budget open is still recorded.
+    const reader = await resolveCommentIdentity(ctx, artifact._id, args.identity_token);
+    await recordRowAccess(ctx, "artifacts", artifact, {
+      actor: reader ? { userId: reader.user._id } : { label: "Page link holder" },
+      action: "open",
+      client: "page",
+    });
     const budget = await bumpWindow(ctx.db, `artifact-view:${artifact._id}`, MAX_VIEWS_PER_MINUTE, 60_000);
     if (!budget.ok) return { ok: false };
     const now = Date.now();
@@ -1189,6 +1283,10 @@ export const mintCommentIdentity = mutation({
     if (!artifact) return { error: "Not found" };
     const user = await ctx.db.get(userId);
     if (!user) return { error: "Sign in required" };
+    if (artifact.team_gate && artifact.user_id !== userId && !(await isTeamMember(ctx, userId, artifact.team_gate))) {
+      const team = await ctx.db.get(artifact.team_gate);
+      return { error: `${teamGateMessage(team?.name)}. Your account is not in ${team?.name ?? "that team"}.` };
+    }
     const existing = await ctx.db
       .query("artifact_identities")
       .withIndex("by_user_artifact", (q) => q.eq("user_id", userId).eq("artifact_id", artifact._id))
@@ -1354,6 +1452,8 @@ export const submitComments = mutation({
     // trusting that a caller came from one.
     k: v.optional(v.string()),
     e: v.optional(v.string()),
+    // ?m= for a team-gated page (lib/artifactGates mTokenFor).
+    m: v.optional(v.string()),
     // Per-comment "Send to agent"; absent falls back to the batch's deliver.
     comments: v.array(v.object({ text: v.string(), anchor: v.optional(v.string()), deliver: v.optional(v.boolean()) })),
   },
@@ -1387,8 +1487,12 @@ export const submitComments = mutation({
         : identity && (await teammatesWhoCanSee(ctx, artifact.user_id)).has(identity.user._id.toString())
           ? "teammate"
           : undefined;
-    const blocked = await gateFailure(artifact, { k: args.k, e: args.e });
-    if (blocked && !role) return { error: blocked };
+    // A team gate admits the owner and that team's members, never every
+    // teammate the owner has elsewhere.
+    const behindWall = role === "owner"
+      || (role === "teammate" && (!artifact.team_gate || (await isTeamMember(ctx, identity!.user._id, artifact.team_gate))));
+    const blocked = await gateFailure(artifact, { k: args.k, e: args.e, m: args.m });
+    if (blocked && !behindWall) return { error: blocked };
     if (args.client_id) {
       const dupe = await ctx.db
         .query("artifact_comments")
@@ -1654,7 +1758,8 @@ export const deleteFromCLI = mutation({
     const r = await resolveTarget(ctx, auth.userId, args.target);
     if (r.error || !r.match) return { error: r.error ?? `No page matches "${args.target}"` };
     const match = r.match;
-    await deleteArtifactCascade(ctx, match);
+    const out = await deletePage(ctx, auth.userId, match);
+    if ("error" in out) return out;
     return { deleted: toCliRow(match) };
   },
 });
@@ -1675,43 +1780,34 @@ export const attachFromCLI = mutation({
     }
     const resolved = await resolveEvidenceBinding(ctx, auth.userId, { task: args.task, station: args.station });
     if (resolved.error || !resolved.binding) return { error: resolved.error ?? "Could not resolve task" };
-    await ctx.db.patch(artifact._id, evidencePatch(resolved.binding));
+    const bound = { ...artifact, ...evidencePatch(resolved.binding) };
+    const gate = await teamGateFor(ctx, bound, { apiToken: args.api_token });
+    await ctx.db.patch(artifact._id, { ...evidencePatch(resolved.binding), ...gatePatch(artifact, gate?.team_id) });
     return { ok: true, slug: artifact.slug, url: artifactUrl(artifact.slug), task: resolved.binding.task_short_id, station: resolved.binding.station };
   },
 });
 
+/** A page and everything it owns, stored files included (lib/deletionPlans artifactPlan, the one list). */
 async function deleteArtifactCascade(ctx: MutationCtx, artifact: Doc<"artifacts">): Promise<void> {
-  const history = await ctx.db
-    .query("artifact_versions")
-    .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
-    .collect();
-  for (const row of history) await deleteVersionRow(ctx, row);
-  // Current version's assets (deleteVersionRow only touched snapshot versions).
-  const assets = await ctx.db
-    .query("artifact_assets")
-    .withIndex("by_artifact_version", (q) => q.eq("artifact_id", artifact._id))
-    .collect();
-  for (const asset of assets) {
-    await ctx.storage.delete(asset.storage_id).catch(() => {});
-    await ctx.db.delete(asset._id);
+  await purgeRow(ctx, artifactPlan(), artifact, { left: Infinity }, {});
+}
+
+/** Delete a page for `userId`: its owner may; in a team whose data is
+ * regulated (the page's team gate) a team admin may too, and the delete runs
+ * as a logged permanent delete (regulatedDeletion.ts). */
+async function deletePage(ctx: MutationCtx, userId: Id<"users">, artifact: Doc<"artifacts">): Promise<{ ok: true } | { error: string }> {
+  const team = artifact.team_gate && (await isRegulatedTeam(ctx, artifact.team_gate)) ? await ctx.db.get(artifact.team_gate) : null;
+  if (team) {
+    if (!(await mayDeleteRegulated(ctx, userId, artifact.user_id, team._id))) return { error: "Not found" };
+    await startDeletion(ctx, {
+      team, actorId: userId, kind: "page", targetId: String(artifact._id), targetLabel: artifact.title, shortId: artifact.slug,
+      roots: [{ plan: "artifact", id: String(artifact._id) }],
+    });
+    return { ok: true };
   }
-  for (const table of ["artifact_comments", "artifact_stats"] as const) {
-    const rows = await ctx.db
-      .query(table)
-      .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
-      .collect();
-    for (const row of rows) await ctx.db.delete(row._id);
-  }
-  const viewers = await ctx.db
-    .query("artifact_viewers")
-    .withIndex("by_artifact_email", (q) => q.eq("artifact_id", artifact._id))
-    .collect();
-  for (const row of viewers) await ctx.db.delete(row._id);
-  await purgeThread(ctx, "page", String(artifact._id));
-  await ctx.storage.delete(artifact.storage_id).catch(() => {});
-  if (artifact.source_storage_id) await ctx.storage.delete(artifact.source_storage_id).catch(() => {});
-  if (artifact.thumb_storage_id) await ctx.storage.delete(artifact.thumb_storage_id).catch(() => {});
-  await ctx.db.delete(artifact._id);
+  if (artifact.user_id !== userId) return { error: "Not found" };
+  await deleteArtifactCascade(ctx, artifact);
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -1851,6 +1947,8 @@ export const listForWeb = query({
         author_id: row.user_id,
         author,
         can_team_edit: !isMine && row.edit_mode === "team",
+        // The regulated team the page answers to: its admins may delete it for good (regulatedDeletion.ts).
+        team_gate: row.team_gate ?? null,
         has_thumb: !!row.thumb_storage_id,
         views: stats?.view_count ?? 0,
         last_viewed_at: stats?.last_viewed_at ?? null,
@@ -1871,9 +1969,8 @@ export const deleteForWeb = mutation({
       .query("artifacts")
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
-    if (!artifact || artifact.user_id !== userId) return { error: "Not found" };
-    await deleteArtifactCascade(ctx, artifact);
-    return { ok: true };
+    if (!artifact) return { error: "Not found" };
+    return deletePage(ctx, userId, artifact);
   },
 });
 
@@ -1891,6 +1988,7 @@ export const teamEditAuth = internalQuery({
       if (artifact.edit_mode !== "team") return null;
       const allowed = await teammatesWhoCanSee(ctx, artifact.user_id);
       if (!allowed.has(args.editor_user_id.toString())) return null;
+      if (artifact.team_gate && !(await isTeamMember(ctx, args.editor_user_id, artifact.team_gate))) return null;
     }
     const editor = await ctx.db.get(args.editor_user_id);
     return {
@@ -1908,9 +2006,11 @@ export const teamEditAuth = internalQuery({
 // report or an option's page, `decision`): the people it asks and readers of
 // the session that asked it. A trial gates its decision pages because they
 // quote a customer; the gate keeps the public link shut, never the decision's
-// own readers. An expired page stays shut for everyone, as the serve route
-// keeps it. Null otherwise, so the embed links out instead of framing a
-// password form.
+// own readers. A team-gated page (regulated data) is the exception: its `m`
+// token goes to its owner and the gate team's signed-in members, and nobody
+// else gets any token for it, decision readers included. An expired page stays
+// shut for everyone, as the serve route keeps it. Null otherwise, so the embed
+// links out instead of framing a password form.
 export const ownerUnlock = query({
   args: { slug: v.string(), decision: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -1920,16 +2020,32 @@ export const ownerUnlock = query({
       .query("artifacts")
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
-    if (!artifact || isExpired(artifact)) return null;
-    if (artifact.user_id !== userId && !(await readsDecisionFiling(ctx, userId, args.slug, args.decision))) return null;
-    return {
-      k: artifact.password_hash ? await kTokenFor(artifact.password_hash, artifact.slug) : null,
-      e: artifact.email_gate && artifact.owner_key ? await eTokenFor(artifact.owner_key, artifact.slug) : null,
-      title: artifact.title,
-      version: artifact.version,
-    };
+    if (!artifact) return null;
+    const keys = await unlockKeys(ctx, userId, artifact, args.decision);
+    return keys ? { ...keys, title: artifact.title, version: artifact.version } : null;
   },
 });
+
+/** The gate tokens a signed-in reader may hold for a page, or null when they have no way in. */
+async function unlockKeys(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  artifact: Doc<"artifacts">,
+  decision: string | undefined,
+): Promise<{ k: string | null; e: string | null; m: string | null } | null> {
+  if (isExpired(artifact)) return null;
+  const owner = artifact.user_id === userId;
+  if (artifact.team_gate) {
+    if (!owner && !(await isTeamMember(ctx, userId, artifact.team_gate))) return null;
+  } else if (!owner && !(await readsDecisionFiling(ctx, userId, artifact.slug, decision))) {
+    return null;
+  }
+  return {
+    k: artifact.password_hash ? await kTokenFor(artifact.password_hash, artifact.slug) : null,
+    e: artifact.email_gate && artifact.owner_key ? await eTokenFor(artifact.owner_key, artifact.slug) : null,
+    m: await mTokenFor(artifact),
+  };
+}
 
 // Everything an embed needs to frame a page, for several pages in one round trip: what getShared tells anyone,
 // plus, on a gated page, the way through its gates that ownerUnlock gives the signed-in reader. One row per page,
@@ -1950,23 +2066,13 @@ export const embedInfo = query({
         rows.push({ slug, missing: true as const });
         continue;
       }
-      const gated = !!artifact.password_hash || !!artifact.email_gate || isExpired(artifact);
-      if (gated) {
-        const mayUnlock = !!userId && !isExpired(artifact)
-          && (artifact.user_id === userId || (await readsDecisionFiling(ctx, userId, slug, decision)));
-        if (!mayUnlock) {
+      if (isGated(artifact)) {
+        const keys = userId ? await unlockKeys(ctx, userId, artifact, decision) : null;
+        if (!keys) {
           rows.push({ slug, gated: true as const, locked: true as const, kind: artifact.kind ?? "html" });
           continue;
         }
-        rows.push({
-          slug,
-          gated: true as const,
-          title: artifact.title,
-          version: artifact.version,
-          kind: artifact.kind ?? "html",
-          k: artifact.password_hash ? await kTokenFor(artifact.password_hash, slug) : null,
-          e: artifact.email_gate && artifact.owner_key ? await eTokenFor(artifact.owner_key, slug) : null,
-        });
+        rows.push({ slug, gated: true as const, title: artifact.title, version: artifact.version, kind: artifact.kind ?? "html", ...keys });
         continue;
       }
       // Nothing beyond the artifact row: an embed subscribes per page, and every row read is a re-run on its writes.
@@ -1996,11 +2102,7 @@ export const getShared = query({
     // Gated artifacts expose NOTHING here. This is a public query (convex
     // exports are internet-callable), so without this check it would hand
     // title + author identity straight through a password or email wall.
-    const gated =
-      !!artifact.password_hash ||
-      !!artifact.email_gate ||
-      (!!artifact.expires_at && Date.now() > artifact.expires_at);
-    if (gated) {
+    if (isGated(artifact)) {
       return {
         slug: artifact.slug,
         title: "Protected page",
