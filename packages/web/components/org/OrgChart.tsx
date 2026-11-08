@@ -317,7 +317,7 @@ export function OrgChart() {
             data-org-waiting={findWaiting ? "on" : "off"}
           >
             <span className="h-[7px] w-[7px] rounded-full" style={{ background: ORG_STATE_META.needs_input.color }} aria-hidden />
-            Needs input
+            Needs you
           </button>
         )}
         <div className="ml-auto flex items-center gap-2">
