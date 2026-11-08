@@ -52,8 +52,8 @@ export async function storeResourceSnapshot(ctx: MutationCtx, userId: Id<"users"
 export const ATTENDED_AFTER_MESSAGE_MS = 30 * 60_000;
 
 /**
- * The sessions on this machine nobody is watching (isUnattendedConversation)
- * and no person has written to lately. The daemon's load governor runs them at
+ * The sessions on this machine nobody is watching (isUnattendedConversation),
+ * no person has written to lately, and no message is waiting to reach. The daemon's load governor runs them at
  * background priority while the machine is over its budget, where a busy Mac
  * can leave them without CPU for an hour, so a session a person is talking to
  * never goes there. Sent with accepted reports only; the daemon keeps the last
@@ -71,7 +71,10 @@ async function unattendedSessions(ctx: MutationCtx, snapshot: MachineResourceSna
       .withIndex("by_conversation_id", q => q.eq("conversation_id", conv._id))
       .order("desc")
       .take(5);
-    if (recent.some(m => m.human && now - m._creationTime < ATTENDED_AFTER_MESSAGE_MS)) continue;
+    // A message still on its way in needs the agent awake to read it: caged at background
+    // priority, a resumed session took 21s of CPU in 40 minutes and never took one (jx751p3,
+    // 2026-11-08).
+    if (recent.some(m => (m.human && now - m._creationTime < ATTENDED_AFTER_MESSAGE_MS) || m.status === "pending" || m.status === "injected")) continue;
     out.push(sessionId);
   }
   return out;

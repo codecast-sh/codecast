@@ -2046,7 +2046,10 @@ async function notifyStuckSend(
   }
   const targetConv = await ctx.db.get(msg.conversation_id);
   const targetLabel = targetConv?.short_id ?? msg.conversation_id.toString().slice(0, 7);
-  const preview = (msg.content ?? "").replace(/<\/?session-message[^>]*>/g, "").trim().slice(0, 140);
+  // One line: a quote ends at its first newline, so a multi-line preview spilled its later
+  // lines out of the quote as loose text.
+  const flat = (msg.content ?? "").replace(/<\/?session-message[^>]*>/g, "").replace(/\s+/g, " ").trim();
+  const preview = flat.length > 140 ? `${flat.slice(0, 139).trimEnd()}…` : flat;
   const body = reach === "gone"
     ? `Your message to session ${targetLabel} could not be delivered — that session no longer exists, so the message was dropped.\n\n> ${preview}`
     : reach === "offline"
@@ -2060,10 +2063,17 @@ async function notifyStuckSend(
   // The receipt goes into the sender's OWN conversation, so from_user == owner == the sender:
   // it's a normal self-scoped message (never itself a cross-user send), and enqueue wakes the
   // sender's session so the agent notices the outcome.
-  await enqueuePendingMessage(ctx, senderConv, msg.from_user_id, {
-    content: formatSessionMessage("codecast", body),
-  });
-  await ctx.db.patch(msg._id, { sender_notified_at: Date.now() });
+  const content = formatSessionMessage("codecast", body);
+  // A receipt the sender has not taken yet says the old state: rewrite it rather than queue a
+  // second one beside it.
+  const earlier = msg.sender_notice_id ? await ctx.db.get(msg.sender_notice_id) : null;
+  if (earlier?.status === "pending") {
+    await ctx.db.patch(earlier._id, { content });
+    await ctx.db.patch(msg._id, { sender_notified_at: Date.now() });
+  } else {
+    const noticeId = await enqueuePendingMessage(ctx, senderConv, msg.from_user_id, { content });
+    await ctx.db.patch(msg._id, { sender_notified_at: Date.now(), sender_notice_id: noticeId });
+  }
   if (giveUp) await patchPendingMessageStatus(ctx, msg, { status: "cancelled" as const });
 }
 

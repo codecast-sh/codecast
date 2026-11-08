@@ -175,3 +175,25 @@ test("the governor's unattended set leaves out a person's session that hosts a w
   const later = now + ATTENDED_AFTER_MESSAGE_MS + 60_000;
   expect([...((await report(later)).unattended_sessions ?? [])].sort()).toEqual(["station", "talked-to", "worker"]);
 });
+
+test("the governor's unattended set leaves out a session with a message still on its way in, until it lands", async () => {
+  const t = convexTest(schema, modules);
+  const now = Date.now();
+  const { user, waiting } = await t.run(async ctx => {
+    const id = await ctx.db.insert("users", {});
+    await ctx.db.insert("devices", { user_id: id, device_id: "mac", label: "Mac", platform: "darwin", last_seen: now });
+    const conversation_id = await ctx.db.insert("conversations", {
+      user_id: id, agent_type: "claude_code", session_id: "role", status: "active", message_count: 0, started_at: now, updated_at: now, is_private: true, unattended: true,
+    } as any);
+    await ctx.db.insert("managed_sessions", { session_id: "role", conversation_id, user_id: id, pid: 1, started_at: now, last_heartbeat: now, agent_status: "idle" });
+    const waiting = await ctx.db.insert("pending_messages", { conversation_id, from_user_id: id, content: "<session-message from=\"jx7864d\">update</session-message>", status: "injected", created_at: now } as any);
+    return { user: id, waiting };
+  });
+  const report = (at: number) => t.run(ctx => storeResourceSnapshot(ctx, user, {
+    ...sample(at),
+    processes: [{ pid: 100, name: "claude", cpu: 1, rss: 1, sessionId: "role" }],
+  } as MachineResourceSnapshot, at));
+  expect((await report(now)).unattended_sessions).toEqual([]);
+  await t.run(ctx => ctx.db.patch(waiting, { status: "delivered" }));
+  expect((await report(now + 60_000)).unattended_sessions).toEqual(["role"]);
+});

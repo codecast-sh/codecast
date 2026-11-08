@@ -508,6 +508,27 @@ describe("settled recipient recovery end to end", () => {
     expect((await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob")).map(row => row._id)).toEqual([msg._id]);
   });
 
+  test("a sender told its send is waiting gets that receipt rewritten when the send turns unconfirmed, quoted on one line", async () => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ now });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "Heads-up from Alice.\n\nRoot cause: the verifier pressed Enter on a stale frame." });
+    const msg = tables.pending_messages[0];
+    await db.patch(msg._id, { created_at: now - 4 * 60_000 });
+    await db.patch("msBob", { agent_status: "working" });
+    await healAndNotifyStuckMessages(ctx as any, now);
+    const receipts = () => tables.pending_messages.filter((r: any) => r.conversation_id === "convAlice");
+    expect(receipts()).toHaveLength(1);
+    expect(receipts()[0].content).toContain("> Heads-up from Alice. Root cause: the verifier");
+
+    await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob");
+    await updatePendingMessageStatusForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", { status: "injected", paste_verified_at: now - 9 * 60_000 });
+    await db.patch(msg._id, { created_at: now - 10 * 60_000 });
+    await db.patch("msBob", { agent_status: "idle" });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ failedUnconfirmed: 1 });
+    expect(receipts()).toHaveLength(1);
+    expect(receipts()[0].content).toMatch(/never confirmed/);
+  });
+
   test("an unconfirmed send is not typed again by a resume, not merged into by a new trigger wake, and expires after a day", async () => {
     const now = Date.now();
     const { ctx, db, tables } = world({ now });

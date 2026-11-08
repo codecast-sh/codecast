@@ -2768,6 +2768,9 @@ export default defineSchema({
     // Set once when the sender has been told this cross-user message is stuck — keeps the cron
     // from notifying repeatedly.
     sender_notified_at: v.optional(v.number()),
+    // The receipt that told the sender, so a later state (stuck, then unconfirmed) rewrites it
+    // while it is still queued instead of stacking a second receipt.
+    sender_notice_id: v.optional(v.id("pending_messages")),
     content: v.string(),
     image_storage_id: v.optional(v.id("_storage")),
     image_storage_ids: v.optional(v.array(v.id("_storage"))),
