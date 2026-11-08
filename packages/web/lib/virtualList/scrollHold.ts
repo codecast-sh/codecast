@@ -52,6 +52,7 @@ export function createScrollHold(v: HoldVirtualizer, getEl: () => HTMLElement | 
   let lastTotal = -1;
   let ro: ResizeObserver | null = null;
   let observed: HTMLElement | null = null;
+  let applyQueued = false;
 
   const charge = (h: Hold) => {
     const now = Date.now();
@@ -117,13 +118,21 @@ export function createScrollHold(v: HoldVirtualizer, getEl: () => HTMLElement | 
       watch(sc);
       apply();
     },
-    /** Feed the virtualizer's onChange here. Re-aims only when sizes moved. */
+    /** Feed the virtualizer's onChange here. Re-aims only when sizes moved,
+     *  in a microtask: onChange fires inside React's commit (a row's measure
+     *  ref), and a scroll written there re-enters the virtualizer's own sync
+     *  onChange, whose flushSync React refuses mid-commit. The microtask still
+     *  runs before the frame paints. */
     onChange() {
-      if (!hold) return;
+      const h = hold;
+      if (!h) return;
       const total = v.getTotalSize();
       if (total === lastTotal) return;
       lastTotal = total;
-      apply();
+      if (!charge(h) || h.bail?.()) { stop(); return; }
+      if (applyQueued) return;
+      applyQueued = true;
+      queueMicrotask(() => { applyQueued = false; apply(); });
     },
     /** The reader took the view. */
     release: stop,

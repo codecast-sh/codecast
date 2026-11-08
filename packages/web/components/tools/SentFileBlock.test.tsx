@@ -17,6 +17,11 @@ mock.module("../../hooks/useStorageImageUrl", () => ({
   setGuestImageScope: () => {},
 }));
 
+// A save out of a regulated team's conversation is logged through a Convex
+// mutation; these renders have no Convex client, and no download is pressed.
+const realAccessLog = { ...(await import("../../lib/accessLogOpen")) };
+mock.module("../../lib/accessLogOpen", () => ({ ...realAccessLog, useRecordConversationDownload: () => () => {} }));
+
 const { renderToStaticMarkup } = await import("react-dom/server");
 const { SentFileBlock } = await import("./SentFileBlock");
 

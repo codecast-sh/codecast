@@ -402,7 +402,7 @@ test("an Ask first decision cannot be edited by its asker, and only such a decis
   expect((await t.run((ctx: any) => ctx.db.get(row._id))).question).toBe(row.question);
   // An ordinary decision of Ana's mints no approve grant.
   const plain = await t.mutation(api.sessionDecisions.ask, { api_token: ANA_TOKEN, session_id: "sess-ana-1", question: "Ship it?", options: [{ label: "Yes" }, { label: "No" }] });
-  expect((await as(ana).action(api.passkeys.presenceBegin, { action: "approve", target: String(plain.id), origin: ORIGIN })).error).toMatch(/Only approving an Ask first read/);
+  expect((await as(ana).action(api.passkeys.presenceBegin, { action: "approve", target: String(plain.id), origin: ORIGIN })).error).toMatch(/Only an Ask first read or a Run card/);
 });
 
 test("removing a passkey takes a grant for it; renaming does not", async () => {

@@ -12,7 +12,7 @@
 
 import * as fs from "node:fs";
 import * as net from "node:net";
-import { spawn } from "node:child_process";
+import { spawn } from "../proc.js";
 import type { Options, SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSdkSession, MINIMUM_CLAUDE_VERSION, versionAtLeast } from "./session.js";
 import { sdkQueryOptions, type SdkLaunchSpec } from "./options.js";

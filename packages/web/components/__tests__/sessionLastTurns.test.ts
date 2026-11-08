@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { lastTurns } from "../SessionLastTurns";
+import { lastTurns } from "../../lib/lastTurns";
 
 describe("lastTurns", () => {
   test("shows the newest ask and the agent's newest words after it, skipping tool rows and framing", () => {

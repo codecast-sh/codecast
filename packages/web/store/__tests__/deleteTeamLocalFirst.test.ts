@@ -47,7 +47,7 @@ describe("deleteTeam local-first", () => {
     expect(s.teams.map((t: any) => t._id)).toEqual([NEWER, OLDER, "team-stub-inflight"]);
     expect(s.clientState.ui?.active_team_id).toBe(OLDER);
     expect(calls[0].action).toBe("dispatchDeleteTeam");
-    expect(calls[0].args).toEqual([DOOMED, "Doomed", OLDER]);
+    expect(calls[0].args).toEqual([DOOMED, "Doomed", OLDER, false]);
     await promise;
   });
 

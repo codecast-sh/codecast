@@ -1,5 +1,6 @@
 import '@/lib/polyfills';
 import { ComposeHost } from '@/components/session/NewSessionSheet';
+import { UndoBarHost } from '@/components/UndoBar';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
@@ -306,6 +307,7 @@ function RootLayoutNav() {
                   />
                 </Stack>
                 <ComposeHost />
+                <UndoBarHost />
                 {calls ? (
                   <OverlayErrorBoundary>
                     <Suspense fallback={null}>

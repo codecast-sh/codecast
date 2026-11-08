@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -440,7 +441,7 @@ export function MergeMenu({ pr }: { pr: any }) {
   const maybeHeld = open && (pr.mergeable_state === "blocked" || pr.mergeable_state === "behind" || (pr.behind_by ?? 0) > 0);
   const accessKey = maybeHeld ? `${pr.repository}#${pr.number}@${pr.head_sha ?? ""}` : null;
   const [access, setAccess] = useState<{ key: string; held: boolean; can_bypass: boolean; merge_state: string; as?: string } | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!accessKey) return;
     let live = true;
     mergeAccess({ repository: pr.repository, number: pr.number })
