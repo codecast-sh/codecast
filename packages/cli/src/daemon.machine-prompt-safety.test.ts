@@ -13,6 +13,8 @@ import { clearPromptHolds, holdConversationForPrompt, isForcedPastDialog, prompt
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
+import { DeliveryEchoLedger } from "./deliveryEchoLedger";
+import { parseTranscriptFor } from "./parser";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice, parseDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer";
 import { closeOwnCommandPanel, mayOpenPanel, paneDialogQuestion, rememberCommandPanel } from "./commandPanel";
@@ -21,17 +23,19 @@ import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { SwapHeldError } from "./herdTake";
 import { TerminalHoldError } from "./terminalHold";
+import { BackendSwitchHoldError } from "./claudeSdk/switchBackend";
 import { ghosttyPane } from "./ghostty";
 import { unreachableTerminalOf } from "../../shared/contracts/deliveryHold";
-import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
+import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
 import { planHandoffTarget } from "./planHandoff";
 import { waitForHandHost } from "./handHostGrace";
 
+
 // The fixture lifts delivery code out of daemon.ts by name; the pane classifiers
 // it calls live in tmuxPaneState.ts, so both files are read as one source.
-const source = ["./daemon.ts", "./tmuxPaneState.ts"].map(file => fs.readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
+const source = ["./daemon.ts", "./tmuxPaneState.ts", "./pollMessage.ts"].map(file => fs.readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
 const scratch: string[] = [];
 afterEach(() => { for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); clearPromptHolds(); setPendingRedrive(null); });
 const poll = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Deploy" });
@@ -142,6 +146,7 @@ function fixture(transport = "tmux", cached = true) {
   const lastEmittedSyntheticPrompt = new Map([["sid", "card-1"]]);
   const closed: unknown[][] = [];
   let journal: TmuxDeliveryJournal | undefined;
+  let echoes: DeliveryEchoLedger | undefined;
   const messages = new Map<string, any>();
   const statuses: Array<{ messageId: string; status: string }> = [];
   const holds: Array<{ id: string; holdReason?: string; holdScreen?: string }> = [];
@@ -172,7 +177,7 @@ function fixture(transport = "tmux", cached = true) {
     tmuxExec, execAsync, redactSecrets,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
     // No cloud agent owns this fixture's conversation, so every one goes to the pane.
-    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, TerminalHoldError, pollPendingNow: () => {},
+    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, TerminalHoldError, BackendSwitchHoldError, backendSwitchHeld: () => false, pollPendingNow: () => {},
     cloudAgents: { deliver: async () => null, forConversation: () => undefined, interrupt: async () => null },
     // A recovery continue restarts a pane that holds its own credential first;
     // this fixture's machine has no fleet store, so no pane is restarted.
@@ -190,6 +195,7 @@ function fixture(transport = "tmux", cached = true) {
     ensureTmuxPaneWide: async () => {}, glyphlessPromptPattern: () => null,
     classifyGlyphlessClientPaneState: fail("glyphless classification"), paneHasNoAgent: async () => false,
     acceptTrustPrompt: fail("trust input"), answerResumeCwdPicker: fail("cwd input"), DEAD_PANE_ERROR: "dead",
+    CLAUDE_OVERPAINTED_RULE,
     CLAUDE_TURN_STATUS_LINE,
     log: () => {}, logDelivery: () => {}, logConvexFailure: fail("convex failure"),
     // Free variables of the lifted delivery path. The real helper where it is
@@ -256,12 +262,15 @@ function fixture(transport = "tmux", cached = true) {
     // The receipt journal the inject path opens when a delivery identity rides
     // along: a private one per fixture, so no test reads the machine's.
     tmuxDeliveryJournal: () => (journal ??= new TmuxDeliveryJournal(path.join(directory, "delivery.sqlite"))),
+    deliveryEchoLedger: () => (echoes ??= new DeliveryEchoLedger(path.join(directory, "echoes.sqlite"))),
+    parseTranscriptFor,
     selfHealIfTimersStalled: () => {}, assertLegacyDeliveryEnvelope: () => {},
     messagesInFlight: new Map(), conversationDeliveryActive: new Set(), injectedMessageTs,
     IN_FLIGHT_HARD_TTL_MS: 10000, compactionRedeliveryBypass: new Set(), injectionDedupWindowMs: () => 10000,
     messageRetryTimers: new Set(), injectedMarkWrites, syncService, conversationCache: cached ? { sid: "conv" } : {}, titleCache: {},
     sendAgentStatus: () => {}, recentSessionInjections: new Map(), resetReconnectDelay: () => {},
     checkForInteractivePrompt: async () => {},
+    claudeSdkBackend: null,
   };
   if (!fixtureFactory) {
     const names = [
@@ -271,7 +280,7 @@ function fixture(transport = "tmux", cached = true) {
       "tmuxWatchablePrefix", "promptIsOwnText", "holdScreen", "surfaceHeldDialog", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
-      "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
+      "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "transcriptEchoes", "injectViaTmux", "injectViaTmuxInner",
       "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption",
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
