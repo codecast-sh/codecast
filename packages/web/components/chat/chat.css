@@ -1420,7 +1420,7 @@ div.ch-reaction-tip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 220px;
+  max-width: 240px;
   padding: 1px 7px;
   border: 1px solid var(--sol-border);
   border-radius: 999px;
@@ -1433,6 +1433,7 @@ div.ch-reaction-tip {
 }
 
 .ch-round-name {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;

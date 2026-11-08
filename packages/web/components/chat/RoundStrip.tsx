@@ -48,15 +48,19 @@ export function RoundStrip({ rootId, round, openOnly = false }: { rootId: string
   const open = round.status === "open";
   const members = roundStrip(round);
   if (members.length === 0) return null;
+  // Two sessions started from one brief often share a title: the short id tells them apart.
+  const seen = new Map<string, number>();
+  for (const m of members) seen.set(m.name, (seen.get(m.name) ?? 0) + 1);
+  const shown = (m: RoundMember) => ((seen.get(m.name) ?? 0) > 1 && m.name !== m.short_id ? `${m.name} · ${m.short_id}` : m.name);
 
   return (
     <div className={`ch-round ${open ? "" : "ch-round-closed"}`} role="group" aria-label="Agents taking turns">
       {members.map((m) => {
         const st = STATE[m.state];
         return (
-          <Link key={m.key} href={memberHref(m)} className={`ch-round-chip ${st.tone}`} title={`${m.name}: ${st.word}`}>
+          <Link key={m.key} href={memberHref(m)} className={`ch-round-chip ${st.tone}`} title={`${shown(m)}: ${st.word}`}>
             <StateMark state={m.state} />
-            <span className="ch-round-name">{m.name}</span>
+            <span className="ch-round-name">{shown(m)}</span>
           </Link>
         );
       })}
