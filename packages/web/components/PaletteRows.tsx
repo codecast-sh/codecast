@@ -122,7 +122,7 @@ export type PaletteSessionRowConv = {
 // (done, dormant, idle) are the quiet default of a list of past sessions.
 // Colours are the inbox section captions', so the dot reads as the section.
 const STATE_MARK: Record<"needs_input" | "working", { dot: string; label: string; ping?: boolean }> = {
-  needs_input: { dot: "bg-sol-yellow", label: "Needs input" },
+  needs_input: { dot: "bg-sol-yellow", label: "Needs you" },
   working: { dot: "bg-sol-green", label: "Working", ping: true },
 };
 
