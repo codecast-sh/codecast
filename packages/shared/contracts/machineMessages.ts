@@ -109,7 +109,8 @@ export function isPollResponsePayload(rawContent: string | null | undefined): bo
 export const MID_WORK_REVIVE_MESSAGE =
   "Your agent process exited while this work was still in progress, and codecast restarted the session. " +
   "Anything that was running in the background stopped with it. Pick up where you left off: relaunch what was " +
-  "interrupted (a workflow resumes from its run id, with finished agents returned from cache), then carry on with the task.";
+  "interrupted (a workflow resumes from its run id, with finished agents returned from cache), then carry on with the task. " +
+  "A command or tool call that was running when it exited did not finish, and nothing ran it again: check what it changed before you repeat it.";
 
 export function isMidWorkReviveNotice(rawContent: string | null | undefined): boolean {
   return !!rawContent && stripInjectionNoise(rawContent).startsWith(MID_WORK_REVIVE_MESSAGE.slice(0, 60));
