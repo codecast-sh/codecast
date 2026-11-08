@@ -32,7 +32,7 @@ describe("a role's opening message", () => {
     expect(m).toContain(SAY_GUIDANCE);
     // The decision it presents is answered from the record (decisionDiscussion.ts).
     expect(m).toContain("A person may ask you about a decision you present");
-    expect(m.split(/\s+/).length).toBeLessThan(440);
+    expect(m.split(/\s+/).length).toBeLessThan(450);
     expect(isBootstrapPrompt(m)).toBe(true);
   });
 
@@ -57,7 +57,7 @@ describe("a role's opening message", () => {
     expect(m).toContain("raise it in this thread");
     expect(m).toContain("Your brief is your memory between turns");
     expect(m.split("Start every turn").length).toBe(2);
-    expect(m.split(/\s+/).length).toBeLessThan(520);
+    expect(m.split(/\s+/).length).toBeLessThan(540);
     expect(isBootstrapPrompt(m)).toBe(true);
   });
 

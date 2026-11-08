@@ -95,6 +95,8 @@ import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { SessionDecisionCard } from "./SessionDecisionCard";
 import { PreloadPublishedPage } from "./PublishedPageEmbed";
 import { HostedApprovalCard, HostedApprovalPending, HostedApprovalSettled } from "./conversation/HostedApprovalCard";
+import { PermissionAnswer, PermissionAskCard, PermissionRecordLine } from "./conversation/PermissionAsk";
+import { useRunningPermission } from "../hooks/useRunningPermission";
 import { DecisionStepperContext, usePendingDecisionItems } from "../hooks/useDecisionQueue";
 import { copyToClipboard, shareOrigin, inferHomeDir } from "../lib/utils";
 import { useWorkflowRun, useWorkflows } from "../hooks/useSyncWorkflows";
@@ -165,7 +167,8 @@ import { agentColorMap } from "../lib/conversationBlockStyles";
 import { VaultReadyLine } from "./conversation/blocks/VaultRequestCard";
 import { AgentSwitchDivider, BashCommandBlock, ContextRecoveryDivider, ChatWakeBlock, CommandMessageBlock, SlashCommandChip, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ReviveDivider, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock, WorkflowTaskBlock } from "./conversation/blocks/systemBlocks";
 import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
-import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
+import { AgentWorkingBubble, AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
+import { cleanKeepsSystemRow } from "../lib/cleanThread";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, stickyCommand, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
@@ -1235,7 +1238,7 @@ const ConversationViewInner = (
       });
     }
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
-  const { userMsgKindMap, turnAggregates, cleanRows, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
+  const { userMsgKindMap, turnAggregates, cleanRows, awaitingReplyTo, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
   const { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery } = useSessionMentions({ conversation, managedSession });
   // The owner composer runs /goal itself, so it offers it beside the agent's commands.
   const composerSkills = useMemo(() => [GOAL_COMMAND, ...(sessionSkills ?? []).filter((k) => k.name !== GOAL_COMMAND.name)], [sessionSkills]);
@@ -1572,6 +1575,7 @@ const ConversationViewInner = (
 
     const msg = item.data as Message;
     if (cleanRows && msg.role === "assistant") return cleanRows.has(msg._id) ? 120 : 0;
+    if (cleanRows && msg.role === "system" && !cleanKeepsSystemRow(msg.content, msg.subtype)) return 0;
     // Compact: a collapsed turn is one card on the first assistant message; the
     // rest of the turn is height 0 until expanded.
     if (foldTurns && msg.role === "assistant") {
@@ -3208,8 +3212,11 @@ const ConversationViewInner = (
   // conversation: the question and Yes / Not now, never a docked sheet.
   const runAsk = useInboxStore((st) => !!decisionItem?.decisionId && !!st.sessionDecisions[decisionItem.decisionId]?.run);
   const inlineApproval = hostedOwnCard || (runAsk && !decisionStepper && decisionItem?.source === "decide");
+  const runningPermission = useRunningPermission(conversation?._id ? String(conversation._id) : undefined);
   const hostedTailCard = !conversation || onSendOverride ? null
-    : inlineApproval ? <HostedApprovalCard key={decisionItem!.key} item={decisionItem!} keys />
+    : inlineApproval ? (runAsk ? <PermissionAskCard key={decisionItem!.key} item={decisionItem!} /> : <HostedApprovalCard key={decisionItem!.key} item={decisionItem!} keys />)
+    // A Yes still running: one line holds the card's place until the result lands.
+    : runningPermission ? <PermissionRecordLine question={runningPermission.question} outcome="running" className="pt-4" />
     // The turn parked on an approval before its decision row arrived: hold
     // the card's place in one quiet line.
     : !decisionItem && hostedSettledAnswer ? <HostedApprovalSettled label={hostedSettledAnswer} />
@@ -3604,6 +3611,7 @@ const ConversationViewInner = (
 
     const msg = item.data as Message;
     if (msg.role === "system") {
+      if (foldWorkingTurns && !cleanKeepsSystemRow(msg.content, msg.subtype)) return null;
       if (isLimitNoticeSuperseded(msg.content, msg.subtype, getPreviousNonToolResultMessage(index), isRecoveryContinue(nextMessage(index)))) return null;
       return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
     }
@@ -3734,7 +3742,11 @@ const ConversationViewInner = (
           // option; the footer carries the question and the way back to the ask.
           const decision = kind.kind === 'decision_answer' ? kind.decision : undefined;
           const forkSeedParent = isForkSeedClientId(msg.client_id) ? conversation?.forked_from : undefined;
-          const prompt = <UserPrompt key={msg._id} bubble={foldWorkingTurns} content={kind.kind === 'direct_user' ? kind.body : decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          const userPrompt = <UserPrompt key={msg._id} bubble={foldWorkingTurns} content={kind.kind === 'direct_user' ? kind.body : decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          // A permission ask's answer reads as its one-line record instead.
+          const prompt = decision ? <PermissionAnswer key={msg._id} decision={decision}>{userPrompt}</PermissionAnswer> : userPrompt;
+          // A clean thread shows the agent took the message while it works on a reply.
+          if (awaitingReplyTo === msg._id && isSessionConnected) return <Fragment key={msg._id}>{prompt}<AgentWorkingBubble /></Fragment>;
           if (!forkSeedParent) return prompt;
           return (
             <Fragment key={msg._id}>

@@ -28,10 +28,10 @@ function CurrentLocation() {
 }
 
 describe("session handoff rendering", () => {
-  test("a generated brief is a handoff in full and folded views, never a sticky human prompt", () => {
+  test("a generated brief is a handoff in the full view, never a sticky human prompt, and a clean thread leaves it out", () => {
     const kind = classifyUserMessage({ _id: "seed", role: "user", content: `<pasted_content id="seed">${prompt}</pasted_content>`, timestamp: 1 });
     expect(kind.kind).toBe("session_handoff");
-    expect(FOLD_KEPT_USER_KINDS.has(kind.kind)).toBe(true);
+    expect(FOLD_KEPT_USER_KINDS.has(kind.kind)).toBe(false);
     expect(isStickyWorthy(kind)).toBe(false);
   });
 

@@ -16,7 +16,7 @@ describe("a role's brief", () => {
     expect(kindOf("You are **not** a bootstrap: this is a person talking.")).toBe("normal");
   });
 
-  test("fold mode keeps the brief, folded, where it sits", () => {
-    expect(FOLD_KEPT_USER_KINDS.has("role_brief")).toBe(true);
+  test("a clean thread leaves the brief to the session view: a machine wrote it", () => {
+    expect(FOLD_KEPT_USER_KINDS.has("role_brief")).toBe(false);
   });
 });

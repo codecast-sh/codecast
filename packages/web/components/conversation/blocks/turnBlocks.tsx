@@ -830,6 +830,15 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
 }
 export const UserPrompt = memo(UserPromptImpl);
 
+/** Under the person's message in a clean thread, while the agent works on its reply. Static: transcript rows run no animation. */
+export function AgentWorkingBubble() {
+  return (
+    <div data-cc-working className="flex items-center gap-1 pl-8 mb-3 -mt-1" aria-label="Working on a reply">
+      {[0, 1, 2].map((i) => <span key={i} className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/60" />)}
+    </div>
+  );
+}
+
 function StorySpinner() {
   return (
     <svg className="w-3.5 h-3.5 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">

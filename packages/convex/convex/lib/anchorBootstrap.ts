@@ -39,7 +39,7 @@ export const DECISION_DISCUSSION_GUIDANCE =
 // reads as a chat of the person's messages and what the agent said with
 // `cast say`; everything else it writes stays out of view.
 export const SAY_GUIDANCE =
-  "Talk to people here with `cast say`, in markdown (`cast say -` for more than a line); nothing else you write reaches them. Say each thing once and whole: what you found, what you did, what you need from them, and any page or image they should see. If nothing is for them, stay quiet.";
+  "Talk to people here with `cast say`, in markdown (`cast say -` for more than a line); nothing else you write reaches them. When someone asks you for something, answer before you go to work on it: what you will do and who will do it. When done, say what came of it, once and whole: what you found, what you did, what you need, and any page to see. If nothing is for them, stay quiet.";
 
 const andList = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 

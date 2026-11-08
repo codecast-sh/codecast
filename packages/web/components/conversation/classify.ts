@@ -296,7 +296,10 @@ const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Y
 // unprompted), and a role's brief or a workflow agent's task, because each is
 // the context every reply after it answers to. Everything else on the user rail was sent by a machine (a poll
 // answer, an interrupt, a notice, a session's report).
-export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'vault_ready', 'session_handoff', 'context_recovery', 'scheduled_task', 'goal_round', 'role_brief', 'workflow_frame']);
+// What a clean thread keeps of the user side: rows a person wrote (a message,
+// an answer to a decision, a chat mention, a filled vault slot). Rows a
+// machine sent (triggers, briefs, handoffs, colleagues' messages) draw nothing.
+export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'chat_wake', 'vault_ready']);
 
 // Dedup key for matching a still-pending message against its eventual JSONL echo.
 // The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control
