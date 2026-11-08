@@ -74,6 +74,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { ConversationHeaderBar, ConversationHeaderTitle } from "./conversation/ConversationHeaderBar";
 import { HEADER_CHIP } from "../lib/headerChip";
 import { SessionStatusSlot } from "./conversation/SessionStatusSlot";
+import { RewindStagedChip } from "./conversation/RewindToHere";
 import { sessionDisconnected } from "./conversation/agentStatusPill";
 import { useMutation, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
@@ -4015,7 +4016,7 @@ const ConversationViewInner = (
 
         // A hosted conversation says its state once, in the composer's status
         // line (HostedStatusLine) or its approval card, never as a header pill.
-        status={isHostedAgentType(conversation?.agent_type) ? null : <SessionStatusSlot conversationId={conversation?._id} agentStatus={managedSession?.agent_status} disconnected={isSessionDisconnected} live={isConversationLive} onRestart={handleRestartSession} />}
+        status={isHostedAgentType(conversation?.agent_type) ? null : <><SessionStatusSlot conversationId={conversation?._id} agentStatus={managedSession?.agent_status} disconnected={isSessionDisconnected} live={isConversationLive} onRestart={handleRestartSession} /><RewindStagedChip conversationId={conversation?._id} forkedFrom={conversation?.forked_from} /></>}
 
         // The facts strip: what this session is (agent and model), where
         // its code sits, and what it is for (task, plan, workflow run),
