@@ -487,9 +487,11 @@ export function blockedContinueClientId(conversationId: string, at: number): str
 // The client_id of the daemon's revive of a session whose agent process died
 // mid-work (cli midWorkRevive.ts). Minute-bucketed like the one above: a pass
 // that runs twice cannot double-queue. The server reads it back to hold the
-// revive to the machine's recovery mode.
-export function reviveClientId(conversationId: string, at: number): string {
-  return `revive-${conversationId}-${Math.floor(at / 60_000)}`;
+// revive to the machine's recovery mode. A turn claim's resume (cli
+// turnClaims.ts) adds its attempt number: a second attempt inside the same
+// minute is a new continue, not a retry of the first, which already landed.
+export function reviveClientId(conversationId: string, at: number, attempt?: number): string {
+  return `revive-${conversationId}-${Math.floor(at / 60_000)}${attempt ? `-a${attempt}` : ""}`;
 }
 
 // The client_id of the continue queued when a move to another machine stopped

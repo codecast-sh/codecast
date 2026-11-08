@@ -1,3 +1,4 @@
+import { MAX_TURN_RESUME_ATTEMPTS } from "./turnClaims.js";
 import { sandboxResumeParams, type ApprovalPolicy, type SandboxMode, type SandboxPolicy, type ThreadResumeParams, type ThreadResumeResponse, type Turn } from "./codexAppServer.js";
 
 export type PersistedCodexThread = {
@@ -89,7 +90,8 @@ export function registerPolicyPersistenceHandlers(input: {
 }
 
 export const CODEX_RECOVERY_PROMPT = "Codecast restarted while your previous turn was still running. Continue the user's existing task from the saved conversation and current workspace. First check the results of any commands that may already have run; do not repeat completed actions. Respect any pending permission or user decision. Continue until the requested work is complete or you need the user's input.";
-export const MAX_CODEX_RECOVERY_ATTEMPTS = 3;
+// The same cap as every other turn resume (turnClaims.ts).
+export const MAX_CODEX_RECOVERY_ATTEMPTS = MAX_TURN_RESUME_ATTEMPTS;
 
 /**
  * Params to bring a saved thread back, reproducing the policy it actually ran
