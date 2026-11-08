@@ -1,0 +1,123 @@
+/*
+ * "Follow one change through Change" (ChangeRun.tsx). Resting styles are the
+ * final state; keyframes only play the way in. The token and the drawn paths
+ * move by CSS transitions the component sets per beat, so a still page (no
+ * clock) simply shows the finished run.
+ */
+
+@keyframes flx-run-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes flx-run-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes flx-run-halo { 0%, 100% { transform: scale(1); opacity: .32; } 50% { transform: scale(1.7); opacity: .06; } }
+@keyframes flx-run-flash {
+  0% { transform: scale(1); }
+  30% { transform: scale(1.08); filter: drop-shadow(0 0 6px var(--c)); }
+  100% { transform: scale(1); }
+}
+@keyframes flx-run-bump { 0% { transform: scale(1); } 40% { transform: scale(1.14); } 100% { transform: scale(1); } }
+@keyframes flx-run-fill { from { width: var(--from); } }
+@keyframes flx-run-breathe { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: .35; } }
+@keyframes flx-run-press { 0% { transform: scale(1); } 35% { transform: scale(.98); } 100% { transform: scale(1); } }
+
+.flx-root .flx-run-svg text { font-family: var(--font-mono, ui-monospace, monospace); }
+
+/* Steps: the active one glows in its own colour (cyan, blue for a person, violet for the Session). */
+.flx-root .flx-run-node { transition: opacity .3s ease; }
+.flx-root .flx-run-box { transition: stroke .35s ease, fill .35s ease, filter .35s ease; }
+.flx-root .flx-run-node[data-on] .flx-run-box {
+  stroke: var(--glow);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--glow) 45%, transparent));
+}
+.flx-root .flx-run-node[data-pick] .flx-run-box { stroke: #073642; stroke-width: 2; }
+.flx-root .flx-run-node[data-dim] { opacity: .45; }
+
+/* Land's two steps. */
+.flx-root .flx-run-sub rect { fill: #f7f2e3; stroke: rgba(88, 110, 117, .25); transition: fill .3s, stroke .3s; }
+.flx-root .flx-run-sub text { fill: #93a1a1; transition: fill .3s; }
+.flx-root .flx-run-sub[data-done] rect { fill: color-mix(in srgb, #859900 12%, transparent); stroke: color-mix(in srgb, #859900 45%, transparent); }
+.flx-root .flx-run-sub[data-done] text { fill: #5c6b00; }
+.flx-root .flx-run-sub[data-on] rect { fill: color-mix(in srgb, #2aa198 14%, transparent); stroke: #2aa198; }
+.flx-root .flx-run-sub[data-on] text { fill: #1d7d76; font-weight: 600; }
+
+/* Ways out: a chip the change took stays lit; a chip lights with a flash the moment it is taken. */
+.flx-root .flx-run-chip { transform-box: fill-box; transform-origin: center; transition: opacity .3s ease; }
+.flx-root .flx-run-chip rect { transition: fill .3s, stroke .3s, stroke-width .3s; }
+.flx-root .flx-run-chip[data-lit] rect { fill: color-mix(in srgb, var(--c) 18%, #fffdf8); stroke: var(--c); stroke-width: 1.6; }
+.flx-root .flx-run-chip[data-lit] text { font-weight: 650; }
+.flx-root [data-play] .flx-run-chip[data-flash] { animation: flx-run-flash .7s ease-out both; }
+.flx-root .flx-run-chip[data-pick] rect { stroke: var(--c); stroke-width: 1.8; }
+.flx-root .flx-run-chip[data-dim], .flx-root .flx-run-fadeable[data-dim] { opacity: .22; }
+.flx-root .flx-run-fadeable { transition: opacity .3s ease; }
+
+/* The rail's stations: a way back with visits is solid violet. */
+.flx-root .flx-run-way { transition: opacity .3s ease; }
+.flx-root .flx-run-way rect { fill: #f6f4fa; stroke: color-mix(in srgb, #6c71c4 40%, transparent); transition: fill .3s, stroke .3s; }
+.flx-root .flx-run-way text { fill: #8e92cf; }
+.flx-root .flx-run-way[data-on] rect { fill: #6c71c4; stroke: #6c71c4; }
+.flx-root .flx-run-way[data-on] text { fill: #6c71c4; font-weight: 650; }
+.flx-root .flx-run-way[data-on][data-pill] text { fill: #fdf6e3; }
+.flx-root .flx-run-way[data-dim] { opacity: .3; }
+.flx-root .flx-run-bump { transform-box: fill-box; transform-origin: center; }
+.flx-root [data-play] .flx-run-bump { animation: flx-run-bump .5s ease-out var(--d, 0ms) both; }
+
+/* The token. */
+.flx-root .flx-run-dot { fill: var(--tk); transition: fill .3s ease; }
+.flx-root .flx-run-halo { fill: var(--tk); opacity: .22; transform-box: fill-box; transform-origin: center; transition: fill .3s ease; }
+.flx-root [data-play] .flx-run-halo { animation: flx-run-halo 1.8s ease-in-out infinite; }
+
+.flx-root .flx-run-sha { animation: flx-run-fade .45s ease both; }
+.flx-root .flx-run-tag { animation: flx-run-fade .4s ease var(--d, 0ms) both; }
+
+/* The step a reader can click. */
+.flx-root .flx-run-hit { background: transparent; cursor: pointer; outline: none; }
+.flx-root .flx-run-hit:focus-visible { box-shadow: 0 0 0 2px #fffaf0, 0 0 0 4px #268bd2; }
+.flx-root .flx-run-hit:hover { background: rgba(42, 161, 152, .06); }
+
+/* Controls. */
+.flx-root .flx-run-btn { transition: background-color .15s ease, border-color .15s ease; outline: none; }
+.flx-root .flx-run-btn:hover { background-color: rgba(238, 232, 213, .7); }
+.flx-root .flx-run-btn:focus-visible { box-shadow: 0 0 0 2px #fffaf0, 0 0 0 4px #268bd2; }
+/* Chapters: played ones carry a check and a quiet bar; the current one a solid, thicker bar; ahead ones are bare.
+   A finished run shows every reached chapter played; a run that ended early marks its last chapter red and the rest skipped. */
+.flx-root .flx-run-chap-name { color: #93a1a1; font-weight: 500; }
+.flx-root .flx-run-chap-bar { height: 3px; background: rgba(88, 110, 117, .16); transition: height .25s ease; }
+.flx-root .flx-run-chap-bar > span { background: color-mix(in srgb, #2aa198 45%, transparent); }
+.flx-root .flx-run-chap-n { color: #93a1a1; border: 1px solid rgba(88, 110, 117, .28); transition: background-color .25s, color .25s, border-color .25s; }
+.flx-root .flx-run-chap[data-state="played"] .flx-run-chap-name { color: #586e75; }
+.flx-root .flx-run-chap[data-state="played"] .flx-run-chap-n { color: #2aa198; border-color: color-mix(in srgb, #2aa198 45%, transparent); background: color-mix(in srgb, #2aa198 10%, transparent); }
+.flx-root .flx-run-chap[data-state="now"] { background-color: rgba(42, 161, 152, .08); }
+.flx-root .flx-run-chap[data-state="now"] .flx-run-chap-name { color: #002b36; font-weight: 700; }
+.flx-root .flx-run-chap[data-state="now"] .flx-run-chap-n { color: #fdf6e3; background: #2aa198; border-color: #2aa198; }
+.flx-root .flx-run-chap[data-state="now"] .flx-run-chap-bar { height: 4px; }
+.flx-root .flx-run-chap[data-state="now"] .flx-run-chap-bar > span { background: #2aa198; box-shadow: 0 0 8px rgba(42, 161, 152, .5); }
+.flx-root .flx-run-chap[data-state="ended"] .flx-run-chap-name { color: #dc322f; font-weight: 700; }
+.flx-root .flx-run-chap[data-state="ended"] .flx-run-chap-n { color: #fdf6e3; background: #dc322f; border-color: #dc322f; }
+.flx-root .flx-run-chap[data-state="ended"] .flx-run-chap-bar > span { background: #dc322f; }
+.flx-root .flx-run-chap[data-state="skipped"] .flx-run-chap-name { text-decoration: line-through; text-decoration-color: rgba(147, 161, 161, .6); }
+.flx-root .flx-run-chap[data-state="skipped"] .flx-run-chap-bar { background: repeating-linear-gradient(90deg, rgba(88, 110, 117, .2) 0 4px, transparent 4px 8px); }
+
+/* Decide's options: real buttons while the run waits on you; a bar under Ship runs down the 4 seconds before it presses itself. */
+.flx-root .flx-run-opt { transition: background-color .15s ease; outline: none; }
+.flx-root .flx-run-opt:not(:disabled) { cursor: pointer; }
+.flx-root .flx-run-opt:not(:disabled):hover { background-color: color-mix(in srgb, var(--oc) 9%, transparent); }
+.flx-root .flx-run-opt:focus-visible { box-shadow: inset 0 0 0 2px #268bd2; }
+@keyframes flx-run-auto { from { width: 100%; } to { width: 0%; } }
+.flx-root .flx-run-auto { width: 0%; animation: flx-run-auto var(--ms) linear both; opacity: .7; }
+.flx-root .flx-run-fill { animation: flx-run-fill var(--ms) linear both; }
+.flx-root .flx-run-status { animation: flx-run-fade .35s ease both; }
+
+/* The moment panel and the log fill in as the run goes. */
+.flx-root .flx-run-moment { animation: flx-run-in .4s cubic-bezier(.2, .7, .2, 1) both; }
+.flx-root .flx-run-press { animation: flx-run-press .45s ease-out both; }
+.flx-root .flx-run-row { transition: background-color .3s ease; }
+.flx-root .flx-run-row[data-on] { animation: flx-run-in .35s cubic-bezier(.2, .7, .2, 1) both; }
+.flx-root .flx-run-row[data-now] { background-color: rgba(42, 161, 152, .1); }
+.flx-root .flx-run-ghost { display: block; opacity: .7; }
+.flx-root .flx-run-snap[data-now] > div:first-child > span:first-child { box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent); }
+.flx-root [data-play] .flx-run-wait { animation: flx-pulse 1.4s ease-in-out infinite; }
+
+/* A person's gate breathes while it waits. */
+.flx-root [data-play] .flx-run-node[data-on][data-wait] .flx-run-box { animation: flx-run-breathe 1.6s ease-in-out infinite; }
+
+/* Sideways scroll on narrow screens: a quiet scrollbar. */
+.flx-root .flx-run-scroll { scrollbar-width: thin; scrollbar-color: rgba(88, 110, 117, .25) transparent; }

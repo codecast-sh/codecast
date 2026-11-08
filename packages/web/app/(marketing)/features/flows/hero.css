@@ -1,0 +1,29 @@
+/* ---------- Hero: the floor plan (prefix flx-hero-). Resting styles are the final frame. ---------- */
+
+.flx-root .flx-hero::before {
+  content: "";
+  position: absolute;
+  inset: 30% 0 0 0;
+  background: radial-gradient(55% 55% at 55% 55%, rgba(42, 161, 152, .09), transparent 72%);
+  pointer-events: none;
+}
+
+/* Entrance: the edges draw in along their own direction. */
+@keyframes flx-hero-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.flx-root .flx-hero-draw { stroke-dasharray: 1 1; stroke-dashoffset: 0; animation: flx-hero-draw 1.1s cubic-bezier(.45, 0, .2, 1) var(--d, 0s) both; }
+
+/* A step changes state softly as a token enters or leaves it. */
+.flx-root .flx-hero-step { transition: fill .3s ease, fill-opacity .3s ease, stroke .3s ease, stroke-opacity .3s ease, filter .3s ease; }
+.flx-root .flx-hero-step[data-lit] { filter: drop-shadow(0 0 7px currentColor); }
+
+/* Decide while a change waits on a person. */
+@keyframes flx-hero-ring { 0%, 100% { opacity: .95; } 50% { opacity: .2; } }
+.flx-root .flx-hero-fig[data-play] .flx-hero-ring { animation: flx-hero-ring 1.5s ease-in-out infinite; }
+
+/* A problem in Triage as a signal joins it, a count as it ticks, a watch that ends quiet. */
+@keyframes flx-hero-hit { from { stroke-opacity: 1; } to { stroke-opacity: 0; } }
+.flx-root .flx-hero-fig[data-play] .flx-hero-hit { stroke-opacity: 0; animation: flx-hero-hit .75s ease-out both; }
+@keyframes flx-hero-tick { from { fill-opacity: .35; } to { fill-opacity: 1; } }
+.flx-root .flx-hero-fig[data-play] .flx-hero-tick { animation: flx-hero-tick .45s ease-out both; }
+@keyframes flx-hero-clean { 0% { fill-opacity: .75; } 30% { fill-opacity: 1; } 100% { fill-opacity: .75; } }
+.flx-root .flx-hero-fig[data-play] .flx-hero-clean { animation: flx-hero-clean .9s ease both; }
