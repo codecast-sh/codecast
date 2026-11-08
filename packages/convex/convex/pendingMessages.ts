@@ -1,3 +1,4 @@
+import { UNCONFIRMED_DELIVERY_REASON } from "@codecast/shared/contracts";
 import { isWorkflowRunLog } from "./lib/runLog";
 import { formatIdle, formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
 import { noteWriteCause } from "./lifecycleEvents";
@@ -1578,7 +1579,7 @@ export async function clearHasPendingIfQuiet(
 }
 
 // Mark a single pending message delivered (terminal) and clear the conversation's
-// has_pending_messages flag when nothing else is in flight. Shared by the content-matched
+// has_pending_messages flag when nothing else is in flight. Shared by the echo
 // ack inside addMessages (the reliable path — fires whenever the agent echoes the message,
 // on any sync path) and available to other callers.
 export async function markPendingDelivered(
@@ -1832,7 +1833,16 @@ const INJECT_ACK_GRACE_MS = 120_000;
 export type HealAction =
   | { kind: "skip" }
   | { kind: "deliver_control" }
-  | { kind: "repend" };
+  | { kind: "repend" }
+  | { kind: "fail_unconfirmed" };
+
+// A row the agent took an Enter for (paste_verified_at) whose echo never came
+// (UNCONFIRMED_DELIVERY_REASON) fails visibly instead of being typed again,
+// which takes the session out of Working and puts a retry on the sender's
+// bubble; only a person's retry (or a late echo) moves it again.
+export { UNCONFIRMED_DELIVERY_REASON };
+// How long a submitted row waits for its echo when no daemon serves its session.
+export const UNSERVED_UNCONFIRMED_WAIT_MS = 30 * 60_000;
 
 // Pure decision for the cron healer. The invariant: `retry_count` counts REAL failed delivery
 // attempts only — never elapsed wait time. So the healer never bumps it (and resets it to 0 on
@@ -1840,7 +1850,7 @@ export type HealAction =
 // reconnect: the old cron bumped retry_count every 30s as a liveness poke, exhausting the
 // undeliverable budget while nothing was actually being delivered.
 export function planStuckMessageHeal(
-  msg: { status: string; content: string; created_at: number },
+  msg: { status: string; content: string; created_at: number; paste_verified_at?: number; delivery_disposition_reason?: string },
   now: number
 ): HealAction {
   const age = now - msg.created_at;
@@ -1850,8 +1860,14 @@ export function planStuckMessageHeal(
     // Control messages have no JSONL echo to ack against; a stale "injected" one was already
     // successfully injected, so promote it to terminal "delivered" rather than re-injecting.
     if (isControlMessage(msg.content)) return { kind: "deliver_control" };
+    if (msg.paste_verified_at !== undefined) {
+      // The clock is the paste's, not the row's: a send that waited in the
+      // queue for an hour was handed over moments ago.
+      return now - msg.paste_verified_at < INJECT_ACK_GRACE_MS ? { kind: "skip" } : { kind: "fail_unconfirmed" };
+    }
     return { kind: "repend" };
   }
+  if (msg.status === "failed" && msg.delivery_disposition_reason === UNCONFIRMED_DELIVERY_REASON) return { kind: "skip" };
   // "undeliverable" is NOT a dead-end: the daemon raises it after its gentle-retry budget is
   // spent (a useful "escalate" signal), but it is revived (once the session is idle — see the
   // cron's readiness gate) so delivery keeps moving forward with no client present. "failed" is
@@ -1867,9 +1883,9 @@ export function planStuckMessageHeal(
   // which a dropped write never does. So a message whose Enter was lost AND whose status write
   // dropped had no backstop at all. Revive it once it is older than any legitimate in-flight
   // delivery (and, via the cron's readiness gate, only when the session is idle and ready). This
-  // can never duplicate a delivered message: anything that actually reached the agent is promoted
-  // to terminal "delivered" by the content-matched ack in addMessages, so a row still "pending"
-  // at this age provably never landed. We don't bump retry_count (repend resets it), so this
+  // never duplicates a delivered message: a row still "pending" was never handed to the agent
+  // (a handed-over row is "injected", and a submitted one fails as unconfirmed rather than
+  // re-pending), so a row still "pending" at this age never landed. We don't bump retry_count (repend resets it), so this
   // never conflates elapsed wait time with the real-attempt budget — the original "don't touch
   // pending" bug is structurally avoided.
   if (msg.status === "pending") {
@@ -1880,6 +1896,11 @@ export function planStuckMessageHeal(
     return { kind: "repend" };
   }
   return { kind: "skip" };
+}
+
+async function failUnconfirmed(ctx: { db: any }, msg: { _id: Id<"pending_messages">; conversation_id: Id<"conversations"> }): Promise<void> {
+  await ctx.db.patch(msg._id, { status: "failed" as const, delivery_disposition_reason: UNCONFIRMED_DELIVERY_REASON });
+  await clearHasPendingIfQuiet(ctx, msg.conversation_id);
 }
 
 // A session with no live process never becomes ready on its own. The daemon resumes a dead
@@ -2086,6 +2107,7 @@ export const applyStuckMessages: RegisteredMutation<"internal", { ids: Id<"pendi
 export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: WakeScheduler }, now: number, only?: Id<"pending_messages">[]): Promise<{
   revived: number;
   controlsAcked: number;
+  failedUnconfirmed: number;
   notified: number;
   waiting: number;
   rewoken: number;
@@ -2126,6 +2148,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
 
     let revived = 0;
     let controlsAcked = 0;
+    let failedUnconfirmed = 0;
     let waiting = 0;
     let notified = 0;
     const reflag = new Set<Id<"conversations">>();
@@ -2198,6 +2221,18 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
       // Session not ready to receive (busy / blocked / stopped / gone): leave the message
       // exactly as-is — preserved, never dropped — and revive it once the session is idle.
       // A session with no live process is the exception: see planDeadSessionRevive.
+      // No daemon serves the session any more: a submitted row it never confirmed
+      // will not confirm now, so it fails visibly rather than holding Working.
+      // A daemon that only paused (a laptop asleep, a restart) comes back and
+      // syncs the echo, so this waits far longer than the idle case.
+      if (!ready.has(conversationId) && !live.has(conversationId) && !gone.has(conversationId)
+        && (msg.paste_verified_at ?? now) <= now - UNSERVED_UNCONFIRMED_WAIT_MS
+        && planStuckMessageHeal(msg, now).kind === "fail_unconfirmed") {
+        acted.add(msg._id);
+        await failUnconfirmed(ctx, msg);
+        failedUnconfirmed++;
+        continue;
+      }
       if (!ready.has(conversationId)) {
         const revivable = !live.has(conversationId) && !gone.has(conversationId)
           && planDeadSessionRevive(msg, now)
@@ -2223,6 +2258,11 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
         controlsAcked++;
         continue;
       }
+      if (action.kind === "fail_unconfirmed") {
+        await failUnconfirmed(ctx, msg);
+        failedUnconfirmed++;
+        continue;
+      }
       if (await rependPendingMessage(ctx, msg, 0)) {
         reflag.add(msg.conversation_id);
         revived++;
@@ -2232,10 +2272,10 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
       await ctx.db.patch(convId, { has_pending_messages: true });
     }
 
-    if (revived > 0 || controlsAcked > 0 || notified > 0 || rewoken.size > 0) {
-      console.log(`retryStuckMessages: revived ${revived} for idle sessions, acked ${controlsAcked} control msg(s), notified ${notified} stuck cross-user send(s), rewoke ${rewoken.size} hosted conversation(s), ${waiting} waiting on a busy/offline session`);
+    if (revived > 0 || controlsAcked > 0 || failedUnconfirmed > 0 || notified > 0 || rewoken.size > 0) {
+      console.log(`retryStuckMessages: revived ${revived} for idle sessions, acked ${controlsAcked} control msg(s), failed ${failedUnconfirmed} unconfirmed, notified ${notified} stuck cross-user send(s), rewoke ${rewoken.size} hosted conversation(s), ${waiting} waiting on a busy/offline session`);
     }
-    return { revived, controlsAcked, notified, waiting, rewoken: rewoken.size, acted: [...acted] };
+    return { revived, controlsAcked, failedUnconfirmed, notified, waiting, rewoken: rewoken.size, acted: [...acted] };
   }
 }
 
@@ -2445,8 +2485,10 @@ export const cancelOldPendingMessages = internalMutation({
   },
 });
 
-// Ack injected messages for a conversation as "delivered". Called by the daemon
-// when a user message appears in the synced JSONL. When the daemon supplies
+// Ack injected messages for a conversation as "delivered". Called by daemons
+// older than delivery ids when a user message appears in the synced JSONL; a
+// daemon that stamps echoes (addMessages echo_ids) settles each row in the
+// write that stores its echo and never calls this. When the daemon supplies
 // `pastedMessageIds` (the rows IT pasted into a live pane this process), only
 // those rows are acked; rows it cannot vouch for stay `injected` for the heal
 // cron to re-pend and re-deliver. Without the list (old daemon) the legacy
@@ -2492,7 +2534,7 @@ export async function ackInjectedForDaemon(
         await ctx.db.patch(transcriptMessageId, { client_id: msg.client_id });
         // The row now HAS its transcript relation — record it, or the
         // delivered-tier match in findEchoedPendingMessage stays open and a
-        // later content-matched echo adopts the same client_id onto a SECOND
+        // later echo adopts the same client_id onto a SECOND
         // message (two rows sharing a client id garbles the web timeline).
         if (!msg.echo_message_id) {
           await ctx.db.patch(msg._id, { echo_message_id: transcriptMessageId });

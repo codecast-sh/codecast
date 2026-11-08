@@ -14,6 +14,7 @@ import { isManagedExcludedPath, POLICY_EXCLUDED_SESSION } from "./config/managed
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
 import type { OpenTaskReport, AgentStatus, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
 import { argumentValidationProblem } from "@codecast/shared/contracts";
+import type { DeliveryEchoLedger } from "./deliveryEchoLedger.js";
 import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
 import { filesForWire, type SyncFile } from "./userFiles.js";
 import { callFrameAtPath, referenceCallFrames } from "./callFrameRefs.js";
@@ -391,6 +392,13 @@ export interface CreateConversationParams {
   fork?: { from: string; atUuid: string; copied: number; cutoff?: number };
 }
 
+const ECHO_IDS_RECHECK_MS = 10 * 60_000;
+
+function withoutDeliveryIds<T extends { delivery_ids?: unknown }>(message: T): Omit<T, "delivery_ids"> {
+  const { delivery_ids: _ids, ...rest } = message;
+  return rest;
+}
+
 export class SyncService {
   /** Stores the snapshot; the answer names the sessions a person put at background priority on this machine. */
   async reportMachineResources(snapshot: import("@codecast/shared/contracts").MachineResourceSnapshot): Promise<{ background_sessions?: string[]; unattended_sessions?: string[] } | undefined> {
@@ -440,6 +448,18 @@ export class SyncService {
   // permanent "sync stalled". Different conversations write different docs and stay
   // fully parallel; only same-conversation writes are chained.
   private conversationWriteChains = new Map<string, Promise<unknown>>();
+  // The daemon's delivery echo ledger (deliveryEchoLedger.ts). Installed by the
+  // daemon only: with it, every user turn this service uploads carries the ids
+  // of the deliveries it echoes, and the batch tells the server so.
+  private deliveryEchoes: Pick<DeliveryEchoLedger, "stamp"> | null = null;
+  // Set when the server refused the fields: it is older than this CLI and still
+  // pairs echoes itself, so the ids are left off rather than the batch. Asked
+  // again after a while, since the deployment catches up without a restart.
+  private echoIdsRefusedAt: number | null = null;
+
+  setDeliveryEchoes(ledger: Pick<DeliveryEchoLedger, "stamp"> | null): void {
+    this.deliveryEchoes = ledger;
+  }
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl, {
@@ -1383,6 +1403,8 @@ export class SyncService {
       model?: string;
     usage?: import("./parser.js").ClaudeUsage;
     apiMessageId?: string;
+    /** Set by the ledger stamp below; a caller never passes it. */
+    deliveryIds?: string[];
     }>;
     reconcileRemoteExisting?: boolean;
   }, options?: { onBatchAccepted?: (inputIndexes: readonly number[]) => void; beforeBatch?: () => void }): Promise<{ inserted: number; ids: string[] }> {
@@ -1391,6 +1413,8 @@ export class SyncService {
     if (params.messages.length === 0) {
       return { inserted: 0, ids: [] };
     }
+    const echoes = this.deliveryEchoes;
+    if (echoes) params = { ...params, messages: echoes.stamp(params.conversationId, params.messages) };
     await this.rescueLocalImageLinks(params.messages);
     await this.offloadImages(params.messages);
     await this.offloadFiles(params.messages);
@@ -1462,6 +1486,7 @@ export class SyncService {
         timestamp: msg.timestamp,
         usage: msg.usage,
         api_message_id: msg.apiMessageId,
+        ...(msg.deliveryIds?.length ? { delivery_ids: msg.deliveryIds } : {}),
       });
       preparedIndexes?.set(preparedMessages[preparedMessages.length - 1], inputIndex);
     }
@@ -1502,18 +1527,30 @@ export class SyncService {
         await this.throttle();
         await this.guarded(async () => {
           beforeBatch?.();
-          const result = await withTimeout(
+          const send = (withEchoIds: boolean) => withTimeout(
             this.mutate(
               "messages:addMessages" as any,
               {
                 conversation_id: params.conversationId,
-                messages: batch,
+                messages: withEchoIds ? batch : batch.map(withoutDeliveryIds),
                 api_token: this.apiToken,
+                ...(withEchoIds ? { echo_ids: true } : {}),
               }
             ),
             ADD_MESSAGES_BATCH_TIMEOUT_MS,
             `addMessages batch (${batch.length} msgs)`
           );
+          let result: unknown;
+          if (echoes && (this.echoIdsRefusedAt === null || Date.now() - this.echoIdsRefusedAt > ECHO_IDS_RECHECK_MS)) {
+            try {
+              result = await send(true);
+              this.echoIdsRefusedAt = null;
+            } catch (err) {
+              if (!/echo_ids|delivery_ids/.test(argumentValidationProblem(err) ?? "")) throw err;
+              this.echoIdsRefusedAt = Date.now();
+              result = await send(false);
+            }
+          } else result = await send(false);
           if (onBatchAccepted) onBatchAccepted(batch.map(message => preparedIndexes!.get(message)!));
           const typed = result as { inserted: number; ids: string[] };
           totalInserted += typed.inserted;
@@ -1969,37 +2006,6 @@ export class SyncService {
     } catch (error) {
       if (error instanceof AuthExpiredError) throw error;
       return null;
-    }
-  }
-
-  async ackInjectedMessages(
-    conversationId: string,
-    pastedMessageIds?: string[],
-    deliveryAcks?: Array<{
-      pendingMessageId: string;
-      transcriptMessageId: string;
-    }>,
-  ): Promise<void> {
-    try {
-      await this.guarded(() =>
-        this.mutate("pendingMessages:ackInjectedMessages" as any, {
-          conversation_id: conversationId,
-          api_token: this.apiToken,
-          device_id: deviceId(),
-          ...(pastedMessageIds ? { message_ids: pastedMessageIds } : {}),
-          ...(deliveryAcks?.length
-            ? {
-                delivery_acks: deliveryAcks.map((ack) => ({
-                  pending_message_id: ack.pendingMessageId,
-                  transcript_message_id: ack.transcriptMessageId,
-                })),
-              }
-            : {}),
-        })
-      );
-    } catch (error) {
-      if (error instanceof AuthExpiredError) throw error;
-      // Non-critical — don't let ack failures break the sync loop
     }
   }
 
