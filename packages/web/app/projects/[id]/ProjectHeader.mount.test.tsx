@@ -62,6 +62,7 @@ async function verifyProjectHeader() {
     clientState: { ui: { active_team_id: "fixture-team" } },
     teams: [{ _id: "fixture-team", name: "Fixture", features: { line: true } }, { _id: "home-team", name: "Codecast" }],
     projects: { [PID]: { ...serverRow } } as Record<string, any>,
+    sessions: {} as Record<string, any>,
     syncMeta: { 'tasks:v2:{"workspace":"team","team_id":"fixture-team"}': { backfilledAt: 1 } },
     // What the store's action does to the draft (store/inboxStore updateProject).
     updateProject: (id: string, fields: Record<string, unknown>) => {
@@ -110,7 +111,9 @@ async function verifyProjectHeader() {
   mock.module("../../../components/DetailSplitLayout", () => ({ DetailSplitLayout: ({ list }: any) => list }));
   mock.module("../../../components/AuthGuard", () => ({ AuthGuard: through }));
   mock.module("../../../components/DashboardLayout", () => ({ DashboardLayout: through }));
-  mock.module("../../../components/repo/RepositoryLinks", () => ({ RepositoryLinks: mark("repository-links") }));
+  // The page's default session reaches BranchCodeLink through the conversation view: keep the real exports.
+  const realRepoLinks = { ...(await import("../../../components/repo/RepositoryLinks")) };
+  mock.module("../../../components/repo/RepositoryLinks", () => ({ ...realRepoLinks, RepositoryLinks: mark("repository-links") }));
   mock.module("../../../components/ShareControl", () => ({ ShareControl: (props: any) => React.createElement("span", { "data-share": props.path, "data-share-token": props.publicShare?.token ?? "" }) }));
   mock.module("../../../components/ProjectUpdates", () => ({ ProjectUpdates: mark("project-updates") }));
   mock.module("../../../components/ProjectTimeline", () => ({ ProjectTimeline: (props: any) => React.createElement("div", { "data-project-timeline": props.projectId }) }));

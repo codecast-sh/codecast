@@ -359,14 +359,14 @@ permission allow and deny, AskUserQuestion, mid-turn steer, interrupt drain,
 a usage limit, the too-old fallback, `/clear`, a daemon that reconnects to a
 pending prompt and binds to its card, and resume after the host is killed.
 
-Recordings come from `scripts/record-claude-sdk.ts` (isolated config dir, the
+Recordings come from `packages/cli/scripts/record-claude-sdk.ts` (isolated config dir, the
 keychain login in the child's env only, haiku). Every line is scrubbed as it is
 written: no thinking, no account identity, no personal skill, agent, plugin or
 MCP names, home paths replaced. The privacy test re-applies the scrub to every
 checked-in line. `limit.jsonl` is derived from `text.jsonl` with the reply
 replaced by a limit error in the shape of a real `api_error` result.
 
-`scripts/claude-sdk-e2e.ts` runs the whole backend against the real `claude`
+`packages/cli/scripts/claude-sdk-e2e.ts` runs the whole backend against the real `claude`
 through launchd-started hosts from the checkout, isolated from the running
 daemon, and checks eighteen behaviors end to end.
 
