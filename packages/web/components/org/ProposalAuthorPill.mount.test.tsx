@@ -47,6 +47,8 @@ async function verifyAuthorPill() {
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
   const { ProposalAuthorPill, DecisionProposalOrigin } = await import("./ProposalAuthorPill");
+  // Characters default off (lib/uiPrefDefaults.ts); the role pill is checked wearing its face.
+  (await import("../../test-helpers/characters")).setCharacters(true);
   const root = createRoot(document.getElementById("root")!);
   const render = (el: React.ReactElement) => act(async () => root.render(el));
   const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
