@@ -28,13 +28,11 @@
  *     either, or the group is back on every invocation's bill sideways.
  *
  * Adding a group is one entry: its token, its description moved here out of the
- * module, and a `load()` that imports the register function. That is also how a
- * group that used to be registered eagerly joins, in place of the
- * `registerXCommand(program)` line it had in index.ts — which is how
- * `cast computer` (ct-49521) and `cast guide` (ct-49544) are registered.
- * Nothing may reach those two any other way: a register function exported
- * under `computer/` or by `guide.ts` that index.ts also calls directly is a
- * failure of commandGroups.guard.test.ts. ct-49546, ct-49848, ct-49849.
+ * module, and a `load()` that imports the register function, in place of the
+ * `registerXCommand(program)` line index.ts had (`cast computer`, ct-49521, and
+ * `cast guide`, ct-49544, joined that way). A register function under
+ * `computer/` or in `guide.ts` that index.ts also calls directly fails
+ * commandGroups.guard.test.ts. ct-49546, ct-49848, ct-49849.
  */
 
 import type { Command } from "commander";

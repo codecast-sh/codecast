@@ -5,7 +5,8 @@
 // on only; the nav shows the section to no one else.
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../../store/inboxStore";
-import { AccessLogPanel, useActiveTeamLogsAccess } from "../../../components/settings/AccessLogPanel";
+import { AccessLogPanel } from "../../../components/settings/AccessLogPanel";
+import { useActiveTeamLogsAccess } from "../../../hooks/useActiveTeamLogsAccess";
 
 export default function AccessLogPage() {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
