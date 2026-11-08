@@ -116,7 +116,7 @@ import {
   type ParsedTerms,
 } from "./searchCore";
 import { MIRROR_WINDOW_MS } from "./searchMirror";
-import { emptyEvidence, parseSessionQuery, relevanceTier, snippetAround, stripWrapperTags, type SessionQuery } from "@codecast/shared/search";
+import { countMatches, emptyEvidence, parseSearchTerms as parseFindTerms, parseSessionQuery, relevanceTier, snippetAround, stripWrapperTags, type SessionQuery } from "@codecast/shared/search";
 import { narrowByOperators, type OperatorCandidate, type OperatorScope } from "./sessionQuerySearch";
 import { requireUser } from "./lib/auth";
 import { isDaemonManagedRow, liveConversationIdSet } from "./lib/liveSessions";
@@ -4653,9 +4653,11 @@ export const searchForCLI = query({
         || "New Session";
 
       // Line numbers are the match's rank, not its place in the transcript:
-      // exact ones would need every message, which hits read limits.
+      // exact ones would need every message, which hits read limits. The
+      // message id opens the match in place (`cast read <id>#<message_id>`).
       const formattedMatches = searchSnippets(candidate, terms).map(({ message: m, content }, idx) => ({
         line: idx + 1,
+        message_id: m._id,
         role: m.role,
         content,
         timestamp: new Date(m.timestamp).toISOString(),
@@ -4866,6 +4868,9 @@ type ReadRangeArgs = {
   include_file_changes?: boolean;
   // The last N messages, found by scanning newest first.
   tail?: number;
+  // Only the messages holding this text (in their words, tool calls or tool
+  // results), with their true line numbers; a range narrows where to look.
+  grep?: string;
 };
 
 export type ScanCursor = { creation_time: number; skip: number };
@@ -4878,18 +4883,33 @@ type ReadSteps = {
     newest_first?: boolean;
     around_message_id?: string;
     include_file_changes?: boolean;
+    grep?: string;
   }) => Promise<any>;
   fetch: (args: {
     api_token: string;
     conversation_id: string;
     ids: string[];
     first_line: number;
+    lines?: number[];
     full_content?: boolean;
   }) => Promise<any>;
 };
 
 /** Messages a tail read returns at most. */
 export const READ_TAIL_MAX = 500;
+
+/** Matching messages a --grep read returns at most; the next read starts past the last one. */
+export const READ_GREP_MAX = 30;
+
+/** Whether a message holds any of the find terms: in its words, its tool calls' input, or its tool results. */
+export function messageHasFindTerms(
+  m: { content?: string; tool_calls?: Array<{ input?: string }>; tool_results?: Array<{ content?: string }> },
+  terms: string[],
+): boolean {
+  if (m.content && countMatches(m.content, terms) > 0) return true;
+  if (m.tool_calls?.some((tc) => tc.input && countMatches(tc.input, terms) > 0)) return true;
+  return !!m.tool_results?.some((tr) => typeof tr.content === "string" && countMatches(tr.content, terms) > 0);
+}
 
 /**
  * Scan steps until `enough` says the ids cover what the read needs, or the
@@ -4899,9 +4919,11 @@ async function scanLines(
   steps: ReadSteps,
   args: ReadRangeArgs,
   newestFirst: boolean,
-  enough: (ids: string[], anchorIndex: number | undefined) => boolean,
+  enough: (ids: string[], anchorIndex: number | undefined, matches: number[]) => boolean,
 ) {
   const ids: string[] = [];
+  // Indexes into `ids` of the rows holding args.grep.
+  const matches: number[] = [];
   let head: any;
   let anchorIndex: number | undefined;
   let after: ScanCursor | undefined;
@@ -4913,19 +4935,21 @@ async function scanLines(
       newest_first: newestFirst || undefined,
       around_message_id: anchorIndex === undefined ? args.around_message_id : undefined,
       include_file_changes: head ? undefined : args.include_file_changes,
+      grep: args.grep,
     });
     if (step?.error) return { error: step };
     head ??= step;
     if (step.anchor_index !== undefined && anchorIndex === undefined) anchorIndex = ids.length + step.anchor_index;
+    for (const i of step.matches ?? []) matches.push(ids.length + i);
     ids.push(...step.ids);
-    if (!step.cursor) return { ids, head, anchorIndex, complete: true };
+    if (!step.cursor) return { ids, head, anchorIndex, matches, complete: true };
     after = step.cursor;
-    if (enough(ids, anchorIndex)) return { ids, head, anchorIndex, complete: false };
+    if (enough(ids, anchorIndex, matches)) return { ids, head, anchorIndex, matches, complete: false };
   }
 }
 
-/** Fetch the messages behind `ids` in steps, numbered from `firstLine`. */
-async function fetchLines(steps: ReadSteps, args: ReadRangeArgs, ids: string[], firstLine: number) {
+/** Fetch the messages behind `ids` in steps, numbered from `firstLine`, or by `lines` when they are not consecutive. */
+async function fetchLines(steps: ReadSteps, args: ReadRangeArgs, ids: string[], firstLine: number, lines?: number[]) {
   const messages: any[] = [];
   let done = 0;
   while (done < ids.length) {
@@ -4934,6 +4958,7 @@ async function fetchLines(steps: ReadSteps, args: ReadRangeArgs, ids: string[], 
       conversation_id: args.conversation_id,
       ids: ids.slice(done),
       first_line: firstLine + done,
+      ...(lines ? { lines: lines.slice(done) } : {}),
       full_content: args.full_content,
     });
     if (page?.error) return { error: page };
@@ -4959,13 +4984,34 @@ async function fetchLines(steps: ReadSteps, args: ReadRangeArgs, ids: string[], 
 export async function readConversationRange(steps: ReadSteps, args: ReadRangeArgs): Promise<any> {
   if (args.tail !== undefined) {
     const n = Math.max(1, Math.min(Math.floor(args.tail), READ_TAIL_MAX));
-    const scan = await scanLines(steps, { ...args, around_message_id: undefined }, true, (ids) => ids.length >= n);
+    const scan = await scanLines(steps, { ...args, around_message_id: undefined, grep: undefined }, true, (ids) => ids.length >= n);
     if ("error" in scan) return scan.error;
     const ids = scan.ids.slice(0, n).reverse();
     const count = scan.complete ? scan.ids.length : Math.max(scan.ids.length, scan.head.conversation.message_count ?? 0);
     const fetched = await fetchLines(steps, args, ids, scan.complete ? count - ids.length + 1 : -ids.length);
     if ("error" in fetched) return fetched.error;
-    return { conversation: { ...scan.head.conversation, message_count: count }, messages: fetched.messages };
+    return { conversation: { ...scan.head.conversation, message_count: count, message_count_exact: scan.complete }, messages: fetched.messages };
+  }
+
+  if (args.grep !== undefined) {
+    // Scan from the start (line numbers need every row before them) until one
+    // match past the page is found, so the reply can say more follow.
+    const start = Math.max(1, args.start_line ?? 1);
+    const end = args.end_line ?? Infinity;
+    const inRange = (matches: number[]) => matches.filter((i) => i + 1 >= start && i + 1 <= end);
+    const scan = await scanLines(steps, { ...args, around_message_id: undefined }, false, (ids, _a, matches) =>
+      ids.length >= end || inRange(matches).length > READ_GREP_MAX);
+    if ("error" in scan) return scan.error;
+    const hits = inRange(scan.matches);
+    const shown = hits.slice(0, READ_GREP_MAX);
+    const fetched = await fetchLines(steps, args, shown.map((i) => scan.ids[i]), 0, shown.map((i) => i + 1));
+    if ("error" in fetched) return fetched.error;
+    const count = scan.complete ? scan.ids.length : Math.max(scan.ids.length, scan.head.conversation.message_count ?? 0);
+    return {
+      conversation: { ...scan.head.conversation, message_count: count, message_count_exact: scan.complete },
+      messages: fetched.messages,
+      grep: { matches: shown.length, searched: Math.max(0, Math.min(scan.ids.length, end) - start + 1), more: hits.length > shown.length },
+    };
   }
 
   const anchorPending = (anchorIndex: number | undefined) => args.around_message_id !== undefined && anchorIndex === undefined;
@@ -4984,7 +5030,7 @@ export async function readConversationRange(steps: ReadSteps, args: ReadRangeArg
 
   const { file_changes, file_changes_truncated } = head;
   return {
-    conversation: { ...head.conversation, message_count: count },
+    conversation: { ...head.conversation, message_count: count, message_count_exact: complete },
     messages: fetched.messages,
     ...(args.include_file_changes ? { file_changes, file_changes_truncated } : {}),
     // Line of the anchored message (1-based) so callers can highlight it.
@@ -5077,20 +5123,27 @@ export const scanConversationLines = internalQuery({
     // Also return the conversation's materialized file changes (Edit/Write
     // calls plus disk-observed Bash changes); `cast diff` folds them into its tree.
     include_file_changes: v.optional(v.boolean()),
+    // Also return which of `ids` hold this text (messageHasFindTerms).
+    grep: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const access = await readableConversation(ctx, args.api_token, args.conversation_id);
     if ("error" in access) return { error: access.error };
     const { conv } = access;
     const after = args.after;
+    const findTerms = args.grep !== undefined ? parseFindTerms(args.grep) : undefined;
 
     const ids: string[] = [];
+    const matches: number[] = [];
     let anchorIndex: number | undefined;
     let firstUserMessage = "";
     let scanned = 0;
     const cursor = await streamMessageRows(ctx, conv._id, after, args.newest_first ? "desc" : "asc", (m) => {
       if (m._id === args.around_message_id) anchorIndex = ids.length;
-      if (isNonEmptyMessage(m)) ids.push(m._id);
+      if (isNonEmptyMessage(m)) {
+        if (findTerms?.length && messageHasFindTerms(m, findTerms)) matches.push(ids.length);
+        ids.push(m._id);
+      }
       // The title falls back to the first user prompt among the first rows.
       if (!after && !args.newest_first && !firstUserMessage && scanned < 10 && m.role === "user" && !m.tool_results?.length) {
         const text = m.content?.trim();
@@ -5101,6 +5154,7 @@ export const scanConversationLines = internalQuery({
 
     return {
       ids,
+      ...(findTerms ? { matches } : {}),
       anchor_index: anchorIndex,
       cursor,
       ...(after ? {} : {
@@ -5129,6 +5183,8 @@ export const readConversationLines = internalQuery({
     conversation_id: v.string(),
     ids: v.array(v.string()),
     first_line: v.number(),
+    // Each id's own line, for ids that are not consecutive lines (a --grep read).
+    lines: v.optional(v.array(v.number())),
     full_content: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -5144,7 +5200,7 @@ export const readConversationLines = internalQuery({
     let bytes = 0;
     for (const raw of args.ids.slice(0, READ_PAGE_SIZE)) {
       if (consumed > 0 && bytes >= READ_STEP_BYTES) break;
-      const line = args.first_line + consumed;
+      const line = args.lines?.[consumed] ?? args.first_line + consumed;
       consumed++;
       const id = ctx.db.normalizeId("messages", raw);
       const m = id ? await ctx.db.get(id) : null;
