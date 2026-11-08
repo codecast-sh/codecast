@@ -87,6 +87,8 @@ export const CONVERSATION_FIELDS = {
   project_path: { send: true, patch: true },
   git_root: { send: true, patch: true },
   agent_type: { send: true, patch: true },
+  // A staged "Rewind to here" in the session's checkout, reported by its daemon (treeSnapshots.reportRewindStaged).
+  rewind_staged: { send: true },
 } as const satisfies Record<string, ConversationFieldSpec>;
 
 export type ConversationField = keyof typeof CONVERSATION_FIELDS;
