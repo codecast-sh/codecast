@@ -66,13 +66,14 @@ export const messagesSig = makeCollectionSig<ChatMessageRow>(
  *  voice rows (the badge waits for the release), so a burst that finalizes by
  *  flipping only voice.status changes the unread count. Leaving it out froze
  *  the badge until unrelated activity touched the channel. Status only — the
- *  rail renders neither the duration nor the recording. */
+ *  rail renders neither the duration nor the recording. `agent_status` is the
+ *  same case: a thinking row counts once its answer lands. */
 export const railMessagesSig = makeCollectionSig<ChatMessageRow>(
   (m) =>
     `${m._id}|${m.channel_id}|${m.user_id}|${m.created_at}|${m.deleted_at ?? 0}` +
     // People only: the rail's mention count is about the viewer, and a role or
     // session entry can never be them.
-    `|${m.mention_scope ?? ""}|${mentionUserIds(m.mentions).join(",")}|${m.voice?.status ?? ""}`,
+    `|${m.mention_scope ?? ""}|${mentionUserIds(m.mentions).join(",")}|${m.voice?.status ?? ""}|${m.agent_status ?? ""}`,
 );
 
 /** What a session PERSONA on a chat line renders (chatViews sessionAuthorFor):
