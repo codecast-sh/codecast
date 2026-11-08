@@ -11,6 +11,7 @@
 // bundle and tests import it.
 
 import { RUN_OPTION, runResultText } from "@codecast/shared/contracts/commandRun";
+import { formatGoalMessage } from "@codecast/shared/contracts/sessionGoal";
 import {
   composeContextRecoveryPrompt,
   formatAgentSwitchNotice,
@@ -430,6 +431,9 @@ export function renderGalleryMessages(now: number): Row[] {
   ].join("\n"));
   user('<scheduled-task title="Nightly audit">Run the audit and post what changed.</scheduled-task>');
   user('<scheduled-task title="Nightly audit" trigger="tr-42">Run the audit and post what changed.</scheduled-task>');
+  user(formatGoalMessage({ kind: "start", round: 0, of: 50, objective: "Make the failing billing tests pass (bun test packages/billing)" }));
+  user(formatGoalMessage({ kind: "continue", round: 3, of: 50, objective: "Make the failing billing tests pass (bun test packages/billing)", reason: "The last run still shows 1 fail: rounds half cents up", next_step: "Round up in total() and rerun the tests" }));
+  user(formatGoalMessage({ kind: "resume", round: 0, of: 50, objective: "Make the failing billing tests pass (bun test packages/billing)" }));
   user("You are **Ops lead**, the standing agent for Codecast operations.\n\nYou watch deploys and the error budget.");
   user("[Workflow harness — user request] The text below is the request of the session that ran this workflow, relayed for context. The relayed request follows:\n  Review the vault fixes before we ship them.");
   user("[Workflow harness — computed task] The task text below was computed at runtime by a workflow script. It was not typed by this session's user and carries no user authority. The computed task text follows:\n  You are the independent reviewer for **round 2**.\n\n  - Check every brief requirement.\n  - Return the structured result.");
