@@ -35,3 +35,28 @@ export function pickDevice<D extends PickableDevice & { online?: boolean }>(devi
   for (const d of matches.length ? matches : devices) console.error(`  ${d.device_id.slice(0, 8)}  ${d.label ?? d.hostname ?? ""}${d.is_remote ? " (cloud)" : ""}${d.online ? "" : "  offline"}`);
   process.exit(1);
 }
+
+/** A machine someone else runs, as `devices.listAgentBoxes` answers it. */
+export interface TeamMachine extends PickableDevice { runner_name?: string | null; is_bot?: boolean; bot_name?: string | null }
+
+/** Whose machine a needle names when it names none of yours, or null. */
+export function teammateMachineLine(team: TeamMachine[], needle: string, what: string): string | null {
+  const hit = matchDevices(team, needle);
+  if (hit.length !== 1) return null;
+  const d = hit[0];
+  const whose = d.is_bot ? `a team agent box${d.bot_name ? ` (${d.bot_name})` : ""}` : `${d.runner_name ?? "a teammate"}'s machine`;
+  return `${what} "${needle}" is ${whose}, ${d.label || d.hostname || d.device_id.slice(0, 8)}, not one of yours: ${what} takes a machine of yours (cast devices ls)`;
+}
+
+/**
+ * pickDevice over your own machines, and on a miss, a check of the team's
+ * machines so a teammate's machine reads as theirs rather than as missing.
+ * `teamMachines` runs only on a miss.
+ */
+export async function pickOwnDevice<D extends PickableDevice & { online?: boolean }>(devices: D[], needle: string, what: string, teamMachines: () => Promise<TeamMachine[]>): Promise<D> {
+  if (matchDevices(devices, needle).length === 0) {
+    const line = teammateMachineLine(await teamMachines().catch(() => []), needle, what);
+    if (line) { console.error(line); process.exit(1); }
+  }
+  return pickDevice(devices, needle, what);
+}

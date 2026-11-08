@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { matchDevices } from "./pickDevice.js";
+import { matchDevices, teammateMachineLine } from "./pickDevice.js";
 
 const devices = [
   { device_id: "b556d7280eed856e", label: "macOS - pegasus", hostname: "pegasus.local" },
@@ -50,5 +50,20 @@ describe("naming a teammate's own other Mac (cast trigger add --device)", () => 
   test("an exact hostname wins over the longer one it prefixes", () => {
     expect(matchDevices(roster, "Alexanders-MacBook-Pro").map((d) => d.device_id)).toEqual(["4e2cfe0d258f"]);
     expect(matchDevices(roster, "macbook")).toHaveLength(2);
+  });
+});
+
+describe("a teammate's machine named where yours is expected", () => {
+  const team = [
+    { device_id: "aaaa1111", label: "cam-mini", runner_name: "Cam", is_bot: false },
+    { device_id: "bbbb2222", label: "union-box-1", runner_name: "union-bot", bot_name: "union-bot", is_bot: true },
+  ];
+  test("says whose machine it is", () => {
+    expect(teammateMachineLine(team, "cam-mini", "--to")).toBe(`--to "cam-mini" is Cam's machine, cam-mini, not one of yours: --to takes a machine of yours (cast devices ls)`);
+    expect(teammateMachineLine(team, "union-box", "--device")).toContain("is a team agent box (union-bot), union-box-1");
+  });
+  test("names nothing when no team machine matches, or several do", () => {
+    expect(teammateMachineLine(team, "nowhere", "--to")).toBeNull();
+    expect(teammateMachineLine(team, "i", "--to")).toBeNull();
   });
 });
