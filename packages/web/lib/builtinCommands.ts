@@ -118,3 +118,6 @@ const BUILTIN_COMMANDS: Record<string, Skill[]> = {
 export function getBuiltinCommands(agentType?: string): Skill[] {
   return BUILTIN_COMMANDS[agentType || "claude_code"] || CLAUDE_CODE;
 }
+
+/** Codecast's own `/goal`, offered only by a composer that runs it itself (ConversationView handleGoalCommand). */
+export const GOAL_COMMAND: Skill = { name: "goal", description: "Keep the agent working until an objective is met [pause|resume|clear]" };

@@ -41,6 +41,7 @@ import { GROUP_WINDOW_MS } from "@codecast/shared/chat";
 import { useNowWhen } from "../hooks/useCoarseNow";
 import { isAskTool } from "@codecast/shared/render";
 import { resolveSessionSkills } from "../lib/sessionSkills";
+import { GOAL_COMMAND } from "../lib/builtinCommands";
 import { latestUsageOf } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { StableContextCards } from "./StableContextCards";
@@ -50,6 +51,10 @@ import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useOpenReveal, useR
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession, toggleSessionsLikeFirst } from "../store/undoActions";
 import { toast } from "sonner";
+import { goalCanPause, goalCanResume, goalFrameLine, goalObjectiveProblem, goalMessageBody, parseGoalCommand, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
+import { SessionGoalPill } from "./SessionGoalPill";
+import { SwitchReview } from "./consequential/ConsequentialSwitch";
+import { sessionGoalLedger } from "../lib/sessionGoalLedger";
 import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, jumpRowForMessage, initialScrollEdge, settleTimelineItemAtOffset, cancelActiveItemSettle, releaseScrollTarget, shouldResumeFollow, READER_SCROLL_WINDOW_MS } from "./conversationScroll";
 import { deriveHostedRunningPhrase, deriveRunningPhrase, shouldShowIdleGap, workingSinceForClock, isProducingAgentStatus } from "./workingStatus";
 import { quoteToComposer, submitReview } from "../lib/reviewActions";
@@ -1125,6 +1130,48 @@ const ConversationViewInner = (
 
 
   const populateInputRef = useRef<((text: string, opts?: { append?: boolean }) => void) | null>(null);
+  // `/goal` in the composer (shared/contracts/sessionGoal parseGoalCommand):
+  // setting or resuming opens the consequential review, and the typed text
+  // stays in the composer until the person confirms; pause, clear and show
+  // act at once.
+  const clearComposerRef = useRef<(() => void) | null>(null);
+  const [goalReview, setGoalReview] = useState<{ objective: string; resume: boolean } | null>(null);
+  const goalConversationId = conversation?._id ? String(conversation._id) : "";
+  const handleGoalCommand = useCallback((text: string): boolean => {
+    const cmd = parseGoalCommand(text);
+    if (!cmd || !goalConversationId) return false;
+    const st = useInboxStore.getState();
+    const goal = sessionGoalOf(st.sessionGoals, goalConversationId);
+    const live = goal && goal.status !== "cleared" ? goal : null;
+    if (cmd.op === "set") {
+      const problem = goalObjectiveProblem(cmd.objective);
+      if (problem) toast(problem);
+      else setGoalReview({ objective: cmd.objective, resume: false });
+      return true;
+    }
+    if (cmd.op === "resume") {
+      if (live && goalCanResume(live)) setGoalReview({ objective: live.objective, resume: true });
+      else toast(live ? `The goal is ${live.status === "done" ? "met" : "running"}` : "No goal on this session");
+      return true;
+    }
+    if (!live) toast("No goal on this session");
+    else if (cmd.op === "show") toast(`Goal ${live.status === "active" ? "running" : live.status === "done" ? "met" : live.status}, round ${live.rounds}/${live.max_rounds}`, { description: live.reason || live.objective });
+    else if (cmd.op === "pause") {
+      if (goalCanPause(live)) st.pauseSessionGoal(goalConversationId);
+      else toast(`The goal is ${live.status}`);
+    } else if (cmd.op === "clear") st.clearSessionGoal(goalConversationId);
+    clearComposerRef.current?.();
+    return true;
+  }, [goalConversationId]);
+  const confirmGoal = useCallback(() => {
+    const review = goalReview;
+    setGoalReview(null);
+    if (!review || !goalConversationId) return;
+    const st = useInboxStore.getState();
+    if (review.resume) st.resumeSessionGoal(goalConversationId);
+    else st.setSessionGoal(goalConversationId, review.objective, `goal-${goalConversationId}-${Date.now().toString(36)}`);
+    clearComposerRef.current?.();
+  }, [goalReview, goalConversationId]);
   const { handleForkFromMessage, forkHandler, handleForkFromBranch, handleForkReply, forkTailHandler } = useForkActions({ injectSession, conversation, addOptimisticFork, currentUser, hasMoreAbove, convCommand, timelineRef, populateInputRef, addOptimisticMsg, sendInlineMessage });
   // Bridge for the quote/comment review UI: lets MessageReview, the selection
   // toolbar, and the review bar push text into the composer without prop-drilling.
@@ -1181,6 +1228,8 @@ const ConversationViewInner = (
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
   const { userMsgKindMap, turnAggregates, cleanRows, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
   const { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery } = useSessionMentions({ conversation, managedSession });
+  // The owner composer runs /goal itself, so it offers it beside the agent's commands.
+  const composerSkills = useMemo(() => [GOAL_COMMAND, ...(sessionSkills ?? []).filter((k) => k.name !== GOAL_COMMAND.name)], [sessionSkills]);
   const { serverUserMessages, stickyEligibleServerIds, stickyUserMsgIndices, navigatorTimelineIndices, timelineMessageIds, loadedMessageIds } = useNavigatorIndex({ cachedUserMessages, messages, timeline, userMsgKindMap });
 
   const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
@@ -1557,6 +1606,7 @@ const ConversationViewInner = (
         case 'skill_expansion': return commandExpansionMap.consumed.has(msg._id) ? 0 : 44;
         case 'task_notification': return 40;
         case 'scheduled_task': return 56;
+        case 'goal_round': return 44;
         case 'role_brief': return 44;
         case 'workflow_frame': return kind.frame === 'user request' ? 44 : 100;
         case 'teammate_events': return 80;
@@ -3601,6 +3651,10 @@ const ConversationViewInner = (
           return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} />;
         case 'scheduled_task':
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} hosted={isHostedAgentType(conversation?.agent_type)} />;
+        case 'goal_round': {
+          const line = goalFrameLine(kind.frame);
+          return <FoldedPromptBlock key={msg._id} label={line.label} preview={line.detail} content={goalMessageBody(msg.content!)} timestamp={msg.timestamp} />;
+        }
         case 'role_brief':
           return <FoldedPromptBlock key={msg._id} label="Role brief" preview={stripSystemTags(msg.content!).trim().split("\n")[0].replace(/\*\*/g, "")} content={stripSystemTags(msg.content!).trim()} timestamp={msg.timestamp} />;
         case 'workflow_frame':
@@ -3915,6 +3969,14 @@ const ConversationViewInner = (
   const composerHostsControl = ownerComposerMounted && !(inRevealBand && !bandComposerOpen) && !newSessionPage && !isHostedConv;
   const threadStatePanel = conversation ? (
     <div data-cc-thread-state>
+      <SessionGoalPill conversationId={conversation._id.toString()} sessionTitle={conversation.title || "This session"} canSteer={effectiveIsOwner} />
+      {goalReview && (
+        <SwitchReview
+          ledger={sessionGoalLedger({ objective: goalReview.objective, session: conversation.title || "This session", resume: goalReview.resume })}
+          onClose={() => setGoalReview(null)}
+          onConfirm={confirmGoal}
+        />
+      )}
       <ThreadStatePanel
         conversationId={conversation._id.toString()}
         threadState={conversation.thread_state}
@@ -5041,7 +5103,7 @@ const ConversationViewInner = (
               ) : null}
               <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} sharedDraft={composerPresenceEnabled(conversation) && !onSendOverride && !newSessionPage} status={conversation.status} embedded={embedded} hero={newSessionPage} sessionControl={composerHostsControl && (
                 <HeaderModelControl variant="composer" conversationId={conversation._id} agentType={conversation.agent_type} model={conversation.model} effort={(conversation as any).effort} messageCount={conversation.message_count} canEdit open={sessionControlOpen} onOpenChange={setSessionControlOpen} />
-              )} composerFoot={newSessionPage ? <NewSessionFoot slotRef={setNewSessionFootSlot} dropRef={dropFilesRef} /> : undefined} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (newSessionPage && roleSend.recipient ? sendToRole : workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
+              )} composerFoot={newSessionPage ? <NewSessionFoot slotRef={setNewSessionFootSlot} dropRef={dropFilesRef} /> : undefined} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkTail={forkTailHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGoalCommand={newSessionPage || onSendOverride ? undefined : handleGoalCommand} clearInputRef={clearComposerRef} onGateSend={onSendOverride ?? (newSessionPage && roleSend.recipient ? sendToRole : workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={<>
                 {/* Who else is in this box (a teammate's live draft, or "is
                     here" for a share link guest with no face on the roster)
                     and who asks to send into it. Inside the composer, so they
@@ -5054,7 +5116,7 @@ const ConversationViewInner = (
                 )}
                 <CollabRequestBanner conversationId={conversation._id.toString()} />
                 {composerNode}
-              </>} composerPlaceholder={newSessionPage && roleSend.recipient ? `Ask ${roleSend.recipient.name} for anything…` : composerPlaceholder} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
+              </>} composerPlaceholder={newSessionPage && roleSend.recipient ? `Ask ${roleSend.recipient.name} for anything…` : composerPlaceholder} skills={newSessionPage || onSendOverride ? sessionSkills : composerSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open
