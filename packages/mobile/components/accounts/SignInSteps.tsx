@@ -2,7 +2,7 @@
 // an in-app browser, copy the code it ends on, come back, paste. Paste reads
 // the clipboard and sends in one tap; typing it stays possible.
 import { useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
+import { ActivityIndicator, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -12,6 +12,7 @@ import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { readClipboard } from '@/lib/clipboard';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { loginFlowPhase, useClaudeSignIn, type AccountDevice } from './claudeSignIn';
+import { appAlert } from '@/lib/popups';
 
 export function SignInSteps({ device, profile, who }: { device: AccountDevice; profile?: string; who: string }) {
   const Theme = useTheme();
@@ -29,7 +30,7 @@ export function SignInSteps({ device, profile, who }: { device: AccountDevice; p
     try {
       value = oauthApprovalCode(raw);
     } catch (err) {
-      Alert.alert('That is not a sign-in code', err instanceof Error ? err.message : undefined);
+      appAlert('That is not a sign-in code', err instanceof Error ? err.message : undefined);
       return;
     }
     setSending(true);
@@ -38,7 +39,7 @@ export function SignInSteps({ device, profile, who }: { device: AccountDevice; p
       setCode('');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
-      Alert.alert('Could not send the code', err instanceof Error ? err.message : undefined);
+      appAlert('Could not send the code', err instanceof Error ? err.message : undefined);
     } finally {
       setSending(false);
     }
@@ -47,7 +48,7 @@ export function SignInSteps({ device, profile, who }: { device: AccountDevice; p
   const pasteAndSend = async () => {
     const text = await readClipboard();
     if (text) void send(text);
-    else Alert.alert('Nothing to paste', 'Copy the code on the sign-in page, then tap Paste.');
+    else appAlert('Nothing to paste', 'Copy the code on the sign-in page, then tap Paste.');
   };
 
   if (phase === 'confirmed') {

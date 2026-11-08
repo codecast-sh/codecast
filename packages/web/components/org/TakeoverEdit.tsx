@@ -1,7 +1,7 @@
 "use client";
 // The sentence a person reads before a role gains scope, and the one edit
 // that goes with it (org-roles-run-work.md R1): "12 sessions now report to
-// @growth and leave your needs input" and "Leave the sessions where they
+// @growth and leave Needs You" and "Leave the sessions where they
 // are". One component, so the proposal's rows and asks, the scope editor in
 // Settings, the lead chip and the hire form say it the same way.
 import { useRef, useState } from "react";

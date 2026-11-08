@@ -11,7 +11,7 @@
 //   macOS wants a monochrome mask. The idle image stays a TEMPLATE image, which
 //   is what lets AppKit paint it for a light or a dark menu bar. The attention
 //   image is the same glyph filled with --sol-yellow (#b58900, the colour the
-//   inbox's Needs Input section already wears) and is NOT a template image:
+//   inbox's Needs You section already wears) and is NOT a template image:
 //   macOS would throw the colour away and paint the mask, leaving the two
 //   states identical. That colour was chosen because it holds contrast against
 //   a black menu bar and a white one alike, so one file covers both themes.

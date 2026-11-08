@@ -51,7 +51,7 @@ count_messages() {
 # No stamp = the session has NEVER declared a state. Short exchanges stay
 # quiet; a substantial thread ending its turn undeclared is asked ONCE (Stop
 # only, held for one more step) to say who acts next — its own \`--status\` is
-# what files it under Needs Input / Done / Dormant, and beats any classifier
+# what files it under Needs You / Done / Dormant, and beats any classifier
 # reading its prose. The recruit mark makes it once per session; a session that
 # then declares gets the ordinary staleness reminders below.
 if [ ! -f "$DIR/$SESSION_ID.json" ]; then

@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
 import { approvesPersonsAct } from '@codecast/shared/contracts/commandRun';
-import { CommandRunBlock } from '@/components/decisions/CommandRunBlock';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -108,7 +107,6 @@ export default function DecisionScreen() {
         <ScrollView style={{ backgroundColor: Theme.bg }} contentContainerStyle={styles.body}>
           <Text style={styles.question}>{source.question}</Text>
           <Text style={styles.muted}>{settled}</Text>
-          {row?.run ? <CommandRunBlock run={row.run} /> : null}
           {nextId ? <AnswerButton look={look} label="Next decision" onPress={goNext} /> : null}
         </ScrollView>
       </>
@@ -122,7 +120,6 @@ export default function DecisionScreen() {
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <QueueChip item={item} now={now} />
           <Text style={styles.question} selectable>{item.question}</Text>
-          {row?.run ? <CommandRunBlock run={row.run} /> : null}
           {row ? <HandoffNote row={row} /> : null}
           {askingSessionLine(item) ? (
             <TouchableOpacity onPress={() => router.push(`/session/${item.conversationId}`)} hitSlop={8}>

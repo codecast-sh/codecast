@@ -119,7 +119,7 @@ Times are film seconds; named cues are in `fixtures/story.ts`. "Light interactio
 ### 1 Inbox (0 to 9)
 
 - 0.0: the film opens on the whole desk window, already composed (the poster frame is 6.6).
-- The desk: sidebar (Inbox with its count, Feed, Tasks, Docs, Workflows; projects), the inbox list with a section header and six sessions from five agents: one working (green ping), one NEEDS INPUT, one DONE, one idle, one unread, one on a cloud host (worktree chip). Timestamps are offsets from mount.
+- The desk: sidebar (Inbox with its count, Feed, Tasks, Docs, Workflows; projects), the inbox list with a section header and six sessions from five agents: one working (green ping), one NEEDS YOU, one DONE, one idle, one unread, one on a cloud host (worktree chip). Timestamps are offsets from mount.
 - 2.8: agent icons pulse down the column (`SNAP`, 90ms stagger) so the eye reads "every agent".
 - `leadLands` 3.4: the lead's row **Retry failed webhooks** drops in on top; rows below push down on `settle`, 25ms stagger.
 - `leadSelected` 4.8: it takes the selection; the conversation pane cross-fades to it.

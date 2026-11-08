@@ -5,7 +5,7 @@ Pin a short state on this session saying where the work stands. The human sees i
 
 **End every turn by declaring who acts next** with `--status`. It decides where the session files in the human's inbox, and it is how you keep from becoming noise:
 
-- `blocked`: a human must act first (answer, grant, decide). Files under **Needs Input** and claims their eyes, so declare it only when true.
+- `blocked`: a human must act first (answer, grant, decide). Files under **Needs You** and claims their eyes, so declare it only when true.
 - `done`: delivered, nothing stalled; read at leisure.
 - `dormant`: a machine wakes you (a trigger you armed, a background task, another session's reply, a blocker on the task you hold: a PR, a decision, a time). Only when you can **name the wake** in the text; if you can't say what resumes you, you are `blocked`.
 - `working` (the default): still moving.

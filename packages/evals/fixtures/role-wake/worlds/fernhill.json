@@ -28,7 +28,7 @@
       "argv": [
         "sessions"
       ],
-      "out": "Sessions · you\nneeds input 1  ·  working 1\n\nNeeds input (1)\n  jx7ref2  Regenerate the webhooks reference   asks whether to drop the v1 events table (sd-55)\nWorking (1)\n  jx7bil3  Rewrite the billing page for the new plans",
+      "out": "Sessions · you\nneeds input 1  ·  working 1\n\nNeeds you (1)\n  jx7ref2  Regenerate the webhooks reference   asks whether to drop the v1 events table (sd-55)\nWorking (1)\n  jx7bil3  Rewrite the billing page for the new plans",
       "prefix": true
     },
     {
@@ -318,7 +318,7 @@
         "--label",
         "docs"
       ],
-      "out": "Sessions · you\nneeds input 1  ·  working 1\n\nNeeds input (1)\n  jx7ref2  Regenerate the webhooks reference   asks whether to drop the v1 events table (sd-55)\nWorking (1)\n  jx7bil3  Rewrite the billing page for the new plans",
+      "out": "Sessions · you\nneeds input 1  ·  working 1\n\nNeeds you (1)\n  jx7ref2  Regenerate the webhooks reference   asks whether to drop the v1 events table (sd-55)\nWorking (1)\n  jx7bil3  Rewrite the billing page for the new plans",
       "prefix": true
     },
     {

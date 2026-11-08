@@ -27,7 +27,7 @@ describe("mobile session spec", () => {
   });
 
   test("statuses the composer shows", () => {
-    expect(MOBILE_COMPOSER_STATUS.permission_blocked.label).toBe("Needs Input");
+    expect(MOBILE_COMPOSER_STATUS.permission_blocked.label).toBe("Needs You");
     expect(MOBILE_COMPOSER_STATUS.idle).toBeUndefined();
   });
 });

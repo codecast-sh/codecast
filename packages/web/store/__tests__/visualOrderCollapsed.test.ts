@@ -236,18 +236,18 @@ describe("computeVisualOrder lifts questions", () => {
 });
 
 // Ctrl+I / queue advance walk computeVisualOrder(state, { yourMove: true }) —
-// the questions / NEEDS INPUT / DONE cards in render order, taken from the same
+// the questions / NEEDS YOU / DONE cards in render order, taken from the same
 // chokepoint verdicts the panel renders with. Regression: the handler used to
 // re-classify each row (classifySession().waiting), which is blind to the
 // staleness net — a "working" row quiet past the trust TTL that the panel
-// files under NEEDS INPUT, oldest first, so it sits at the very top once old
+// files under NEEDS YOU, oldest first, so it sits at the very top once old
 // sessions are shown. Ctrl+I skipped it and landed on a lower card.
 describe("computeVisualOrder yourMove mirrors the panel's your-move sections", () => {
   const DAY = 24 * 60 * 60 * 1000;
   const yourMove = (state: Parameters<typeof computeVisualOrder>[0]) =>
     computeVisualOrder(state, { yourMove: true }).map(tag);
   // stale: claims "working" but went quiet two days ago → the net files it in
-  // NEEDS INPUT above the fresh idle row (queues sort oldest first).
+  // NEEDS YOU above the fresh idle row (queues sort oldest first).
   // The status stamp goes back with the row's activity: the queue orders by when
   // the state STARTED (shared inboxSortTime, ct-49550), and a row that has been
   // quiet for two days did not have its status change a minute ago.
@@ -256,7 +256,7 @@ describe("computeVisualOrder yourMove mirrors the panel's your-move sections", (
   const working = session("wk", { is_idle: false, agent_status: "working" });
   const withStale = { ...baseState, sessions: byId([staleWorking, idleFresh, working]) };
 
-  it("grouped view: the stale row the panel shows first in NEEDS INPUT is the first target", () => {
+  it("grouped view: the stale row the panel shows first in NEEDS YOU is the first target", () => {
     expect(yourMove(withStale)).toEqual(["stale", "idle"]);
     // and the plain order keeps walking every card
     expect(computeVisualOrder(withStale).map(tag)).toEqual(["stale", "idle", "wk"]);
@@ -272,14 +272,14 @@ describe("computeVisualOrder yourMove mirrors the panel's your-move sections", (
     expect(yourMove({ ...withStale, sessionsWithQueuedMessages: new Set([cid("stale")]) })).toEqual(["idle"]);
   });
 
-  it("a collapsed NEEDS INPUT section is not walked, exactly like the plain order", () => {
+  it("a collapsed NEEDS YOU section is not walked, exactly like the plain order", () => {
     expect(yourMove({ ...withStale, collapsedSections: { needs_input: true } })).toEqual([]);
   });
 
   it("with old sessions hidden the folded stale row is off screen, so it is not the target", () => {
     // The 12h fold cut (shared computeFold): wk (now) → idle (1d) is the first
     // gap over 12h, so the cutoff is idle's activity and only stale (2d) folds.
-    // Shown (the default): the stale row is on screen at the top of NEEDS INPUT.
+    // Shown (the default): the stale row is on screen at the top of NEEDS YOU.
     expect(yourMove(withStale)).toEqual(["stale", "idle"]);
     // Hidden: it is not rendered, so it is not the target.
     expect(yourMove({ ...withStale, clientState: { ui: { inbox_show_old: false } } })).toEqual(["idle"]);

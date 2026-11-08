@@ -1,4 +1,4 @@
-import { StyleSheet, RefreshControl, TouchableOpacity, View as RNView, Alert, ScrollView, Platform, ActionSheetIOS } from 'react-native';
+import { StyleSheet, RefreshControl, TouchableOpacity, View as RNView, ScrollView } from 'react-native';
 import { probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -28,7 +28,8 @@ import { useQuery } from 'convex/react';
 import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { bootMark } from '@/lib/bootProfile';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
-import { holdKill, useUndoBar } from '@/lib/undoBar';
+import { holdKill, showNotice, useUndoBar } from '@/lib/undoBar';
+import { appAlert, appPrompt, showActionSheet } from '@/lib/popups';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
@@ -274,25 +275,26 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const heldKillId = useUndoBar((s) => s.heldKillId);
 
   const confirmKillAllStashed = useCallback((ids: string[]) => {
-    Alert.alert('Kill all stashed', `Stop every stashed session? (${ids.length})`, [
+    appAlert('Kill all stashed', `Stop every stashed session? (${ids.length})`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Kill', style: 'destructive', onPress: () => killSessions(ids) },
     ]);
   }, [killSessions]);
 
   // Label filing — the web session-card context menu's "label" half. Picks from
-  // existing labels (tap the current one to unfile), creates on the fly (iOS
-  // Alert.prompt), all through the shared store's optimistic actions.
+  // existing labels (tap the current one to unfile), creates on the fly, all
+  // through the shared store's optimistic actions.
   const openLabelPicker = useCallback((session: InboxSession) => {
     const store = useInboxStore.getState();
     const labels = sortLabels(store.buckets);
     const current = convBucketMap(store.bucketAssignments)[session._id];
     const pick = (bucket: BucketItem) =>
       store.assignSessionToBucket(session._id, bucket._id === current ? null : bucket._id);
-    const createAndAssign = () => {
-      if (Platform.OS !== 'ios') return;
-      Alert.prompt('New Label', undefined, (name) => {
-        const trimmed = name?.trim();
+    const createAndAssign = () => appPrompt('New label', {
+      placeholder: 'Name',
+      confirm: 'Create',
+      onSubmit: (name) => {
+        const trimmed = name.trim();
         if (!trimmed) return;
         const attemptCreate = async () => {
           try {
@@ -306,13 +308,10 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
             );
           } catch (error) {
             if (mobileCreateFailureDisposition(error) === "accepted-pending") {
-              Alert.alert(
-                'Label queued',
-                'The label is saved for delivery and will appear when CodeCast reconnects.',
-              );
+              showNotice('Label queued until CodeCast reconnects');
               return;
             }
-            Alert.alert(
+            appAlert(
               "Couldn't create label",
               mobileCreateErrorMessage("label", error),
               [
@@ -323,24 +322,12 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           }
         };
         void attemptCreate();
-      });
-    };
-    if (Platform.OS === 'ios') {
-      const names = labels.map((b) => (b._id === current ? `✓ ${b.name}` : b.name));
-      const options = [...names, 'New Label…', 'Cancel'];
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options, cancelButtonIndex: options.length - 1, title: 'Label' },
-        (index) => {
-          if (index < labels.length) pick(labels[index]);
-          else if (index === labels.length) createAndAssign();
-        },
-      );
-    } else {
-      Alert.alert('Label', undefined, [
-        ...labels.map((b) => ({ text: b._id === current ? `✓ ${b.name}` : b.name, onPress: () => pick(b) })),
-        { text: 'Cancel', style: 'cancel' as const },
-      ]);
-    }
+      },
+    });
+    showActionSheet('Label', [
+      ...labels.map((b) => ({ label: b.name, selected: b._id === current, onPress: () => pick(b) })),
+      { label: 'New label…', onPress: createAndAssign },
+    ]);
   }, []);
 
   const handleSessionLongPress = useCallback((session: InboxSession) => {
@@ -349,41 +336,14 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     // Same verb as the web card's right-click menu, same store action, so the
     // dot the phone lights is the dot the desktop shows.
     const markUnread = () => useInboxStore.getState().markSessionUnread(session._id);
-    const options = [
-      session.is_pinned ? 'Unpin' : 'Pin',
-      favoriteLabel,
-      'Mark unread',
-      'Label…',
-      'Stash',
-      'Kill Session',
-      'Cancel',
-    ];
-    const destructiveButtonIndex = 5;
-    const cancelButtonIndex = 6;
-
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options, cancelButtonIndex, destructiveButtonIndex, title: sessionTitle(session) },
-        (index) => {
-          if (index === 0) handlePin(session._id);
-          else if (index === 1) toggleFavorite();
-          else if (index === 2) markUnread();
-          else if (index === 3) openLabelPicker(session);
-          else if (index === 4) handleStash(session._id);
-          else if (index === 5) holdKill(session._id);
-        },
-      );
-    } else {
-      Alert.alert(sessionTitle(session), undefined, [
-        { text: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
-        { text: favoriteLabel, onPress: toggleFavorite },
-        { text: 'Mark unread', onPress: markUnread },
-        { text: 'Label…', onPress: () => openLabelPicker(session) },
-        { text: 'Stash', onPress: () => handleStash(session._id) },
-        { text: 'Kill Session', style: 'destructive', onPress: () => holdKill(session._id) },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    }
+    showActionSheet(sessionTitle(session), [
+      { label: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
+      { label: favoriteLabel, onPress: toggleFavorite },
+      { label: 'Mark unread', onPress: markUnread },
+      { label: 'Label…', onPress: () => openLabelPicker(session) },
+      { label: 'Stash', onPress: () => handleStash(session._id) },
+      { label: 'Kill session', destructive: true, onPress: () => holdKill(session._id) },
+    ]);
   }, [handlePin, handleStash, openLabelPicker]);
 
   const onRefresh = useCallback(() => {
@@ -507,7 +467,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // armed inject trigger or a live loop parks its home in DORMANT as data
   // (armed_trigger_kind / loop_state reach the shared classifier inside the
   // chokepoint), identically on web, mobile and the server. QUESTIONS renders
-  // ahead of Needs Input — same lift web ships; it was missing here.
+  // ahead of Needs You — same lift web ships; it was missing here.
   const filteredQuestions = useMemo(() => chipFilter(questions), [chipFilter, questions]);
   const statusNeedsInput = filteredNeedsInput;
   const statusDone = filteredDone;
@@ -588,9 +548,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       sectionHeaderCount(shown, full, n, showSubagents);
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta, undefined, countOf(filteredPinned, pinned, placed.counts.pinned)));
     sections.push(renderSection('New', filteredNew, Theme.blue, "New", countOf(filteredNew, newSessions, placed.counts.newSessions)));
-    // Top-down "who acts next": you (Needs Input, Done to review), the agent
+    // Top-down "who acts next": you (Needs You, Done to review), the agent
     // (Working), a machine (Dormant) — same order as the web panel.
-    sections.push(renderSection('Needs Input', statusNeedsInput, Theme.accent, "Needs Input", countOf(statusNeedsInput, needsInput, placed.counts.needsInput)));
+    sections.push(renderSection('Needs You', statusNeedsInput, Theme.accent, "Needs You", countOf(statusNeedsInput, needsInput, placed.counts.needsInput)));
     sections.push(renderSection("Done", statusDone, Theme.cyan, undefined, countOf(statusDone, done, placed.counts.done)));
     sections.push(renderSection("Working", statusWorking, Theme.greenBright, undefined, countOf(statusWorking, working, placed.counts.working)));
     sections.push(renderSection('Dormant', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));

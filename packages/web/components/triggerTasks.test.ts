@@ -357,7 +357,7 @@ describe("an armed trigger's resting home in the walk (the armed_trigger_kind fa
   // Trigger absorption is no longer a nav/panel pass over the trigger
   // subscription: the home's armed_trigger_kind reaches the shared classifier
   // as data (identically on every replica), so a resting standing home files
-  // DORMANT — it leaves Needs Input but stays reachable by Ctrl+J/K at the
+  // DORMANT — it leaves Needs You but stays reachable by Ctrl+J/K at the
   // end, where the panel renders it. Nothing vanishes from the walk.
   const sessions: Record<string, InboxSession> = {
     resting: session("resting", { is_idle: true, armed_trigger_kind: "standing", last_turn_allows_park: true }),

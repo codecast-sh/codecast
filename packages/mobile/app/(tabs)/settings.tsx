@@ -1,4 +1,4 @@
-import { StyleSheet, TouchableOpacity, View as RNView, Alert } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Text as RNText } from '@/components/Themed';
@@ -19,6 +19,7 @@ import { LANE_COPY, meterWords } from '@codecast/web/components/simple/lane';
 import { usePlanMeter } from '@codecast/web/components/simple/usePlanFigures';
 import { useLaneMailAbilities } from '@codecast/web/components/simple/useLaneMail';
 import { useSecrets } from '@codecast/web/hooks/useSyncSecrets';
+import { appAlert } from '@/lib/popups';
 
 // The settings home is a short list of rows; each opens its own screen
 // (app/settings/[section].tsx), so every switch is one tap deeper and the
@@ -41,7 +42,7 @@ export default function SettingsScreen() {
   const open = (section: string) => router.push(`/settings/${section}` as never);
 
   const handleSignOut = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+    appAlert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: signOut },
     ]);

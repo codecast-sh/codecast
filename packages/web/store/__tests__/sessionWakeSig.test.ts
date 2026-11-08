@@ -110,7 +110,7 @@ describe("sessionStructuralSig — real bucket/order changes flip it", () => {
   // Ownership decides whose inbox the row is in (isForeignRow →
   // isAssignedAwayFromViewer), so a handoff has to wake the placement. Without
   // this the memo kept serving the pre-handoff answer until some other row
-  // moved, and a session assigned away stayed in the assigner's Needs Input.
+  // moved, and a session assigned away stayed in the assigner's Needs You.
   it("flips when the session is assigned to someone else, and when I am an owner", () => {
     expect(
       sessionStructuralSig(session("a", { owner_user_id: "users_them" })),

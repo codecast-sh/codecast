@@ -59,7 +59,7 @@ function LiveDot({ live }: { live?: BranchLive }) {
     );
   }
   if (live === "needs_input") {
-    return <span className="w-2 h-2 rounded-full bg-sol-yellow flex-shrink-0" title="Needs input" />;
+    return <span className="w-2 h-2 rounded-full bg-sol-yellow flex-shrink-0" title="Needs you" />;
   }
   return <span className="w-2 h-2 rounded-full border border-sol-border flex-shrink-0" title={live ? "Idle" : undefined} />;
 }

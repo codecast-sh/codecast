@@ -4,7 +4,7 @@
 // line sent here is the wake, the same as web; the header's board button opens
 // everything in the role's scope. "workspace" is the root: the workspace agent.
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
+import { ActivityIndicator, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from 'convex/react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -19,6 +19,7 @@ import { parentName } from '@codecast/web/components/org/orgMeta';
 import { canEditRole, scopeSeatOf } from '@codecast/web/lib/scopePage';
 import { ledgerLines, roleOnlineLedger } from '@codecast/web/components/consequential/roleOnline';
 import { autonomyOn } from '@codecast/shared/contracts/roleAutonomy';
+import { appAlert } from '@/lib/popups';
 
 export default function RoleScreen() {
   const Theme = useTheme();
@@ -148,5 +149,5 @@ const styles = themedStyles((Theme) => StyleSheet.create({
 /** Bringing a role online starts its standing session, and with its own switch on, paid work unasked: the press asks first, with the numbers. */
 function confirmOnline(role: { handle: string; name: string; trust?: string | null; caps?: { hands_per_day?: number | null } | null }, host: string, go: () => void) {
   const l = roleOnlineLedger({ handle: role.handle, name: role.name, host, startsOnItsOwn: autonomyOn(role.trust), sessionsPerDay: role.caps?.hands_per_day ?? 6 });
-  Alert.alert(l.name, ledgerLines(l).join('\n'), [{ text: l.keep ?? 'Keep offline', style: 'cancel' }, { text: l.confirm, style: 'destructive', onPress: go }]);
+  appAlert(l.name, ledgerLines(l).join('\n'), [{ text: l.keep ?? 'Keep offline', style: 'cancel' }, { text: l.confirm, style: 'destructive', onPress: go }]);
 }

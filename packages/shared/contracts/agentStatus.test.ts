@@ -122,7 +122,7 @@ describe("isLivenessStale", () => {
 // The heartbeat window measures the heartbeat WRITES, and those land on the
 // first flush past the server's throttle — never on the flush cadence alone.
 // When the window did not clear that interval, a session running a long silent
-// tool call read as a dead daemon and filed under Needs Input while its daemon
+// tool call read as a dead daemon and filed under Needs You while its daemon
 // was beating (2026-09-17: writes measured 60s apart in steady state and 85s
 // behind a late flush, against a 90s window).
 describe("heartbeat liveness window", () => {

@@ -13,7 +13,7 @@ import { counted, quoted, sessionTitle } from "../labels";
 import { keepConversationRows } from "../thinConversation";
 
 export const USER_REST_LABEL: Record<UserRest, string> = {
-  needs_input: "Needs input",
+  needs_input: "Needs you",
   done: "Done",
   dormant: "Dormant",
 };

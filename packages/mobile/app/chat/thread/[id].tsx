@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useActiveTeamFeature } from '@/lib/teamFeatures';
-import {
-  StyleSheet, FlatList, TouchableOpacity, View as RNView,
-  KeyboardAvoidingView, Platform, AppState, Alert,
-} from 'react-native';
+import { StyleSheet, FlatList, TouchableOpacity, View as RNView, KeyboardAvoidingView, Platform, AppState } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import * as Haptics from 'expo-haptics';
 import { copyToClipboard } from '@/lib/clipboard';
@@ -25,6 +22,7 @@ import { MessageActionsSheet, type MessageAction } from '@/components/chat/Messa
 import { ImageViewer } from '@/components/chat/ImageViewer';
 import { TypingRow } from '@/components/chat/TypingRow';
 import type { ChatAttachmentArg } from '@/components/chat/chatUpload';
+import { appAlert } from '@/lib/popups';
 
 // One thread: the root as the subject, the replies under it, and a composer
 // that says out loud when a plain reply will reach the anchor. That hint comes
@@ -224,7 +222,7 @@ export default function ChatThreadScreen() {
     } else if (action.kind === 'edit') {
       setEditing({ messageId: message.id, content: message.content });
     } else if (action.kind === 'delete') {
-      Alert.alert('Delete message?', 'It will show as deleted for everyone.', [
+      appAlert('Delete message?', 'It will show as deleted for everyone.', [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Delete', style: 'destructive', onPress: () => useInboxStore.getState().deleteChatMessage(message.id) },
       ]);

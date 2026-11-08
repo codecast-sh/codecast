@@ -1,6 +1,6 @@
 // A permission answer carries more than approve/deny: a denial's reason and an
 // approval that keeps Claude's suggested rules. And a prompt whose machine
-// stopped beating is expired so Needs Input does not keep asking.
+// stopped beating is expired so Needs You does not keep asking.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";

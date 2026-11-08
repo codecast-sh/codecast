@@ -91,7 +91,7 @@ export function DeskRail(_: PartProps) {
 }
 
 /**
- * The inbox list in its default grouped view: Needs Input, Done, then
+ * The inbox list in its default grouped view: Needs You, Done, then
  * Working, where the lead lands on top and its workers nest under it from
  * their spawn cues. Clicking a row selects it and the star toggles, locally,
  * until the camera moves on.

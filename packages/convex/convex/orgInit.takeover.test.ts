@@ -90,7 +90,7 @@ describe("a scope change takes over the sessions in it", () => {
     const res = await applyScope(ctx, ME as any, BOUNDARY, { kind: "scope", handle: "@growth", add: ["pr-1"] }, OPTS);
     expect(res.status).toBe("applied");
     const note = (res as any).note as string;
-    expect(note).toContain("2 sessions now report to @growth and leave your needs input");
+    expect(note).toContain("2 sessions now report to @growth and leave Needs You");
     expect(note).toMatch(/\d told now/);
     expect(roleOf(db, 1)).toBe(role._id);
     expect(roleOf(db, 2)).toBe(role._id);
@@ -106,7 +106,7 @@ describe("a scope change takes over the sessions in it", () => {
     const ctx = ctxOf(db);
     const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] } });
     const dry = await takeOverSessions(ctx, ME as any, role._id, { dry: true });
-    expect(takeoverPhrase("growth", dry, false)).toBe("2 sessions now report to @growth and leave your needs input");
+    expect(takeoverPhrase("growth", dry, false)).toBe("2 sessions now report to @growth and leave Needs You");
     expect(roleOf(db, 1)).toBeUndefined();
     expect(db._tables.pending_messages.length).toBe(0);
   });
@@ -225,7 +225,7 @@ describe("the role update is the one place a live role takes over", () => {
     // Three: the two on the gained project, and the one on the project the
     // role already had. The takeover reads the role's whole scope, and a bare
     // performCreateRole (no hire, no apply) had moved nothing for it.
-    expect(updated.took_over.phrase).toContain("3 sessions now report to @growth and leave your needs input");
+    expect(updated.took_over.phrase).toContain("3 sessions now report to @growth and leave Needs You");
     expect(roleOf(db, 1)).toBe(role._id);
     expect(roleOf(db, 2)).toBe(role._id);
     expect(roleOf(db, 4)).toBe(role._id);

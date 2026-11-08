@@ -4,15 +4,7 @@ import {
   useMemo,
   useRef,
   useEffect } from "react";
-import {
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  View as RNView,
-  ActionSheetIOS,
-  ActivityIndicator,
-  type TextInput as RNTextInput,
-} from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, View as RNView, ActivityIndicator, type TextInput as RNTextInput } from 'react-native';
 import { Text as RNText, TextInput } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
@@ -29,6 +21,7 @@ import { MarkdownContent } from "@/components/MarkdownRenderer";
 import { CollapsibleBody } from "@/components/CollapsibleBody";
 import { formatRelativeTime } from "@/components/SessionItem";
 import { taskGraphView, type BlockerRow, type PrKey } from "@/lib/taskGraphRows";
+import { showActionSheet } from "@/lib/popups";
 import {
   STATUS_CONFIG,
   STATUS_ORDER,
@@ -126,48 +119,32 @@ export default function TaskDetailScreen() {
     const open = openSubtasksOf(shortId);
     if (open.length === 0) { updateTask(shortId, { status: next }); return; }
     const verb = next === "done" ? "Close" : "Drop";
-    ActionSheetIOS.showActionSheetWithOptions(
-      {
-        options: [`${verb} subtasks too`, `${verb} only this`, "Cancel"],
-        cancelButtonIndex: 2,
-        title: `${open.length} open subtask${open.length === 1 ? "" : "s"}`,
-      },
-      (i) => {
-        if (i === 0) updateTask(shortId, { status: next, subtask_resolution: "cascade" });
-        else if (i === 1) updateTask(shortId, { status: next, subtask_resolution: "only_parent" });
-      },
-    );
+    showActionSheet(`${open.length} open subtask${open.length === 1 ? "" : "s"}`, [
+      { label: `${verb} subtasks too`, onPress: () => updateTask(shortId, { status: next, subtask_resolution: "cascade" }) },
+      { label: `${verb} only this`, onPress: () => updateTask(shortId, { status: next, subtask_resolution: "only_parent" }) },
+    ]);
   }, [updateTask]);
 
   const handleStatusPress = useCallback(() => {
     if (!task) return;
-    const available = STATUS_ORDER.filter((s) => s !== task.status);
-    const options = available.map((s) => STATUS_CONFIG[s].label);
-    options.push("Cancel");
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: "Change Status" },
-      (idx) => {
-        if (idx >= available.length) return;
-        const next = available[idx];
+    showActionSheet("Status", STATUS_ORDER.map((next) => ({
+      label: STATUS_CONFIG[next].label,
+      selected: next === task.status,
+      onPress: () => {
+        if (next === task.status) return;
         if (next === "done" || next === "dropped") closeWithGuard(task.short_id, next);
         else updateTask(task.short_id, { status: next });
       },
-    );
+    })));
   }, [task, updateTask, closeWithGuard]);
 
   const handlePriorityPress = useCallback(() => {
     if (!task) return;
-    const prios = (Object.keys(PRIORITY_CONFIG) as TaskPriority[]).filter((p) => p !== task.priority);
-    const options = prios.map((p) => PRIORITY_CONFIG[p].label);
-    options.push("Cancel");
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: "Change Priority" },
-      (idx) => {
-        if (idx < prios.length) {
-          updateTask(task.short_id, { priority: prios[idx] });
-        }
-      },
-    );
+    showActionSheet("Priority", (Object.keys(PRIORITY_CONFIG) as TaskPriority[]).map((p) => ({
+      label: PRIORITY_CONFIG[p].label,
+      selected: p === task.priority,
+      onPress: () => { if (p !== task.priority) updateTask(task.short_id, { priority: p }); },
+    })));
   }, [task, updateTask]);
 
   const handleAddComment = useCallback(() => {

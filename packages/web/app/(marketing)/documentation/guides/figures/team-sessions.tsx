@@ -71,7 +71,7 @@ const SESSIONS: Row[] = [
   { title: "Audit log export to S3", who: "Alex", agent: "Codex", ago: 47, state: "done" },
 ];
 const STATE: Record<Row["state"], { label: string; ink: string }> = {
-  needs: { label: "Needs input", ink: SOL.yellow },
+  needs: { label: "Needs you", ink: SOL.yellow },
   working: { label: "Working", ink: SOL.green },
   done: { label: "Done", ink: SOL.cyan },
 };

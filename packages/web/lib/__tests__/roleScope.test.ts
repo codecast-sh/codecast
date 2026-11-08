@@ -89,7 +89,7 @@ describe("buildRoleScope", () => {
   test("sessions read by who acts next, in a person's words", () => {
     expect(model.sessions!.total).toBe(growth.total);
     expect(sessionsLine(model.sessions!)).toMatch(/waiting on a person/);
-    expect(sessionsLine(model.sessions!)).not.toMatch(/needs_input|Needs input/);
+    expect(sessionsLine(model.sessions!)).not.toMatch(/needs_input|Needs you/);
   });
 
   test("who it reports to, who reports to it, and what it owns", () => {

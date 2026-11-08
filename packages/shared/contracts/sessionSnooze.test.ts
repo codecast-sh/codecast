@@ -20,7 +20,7 @@ describe("session snooze", () => {
     }
   });
 
-  test("expiry returns to Needs Input even with an old verdict or question", () => {
+  test("expiry returns to Needs You even with an old verdict or question", () => {
     for (const agent_status of ["working", "done", "dormant", "permission_blocked"]) {
       expect(placeProjectableRow({ ...row, agent_status }, true, row.inbox_snoozed_until)).toEqual({ bucket: "needs_input", work_state: "needs_input" });
     }

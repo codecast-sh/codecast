@@ -60,7 +60,7 @@ describe("classifySession is a thin adapter over the shared classifier (no secon
     }
   });
 
-  it("an unresponsive row with queued work is NEEDS INPUT — the arm the legacy chain never had (ct: two-replica simulation)", () => {
+  it("an unresponsive row with queued work is NEEDS YOU — the arm the legacy chain never had (ct: two-replica simulation)", () => {
     // message_count 12, is_idle false, has_pending true, no status: the
     // legacy isSessionWaitingForInput read `canDeliver && has_pending` as
     // working; the shared rule files a dead daemon's queue as a hard block.

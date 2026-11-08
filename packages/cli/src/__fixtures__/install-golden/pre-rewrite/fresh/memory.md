@@ -36,7 +36,7 @@ cast sessions <id> --messages -w  # …focused on one session
 # Event states use underscores ("needs_input"); the --state flag accepts either form.
 # --state: working | needs-input | idle | pinned | live (also works on cast feed)
 # needs-input = ball in your court (finished turn, open question, permission prompt, dead with
-# output) — same as the web inbox's NEEDS INPUT. idle = blank sessions with nothing to act on.
+# output) — same as the web inbox's NEEDS YOU. idle = blank sessions with nothing to act on.
 # A finished turn with a live background task/Monitor stays WORKING (status "waiting") —
 # the harness re-invokes the agent when the task ends, so don't wait on needs-input for it.
 

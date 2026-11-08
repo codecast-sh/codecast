@@ -38,7 +38,7 @@ monitored invariant.
 
 ## Why the previous designs did not converge
 
-Three clients of one account showed Needs Input 24, 25, and 50, and Pinned 20, 17, 20.
+Three clients of one account showed Needs You 24, 25, and 50, and Pinned 20, 17, 20.
 The July fix (`liveInboxIds` gating) and the August fix (append only sync log) each
 repaired one layer. The remaining causes, verified against current code and one live
 client:
@@ -94,7 +94,7 @@ preserve list both derive from it, with a signature test. Every fact is explicit
 wire, null when there is none, and the replica reads an absent fact as null. Convex drops
 an undefined key, and a merge that only writes the keys it receives keeps the previous
 execution's value: a "stopped" from the day a daemon died outlived the managed row and
-filed a declared done session under Needs Input on every replica while the stamp beside
+filed a declared done session under Needs You on every replica while the stamp beside
 it said done.
 
 **The row body is an allowlist, written one way by every feeder.** Besides the facts, a
@@ -352,8 +352,8 @@ named, bounded, and excluded from the compare:
 | optimistic create stub | appears in Working | until the server row supersedes (altKey) |
 | optimistic triage gesture | moves or removes the row | until ack or HIDDEN_OVERRIDE_SETTLE_MS |
 | focused session | stays visible while open | while focused; never counted outside the working set |
-| queued or pending send in the open view | Needs Input to Working | while the queue holds |
-| revive request | Needs Input to Working | 120s |
+| queued or pending send in the open view | Needs You to Working | while the queue holds |
+| revive request | Needs You to Working | 120s |
 | draft or blank engagement | renders a `new` row locally | rendering only, never counts |
 
 Chip filters, label lenses, and schedule grouping are presentation over placed rows and

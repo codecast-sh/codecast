@@ -6,7 +6,7 @@ import { makeFakeDb } from "./testDb";
 // 2026-09-30 jx75xx3 spawned jx75tw6, pinned dormant "waiting on the worker",
 // and ended its turn with no watch armed. The worker finished four hours later
 // and nothing told the parent: it slept on a report nobody delivered, and the
-// inbox filed its bare dormant claim under Needs Input. These pin the delivery.
+// inbox filed its bare dormant claim under Needs You. These pin the delivery.
 
 const NOW = 1_800_000_000_000;
 const USER = "users_me";

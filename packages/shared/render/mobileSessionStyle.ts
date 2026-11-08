@@ -96,7 +96,7 @@ export const MOBILE_COMPOSER_STATUS: Record<string, { color: string; label: stri
   // inference from open background work, "dormant" the agent's declaration.
   waiting: { color: "#268bd2", label: "Dormant" },
   dormant: { color: "#268bd2", label: "Dormant" },
-  permission_blocked: { color: "#cb4b16", label: "Needs Input" },
+  permission_blocked: { color: "#cb4b16", label: "Needs You" },
   connected: { color: "#2aa198", label: "Connected" },
 };
 

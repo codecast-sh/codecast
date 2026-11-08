@@ -118,7 +118,7 @@ const SORT_FNS: Record<SortBy, (a: MapSession, b: MapSession) => number> = {
   title: (a, b) => a.title.localeCompare(b.title),
   messages: (a, b) => (b.messages ?? 0) - (a.messages ?? 0) || b.updated_at - a.updated_at,
 };
-export const STATE_TITLE: Record<WorkState, string> = { needs_input: "Needs input", working: "Working", dormant: "Dormant", done: "Done", idle: "Idle" };
+export const STATE_TITLE: Record<WorkState, string> = { needs_input: "Needs you", working: "Working", dormant: "Dormant", done: "Done", idle: "Idle" };
 const DAY_BUCKETS = [
   { key: "today", title: "Today", ms: 86_400_000 }, { key: "week", title: "This week", ms: 7 * 86_400_000 },
   { key: "month", title: "This month", ms: 30 * 86_400_000 }, { key: "older", title: "Older", ms: Infinity },

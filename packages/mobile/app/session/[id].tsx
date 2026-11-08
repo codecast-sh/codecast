@@ -4,7 +4,7 @@ import { forkSessionAsAgent, sessionRowFor, switchSessionAgent } from '@codecast
 import { usePinnedAgentIds } from '@codecast/web/hooks/usePinnedAgents';
 import { AccountRecoveryBanner } from '@/components/AccountRecoveryBanner';
 import { ConversationSlideOut, useConversationDrawer } from '@/components/inbox/ConversationSlideOut';
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
@@ -64,7 +64,7 @@ import { SlashCommandPills } from '@/components/session/SlashCommandPills';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
-import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
+import { appAlert, showActionSheet, type SheetItem } from '@/lib/popups';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
 import { sessionLanded } from '@/lib/compose';
@@ -2263,48 +2263,41 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     const messageText = message.content || '';
     const canFork = !message.role?.startsWith('system') && message.message_uuid && onFork;
     const canBookmark = !!conversationId;
-    const options = ['Copy Text', 'Copy Link', 'Share Message'];
-    if (canBookmark) options.push(isBookmarked ? 'Remove Bookmark' : 'Bookmark');
-    if (canFork) options.push('Fork from Here');
-    options.push('Cancel');
-    const cancelButtonIndex = options.length - 1;
-
-    const handleAction = async (buttonIndex: number) => {
-      const label = options[buttonIndex];
-      if (label === 'Copy Text') {
-        Clipboard.setString(messageText);
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        showToast?.('Copied to clipboard');
-      } else if (label === 'Copy Link') {
-        const url = `https://codecast.sh/conversation/${conversationId}#msg-${message._id}`;
-        Clipboard.setString(url);
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        showToast?.('Link copied');
-      } else if (label === 'Share Message') {
-        Share.share({ message: messageText });
-      } else if (label === 'Bookmark' || label === 'Remove Bookmark') {
-        // Store action: the list flips now and the toggle rides the outbox.
-        useInboxStore.getState().toggleBookmark(conversationId as string, message._id);
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        showToast?.(isBookmarked ? 'Bookmark removed' : 'Bookmarked');
-      } else if (label === 'Fork from Here' && message.message_uuid) {
-        onFork!(message.message_uuid);
-      }
-    };
-
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options, cancelButtonIndex },
-        (buttonIndex) => { handleAction(buttonIndex); }
-      );
-    } else {
-      Alert.alert('Message Actions', undefined,
-        options.slice(0, -1).map((label, i) => ({
-          text: label,
-          onPress: () => handleAction(i),
-        })).concat([{ text: 'Cancel', onPress: async () => {} }])
-      );
+    const items: SheetItem[] = [
+      {
+        label: 'Copy text',
+        onPress: () => {
+          Clipboard.setString(messageText);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          showToast?.('Copied to clipboard');
+        },
+      },
+      {
+        label: 'Copy link',
+        onPress: () => {
+          Clipboard.setString(`https://codecast.sh/conversation/${conversationId}#msg-${message._id}`);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          showToast?.('Link copied');
+        },
+      },
+      { label: 'Share message', onPress: () => { void Share.share({ message: messageText }); } },
+    ];
+    if (canBookmark) {
+      items.push({
+        label: isBookmarked ? 'Remove bookmark' : 'Bookmark',
+        onPress: () => {
+          // Store action: the list flips now and the toggle rides the outbox.
+          useInboxStore.getState().toggleBookmark(conversationId as string, message._id);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          showToast?.(isBookmarked ? 'Bookmark removed' : 'Bookmarked');
+        },
+      });
     }
+    if (canFork && message.message_uuid) {
+      const uuid = message.message_uuid;
+      items.push({ label: 'Fork from here', onPress: () => onFork!(uuid) });
+    }
+    showActionSheet(undefined, items);
   };
 
   if (message.role === 'system') {
@@ -3579,7 +3572,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const fork = beginLocalFork(forkInputs.current.conversation as any, messageUuid, {
       currentUser: useInboxStore.getState().currentUser,
       hasMoreAbove: forkInputs.current.hasMoreAbove,
-      onError: (message) => Alert.alert('Fork failed', message),
+      onError: (message) => appAlert('Fork failed', message),
     });
     if (fork) router.push(`/session/${fork.forkSessionId}`);
   }, [id, router]);
@@ -3642,49 +3635,46 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const hasTeam = !!conversation.team_id;
     const vis = conversation.team_visibility || 'summary';
 
-    const options: string[] = [];
-    if (!isPrivate) options.push('Make Private');
-    if (hasTeam && (isPrivate || vis !== 'summary')) options.push('Share with Team (Summary)');
-    if (hasTeam && (isPrivate || vis !== 'full')) options.push('Share with Team (Full)');
-    options.push(conversation.share_token ? 'Copy Share Link' : 'Generate & Copy Share Link');
-    if (conversation.share_token) options.push('Share Link via...');
-    options.push('Cancel');
-
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: 'Sharing' },
-      async (idx) => {
-        const label = options[idx];
-        try {
-          if (label === 'Make Private') {
-            // Local-first: optimistically flips is_private on the store row so
-            // re-opening the share sheet immediately reflects 'private'.
-            setPrivacy(convId, true);
-            showToast('Made private');
-          } else if (label === 'Share with Team (Summary)') {
-            setTeamVisibility(convId, 'summary');
-            showToast('Sharing summary with team');
-          } else if (label === 'Share with Team (Full)') {
-            setTeamVisibility(convId, 'full');
-            showToast('Sharing full conversation with team');
-          } else if (label === 'Copy Share Link' || label === 'Generate & Copy Share Link') {
-            let token = conversation.share_token;
-            if (!token) {
-              token = await generateShareLink({ conversation_id: convId });
-            }
-            if (token) {
-              const url = conversationShareLink(token);
-              Clipboard.setString(url);
-              showToast('Share link copied');
-            }
-          } else if (label === 'Share Link via...') {
-            const url = conversationShareLink(conversation.share_token!);
-            await Share.share({ message: url, url });
-          }
-        } catch (_e) {
-          showToast('Failed to update sharing');
-        }
+    const attempt = (fn: () => void | Promise<void>) => async () => {
+      try { await fn(); } catch { showToast('Failed to update sharing'); }
+    };
+    const items: SheetItem[] = [
+      {
+        label: 'Private',
+        selected: isPrivate,
+        // Local-first: optimistically flips is_private on the store row so
+        // re-opening the share sheet immediately reflects 'private'.
+        onPress: attempt(() => { if (!isPrivate) { setPrivacy(convId, true); showToast('Made private'); } }),
       },
-    );
+    ];
+    if (hasTeam) {
+      items.push(
+        {
+          label: 'Team sees the summary',
+          selected: !isPrivate && vis === 'summary',
+          onPress: attempt(() => { setTeamVisibility(convId, 'summary'); showToast('Sharing summary with team'); }),
+        },
+        {
+          label: 'Team sees everything',
+          selected: !isPrivate && vis === 'full',
+          onPress: attempt(() => { setTeamVisibility(convId, 'full'); showToast('Sharing full conversation with team'); }),
+        },
+      );
+    }
+    items.push({
+      label: 'Copy share link',
+      onPress: attempt(async () => {
+        const token = conversation.share_token ?? await generateShareLink({ conversation_id: convId });
+        if (!token) return;
+        Clipboard.setString(conversationShareLink(token));
+        showToast('Share link copied');
+      }),
+    });
+    if (conversation.share_token) {
+      const url = conversationShareLink(conversation.share_token);
+      items.push({ label: 'Share link via…', onPress: attempt(async () => { await Share.share({ message: url, url }); }) });
+    }
+    showActionSheet('Sharing', items);
   }, [conversation, id, generateShareLink, setPrivacy, setTeamVisibility, showToast]);
 
   const searchLower = searchQuery.toLowerCase();
@@ -4098,15 +4088,15 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         const row = sessionRowFor(conversation._id as string, agentType);
         if (verb === 'switch') {
-          void switchSessionAgent(row, o.type).catch((err) => Alert.alert('Could not switch agent', err instanceof Error ? err.message : undefined));
+          void switchSessionAgent(row, o.type).catch((err) => appAlert('Could not switch agent', err instanceof Error ? err.message : undefined));
           return;
         }
         try {
           const fork = forkSessionAsAgent(row, o.type);
           router.push(`/session/${fork.sessionId}` as any);
-          void fork.ready.catch((err) => Alert.alert('Could not fork', err instanceof Error ? err.message : undefined));
+          void fork.ready.catch((err) => appAlert('Could not fork', err instanceof Error ? err.message : undefined));
         } catch (err) {
-          Alert.alert('Could not fork', err instanceof Error ? err.message : undefined);
+          appAlert('Could not fork', err instanceof Error ? err.message : undefined);
         }
       },
     })));

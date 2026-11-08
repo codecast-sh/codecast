@@ -2,7 +2,7 @@ A long session is hard to walk back into. The transcript holds everything the ag
 
 With Thread State on, the agent keeps one short note pinned to the session that answers that question: what it is working on, where things stand, what comes next, and whether anything is yours to decide. It rewrites the note as the work moves and clears it when it stops being true. You see it above the composer the moment you open the session, and on the session's inbox card before you open anything.
 
-![The pinned state above the composer: a Needs input chip and the headline on one line, then a You line on amber, a Done checklist and a Next line](/documentation/thread-state/pinned-panel.webp "A pinned state in a conversation. The chip says who acts next, the headline says where the work stands, and the You line is what the agent needs from you.")
+![The pinned state above the composer: a Needs you chip and the headline on one line, then a You line on amber, a Done checklist and a Next line](/documentation/thread-state/pinned-panel.webp "A pinned state in a conversation. The chip says who acts next, the headline says where the work stands, and the You line is what the agent needs from you.")
 
 ## Turn it on
 
@@ -18,7 +18,7 @@ You don't need to ask for it once it is on, but you can steer it:
 
 **In the conversation**, the note sits in a panel just above the composer:
 
-- The header is the answer: a status chip (**In progress**, **Needs input**, **Complete** or **Dormant**) and the headline, one line on where the work stands. A note without a status shows **Pinned**.
+- The header is the answer: a status chip (**In progress**, **Needs you**, **Complete** or **Dormant**) and the headline, one line on where the work stands. A note without a status shows **Pinned**.
 - On the right, how old it is, such as *4m*. Once the thread has run well past the note, it turns yellow, and when messages are why, it counts them: *4h · 64 new messages*.
 - Under the header, each detail line sits beside its label. **You** is what the agent needs from you, on amber, with a **Copy** button when it is a command. **Done** is a checklist of what is finished, and **Next** says what happens next and when. A long note folds to **Show all**.
 - Click the header to collapse the panel to the headline. The **×** that appears on hover clears the note; a toast reads *Pinned state cleared* with **Undo**.
@@ -31,10 +31,10 @@ The status on the note decides where the session files in your inbox when the ag
 
 ```figure
 WhoActsNextFigure
-The status the agent pins decides the inbox section. A turn that says nothing files under Needs Input, so you open it and find out.
+The status the agent pins decides the inbox section. A turn that says nothing files under Needs You, so you open it and find out.
 ```
 
-- **Needs input** is the one status that asks for you. It brings a stashed session back to the inbox, so agents use it only when they truly can't continue without you. A question that can wait goes to your [decision queue](/documentation/decisions) instead.
+- **Needs you** is the one status that asks for you. It brings a stashed session back to the inbox, so agents use it only when they truly can't continue without you. A question that can wait goes to your [decision queue](/documentation/decisions) instead.
 - **Complete** and **Dormant** cover only the turn that set them. A dormant note says what will wake the session: a schedule, a background job, a reply from another session.
 - When you send the session a message, the note comes down, because you have answered it. The agent pins a fresh one when its turn ends. A message from another session or a scheduled wake leaves the note standing.
 
@@ -55,5 +55,5 @@ For its first 60 messages the note is fresh. After that its age turns yellow and
 |-----------------|------------|
 | No pinned state on new sessions | Check that **Thread State** is on for the computer the session runs on, in **Agent features** |
 | The note says the agent is waiting on something that already happened | Tell the agent. It rewrites the note when it ends that turn |
-| A session sits in Needs Input but needed nothing | The agent ended its turn without saying who acts next. Ask it to keep its pinned state current |
+| A session sits in Needs You but needed nothing | The agent ended its turn without saying who acts next. Ask it to keep its pinned state current |
 | You cleared a note by mistake | Click **Undo** on the toast, or ask the agent to pin it again |

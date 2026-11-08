@@ -425,7 +425,7 @@ describe("a run's notification opens the run", () => {
   const user = { _id: USER, push_token: "push-token", notifications_enabled: true };
 
   test("a flagged completion names the run conversation", async () => {
-    const { ctx, tables } = await world({}, { users: [user], notifications: [] });
+    const { ctx, tables } = await world({ created_by_conversation_id: undefined }, { users: [user], notifications: [] });
     await complete(ctx, { summary: "separated: worse", needs_attention: true, run_session_uuid: RUN_UUID });
     expect(tables.notifications).toHaveLength(1);
     expect(tables.notifications[0]).toMatchObject({ type: "task_completed", conversation_id: RUN });
@@ -438,8 +438,87 @@ describe("a run's notification opens the run", () => {
   });
 
   test("a terminal failure names the run conversation", async () => {
-    const { ctx, tables } = await world({ retry_count: 3 }, { users: [user], notifications: [] });
+    const { ctx, tables } = await world({ retry_count: 3, created_by_conversation_id: undefined }, { users: [user], notifications: [] });
     await fail(ctx, { error: "Exceeded max runtime (10min)" });
     expect(tables.notifications[0]).toMatchObject({ type: "task_failed", conversation_id: RUN });
   });
+  test("a flagged owned run wakes its owner without notifying the human", async () => {
+    const { ctx, tables } = await world({}, { users: [user], notifications: [] });
+    await complete(ctx, { summary: "Restore the CLI workflow.", needs_attention: true, run_session_uuid: RUN_UUID });
+    expect(wakes(tables)).toHaveLength(1);
+    expect(tables.notifications).toHaveLength(0);
+  });
+
+  test("an owned terminal failure wakes its owner without notifying the human", async () => {
+    const { ctx, tables } = await world({ retry_count: 3 }, { users: [user], notifications: [] });
+    await fail(ctx, { error: "Runner unavailable" });
+    expect(wakes(tables)).toHaveLength(1);
+    expect(tables.notifications).toHaveLength(0);
+  });
+
+  test("clean completion and recoverable failure stay quiet", async () => {
+    const clean = await world({ created_by_conversation_id: undefined }, { users: [user], notifications: [] });
+    await complete(clean.ctx, { summary: "Everything passed.", run_session_uuid: RUN_UUID });
+    expect(clean.tables.notifications).toHaveLength(0);
+    const retry = await world({ created_by_conversation_id: undefined }, { users: [user], notifications: [] });
+    await fail(retry.ctx, { error: "Temporary disconnect" });
+    expect(retry.tables.notifications).toHaveLength(0);
+    expect(retry.tables.agent_tasks[0].status).toBe("scheduled");
+  });
+
+  test("the bell works without phone push and explains the requested action", async () => {
+    const { ctx, tables } = await world({ created_by_conversation_id: undefined }, {
+      users: [{ _id: USER }], notifications: [],
+    });
+    await complete(ctx, { summary: "Renew the expired credential.", needs_attention: true, run_session_uuid: RUN_UUID });
+    expect(tables.notifications).toHaveLength(1);
+    expect(tables.notifications[0].message).toBe("Renew the expired credential. — Report how session parking behaved");
+  });
+
+  test("muted task activity stays quiet", async () => {
+    const { ctx, tables } = await world({ created_by_conversation_id: undefined }, {
+      users: [{ ...user, notification_preferences: { task_activity: false } }], notifications: [],
+    });
+    await complete(ctx, { summary: "Review this.", needs_attention: true, run_session_uuid: RUN_UUID });
+    expect(tables.notifications).toHaveLength(0);
+  });
+
+  test("another report updates the unread alert instead of creating another", async () => {
+    const { ctx, tables } = await world({ created_by_conversation_id: undefined }, {
+      users: [user], notifications: [{
+        _id: "notifications_existing", recipient_user_id: USER,
+        entity_id: "agent_tasks_owned", type: "task_completed", read: false,
+        message: "Earlier report", conversation_id: OWNER, created_at: NOW - 1000,
+      }],
+    });
+    await complete(ctx, { summary: "Renew the expired credential.", needs_attention: true, run_session_uuid: RUN_UUID });
+    expect(tables.notifications).toHaveLength(1);
+    expect(tables.notifications[0]).toMatchObject({
+      _id: "notifications_existing", conversation_id: RUN, created_at: NOW,
+      message: "Renew the expired credential. — Report how session parking behaved",
+    });
+  });
+
+  test("a read alert does not swallow a later request", async () => {
+    const { ctx, tables } = await world({ created_by_conversation_id: undefined }, {
+      users: [user], notifications: [{
+        _id: "notifications_read", recipient_user_id: USER,
+        entity_id: "agent_tasks_owned", type: "task_completed", read: true,
+        message: "Earlier report", conversation_id: RUN, created_at: NOW - 1000,
+      }],
+    });
+    await complete(ctx, { summary: "A new action is needed.", needs_attention: true, run_session_uuid: RUN_UUID });
+    expect(tables.notifications).toHaveLength(2);
+  });
+
+  test("an exhausted lease reports to the owning agent", async () => {
+    const { ctx, tables } = await world({ retry_count: 3, lease_expires_at: NOW - 1 }, {
+      users: [user], notifications: [],
+    });
+    await (reclaimStaleTasks as any)._handler(ctx, {});
+    expect(wakes(tables)).toHaveLength(1);
+    expect(tables.notifications).toHaveLength(0);
+    expect(tables.agent_tasks[0].status).toBe("failed");
+  });
+
 });

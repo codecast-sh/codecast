@@ -126,7 +126,7 @@ describe("ProjectLeadChip", () => {
     const gate = document.querySelector<HTMLElement>("[data-takeover-gate]");
     assert.ok(gate, `the gate is open. Body: ${text()}`);
     assert.match(gate!.textContent!, /Billing lead will lead Paid/);
-    assert.match(gate!.querySelector("[data-takeover-phrase]")!.textContent!, /^3 sessions now report to @billing and leave your needs input\.$/);
+    assert.match(gate!.querySelector("[data-takeover-phrase]")!.textContent!, /^3 sessions now report to @billing and leave Needs You\.$/);
     await act(async () => gate!.querySelector<HTMLInputElement>("[data-takeover-leave-input]")!.click());
     await act(async () => gate!.querySelector<HTMLButtonElement>("[data-takeover-confirm]")!.click());
     assert.deepEqual(sent, [[PAID, billing._id, { leave_sessions: true }]]);

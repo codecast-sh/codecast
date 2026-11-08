@@ -136,14 +136,14 @@ export function scopeQueryRef(
 // ---------------------------------------------------------------- F4: the scope is a conversation
 
 /** F4.3: the panel's Sessions tab groups hands the way the inbox groups
- *  sessions, in the inbox's order. GlobalSessionPanel renders Needs Input,
+ *  sessions, in the inbox's order. GlobalSessionPanel renders Needs You,
  *  Done, Working, Dormant, top down as "who acts next": you (a hand waiting on
  *  a person, a finished hand to review), the agent right now, then a machine
  *  wake. Idle rows, which the inbox never renders, close the list so a hand
  *  under the scope is never hidden. A source test keeps this order equal to
  *  the inbox's. */
 export const HAND_GROUPS: { state: WorkState; label: string }[] = [
-  { state: "needs_input", label: "Needs input" },
+  { state: "needs_input", label: "Needs you" },
   { state: "done", label: "Done" },
   { state: "working", label: "Working" },
   { state: "dormant", label: "Dormant" },

@@ -125,7 +125,7 @@ export function inboxRows(now: number): { session: InboxSession; isLive: boolean
  * lead lands on top of Working, and its workers nest under it.
  */
 export const INBOX_SECTIONS = [
-  { key: "needs_input", label: "Needs Input", color: "text-sol-yellow", rows: [1] },
+  { key: "needs_input", label: "Needs You", color: "text-sol-yellow", rows: [1] },
   { key: "done", label: "Done", color: "text-sol-cyan", rows: [3, 4, 5] },
   { key: "working", label: "Working", color: "text-sol-green", rows: [0, 2] },
 ] as const;

@@ -48,7 +48,7 @@
   - amber ★ + amber card border for pinned                                                                                    
   - dimmed row + gray dismissed badge for dismissed                  
                                                    
-  Filter — a STATE row: All · Needs input · Working · Pinned · Dismissed, each with a live count.
+  Filter — a STATE row: All · Needs you · Working · Pinned · Dismissed, each with a live count.
 
   Act — per-row pin/unpin and dismiss/restore buttons, next to the existing kill/prune.                                       
 
@@ -103,7 +103,7 @@ Where should the "kill all" button live, and what should it target?
   1. Global, every route          ┌────────────────────────────────────────────────────────┐
  2. Sessions page, all filters    │ /sessions header:                                      │
                                   │   Sessions  37 active … [⚠ Kill all 37]                │
-  3. Both                         │ Filter = Needs input → [⚠ Kill all 11]                 │
+  3. Both                         │ Filter = Needs you → [⚠ Kill all 11]                 │
                                   │ Filter = Pinned      → [⚠ Kill all 3]                  │
                                   │ (acts on whatever's currently filtered)                │
                                   └────────────────────────────────────────────────────────┘

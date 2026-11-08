@@ -1,6 +1,6 @@
 // What a scope gain would move, read BEFORE the person accepts it
 // (org-roles-run-work.md R1): "12 sessions now report to @growth and leave
-// your needs input". Only the server can count it (the org scan), so this is
+// Needs You". Only the server can count it (the org scan), so this is
 // an enrichment read, and it never throws into the surface that shows it. A
 // surface asks for every row it shows in ONE call: the server scans the
 // workspace's sessions once for all of them (orgInit.previewTakeovers).

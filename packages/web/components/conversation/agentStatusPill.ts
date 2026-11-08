@@ -9,7 +9,7 @@ const LIVE_TONES = {
   compacting: { tone: "text-amber-400", dot: "animate-pulse bg-amber-400", label: "Compacting", short: "Compact" },
   waiting: { tone: "text-sol-blue", dot: "animate-pulse bg-sol-blue", label: "Dormant", short: "Dormant" },
   dormant: { tone: "text-sol-blue", dot: "animate-pulse bg-sol-blue", label: "Dormant", short: "Dormant" },
-  permission_blocked: { tone: "text-sol-orange", dot: "animate-pulse bg-sol-orange", label: "Needs Input", short: "Input" },
+  permission_blocked: { tone: "text-sol-orange", dot: "animate-pulse bg-sol-orange", label: "Needs You", short: "Input" },
   starting: { tone: "text-sol-cyan", dot: "animate-pulse bg-sol-cyan", label: "Starting", short: "Start" },
   resuming: { tone: "text-sol-cyan", dot: "animate-pulse bg-sol-cyan", label: "Resuming", short: "Rsum" },
   connected: { tone: "text-sol-cyan", dot: "animate-pulse bg-sol-cyan", label: "Connected", short: "Conn" },

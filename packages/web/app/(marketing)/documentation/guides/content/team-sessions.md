@@ -2,7 +2,7 @@ Every coding agent your team runs already keeps a full record of its session on 
 
 Each teammate installs codecast once ([Getting started](/documentation#getting-started)). From then on, every session they start in a terminal, an editor, tmux or over SSH shows up in codecast as it happens. You choose which of your folders the team can see, and everything else stays yours.
 
-![The codecast inbox with a team's sessions](/documentation/shots/inbox.webp "The inbox files sessions under Needs input, Done and Working, from every machine and every agent, with one open beside it.")
+![The codecast inbox with a team's sessions](/documentation/shots/inbox.webp "The inbox files sessions under Needs you, Done and Working, from every machine and every agent, with one open beside it.")
 
 ## Two ways to look at the same sessions
 
@@ -18,7 +18,7 @@ The feed answers what is happening across the team. The inbox answers what needs
 | Section | What is in it |
 |---------|---------------|
 | **Questions** | Decisions agents are waiting on you for ([Decisions](/documentation/decisions)) |
-| **Needs Input** | Blocked on you: a question, a permission prompt, a finished turn to review |
+| **Needs You** | Blocked on you: a question, a permission prompt, a finished turn to review |
 | **Done** | Delivered. Read it when you have time |
 | **Working** | The agent is still going |
 | **Dormant** | Waiting on something scheduled, such as a test run or a reply |

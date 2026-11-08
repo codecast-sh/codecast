@@ -15,7 +15,7 @@ cast sessions [--label <name>] [--mine]        # grouped by who acts next
 cast sessions --state needs-input --json       # the ones that claim a human
 ```
 
-For each session under Needs Input: `cast state show <id>` and, when the pin
+For each session under Needs You: `cast state show <id>` and, when the pin
 does not explain the ask, `cast read <id>` for the last few turns. Decide
 whether it truly needs a human, is finished and never said so, is stuck on
 something another session or you can supply, or is dead with output.

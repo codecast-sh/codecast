@@ -157,7 +157,7 @@ describe("applyInboxLivenessPayload — the one applier for { liveness, projecti
     // Prod, 2026-09-01: the managed row aged out, the server's trusted status
     // became undefined, Convex dropped the key, and a merge that only wrote the
     // keys it received kept "stopped" from the day the daemon died — filing a
-    // declared-done session under Needs Input on every replica while the stamp
+    // declared-done session under Needs You on every replica while the stamp
     // beside it said done.
     useInboxStore.setState({ sessions: { [A]: row(A, { agent_status: "stopped", thread_state_status: "done", message_count: 40 }) } } as any);
     useInboxStore.getState().applyInboxLivenessPayload("mine", {

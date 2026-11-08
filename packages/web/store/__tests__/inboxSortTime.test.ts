@@ -16,7 +16,7 @@ import {
 // sidebar and mobile render from.
 //
 // Each section keeps its own DIRECTION and only changes which stamp it reads:
-// Needs Input and Done are queues the reader clears top-down (oldest first),
+// Needs You and Done are queues the reader clears top-down (oldest first),
 // Working and the flat active order put the freshest on top, Dormant orders by
 // the wake it parks on.
 

@@ -5,7 +5,7 @@ import { sectionHeaderCount, type InboxSession } from "../inboxStore";
 // every row PLACED in a bucket — flat cards plus members nested under a
 // same-bucket lead — and that is honest only while the nested rows render.
 // Prod, 2026-09-10: with the subagent toggle off the panel showed
-// "NEEDS INPUT (121)" above 33 cards, while the sidebar badge (flat cards)
+// "NEEDS YOU (121)" above 33 cards, while the sidebar badge (flat cards)
 // said 34. Nothing on screen could reach the other 88.
 
 const row = (id: string): InboxSession => ({ _id: id } as InboxSession);

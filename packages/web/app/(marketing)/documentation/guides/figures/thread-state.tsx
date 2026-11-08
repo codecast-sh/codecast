@@ -75,10 +75,10 @@ export function FreshnessFigure() {
 
 const ROUTES: { flag: string; to: string; ink: Ink; note?: string[] }[] = [
   { flag: "In progress", to: "Working", ink: "green" },
-  { flag: "Needs input", to: "Needs Input", ink: "yellow" },
+  { flag: "Needs you", to: "Needs You", ink: "yellow" },
   { flag: "Complete", to: "Done", ink: "cyan", note: ["this turn only:", "the next one says again"] },
   { flag: "Dormant", to: "Dormant", ink: "blue", note: ["names what wakes it:", "a schedule, a task, a reply"] },
-  { flag: "nothing said", to: "Needs Input", ink: "base1" },
+  { flag: "nothing said", to: "Needs You", ink: "base1" },
 ];
 
 /** The status the agent pins decides the inbox section when the turn ends; a person's message takes it down. */

@@ -141,7 +141,7 @@ describe("the questions bucket", () => {
     expect(ids(placed.pinned)).toEqual(["mate3"]);
     expect(placed.subsByParent.has("mate3")).toBe(false);
     // A teammate whose lead is absent is not an inbox card — leftover
-    // reviewers of a gone lead used to dump into Needs Input / Done as ↳ rows.
+    // reviewers of a gone lead used to dump into Needs You / Done as ↳ rows.
     expect(ids(placed.needsInput)).toEqual([]);
     expect(placed.counts.needsInput).toBe(0);
     expect(ids(placed.sorted)).not.toContain("mate4");

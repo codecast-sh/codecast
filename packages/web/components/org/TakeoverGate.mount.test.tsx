@@ -74,7 +74,7 @@ describe("TakeoverGate", () => {
     await mount(<TakeoverGate workspace={WS} ask={{ handle: "growth", add: ["project:p-growth"] }} what="Growth joins @growth" confirmLabel="Go" onConfirm={(o) => confirmed.push(o)} onCancel={() => cancelled++} />);
     assert.deepEqual(asked.at(-1), { team_id: "fixture-team", items: [{ handle: "growth", add: ["project:p-growth"] }] });
     assert.deepEqual(confirmed, [], "a takeover never confirms itself");
-    assert.match(q("[data-takeover-phrase]")!.textContent!, /^3 sessions now report to @growth and leave your needs input\.$/);
+    assert.match(q("[data-takeover-phrase]")!.textContent!, /^3 sessions now report to @growth and leave Needs You\.$/);
     await act(async () => q<HTMLInputElement>("[data-takeover-leave-input]")!.click());
     await act(async () => q<HTMLButtonElement>("[data-takeover-confirm]")!.click());
     await act(async () => q<HTMLButtonElement>("[data-takeover-confirm]")?.click());

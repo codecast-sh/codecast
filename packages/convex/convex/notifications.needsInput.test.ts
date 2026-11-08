@@ -138,7 +138,7 @@ function createCtx(seed: Record<string, Rec[]>) {
 // A session that finished a turn and settled past the idle grace: the daemon
 // flipped agent_status to "idle" 60s ago (grace is 45s), the last synced
 // message is the assistant's answer, heartbeat fresh. This is the exact state
-// the web inbox files under NEEDS INPUT and chimes for.
+// the web inbox files under NEEDS YOU and chimes for.
 function settledIdleWorld(overrides: {
   conv?: Rec;
   session?: Rec;
@@ -698,7 +698,7 @@ describe("needs-input push — only human-started turns clear the bar", () => {
 // A hidden session (stashed, or a folded run on the legacy dismissed stamp)
 // may be quiet, never quietly stuck: a HARD block — open AskUserQuestion,
 // permission prompt, dead process — clears the hide so the row surfaces in
-// Needs Input. Plain settles and soft verdicts never do.
+// Needs You. Plain settles and soft verdicts never do.
 describe("needs-input check — stall rule for hidden sessions", () => {
   const now = Date.now();
   const auqPoll = {
@@ -719,7 +719,7 @@ describe("needs-input check — stall rule for hidden sessions", () => {
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(res.reason).toBe("unstashed_stall");
     expect(tables.conversations[0].inbox_stashed_at).toBeUndefined();
-    // No chime from the stall path — surfacing in Needs Input IS the signal.
+    // No chime from the stall path — surfacing in Needs You IS the signal.
     expect(tables.notifications.length).toBe(0);
   });
 
@@ -745,7 +745,7 @@ describe("needs-input check — stall rule for hidden sessions", () => {
 
   // The regression: every headless trigger run ends by its process exiting, so
   // "stopped" arrived seconds after the clean completion folded the run and
-  // put it straight back under Needs Input. The completion is the run's done
+  // put it straight back under Needs You. The completion is the run's done
   // declaration (agentTasks.settleRunConversation), and an exit after a
   // declared done is not a death.
   test("a run that exited after completing cleanly stays folded", async () => {
@@ -800,7 +800,7 @@ describe("needs-input check — stall rule for hidden sessions", () => {
 // REAL completion and the REAL stall check: the agent reports its outcome, the
 // turn settles, the headless process exits. Before ct-52200 the exit read as a
 // dead session with output, so the stall rule pulled every clean run back out
-// of its fold and into Needs Input.
+// of its fold and into Needs You.
 describe("a trigger run in a fresh session, from completion to process exit", () => {
   const task = (over: Rec = {}) =>
     ({ _id: "task1", short_id: "tr-9", title: "Stall sweep", schedule_type: "recurring", ...over }) as any;

@@ -22,7 +22,7 @@ cast own <member>            # adds them; the session sits in both inboxes
 cast own <session> <member>  # a different session of yours
 ```
 
-They get a notification, and the session surfaces under Needs Input in
+They get a notification, and the session surfaces under Needs You in
 their inbox with your name on it. Use `cast disown` on yourself only if the
 work is entirely theirs now.
 

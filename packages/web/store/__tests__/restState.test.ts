@@ -6,7 +6,7 @@ import {
 } from "../inboxStore";
 import { orderSections, placeSections } from "./placeTestHarness";
 
-// The settled sections split by WHO ACTS NEXT: a blocked settle is Needs Input,
+// The settled sections split by WHO ACTS NEXT: a blocked settle is Needs You,
 // a delivered one is Done, one parked on a machine wake is Dormant. These pin
 // the client mirror of classifyWorkState's restState arm (the shared module):
 // the same sources, the same precedence, so the web inbox and `cast sessions`
@@ -98,7 +98,7 @@ describe("classifySession.rest", () => {
 
   it("the USER's verdict is triage and stands over a hard block until the next activity", () => {
     // The 2026-09-05 report: a dead agent (stopped, with output) parked as
-    // dormant stayed under Needs Input because the dead-agent rule ran first.
+    // dormant stayed under Needs You because the dead-agent rule ran first.
     expect(classifySession(mk("d", { agent_status: "stopped", user_rest: "dormant" })).rest).toBe("dormant");
     expect(classifySession(mk("e", { user_rest: "done", pending_api_error: true })).rest).toBe("done");
     expect(classifySession(mk("q", { user_rest: "needs_input", agent_status: "done" })).rest).toBe("needs_input");
@@ -138,7 +138,7 @@ describe("placeSections rest sections", () => {
   });
 
   // Each section keeps its own DIRECTION and reads the stamp its class is
-  // ranked by (shared inboxSortTime, ct-49550): Done and Needs Input are
+  // ranked by (shared inboxSortTime, ct-49550): Done and Needs You are
   // queues the reader clears top-down, and so is Dormant, by when each parked.
   it("orders done, needs input and dormant oldest-first by the class stamp", () => {
     const loop = (wakeupAt: number) => ({ status: "armed" as const, wakeup_at: wakeupAt, event_at: BASE });
@@ -156,7 +156,7 @@ describe("placeSections rest sections", () => {
     expect(ids(needsInput)).toEqual(["n1", "n2"]);
   });
 
-  it("a bare dormant claim expires into Needs Input; a verifiable wake keeps the park, heartbeat or not", () => {
+  it("a bare dormant claim expires into Needs You; a verifiable wake keeps the park, heartbeat or not", () => {
     // A declared dormant is a promise about a wake, and the status only
     // re-derives when that wake lands — so a promise nothing can verify used
     // to have no expiry at all. Past DORMANT_CLAIM_TTL_MS of quiet a BARE
@@ -207,7 +207,7 @@ describe("placeSections rest sections", () => {
 //   waiting && !hard ? sessionRestState(s) : "needs_input"
 // so a row that entered the settled split ONLY through the trust-staleness
 // net (a frozen is_idle:false copy the liveness overlay no longer refreshes)
-// had waiting=false, lost its settle verdict, and filed under Needs Input
+// had waiting=false, lost its settle verdict, and filed under Needs You
 // wearing a DORMANT pill — while the server filed the same row Done. The
 // chokepoint adapts a stale row exactly as the server's trustedAgentStatus /
 // recency-gated is_idle do at enrichment, so the row's own verdicts decide.
@@ -237,7 +237,7 @@ describe("ct-47520: a staleness-swept row keeps its rest verdict at the chokepoi
     expect(placed.tally.shown.needs_input).toBe(0);
   });
 
-  it("the sibling with no settle verdict and only a dormant declaration is NEEDS INPUT (dead-daemon rule)", () => {
+  it("the sibling with no settle verdict and only a dormant declaration is NEEDS YOU (dead-daemon rule)", () => {
     // A `dormant` promise with no daemon status behind it has no one to
     // deliver the wake — a human must look. Only `done` rides the
     // declaration fallback.

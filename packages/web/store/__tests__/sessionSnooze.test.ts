@@ -27,7 +27,7 @@ test("all duration actions move immediately, dispatch an unopened row, and survi
   }
 });
 
-test("expiry and wake now enter Needs Input, including old and asking sessions", () => {
+test("expiry and wake now enter Needs You, including old and asking sessions", () => {
   const future = { ...row, inbox_snoozed_until: now + 60_000, awaiting_input: true, updated_at: now - 40 * 86400_000 };
   expect(placeSections({ [id]: future }, new Set(), new Set(), { now }).questions).toHaveLength(0);
   const due = placeSections({ [id]: future }, new Set(), new Set(), { now: now + 60_000, showOld: false });

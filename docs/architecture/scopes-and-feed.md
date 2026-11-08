@@ -200,7 +200,7 @@ The sentences under "Where it stands" are the role's. Its brief gains a section 
 ### F5.3 What leaves the first screen
 
 - "N sessions are waiting on a person in this area" and the reporting line under it.
-- The Needs input list of hands and the Done and Parked sections.
+- The Needs you list of hands and the Done and Parked sections.
 - Task counts and progress bars on project cards; plan rows with fractions.
 - Counts on tabs.
 

@@ -143,7 +143,7 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
                     )}
                     {task.execution_status === "needs_context" && (
                       <div className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-sol-orange/15 text-sol-orange">
-                        Needs input
+                        Needs you
                       </div>
                     )}
                     {task.execution_status === "blocked" && (

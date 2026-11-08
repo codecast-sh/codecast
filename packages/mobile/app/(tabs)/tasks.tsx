@@ -33,7 +33,7 @@ import { sameAssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { TaskItemRow, STATUS_CONFIG, PRIORITY_CONFIG, PRIORITY_ORDER, showTaskActions } from "@/components/TaskItem";
 import { PlanItemRow, PLAN_STATUS_CONFIG, PLAN_STATUS_ORDER } from "@/components/PlanItem";
 import { DocItemRow, DOC_TYPE_CONFIG, DOC_TYPES } from "@/components/DocItem";
-import { showActionSheet } from "@/lib/actionSheet";
+import { showActionSheet } from "@/lib/popups";
 import { RoutineList } from "@/components/hosted/Routines";
 
 const ICON_EMOJI: Record<string, string> = {

@@ -1,4 +1,4 @@
-import { StyleSheet, TouchableOpacity, View as RNView, ActionSheetIOS, useWindowDimensions } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView, useWindowDimensions } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -14,6 +14,7 @@ import { TeamActivityList } from '@/components/team/TeamActivityList';
 import { useCallsOn, useLiveRooms } from '@/components/calls/LiveRooms';
 import { useActiveTeam, useSwitchActiveTeam } from '@/hooks/useWorkspaceArgs';
 import { getCallSnapshot, subscribeCall } from '@/lib/calls/callManager';
+import { showActionSheet } from '@/lib/popups';
 
 const TEAM_ICON_EMOJI: Record<string, string> = {
   rocket: '🚀', flame: '🔥', zap: '⚡', star: '⭐', diamond: '💎', crown: '👑',
@@ -64,14 +65,12 @@ export default function ChatScreen() {
   const showTeamPicker = useCallback(() => {
     if (validTeams.length <= 1) return;
     void Haptics.selectionAsync();
-    const options = [...validTeams.map((t) => `${TEAM_ICON_EMOJI[t.icon || ''] || t.icon || ''} ${t.name}`.trim()), 'Cancel'];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: 'Switch team' },
-      (index) => {
-        if (index < validTeams.length) switchTeam(validTeams[index]._id);
-      },
-    );
-  }, [validTeams, switchTeam]);
+    showActionSheet('Switch team', validTeams.map((t) => ({
+      label: `${TEAM_ICON_EMOJI[t.icon || ''] || t.icon || ''} ${t.name}`.trim(),
+      selected: t._id === activeTeamId,
+      onPress: () => switchTeam(t._id),
+    })));
+  }, [validTeams, switchTeam, activeTeamId]);
 
   if (currentUser?._id && !activeTeamId) {
     return (
