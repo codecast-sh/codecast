@@ -63,14 +63,14 @@ test("the views render from props alone and leave the store untouched", () => {
   const card = render(<SessionCardView {...cardProps} />);
   expect(card).toContain('data-session-id="c-hero-1"');
   expect(card).toContain("Webhook API half");
-  expect(card).toContain("Needs input");
+  expect(card).toContain("Needs you");
   expect(card).toContain("Payments");
   expect(card).toContain('title="Working"');
 
   const sub = render(<SessionCardView {...cardProps} session={{ ...session, is_subagent: true, parent_conversation_id: "p" } as InboxSession} />);
   expect(sub).toContain('aria-label="Subagent"');
 
-  expect(render(<SectionHeader label="Needs input" count={3} color="text-sol-yellow" sectionKey="needs_input" collapsed={false} />))
+  expect(render(<SectionHeader label="Needs you" count={3} color="text-sol-yellow" sectionKey="needs_input" collapsed={false} />))
     .toContain('data-inbox-section-count="3"');
 
   const rail = render(
