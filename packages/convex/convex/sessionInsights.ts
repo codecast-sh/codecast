@@ -646,7 +646,7 @@ export const generateSessionInsight = internalAction({
 
 
     try {
-      const response = await postMessages(insightRequest(context, source));
+      const response = await postMessages(insightRequest(context, source), { gate: { ctx, scope: { conversationId: args.conversation_id } } });
       if (!response) return { status: "skipped", reason: "missing_api_key" };
       if (!response.ok) {
         return { status: "error", reason: `provider_${response.status}` };

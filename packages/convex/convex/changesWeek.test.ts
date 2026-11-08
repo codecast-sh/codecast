@@ -140,6 +140,8 @@ describe("week editions on the wire", () => {
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
+  // Every model call asks the vendor guard (lib/vendorGuard) through this query.
+  "./vendorCoverage.ts": () => import("./vendorCoverage"),
   "./syncOutbox.ts": () => import("./syncOutbox"),
   "./changes.ts": () => import("./changes"),
   "./changesSchedule.ts": () => import("./changesSchedule"),
