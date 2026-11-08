@@ -17103,7 +17103,7 @@ work
       let filed = 0;
       for (const f of findings) {
         try {
-          await cliPost("/cli/review/add", { git_root: gitRoot, file_path: f.file_path, line_number: f.line_number, line_end: f.line_end, content: `[${f.severity}] ${f.content}`, severity: f.severity, task_id: taskId, conversation_id: body.conversation_id, author_kind: "agent", disposition: f.disposition, owner: f.owner, due_at: f.due_at });
+          await cliPost("/cli/review/add", { git_root: gitRoot, file_path: f.file_path, line_number: f.line_number, line_end: f.line_end, content: `[${f.severity}] ${f.content}`, severity: f.severity, task_id: taskId, conversation_id: body.conversation_id, author_kind: "agent", disposition: f.disposition, owner: f.owner, due_at: f.due_at }, { throwOnError: true });
           filed++;
         } catch (err) {
           console.error(`finding not recorded (${f.file_path}): ${(err as Error).message}`);
