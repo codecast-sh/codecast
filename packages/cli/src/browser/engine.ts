@@ -28,12 +28,14 @@
  *    separate sessions genuinely cannot see each other's tabs.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync, whichBin } from "../proc.js";
 import { narrated } from "./narrate.js";
+import { expireIfSpent, remainingMs, setStage } from "./deadline.js";
 import { browserHome } from "./profile.js";
 import { frontAppPid, restoreFocusIfStolen } from "./focusGuard.js";
 import { readState } from "./instance.js";
@@ -166,10 +168,9 @@ export interface EngineOptions {
  * terminal has one obvious intent and should not be handed a private browser
  * they then cannot see.
  */
-export function engineSession(detectSessionId?: () => string | null): string {
-  const key = ownerKey(detectSessionId);
-  if (!key) return "default";
-  return engineSessionKey(key);
+export function engineSession(detectSessionId?: () => string | null, env: NodeJS.ProcessEnv = process.env): string {
+  const key = ownerKey(detectSessionId, env);
+  return withTabName(key ? engineSessionKey(key) : "default", env[BROWSER_TAB_ENV]);
 }
 
 /** An owner key as the engine session name: names end up in paths and process
@@ -178,7 +179,63 @@ export function engineSessionKey(owner: string): string {
   return owner.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, SESSION_KEY_MAX);
 }
 
+/** The socket path (~/.agent-browser/<key>.sock) must stay under the OS limit. */
 const SESSION_KEY_MAX = 60;
+
+/**
+ * A named tab of one agent: `--tab <name>` on any browser verb, or this
+ * variable. Task and workflow subagents inherit their parent's harness id, so
+ * without a name they all drive the parent's single tab and navigate each
+ * other's pages. Each name is an engine session and a pinned tab of its own,
+ * still owned by the same agent: the reaper keeps it while the agent lives.
+ */
+export const BROWSER_TAB_ENV = "CAST_BROWSER_TAB";
+
+/** Between the owner part of a key and its tab name. Flattened owner keys
+ *  never hold `__` (uuids and pane ids flatten to single `-`/`_` runs only
+ *  from `:`/`%`, and names are sanitized to drop `_`). */
+const TAB_SEPARATOR = "__";
+
+/** A session key with a tab name on it, kept within SESSION_KEY_MAX once a
+ *  mode suffix is added; a long name is shortened with a hash so two long
+ *  names never collapse into one tab. */
+export function withTabName(base: string, name: string | undefined): string {
+  const clean = (name ?? "").replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!clean) return base;
+  const room = SESSION_KEY_MAX - MODE_SUFFIX_MAX - TAB_SEPARATOR.length;
+  const owner = base.slice(0, room - 8);
+  const left = room - owner.length;
+  const tab = clean.length <= left ? clean : `${clean.slice(0, left - 5)}-${createHash("sha1").update(clean).digest("hex").slice(0, 4)}`;
+  return `${owner}${TAB_SEPARATOR}${tab}`;
+}
+
+/**
+ * Use a named tab for the rest of this process (`--tab <name>`, or its alias
+ * `--session <name>`, the engine's own word). An existing tab's id is refused:
+ * `--tab <id>` acted on that tab in the old driver, and here it would mint an
+ * empty tab named after it.
+ */
+export function requestTabName(name: string | undefined, env: NodeJS.ProcessEnv = process.env): void {
+  if (!name) return;
+  if (/^([0-9a-f]{8}|[0-9a-f]{32}|t\d+)$/i.test(name)) {
+    throw new Error(`--tab names a tab of your own (e.g. --tab checkout); '${name}' is an existing tab's id. To act on that tab: cast browser tab switch ${name}`);
+  }
+  env[BROWSER_TAB_ENV] = name;
+}
+
+/** The tab name in a session key, or null for the agent's default tab. */
+export function tabNameOf(session: string): string | null {
+  const i = baseSessionKey(session).lastIndexOf(TAB_SEPARATOR);
+  return i >= 0 ? baseSessionKey(session).slice(i + TAB_SEPARATOR.length) : null;
+}
+
+/** The agent behind a session key: no mode suffix and no tab name. What
+ *  liveness reads, so every named tab lives exactly as long as its agent. */
+export function ownerOfSessionKey(session: string): string {
+  const base = baseSessionKey(session);
+  const i = base.lastIndexOf(TAB_SEPARATOR);
+  return i >= 0 ? base.slice(0, i) : base;
+}
 
 /**
  * Real mode is a second engine session on the bridge port. The daemon resets
@@ -198,6 +255,8 @@ const REAL_SESSION_SUFFIX = "-real";
  * driving the human's Chrome or the clone.
  */
 const PANE_SESSION_SUFFIX = "-pane";
+
+const MODE_SUFFIX_MAX = Math.max(REAL_SESSION_SUFFIX.length, PANE_SESSION_SUFFIX.length);
 
 export function realSessionKey(session: string): string {
   if (isRealSession(session)) return session;
@@ -325,8 +384,12 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun |
 
   const session = opts.session ?? engineSession();
   const full = [...args, "--pin-tab", "--init-script", agentTabInitScript()];
+  // Never past the verb's whole budget (deadline.ts): a synchronous run
+  // blocks the timer that would otherwise end it.
+  const left = remainingMs();
+  setStage(opts.narrate ?? `waiting for the browser engine (\`${args[0] ?? ""}\`)`);
   const launch = {
-    timeout: opts.timeoutMs ?? 120_000,
+    timeout: Math.max(1, Math.min(opts.timeoutMs ?? 120_000, left ?? Infinity)),
     stdio: (opts.inherit ? ["ignore", "inherit", "inherit"] : ["ignore", "pipe", "pipe"]) as ["ignore", "inherit" | "pipe", "inherit" | "pipe"],
     env: {
       ...process.env,
@@ -349,10 +412,14 @@ export function runEngine(args: string[], opts: EngineOptions = {}): EngineRun |
       child.on("error", reject);
       child.on("close", (status) => resolve({ status: status ?? 1, stdout, stderr }));
     });
-    return narrated(opts.narrate, run).finally(() => restoreFocusIfStolen(front));
+    return narrated(opts.narrate, run).finally(() => {
+      restoreFocusIfStolen(front);
+      expireIfSpent();
+    });
   }
   const res = spawnSync(binary, full, { encoding: "utf-8", ...launch });
   restoreFocusIfStolen(front);
+  expireIfSpent();
 
   return {
     status: res.status ?? 1,
