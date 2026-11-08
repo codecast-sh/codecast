@@ -9,7 +9,7 @@ import { WAKE_STEPS, wakeElapsed } from "../lib/hostWake";
 import type { HostWake } from "../hooks/useHostWake";
 import { StatusDot } from "./StatusDot";
 import { TopbarChip } from "./TopbarButton";
-import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { HoverCard } from "./ui/HoverCard";
 import { StatusPanelHeader, StatusPanelSection } from "./StatusPanel";
 
 const STEP_LABEL: Record<(typeof WAKE_STEPS)[number], string> = {
@@ -177,12 +177,12 @@ export function SessionHostWakeChip({ wake }: { wake: HostWake }) {
     </div>
   );
   return (
-    <ShortcutTooltip label={panel} panel align="end">
+    <HoverCard card={panel} side="bottom" align="end" className="w-[280px]" focusable>
       <TopbarChip data-host-wake={wake.stage} aria-label={`${wake.host}: ${HEADLINE[wake.stage]}`} tone={color} alert={loud} className="hidden md:flex">
         {wake.stage === "asleep" ? <Moon className="h-3 w-3 shrink-0" /> : <StatusDot color={color} ping={isWaking(wake)} />}
         <span className="max-w-[112px] truncate">{chipText(wake)}</span>
       </TopbarChip>
-    </ShortcutTooltip>
+    </HoverCard>
   );
 }
 
