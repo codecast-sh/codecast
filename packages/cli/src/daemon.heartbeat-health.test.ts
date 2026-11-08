@@ -2,7 +2,7 @@ import { killIsolatedTmuxServer } from "./test-helpers/isolatedTmuxServer.js";
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { execFileAsync } from "./proc.js";
-import { isTmuxSessionMissingError, tmuxRun } from "./tmux.js";
+import { isTmuxSessionMissingError, runTmux, tmuxRun } from "./tmux.js";
 import { spawnHarness } from "./test-helpers/messagingHarness.js";
 import { functionBlock } from "./test-helpers/sourceRegion.js";
 
@@ -21,7 +21,7 @@ const transient = [
   ["unstructured failure", new Error("tmux probe failed")],
 ] as const;
 
-function harness(probeError?: unknown, realTarget?: string, probe?: (args: string[], opts?: { timeout?: number }) => Promise<unknown>) {
+function harness(probeError?: unknown, realTarget?: string, probe?: (args: string[], opts?: { timeout?: number }) => Promise<unknown>, claimed = false) {
   const sessionId = "heartbeat-test";
   const target = realTarget ?? "heartbeat-test-pane";
   const events: string[] = [];
@@ -52,6 +52,9 @@ function harness(probeError?: unknown, realTarget?: string, probe?: (args: strin
     clearConversationDeliveryAndResumeState: async () => events.push("clear-delivery"),
     repairAndResumeSession: async () => { events.push("repair"); return true; },
     readTitleCache: () => ({}),
+    turnClaims: () => ({ get: (id: string) => (claimed && id === sessionId ? { sessionId } : undefined) }),
+    observedDeadPanes: new Set<string>(),
+    requestTurnClaimRecovery: async () => { events.push("claim-pass"); },
   };
   const check = new Function(...Object.keys(deps), `${code}; return heartbeatHealthCheck;`)(...Object.values(deps)) as (id: string) => Promise<void>;
   return { check: () => check(sessionId), events, resumeSessionCache, sessionId, deps };
@@ -75,6 +78,7 @@ describe("heartbeat uncertainty preserves the session", () => {
     "can't find session: gone",
     "no such session: gone",
     "session not found: gone",
+    "no current target", // tmux 3.6 on a running server with no sessions
     "no server running on /tmp/tmux-501/default",
     "error connecting to /tmp/tmux-501/default (No such file or directory)",
   ])("confirmed absence still recovers: %s", async stderr => {
@@ -82,6 +86,16 @@ describe("heartbeat uncertainty preserves the session", () => {
     await h.check();
     expect(h.events).toContain("repair");
     expect(h.resumeSessionCache.has(h.sessionId)).toBe(false);
+  });
+
+  // A pane that died mid-turn is continued by its turn claim (turnClaims.ts):
+  // a restart here would land it idle at its prompt and lose the turn.
+  test("a pane that died mid-turn hands its claim to the recovery pass instead of restarting idle", async () => {
+    const h = harness({ code: 1, stderr: "can't find session: gone" }, undefined, undefined, true);
+    await h.check();
+    expect(h.events).toContain("claim-pass");
+    expect(h.events).not.toContain("repair");
+    expect(h.deps.observedDeadPanes.has(h.sessionId)).toBe(true);
   });
 
   test("in-flight recovery skips the probe", async () => {
@@ -103,6 +117,13 @@ describe("authoritative tmux absence", () => {
 });
 
 afterAll(killIsolatedTmuxServer);
+
+// The probe the daemon's tmuxExec makes: routed to the session's own tmux
+// server (tmuxRoute.ts). A bare `tmux` call reaches the default server, which
+// holds neither session and answers "no current target" at once.
+function routedProbe(args: string[], opts?: { timeout?: number }) {
+  return runTmux(args, process.env, (argv) => execFileAsync("tmux", argv, { timeout: opts?.timeout, killSignal: "SIGKILL", env: { ...process.env } }), (rs) => rs[0]!);
+}
 
 test.skipIf(!Bun.which("tmux"))("a timed-out health check preserves a real live terminal", async () => {
   const pane = spawnHarness({ command: "exec sleep 600" });
@@ -128,7 +149,7 @@ test.skipIf(!Bun.which("tmux"))("an actual tmux timeout preserves the live pane 
     process.kill(serverPid, "SIGSTOP");
     paused = true;
     const h = harness(undefined, pane.tmuxSession, (args, opts) =>
-      execFileAsync("tmux", args, { timeout: opts?.timeout, killSignal: "SIGKILL", env: { ...process.env } })
+      routedProbe(args, opts)
         .catch(error => { failure = error; throw error; })
         .finally(() => { process.kill(serverPid, "SIGCONT"); paused = false; }),
     );
@@ -146,9 +167,7 @@ test.skipIf(!Bun.which("tmux"))("an actual tmux timeout preserves the live pane 
 test.skipIf(!Bun.which("tmux"))("an actual missing-session response still triggers recovery", async () => {
   const pane = spawnHarness({ command: "exec sleep 600" });
   try {
-    const h = harness(undefined, `${pane.tmuxSession}-missing`, (args, opts) =>
-      execFileAsync("tmux", args, { timeout: opts?.timeout, killSignal: "SIGKILL", env: { ...process.env } }),
-    );
+    const h = harness(undefined, `${pane.tmuxSession}-missing`, routedProbe);
     await h.check();
     expect(h.events).toContain("repair");
     expect(h.resumeSessionCache.has(h.sessionId)).toBe(false);
