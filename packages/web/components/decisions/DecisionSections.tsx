@@ -85,17 +85,19 @@ export function hasDecisionBody(decision: SessionDecisionItem, detail: DecisionD
   return !!(gateDoc(detail.doc?.content ?? "") || decision.context_md || (decision.report_slug && !decision.card));
 }
 
-/** The attached document, the short context and the report. */
-export function DecisionBody({ decision, detail }: { decision: SessionDecisionItem; detail: DecisionDetailItem }) {
+/** The attached document, the short context and the report. `report={false}`
+ *  leaves the report to the caller, for a page that draws the team's comments
+ *  between the words and the report. */
+export function DecisionBody({ decision, detail, report = true }: { decision: SessionDecisionItem; detail: DecisionDetailItem; report?: boolean }) {
   const doc = gateDoc(detail.doc?.content ?? "") || undefined;
   if (!hasDecisionBody(decision, detail)) return null;
   return (
     <>
       {doc && (
-        <div className="decision-body text-sol-text-muted" data-decision-doc><MarkdownRenderer content={doc} /></div>
+        <div className="decision-body text-sol-text" data-decision-doc><MarkdownRenderer content={doc} /></div>
       )}
       {!doc && decision.context_md && (
-        <div className="decision-body text-sol-text-muted border-l-2 border-sol-border pl-4" data-decision-context><MarkdownRenderer content={decision.context_md} /></div>
+        <div className="decision-body text-sol-text" data-decision-context><MarkdownRenderer content={decision.context_md} /></div>
       )}
       {doc && decision.context_md && (
         <details className="mt-3 text-sm text-sol-text-dim">
@@ -103,9 +105,15 @@ export function DecisionBody({ decision, detail }: { decision: SessionDecisionIt
           <div className="mt-2 border-l-2 border-sol-border pl-4" data-decision-context><MarkdownRenderer content={decision.context_md} /></div>
         </details>
       )}
-      {decision.report_slug && !decision.card && <div className="mt-4"><PublishedPageEmbed slug={decision.report_slug} decision={decision._id} /></div>}
+      {report && <DecisionReport decision={decision} className="mt-4" />}
     </>
   );
+}
+
+/** The report a plain decision attached (a change card draws its own proof). */
+export function DecisionReport({ decision, className }: { decision: SessionDecisionItem; className?: string }) {
+  if (!decision.report_slug || decision.card) return null;
+  return <div className={className}><PublishedPageEmbed slug={decision.report_slug} decision={decision._id} /></div>;
 }
 
 /** The last lead's recommendation and its reasoning, read before the body: the ladder behind Details keeps the full climb. */
@@ -114,11 +122,11 @@ export function LeadRecommendation({ decision, detail, className = "mt-4" }: { d
   if (!hop) return null;
   const option = decision.options[hop.recommendation!]?.label ?? `option ${hop.recommendation! + 1}`;
   return (
-    <div className={`${className} rounded-lg border border-sol-cyan/30 bg-sol-cyan/5 px-4 py-3`} data-decision-recommendation>
-      <div className="text-[12px] text-sol-text-muted">
-        <span className="text-sol-text">{hop.role?.name ?? "A lead"}</span> recommends <span className="text-sol-cyan">{option}</span>
+    <div className={`${className} decision-body border-t border-sol-border/70 pt-4`} data-decision-recommendation>
+      <div className="text-[13px] text-sol-text-muted">
+        <span className="text-sol-text">{hop.role?.name ?? "A lead"}</span> recommends <span className="text-sol-cyan font-medium">{option}</span>
       </div>
-      {hop.note && <div className="decision-body mt-1 text-sol-text-muted"><MarkdownRenderer content={hop.note} /></div>}
+      {hop.note && <div className="mt-1 text-sol-text-muted"><MarkdownRenderer content={hop.note} /></div>}
     </div>
   );
 }

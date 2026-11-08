@@ -1,6 +1,5 @@
 "use client";
 
-import { CommandRunView } from "./CommandRunView";
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { useRef, useState, type WheelEvent } from "react";
 import Link from "next/link";
@@ -15,7 +14,7 @@ import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls } from "./DecisionAnswerControls";
 import { DecisionOptionList } from "./DecisionOptionList";
 import { DecisionDiscussion } from "./DecisionDiscussion";
-import { DecisionBody, DecisionFacts, DecisionLadder, LeadRecommendation, hasDecisionBody } from "./DecisionSections";
+import { DecisionBody, DecisionFacts, DecisionLadder, DecisionReport, LeadRecommendation } from "./DecisionSections";
 import { GateRunChip } from "./DecisionCompactCard";
 import { DeployedIn } from "../line/widgets/DeployedIn";
 import { OriginTrail } from "../line/widgets/OriginTrail";
@@ -84,7 +83,10 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   // A card's attached doc that only restates the card ("What is wrong: ...")
   // is said once, by the card.
   const restated = !!decision.card && restatesCard(gateDoc(detail.doc?.content ?? ""), decision.card);
-  const body = hasDecisionBody(decision, detail) && !restated ? <DecisionBody decision={decision} detail={detail} /> : null;
+  // The report is drawn on its own, under the team's comments, so the words
+  // that frame the question stay with it and the comments sit near the top.
+  const hasWords = !!(gateDoc(detail.doc?.content ?? "") || decision.context_md);
+  const body = hasWords && !restated ? <DecisionBody decision={decision} detail={detail} report={false} /> : null;
 
   return (
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll onWheel={onWheel}>
@@ -128,18 +130,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           <HandoffNote decision={decision} className="mt-3" />
         </header>
 
-        {/* A line card's path from the raw thing to this card, each stage opened in place. */}
-        {decision.workflow_run_id && decision.task_id && (
-          <section className="mt-5 lw-widget" data-decision-origin>
-            <OriginTrail decision={decision._id} folded />
-          </section>
-        )}
-
-        {/* A lead's call and why, before the evidence it was made on. */}
-        <LeadRecommendation decision={decision} detail={detail} />
-
-        {/* The doubt the record raised about the cause, where a reviewer cannot miss it. */}
-        {doubt && <DoubtChip doubt={doubt} className="mt-3" />}
+        {/* What the question is about, straight under the question. */}
+        {!decision.card && body && <section className="mt-6">{body}</section>}
 
         {/* Two ways to discuss, each saying where the words go: into the
             session that asked (its transcript, where a message brings it to
@@ -164,14 +156,31 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         </div>
 
         {/* ── The team thread (ct-74449): people and the session that owns the
-            decision. It sits under the button that opens it, above the
-            evidence, so what the team said is read before the card. ── */}
+            decision. It sits under the question and the button that opens
+            it, above the evidence, so what the team said reads first. ── */}
         {(discussOpen || discussion.rows.length > 0) && (
           <section className="mt-5" id="discuss" data-decision-discuss-section>
             <h2 className="decision-kicker mb-3">Comments</h2>
             <DecisionDiscussion decisionId={decision._id} open={discussOpen} onOpenChange={setDiscussOpen} bare noAsk />
           </section>
         )}
+
+        <DecisionReport decision={decision} className="mt-6" />
+
+        {/* A line card's path from the raw thing to this card, each stage opened in place. */}
+        {decision.workflow_run_id && decision.task_id && (
+          <section className="mt-5 lw-widget" data-decision-origin>
+            <OriginTrail decision={decision._id} folded />
+          </section>
+        )}
+
+        {/* A change card's lead verdict reads before its proof. A plain
+            decision reads question, context, then the lead's call beside
+            the options it picks between. */}
+        {decision.card && <LeadRecommendation decision={decision} detail={detail} />}
+
+        {/* The doubt the record raised about the cause, where a reviewer cannot miss it. */}
+        {doubt && <DoubtChip doubt={doubt} className="mt-3" />}
 
         {/* Sticky, so it is a sibling of the page's sections, not inside the header. */}
         {verdictBar && decision.card && heldNote && <div className="mt-4">{heldNote}</div>}
@@ -191,11 +200,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           </section>
         )}
 
-        {/* ── The command a --run card executes, and how it went ── */}
-        {decision.run && <section className="mt-6"><CommandRunView run={decision.run} /></section>}
-
-        {/* ── Body ── */}
-        {!decision.card && body && <section className="mt-8">{body}</section>}
+        {!decision.card && <LeadRecommendation decision={decision} detail={detail} className="mt-8" />}
 
         {/* ── Options ── */}
         {/* A settled card's options collapse into its outcome line. */}
