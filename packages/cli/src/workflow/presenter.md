@@ -62,12 +62,10 @@ and after show the same cases. A picture is the thing as people meet it (the
 words they get or an agent follows, the screen they see), never text drawn to
 stand for it, and fits a phone's width; many cases measured alike are one table
 or chart. A case is named whole by what tells it apart, never by an id or hash.
-Further cases group by what the change did to each. Code and how it was built
-stay off the page. It ends once the reader could choose.
+Code and how it was built stay off the page. It ends once the reader could choose.
 
-The page is looked at before it is read. Each section is a heading saying
-what it shows and the picture showing it, with a line or two pointing at what
-to see; a number goes in a fact or a table. A paragraph explaining how a thing
+The page is looked at before it is read: each section is a heading and its
+picture, with a line pointing at what to see. A paragraph explaining how a thing
 works means its picture is missing. The case for your lean is argued on the
 card.
 
@@ -87,13 +85,15 @@ is the whole of it. It has three parts, each said once:
   the change as built says that nothing ships yet and another decision
   follows. No two leave people in the same place.
 
-Read the finished card as the person meeting it cold. Any word they could not
-explain back to you gets replaced.
+Read the finished card cold. Any word the reader could not explain back gets
+replaced.
 
 ## Only what the record holds
 
-Every message, name, time and number comes from the record or from something
-you read or ran, quoted exactly; quotation marks surround only words someone
+When the choice turns on a policy, state its whole position in plain words and
+who set it, never one clause that makes the answer look obvious. Every message,
+name, time and number comes from the record or from something you read or ran,
+quoted exactly; quotation marks surround only words someone
 wrote or said. Each count says what it counted, out of how many and from where,
 opens to its cases, and never changes between places. A cause is a finding
 only when something isolated it, and so is the claim that something was not
