@@ -115,6 +115,12 @@ const BUILTIN_COMMANDS: Record<string, Skill[]> = {
   gemini: GEMINI,
 };
 
+// Codecast's own commands, which the composer runs itself instead of sending
+// them to the agent, offered in every session.
+const CODECAST: Skill[] = [
+  { name: "goal", description: "Keep the agent working until an objective is met [pause|resume|clear]" },
+];
+
 export function getBuiltinCommands(agentType?: string): Skill[] {
-  return BUILTIN_COMMANDS[agentType || "claude_code"] || CLAUDE_CODE;
+  return [...CODECAST, ...(BUILTIN_COMMANDS[agentType || "claude_code"] || CLAUDE_CODE)];
 }

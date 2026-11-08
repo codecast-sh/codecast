@@ -19,6 +19,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { scheduleFedSessionSettle } from "./callChat";
 import { scheduleWorkerSettle } from "./workerSettle";
 import { closeSessionRepliesAfterTurn } from "./chatSessionReplies";
+import { scheduleGoalJudge } from "./sessionGoals";
 
 // A status CHANGE is the entry point to the needs-input push (see
 // notifications.checkNeedsInput). "idle" only settles into needs_input after
@@ -935,6 +936,11 @@ async function applyAgentStatus(ctx: MutationCtx, session: Doc<"managed_sessions
     await releaseQueuedRows(ctx, args.conversation_id);
     // Chat lines this turn read and did not answer stop saying "thinking".
     await closeSessionRepliesAfterTurn(ctx, args.conversation_id);
+    // A session working toward a goal has this turn judged (sessionGoals.ts).
+    if (!args.session_boundary) {
+      // A re-published settle carries its old stamp, so the stamp names the turn only when it advanced.
+      await scheduleGoalJudge(ctx, args.conversation_id, (turnStampAdvanced ? args.turn_completed_at : undefined) ?? patch.agent_status_updated_at ?? Date.now(), args.agent_status);
+    }
   } else if (session.agent_status === "permission_blocked" && args.agent_status !== "permission_blocked" && !ACTIVE_AGENT_STATUSES.has(args.agent_status)) {
     // A turn stopped at a permission prompt (denied, or interrupted by a
     // "stop and send") ended too: its queue goes in.

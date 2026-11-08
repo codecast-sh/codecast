@@ -312,6 +312,18 @@ export const CLIENT_SYNC_REGISTRY = {
       fields: ["status", "answer_index", "answer_text", "answer_json", "resolved_at"],
     },
   },
+  // A session's goal (convex sessionGoals.ts, shared/contracts/sessionGoal):
+  // the newest goal row of each open session, fed per conversation while it
+  // is open, so delta. The pill above the composer reads it. localFirst: /goal
+  // paints a stub keyed by client_key that the server row supersedes, and
+  // pause, resume and clear flip the row before their named side effects land.
+  sessionGoals: {
+    persistence: { kind: "collection", key: "sessionGoals" },
+    sync: { isDelta: true, altKey: "client_key" },
+    localFirst: true,
+    feeds: ["sessionGoals.forConversation"],
+    writtenBy: ["sessionGoals"],
+  },
   // Decision stacks (D5): the viewer's open stacks with their progress. The
   // list is the complete visible set, so a snapshot; every stack verb is a
   // named mutation and the row echoes back through this feed.
@@ -1906,6 +1918,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   docDetails: "shared",
   sessionDecisions: "shared",
   decisionStacks: "shared",
+  sessionGoals: "shared",
   handledDecisions: "shared",
   decisionDetails: "shared",
   orgTemplateInstances: "shared",

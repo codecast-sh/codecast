@@ -99,6 +99,7 @@ import { getToolPatchInputs } from '@codecast/convex/convex/fileChanges/embedded
 import { BashModeBlock, FoldedPromptRow, SessionHandoffCard } from '@/components/session/UserRows';
 import { classifyUserRows, pairCommandExpansions } from '@codecast/web/lib/userRowKinds';
 import { parseJointMessage } from '@codecast/shared/contracts/jointMessage';
+import { goalFrameLine, goalMessageBody } from '@codecast/shared/contracts/sessionGoal';
 import { parseCommandInvocation, cleanCommandExpansion, parseCastCommand, parseApiErrorContent, stripSystemTags as stripTagsShared } from '@codecast/web/components/conversation/classify';
 import { sayTextOf } from '@codecast/web/components/castCommand';
 import { useRecordConversationOpen } from '@/lib/accessLogOpen';
@@ -4523,6 +4524,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         // the agent's computed task as a brief card from the workflow.
         if (kind.frame === 'user request') return <FoldedPromptRow icon="corner-down-right" label="Request" detail={kind.body.split('\n')[0]} body={kind.body} timestamp={item.timestamp} />;
         return <WorkflowTaskBlock body={kind.body} timestamp={item.timestamp} />;
+      case 'goal_round': {
+        const line = goalFrameLine(kind.frame);
+        return <FoldedPromptRow icon="target" label={line.label} detail={line.detail} body={goalMessageBody(item.content || '')} timestamp={item.timestamp} />;
+      }
       case 'role_brief': {
         const brief = stripSystemTags(item.content || '').trim();
         return <FoldedPromptRow icon="user-check" label="Role brief" detail={brief.split('\n')[0].replace(/\*\*/g, '')} body={brief} timestamp={item.timestamp} />;
