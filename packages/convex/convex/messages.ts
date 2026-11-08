@@ -838,6 +838,63 @@ export async function settleEchoedPending(
   if (!pending.echo_message_id) await ctx.db.patch(pending._id, { echo_message_id: messageId });
 }
 
+// The pending rows a stamped turn names, read by id, each taken by one turn
+// of the batch. A row of another conversation the same person owns is one
+// the daemon delivered here on its behalf (a plan parent's message handed to
+// its child): it settles, but its client id and sender stay with its own
+// conversation (settleEchoesOn), so only this conversation's rows can be the
+// turn's primary.
+export async function stampedEchoRows(
+  ctx: { db: any },
+  conversation: { _id: Id<"conversations">; user_id: Id<"users"> },
+  deliveryIds: readonly string[] | undefined,
+  consumed: ReadonlySet<Id<"pending_messages">>,
+): Promise<Doc<"pending_messages">[]> {
+  const rows: Doc<"pending_messages">[] = [];
+  for (const raw of deliveryIds ?? []) {
+    const id = ctx.db.normalizeId("pending_messages", raw);
+    if (!id || consumed.has(id) || rows.some((r) => r._id === id)) continue;
+    const row = await ctx.db.get(id);
+    if (!row) continue;
+    if (String(row.conversation_id) === String(conversation._id)) rows.push(row);
+    else if (String(row.owner_user_id ?? row.from_user_id) === String(conversation.user_id)) rows.push(row);
+  }
+  return rows;
+}
+
+/** Whether a stamped row belongs to the conversation its echo landed in. */
+const isOwnRow = (row: Doc<"pending_messages">, conversationId: Id<"conversations">) =>
+  String(row.conversation_id) === String(conversationId);
+
+// A legacy batch's echo, paired by its words (see MessageBatch.echo_ids).
+function legacyEchoRows(
+  pendingMsgs: readonly Doc<"pending_messages">[],
+  content: string | undefined,
+  timestamp: number,
+  consumed: ReadonlySet<Id<"pending_messages">>,
+): Doc<"pending_messages">[] {
+  const row = pendingMsgs.length ? findEchoedPendingMessage(pendingMsgs, content, timestamp, consumed) : undefined;
+  return row ? [row] : [];
+}
+
+// Settle every delivery a turn echoes on the message that holds it. The
+// message takes the sender and client id of the first delivery no other
+// message took, only when it has none of its own.
+async function settleEchoesOn(
+  ctx: { db: any },
+  message: Doc<"messages">,
+  echoed: readonly Doc<"pending_messages">[],
+  primary: Doc<"pending_messages"> | undefined,
+): Promise<void> {
+  if (primary) {
+    const patch: Record<string, unknown> = {};
+    if (!message.client_id && primary.client_id) patch.client_id = primary.client_id;
+    if (!message.from_user_id && primary.from_user_id) patch.from_user_id = primary.from_user_id;
+    if (Object.keys(patch).length) await ctx.db.patch(message._id, patch);
+  }
+  for (const row of echoed) await settleEchoedPending(ctx, row, message._id);
+}
+
 
 // Stamp what the session opened with (see titleGeneration.firstPromptOf),
 // once. Only on a young session: an old row with no stamp gets it from the
@@ -1376,6 +1433,11 @@ export const messageValidator = v.object({
     cache_read_input_tokens: v.optional(v.number()),
   })),
   api_message_id: v.optional(v.string()),
+  // The deliveries this user turn echoes: the pending_messages ids the writer
+  // handed to the agent and saw come back as this turn (the daemon's
+  // deliveryEchoLedger, the hosted turn engine). The first is the one whose
+  // sender, client id and words the turn takes; any others went in with it.
+  delivery_ids: v.optional(v.array(v.string())),
 });
 
 /** The fields one batch message may carry (the hosted harness's MessageRow is checked against it). */
@@ -1526,13 +1588,20 @@ function refuseHostedTranscriptWrite(conversation: Doc<"conversations">) {
   }
 }
 
-export type MessageBatch = { conversation_id: Id<"conversations">; messages: Array<typeof messageValidator.type> };
+// `echo_ids`: the writer stamps every echo it delivered with delivery_ids, so
+// an unstamped user turn is no delivery (someone typed at the terminal) and
+// nothing is paired by its words. A batch without it comes from a daemon
+// older than delivery ids, whose echoes are still paired by text
+// (findEchoedPendingMessage), as is ackInjectedMessages' delivery_acks. Both
+// go once the oldest CLI still syncing is the release that carries echo_ids.
+export type MessageBatch = { conversation_id: Id<"conversations">; messages: Array<typeof messageValidator.type>; echo_ids?: boolean };
 
 export const addMessages = mutation({
   args: {
     conversation_id: v.id("conversations"),
     messages: v.array(messageValidator),
     api_token: v.optional(v.string()),
+    echo_ids: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     if (!batchHasWork(args.messages)) {
@@ -1624,7 +1693,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
   // unless the batch actually carries a user message. consumedPendingIds keeps a
   // pending row from matching two different user messages in the same batch.
   const batchHasUserMsg = args.messages.some((m) => m.role === "user");
-  const pendingMsgs = batchHasUserMsg ? await pendingRowsForEcho(ctx, args.conversation_id) : [];
+  const pendingMsgs = batchHasUserMsg && !args.echo_ids ? await pendingRowsForEcho(ctx, args.conversation_id) : [];
   const consumedPendingIds = new Set<Id<"pending_messages">>();
 
   for (const [batchIndex, msg] of args.messages.entries()) {
@@ -1646,14 +1715,13 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
     // Resolve the exact pending intent before duplicate suppression. Two
     // identical user sends with different client ids are distinct durable
     // commands and need distinct transcript relations for v2 coverage.
-    const matchingPending = msg.role === "user" && pendingMsgs.length > 0
-      ? findEchoedPendingMessage(
-          pendingMsgs,
-          safeContent,
-          msgTimestamp,
-          consumedPendingIds,
-        )
-      : undefined;
+    const echoed = msg.role !== "user" ? []
+      : args.echo_ids ? await stampedEchoRows(ctx, conversation, msg.delivery_ids, consumedPendingIds)
+      : legacyEchoRows(pendingMsgs, safeContent, msgTimestamp, consumedPendingIds);
+    // The delivery the turn takes its sender, client id and words from: one
+    // no other message took first, so a client id never lands on two rows.
+    const matchingPending = echoed.find((row) => !row.echo_message_id && isOwnRow(row, args.conversation_id));
+    const consumeEchoed = () => { for (const row of echoed) consumedPendingIds.add(row._id); };
 
     if (msg.message_uuid) {
       const existing = await ctx.db
@@ -1701,6 +1769,12 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
             current.tool_calls, current.tool_results, extractFileChanges([existing]));
         }
         if (hosted) await storeHostedReplay(ctx, args.conversation_id, existing._id, msg, { thinking: safeThinking, tool_calls: safeToolCalls });
+        // A re-upload of a stored turn settles what it echoes: the id makes
+        // the retry converge on the one row, whichever upload stamped first.
+        if (args.echo_ids && echoed.length) {
+          consumeEchoed();
+          await settleEchoesOn(ctx, existing, echoed, matchingPending);
+        }
         ids.push(existing._id);
         continue;
       }
@@ -1738,20 +1812,8 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
           if (Object.keys(patch).length > 0) {
             await ctx.db.patch(dup._id, { ...patch, ...navPromptPatch(dup, patch) });
           }
-          if (matchingPending) {
-            consumedPendingIds.add(matchingPending._id);
-            const dupPatch: Record<string, unknown> = {};
-            if (!dup.client_id && matchingPending.client_id) {
-              dupPatch.client_id = matchingPending.client_id;
-            }
-            if (!dup.from_user_id && matchingPending.from_user_id) {
-              dupPatch.from_user_id = matchingPending.from_user_id;
-            }
-            if (Object.keys(dupPatch).length > 0) {
-              await ctx.db.patch(dup._id, dupPatch);
-            }
-            await settleEchoedPending(ctx, matchingPending, dup._id);
-          }
+          consumeEchoed();
+          if (echoed.length) await settleEchoesOn(ctx, dup, echoed, matchingPending);
           ids.push(dup._id);
           continue;
         }
@@ -1761,10 +1823,11 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
     let images = msg.images;
     let contentToStore = safeContent;
     let clientIdToStore: string | undefined;
+    consumeEchoed();
     if (matchingPending) {
-        consumedPendingIds.add(matchingPending._id);
-        contentToStore = redactSecrets(matchingPending.content);
-        clientIdToStore = matchingPending.client_id;
+      // A turn that carried several sends keeps the agent's words, which hold them all.
+      if (echoed.length === 1) contentToStore = redactSecrets(matchingPending.content);
+      clientIdToStore = matchingPending.client_id;
     }
     if (msg.role === "user") {
       const resolved = resolveEchoImages(images, matchingPending, safeContent || "");
@@ -1795,7 +1858,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
       timestamp: msgTimestamp,
       ...navPromptField({ role: msg.role, content: contentToStore, tool_results: safeToolResults, images, subtype: msg.subtype }),
     });
-    if (matchingPending) await settleEchoedPending(ctx, matchingPending, messageId);
+    for (const row of echoed) await settleEchoedPending(ctx, row, messageId);
     if (hosted) await storeHostedReplay(ctx, args.conversation_id, messageId, msg, { thinking: safeThinking, tool_calls: safeToolCalls });
     ids.push(messageId);
     insertedCount++;

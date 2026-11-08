@@ -104,7 +104,7 @@ describe("world", () => {
       [() => daemon.heartbeat("ada/s"), ["managedSessions:heartbeat"]],
       [() => daemon.restart(["ada/s"]), ["managedSessions:registerManagedSession"]],
       [() => daemon.claimPending("ada/s"), ["pendingMessages:getPendingMessagesForDaemon"]],
-      [() => daemon.ack("ada/s"), ["pendingMessages:ackInjectedMessages"]],
+      [() => daemon.ack("ada/s"), ["messages:addMessages"]],
       [() => daemon.resume("ada/s"), ["users:resumeSession"]],
       [() => daemon.claimTask(), ["agentTasks:getDueTasks"]],
       [() => actors.agent("ada/s").says("acme/general", "hello", ["bo"]), ["chat:sendMessage"]],
@@ -181,11 +181,10 @@ describe("world", () => {
       "pendingMessages:getPendingMessagesForDaemon",
       "pendingMessages:claimPendingMessageForDelivery",
       "pendingMessages:updateMessageStatus",
-      "pendingMessages:ackInjectedMessages",
+      "messages:addMessages",
     ]) expect(reached).toContain(name);
-    // The echo goes up wrapped as Claude Code writes a paste. It matched its row
-    // through the server's strip, so the line stores the row's own text, and
-    // the delivery ack stamped the send's client_id on it.
+    // The echo goes up wrapped as Claude Code writes a paste and names its
+    // delivery, so the line stores the row's own text and the send's client_id.
     const send = (w.backend.db._tables.pending_messages ?? []).find((r: any) => r.conversation_id === w.idOf("ada/s"));
     const echo = (w.backend.db._tables.messages ?? []).find((m: any) => String(m.message_uuid ?? "").startsWith("sim-echo-"));
     expect(echo?.content).toBe(send?.content);

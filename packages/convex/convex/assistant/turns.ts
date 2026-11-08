@@ -594,14 +594,14 @@ function approvalOf(decision: Doc<"session_decisions"> | null, ownerId: Id<"user
 
 // ------------------------------------------------------------------ begin
 
-/** The person's queued words, into the transcript as their rows (which also
- *  settles each pending row through the writer's echo match), then every row
- *  marked delivered. */
 /** Input that only a routine sent: no word from the person in it. */
 function routineOnly(typed: Doc<"pending_messages">[]): boolean {
   return typed.length > 0 && typed.every((row) => row.origin === "scheduler");
 }
 
+/** The person's queued words, into the transcript as their rows, each naming
+ *  the pending row it delivers (which the writer settles by that id), then
+ *  every row marked delivered. */
 async function takeTyped(ctx: MutationCtx, conversationId: Id<"conversations">, typed: Doc<"pending_messages">[]): Promise<void> {
   if (typed.length === 0) return;
   const now = Date.now();
@@ -609,6 +609,7 @@ async function takeTyped(ctx: MutationCtx, conversationId: Id<"conversations">, 
     role: "user" as const,
     message_uuid: `pending:${row._id}`,
     content: row.content,
+    delivery_ids: [String(row._id)],
     timestamp: now + i,
   })));
   for (const row of typed) {
