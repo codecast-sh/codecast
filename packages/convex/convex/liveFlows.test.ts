@@ -229,6 +229,17 @@ describe("liveFlows (one live flow per team)", () => {
     expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_g40"]);
   });
 
+  test("the sweep starts what the page shows next, however many problems ahead of it in the reads cannot start", async () => {
+    // Problems handed to someone outside the flow's leads are read and dropped; 100 of them on each side of the
+    // one that can start put it past the first 90 of both reads (newest first, and oldest unscored first).
+    const elsewhere = (id: string, at: number) => problem(id, "growth", null, { assignee: "users_elsewhere", created_at: at, updated_at: at });
+    const old = Array.from({ length: 100 }, (_, i) => elsewhere(`old${i}`, NOW - 300_000 + i));
+    const fresh = Array.from({ length: 100 }, (_, i) => elsewhere(`new${i}`, NOW - 100_000 + i));
+    const { ctx, tables } = fixtures({ tasks: [...old, problem("mid", "growth", null, { created_at: NOW - 200_000, updated_at: NOW - 200_000 }), ...fresh] });
+    expect((await liveFlowView(ctx, tables.live_flows[0], NOW)).queue.map((q) => q.task_id)).toEqual(["tasks_mid"]);
+    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_mid"]);
+  });
+
   test("only a team admin sets the bar; the CLI says it in words, refuses a bad one, and takes it off", async () => {
     const token = "cx_live_flow_bar_token";
     const { ctx, tables } = fixtures({ tasks: [problem("g70", "growth", 70)], extra: { api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(token), name: "cli", created_at: 1 }] } });
