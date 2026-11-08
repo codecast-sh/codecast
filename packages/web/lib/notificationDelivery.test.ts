@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  AGENT_ALERTS_OVERRIDE, agentAlertsSuppressed, claimStoredAlert,
-  createNotificationDelivery, deliverAlert, installNotificationDelivery,
+  AGENT_ALERTS_OVERRIDE, agentAlertsSuppressed, claimStoredAlert, createNotificationDelivery,
+  deliverAlert, focusedViewChanged, focusedWindowShows, installFocusHold, installNotificationDelivery,
   type AlertClaim, type ClaimResult,
 } from "./notificationDelivery";
 import { AGENT_TAB_KEY } from "./desktopHandoff";
+import { replaceGlobals } from "../test-helpers/globals";
 
 const claim: AlertClaim = { key: "sound:chat:1", ttl: 60_000, preferDesktop: true };
 const originalStorage = globalThis.sessionStorage;
@@ -127,5 +128,98 @@ describe("notification delivery", () => {
     expect(claimStoredAlert(shared, "event", 1_000, 1_000)).toBe(true);
     for (let i = 0; i < 1_000; i++) claimStoredAlert(shared, `m:${i}`, 60_000, 2_000);
     expect(Object.keys(JSON.parse(shared.getItem("codecast-notification-claims")!))).toHaveLength(500);
+  });
+});
+
+describe("alerts about requests", () => {
+  test("a request answered while its alert waits for the desktop never sounds; one still open does", async () => {
+    let result: ClaimResult = "desktop";
+    let pending = true;
+    const delivery = createNotificationDelivery({
+      remote: async () => result,
+      fallback: async () => true,
+      suppressed: () => false,
+      // The desktop never takes it; meanwhile the person answers.
+      wait: async () => { result = "claimed"; pending = false; },
+    });
+    const uninstall = installNotificationDelivery(delivery);
+    try {
+      let sent = 0;
+      expect(await deliverAlert("sound:idle:a", () => { sent++; }, { due: () => pending })).toBe(false);
+      expect(sent).toBe(0);
+      result = "desktop";
+      pending = true;
+      const open = createNotificationDelivery({
+        remote: async () => result,
+        fallback: async () => true,
+        suppressed: () => false,
+        wait: async () => { result = "claimed"; },
+      });
+      installNotificationDelivery(open);
+      expect(await deliverAlert("sound:idle:b", () => { sent++; }, { due: () => pending })).toBe(true);
+      expect(sent).toBe(1);
+      // Already answered when asked: nothing is claimed or sent.
+      expect(await deliverAlert("sound:idle:c", () => { sent++; }, { due: () => false })).toBe(false);
+      expect(sent).toBe(1);
+    } finally {
+      uninstall();
+    }
+  });
+});
+
+// A LockManager shared by every "tab" in a test, with the semantics the focus
+// lock relies on: shared holds on a name stack, and an exclusive ifAvailable
+// request for that name gets null while any is held.
+function lockManager() {
+  const shared = new Map<string, number>();
+  return {
+    async request(name: string, opts: { mode?: string; ifAvailable?: boolean }, cb: (lock: object | null) => unknown) {
+      if (opts.mode === "shared") {
+        shared.set(name, (shared.get(name) ?? 0) + 1);
+        try { return await cb({}); } finally { shared.set(name, shared.get(name)! - 1); }
+      }
+      return cb(opts.ifAvailable && (shared.get(name) ?? 0) > 0 ? null : {});
+    },
+  };
+}
+
+describe("focus across tabs", () => {
+  test("a focused tab's view silences banners about it in every tab, until it blurs or moves on", async () => {
+    const locks = lockManager();
+    const listeners = new Map<string, () => void>();
+    let focused = true;
+    let view: string | null = "/conversation/c1";
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    const restore = replaceGlobals({
+      navigator: { locks },
+      window: { addEventListener: (t: string, f: () => void) => listeners.set(t, f), removeEventListener: () => {} },
+      document: { hasFocus: () => focused, addEventListener: () => {}, removeEventListener: () => {} },
+    });
+    try {
+      const uninstall = installFocusHold(() => view);
+      await tick();
+      expect(await focusedWindowShows("/conversation/c1")).toBe(true);
+      expect(await focusedWindowShows("/conversation/c2")).toBe(false);
+      // The tab moves to another conversation.
+      view = "/conversation/c2";
+      focusedViewChanged();
+      await tick();
+      expect(await focusedWindowShows("/conversation/c1")).toBe(false);
+      expect(await focusedWindowShows("/conversation/c2")).toBe(true);
+      // Blurred, it silences nothing.
+      focused = false;
+      listeners.get("blur")!();
+      await tick();
+      expect(await focusedWindowShows("/conversation/c2")).toBe(false);
+      focused = true;
+      listeners.get("focus")!();
+      await tick();
+      expect(await focusedWindowShows("/conversation/c2")).toBe(true);
+      uninstall();
+      await tick();
+      expect(await focusedWindowShows("/conversation/c2")).toBe(false);
+    } finally {
+      restore();
+    }
   });
 });

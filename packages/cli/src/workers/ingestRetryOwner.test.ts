@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {TranscriptRetryOwner} from './ingestRetryOwner.js';
+import {serializeTranscript} from './ingestClient.js';
+import {MAX_QUEUE,MAX_INFLIGHT} from './protocol.js';
 const turn=()=>new Promise<void>(resolve=>setImmediate(resolve));
 
 test('normal-return retained work arms a due wake from cold and survives pause and stop',async()=>{
@@ -56,5 +58,23 @@ test('an active stopped instance cannot rearm on its late failure and unrelated 
     const pending=sync.invalidateAndAwait();await started;sync.stop();reject(new Error('late failure'));await pending;await turn();now=100;expect(owner.drain()).toBe(0);
     expect(()=>owner.create(map,file,{client:'claude',file,sessionId:'different-full'},async()=>{})).toThrow('mismatch');
     const other=owner.create(map,file+'other',{client:'claude',file,sessionId:'other-full'},async()=>{}, {maxRetries:1});await other.invalidateAndAwait();expect(owner.drain()).toBe(0);
+  }finally{console.warn=warn;owner.stop();fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('a live pass refused for capacity waits for a freed reservation instead of retrying in a loop',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'f3-retry-capacity-')),files=['a','b'].map(name=>path.join(root,name));
+  for(const file of files)fs.writeFileSync(file,'x');
+  let release!:()=>void;
+  const blocked=new Promise<void>(resolve=>{release=resolve;});
+  const holders=Array.from({length:MAX_QUEUE+MAX_INFLIGHT},(_,i)=>serializeTranscript(`held-${i}`,()=>blocked));
+  const owner=new TranscriptRetryOwner({allowed:()=>true,retryable:()=>true}),map=new Map();
+  const attempts=[0,0],synced=[false,false],warn=console.warn;let warnings=0;console.warn=()=>{warnings++;};
+  try{
+    const syncs=files.map((file,i)=>owner.create(map,file,{file,sessionId:`s${i}`,client:'claude'},async()=>{attempts[i]++;await serializeTranscript(file,async()=>{synced[i]=true;});}));
+    const done=syncs.map(sync=>sync.invalidateAndAwait());
+    await new Promise(resolve=>setTimeout(resolve,50));
+    expect(attempts).toEqual([1,1]);expect(synced).toEqual([false,false]);
+    release();await Promise.all(holders);await Promise.all(done);
+    expect(synced).toEqual([true,true]);expect(attempts).toEqual([2,2]);expect(warnings).toBe(0);
   }finally{console.warn=warn;owner.stop();fs.rmSync(root,{recursive:true,force:true});}
 });

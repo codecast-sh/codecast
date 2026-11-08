@@ -44,16 +44,21 @@ import {
 } from "../lib/terminal/conversationTerminalState";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useClaudeBackend } from "../hooks/useSessionCommands";
+import { SdkBackendPill } from "./ClaudeBackendControl";
 
 export function TmuxAttachPill({
   tmuxSession,
   agentType,
   isLive,
   conversationKey,
+  canSwitchBackend = false,
 }: {
   tmuxSession?: string | null;
   agentType?: string | null;
   isLive: boolean;
+  /** The viewer may move this Claude session between tmux and the Agent SDK (the SDK pill's menu). */
+  canSwitchBackend?: boolean;
   /** Enables open-as-split and the machine lookup; without it the pill falls back to copy-only. */
   conversationKey?: string;
 }) {
@@ -62,6 +67,7 @@ export function TmuxAttachPill({
   const [anim, setAnim] = useState<"tmux-pill-in" | "tmux-pill-change" | null>(null);
 
   const { machine, attach, copyAttach } = useAttachCopy(tmuxSession, conversationKey);
+  const { backend } = useClaudeBackend(conversationKey);
 
   useWatchEffect(() => {
     const p = prev.current;
@@ -71,6 +77,8 @@ export function TmuxAttachPill({
     else if (p && tmuxSession && p !== tmuxSession) setAnim("tmux-pill-change"); // restart moved it
   }, [tmuxSession]);
 
+  // An Agent SDK session has no pane: its pill says so and offers the move to one.
+  if (backend === "sdk" && conversationKey) return <SdkBackendPill conversationId={conversationKey} isLive={isLive} canSwitch={canSwitchBackend} />;
   if (!tmuxSession && agentType !== "codex") return null;
 
   const machineName = machine ? deviceDisplayName(machine as any) : null;

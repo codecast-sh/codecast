@@ -81,3 +81,33 @@ test("the stylesheet's round send rules are scoped to the icon form", () => {
     for (const part of selector.split(",")) expect(part.trim()).toContain("[data-cc-send]:not([data-cc-send-label])");
   }
 });
+
+test("while a turn runs with text, the pill offers stop and send, send when the turn ends, and send now, each doing its own thing", async () => {
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  const did: string[] = [];
+  const tips: string[] = [];
+  try {
+    await act(() => root.render(
+      <form onSubmit={(e) => { e.preventDefault(); did.push("send now"); }}>
+        <ComposerSendButton
+          canSubmit
+          stopAndSend={{ onStopAndSend: () => did.push("stop and send") }}
+          queueSend={{ onQueue: () => did.push("queue") }}
+          tip={(b, words) => { tips.push(words); return b; }}
+        />
+      </form>,
+    ));
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Stop and send", "Send when this turn ends", "Send now"]);
+    expect(tips).toEqual(["Send now"]);
+    for (const b of buttons) await act(() => { b.click(); });
+    expect(did).toEqual(["stop and send", "queue", "send now"]);
+    // Without a queue the pill is the two buttons it was.
+    await act(() => root.render(<ComposerSendButton canSubmit stopAndSend={{ onStopAndSend: () => {} }} />));
+    expect(host.querySelectorAll("[data-cc-queue-send]").length).toBe(0);
+  } finally {
+    act(() => root.unmount());
+    host.remove();
+  }
+});

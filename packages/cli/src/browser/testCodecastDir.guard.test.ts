@@ -25,7 +25,7 @@ const SRC = path.resolve(path.dirname(THIS_FILE), "..");
 const WRITERS = ["writeBridgeState", "ensureBridgeConfig", "rotateBridgeToken", "testBridgeHost", "browserHome("];
 
 /** Any of these puts the writes somewhere other than the human's ~/.codecast. */
-const REDIRECTS = [/process\.env\.CODECAST_DIR\s*=/, /CODECAST_DIR\s*:/, /isolateCodecastDir\s*\(/];
+const REDIRECTS = [/process\.env\.CODECAST_DIR\s*=/, /CODECAST_DIR\s*:/, /isolateCodecastDir(?:EachTest)?\s*\(/];
 
 const SKIP_DIRS = new Set(["node_modules", "dist", "__fixtures__"]);
 

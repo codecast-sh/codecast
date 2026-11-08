@@ -16,6 +16,7 @@ import { getSystemConfig } from "./systemConfig";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { batchResults, createBatch, getBatch, modelCost, type BatchResult, type ModelUsage } from "./lib/anthropic";
+import { vendorRefusalFor } from "./lib/vendorGuard";
 import {
   ASSIGN_SCHEMA,
   DAILY_CAP_USD,
@@ -201,7 +202,7 @@ export const submit = internalAction({
     const due = (args.rescore ? open : dueForScoring(open)).slice(0, args.limit);
     if (!due.length) return { batch_id: null, count: 0, open: open.length };
     const requests = await scoreRequests(ctx, due.map((b) => b.id));
-    const batch = await createBatch(requests);
+    const batch = await createBatch({ ctx, scope: { workspace: args.workspace } }, requests);
     return { batch_id: batch.id, count: requests.length, open: open.length };
   },
 });
@@ -283,7 +284,7 @@ export const submitFamilies = internalAction({
   handler: async (ctx, args) => {
     const { labels } = await labelsOf(ctx, args.workspace, args.judge);
     const prompt = problemFamiliesPrompt(labels.map((l) => ({ label: l.label, count: l.ids.length })));
-    const batch = await createBatch([{ custom_id: "families", req: { model: FAMILY_MODEL, max_tokens: 64_000, effort: "medium", prompt, output_schema: FAMILIES_SCHEMA } }]);
+    const batch = await createBatch({ ctx, scope: { workspace: args.workspace } }, [{ custom_id: "families", req: { model: FAMILY_MODEL, max_tokens: 64_000, effort: "medium", prompt, output_schema: FAMILIES_SCHEMA } }]);
     return { batch_id: batch.id, labels: labels.length };
   },
 });
@@ -322,7 +323,7 @@ export const submitAssign = internalAction({
     const chunks = (args.families ? labels : unplacedLabels(open, labels)).map((l) => l.label);
     if (!chunks.length || !families.length) return { batch_id: null, labels: 0 };
     const requests = assignRequests(families, chunks);
-    const batch = await createBatch(requests);
+    const batch = await createBatch({ ctx, scope: { workspace: args.workspace } }, requests);
     return { batch_id: batch.id, labels: chunks.length, requests: requests.length, families, chunks };
   },
 });
@@ -513,6 +514,9 @@ export const tick = internalAction({
 });
 
 async function advance(ctx: any, workspace: string, judge: string, dry: boolean): Promise<Record<string, unknown>> {
+  // A regulated workspace's problems are not scored while Anthropic has no BAA (lib/vendorGuard).
+  const refusal = await vendorRefusalFor(ctx, { workspace }, "anthropic");
+  if (refusal) return { skipped: refusal };
   const now = Date.now();
   const state = await loadPass(ctx, workspace, judge);
   const pending = state.pending;
@@ -537,7 +541,7 @@ async function advance(ctx: any, workspace: string, judge: string, dry: boolean)
       const families = state.families?.length ? state.families : writtenFamilies(open);
       const chunks = unplacedLabels(open, labels).map((l) => l.label);
       if (chunks.length && families.length && spentToday(state.spend, now) < DAILY_CAP_USD) {
-        const assign = await createBatch(assignRequests(families, chunks));
+        const assign = await createBatch({ ctx, scope: { workspace } }, assignRequests(families, chunks));
         state.pending = { kind: "assign", batch_id: assign.id, at: now, labels: chunks, families };
       }
     } else {
@@ -557,7 +561,7 @@ async function advance(ctx: any, workspace: string, judge: string, dry: boolean)
   if (dry) return { due: due.length, would_send: send.length, spent_today: spentToday(state.spend, now) };
   state.last_submit_at = now;
   if (send.length) {
-    const batch = await createBatch(await scoreRequests(ctx, send.map((b) => b.id)));
+    const batch = await createBatch({ ctx, scope: { workspace } }, await scoreRequests(ctx, send.map((b) => b.id)));
     state.pending = { kind: "score", batch_id: batch.id, at: now };
   }
   await savePass(ctx, workspace, judge, state);

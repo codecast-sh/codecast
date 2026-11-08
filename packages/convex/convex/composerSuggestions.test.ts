@@ -1,3 +1,4 @@
+import { NO_TEAM_CONTENT_GATE } from "./lib/vendorGuard";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { CHEAP_MODEL } from "./lib/anthropic";
@@ -36,6 +37,9 @@ function fakeDb(tables: Record<string, any[]>) {
     and: (...preds: any[]) => (row: any) => preds.every((p) => p(row)),
   };
   return {
+    // The vendor guard reads each conversation's team; none of these is a regulated team's.
+    normalizeId: (_table: string, id: string) => id,
+    get: async (id: string) => Object.values(tables).flat().find((r) => r._id === id) ?? null,
     query: (table: string) => {
       let rows = tables[table] ?? [];
       const chain: any = {
@@ -93,6 +97,21 @@ describe("getRecentUserInputs", () => {
     expect(texts).toContain("now verify it in the browser");
     expect(texts).not.toContain("continue");
     expect(texts).not.toContain("carrier");
+  });
+
+  test("leaves out a regulated team's sessions while Anthropic has no BAA", async () => {
+    const conversations = [
+      { _id: "mine", _creationTime: 100, user_id: "u1", updated_at: 900 },
+      { _id: "clinic", _creationTime: 100, user_id: "u1", updated_at: 800, team_id: "t1", team_visibility: "full" },
+    ];
+    const messages = [
+      { _id: "a", conversation_id: "mine", role: "user", content: "plan and task this out deeply", timestamp: 200 },
+      { _id: "b", conversation_id: "clinic", role: "user", content: "summarize the patient intake notes", timestamp: 200 },
+    ];
+    const handler = (getRecentUserInputs as any)._handler ?? (getRecentUserInputs as any).handler;
+    const teams = [{ _id: "t1", name: "Clinic", policy: { regulated_data: true } }];
+    const out = await handler({ db: fakeDb({ conversations, messages, teams }) }, { user_id: "u1" });
+    expect(out.map((r: { text: string }) => r.text)).toEqual(["plan and task this out deeply"]);
   });
 
   test("skips machine-driven sessions and fork-copied history", async () => {
@@ -464,7 +483,7 @@ describe("suggest request golden", () => {
   test("the Haiku bodies equal the recorded golden", async () => {
     const actual: GoldenCase[] = [];
     for (const c of SUGGEST_CASES) {
-      const [body] = await postedBodies(() => predictSuggestions(c.context as any, c.profile as any, "anthropic"));
+      const [body] = await postedBodies(() => predictSuggestions(c.context as any, c.profile as any, "anthropic", NO_TEAM_CONTENT_GATE));
       actual.push({ case: c.name, body });
     }
     const [miner] = await postedBodies(() => minePatternsWithLLM(MINER_INPUTS), "{}");
@@ -488,23 +507,23 @@ describe("suggest request seams", () => {
     for (const c of SUGGEST_CASES) {
       const seen: any[] = [];
       const reply = '[{"text":"add the wait and the regression test","confidence":0.9}]';
-      const injected = await predictSuggestions(c.context as any, c.profile as any, "anthropic", async (opts) => {
+      const injected = await predictSuggestions(c.context as any, c.profile as any, "anthropic", NO_TEAM_CONTENT_GATE, async (opts) => {
         seen.push(opts);
         return { text: reply };
       });
       const req = suggestRequest(c.context as any, c.profile as any);
-      expect(seen).toEqual([{ provider: "anthropic", prompt: req.prompt, maxTokens: req.max_tokens }]);
+      expect(seen).toEqual([{ provider: "anthropic", prompt: req.prompt, maxTokens: req.max_tokens, gate: NO_TEAM_CONTENT_GATE }]);
       // The default path posts exactly those opts as its body, and parses the
       // same reply into the same suggestions.
       let live: any;
       const [body] = await postedBodies(async () => {
-        live = await predictSuggestions(c.context as any, c.profile as any, "anthropic");
+        live = await predictSuggestions(c.context as any, c.profile as any, "anthropic", NO_TEAM_CONTENT_GATE);
       }, reply);
       expect(body).toBe(goldenBody(haikuRequest(seen[0].prompt, seen[0].maxTokens)));
       expect(injected).toEqual(live);
     }
     const providers: string[] = [];
-    await predictSuggestions(SHORT_CONTEXT as any, FULL_PROFILE as any, "openai", async (opts) => {
+    await predictSuggestions(SHORT_CONTEXT as any, FULL_PROFILE as any, "openai", NO_TEAM_CONTENT_GATE, async (opts) => {
       providers.push(opts.provider);
       return null;
     });

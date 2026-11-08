@@ -326,7 +326,7 @@ export const generateIdleSummary = internalAction({
     if (messages.length === 0) return;
 
     try {
-      const reply = await callModel({ ...settleRequest(messages), label: "Idle summary" });
+      const reply = await callModel({ ...settleRequest(messages), label: "Idle summary", gate: { ctx, scope: { conversationId: args.conversation_id } } });
       if (!reply) return;
       const { verdict, summary } = parseSettleReply(reply.text);
       const usableSummary = summary && isUsableIdleSummary(summary) ? summary : undefined;

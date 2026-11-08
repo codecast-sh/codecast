@@ -36,6 +36,7 @@ mock.module("posthog-js/dist/module.slim.js", () => ({
 }));
 mock.module("posthog-js/dist/extension-bundles.js", () => ({
   AnalyticsExtensions: {},
+  SessionReplayExtensions: {},
 }));
 mock.module("@sentry/react", () => ({
   init: record(sentryCalls, "init"),
@@ -49,6 +50,7 @@ mock.module("../errorToast", () => ({
 }));
 
 const analytics = await import("../analytics");
+const { POSTHOG_REPLAY_SAMPLE_RATE } = await import("@codecast/shared/analytics");
 
 describe("codecast's analytics configuration reaches the package", () => {
   test("keeps the browser SDK behind the idle initialization boundary", async () => {
@@ -66,8 +68,9 @@ describe("codecast's analytics configuration reaches the package", () => {
     expect(key).toBe("phc_test_key");
     expect(options.api_host).toBe("https://ph.test");
     // Behavior the package owns, asserted here because codecast depends on it:
-    // no session recording, no dead clicks, pageviews on SPA navigations.
-    expect(options.disable_session_recording).toBe(true);
+    // a sample of sessions recorded, no dead clicks, pageviews on SPA navigations.
+    expect(options.disable_session_recording).toBe(false);
+    expect(options.session_recording).toEqual({ sampleRate: POSTHOG_REPLAY_SAMPLE_RATE });
     expect(options.capture_dead_clicks).toBe(false);
     expect(options.capture_pageview).toBe("history_change");
 

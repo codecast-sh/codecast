@@ -4,6 +4,9 @@
 // readings both share: a problem's outcome, a source's state and its normal
 // day. Pure.
 
+import { runEnd, type AnsweredGate, type LineRunStations } from "./lineRunEnd";
+import type { FlowFunnel } from "./lineFunnel";
+
 export const FLOW_MAP_DAYS = 14;
 /** How far back a source's problems count toward its outcomes. */
 export const FLOW_MAP_OUTCOME_DAYS = 30;
@@ -89,6 +92,8 @@ export type FlowMap = {
   sources: FlowMapSource[];
   /** The fixes in production over FLOW_MAP_DAYS (shippedFixes), regressed first: header.watching and header.regressed count it. */
   shipped: FlowMapShipped[];
+  /** How far the problems opened in each window got through the live flow (lineFunnel.ts); null before a rollup wrote one. */
+  funnel?: FlowFunnel | null;
   header: {
     problemsOpen: number;
     problemsScored: number;
@@ -160,21 +165,13 @@ export const emptyOutcomes = (): FlowMapOutcomes => ({ queued: 0, notReady: 0, r
 
 // ── a problem's outcome ─────────────────────────────────────────────────────
 
-type RunNode = { node_id: string; status: string };
 export type OutcomeTask = { status: string; readiness?: string | null; workflow_run_id?: string | null; waiting_since?: number | null; cause?: { merged_into?: unknown } | null };
-export type OutcomeRun = { status: string; node_statuses?: ReadonlyArray<RunNode> } | null | undefined;
+export type OutcomeRun = ({ status: string } & LineRunStations & AnsweredGate) | null | undefined;
 
-/** The end station a run completed last, in any graph (causeHistory.runEnd's reading, without the card check). */
+/** The end a run reached (lineRunEnd.runEnd), as an outcome. */
 function runEndKind(run: OutcomeRun): "shipped" | "closed" | "parked" | null {
-  let end: "shipped" | "closed" | "parked" | null = null;
-  for (const n of run?.node_statuses ?? []) {
-    if (n.status !== "completed") continue;
-    const id = n.node_id;
-    if (id === "watch") end = "shipped";
-    else if (id === "drop" || id === "dissolve" || /^(?:dissolved|released)_at_\w+$/.test(id)) end = "closed";
-    else if (/^park(?:_|$)/.test(id)) end = "parked";
-  }
-  return end;
+  const end = run ? runEnd(run) : null;
+  return !end ? null : end.kind === "shipped" ? "shipped" : end.kind === "parked" ? "parked" : "closed";
 }
 
 const failedAt = (run: OutcomeRun) => (run?.node_statuses ?? []).some((n) => n.node_id.startsWith("failed_at_") && n.status === "completed");

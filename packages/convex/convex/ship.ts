@@ -19,7 +19,7 @@ import { addConversationToWorkItem } from "./conversationLinks";
 import { resolveTaskGitContext } from "./tasks";
 import { answerCore } from "./sessionDecisions";
 import { roleOfRun } from "./lib/actor";
-import { mergeAllowance } from "./lib/lineMerge";
+import { roleMergeAllowance } from "./lib/regretRead";
 import { repositoryFromRemote, normalizeSubagentCaps } from "@codecast/shared/contracts";
 import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
 import {
@@ -170,7 +170,7 @@ export async function gatherShipFacts(ctx: Ctx, userId: Id<"users">, target: Shi
 /**
  * The line run a task is on (the card's run, else its newest) and the role
  * that owns that line, with its merge grant read the way the merge step reads
- * it (lib/lineMerge mergeAllowance), so the grant allows a Ship merge too.
+ * it (lib/regretRead roleMergeAllowance), so the grant allows a Ship merge too.
  */
 async function lineOfTask(ctx: Ctx, task: any, gate: any): Promise<ShipFacts["line"]> {
   const run = gate?.workflow_run_id
@@ -179,7 +179,7 @@ async function lineOfTask(ctx: Ctx, task: any, gate: any): Promise<ShipFacts["li
   if (!run) return null;
   const role = await roleOfRun(ctx, run);
   if (!role) return { runId: String(run._id), role: null };
-  const a = mergeAllowance(role, Date.now());
+  const a = await roleMergeAllowance(ctx, role, Date.now());
   return { runId: String(run._id), role: { handle: role.handle, on: a.on, allowed: a.allowed, reason: a.reason, used: a.used, limit: a.limit } };
 }
 

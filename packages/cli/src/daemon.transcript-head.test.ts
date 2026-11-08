@@ -46,6 +46,19 @@ describe("readFileHeadLines", () => {
     expect(readFileHeadLines(file, 8, 65536).length).toBe(65536);
   });
 
+  test("a read that stops before EOF ends on a whole line, so every line parses", () => {
+    const file = path.join(os.tmpdir(), `head-lines-${process.pid}-${Date.now()}.jsonl`);
+    const hook = JSON.stringify({ type: "attachment", attachment: { type: "hook_success", content: "x".repeat(40_000) } });
+    const lines = [hook, ...Array.from({ length: 30 }, (_, i) => JSON.stringify({ type: "user", n: i, text: "y".repeat(3000) }))];
+    fs.writeFileSync(file, lines.join("\n") + "\n");
+    tmpFiles.push(file);
+    const head = readFileHeadLines(file, 16, 1024 * 1024);
+    expect(head.endsWith("\n")).toBe(true);
+    const parsed = head.split("\n").filter(Boolean).map(line => JSON.parse(line));
+    expect(parsed[0].attachment.type).toBe("hook_success");
+    expect(parsed.length).toBeGreaterThanOrEqual(16);
+  });
+
   test("reads a short file whole (fewer lines than asked, no error)", () => {
     const file = rolloutWithLongMeta(10);
     const head = readFileHeadLines(file, 8);

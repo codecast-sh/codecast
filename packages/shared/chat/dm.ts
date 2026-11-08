@@ -16,11 +16,33 @@ export function dmKeyFor(teamId: string, ids: string[]): string {
   return `${teamId}:${Array.from(new Set(ids.map(String))).sort().join(":")}`;
 }
 
-/** The other parties named by a key — everyone but the viewer. */
+const SESSION_DM_MARK = "#session:";
+
+/** The key of a session's own conversation with the people it named. The
+ *  session is a party, so the key never resolves to the room those people
+ *  share with the session's owner. */
+export function sessionDmKeyFor(teamId: string, ids: string[], conversationId: string): string {
+  return `${dmKeyFor(teamId, ids)}${SESSION_DM_MARK}${conversationId}`;
+}
+
+/** The id a session stands under among a DM's parties (dmOtherIds). */
+export function sessionPartyId(conversationId: string): string {
+  return `session:${conversationId}`;
+}
+
+export function isSessionPartyId(id: string): boolean {
+  return id.startsWith("session:");
+}
+
+/** The other parties named by a key — everyone but the viewer. A session's
+ *  room names the session among them (sessionPartyId), so no surface takes it
+ *  for the viewer's own DM with the people in it. */
 export function dmOtherIds(dmKey: string | undefined, viewerId: string): string[] {
   if (!dmKey) return [];
-  return dmKey
+  const [people, session] = dmKey.split(SESSION_DM_MARK);
+  const others = people
     .split(":")
     .slice(1)
     .filter((id) => id && id !== viewerId);
+  return session ? [...others, sessionPartyId(session)] : others;
 }

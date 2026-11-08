@@ -25,7 +25,7 @@ import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
-import { parsePollAnswers, pollClosedLabel, pollDeadline, POLL_TIMED_OUT } from '@codecast/web/lib/pollPayload';
+import { pollCardAnswers, pollClosedLabel, typedPollAnswerTexts, pollDeadline, POLL_TIMED_OUT } from '@codecast/web/lib/pollPayload';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { ImageGallery } from '@/components/ImageGallery';
 import { isTrustedImageSrc } from '@/lib/convex';
@@ -99,7 +99,10 @@ import { getToolPatchInputs } from '@codecast/convex/convex/fileChanges/embedded
 import { BashModeBlock, FoldedPromptRow, SessionHandoffCard } from '@/components/session/UserRows';
 import { classifyUserRows, pairCommandExpansions } from '@codecast/web/lib/userRowKinds';
 import { parseJointMessage } from '@codecast/shared/contracts/jointMessage';
+import { goalFrameLine, goalMessageBody } from '@codecast/shared/contracts/sessionGoal';
 import { parseCommandInvocation, cleanCommandExpansion, parseCastCommand, parseApiErrorContent, stripSystemTags as stripTagsShared } from '@codecast/web/components/conversation/classify';
+import { sayTextOf } from '@codecast/web/components/castCommand';
+import { useRecordConversationOpen } from '@/lib/accessLogOpen';
 import type { ParsedApiError } from '@codecast/web/components/conversation/types';
 import { compactionProgressMessage, type CompactionProgress } from '@codecast/web/lib/compactionProgress';
 import { CastCommandBlock } from '@/components/session/CastCommandBlock';
@@ -170,6 +173,7 @@ type ToolResult = {
   tool_use_id: string;
   content: string;
   is_error?: boolean;
+  typed_answer?: string;
 };
 
 type ImageData = {
@@ -527,12 +531,7 @@ function AskUserQuestionCard({ tool, result, conversationId, parsedInput, deadli
   const questions = parsedInput.questions || [];
   if (questions.length === 0) return null;
 
-  let answers: Record<string, string> = {};
-  if (parsedInput.answers && typeof parsedInput.answers === 'object') {
-    answers = parsedInput.answers;
-  } else {
-    answers = parsePollAnswers(questions, result?.content);
-  }
+  const answers = pollCardAnswers(questions, parsedInput.answers, result);
 
   // Interactive while the agent is still waiting: no answer yet, a live
   // conversation to send into, and the user hasn't already tapped. Confirmation
@@ -2609,6 +2608,11 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             // A `cast …` command reads as what it did (a message sent, a
             // decision asked, a task made), with the shell line one tap away.
             const castCmd = !hostedAgent ? parseCastCommand(tc as any) : null;
+            // A `cast say` is the agent talking: its words, not a command row.
+            const said = sayTextOf(castCmd);
+            if (said) {
+              return <MarkdownContent key={tc.id} text={said} baseStyle={[styles.bubbleText, { fontSize: 15, lineHeight: 24 }, styles.assistantText]} isUser={false} />;
+            }
             if (castCmd) {
               return (
                 <CastCommandBlock
@@ -3240,6 +3244,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // Who this session is (its character, or its role): the header wears the
   // same face and name the inbox row does.
   const identityRow = useSessionIdentityRow(conversation?._id ? String(conversation._id) : null, conversation as any);
+  // A regulated team's audit log gets one entry per open (lib/accessLogOpen).
+  useRecordConversationOpen(conversation?._id && conversation._id !== DESIGN_MOCK_ID ? String(conversation._id) : null, conversation?.team_id ? String(conversation.team_id) : null);
   const seatIdentity = identityRow ? sessionIdentity(identityRow) : null;
   const boardHref = boardHrefProp ?? (seatIdentity?.kind === 'role' ? `/org/${seatIdentity.role.short_id}/board` : null);
   // A conversation with the hosted assistant runs on no machine: the header
@@ -3511,6 +3517,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           map[tr.tool_use_id] = tr;
         }
       }
+    }
+    for (const [id, typed_answer] of Object.entries(typedPollAnswerTexts(allMessages))) {
+      if (map[id]) map[id] = { ...map[id], typed_answer };
     }
     return map;
   }, [allMessages]));
@@ -4514,6 +4523,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         // the agent's computed task as a brief card from the workflow.
         if (kind.frame === 'user request') return <FoldedPromptRow icon="corner-down-right" label="Request" detail={kind.body.split('\n')[0]} body={kind.body} timestamp={item.timestamp} />;
         return <WorkflowTaskBlock body={kind.body} timestamp={item.timestamp} />;
+      case 'goal_round': {
+        const line = goalFrameLine(kind.frame);
+        return <FoldedPromptRow icon="target" label={line.label} detail={line.detail} body={goalMessageBody(item.content || '')} timestamp={item.timestamp} />;
+      }
       case 'role_brief': {
         const brief = stripSystemTags(item.content || '').trim();
         return <FoldedPromptRow icon="user-check" label="Role brief" detail={brief.split('\n')[0].replace(/\*\*/g, '')} body={brief} timestamp={item.timestamp} />;

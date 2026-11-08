@@ -11,6 +11,8 @@ import type { ProviderFault } from "@platform/agent";
 import { internalAction, internalMutation, internalQuery, query, type MutationCtx, type QueryCtx } from "../functions";
 import { internal } from "../_generated/api";
 import { postMessages } from "../lib/anthropic";
+import { openaiFetch } from "../lib/openai";
+import { NO_TEAM_CONTENT_GATE } from "../lib/vendorGuard";
 
 /** How the probe reaches outside, as one object tests replace: the delay
  *  before each probe (doubling from the first to the last), and the ping. */
@@ -27,18 +29,16 @@ export const incidentDeps: {
 async function pingProvider(provider: string, model: string): Promise<boolean> {
   try {
     if (provider === "anthropic") {
-      const response = await postMessages({ model, max_tokens: 1, prompt: "ping" });
+      const response = await postMessages({ model, max_tokens: 1, prompt: "ping" }, { gate: NO_TEAM_CONTENT_GATE });
       return !!response?.ok;
     }
     if (provider === "openai") {
-      const key = process.env.OPENAI_API_KEY;
-      if (!key) return false;
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await openaiFetch(NO_TEAM_CONTENT_GATE, "/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: model.slice(model.indexOf("/") + 1), max_completion_tokens: 16, messages: [{ role: "user", content: "ping" }] }),
       });
-      return response.ok;
+      return !!response?.ok;
     }
   } catch {
     return false;
