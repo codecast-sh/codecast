@@ -62,7 +62,7 @@ export function reportFieldWords(result: unknown): string | null {
 export { runEnd };
 
 /** The step a run closed at, from its end station: "dissolved_at_investigate" is Investigate; the line's own end stations name themselves. */
-export const closedAtStep = (endNode: string): string => /^(?:dissolved|released|failed|escalated)_at_(\w+)$/.exec(endNode)?.[1] ?? endNode;
+export const closedAtStep = (endNode: string): string => /^(?:dissolved|released|closed|failed|escalated)_at_(\w+)$/.exec(endNode)?.[1] ?? endNode;
 
 /** The station a run gave up at: it reached one of its failure steps (`failed_at_<station>`, which only comments), so
  *  the run completed without an end of its own. null when it reached none. */
@@ -160,6 +160,8 @@ export type DeployRow = {
   project_id: string | null;
   at: number;
   sha: string | null;
+  /** The sha's place in main's order (commits.main_at), when known: the deploy's code holds every merge that reached main by then. */
+  cut_at?: number | null;
   repository: string | null;
   /** A `cast ship mark` surface ("backend"). */
   surface: string | null;
@@ -239,7 +241,11 @@ export type AttemptCard = {
 };
 
 /** `byHand`: a person merged the fix's pull request outside the line (its merge step off), so no commit is recorded (sha ""). */
-export type AttemptMerge = { sha: string; branch: string; into: string; at: number; prUrl: string | null; repository: string | null; byHand?: true };
+export type AttemptMerge = {
+  sha: string; branch: string; into: string; at: number; prUrl: string | null; repository: string | null; byHand?: true;
+  /** The merge commit's place in main's order (commits.main_at), when the reader knows it; `at` stands in otherwise. */
+  mainAt?: number | null;
+};
 
 /** A fix branch's pull request a person merged by hand (the web's fixMerges): the line's own record never hears of it. */
 export type HandMerge = { at: number; url: string; branch?: string | null; into?: string | null; /** A commit that landed it, when no pull request did. */ sha?: string | null };
@@ -445,14 +451,23 @@ const NOT_LIVE_ENVIRONMENT = /^(local|localhost|dev|development|test|testing|ci|
 /** Whether a deploy put code where users meet it, so it can carry a fix live. */
 export const deployIsLive = (d: Pick<DeployRow, "environment">) => !d.environment || !NOT_LIVE_ENVIRONMENT.test(d.environment.trim());
 
-/** The deploys that carried a merge: the first per live target at or after the merge, on the same code. */
+/**
+ * Whether a deploy's code holds a merge. A deploy whose sha has a place on main holds what reached main by then: the
+ * merge commit's own place when known, else the merge's time, which comes after its push, so a merge recorded after
+ * the cut waits for the next deploy rather than counting live early. A deploy with no place on main (a source naming
+ * a version, a sha main never saw) is read by time: live at or after the merge.
+ */
+const holdsMerge = (d: DeployRow, merge: AttemptMerge) =>
+  d.cut_at != null ? (merge.mainAt ?? merge.at) <= d.cut_at : d.at >= merge.at;
+
+/** The deploys that carried a merge: the first per live target whose code holds it (the same commit, or cut after it). */
 export function carryingDeploys(merge: AttemptMerge, deploys: ReadonlyArray<DeployRow>, runId: string): HistoryDeploy[] {
   const byTarget = new Map<string, HistoryDeploy>();
   for (const d of [...deploys].sort((a, b) => a.at - b.at)) {
     if (!deployIsLive(d)) continue;
     const exact = sameSha(d.sha, merge.sha);
     const sameCode = !d.repository || !merge.repository || d.repository === merge.repository;
-    if (!exact && !(sameCode && d.at >= merge.at)) continue;
+    if (!exact && !(sameCode && holdsMerge(d, merge))) continue;
     const key = deployTarget(d) ?? d.source;
     if (byTarget.has(key)) continue;
     byTarget.set(key, {

@@ -9,7 +9,8 @@
 // comes from flow_map_rollups, which the hourly `rollup` pass writes per
 // workspace with a live flow: it recounts yesterday and today and keeps the
 // older days of its last row, so a pass reads two days of findings, not
-// fourteen.
+// thirty. The same pass folds the Volume chart (lineFunnel.ts): how far each
+// problem opened in the last FUNNEL_DAYS got through the live flow.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalAction, internalMutation, internalQuery, query } from "./functions";
@@ -23,7 +24,8 @@ import { JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
 import { flowFamily, flowRouteFor, type FlowRouteRow } from "./lib/flowRoute";
 import { eventSourceWords, sourceWords } from "./lib/flowMapLabels";
 import { flowHands, flowHold } from "./liveFlows";
-import { flowMapOutcomesValidator } from "./flowMapSchema";
+import { flowFunnelValidator, flowMapOutcomesValidator } from "./flowMapSchema";
+import { FUNNEL_DAYS, foldFunnel, funnelItem, funnelStations, type FunnelItem, type FunnelStation } from "@codecast/shared/contracts/lineFunnel";
 import { runsWaitingOnAPerson } from "./lib/linePlacement";
 
 type Ctx = { db: any };
@@ -38,6 +40,8 @@ const OPEN_STATUSES = new Set(["open", "in_progress", "in_review"]);
 const PROBLEM_STATUSES = ["open", "in_progress", "in_review", "done", "dropped"] as const;
 const LIVE_RUN_STATUSES = ["pending", "running", "paused"] as const;
 const dayStart = (at: number) => Date.parse(`${utcDayKey(at)}T00:00:00Z`);
+/** The days of findings a row keeps per source: the Volume chart's longest window (the map's rows show FLOW_MAP_DAYS of them). */
+const KEEP_DAYS = Math.max(FLOW_MAP_DAYS, FUNNEL_DAYS);
 
 // ── reading a workspace ────────────────────────────────────────────────────
 
@@ -120,10 +124,29 @@ export function foldFindings(rows: ReadonlyArray<{ source: string; created_at: n
   return { counts: [...counts.values()], reopened: [...reopened].map(([task_id, at]) => ({ task_id, at })) };
 }
 
-/** One page of a workspace's problems of one status: the open counts, and the outcome of each opened since `since`, by its source. */
+const stationV = v.object({ key: v.string(), label: v.string(), ids: v.array(v.string()) });
+const funnelArgV = v.object({ stations: v.array(stationV), labels: v.array(v.object({ id: v.string(), label: v.string() })), now: v.number() });
+
+/** The live flow's station steps for the Volume chart, and its stations' labels by node id. */
+export const funnelSetup = internalQuery({
+  args: { workspace: v.string() },
+  handler: async (ctx, { workspace }): Promise<{ stations: FunnelStation[]; labels: Array<{ id: string; label: string }> }> => {
+    const { spine } = await flowSetup(ctx, workspace);
+    const nodes: Array<{ id: string; label?: string; type?: string }> = spine?.nodes ?? [];
+    return {
+      stations: funnelStations(nodes, spine?.edges ?? []),
+      labels: nodes.map((n) => ({ id: n.id, label: n.label || stationWords(n.id) })),
+    };
+  },
+});
+
+/** One page of a workspace's problems of one status: the open counts, and the outcome of each opened since `since`, by
+ *  its source, with its Volume chart item when `funnel` names the stations. */
 export const problemsPage = internalQuery({
-  args: { workspace: v.string(), status: v.string(), since: v.number(), cursor: v.union(v.string(), v.null()) },
+  args: { workspace: v.string(), status: v.string(), since: v.number(), cursor: v.union(v.string(), v.null()), funnel: v.optional(funnelArgV) },
   handler: async (ctx, args) => {
+    const labels = new Map((args.funnel?.labels ?? []).map((l) => [l.id, l.label]));
+    const items: FunnelItem[] = [];
     const page = await ctx.db.query("tasks").withIndex("by_workspace_source_status", (q: any) => q.eq("workspace", args.workspace).eq("source", "signal").eq("status", args.status)).paginate({ cursor: args.cursor, numItems: 150 });
     let open = 0, scored = 0, queued = 0;
     const outcomes: Array<{ source: string; outcome: string }> = [];
@@ -140,8 +163,10 @@ export const problemsPage = internalQuery({
       // A problem with no finding left on it has no source to count under.
       const source = outcome ? await problemSource(ctx, t._id) : null;
       if (outcome && source) outcomes.push({ source, outcome });
+      const item = args.funnel ? funnelItem({ task: { ...t, _id: String(t._id) }, run: run ? { ...run, _id: String(run._id) } : null, stations: args.funnel.stations, labels, now: args.funnel.now }) : null;
+      if (item) items.push(item);
     }
-    return { open, scored, queued, outcomes, cursor: page.isDone ? null : page.continueCursor };
+    return { open, scored, queued, outcomes, items, cursor: page.isDone ? null : page.continueCursor };
   },
 });
 
@@ -196,6 +221,7 @@ const rollupArgs = {
   problems_scored: v.number(),
   queued: v.number(),
   reopened: v.array(v.object({ task_id: v.string(), at: v.number() })),
+  funnel: v.optional(flowFunnelValidator),
 };
 
 export const writeRollup = internalMutation({
@@ -211,12 +237,13 @@ type RollupRow = { [K in keyof typeof rollupArgs]: any };
 
 /**
  * The days a pass keeps from the last row and the ones it recounts: a new
- * row counts the whole window; after that, yesterday (a late finding still
- * lands in it) and today.
+ * row (or one from before it kept KEEP_DAYS, which carries no funnel) counts
+ * the whole window; after that, yesterday (a late finding still lands in it)
+ * and today.
  */
-export function recountFrom(prev: { rolled_at: number } | null | undefined, now: number): number {
-  const windowStart = dayStart(now - (FLOW_MAP_DAYS - 1) * DAY_MS);
-  return prev && now - prev.rolled_at < 2 * DAY_MS ? dayStart(now - DAY_MS) : windowStart;
+export function recountFrom(prev: { rolled_at: number; funnel?: unknown } | null | undefined, now: number): number {
+  const windowStart = dayStart(now - (KEEP_DAYS - 1) * DAY_MS);
+  return prev?.funnel && now - prev.rolled_at < 2 * DAY_MS ? dayStart(now - DAY_MS) : windowStart;
 }
 
 /**
@@ -231,7 +258,7 @@ export function foldRollup(o: {
   outcomes: Array<{ source: string; outcome: string }>;
   escapes: Record<string, number>;
 }): Pick<RollupRow, "sources" | "reopened"> {
-  const window = new Set(windowDays(o.now));
+  const window = new Set(windowDays(o.now, KEEP_DAYS));
   const fromDay = utcDayKey(o.from);
   const by = new Map<string, { days: Map<string, number>; last_at?: number; outcomes: FlowMapOutcomes; escapes: number }>();
   const row = (k: string) => by.get(k) ?? by.set(k, { days: new Map(), outcomes: emptyOutcomes(), escapes: 0 }).get(k)!;
@@ -276,23 +303,29 @@ async function rollupWorkspace(ctx: any, workspace: string, now: number): Promis
     cursor = page.cursor;
   } while (cursor);
   const outcomes: Array<{ source: string; outcome: string }> = [];
+  const items: FunnelItem[] = [];
   let open = 0, scored = 0, queued = 0;
+  // One read serves both: a source's outcomes and the Volume chart's problems span the same 30 days.
   const since = now - FLOW_MAP_OUTCOME_DAYS * DAY_MS;
+  const setup: { stations: FunnelStation[]; labels: Array<{ id: string; label: string }> } = await ctx.runQuery((internal as any).flowMap.funnelSetup, { workspace });
+  const funnel = { ...setup, now };
   for (const status of PROBLEM_STATUSES) {
     cursor = null;
     do {
-      const page: any = await ctx.runQuery((internal as any).flowMap.problemsPage, { workspace, status, since, cursor });
+      const page: any = await ctx.runQuery((internal as any).flowMap.problemsPage, { workspace, status, since, cursor, funnel });
       open += page.open;
       scored += page.scored;
       queued += page.queued;
       outcomes.push(...page.outcomes);
+      items.push(...page.items);
       cursor = page.cursor;
     } while (cursor);
   }
   const escapes = await ctx.runQuery((internal as any).flowMap.escapesInputs, { workspace, since: now - FLOW_MAP_ESCAPE_DAYS * DAY_MS });
   const events = await ctx.runQuery((internal as any).flowMap.eventsInputs, { workspace, since: dayStart(now - (FLOW_MAP_DAYS - 1) * DAY_MS) });
   const folded = foldRollup({ workspace, now, from, prev, counts, reopened, outcomes, escapes });
-  await ctx.runMutation((internal as any).flowMap.writeRollup, { workspace, rolled_at: now, ...folded, events, problems_open: open, problems_scored: scored, queued });
+  const volume = foldFunnel({ items, stations: setup.stations, sources: folded.sources, now });
+  await ctx.runMutation((internal as any).flowMap.writeRollup, { workspace, rolled_at: now, ...folded, events, problems_open: open, problems_scored: scored, queued, funnel: volume });
 }
 
 /** The hourly pass (crons.ts), or one workspace by hand: `run.sh flowMap:rollup '{"workspace":"team:..."}'`. */
@@ -491,6 +524,7 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
     off: { running: offTotal.running, stalled: offTotal.stalled, steps: [...offLive].map(([id, { label, ...c }]) => ({ id, label, ...c })) },
     sources,
     shipped,
+    funnel: rolled?.funnel ?? null,
     header: {
       problemsOpen: rolled?.problems_open ?? 0, problemsScored: rolled?.problems_scored ?? 0, decisionsForYou, decisionsForTeam,
       watching: shipped.filter((r) => r.state === "watching").length, regressed: shipped.filter((r) => r.state === "regressed").length,
