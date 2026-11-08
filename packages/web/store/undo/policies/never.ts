@@ -214,6 +214,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   clearAssignedPing: READ_STATE,
   markBlockedAcknowledged: never("banner: \"never restart this\" answers the blocked banner; the row's restart control asks again"),
   toggleChatReaction: never("reaction: the same click takes it back, and it notifies the author"),
+  skipChatRoundFloor: never("round: the next agent is already woken; the skipped one can still answer in the thread"),
+  endChatRound: never("round: stops waking agents; a new line in the thread starts another"),
 
   // Settings
   setAgentDefaultParams: SETTINGS,

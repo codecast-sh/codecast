@@ -1400,6 +1400,105 @@ div.ch-reaction-tip {
   color: var(--sol-text-muted);
 }
 
+/* ── Round: the room's agents taking turns on a thread ─────────────────────── */
+
+.ch-round {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 11.5px;
+}
+
+.ch-thread .ch-round {
+  margin: 0;
+  padding: 2px 16px 8px var(--ch-gutter);
+}
+
+.ch-round-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  padding: 1px 7px;
+  border: 1px solid var(--sol-border);
+  border-radius: 999px;
+  color: var(--sol-text-muted);
+  transition: background 110ms ease;
+}
+
+.ch-round-chip:hover {
+  background: var(--sol-bg-alt);
+}
+
+.ch-round-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ch-round-floor {
+  color: var(--sol-text);
+  border-color: color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+  background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
+}
+
+.ch-round-spoke {
+  color: var(--sol-text);
+}
+
+.ch-round-spoke svg {
+  color: var(--sol-green);
+}
+
+.ch-round-busy svg {
+  color: var(--sol-yellow);
+}
+
+.ch-round-quiet,
+.ch-round-closed .ch-round-chip {
+  color: var(--sol-text-dim);
+  border-style: dashed;
+}
+
+.ch-round-off {
+  color: var(--sol-text-dim);
+  text-decoration: line-through;
+}
+
+.ch-round-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sol-cyan);
+}
+
+.ch-round-ring {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  opacity: 0.6;
+}
+
+.ch-round-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 2px;
+}
+
+.ch-round-btn {
+  padding: 1px 7px;
+  border-radius: 5px;
+  color: var(--sol-text-muted);
+}
+
+.ch-round-btn:hover {
+  background: var(--sol-bg-alt);
+  color: var(--sol-text);
+}
+
 /* ── Toast ───────────────────────────────────────────────────────────────── */
 
 .ch-toast {

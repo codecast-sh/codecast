@@ -12,7 +12,8 @@ import type { OrgRole } from "../org/orgTypes";
 import "./chat.css";
 
 // The roles and sessions inside a room (docs/architecture/agent-channels.md
-// C5): each hears every line a person posts there. Rows for the member panel,
+// C5): a person's line reaches them, and two or more take turns on it (C6).
+// Rows for the member panel,
 // and the picker that puts more in, shared with the new-channel modal.
 
 type AgentView = { ref: ChatChannelAgentRef; id: string; name: string; sub: string; href: string };

@@ -54,6 +54,7 @@ import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
 import { dayBucket, hourBucket } from "./lib/chatQuota";
 import { follow as followChannel, unfollow as unfollowChannel } from "./orgChannels";
 import { addChannelAgents, removeChannelAgent } from "./chatAgents";
+import { endRound, onRoundTurnEnded, skipFloor } from "./chatRounds";
 import { checkSessionReply, closeSessionRepliesAfterTurn, SESSION_REPLY_CHECK_MS } from "./chatSessionReplies";
 
 const ALICE = "user-alice" as any;
@@ -3956,33 +3957,114 @@ describe("roles and sessions inside a room (C5)", () => {
   }
   const pending = (ctx: any) => ctx.db._tables.pending_messages;
 
-  test("a person's line reaches every member once; an agent's line reaches none", async () => {
+  const waking = (ctx: any) => pending(ctx).filter((p: any) => p.status !== "delivered").map((p: any) => p.conversation_id);
+  // The session read its wake (the daemon delivered it).
+  const read = (ctx: any) => { for (const p of pending(ctx)) p.status = "delivered"; };
+  const rootRound = (ctx: any, id: string) => ctx.db._tables.chat_messages.find((m: any) => m._id === id).round;
+
+  test("a person's line gives the floor to one member at a time, each seeing the thread so far", async () => {
     const ctx = context(ALICE, seed());
     const added = await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["@growth", "jx7alic", "jx7bobb"] });
     expect(added.added.map((a: any) => a.short_id)).toEqual(["or-7", "jx7alic", "jx7bobb"]);
-    // Adding again is a no-op that says so.
     const again = await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["or-7"] });
     expect(again.added).toEqual([]);
     expect(again.already.map((a: any) => a.short_id)).toEqual(["or-7"]);
 
-    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "standup in five" });
-    expect(sent.mention_wakes).toEqual({ roles: 1, sessions: 2, folded: 0, skipped: [] });
-    expect(pending(ctx).map((p: any) => p.conversation_id).sort()).toEqual(["conv-alice", "conv-bob", "conv-growth"]);
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "how should we price the pilot?" });
+    expect(sent.round).toEqual({ opened: true, floor: "or-7", queued: 2 });
+    // Only the floor holder is woken.
+    expect(waking(ctx)).toEqual(["conv-growth"]);
     const body = pending(ctx)[0].content;
-    expect(body.startsWith(`<chat-mention channel="#general" thread="${sent.message_id}" from="Alice">\n`)).toBe(true);
-    expect(body).toContain("a channel you are a member of");
-    expect(body).toContain(`cast chat send --channel ${CHANNEL} "<your reply>"`);
+    expect(body.startsWith(`<chat-mention channel="#general" thread="${sent.message_id}" from="round">\n`)).toBe(true);
+    expect(body).toContain("it is your turn");
+    expect(body).toContain(`cast chat send --channel ${CHANNEL} --thread ${sent.message_id} "<your reply>"`);
+    expect(body).toContain("After you: jx7alic, jx7bobb (Bob's session)");
     expect(isMachineDeliveredMessage(body)).toBe(true);
 
-    // Naming a member in a person's line still delivers once, and spends no mention cap.
-    const named = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth @jx7bobb look" });
-    expect(named.mention_wakes).toEqual({ roles: 1, sessions: 2, folded: 0, skipped: [] });
-    expect(pending(ctx).length).toBe(6);
+    // The role answers in the thread: the next member gets the floor with that answer in its wake.
+    read(ctx);
+    const answer = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, thread_root_id: sent.message_id, content: "start at 2%", origin: "agent", origin_session_id: "conv-growth",
+    });
+    expect(answer.round.floor).toBe("jx7alic");
+    expect(waking(ctx)).toEqual(["conv-alice"]);
+    const second = pending(ctx).find((p: any) => p.conversation_id === "conv-alice").content;
+    expect(second).toContain("start at 2%");
+    expect(second).toContain("Before you: or-7 (@growth) answered");
 
-    // A session typing in the room wakes no member.
-    const agent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "done", origin: "agent", origin_session_id: "sess-alice" });
-    expect(agent.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: [] });
-    expect(pending(ctx).length).toBe(6);
+    // Alice's session ends its turn without answering: it passed, Bob's session is next.
+    read(ctx);
+    await onRoundTurnEnded(ctx, "conv-alice" as any);
+    expect(waking(ctx)).toEqual(["conv-bob"]);
+    expect(rootRound(ctx, sent.message_id).members.map((m: any) => m.state)).toEqual(["spoke", "passed", "floor"]);
+
+    // Bob's session passes too. One member spoke, so a second lap asks the others once more, then the round is done.
+    read(ctx);
+    await onRoundTurnEnded(ctx, "conv-bob" as any);
+    expect(waking(ctx)).toEqual(["conv-alice"]);
+    read(ctx);
+    await onRoundTurnEnded(ctx, "conv-alice" as any);
+    read(ctx);
+    await onRoundTurnEnded(ctx, "conv-bob" as any);
+    expect(rootRound(ctx, sent.message_id).status).toBe("done");
+    expect(waking(ctx)).toEqual([]);
+  });
+
+  test("a person's follow-up in the thread wakes the members again", async () => {
+    const ctx = context(ALICE, seed());
+    await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["jx7alic", "jx7bobb"] });
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "what's left?" });
+    read(ctx);
+    await onRoundTurnEnded(ctx, "conv-alice" as any);
+    read(ctx);
+    await onRoundTurnEnded(ctx, "conv-bob" as any);
+    expect(rootRound(ctx, sent.message_id).status).toBe("done");
+    const follow = await call(sendMessage, ctx, { channel_id: CHANNEL, thread_root_id: sent.message_id, content: "and the docs?" });
+    expect(follow.round).toEqual({ opened: true, floor: "jx7alic", queued: 1 });
+    expect(waking(ctx)).toEqual(["conv-alice"]);
+    expect(pending(ctx).at(-1).content).toContain("and the docs?");
+  });
+
+  test("naming members asks only them; a reply can hand the floor on", async () => {
+    const ctx = context(ALICE, seed());
+    await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["@growth", "jx7alic", "jx7bobb"] });
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@jx7bobb what broke?" });
+    expect(sent.round).toEqual({ opened: true, floor: "jx7bobb", queued: 0 });
+    // Named in a person's line: woken once, by the round, spending no mention cap.
+    expect(sent.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: [] });
+    expect(waking(ctx)).toEqual(["conv-bob"]);
+    read(ctx);
+    const reply = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, thread_root_id: sent.message_id, content: "the deploy; @jx7alic knows the config", origin: "agent", origin_session_id: "sess-bob",
+    });
+    expect(reply.round.floor).toBe("jx7alic");
+    expect(waking(ctx)).toEqual(["conv-alice"]);
+  });
+
+  test("an agent's new root opens a round without its author; its thread replies outside a round wake nobody", async () => {
+    const ctx = context(ALICE, seed());
+    await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["jx7alic", "jx7bobb"] });
+    const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "proposal: ship friday", origin: "agent", origin_session_id: "sess-alice" });
+    expect(root.round).toEqual({ opened: true, floor: "jx7bobb", queued: 0 });
+    read(ctx);
+    await call(endRound, ctx, { root_id: root.message_id });
+    expect(rootRound(ctx, root.message_id).status).toBe("ended");
+    const before = pending(ctx).length;
+    await call(sendMessage, ctx, { channel_id: CHANNEL, thread_root_id: root.message_id, content: "also tests", origin: "agent", origin_session_id: "sess-alice" });
+    expect(pending(ctx).length).toBe(before);
+  });
+
+  test("a member mid-turn goes to the end of the lap instead of queueing a stale line", async () => {
+    const ctx = context(ALICE, seed());
+    ctx.db._tables.managed_sessions.push({ _id: "ms-bob", conversation_id: "conv-bob", agent_status: "working" });
+    await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["jx7bobb", "jx7alic"] });
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "status?" });
+    expect(sent.round.floor).toBe("jx7alic");
+    expect(rootRound(ctx, sent.message_id).members.find((m: any) => m.short_id === "jx7bobb").state).toBe("busy");
+    // A person can move the floor past a member.
+    await call(skipFloor, ctx, { root_id: sent.message_id });
+    // Bob's turn comes back at the end of the lap and he is woken even though busy.
+    expect(waking(ctx)).toContain("conv-bob");
   });
 
   test("the rail names members; removing one stops its lines", async () => {

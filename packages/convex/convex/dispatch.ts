@@ -3120,6 +3120,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       refs,
     });
   },
+  skipChatRoundFloor: async (ctx, _userId, [rootId]: [string]) => {
+    if (!isServerId(rootId)) return;
+    return await ctx.runMutation!(api.chatRounds.skipFloor, { root_id: rootId as Id<"chat_messages"> });
+  },
+  endChatRound: async (ctx, _userId, [rootId]: [string]) => {
+    if (!isServerId(rootId)) return;
+    return await ctx.runMutation!(api.chatRounds.endRound, { root_id: rootId as Id<"chat_messages"> });
+  },
   removeChatChannelAgent: async (
     ctx,
     _userId,

@@ -1,7 +1,8 @@
 # Agent chat channels (W6)
 
 Roles and sessions can read and post in chat without waking every agent on
-every line. Three delivery modes and a small set of noise rules.
+every line. Three delivery modes, a small set of noise rules, and turn-taking
+for rooms that hold several agents.
 
 ## C1. Channels and membership
 
@@ -102,14 +103,13 @@ Any room but a DM or a community room can hold roles and sessions as members
 with the short id copied at add time). Following (C1) is a role reading a
 channel on its own clock; membership is delivery.
 
-- Delivery. Every line a PERSON posts in the room reaches every member as one
-  pending line in the mention envelope (`deliverToChannelAgents`, chat.ts),
-  keyed on the mention's client id so a member named in the same line hears it
-  once. A member named in a person's line skips the mention rail and spends no
-  hourly cap. Lines typed by agents (`origin: agent`, bot authors) reach
-  members only through mentions, so members cannot wake each other in a loop.
-  A line in a thread is answered in the thread, a line at channel level at
-  channel level.
+- Delivery. In a room with one agent member (a session's own DM room, or a
+  room holding a single role or session), every line a PERSON posts reaches
+  it as one pending line in the mention envelope (`deliverToChannelAgents`,
+  chat.ts), keyed on the mention's client id so a member named in the same
+  line hears it once. A room with two or more agent members takes turns
+  instead (C6). Either way a member named in a line skips the mention rail
+  and spends no hourly cap.
 - Who adds. Anyone who can post in the room adds or removes agents
   (`chatAgents.addChannelAgents` / `removeChannelAgent`). A role must belong
   to the room's team or be the caller's own; a session must be one the caller
@@ -124,6 +124,44 @@ channel on its own clock; membership is delivery.
   and the new channel modal takes agents on either kind. CLI:
   `cast chat new <name> --private`, `cast chat add <channel> <@role|or-N|short
   id|this>...`, `cast chat remove <channel> <agent>`.
+
+## C6. Rounds: agents in a room take turns
+
+Waking every member of a room at once gets N replies written in parallel,
+none of which saw the others. In a room with two or more agent members
+(never a DM), a line opens a ROUND on its thread instead, and the members
+answer one at a time. The turn model is pure and shared
+(`@codecast/shared/chat` rounds.ts); `convex/chatRounds.ts` does the waking.
+The round's state lives on the thread root (`chat_messages.round`), so every
+client gets it with the row.
+
+- Who opens one. A person's line (at channel level its own thread; in a
+  thread, that thread), or an agent's new root, which leaves its author out of
+  the first lap. An agent's reply in a thread whose round is over wakes
+  nobody; a person's next line in the thread starts a fresh lap.
+- The floor. One member holds it. Its wake (`buildRoundWake`) quotes the
+  thread so far (up to 30 replies) and names who already answered or passed
+  and who is next. It replies in the thread, or ends its turn without a word
+  there, which is a pass (`onRoundTurnEnded`, called beside
+  `closeSessionRepliesAfterTurn`). Its "thinking" row is the only one showing.
+- Order. Members the line names (`@<short id>` of a member counts even when
+  the writer could not mention that session elsewhere; membership is the
+  grant), and only they; otherwise everyone in room order. A person replying
+  under a member's root asks that member first. A reply that names members
+  hands them the floor next.
+- Busy members. A member mid-turn when its turn comes goes to the end of the
+  lap once, instead of having a line queued behind its work that is stale by
+  the time it reads it. At the end it is woken anyway.
+- Stalls. `checkFloor` runs 5 minutes after a grant: a wake still unread moves
+  the floor on (`no_answer`); a member that read it may hold the floor up to
+  20 minutes.
+- Bounds. A member speaks at most twice per round; a second lap runs only when
+  someone spoke in the first, skipping the last speaker; two laps at most.
+- People. The thread and the channel row show a strip of member chips in turn
+  order (answered, answering, next, passed, busy, skipped) with Skip and End
+  (`chatRounds.skipFloor` / `endRound`). `cast chat send` prints who has the
+  floor. A thread relay to a session that is a member is skipped: the round
+  reaches it.
 
 ## Shapes (as shipped)
 
@@ -207,3 +245,4 @@ role-create path once `anchor_channels` carries a `role_id`.
 - C4 on mobile (agents icon, "listening: N roles", role and session pills,
   "follow as @handle"); `mentionsMe` there still compares string entries only.
 - C2 digest: no routine posts a channel digest yet.
+- C6 on mobile: the turn strip and its Skip and End controls.

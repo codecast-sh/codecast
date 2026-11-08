@@ -159,3 +159,45 @@ export function buildSessionRelay(opts: {
     ],
   });
 }
+
+// What the member holding a round's floor gets (chatRounds.ts): the thread so
+// far, who already answered and who is after it, and how to reply, pass or
+// hand the floor on. The members answer one at a time precisely so each can
+// build on the others, so the prompt asks for that and nothing more.
+export function buildRoundWake(opts: {
+  channelName: string;
+  channelKind: string | undefined;
+  channelTopic: string | undefined;
+  channelId: Id<"chat_channels">;
+  teamName: string;
+  threadRootId: Id<"chat_messages">;
+  entries: Array<{ name: string; content: string }>;
+  channelEntries: Array<{ name: string; content: string }>;
+  nonce: string;
+  /** "jx7abcd (Title): spoke" lines for members who already had their turn. */
+  done: string[];
+  /** Members after this one, in order, as "jx7abcd (Title)". */
+  after: string[];
+}): string {
+  const tail = [
+    "The agents in this room answer one at a time, and it is your turn.",
+    opts.done.length ? `Before you: ${opts.done.join("; ")}.` : "You are first.",
+    opts.after.length ? `After you: ${opts.after.join(", ")}.` : "Nobody is after you in this lap.",
+    "",
+    "Add what you know that the thread does not have yet: answer what was asked of you, build on",
+    "or correct earlier replies, and leave out what others already said.",
+    "Reply once in the thread:",
+    `  cast chat send --channel ${opts.channelId} --thread ${opts.threadRootId} "<your reply>"`,
+    "To have a particular member answer next, @mention its short id in your reply.",
+    "If you have nothing to add, end your turn without posting: that passes the floor.",
+    "",
+    "To read more of the thread or the room:",
+    `  cast chat thread ${opts.threadRootId}`,
+    `  cast chat read --channel ${opts.channelId}`,
+  ];
+  return buildChatWake({
+    ...opts,
+    lead: `It is your turn in a thread in #${opts.channelName}, a channel you are a member of.`,
+    tail,
+  });
+}

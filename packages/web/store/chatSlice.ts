@@ -39,7 +39,7 @@
 
 import { threadRowId, type PageCommentRow, type PageThreadRow, type ThreadInboxRow, type ThreadKind } from "./threadTypes";
 import { inActiveWorkspace } from "../lib/workspaceScope";
-import { dmKeyFor, dmOtherIds, isThreadMuted, withThreadMuted, type ChatMentionRef, type ChatVoiceStatus } from "@codecast/shared/chat";
+import { dmKeyFor, dmOtherIds, endRound, isThreadMuted, recordOutcome, withThreadMuted, type ChatMentionRef, type ChatRound, type ChatVoiceStatus } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { mirrorState, mergeLinkOptions, nextSlackMembers, type SlackDirection, type SlackLinkOptions, type SlackMemberWriter, type SlackSendAuth } from "@codecast/convex/convex/lib/slackMirror";
@@ -226,6 +226,8 @@ export type ChatMessageRow = {
   agent_status?: ChatAgentStatus;
   agent_anchor_id?: string;
   anchor_follow?: boolean;
+  /** The room's agents taking turns on this thread (root rows only). */
+  round?: ChatRound;
   fork_conversation_id?: string;
   // Slack mirror provenance. "inbound" rows were written in Slack: `user_id` is
   // then a mapped teammate or the workspace's bridge identity, and
@@ -570,6 +572,10 @@ export type ChatSliceActions = {
   setChannelNotifyLevel: (channelId: string, level: ChatNotifyLevel) => void;
   /** Silence (or restore) reply notifications for one thread. */
   setChatThreadMuted: (channelId: string, rootId: string, muted: boolean) => void;
+  /** Move a thread's round past the agent holding the floor (chatRounds.skipFloor). */
+  skipChatRoundFloor: (rootId: string) => void;
+  /** End a thread's round: no more agents are woken for it. */
+  endChatRound: (rootId: string) => void;
   /** Rename or re-topic a channel. Optimistic: the rail and header rename the
    *  moment you confirm; the server enforces creator-or-admin and reconciles. */
   updateChatChannel: (channelId: string, fields: { name?: string; topic?: string }) => void;
@@ -1278,6 +1284,18 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
 
     setChannelNotifyLevel: action(function (this: ChatDraft, channelId: string, level: ChatNotifyLevel) {
       upsertRead(this, channelId, { notify_level: level });
+    }),
+
+    skipChatRoundFloor: action(function (this: ChatDraft, rootId: string) {
+      const row = this.chatMessages[rootId] as ChatMessageRow | undefined;
+      if (row?.round?.floor_key) row.round = recordOutcome(row.round, row.round.floor_key, "skipped", { now: Date.now() });
+      return { rootId };
+    }),
+
+    endChatRound: action(function (this: ChatDraft, rootId: string) {
+      const row = this.chatMessages[rootId] as ChatMessageRow | undefined;
+      if (row?.round?.status === "open") row.round = endRound(row.round, Date.now());
+      return { rootId };
     }),
 
     setChatThreadMuted: action(function (this: ChatDraft, channelId: string, rootId: string, muted: boolean) {

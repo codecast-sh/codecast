@@ -650,7 +650,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
               )}
               {/* Which roles read this room on their next wake, and "follow
                   as @handle" for the viewer's own roles. */}
-              {activeChannel && !community && <ChannelListeners channel={activeChannel} />}
+              {activeChannel && !community && <ChannelListeners channel={activeChannel} hasAgents={(activeChannel.agents?.length ?? 0) > 0} />}
               {activeChannel && activeChannel.kind !== "dm" && !community && !isGuest && (
                 <SlackMirrorPill channelId={activeChannel.id} link={slackLink} />
               )}
@@ -868,6 +868,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
         <ChatThreadPanel
           channelId={activeChannelId}
           channelName={activeChannel?.name ?? "channel"}
+          agentCount={activeChannel?.kind === "dm" ? 0 : activeChannel?.agents?.length ?? 0}
           rootId={threadRootId}
           root={thread.root}
           replies={thread.replies}

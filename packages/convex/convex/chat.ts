@@ -88,6 +88,8 @@ import { chatMentionClientId, chatRelayClientId } from "./lib/chatWakeIds";
 import { nextChatStamp, patchChat } from "./lib/chatRows";
 import { closeSessionReplyOnAnswer, openSessionReply } from "./chatSessionReplies";
 import { buildAnchorWake, buildChatWake, buildSessionRelay } from "./chatWakePrompts";
+import { collectChatExcerpt } from "./chatExcerpt";
+import { onRoomLine, roomTakesTurns, type RoundResult } from "./chatRounds";
 import { openaiFetch } from "./lib/openai";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
@@ -180,10 +182,6 @@ const VOICE_SWEEP_SCAN = 25;
 const VOICE_WATCH_CHANNELS = 40;
 const VOICE_WATCH_SCAN = 5;
 
-// How many thread messages the anchor's wake prompt may carry. The excerpt is
-// always confined to ONE thread — never the channel — so mentioning the anchor
-// hands it the conversation it was called into and nothing else.
-const ANCHOR_THREAD_EXCERPT = 12;
 // How long a placeholder may say "thinking" before the thread is told the answer
 // is not coming. Long enough for a dormant daemon to wake, resume the standing
 // session and take a turn; short enough that nobody watches a dead spinner.
@@ -2555,12 +2553,13 @@ export const sendMessage = mutation({
     }
 
     // A role or session this line named, woken now — the one exception to "an
-    // agent line wakes nobody", and it degrades like the wake above.
-    // A person's line reaches every role and session inside the room
-    // (C5); an agent's reaches them only through a mention, like anywhere.
+    // agent line wakes nobody", and it degrades like the wake above. The
+    // room's own members are never woken by a mention: they take turns in a
+    // round (C6, chatRounds.ts), where a mention hands one the floor next.
     const personLine = !sender?.is_bot && args.origin !== "agent";
-    const agentMembers = personLine ? await channelAgentRows(ctx, channel._id) : [];
-    const memberIds = new Set(agentMembers.map((row) => String(row.role_id ?? row.conversation_id)));
+    const agentMembers = await channelAgentRows(ctx, channel._id);
+    const takesTurns = roomTakesTurns(channel, agentMembers);
+    const memberIds = new Set((takesTurns || personLine ? agentMembers : []).map((row) => String(row.role_id ?? row.conversation_id)));
     let mentionWakes: MentionWakeResult = { roles: 0, sessions: 0, folded: 0, skipped: [] };
     if (message && (roles.length > 0 || sessions.length > 0)) {
       try {
@@ -2578,7 +2577,16 @@ export const sendMessage = mutation({
         );
       }
     }
-    if (message && agentMembers.length > 0) {
+    let round: RoundResult = null;
+    if (message && takesTurns) {
+      try {
+        round = await onRoomLine(ctx, { channel, message, root, rows: agentMembers, byPerson: personLine });
+      } catch (error) {
+        mentionWakes.skipped.push(
+          error instanceof ConvexError ? String((error.data as any)?.code ?? "error") : "error",
+        );
+      }
+    } else if (message && personLine && agentMembers.length > 0) {
       try {
         const reached = await deliverToChannelAgents(ctx, {
           channel, message, root, senderId: userId, senderName: actorName, rows: agentMembers,
@@ -2606,6 +2614,9 @@ export const sendMessage = mutation({
       // A reply on a thread a session started: whether it was injected into
       // that session, and why not when it was not.
       session_relay: relay,
+      // The room's agent members taking turns on this line's thread: who has
+      // the floor and how many wait. Null in a room without agent members.
+      round,
       anchor_thinking_message_id: anchor,
       // True when the wake was a silent listen (a reply in a thread the anchor
       // follows, not addressed to it): nothing shows unless it chooses to speak.
@@ -3841,87 +3852,6 @@ async function anchorTurnInFlight(
     && isAgentTurnInFlight(row.agent_status)) ?? null;
 }
 
-// How many channel-level messages the wake carries as room context. The thread
-// is the conversation; the channel excerpt is what the room was talking about
-// around it, so a mention like "can you look at what Sam posted above" lands.
-const ANCHOR_CHANNEL_CONTEXT = 8;
-
-// The excerpt a chat wake quotes: the thread (root first, newest replies
-// last) and a short slice of the room around it — a mention rarely arrives with
-// its context inside the thread — never crossing into another channel. Shared
-// by the anchor wake and the session relay so both agents read the same room.
-async function collectChatExcerpt(
-  ctx: ReadCtx,
-  opts: {
-    channel: Doc<"chat_channels">;
-    root: Doc<"chat_messages"> | null;
-    message: Doc<"chat_messages">;
-    senderName: string;
-    threadRootId?: Id<"chat_messages">;
-    /** Rows the READER wrote, quoted back as "You (earlier)". */
-    isSelf: (row: Doc<"chat_messages">) => boolean;
-    /** A row to leave out (the anchor's own fresh placeholder). */
-    skipId?: Id<"chat_messages">;
-  },
-): Promise<{
-  entries: Array<{ name: string; content: string }>;
-  channelEntries: Array<{ name: string; content: string }>;
-}> {
-  const names = new Map<string, string>();
-  // "You (earlier)" is decided PER ROW, never cached by author: a session and
-  // its human host share a user_id, so caching the self label under the user
-  // would dress the human's own lines (and other sessions') as the reader's.
-  const humanName = async (userId: Id<"users">): Promise<string> => {
-    const key = userId.toString();
-    if (!names.has(key)) names.set(key, displayName(await ctx.db.get(userId)));
-    return names.get(key)!;
-  };
-  // A line a session typed names the session, crediting its human, the way
-  // the chat renders it: under the human's name alone, the reader cannot
-  // tell a session's answer from the person's own words.
-  const nameFor = async (row: Doc<"chat_messages">): Promise<string> => {
-    if (opts.isSelf(row)) return "You (earlier)";
-    const human = await humanName(row.user_id);
-    if (row.origin === "agent" && row.origin_session_id && row.author_kind !== "agent") {
-      const title = row.origin_session_title ? `${oneLine(row.origin_session_title, 60)}, ` : "";
-      return `${title}session ${row.origin_session_id.slice(0, 7)} via ${human}`;
-    }
-    return human;
-  };
-  const entries: Array<{ name: string; content: string }> = [];
-  if (opts.root && opts.threadRootId) {
-    const thread = await ctx.db
-      .query("chat_messages")
-      .withIndex("by_thread_created", (q: any) => q.eq("thread_root_id", opts.threadRootId))
-      .order("desc")
-      .take(ANCHOR_THREAD_EXCERPT);
-    for (const row of [opts.root, ...thread.reverse()]) {
-      if (opts.skipId && row._id.toString() === opts.skipId.toString()) continue;
-      if (row.deleted_at || isSilentAgentRow(row)) continue;
-      entries.push({ name: await nameFor(row), content: row.content });
-    }
-  } else {
-    entries.push({ name: opts.senderName, content: opts.message.content });
-  }
-  // The room around it: recent channel-level lines older than this thread's
-  // root (a DM room has no threads to speak of, so its recent lines ARE the
-  // context). Skipped for the thread's own root, which the thread excerpt opens.
-  const rootRow = opts.root ?? opts.message;
-  const recentRoots = await ctx.db
-    .query("chat_messages")
-    .withIndex("by_channel_created", (q: any) =>
-      q.eq("channel_id", opts.channel._id).lt("created_at", rootRow.created_at))
-    .order("desc")
-    .filter((q) => q.eq(q.field("thread_root_id"), undefined))
-    .take(ANCHOR_CHANNEL_CONTEXT);
-  const channelEntries: Array<{ name: string; content: string }> = [];
-  for (const row of recentRoots.reverse()) {
-    if (row.deleted_at || isSilentAgentRow(row)) continue;
-    channelEntries.push({ name: await nameFor(row), content: row.content });
-  }
-  return { entries, channelEntries };
-}
-
 // A person replying on a thread a SESSION started goes back into that session.
 //
 // A session that posts to chat (`cast chat send` stamps origin:"agent" and its
@@ -3984,6 +3914,11 @@ async function maybeRelayToOriginSession(
   // below, so any conversation is accepted here.
   const conversation = await findConversationByAnyRefWhere(ctx, targetRef, () => true);
   if (!conversation) return no("session_not_found");
+  // A member of a room that takes turns hears this thread through its round.
+  const roomRows = await channelAgentRows(ctx, opts.channel._id);
+  if (roomTakesTurns(opts.channel, roomRows) && roomRows.some((row) => String(row.conversation_id) === String(conversation._id))) {
+    return no("round");
+  }
   // A person needs the right to inject a turn into the session (the own-or-team
   // rule `cast send` uses). A mention reply needs no such grant: the asking
   // session solicited exactly this answer, and the mention only resolved
@@ -4407,9 +4342,10 @@ export async function wakeMentionedParties(
     /** The session that wrote the line when it is not stamped on the row: an
      *  anchor's post or reply names its own standing session here. */
     selfConversationId?: string | null;
-    /** Role and conversation ids inside the room, which the member rail
-     *  (deliverToChannelAgents) reaches with this line instead: a member
-     *  named in a person's line is delivered once and spends no mention cap. */
+    /** Role and conversation ids inside the room, which reach it another
+     *  way: the room's round (chatRounds.ts), or the member rail
+     *  (deliverToChannelAgents) for a person's line in a one-agent room. A
+     *  member named in the line is delivered once and spends no mention cap. */
     members?: Set<string>;
   },
 ): Promise<MentionWakeResult> {
@@ -4499,7 +4435,9 @@ export async function wakeMentionedParties(
   return out;
 }
 
-// The member rail (C5): a person's line in a room, handed to every role and
+// The member rail (C5) for a room with ONE agent member (a session's own DM
+// room, or a room with a single agent), where there is nobody to take turns
+// with: a person's line in the room, handed to every role and
 // session inside it as one pending line in the mention envelope. No hourly
 // cap: a person typing is the bound (chat.send's rate limit), and a member was
 // put in the room to hear exactly this. The client id is the mention's, so a

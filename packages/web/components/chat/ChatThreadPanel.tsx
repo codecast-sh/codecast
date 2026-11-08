@@ -8,6 +8,7 @@ import { ChatMessageList } from "./ChatMessageList";
 import { ChatComposer } from "./ChatComposer";
 import type { ChatMessageView } from "./chatTypes";
 import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
+import { RoundStrip } from "./RoundStrip";
 import "./chat.css";
 
 // The thread panel: Slack's right rail.
@@ -54,6 +55,7 @@ const maxWidth = (handle: HTMLElement) =>
 
 export const ChatThreadPanel = memo(function ChatThreadPanel({
   channelName,
+  agentCount = 0,
   channelId,
   rootId,
   root,
@@ -75,6 +77,8 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
   onRetryAgent,
 }: {
   channelName: string;
+  /** Roles and sessions in the room: two or more take turns on a reply. */
+  agentCount?: number;
   channelId: string;
   rootId: string;
   root: ChatMessageView | null;
@@ -155,6 +159,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
                 onRetryAgent={onRetryAgent}
               />
             </div>
+            <RoundStrip rootId={rootId} round={root.round} />
             {replies.length > 0 && (
               <div className="ch-thread-replies-label">
                 {replies.length} {replies.length === 1 ? "reply" : "replies"}
@@ -173,10 +178,12 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
         channelId={channelId}
         threadRootId={rootId}
         teamId={teamId}
-        // A reply on a thread a session started is delivered into that
-        // session (chat.ts maybeRelayToOriginSession) — say so where the
-        // person is about to type, so it is not a surprise.
-        placeholder={root?.author.session ? `Reply to ${root.author.name} — delivered into its session` : "Reply…"}
+        // Where the reply goes, said where the person is about to type: the
+        // room's agents in turn (chatRounds), or the session that started
+        // the thread (chat.ts maybeRelayToOriginSession).
+        placeholder={agentCount >= 2
+          ? "Reply… the room's agents answer one at a time"
+          : root?.author.session ? `Reply to ${root.author.name} — delivered into its session` : "Reply…"}
         channelName={channelName}
         onSend={onSend}
         compact

@@ -29,6 +29,7 @@ import "../editor/editor.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useInboxStore } from "../../store/inboxStore";
+import { RoundStrip } from "./RoundStrip";
 // One chat message.
 //
 // The row is a two column grid: a fixed gutter (--ch-gutter in chat.css) and the body. When a message
@@ -630,6 +631,7 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         )}
 
+        {!inThread && <RoundStrip rootId={message.id} round={message.round} openOnly />}
         {!inThread && !!message.replyCount && message.replyCount > 0 && (
           <button type="button" className="ch-thread-link" onClick={() => onOpenThread?.(message.id)}>
             <span className="ch-thread-faces">

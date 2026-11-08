@@ -135,6 +135,25 @@ async function wakeUnread(ctx: MutationCtx, conversationId: Id<"conversations">,
   return !!wake && UNREAD_WAKE.has(wake.status);
 }
 
+/** Whether a wake is still waiting to be read, following merges. */
+export async function wakeIdUnread(ctx: MutationCtx, wakeId: Id<"pending_messages">): Promise<boolean> {
+  let wake: Doc<"pending_messages"> | null = await ctx.db.get(wakeId);
+  for (let hop = 0; wake?.merged_into && hop < 5; hop++) wake = await ctx.db.get(wake.merged_into);
+  return !!wake && UNREAD_WAKE.has(wake.status);
+}
+
+/** Close the session's thinking row in one place: a round moved past it. */
+export async function closeSessionReplyIn(
+  ctx: MutationCtx,
+  sessionId: string,
+  channelId: Id<"chat_channels">,
+  threadRootId: Id<"chat_messages">,
+): Promise<void> {
+  for (const row of await openRows(ctx, sessionId)) {
+    if (samePlace(row, channelId, threadRootId)) await closeRow(ctx, row);
+  }
+}
+
 /** A turn of the session just ended. Every row whose line it had already been
  *  handed closes: the session read it and did not answer there. */
 export async function closeSessionRepliesAfterTurn(ctx: MutationCtx, conversationId: Id<"conversations">): Promise<void> {
@@ -143,7 +162,7 @@ export async function closeSessionRepliesAfterTurn(ctx: MutationCtx, conversatio
   }
 }
 
-async function agentActive(ctx: MutationCtx, conversationId: Id<"conversations">): Promise<boolean> {
+export async function agentActive(ctx: MutationCtx, conversationId: Id<"conversations">): Promise<boolean> {
   const session = await ctx.db
     .query("managed_sessions")
     .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))

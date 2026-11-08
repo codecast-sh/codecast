@@ -524,6 +524,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
       return { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent, role: a.role };
     }),
     threadAgentStatus: useSummary ? summary!.agent_status : undefined,
+    round: row.round,
     pending: state === "pending",
     failed: state === "failed",
     failReason: state === "failed" && row._failReason ? row._failReason : undefined,

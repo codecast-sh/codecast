@@ -26,7 +26,7 @@ import "./chat.css";
 
 export type ListenersChannel = { id: string; kind?: string; isPrivate?: boolean };
 
-export function ChannelListeners({ channel }: { channel: ListenersChannel }) {
+export function ChannelListeners({ channel, hasAgents = false }: { channel: ListenersChannel; hasAgents?: boolean }) {
   // The tree ref churns with every session heartbeat in the org; the header
   // only branches on roles and the viewer's grant, so it wakes on THAT
   // signature (lib/chatListeners) and reads the tree from the tracked state.
@@ -67,6 +67,9 @@ export function ChannelListeners({ channel }: { channel: ListenersChannel }) {
   const followable = channel.kind !== "dm" && !channel.isPrivate && channel.kind !== "private";
   if (!followable) return null;
   if (channel.kind !== "agents" && listening.length === 0 && mine.length === 0) return null;
+  // A room with agent members already says who is in it (the member count);
+  // "no roles listening" beside it reads as if those agents hear nothing.
+  if (hasAgents && listening.length === 0) return null;
 
   const n = listening.length;
   const label = n === 0 ? "listening: no roles" : n === 1 ? `listening: @${listening[0].handle}` : `listening: ${n} roles`;

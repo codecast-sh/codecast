@@ -19,6 +19,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { scheduleFedSessionSettle } from "./callChat";
 import { scheduleWorkerSettle } from "./workerSettle";
 import { closeSessionRepliesAfterTurn } from "./chatSessionReplies";
+import { onRoundTurnEnded } from "./chatRounds";
 import { scheduleGoalJudge } from "./sessionGoals";
 
 // A status CHANGE is the entry point to the needs-input push (see
@@ -944,6 +945,8 @@ async function applyAgentStatus(ctx: MutationCtx, session: Doc<"managed_sessions
     await releaseQueuedRows(ctx, args.conversation_id);
     // Chat lines this turn read and did not answer stop saying "thinking".
     await closeSessionRepliesAfterTurn(ctx, args.conversation_id);
+    // A floor it held in a chat round and ended its turn without answering: passed.
+    await onRoundTurnEnded(ctx, args.conversation_id);
     // A session working toward a goal has this turn judged (sessionGoals.ts).
     if (!args.session_boundary) {
       // A re-published settle carries its old stamp, so the stamp names the turn only when it advanced.

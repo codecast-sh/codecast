@@ -1,3 +1,4 @@
+import type { ChatRound } from "@codecast/shared/chat";
 import type { SlackMirrorState } from "@codecast/convex/convex/lib/slackMirror";
 // View models for the chat surface.
 //
@@ -105,6 +106,8 @@ export type ChatMessageView = {
   /** An agent turn in flight (or failed) inside this root's thread, so the
    *  affordance can say "thinking…" without the panel open. */
   threadAgentStatus?: "thinking" | "streaming" | "error";
+  /** The room's agents taking turns on this root's thread. */
+  round?: ChatRound;
   /** Push-to-talk. Present only on a walkie burst, which renders as a voice
    *  bubble instead of a markdown body: pulsing while the sender is still
    *  holding the key, a play button once the recording has landed. `content` is
