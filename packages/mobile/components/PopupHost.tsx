@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import {
   Animated, BackHandler, Easing, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet,
-  View, useWindowDimensions, type ComponentType,
+  View, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
+import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { Text, TextInput } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
@@ -133,13 +133,16 @@ function SheetBody({ popup, leave }: { popup: Extract<Popup, { kind: 'sheet' }>;
               accessibilityRole="button"
               accessibilityState={{ selected: !!item.selected }}
             >
+              {item.icon ? (
+                <Feather name={item.icon} size={18} color={item.destructive ? Theme.red : item.selected ? Theme.cyan : Theme.textMuted} style={styles.rowIcon} />
+              ) : null}
               <Text
                 style={[styles.rowLabel, item.destructive && { color: Theme.red }, item.selected && styles.rowSelected]}
                 numberOfLines={1}
               >
                 {item.label}
               </Text>
-              {item.selected ? <FontAwesome name="check" size={13} color={Theme.cyan} /> : null}
+              {item.selected ? <Feather name="check" size={16} color={Theme.cyan} /> : null}
             </Pressable>
           ))}
         </Animated.ScrollView>
@@ -283,6 +286,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingHorizontal: Spacing.xl,
   },
   rowRule: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Theme.borderLight },
+  rowIcon: { width: 22, textAlign: 'center' },
   rowLabel: { flex: 1, fontSize: 16, fontWeight: '500', color: Theme.text },
   rowSelected: { color: Theme.cyan, fontWeight: '600' },
   pressed: { opacity: 0.55 },

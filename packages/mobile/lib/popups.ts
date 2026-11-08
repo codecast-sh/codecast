@@ -1,3 +1,5 @@
+import type { ComponentProps } from 'react';
+import type Feather from '@expo/vector-icons/Feather';
 import { create } from 'zustand';
 
 // The app's own popups, drawn by components/PopupHost at the root in place of
@@ -15,6 +17,8 @@ import { create } from 'zustand';
 
 export type SheetItem = {
   label: string;
+  /** A Feather glyph before the label. Give every row of a sheet one, or none. */
+  icon?: ComponentProps<typeof Feather>['name'];
   onPress: () => void;
   /** Renders a check beside the label: the current pick in a picker sheet. */
   selected?: boolean;

@@ -53,8 +53,8 @@ export type ImageSource = 'camera' | 'library';
 export function chooseImageSource(): Promise<ImageSource | null> {
   return new Promise((resolve) => {
     showActionSheet(undefined, [
-      { label: 'Take photo', onPress: () => resolve('camera') },
-      { label: 'Photo library', onPress: () => resolve('library') },
+      { label: 'Take photo', icon: 'camera', onPress: () => resolve('camera') },
+      { label: 'Photo library', icon: 'image', onPress: () => resolve('library') },
     ], { onCancel: () => resolve(null) });
   });
 }

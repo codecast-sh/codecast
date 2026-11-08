@@ -194,10 +194,10 @@ export function ChatHomeList({
     const level = channel.notifyLevel;
     const store = useInboxStore.getState();
     showActionSheet(displayName(channel), [
-      ...((channel.unreadCount ?? 0) > 0 ? [{ label: 'Mark as read', onPress: () => store.markChannelRead(channel.id) }] : []),
-      { label: 'Notify for everything', selected: level === 'all', onPress: () => store.setChannelNotifyLevel(channel.id, 'all') },
-      { label: 'Notify for mentions only', selected: level === 'mentions', onPress: () => store.setChannelNotifyLevel(channel.id, 'mentions') },
-      { label: 'Mute', selected: level === 'none', onPress: () => store.setChannelNotifyLevel(channel.id, 'none') },
+      ...((channel.unreadCount ?? 0) > 0 ? [{ label: 'Mark as read', icon: 'check-circle' as const, onPress: () => store.markChannelRead(channel.id) }] : []),
+      { label: 'Notify for everything', icon: 'bell', selected: level === 'all', onPress: () => store.setChannelNotifyLevel(channel.id, 'all') },
+      { label: 'Notify for mentions only', icon: 'at-sign', selected: level === 'mentions', onPress: () => store.setChannelNotifyLevel(channel.id, 'mentions') },
+      { label: 'Mute', icon: 'bell-off', selected: level === 'none', onPress: () => store.setChannelNotifyLevel(channel.id, 'none') },
     ]);
   };
 

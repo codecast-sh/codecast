@@ -73,7 +73,7 @@ function UndoBar({ item }: { item: UndoBarItem }) {
       <Animated.View
         style={[
           styles.drain,
-          { backgroundColor: item.tone === 'kill' ? Theme.red : Theme.textMuted0, transform: [{ scaleX: left }] },
+          { backgroundColor: item.tone === 'kill' ? Theme.red : Theme.bg, opacity: item.tone === 'kill' ? 1 : 0.45, transform: [{ scaleX: left }] },
         ]}
       />
     </Animated.View>
@@ -112,7 +112,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    height: 2,
+    height: 3,
     transformOrigin: 'left',
   },
 }));
