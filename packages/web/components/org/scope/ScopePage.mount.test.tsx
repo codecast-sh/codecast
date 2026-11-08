@@ -370,7 +370,7 @@ async function verifyScopePage() {
   const facts = [{ _id: "h4", short_id: "jx7h4", title: "Watch CI on main", state: "dormant", state_line: "Waiting on run 8841", state_status: "dormant", state_at: T0, updated_at: T0, task: null }];
   await act(async () => root.render(React.createElement(HandGroups, { rows, hands: facts as any, now: T0, onOpen: (s: OrgSession) => calls.push(`open:${s._id}`) })));
   assert.deepEqual(qa("[data-hand-group]").map((g) => g.getAttribute("data-hand-group")), ["needs_input", "done", "working", "dormant", "idle"], "the inbox's order");
-  assert.deepEqual(qa("[data-hand-group] h3").map((h) => h.textContent), ["Needs input2", "Done1", "Working1", "Dormant1", "Idle1"], "each header carries its count");
+  assert.deepEqual(qa("[data-hand-group] h3").map((h) => h.textContent), ["Needs you2", "Done1", "Working1", "Dormant1", "Idle1"], "each header carries its count");
   assert.deepEqual(qa('[data-hand-group="needs_input"] [data-hand]').map((r) => r.getAttribute("data-hand")), ["h2", "h6"], "a queue you clear reads oldest first");
   const line = (id: string) => q(`[data-hand="${id}"] [data-hand-line]`)!.textContent;
   assert.equal(line("h1"), "Writing the 1.2 notes", "the store's state line, first line only");
