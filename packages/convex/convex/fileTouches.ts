@@ -2,6 +2,7 @@ import { mutation, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { cliSessionClassifier } from "./cliSessionClassifier";
+import { resolveConversationRef } from "./conversations";
 import { Doc, Id } from "./_generated/dataModel";
 
 export const recordTouch = internalMutation({
@@ -127,16 +128,16 @@ export const findSimilar = mutation({
         .order("desc")
         .take(500);
 
-      const sourceConv = allConvs.find(
+      // A short id older than the 500 newest goes through the shared resolver;
+      // only the caller's own sessions are compared, as before.
+      const resolved = allConvs.find(
         (c) => c._id.toString().startsWith(args.session_id!) ||
                c.session_id?.startsWith(args.session_id!)
-      ) ?? null;
+      ) ?? await resolveConversationRef(ctx, args.session_id, result.userId);
+      const sourceConv = resolved && resolved.user_id.toString() === result.userId.toString() ? resolved : null;
 
       if (!sourceConv) {
-        if (allConvs.length > 0) {
-          return { error: `Session "${args.session_id}" not found in ${allConvs.length} conversations. Sample: ${allConvs[0]._id.toString().slice(0, 10)}` };
-        }
-        return { error: `No conversations found for user` };
+        return { error: `No session ${args.session_id} of yours. Find ids with \`cast sessions\` or \`cast search <words>\`.` };
       }
 
       const sourceTouches = await ctx.db
