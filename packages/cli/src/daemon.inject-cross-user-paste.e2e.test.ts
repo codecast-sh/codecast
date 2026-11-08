@@ -53,6 +53,10 @@ import {
 } from "../../convex/convex/pendingMessages";
 import { findEchoedPendingMessage, pendingRowsForEcho, settleEchoedPending } from "../../convex/convex/messages";
 import { redactSecrets } from "../../convex/convex/redact";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+
+// The delivery echo ledger these deliveries record into lives in CODECAST_DIR.
+const codecastDir = isolateCodecastDir();
 
 const CAN_RUN = process.env.CODECAST_PASTE_E2E === "1" && hasBinary("tmux") && hasBinary("claude");
 const WRAPPED = machinePasteWrapperOn();
