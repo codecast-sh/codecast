@@ -21,7 +21,7 @@ const transient = [
   ["unstructured failure", new Error("tmux probe failed")],
 ] as const;
 
-function harness(probeError?: unknown, realTarget?: string, probe?: (args: string[], opts?: { timeout?: number }) => Promise<unknown>) {
+function harness(probeError?: unknown, realTarget?: string, probe?: (args: string[], opts?: { timeout?: number }) => Promise<unknown>, claimed = false) {
   const sessionId = "heartbeat-test";
   const target = realTarget ?? "heartbeat-test-pane";
   const events: string[] = [];
@@ -52,6 +52,9 @@ function harness(probeError?: unknown, realTarget?: string, probe?: (args: strin
     clearConversationDeliveryAndResumeState: async () => events.push("clear-delivery"),
     repairAndResumeSession: async () => { events.push("repair"); return true; },
     readTitleCache: () => ({}),
+    turnClaims: () => ({ get: (id: string) => (claimed && id === sessionId ? { sessionId } : undefined) }),
+    observedDeadPanes: new Set<string>(),
+    requestTurnClaimRecovery: async () => { events.push("claim-pass"); },
   };
   const check = new Function(...Object.keys(deps), `${code}; return heartbeatHealthCheck;`)(...Object.values(deps)) as (id: string) => Promise<void>;
   return { check: () => check(sessionId), events, resumeSessionCache, sessionId, deps };
@@ -82,6 +85,16 @@ describe("heartbeat uncertainty preserves the session", () => {
     await h.check();
     expect(h.events).toContain("repair");
     expect(h.resumeSessionCache.has(h.sessionId)).toBe(false);
+  });
+
+  // A pane that died mid-turn is continued by its turn claim (turnClaims.ts):
+  // a restart here would land it idle at its prompt and lose the turn.
+  test("a pane that died mid-turn hands its claim to the recovery pass instead of restarting idle", async () => {
+    const h = harness({ code: 1, stderr: "can't find session: gone" }, undefined, undefined, true);
+    await h.check();
+    expect(h.events).toContain("claim-pass");
+    expect(h.events).not.toContain("repair");
+    expect(h.deps.observedDeadPanes.has(h.sessionId)).toBe(true);
   });
 
   test("in-flight recovery skips the probe", async () => {

@@ -658,7 +658,8 @@ export class SyncService {
   // like the composer's messages.
   // Resolves to whether the server queued it: null means it declined (a crash
   // revive under recovery mode "off").
-  async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<boolean> {
+  /** Queue a message for the conversation's session; the new row's id, or null when the server declined it (recovery off). */
+  async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<string | null> {
     await this.throttle();
     const queued = await this.mutate("pendingMessages:sendMessageToSession" as any, {
       conversation_id: conversationId,
@@ -667,7 +668,7 @@ export class SyncService {
       ...(opts.human ? { human: true } : {}),
       api_token: this.apiToken,
     });
-    return queued !== null;
+    return queued === null || queued === undefined ? null : String(queued);
   }
 
   // After this (primary) daemon pushes a CHANGED credential to the remote
@@ -1753,8 +1754,10 @@ export class SyncService {
    * from "a remote owns this but can only serve an explicitly-moved session — if I
    * have the checkout I should reclaim it." null if unknown/unowned.
    */
+  /** Null when no device owns it, or when the lookup failed; `strict` throws on the failure instead. */
   async getConversationOwnerInfo(
     conversationId: string,
+    opts: { strict?: boolean } = {},
   ): Promise<{ ownerDeviceId: string; ownerIsRemote: boolean; ownerOnline: boolean } | null> {
     try {
       const res = await this.client.query("devices:getConversationOwner" as any, {
@@ -1768,7 +1771,8 @@ export class SyncService {
         ownerIsRemote: !!(res as any).owner_is_remote,
         ownerOnline: !!(res as any).owner_online,
       };
-    } catch {
+    } catch (err) {
+      if (opts.strict) throw err;
       return null;
     }
   }

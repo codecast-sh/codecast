@@ -1,10 +1,10 @@
 // Whether a session whose agent process died mid-work is brought back.
 //
 // The watchdog finds sessions whose status file went stale and whose process
-// is gone. For a session that had finished its turn that is the end: marking
-// it completed is right. For one that was still working, or waiting on its own
-// background work (a workflow, a background command, a monitor), the death was
-// an accident: a tmux server restart, a daemon restart, a crash. The work
+// is gone. For a session that had finished its turn and its work that is the
+// end: marking it completed is right. For one waiting on its own background
+// work (a workflow, a background command, a monitor), the death was an
+// accident: a tmux server restart, a daemon restart, a crash. The work
 // inside the process died with it, and before this nothing brought it back, so
 // the session sat "stopped" until a person noticed and typed "continue"
 // (jx7e4fy, 2026-10-03 and twice on 2026-10-05, eight hours each time).
@@ -19,20 +19,26 @@ import fs from "node:fs";
 import path from "node:path";
 import { MID_WORK_REVIVE_MESSAGE, reviveClientId } from "@codecast/shared/contracts";
 import { workflowRunLastActivity } from "./workflowRunLive.js";
+import { writeFileAtomic } from "./fsAtomic.js";
 
-// The statuses that mean the turn was not over. "waiting" is the daemon's word
-// for a finished turn that still owns background work. A permission prompt
-// waits on a person. "dormant" waits on a machine: a trigger or a message
-// wakes it through delivery, which resumes a dead process anyway, but a wake
-// the session armed inside its own process (a background command, a Monitor)
-// died with it and never fires. The Implement hand of ct-59998 pinned dormant
-// on a background check and a Monitor, the machine restarted under it, and
-// its run sat waiting on a wake that no longer existed (2026-10-16). So a
-// dormant session is revived when its transcript still holds open background
-// work (ReviveFacts.wakeDiedWithProcess).
-export const REVIVABLE_STATUSES: ReadonlySet<string> = new Set(["working", "thinking", "compacting", "waiting"]);
+// The statuses this module revives: a session whose turn had ENDED but whose
+// work had not. A death mid-turn is the turn claim's (turnClaims.ts): the
+// claim says exactly which turns were open and counts their resumes. What is
+// left here is a finished turn that still owns work. "waiting" is the
+// daemon's word for a finished turn that still owns background work (a
+// workflow, a background command, a monitor). "dormant" waits on a machine: a
+// trigger or a message wakes it through delivery, which resumes a dead
+// process anyway, but a wake the session armed inside its own process (a
+// background command, a Monitor) died with it and never fires. The Implement
+// hand of ct-59998 pinned dormant on a background check and a Monitor, the
+// machine restarted under it, and its run sat waiting on a wake that no
+// longer existed (2026-10-16). So a dormant session is revived when its
+// transcript still holds open background work (ReviveFacts.wakeDiedWithProcess).
+export const REVIVABLE_STATUSES: ReadonlySet<string> = new Set(["waiting"]);
 // What the watchdog asks midWorkReviveDecision about, and keeps the status file of.
 export const REVIVE_CANDIDATE_STATUSES: ReadonlySet<string> = new Set([...REVIVABLE_STATUSES, "dormant"]);
+// Status files kept for the long TTL: the turn or its work was unfinished.
+const UNFINISHED_STATUSES: ReadonlySet<string> = new Set([...REVIVE_CANDIDATE_STATUSES, "working", "thinking", "compacting"]);
 
 // A session silent this long died on work nobody would expect to resume now;
 // the first pass after this ships must not wake sessions that died days ago.
@@ -92,7 +98,7 @@ export type ReviveLifecycle = {
 export const UNFINISHED_STATUS_FILE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 
 export function statusFileExpired(status: string | undefined, mtimeMs: number, now: number, finishedTtlMs: number): boolean {
-  const ttl = REVIVE_CANDIDATE_STATUSES.has(status ?? "") ? UNFINISHED_STATUS_FILE_TTL_MS : finishedTtlMs;
+  const ttl = UNFINISHED_STATUSES.has(status ?? "") ? UNFINISHED_STATUS_FILE_TTL_MS : finishedTtlMs;
   return now - mtimeMs > ttl;
 }
 
@@ -130,26 +136,43 @@ export type ReviveFacts = {
 
 export type ReviveDecision = { revive: true } | { revive: false; reason: string };
 
+/**
+ * Why a dead session must not be brought back whatever it was doing, or null.
+ * Shared with the turn claims (turnClaims.ts), so both revive paths refuse the
+ * same sessions.
+ */
+export function reviveRefusal(f: Pick<ReviveFacts, "lifecycle" | "interruptedByUser" | "limitParked">): string | null {
+  // Unknown hide state fails toward the old behavior (mark it completed): a
+  // revive the person did not want costs a turn, and here nothing says they
+  // still hold the session.
+  if (!f.lifecycle || !f.lifecycle.hideStateKnown) return "lifecycle-unknown";
+  // A stash keeps the agent running by design, so only a kill or a dismiss
+  // says the person is done with it.
+  if (f.lifecycle.inboxKilledAt || f.lifecycle.inboxDismissedAt) return "retired";
+  if (f.interruptedByUser) return "interrupted";
+  if (f.limitParked) return "limit-parked";
+  return null;
+}
+
+/** Revives inside the budget window, the cap both revive paths share across turns. */
+export function recentRevives(prior: readonly number[], now: number): number {
+  return prior.filter((t) => now - t < REVIVE_BUDGET_WINDOW_MS).length;
+}
+
 export function midWorkReviveDecision(f: ReviveFacts): ReviveDecision {
   const ownWake = f.status === "dormant" && !!f.wakeDiedWithProcess;
   if (!REVIVABLE_STATUSES.has(f.status ?? "") && !ownWake) return { revive: false, reason: "turn-finished" };
   if (f.ageMs > REVIVE_MAX_AGE_MS) return { revive: false, reason: "too-old" };
-  // Unknown hide state fails toward the old behavior (mark it completed): a
-  // revive the person did not want costs a turn, and here nothing says they
-  // still hold the session.
-  if (!f.lifecycle || !f.lifecycle.hideStateKnown) return { revive: false, reason: "lifecycle-unknown" };
-  // A stash keeps the agent running by design, so only a kill or a dismiss
-  // says the person is done with it.
-  if (f.lifecycle.inboxKilledAt || f.lifecycle.inboxDismissedAt) return { revive: false, reason: "retired" };
-  if (f.interruptedByUser) return { revive: false, reason: "interrupted" };
-  if (f.limitParked) return { revive: false, reason: "limit-parked" };
-  const recent = f.priorRevives.filter((t) => f.now - t < REVIVE_BUDGET_WINDOW_MS).length;
-  if (recent >= REVIVE_BUDGET) return { revive: false, reason: "budget-spent" };
+  const refusal = reviveRefusal(f);
+  if (refusal) return { revive: false, reason: refusal };
+  if (recentRevives(f.priorRevives, f.now) >= REVIVE_BUDGET) return { revive: false, reason: "budget-spent" };
   return { revive: true };
 }
 
-// The ledger: when each session was last revived. The daemon restarts often
-// (every source change), so the budget has to outlive it.
+// The ledger: when each conversation was last revived, by either revive path
+// (turnClaims.ts too). The daemon restarts often (every source change), so the
+// budget has to outlive it; and it is per conversation, so a resume that lands
+// on a new session id does not start it over.
 type Ledger = Record<string, number[]>;
 
 function readLedger(file: string): Ledger {
@@ -161,20 +184,18 @@ function readLedger(file: string): Ledger {
   }
 }
 
-export function priorRevives(file: string, sessionId: string): number[] {
-  const list = readLedger(file)[sessionId];
+export function priorRevives(file: string, conversationId: string): number[] {
+  const list = readLedger(file)[conversationId];
   return Array.isArray(list) ? list.filter((t) => typeof t === "number") : [];
 }
 
-export function recordRevive(file: string, sessionId: string, at: number): void {
+export function recordRevive(file: string, conversationId: string, at: number): void {
   const ledger = readLedger(file);
   for (const [id, list] of Object.entries(ledger)) {
     const kept = list.filter((t) => at - t < REVIVE_BUDGET_WINDOW_MS);
     if (kept.length) ledger[id] = kept; else delete ledger[id];
   }
-  ledger[sessionId] = [...(ledger[sessionId] ?? []), at];
+  ledger[conversationId] = [...(ledger[conversationId] ?? []), at];
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(ledger));
-  fs.renameSync(tmp, file);
+  writeFileAtomic(file, JSON.stringify(ledger), { sync: true });
 }
