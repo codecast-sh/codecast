@@ -404,14 +404,16 @@ async function setupInboxHeartbeat(): Promise<Bench> {
   await show();
   const target = host.querySelector("[data-session-id]")!.getAttribute("data-session-id")!;
   const sessions = useInboxStore.getState().sessions as Record<string, any>;
-  const live = Object.keys(sessions).filter((id) => sessions[id].user_id === ME).slice(0, LIVE_SET);
-  if (!live.includes(target)) live.push(target);
-  // The server stamps each row with the placement its facts give; the facts
-  // do not change between beats, so neither do the stamps.
+  // The server stamps each shown member with the placement its facts give;
+  // the facts do not change between beats, so neither do the stamps. No
+  // seeded session asks, so `asking` is false on every row, as the server's
+  // askingFor would say for them.
   const placed = placeInboxRows(useInboxStore.getState() as any, { scope: "mine" });
+  const live = Object.keys(sessions).filter((id) => sessions[id].user_id === ME && placed.placements.has(id)).slice(0, LIVE_SET);
+  if (!live.includes(target)) live.push(target);
   const stampOf = (id: string) => {
-    const p = placed.placements.get(id) as any;
-    return p ? { bucket: p.bucket, work_state: p.work_state, asking: !!p.asking, below_fold: !!p.below_fold, bucket_stale_at: null, stale_bucket: null } : {};
+    const p = placed.placements.get(id)!;
+    return { bucket: p.bucket, work_state: p.work_state, asking: false, below_fold: !!p.below_fold, bucket_stale_at: null, stale_bucket: null };
   };
   let n = 0;
   const beat = async () => {
@@ -424,7 +426,7 @@ async function setupInboxHeartbeat(): Promise<Bench> {
       liveness[id] = row;
     }
     liveness[target].last_heartbeat = now + n * 1000;
-    const projection = { v: INBOX_PROJECTION_VERSION, epoch: placed.epoch, tally: placed.tally, set_digest: null, truncated: [] };
+    const projection = { v: INBOX_PROJECTION_VERSION, user_id: ME, scope: "mine", team_id: null, epoch: placed.epoch, tally: placed.tally, set_digest: null, truncated: [] };
     const payload = structuredClone({ liveness, projection });
     await act(async () => { applyMineLivenessPayload(payload); });
   };
