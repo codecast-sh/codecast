@@ -1,12 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { webcrypto } from 'node:crypto';
+import { chromeEvent as event, chromeStub, loadWorker, storageArea } from './extensionStub.testutil';
 
-const source = readFileSync(new URL('../../../browser-extension/background.js', import.meta.url), 'utf8');
-const statusSource = readFileSync(new URL('../../../browser-extension/status.js', import.meta.url), 'utf8');
-
-function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; keeperAlreadyOpen?: boolean; noOffscreenApi?: boolean; slowOverlay?: boolean; appWindowFocused?: boolean; groupFails?: boolean } = {}) {
+function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; madeRecords?: [number, string][]; madeUsed?: number[]; keeperAlreadyOpen?: boolean; noOffscreenApi?: boolean; slowOverlay?: boolean; appWindowFocused?: boolean; groupFails?: boolean } = {}) {
   const grouped: unknown[] = [];
   const detached: number[] = [];
   const created: unknown[] = [];
@@ -14,27 +10,20 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
   const keeperDocs: object[] = [];
   let keeperExists = !!opts.keeperAlreadyOpen;
   let selfHeld = !!opts.selfAlreadyAttached;
-  const event = () => {
-    const listeners: Array<(tab: object) => void> = [];
-    return { addListener(fn: (tab: object) => void) { listeners.push(fn); }, emit(tab: object) { listeners.forEach((fn) => fn(tab)); } };
-  };
   const tab = { id: 7, windowId: 1, groupId: -1, url: 'https://example.com', active: false };
-  const storage = (data: object) => ({ get: async () => data, set: async () => {} });
   let ownershipReads = 0;
-  const chrome = {
-    storage: { local: storage({}), session: {
-      ...storage({}),
-      get: async () => ++ownershipReads === 1 && opts.firstOwnershipReadStalls
-        ? new Promise(() => {}) : { ownedTabs: opts.ownedTabs ?? [] },
-    } },
-    action: { setTitle: async () => {}, setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
-    ...(opts.noOffscreenApi ? {} : { offscreen: {
-      Reason: { WORKERS: 'WORKERS' },
+  const chrome = chromeStub({
+    storage: {
+      session: {
+        get: async () => ++ownershipReads === 1 && opts.firstOwnershipReadStalls
+          ? new Promise(() => {}) : { ownedTabs: opts.ownedTabs ?? [] },
+      },
+      local: storageArea(opts.madeRecords ? { madeTabs: opts.madeRecords, madeUsed: opts.madeUsed ?? [] } : {}),
+    },
+    offscreen: {
       hasDocument: async () => keeperExists,
       createDocument: async (p: object) => { keeperDocs.push(p); keeperExists = true; },
-    } }),
-    runtime: { onStartup: event(), onInstalled: event(), onMessage: event(), getManifest: () => ({ version: '0.1.0' }), getURL: (path: string) => `chrome-extension://ext/${path}` },
-    alarms: { create: async () => {}, onAlarm: event() },
+    },
     tabs: {
       get: async () => ({ ...tab }),
       query: async (q: { groupId?: number } = {}) => {
@@ -63,6 +52,7 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
         if (opts.castGroupWithTabs && q.color === 'red') return [{ id: 42, windowId: 1, title: 'Cast ...', color: 'red' }, { id: 43, windowId: 1, title: 'Shopping', color: 'red' }];
         return [];
       }, update: async (id: number, p: object) => ({ id, windowId: 1, ...p }),
+      get: async (id: number) => ({ id, windowId: 1, title: id === 42 ? 'Cast' : 'Shopping', color: 'red' }),
       onCreated: event(), onUpdated: event(), onRemoved: event(),
     },
     // Window 9 stands for an installed web app's window: Chrome counts it as
@@ -100,13 +90,9 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
       },
       onEvent: event(), onDetach: event(),
     },
-  };
-  const context = vm.createContext({ chrome, crypto: webcrypto, TextEncoder, navigator: { userAgent: 'test' },
-    importScripts() {}, setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms / 250), clearTimeout,
-    setInterval: () => 1, clearInterval() {},
   });
-  vm.runInContext(statusSource, context);
-  vm.runInContext(source, context);
+  if (opts.noOffscreenApi) delete chrome.offscreen;
+  const context = loadWorker({ chrome, globals: { setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms / 250), clearTimeout } });
   const selfSettled = () => vm.runInContext('selfSync', context);
   const dropSelf = () => { selfHeld = false; chrome.debugger.onDetach.emit({ targetId: 'sw-self' }); };
   const keeperSettled = () => vm.runInContext('keeperPending || Promise.resolve()', context);
@@ -174,11 +160,24 @@ describe('extension tab lifecycle', () => {
     expect(result.tabs).toHaveLength(1);
   });
 
-  test('with ownership memory empty, tabs in a red Cast group are ours again (an extension reload does not orphan them)', async () => {
-    const w = worker({ castGroupWithTabs: [11, 12] });
+  test('with ownership memory empty, only tabs this extension recorded making (same id and URL) are ours again', async () => {
+    // 11 is a tab it made, still at its URL; 12 sits in a red group titled Cast but
+    // was never recorded (a human's group, or a tab after a browser restart gave it a
+    // new id); 13 was recorded at another URL, so the id now names some other page.
+    const w = worker({ castGroupWithTabs: [11, 12, 13], madeRecords: [[11, 'https://example.com'], [13, 'https://elsewhere.example/']], madeUsed: [11] });
     const result = await w.context.handle({ op: 'tabs.list' });
     const byId = Object.fromEntries(result.tabs.map((t: { tabId: number; owned: boolean }) => [t.tabId, t.owned]));
-    expect(byId).toEqual({ 7: false, 11: true, 12: true });
+    expect(byId).toEqual({ 7: false, 11: true, 12: false, 13: false });
+    expect(vm.runInContext('[...ownedGroups]', w.context)).toEqual([42]);
+    // The human had used 11 before the reload: it stays kept.
+    expect(vm.runInContext('humanUsed.has(11)', w.context)).toBe(true);
+  });
+
+  test('a red group titled Cast is not ours when no tab in it was recorded', async () => {
+    const w = worker({ castGroupWithTabs: [11, 12] });
+    const result = await w.context.handle({ op: 'tabs.list' });
+    expect(result.tabs.every((t: { owned: boolean }) => !t.owned)).toBe(true);
+    expect(vm.runInContext('[...ownedGroups]', w.context)).toEqual([]);
   });
 
   test('a stalled tab query identifies the Chrome API that did not answer', async () => {
@@ -293,5 +292,112 @@ describe('extension tab lifecycle', () => {
     const w = worker({ coldRenderer: true, ownedTabs: [7] });
     await w.context.attachTab(7);
     expect(vm.runInContext('attached.has(7)', w.context)).toBe(true);
+  });
+});
+
+// Closing a tab takes it out of its group first (onUpdated groupId -1, then
+// onRemoved). Every closed agent tab was claimed as "dragged out" by the
+// human and logged so (soak ct-87421); only a tab still open outside the Cast
+// group is the human's now.
+describe('a tab leaving the Cast group', () => {
+  function leaving(stillOpen: boolean) {
+    const chrome = chromeStub({ tabs: { get: async (id: number) => {
+      if (!stillOpen) throw new Error(`No tab with id: ${id}.`);
+      return { id, windowId: 1, groupId: -1, url: 'https://example.com', active: false };
+    } } });
+    const context = loadWorker({ chrome, globals: { setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms / 50), clearTimeout } });
+    vm.runInContext('ownedGroups.add(42); ownedTabs.add(7); tabGroupOf.set(7, 42)', context);
+    chrome.tabs.onUpdated.emit(7, { groupId: -1 }, { id: 7, windowId: 1, groupId: -1, url: 'https://example.com', active: false });
+    if (!stillOpen) chrome.tabs.onRemoved.emit(7, { windowId: 1, isWindowClosing: false });
+    return context;
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+  test('a closed agent tab is not claimed or logged as dragged out', async () => {
+    const context = leaving(false);
+    await settle();
+    expect(vm.runInContext('claimed.has(7)', context)).toBe(false);
+    expect(vm.runInContext('recent.some((r) => r.includes("dragged out"))', context)).toBe(false);
+  });
+
+  test('an agent tab still open outside the group is the human\'s to keep', async () => {
+    const context = leaving(true);
+    await settle();
+    expect(vm.runInContext('claimed.has(7)', context)).toBe(true);
+    expect(vm.runInContext('recent.some((r) => r.includes("tab 7 dragged out of the Cast group; kept"))', context)).toBe(true);
+  });
+});
+
+describe('a tab moved to another window', () => {
+  test('is still the agent\'s, not claimed', async () => {
+    const chrome = chromeStub({ tabs: { get: async (id: number) => ({ id, windowId: 2, groupId: -1, url: 'https://example.com', active: false }) } });
+    const context = loadWorker({ chrome, globals: { setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms / 50), clearTimeout } });
+    vm.runInContext('ownedGroups.add(42); ownedTabs.add(7); tabGroupOf.set(7, 42)', context);
+    chrome.tabs.onUpdated.emit(7, { groupId: -1 }, { id: 7, windowId: 1, groupId: -1, url: 'https://example.com', active: false });
+    chrome.tabs.onDetached.emit(7, { oldWindowId: 1, oldPosition: 0 });
+    chrome.tabs.onAttached.emit(7, { newWindowId: 2, newPosition: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(vm.runInContext('claimed.has(7)', context)).toBe(false);
+    expect(vm.runInContext('ownedTabs.has(7)', context)).toBe(true);
+  });
+});
+
+describe('tabs the human is using stay theirs', () => {
+  const tabAt = (id: number, extra: object = {}) => ({ id, windowId: 1, groupId: -1, url: `https://example.com/${id}`, active: false, ...extra });
+  function context(extra: Record<string, unknown> = {}) {
+    const chrome = chromeStub({
+      tabs: { get: async (id: number) => tabAt(id), remove: async (id: number) => { removed.push(id); } },
+      windows: { get: async (id: number) => ({ id, type: 'normal', focused: false }), getLastFocused: async () => ({ id: 1, focused: false }) },
+      ...extra,
+    });
+    const removed: number[] = [];
+    return { chrome, removed, ctx: loadWorker({ chrome }) };
+  }
+  const run = (ctx: vm.Context, code: string) => vm.runInContext(code, ctx);
+
+  test('a popup opened from an agent tab while it waits on a handoff, or from a lent tab, is not adopted', async () => {
+    const { ctx } = context();
+    run(ctx, 'ownedTabs.add(5); handoffs.set(5, { id: "h1", state: "waiting", expires: Date.now() + 60000 }); lentTabs.add(6); attached.add(6); ownedTabs.add(8)');
+    await run(ctx, 'adoptOpened(20, 5)');
+    await run(ctx, 'adoptOpened(21, 6)');
+    await run(ctx, 'adoptOpened(22, 8)');
+    expect(run(ctx, '[ownedTabs.has(20), ownedTabs.has(21), ownedTabs.has(22)]')).toEqual([false, false, true]);
+    expect(run(ctx, 'recent.some((r) => r.includes("tab 20 opened from tab 5 while it is the human\'s (handoff)"))')).toBe(true);
+  });
+
+  test('idle cleanup closes only tabs it made that the human never brought to the front', async () => {
+    const { chrome, removed, ctx } = context();
+    const old = 'Date.now() - 31 * 60 * 1000';
+    // 30: made, idle. 31: made, then the human clicked it. 32: adopted popup, idle.
+    run(ctx, `for (const id of [30, 31, 32]) { ownedTabs.add(id); touched.set(id, ${old}); } madeTabs.set(30, "u"); madeTabs.set(31, "u"); adoptedFrom.set(32, 30); ownershipLoaded = Promise.resolve();`);
+    chrome.tabs.onActivated.emit({ tabId: 31, windowId: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await run(ctx, 'cleanupIdle()');
+    expect(removed).toEqual([30]);
+    expect(run(ctx, 'keepReason({ id: 31 })')).toBe('used');
+  });
+
+  test('an agent raising its own tab is not the human using it', async () => {
+    const { chrome, ctx } = context();
+    run(ctx, 'ownedTabs.add(40); ownershipLoaded = Promise.resolve(); agentActivated(40)');
+    chrome.tabs.onActivated.emit({ tabId: 40, windowId: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(run(ctx, 'humanUsed.has(40)')).toBe(false);
+  });
+});
+
+describe('a command that hits another extension\'s frame', () => {
+  test('is retried only when it reads; input is never sent twice', async () => {
+    const sent: string[] = [];
+    const chrome = chromeStub({
+      debugger: { sendCommand: async (_d: object, method: string) => { sent.push(method); throw new Error('Cannot access a chrome-extension:// URL of different extension'); } },
+      tabs: { sendMessage: async () => ({ removed: 1 }) },
+    });
+    const ctx = loadWorker({ chrome, globals: { setTimeout: (fn: () => void) => setTimeout(fn, 0), clearTimeout } });
+    await expect(vm.runInContext('cdpPastForeignFrames(3, "Input.dispatchMouseEvent", {})', ctx)).rejects.toThrow('was not retried, since it may already have acted');
+    expect(sent).toEqual(['Input.dispatchMouseEvent']);
+    sent.length = 0;
+    await expect(vm.runInContext('cdpPastForeignFrames(3, "DOM.getDocument", {})', ctx)).rejects.toThrow('different extension');
+    expect(sent).toEqual(['DOM.getDocument', 'DOM.getDocument', 'DOM.getDocument']);
   });
 });

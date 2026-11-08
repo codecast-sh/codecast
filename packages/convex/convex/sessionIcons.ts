@@ -70,7 +70,7 @@ export const drawSessionIcon = internalAction({
     if (!brief) return;
     const scratch: Id<"_storage">[] = [];
     try {
-      const result = await generateRoleIcon(brief, deploymentAsk(ctx, scratch));
+      const result = await generateRoleIcon(brief, deploymentAsk(ctx, scratch, { ctx, scope: { conversationId: args.conversation_id } }));
       console.log(`session icon for ${brief.handle}: ${result.ok ? `"${result.icon.concept}"` : "none"}, ${result.calls} calls, $${modelCost(ICON_MODEL, result.usage).toFixed(3)}`);
       if (result.ok) await ctx.runMutation(internal.sessionIcons.saveSessionIcon, { conversation_id: args.conversation_id, icon: result.icon });
       else console.error(`session icon for ${brief.handle}: ${result.reason}`);

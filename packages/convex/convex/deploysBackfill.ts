@@ -3,10 +3,13 @@
 // the carries of deploys recorded from markers.
 
 import { v } from "convex/values";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./functions";
 import { normalizeRepository } from "./lib/gitRefs";
 import { normalizeDeployTarget } from "@codecast/shared/contracts/deploys";
-import { carriesForMarker, recordDeployMarker, type DeployMarker } from "./deploys";
+import { carriesForMarker, lineDeployTargets, recordDeployMarker, workspaceMergeWindow, type DeployMarker } from "./deploys";
+import { fillDeployRange } from "./deployTargets";
+import { mainAtOf } from "./deployTargetsState";
 
 /**
  * Record every deploy marker already in external_events as a deploy object,
@@ -89,11 +92,15 @@ export const backfillTargets = internalQuery({
 /**
  * Recompute the carries of deploys recorded from markers (trigger outside),
  * oldest first, after the merges the rule reads changed (landed fixes joined
- * them). A deploy the line sent keeps what it sent. Ten per call; pass the
- * returned `next` as `since` until it is null.
+ * them, cut_at came to hold merges against main's order). Each deploy's
+ * cut_at is stamped first. A deploy the line sent keeps what it sent. A deploy
+ * older than the merges the rule reads are complete from is left alone, since
+ * its merges are not all read. Ten per call; pass the returned `next` as
+ * `since` until it is null. `dry` reports what would change and writes nothing; `show` lists the carries computed for
+ * the deploys it names (dp-N).
  */
 export const recarry = internalMutation({
-  args: { workspace: v.string(), since: v.optional(v.number()) },
+  args: { workspace: v.string(), since: v.optional(v.number()), dry: v.optional(v.boolean()), show: v.optional(v.array(v.string())) },
   handler: async (ctx, args) => {
     const PER_CALL = 10;
     const rows = await ctx.db
@@ -102,14 +109,44 @@ export const recarry = internalMutation({
       .order("asc")
       .take(PER_CALL);
     const now = Date.now();
-    let changed = 0;
-    for (const d of rows) {
-      if (d.trigger !== "outside" || d.status !== "live") continue;
+    const window = await workspaceMergeWindow(ctx, args.workspace, now);
+    const read = { merges: window.merges, targets: await lineDeployTargets(ctx, args.workspace) };
+    // A dry run writes no cut_at, so every live deploy's place on main is read here instead.
+    const cuts = new Map<string, number>();
+    if (args.dry) {
+      const live = await ctx.db.query("deploys").withIndex("by_workspace_created", (q: any) => q.eq("workspace", args.workspace)).order("desc").take(300);
+      for (const d of live) {
+        if (d.status !== "live" || !d.sha || d.cut_at != null) continue;
+        const cut = await mainAtOf(ctx, d.repository, d.sha);
+        if (cut != null) cuts.set(String(d._id), cut);
+      }
+    }
+    const shortOf = async (id: string) => ((await ctx.db.get(id as Id<"tasks">)) as Doc<"tasks"> | null)?.short_id ?? id;
+    let changed = 0, skipped = 0;
+    const deploys = [];
+    const shown: Array<{ deploy: string; carries: string[] }> = [];
+    for (const row of rows) {
+      if (row.trigger !== "outside" || row.status !== "live") continue;
+      if ((row.live_at ?? row.created_at) < window.from || row.carries.some((c) => (c.merged_at ?? now) < window.from)) { skipped++; continue; }
+      // Its sha's place on main first (cut_at), which the rule holds merges against; oldest first, so every earlier
+      // deploy is already placed when this one's carries are read.
+      if (row.cut_at == null && !args.dry) await fillDeployRange(ctx, row._id);
+      const d = (await ctx.db.get(row._id))!;
       // A marker's deploy names no project (it ships the code); one recorded before that rule lets go of its project.
       const wide = d.project_id ? { ...d, project_id: undefined } : d;
-      const carries = await carriesForMarker(ctx, wide, now);
-      if (d.project_id || JSON.stringify(carries) !== JSON.stringify(d.carries)) { await ctx.db.patch(d._id, { carries, project_id: undefined, updated_at: now }); changed++; }
+      const carries = await carriesForMarker(ctx, wide, now, cuts, read);
+      if (args.show?.includes(d.short_id)) shown.push({ deploy: d.short_id, carries: await Promise.all(carries.map(async (c) => `${await shortOf(String(c.task_id))} ${c.merge_sha?.slice(0, 10) ?? "-"}`)) });
+      // Stored objects come back with their keys in another order, so compare what each carry says, not its JSON.
+      const said = (cs: Doc<"deploys">["carries"]) => cs.map((c) => [c.task_id, c.run_id, c.decision_id, c.merge_sha, c.merged_at, c.pr_url, c.how].join("|")).sort().join("\n");
+      if (!d.project_id && said(carries) === said(d.carries)) continue;
+      changed++;
+      const before = new Set(d.carries.map((c) => String(c.task_id)));
+      const after = new Set(carries.map((c) => String(c.task_id)));
+      const dropped = await Promise.all([...before].filter((t) => !after.has(t)).map(shortOf));
+      const added = await Promise.all([...after].filter((t) => !before.has(t)).map(shortOf));
+      if (dropped.length || added.length) deploys.push({ deploy: d.short_id, sha: d.sha ?? null, target: d.target, dropped, added });
+      if (!args.dry) await ctx.db.patch(d._id, { carries, project_id: undefined, updated_at: now });
     }
-    return { read: rows.length, changed, next: rows.length === PER_CALL ? rows[rows.length - 1].created_at : null };
+    return { dry: !!args.dry, read: rows.length, changed, skipped, merges_from: window.from, deploys, ...(args.show ? { shown } : {}), next: rows.length === PER_CALL ? rows[rows.length - 1].created_at : null };
   },
 });

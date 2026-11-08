@@ -129,9 +129,9 @@ describe("chip filtering and counts", () => {
     ...serverCards(
       [
         row("chat", "r1", { channel_id: "room", unread: 1, last_activity_at: 40 }),
-        row("chat", "r2", { channel_id: "dmroom", unread: 1, last_activity_at: 30 }),
+        row("chat", "r2", { channel_id: "dmroom", unread: 1, for_you: true, last_activity_at: 30 }),
         row("comment", "conv:global", { conversation_id: "conv", unread: 0, last_activity_at: 20 }),
-        row("task", "t1", { task_id: "t1", unread: 3, last_activity_at: 10 }),
+        row("task", "t1", { task_id: "t1", unread: 3, for_you: true, last_activity_at: 10 }),
       ],
       (id) => (id === "dmroom" ? "dm" : "public"),
       () => undefined,
@@ -155,8 +155,9 @@ describe("chip filtering and counts", () => {
     ]);
   });
 
-  it("counts unread cards per chip and never counts sessions", () => {
-    expect(unreadByChip(cards)).toEqual({ all: 4, chat: 1, dm: 2, comment: 0, code: 0, task: 1, page: 0, question: 0 });
+  it("counts unread cards per chip; All counts only what waits on you, never sessions", () => {
+    // r1 is unread activity: on its chip, not in All.
+    expect(unreadByChip(cards)).toEqual({ all: 3, chat: 1, dm: 2, comment: 0, code: 0, task: 1, page: 0, question: 0 });
   });
 });
 

@@ -70,6 +70,9 @@ export function RecentsPanel({
         if (i >= 0 && i !== selectedIndex) onSelectedIndexChange(i);
       }}
       loop
+      // Every mode floats over the desktop titlebar's drag region, which would
+      // take the clicks before the rows see them (globals.css, data-flyout).
+      data-flyout
       className={`flex flex-col overflow-hidden ${className}`}
     >
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">

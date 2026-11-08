@@ -84,6 +84,14 @@ export const setTitleAndSubtitle = internalMutation({
     }
     if (Object.keys(patch).length === 0) return;
     await ctx.db.patch(args.conversation_id, patch);
+    // A project named after this session (started with the new project
+    // switch) takes the session's title until a person renames it.
+    if (patch.title && conv.project_id) {
+      const project = await ctx.db.get(conv.project_id);
+      if (project?.title_from_session && String(project.default_session_id) === String(conv._id) && project.title !== patch.title) {
+        await ctx.db.patch(project._id, { title: patch.title, updated_at: Date.now() });
+      }
+    }
   },
 });
 
@@ -106,7 +114,7 @@ export const generateTitle = internalAction({
     }
 
     try {
-      const reply = await callModel({ ...titleRequest(conversation), label: "Title generation" });
+      const reply = await callModel({ ...titleRequest(conversation), label: "Title generation", gate: { ctx, scope: { conversationId: args.conversation_id } } });
       if (!reply) return;
       const text = reply.text;
 
@@ -175,6 +183,7 @@ async function nameRow(ctx: ActionCtx, id: Id<"conversations"> | Id<"tasks"> | I
     const reply = await callModel({
       ...shortTitleRequest({ kind: row.kind, title: row.title, context: row.context }),
       label: "Short title generation",
+      gate: { ctx, scope: row.kind === "session" ? { conversationId: id as Id<"conversations"> } : { workspace: row.workspace } },
     });
     if (!reply) return;
     // An answer that fails the name rule is stored as "" (asked, no usable
@@ -197,13 +206,15 @@ export const getRowForShortTitle = internalQuery({
     // Which kind the id names is in the id itself; the row's shape tells it
     // apart without a second read.
     const short_title = row.short_title as string | undefined;
+    // Whose words the title is (lib/vendorGuard); a session's answers to its conversation's team.
+    const workspace = (row.workspace as string | undefined) ?? null;
     if ("goal" in row || "acceptance_criteria" in row) {
-      return { kind: "plan" as const, title: row.title as string | undefined, context: row.goal as string | undefined, short_title };
+      return { kind: "plan" as const, title: row.title as string | undefined, context: row.goal as string | undefined, short_title, workspace };
     }
     if ("session_id" in row && "agent_type" in row) {
-      return { kind: "session" as const, title: row.title as string | undefined, context: row.subtitle as string | undefined, short_title };
+      return { kind: "session" as const, title: row.title as string | undefined, context: row.subtitle as string | undefined, short_title, workspace };
     }
-    return { kind: "task" as const, title: row.title as string | undefined, context: (row.description as string | undefined)?.slice(0, 300), short_title };
+    return { kind: "task" as const, title: row.title as string | undefined, context: (row.description as string | undefined)?.slice(0, 300), short_title, workspace };
   },
 });
 

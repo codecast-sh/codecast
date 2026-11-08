@@ -5,6 +5,8 @@
 // the paint, holds the first-run turn (lib/firstRunDialogs) so it never lands
 // over the device-setup dialog or the inbox tour, and stays quiet when tips
 // are off, when the tour was seen on any device, or when another tour runs.
+import { useLocation } from "react-router";
+import { isSetupFlowPath } from "../lib/setupFlow";
 import { useFirstRunDialog } from "../lib/firstRunDialogs";
 import { hasOpenModal } from "../shortcuts";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
@@ -29,9 +31,12 @@ export function useTourAutoStart(id: string, ready: boolean, opts: { insideModal
   const off = s.clientState.tips?.level === "none";
   const { blocked, claim } = useFirstRunDialog(`tour:${id}`, runningId === id);
   const insideModal = !!opts.insideModal;
+  // No tour starts itself over the setup flow (lib/setupFlow). The real URL:
+  // the compat usePathname answers with the active tab's path.
+  const inSetupFlow = isSetupFlowPath(useLocation().pathname);
 
   useWatchEffect(() => {
-    if (!def || !ready || runningId || blocked || !initialized || seen || off) return;
+    if (!def || !ready || runningId || blocked || !initialized || seen || off || inSetupFlow) return;
     let t: ReturnType<typeof setTimeout>;
     const arm = () => {
       t = setTimeout(() => {
@@ -43,5 +48,5 @@ export function useTourAutoStart(id: string, ready: boolean, opts: { insideModal
     };
     arm();
     return () => clearTimeout(t);
-  }, [def, id, ready, runningId, blocked, initialized, seen, off, insideModal, claim]);
+  }, [def, id, ready, runningId, blocked, initialized, seen, off, insideModal, claim, inSetupFlow]);
 }

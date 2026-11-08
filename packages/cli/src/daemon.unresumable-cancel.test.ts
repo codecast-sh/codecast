@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import { functionBlock } from "./test-helpers/sourceRegion";
+import { afterAll as restoreCodecastDirAfterAll } from "bun:test";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+
+// Deliveries these tests make record into the delivery echo ledger in CODECAST_DIR.
+const codecastDir = isolateCodecastDir();
+restoreCodecastDirAfterAll(() => codecastDir.restore());
 
 // ct-56547: worker reports queued into finished Line stations retried every
 // five minutes for days (retry 600+), because the delivery path gave up with a

@@ -1,5 +1,6 @@
 "use client";
 
+import { CommandRunView } from "./decisions/CommandRunView";
 import { useState } from "react";
 import { ArrowUpRight, Check, ChevronDown, ChevronRight, CornerUpLeft } from "lucide-react";
 import Link from "next/link";
@@ -130,6 +131,7 @@ export function DecisionAnswerQuote({ decision, conversationId, timestamp }: { d
           ) : (
             <div className="text-sol-text-dim">{loading ? "Loading the question…" : "The full question is no longer available."}</div>
           )}
+          {row?.run && <CommandRunView run={row.run} />}
           {row?.context_md && (
             <div className="text-sol-text-muted [&_p]:my-1">
               <MarkdownRenderer content={row.context_md} />

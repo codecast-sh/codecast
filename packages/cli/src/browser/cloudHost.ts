@@ -91,6 +91,10 @@ export interface CloudHost {
    * for one, and the laptop cannot prove the listener is the managed Chrome.
    * Set by hand in hosts.json. Read by cloud/browserSync.ts. */
   browserSyncAll?: boolean;
+  /** Sessions on this host drive the laptop's own Chrome while the laptop is
+   *  up (cloud/browserLink.ts). Missing = on; `cast browser extension revoke
+   *  --host` sets false, `cast browser extension link --host` sets true. */
+  laptopBrowser?: boolean;
 }
 
 export interface HostGitAccessRecord {

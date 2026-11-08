@@ -34,7 +34,7 @@ import { canSeeMemberSpend, fetchUserUsageDays } from "./lib/usageDaily";
 import { bucketPunchcardRows } from "./lib/activityPunchcard";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
-import { conversationProjectRoot, foldCheckoutsByRepository, pathWithinLocalRoots } from "./projectPaths";
+import { conversationProjectRoot, foldCheckoutsByRepository, knownCheckoutRoots, pathWithinLocalRoots } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
 import { activeEnrollmentTeam, heartbeatTeamPolicy } from "./lib/teamPolicyGuard";
@@ -819,6 +819,8 @@ export const daemonHeartbeat = mutation({
       team_id: user?.active_team_id ?? user?.team_id ?? undefined,
       min_cli_version: minVersionConfig?.value ?? undefined,
       agent_permission_modes: user?.agent_permission_modes ?? undefined,
+      // The backend new Claude sessions start on; null = the shipped default.
+      claude_backend: user?.claude_backend ?? null,
       agent_default_params: user?.agent_default_params ?? undefined,
       // The user's codecast default model per client. The daemon mirrors the
       // claude one into ~/.claude/settings.json every beat, so the file (and
@@ -965,6 +967,11 @@ export const reportCommandResult = mutation({
       ...(command.command === "set_provider_key" ? { args: undefined } : {}),
     });
     if (command.command === "start_session" && !args.error) await stampStartedWorktree(ctx, command.args, args.result);
+    // A `cast decide --run` the machine could not take fails its card and tells the session.
+    if (command.command === "run_cast" && args.error) {
+      const decision_id = (() => { try { return String(JSON.parse(command.args ?? "{}").decision_id ?? ""); } catch { return ""; } })();
+      if (decision_id) await ctx.scheduler.runAfter(0, internal.sessionDecisions.failCommandRun, { user_id: auth.userId, decision_id, error: args.error.slice(0, 500) });
+    }
 
     return { success: true };
   },
@@ -3606,8 +3613,9 @@ export async function performGetRecentProjectPaths(
     const localRoots = deviceRoots || onlineRoots.length > 0 ? onlineRoots : null;
 
     const pathCounts = new Map<string, { count: number; lastActive: number; repository?: string }>();
+    const checkouts = knownCheckoutRoots(conversations);
     for (const conv of conversations) {
-      const path = conversationProjectRoot(conv);
+      const path = conversationProjectRoot(conv, checkouts);
       if (!path) continue;
       if (localRoots && !pathWithinLocalRoots(path, localRoots)) continue;
       // Bucket to the minute as the value enters the tally, so both the ranking
@@ -4088,6 +4096,20 @@ export const updateAgentPermissionModes = mutation({
   },
 });
 
+/** Settings → Agents "Claude sessions run in" (web through the store, `cast config claude_backend`). */
+export const setClaudeBackend = mutation({
+  args: {
+    backend: v.union(v.literal("sdk"), v.literal("tmux")),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token ? await getAuthenticatedUserId(ctx, args.api_token) : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    await ctx.db.patch(userId, { claude_backend: args.backend });
+    return { claude_backend: args.backend };
+  },
+});
+
 export const getAgentDefaultParams = query({
   args: {},
   handler: async (ctx) => {
@@ -4179,7 +4201,7 @@ export const sendConfigCommand = mutation({
 export async function enqueueConfigCommand(
   ctx: Pick<MutationCtx, "db">,
   userId: Id<"users">,
-  command: "config_list" | "config_read" | "config_write" | "config_create" | "config_delete" | "line_profile_edit" | "line_graph_edit" | "line_try" | "line_trial_reask" | "line_deploy",
+  command: "config_list" | "config_read" | "config_write" | "config_create" | "config_delete" | "line_profile_edit" | "line_graph_edit" | "line_try" | "line_trial_reask" | "line_deploy" | "line_fixloop",
   argsJson: string | undefined,
   targetDeviceId?: string,
   requestId?: string,

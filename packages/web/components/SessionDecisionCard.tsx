@@ -1,5 +1,6 @@
 "use client";
 
+import { CommandRunView } from "./decisions/CommandRunView";
 import { approvalButtonLabel } from "@codecast/shared/contracts/assistant";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useDecisionAnswer } from "../hooks/useDecisionAnswer";
@@ -520,10 +521,12 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
   const showRecent = !item.contextMd && !!recentText && !hosted;
   const showThreadState = !item.contextMd && !recentText && !!session?.thread_state;
   const showUnreadable = needsMessages && !poll && !isPermissionCard && !isInfraDialog;
-  const contextBlock = (card || detail || reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
+  const runRow = decisionRow?.run;
+  const contextBlock = (card || runRow || detail || reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
     <div className="decision-sheet-context min-w-0 space-y-4" data-reveal-span>
       {/* The headline above already says the change and its cause. */}
       {card && <ChangeCardView card={card} density="inline" change={false} recommend={!richControls} summarized={cardBar} />}
+      {runRow && <CommandRunView run={runRow} />}
       {/* A run's gate is owned by the session that started the run or the
           project's lead, not this log: discuss it with them (ct-58330). */}
       {decideId && decisionRow?.workflow_run_id && <DecisionDiscussion decisionId={decideId} compact />}

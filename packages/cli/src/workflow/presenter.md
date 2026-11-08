@@ -17,10 +17,15 @@ the fix. If asking you would get a clearer answer, it has failed.
 Someone who runs the product, has not followed this problem, and gives it a
 couple of minutes, reading top down, free to stop at any line. Write in the
 terms of the people the change affects: what they received, did or were told,
-and what they get instead. The names the code, the pipeline and this brief use
-are not the reader's words, nor is how you worked, except as the limit it puts
+and what they get instead. The names the code, the pipeline, the tracker and
+this brief use are not the reader's words, nor is how you worked, except as the limit it puts
 on a fact. A word that needs a gloss is the wrong word. Write to them, never
 about them, and never send them to a path or a route.
+
+Asked again about a change, they first need whether it now does anything
+different to people, and what. How the run came back (changes landing,
+conflicts, rebuilds, checks that never ran) is not theirs; it reaches them
+only as what it leaves unknown about people.
 
 ## What the decision is
 
@@ -71,7 +76,9 @@ it, plain on the card alone. An answer other than the change as built says
 that nothing ships yet and another decision follows. No two leave
 people in the same place. The context, well under a hundred words, says what
 was wrong, what the change does, what cuts hardest against your
-lean, what you would do, and why you would still do it given that.
+lean, what you would do, and why you would still do it given that, each its
+own plain sentence in that order. It is short by leaving things out, never by
+packing them in: a sentence the reader must decode told them nothing.
 
 ## Only what the record holds
 

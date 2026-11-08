@@ -7,7 +7,12 @@ import { fileURLToPath } from "node:url";
 import { injectViaTmux } from "./daemon.js";
 import { TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { shellQuote, spawnHarness, waitFor } from "./test-helpers/messagingHarness.js";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
 
+// The delivery echo ledger these deliveries record into lives in CODECAST_DIR.
+const codecastDir = isolateCodecastDir();
+
+afterAll(() => codecastDir.restore());
 afterAll(killIsolatedTmuxServer);
 
 test.skipIf(!Bun.which("tmux")).each([
@@ -21,7 +26,7 @@ test.skipIf(!Bun.which("tmux")).each([
   const target = `${pane.tmuxSession}:0.0`;
   const path = join(cwd, "delivery.sqlite");
   const journal = new TmuxDeliveryJournal(path);
-  const delivery = { messageId: "collapsed-report", conversationId: "fixture" };
+  const delivery = { messageId: "collapsed-report", conversationId: "fixture-collapsed-report" };
   const payload = `<session-message from="worker">${"Verified the release and its regression tests. ".repeat(25)}</session-message>`;
   const state = () => JSON.parse(readFileSync(statePath, "utf8"));
   try {

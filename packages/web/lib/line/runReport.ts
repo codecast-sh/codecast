@@ -809,7 +809,7 @@ export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.
   const failedAt = /^failed_at_(\w+)$/.exec(id)?.[1];
   if (failedAt) return { tone: "failed", end, text: `Stopped: ${labelOf(run, failedAt)} failed.` };
   if (id === OWNED_END) return { tone: "closed", end, text: `${OWNED_WORDS}.` };
-  const closedAt = /^(?:dissolved|released)_at_(\w+)$/.exec(id)?.[1];
+  const closedAt = /^(?:dissolved|released|closed)_at_(\w+)$/.exec(id)?.[1];
   if (closedAt) return { tone: "closed", end, text: `Closed without a change at ${labelOf(run, closedAt)}.` };
   if (id) return { tone: "calm", end, text: `Ended at ${labelOf(run, id)}.` };
   return { tone: "calm", end, text: "Finished." };

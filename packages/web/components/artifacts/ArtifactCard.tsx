@@ -32,6 +32,10 @@ import { ForwardCtxItem } from "../menus/ObjectContextMenus";
 import { EntityIdPill } from "../EntityIdPill";
 import { PageThumb } from "../PageThumb";
 import { relativeTime, withEditParam } from "./artifactCardUtils";
+import { useState } from "react";
+import { useInboxStore } from "../../store/inboxStore";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { PAGE_REACHES, permanentDeleteLedger, regulatedTeam } from "../consequential/deletionLedgers";
 
 export type ArtifactRow = {
   slug: string;
@@ -51,6 +55,7 @@ export type ArtifactRow = {
   author_id?: string;
   author: { name: string | null; image: string | null } | null;
   can_team_edit: boolean;
+  team_gate?: string | null;
   has_password?: boolean;
   email_gate?: boolean;
   expires_at?: number | null;
@@ -166,14 +171,37 @@ export function ArtifactCard({
     }
   };
 
-  const deleteWithConfirm = async () => {
-    if (!window.confirm(`Delete "${a.title}" and its whole version history? The link stops working immediately.`)) return;
+  // A page of a team whose data is regulated is deleted for good, through the
+  // shared review, by its owner or a team admin; any other page by its owner.
+  const teams = useInboxStore((s) => s.teams);
+  const team = regulatedTeam(teams, a.team_gate);
+  const canDelete = !!a.manage_url || !!team?.admin;
+  const [reviewing, setReviewing] = useState(false);
+  const runDelete = async () => {
     const r = await deleteArtifact({ slug: a.slug });
     if (r && "error" in r && r.error) toast.error(r.error);
     else toast.success("Page deleted");
   };
+  const deleteWithConfirm = async () => {
+    if (team) return setReviewing(true);
+    if (!window.confirm(`Delete "${a.title}" and its whole version history? The link stops working immediately.`)) return;
+    await runDelete();
+  };
 
   const ctxMenu = useContextMenu();
+  const review = reviewing && team ? (
+    <SwitchReview
+      ledger={permanentDeleteLedger({
+        what: "page",
+        title: a.title || a.slug,
+        team: team.name,
+        figures: [{ value: String(a.version), label: a.version === 1 ? "version" : "versions", tone: "warn" }, { value: String(a.views), label: "views" }],
+        reaches: PAGE_REACHES,
+      })}
+      onClose={() => setReviewing(false)}
+      onConfirm={() => { setReviewing(false); void runDelete(); }}
+    />
+  ) : null;
 
   // ONE item list serves both the hover kebab and the right-click cursor menu,
   // so the two surfaces can never drift.
@@ -199,6 +227,10 @@ export function ArtifactCard({
           >
             Edit
           </CtxItem>
+        </>
+      )}
+      {canDelete && (
+        <>
           <CtxSeparator />
           <CtxItem danger icon={Trash2} onSelect={deleteWithConfirm}>
             Delete
@@ -301,6 +333,7 @@ export function ArtifactCard({
         </span>
         <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity flex-shrink-0">{kebab}</div>
         {cursorMenu}
+        {review}
       </div>
     );
   }
@@ -327,6 +360,7 @@ export function ArtifactCard({
       </div>
 
       {cursorMenu}
+      {review}
 
       {/* Body */}
       <div className="flex flex-col gap-1.5 p-3">

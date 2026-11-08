@@ -5,7 +5,7 @@ import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { entityIdArgs, useSyncCollection } from "./useSyncCollection";
 import { useCoarseNow } from "./useCoarseNow";
-import { conversationCommandRows, interruptVerdict, latestInterruptRow, INTERRUPT_VERDICT_LINGER_MS, type SessionCommandRow } from "../lib/sessionCommands";
+import { backendSwitchState, conversationCommandRows, interruptVerdict, latestBackendRow, latestInterruptRow, BACKEND_VERDICT_LINGER_MS, INTERRUPT_VERDICT_LINGER_MS, sessionCommandDeadline, type SessionCommandRow } from "../lib/sessionCommands";
 
 // A row still waiting on its daemon, keyed by a request id (a row keyed by its
 // command id came from forConversation and is already the server's). A line
@@ -67,4 +67,18 @@ export function useInterruptVerdict(conversationId: string | undefined) {
   const recent = !!row && Date.now() - row.requested_at < INTERRUPT_VERDICT_LINGER_MS;
   const now = useCoarseNow(recent ? 5_000 : 60_000);
   return { row, verdict: interruptVerdict(row, now) };
+}
+
+/**
+ * A conversation's Claude backend: where it runs (the managed session's
+ * claude_backend fact) and where this window's latest switch stands. Ticks
+ * only while a switch is in flight or its verdict is showing.
+ */
+export function useClaudeBackend(conversationId: string | undefined) {
+  const runsOnSdk = useInboxStore((s) => (conversationId ? s.sessions[conversationId]?.claude_backend === "sdk" : false));
+  const row = useInboxStore((s) => latestBackendRow(s.sessionCommands, conversationId));
+  const live = !!row && Date.now() < (row.executed_at ?? sessionCommandDeadline(row)) + BACKEND_VERDICT_LINGER_MS;
+  const now = useCoarseNow(live ? 2_000 : 60_000);
+  const backend = runsOnSdk ? "sdk" as const : "tmux" as const;
+  return { backend, switching: backendSwitchState(row, backend, now) };
 }

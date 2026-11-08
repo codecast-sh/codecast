@@ -235,4 +235,9 @@ describe("resolveComposeProjectPath with a teammate's project chip", () => {
       }),
     ).toBe(teammatePath);
   });
+
+  it("a saved default project beats the conversation on screen, not an explicit caller context", () => {
+    expect(resolveComposeProjectPath({ conversation: { projectPath: "/Users/me/src/a" }, defaultProject: "/Users/me/src/b" })).toBe("/Users/me/src/b");
+    expect(resolveComposeProjectPath({ context: { projectPath: "/Users/me/src/c" }, conversation: {}, defaultProject: "/Users/me/src/b" })).toBe("/Users/me/src/c");
+  });
 });

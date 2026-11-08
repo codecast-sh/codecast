@@ -50,6 +50,7 @@ function makeCtx(rows: Array<Record<string, any>>, opts: { tokenUser?: string } 
         filtered = filtered.filter((r) => Object.entries(eqs).every(([k, v]) => r[k] === v));
         return {
           first: async () => filtered[0] ?? null,
+          take: async (n: number) => filtered.slice(0, n),
           collect: async () => filtered,
         };
       },

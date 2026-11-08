@@ -36,6 +36,75 @@ function lockFileAgeMs(lockFile: string): number {
   }
 }
 
+/**
+ * Who holds an existing lock file: its live holder's pid, "stale" when the
+ * holder is dead or held it past `staleMs` (SIGKILL leaves no release), or
+ * "young" for an unreadable file too new to be abandoned.
+ *
+ * Why "young": create/write/close is three syscalls, so the winner of the
+ * O_EXCL race publishes an EMPTY file for a moment. Reading that as "no pid,
+ * therefore stale" makes the loser delete a live holder's lock and take one of
+ * its own — two processes then both believe they hold it, which a 4-process
+ * 15-round stress reproduced 4 times. An unreadable file OLDER than the grace
+ * is still a corpse.
+ */
+function lockHolder(lockFile: string, staleMs: number): number | "stale" | "young" {
+  let holder: { pid?: number; at?: number } | null = null;
+  try {
+    holder = JSON.parse(fs.readFileSync(lockFile, "utf-8"));
+  } catch {
+    /* unreadable — a corpse, or a holder still mid-write */
+  }
+  if (!holder && lockFileAgeMs(lockFile) < HOLDER_STAMP_GRACE_MS) return "young";
+  holder ??= {};
+  const stale = !holder.pid || !isPidAlive(holder.pid) || !holder.at || Date.now() - holder.at > staleMs;
+  return stale ? "stale" : holder.pid!;
+}
+
+/**
+ * Run `fn` holding `lockFile`, synchronously: for read-modify-write of a small
+ * state file that several CLI processes update at once, where the critical
+ * section is a few syscalls and the callers are synchronous. Same reclaim
+ * rules as acquireFileLock; the release is in `finally`, and a holder killed
+ * mid-section loses the lock to the staleness bound.
+ */
+export function withFileLockSync<T>(lockFile: string, fn: () => T, opts: { waitMs?: number; staleMs?: number } = {}): T {
+  const waitMs = opts.waitMs ?? 10_000;
+  const staleMs = opts.staleMs ?? 10_000;
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + waitMs;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try {
+      const fd = fs.openSync(lockFile, "wx", 0o600);
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+      fs.closeSync(fd);
+      break;
+    } catch {
+      const holder = lockHolder(lockFile, staleMs);
+      if (holder === "stale") {
+        try {
+          fs.unlinkSync(lockFile);
+        } catch {
+          /* someone else removed it first */
+        }
+        continue;
+      }
+      if (Date.now() >= deadline) throw new Error(`another process (pid ${holder}) has held ${lockFile} for over ${Math.round(waitMs / 1000)}s — if it is stuck, remove ${lockFile}`);
+      Atomics.wait(pause, 0, 0, 5);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      fs.unlinkSync(lockFile);
+    } catch {
+      /* already released */
+    }
+  }
+}
+
 export interface FileLockOptions {
   /** How long to queue behind another holder before giving up. */
   waitMs?: number;
@@ -94,26 +163,13 @@ export async function acquireFileLock(lockFile: string, opts: FileLockOptions = 
         release();
       };
     } catch {
-      let holder: { pid?: number; at?: number } | null = null;
-      try {
-        holder = JSON.parse(fs.readFileSync(lockFile, "utf-8"));
-      } catch {
-        /* unreadable — a corpse, or a holder still mid-write (below) */
-      }
-      // Why: create/write/close is three syscalls, so the winner of the O_EXCL
-      // race publishes an EMPTY file for a moment. Reading that as "no pid,
-      // therefore stale" makes the loser delete a live holder's lock and take
-      // one of its own — two processes then both believe they hold it, which a
-      // 4-process 15-round stress reproduced 4 times. A file too young to have
-      // been abandoned is a holder mid-write; wait for its stamp instead of
-      // stealing. An unreadable file OLDER than the grace is still a corpse.
-      if (!holder && lockFileAgeMs(lockFile) < HOLDER_STAMP_GRACE_MS) {
+      const holder = lockHolder(lockFile, staleMs);
+      // A holder mid-write: wait for its stamp instead of stealing (lockHolder).
+      if (holder === "young") {
         await sleep(20);
         continue;
       }
-      holder ??= {};
-      const stale = !holder.pid || !isPidAlive(holder.pid) || !holder.at || Date.now() - holder.at > staleMs;
-      if (stale) {
+      if (holder === "stale") {
         try {
           fs.unlinkSync(lockFile);
         } catch {
@@ -124,13 +180,13 @@ export async function acquireFileLock(lockFile: string, opts: FileLockOptions = 
       if (Date.now() >= deadline) {
         const what = opts.describe ? `another \`${opts.describe}\`` : "another process";
         throw new Error(
-          `${what} (pid ${holder.pid}) has held ${lockFile} for over ${Math.round(waitMs / 1000)}s — ` +
+          `${what} (pid ${holder}) has held ${lockFile} for over ${Math.round(waitMs / 1000)}s — ` +
             `if it is stuck, remove ${lockFile}`,
         );
       }
-      if (!announced && holder.pid) {
+      if (!announced && holder) {
         announced = true;
-        opts.onWait?.(holder.pid);
+        opts.onWait?.(holder);
       }
       await sleep(300);
     }

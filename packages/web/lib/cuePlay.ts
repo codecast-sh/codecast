@@ -56,6 +56,18 @@ export function scheduleCue(ac: AudioContext, spec: CueSpec, volume = 1): void {
     osc.stop(t0 + n.start + n.dur);
   }
 
+  if (spec.sample) {
+    // Decoded once per context; the first play of a file waits for it, every
+    // later one starts on the spot. Silent if the file cannot load.
+    void loadSample(ac, spec.sample.src).then((buffer) => {
+      if (!buffer) return;
+      const src = ac.createBufferSource();
+      src.buffer = buffer;
+      src.connect(master);
+      src.start();
+    });
+  }
+
   for (const n of spec.noise ?? []) {
     const frames = Math.floor(ac.sampleRate * n.dur);
     const buf = ac.createBuffer(1, frames, ac.sampleRate);
@@ -78,6 +90,26 @@ export function scheduleCue(ac: AudioContext, spec: CueSpec, volume = 1): void {
     src.start(t0 + n.start);
     src.stop(t0 + n.start + n.dur);
   }
+}
+
+const decoded = new WeakMap<BaseAudioContext, Map<string, Promise<AudioBuffer | null>>>();
+
+/** A recorded cue's buffer on `ac`, fetched and decoded on first ask. */
+export function loadSample(ac: BaseAudioContext, src: string): Promise<AudioBuffer | null> {
+  let byContext = decoded.get(ac);
+  if (!byContext) decoded.set(ac, (byContext = new Map()));
+  let buffer = byContext.get(src);
+  if (!buffer) {
+    buffer = fetch(src)
+      .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(`${src}: ${res.status}`))))
+      .then((bytes) => ac.decodeAudioData(bytes))
+      .catch(() => {
+        byContext!.delete(src); // a later play tries again
+        return null;
+      });
+    byContext.set(src, buffer);
+  }
+  return buffer;
 }
 
 let shared: AudioContext | null = null;

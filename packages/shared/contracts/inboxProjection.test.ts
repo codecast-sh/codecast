@@ -704,7 +704,7 @@ describe("field ownership constants", () => {
   test("the fact and stamp alphabets are disjoint and pinned", () => {
     expect([...INBOX_FACT_FIELDS]).toEqual([
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input", "is_connected",
-      "tmux_session", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
+      "tmux_session", "claude_backend", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
       "message_count", "updated_at", "last_turn_allows_park",
       "agent_status_updated_at", "agent_status_boundary", "turn_completed_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
       "child_asking", "child_asking_until", "child_live", "activity", "context_tokens", "last_model_call_at",

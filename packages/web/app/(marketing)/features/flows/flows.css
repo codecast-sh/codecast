@@ -1,0 +1,42 @@
+/*
+ * /features/flows. Every element's resting style is its final state; the rise
+ * plays only on the way in, and `[data-static]` (?static) or reduced motion
+ * skip it.
+ */
+
+@keyframes flx-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+.flx-rise { animation: flx-rise .6s cubic-bezier(.2, .7, .2, 1) var(--d, 0s) both; }
+.flx-root[data-static] .flx-rise { animation: none; }
+@media (prefers-reduced-motion: reduce) { .flx-rise { animation: none; } }
+
+.flx-prose p + p { margin-top: 1em; }
+.flx-prose b { color: #073642; font-weight: 650; }
+.flx-prose h3 + p { margin-top: .5em; }
+
+.flx-mark { display: inline-block; padding: 0 .45em; border-radius: 999px; font-family: var(--font-mono, ui-monospace, monospace); font-size: .88em; white-space: nowrap; }
+
+/* The loop strip: five stages left to right, and the way back underneath. */
+.flx-strip { margin-top: 40px; width: fit-content; max-width: 100%; font-family: var(--font-mono, ui-monospace, monospace); }
+.flx-strip ol { display: flex; flex-wrap: wrap; gap: 8px 0; list-style: none; margin: 0; padding: 0; }
+.flx-strip li { display: flex; align-items: center; }
+.flx-strip li + li::before { content: "→"; margin: 0 10px; color: #93a1a1; }
+.flx-strip a { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid rgba(88, 110, 117, .25); border-radius: 8px; background: #fffaf0; color: #073642; font-size: 13.5px; font-weight: 600; text-decoration: none; transition: border-color .15s, background-color .15s; }
+.flx-strip a:hover { border-color: #2aa198; background: rgba(42, 161, 152, .06); }
+.flx-n { color: #93a1a1; font-weight: 500; }
+.flx-return { position: relative; margin: 6px 0 0 18px; height: 22px; border: 1.5px solid rgba(42, 161, 152, .45); border-top: none; border-radius: 0 0 10px 10px; width: calc(100% - 36px); }
+.flx-return::before { content: "↑"; position: absolute; left: -7px; top: -12px; font-size: 12px; color: #2aa198; }
+.flx-return span { position: absolute; left: 50%; bottom: -9px; transform: translateX(-50%); padding: 0 8px; background: #fdf6e3; color: #2aa198; font-size: 12px; white-space: nowrap; }
+
+/* A phone: the stages stack, the way back runs down their left side. */
+@media (max-width: 640px) {
+  .flx-strip ol { flex-direction: column; align-items: flex-start; gap: 6px; padding-left: 22px; border-left: 1.5px solid rgba(42, 161, 152, .45); }
+  .flx-strip li + li::before { content: none; }
+  .flx-return { display: none; }
+  .flx-strip::after { content: "↑ production becomes the next signal"; display: block; margin-top: 8px; color: #2aa198; font-size: 12px; }
+}
+
+/* Wide screenshots: a phone scrolls them sideways at a readable width. */
+@media (max-width: 640px) {
+  .flx-wide { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-right: -20px; padding-right: 20px; padding-bottom: 6px; }
+  .flx-wide img { min-width: 880px; }
+}

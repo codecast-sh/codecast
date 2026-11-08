@@ -6,8 +6,9 @@
 // secret character) beacons data out to teammates and to public share-link
 // visitors with zero interaction (the EchoLeak / CamoLeak class).
 //
-// Our own web origin and our Convex storage origin (where pasted/uploaded
-// transcript images and `cast image` uploads live) are not third parties: a
+// Our own web origin, our Convex storage origin (where pasted/uploaded
+// transcript images and `cast image` uploads live) and our media origin (where
+// `cast image` puts videos) are not third parties: a
 // GET there leaks viewer IP and timing only to our own infrastructure. Those
 // render immediately; every other http(s) origin is untrusted and callers gate
 // it behind an explicit click (MarkdownRenderer) or strip it (canvasSanitize).
@@ -20,6 +21,7 @@
 // dead-code-eliminated the Convex origin from the trust set — which gated
 // every image in our own storage behind click-to-load.
 
+import { MEDIA_ORIGIN } from "@codecast/shared/contracts/castPlayer";
 import { getConvexUrl } from "./convexUrl";
 
 let trustedOrigins: Set<string> | null = null;
@@ -29,6 +31,7 @@ export function getTrustedImageOrigins(): Set<string> {
   const origins = new Set<string>();
   try { origins.add(window.location.origin); } catch { /* non-browser */ }
   try { origins.add(new URL(getConvexUrl()).origin); } catch { /* malformed */ }
+  origins.add(MEDIA_ORIGIN);
   trustedOrigins = origins;
   return origins;
 }

@@ -25,7 +25,11 @@ import { agentAssignee, claimSlot, freeSlots, isReadyCause, lineLoadFor, lineOwn
 
 type Ctx = { db: any };
 
-/** How many of the head a queue read takes from each order (scored, unscored) before it filters. */
+/**
+ * How many of the head a queue read takes from each order (scored, unscored) before it filters. Every reader takes the
+ * whole window, however few it will start: the problems that cannot start are dropped only after the read, so a sweep
+ * that read fewer rows than the page saw none of the queue the page showed next (Nov 8: no start for 14 hours).
+ */
 export const LIVE_FLOW_WINDOW = 200;
 /** How many of the queue a view shows. */
 export const LIVE_FLOW_SHOWN = 50;
@@ -62,7 +66,7 @@ export async function liveFlowFor(ctx: Ctx, teamId: string | null | undefined): 
 export async function liveFlowCandidates(ctx: Ctx, flow: any, roles: any[], limit: number): Promise<LiveCandidate[]> {
   if (limit <= 0) return [];
   const team = flowRoles(flow, roles);
-  const window = Math.min(LIVE_FLOW_WINDOW, limit + 64);
+  const window = LIVE_FLOW_WINDOW;
   const head = (q: any) => q.eq("workspace", flow.workspace).eq("source", "signal").eq("status", "open").eq("readiness", "ready");
   const rows: any[] = [
     ...await ctx.db.query("tasks").withIndex("by_workspace_source_status_readiness_score", head).order("desc").take(window),

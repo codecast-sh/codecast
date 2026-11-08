@@ -6,6 +6,8 @@ import { Id } from "./_generated/dataModel";
 import { isLowSignalPrompt } from "./titleGeneration";
 import { verifyApiToken } from "./apiTokens";
 import { CHEAP_MODEL, parseJsonBlock, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
+import { openaiFetch } from "./lib/openai";
+import { NO_TEAM_CONTENT_GATE, vendorAllowedFor, vendorRefusalFromDb, type VendorGate } from "./lib/vendorGuard";
 
 // Suggested replies for the composer ("suggestion pills"). Fourth member of
 // the Haiku family (titleGeneration, idleSummary, sessionInsights): an
@@ -212,6 +214,9 @@ export const getRecentUserInputs = internalQuery({
     for (const conv of conversations) {
       if (out.length >= 400) break;
       if (isMachineDrivenConversation(conv)) continue;
+      // The miner sends this corpus to Anthropic, so a regulated team's
+      // conversation stays out of it while Anthropic has no BAA.
+      if (await vendorRefusalFromDb(ctx, { conversationId: conv._id }, "anthropic")) continue;
       // Filter BEFORE take: most user-role rows are tool-result carriers (the
       // agent's tool outputs come back as role "user"), and an unfiltered
       // window fills up with them, crowding out every typed prompt. Same
@@ -620,7 +625,8 @@ export async function minePatternsWithLLM(
   inputs: string[],
 ): Promise<(MinedProfile & { usage?: unknown }) | null> {
   const prompt = buildMinerPrompt(inputs);
-  const completion = await llmComplete({ provider: "anthropic", prompt, maxTokens: 3000 });
+  // getRecentUserInputs leaves out every conversation whose team may not send to Anthropic.
+  const completion = await llmComplete({ provider: "anthropic", prompt, maxTokens: 3000, gate: NO_TEAM_CONTENT_GATE });
   if (!completion) return null;
   const mined = parseMinedProfile(parseJsonBlock(completion.text));
   return mined ? { ...mined, usage: completion.usage } : null;
@@ -759,26 +765,26 @@ export async function llmComplete(opts: {
   provider: "anthropic" | "openai";
   prompt: string;
   maxTokens: number;
+  /** Whose content the prompt carries (lib/vendorGuard). */
+  gate: VendorGate;
 }): Promise<{ text: string; usage?: unknown } | null> {
   try {
     if (opts.provider === "openai") {
-      const key = process.env.OPENAI_API_KEY;
-      if (!key) return null;
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await openaiFetch(opts.gate, "/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "gpt-5.6-luna",
           max_completion_tokens: opts.maxTokens,
           messages: [{ role: "user", content: opts.prompt }],
         }),
       });
-      if (!response.ok) return null;
+      if (!response?.ok) return null;
       const data = await response.json();
       const text = data.choices?.[0]?.message?.content?.trim() ?? "";
       return text ? { text, usage: data.usage } : null;
     }
-    const response = await postMessages(haikuRequest(opts.prompt, opts.maxTokens));
+    const response = await postMessages(haikuRequest(opts.prompt, opts.maxTokens), { gate: opts.gate });
     if (!response?.ok) return null;
     const data = await response.json();
     const text = replyText(data);
@@ -898,9 +904,10 @@ export const bakeoffSuggestions = internalAction({
         continue;
       }
       const t0 = Date.now();
-      const haiku = await llmComplete({ provider: "anthropic", prompt, maxTokens: SUGGEST_MAX_TOKENS });
+      const gate = { ctx, scope: { conversationId: cid } };
+      const haiku = await llmComplete({ provider: "anthropic", prompt, maxTokens: SUGGEST_MAX_TOKENS, gate });
       const t1 = Date.now();
-      const luna = await llmComplete({ provider: "openai", prompt, maxTokens: SUGGEST_MAX_TOKENS });
+      const luna = await llmComplete({ provider: "openai", prompt, maxTokens: SUGGEST_MAX_TOKENS, gate });
       const t2 = Date.now();
       const tailMsg = [...context.turns].reverse().find((t) => t.role === "assistant");
       results.push({
@@ -930,6 +937,7 @@ export async function predictSuggestions(
   context: Parameters<typeof buildPrompt>[0],
   profile: StoredProfile,
   provider: "anthropic" | "openai",
+  gate: VendorGate,
   complete: typeof llmComplete = llmComplete,
 ): Promise<{ suggestions: string[]; error?: "provider_failed" | "invalid_json"; raw?: string }> {
   const req = suggestRequest(context, profile);
@@ -946,7 +954,7 @@ export async function predictSuggestions(
   // immediate echo.
   for (const p of profile.prompts ?? []) bannedVerbatim.delete(normalizeForMatch(p.text));
 
-  const completion = await complete({ provider, prompt: req.prompt, maxTokens: req.max_tokens });
+  const completion = await complete({ provider, prompt: req.prompt, maxTokens: req.max_tokens, gate });
   if (!completion) return { suggestions: [], error: "provider_failed" };
   const parsed = parseJsonBlock(completion.text);
   if (parsed === null) return { suggestions: [], error: "invalid_json", raw: completion.text };
@@ -992,6 +1000,11 @@ export const generateComposerSuggestions = action({
       return { status: "skipped", reason: "already_generated" };
     }
 
+    // A regulated team's session gets no suggestions while the provider has no BAA (lib/vendorGuard).
+    const provider = process.env.SUGGESTIONS_PROVIDER === "openai" ? "openai" : "anthropic";
+    const gate = { ctx, scope: { conversationId: args.conversation_id } };
+    if (!(await vendorAllowedFor(ctx, gate.scope, provider))) return { status: "skipped", reason: "vendor_not_covered" };
+
     let profile: StoredProfile | null = await ctx.runQuery(
       internal.composerSuggestions.getSuggestionProfile,
       { user_id: user._id },
@@ -1001,8 +1014,7 @@ export const generateComposerSuggestions = action({
     }
 
     try {
-      const provider = process.env.SUGGESTIONS_PROVIDER === "openai" ? "openai" : "anthropic";
-      const predicted = await predictSuggestions(context, profile, provider);
+      const predicted = await predictSuggestions(context, profile, provider, gate);
       if (predicted.error) return { status: "error", reason: predicted.error };
       const suggestions = predicted.suggestions;
 

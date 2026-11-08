@@ -30,7 +30,7 @@ import { StageRail } from "./StageRail";
 import { paneSessionId, stageClose, stageExpand, stageFocus, stageNavigateLeaf, startPaneDrag } from "../../lib/stage";
 import { pathLabel } from "../../lib/pathLabel";
 import { browserPathLabel, isBrowserRoutePath, subscribeBrowserTitles } from "../../lib/browserPane";
-import { chatTabTitle } from "../../lib/tabTitle";
+import { chatTabTitle, recordTabTitle } from "../../lib/tabTitle";
 import { RoutePane, usePaneScope } from "../RoutePane";
 import { TabParamsCtx } from "../../lib/tabParams";
 import { SessionPane } from "./SessionPane";
@@ -60,6 +60,8 @@ function usePaneTitle(path: string): string {
       : kind === "plans" ? st.plans[id]?.title
       : kind === "chat" ? chatTabTitle(path, st.chatChannels, st.teamMembers, (st as any).currentUser?._id)
       : null,
+    // A project, a run, an org object: named the way the tab bar names them.
+    (st) => (kind ? null : recordTabTitle(path, st as any)),
   ]);
   const entity =
     kind === "docs" ? ((s.docs[id] as any)?.display_title ?? s.docs[id]?.title)
@@ -67,7 +69,7 @@ function usePaneTitle(path: string): string {
     : kind === "plans" ? s.plans[id]?.title
     : kind === "chat" ? chatTabTitle(path, s.chatChannels, s.teamMembers, (s as any).currentUser?._id)
     : null;
-  return browser || entity || pathLabel(path);
+  return browser || entity || (kind ? null : recordTabTitle(path, s as any)) || pathLabel(path);
 }
 
 // A pane that draws its OWN header (a conversation, a browser pane) still

@@ -16,7 +16,7 @@ import { remarkChatMentions, channelNameMap } from "../../lib/remarkChatMentions
 import { remarkEntityCards } from "../../lib/remarkEntityCards";
 import { compactAge } from "../../lib/threadState";
 import { copyToClipboard, sharePageUrl } from "../../lib/utils";
-import { attachmentKind, type ChatAttachmentView, type ChatMessageView } from "./chatTypes";
+import { attachmentKind, threadRootOf, type ChatAttachmentView, type ChatMessageView } from "./chatTypes";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useStorageImageSrc, useStorageImageUrl } from "../../hooks/useStorageImageUrl";
 import { ChatVoiceBubble, VoicePlayButton } from "./ChatVoiceBubble";
@@ -475,7 +475,7 @@ export const ChatMessage = memo(function ChatMessage({
           <button
             type="button"
             className="ch-msg-threadctx"
-            onClick={() => onOpenThread?.(message.threadRootId!)}
+            onClick={() => onOpenThread?.(threadRootOf(message))}
           >
             <MessageSquare className="w-3 h-3" />
             replied to a thread
@@ -683,7 +683,7 @@ export const ChatMessage = memo(function ChatMessage({
               type="button"
               className="ch-tool"
               title="Reply in thread"
-              onClick={() => onOpenThread(message.id)}
+              onClick={() => onOpenThread(threadRootOf(message))}
             >
               <MessageSquare className="w-3.5 h-3.5" />
             </button>
