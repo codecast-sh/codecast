@@ -949,15 +949,23 @@ export const healthReport = action({
 // deferred review findings this role owns. done_with_concerns_7d: hands that
 // finished with a concern, counted on their own instead of folded into done.
 
+const SZZ_PREFIX = "szz:";
+/** The first string past every "szz:..." fingerprint (";" follows ":"). */
+const SZZ_END = "szz;";
+
 export type FixLoopInputs = { bugsByRole: Map<string, number>; promisesByRole: Map<string, { open: number; overdue: number }> };
 
 export async function readFixLoopCounts(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, roleIds: Id<"org_roles">[]): Promise<FixLoopInputs> {
   const workspace = teamId ? `team:${teamId}` : `user:${userId}`;
   const cut30 = now - 30 * 86_400_000;
-  const signals: any[] = await ctx.db.query("signals").withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspace).gte("created_at", cut30)).collect();
+  // Only the fix-loop finder's rows, off the fingerprint index: the workspace's
+  // whole month of signals is every error and job failure its product reports,
+  // and collecting it to count the few szz: rows ran Union's health read out
+  // of memory (ct-87999).
+  const signals: any[] = await ctx.db.query("signals").withIndex("by_workspace_fingerprint", (q: any) => q.eq("workspace", workspace).gte("fingerprint", SZZ_PREFIX).lt("fingerprint", SZZ_END)).collect();
   const bugsByRole = new Map<string, number>();
   for (const sg of signals) {
-    if (!sg.role_id || !String(sg.fingerprint).startsWith("szz:")) continue;
+    if (!sg.role_id || !String(sg.fingerprint).startsWith(SZZ_PREFIX) || (sg.created_at ?? 0) < cut30) continue;
     const rid = String(sg.role_id);
     bugsByRole.set(rid, (bugsByRole.get(rid) ?? 0) + 1);
   }

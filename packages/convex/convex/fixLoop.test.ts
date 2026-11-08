@@ -19,7 +19,7 @@ describe("disposition", () => {
 });
 
 /** A fake db over one table with the two indexes the code reads. */
-function fakeDb(rows: Record<string, any>[]) {
+function fakeDb(rows: Record<string, any>[], read: string[] = []) {
   const query = (table: string) => ({
     withIndex: (_name: string, build: (q: any) => any) => {
       const conds: ((r: any) => boolean)[] = [];
@@ -30,7 +30,7 @@ function fakeDb(rows: Record<string, any>[]) {
       };
       build(q);
       const matching = rows.filter((r) => r.table === table && conds.every((c) => c(r)));
-      return { take: async (n: number) => matching.slice(0, n), collect: async () => matching };
+      return { take: async (n: number) => { read.push(...matching.slice(0, n).map((r) => r._id)); return matching.slice(0, n); }, collect: async () => { read.push(...matching.map((r) => r._id)); return matching; } };
     },
   });
   return { query, patch: async (id: string, p: any) => { Object.assign(rows.find((r) => r._id === id)!, p); } };
@@ -71,5 +71,18 @@ describe("health counts", () => {
     const inputs = await readFixLoopCounts({ db: fakeDb(rows) }, "u1" as any, "t1" as any, now, ["r1", "r2"] as any);
     expect(fixLoopCounts(inputs, "r1", 3)).toEqual({ bugs_introduced_30d: 2, promises_open: 2, promises_overdue: 1, done_with_concerns_7d: 3 });
     expect(fixLoopCounts(inputs, "r2", 0)).toEqual({ bugs_introduced_30d: 1, promises_open: 0, promises_overdue: 0, done_with_concerns_7d: 0 });
+  });
+
+  test("the bug count reads only the fix-loop finder's signals, never the workspace's month of signals (ct-87999)", async () => {
+    const now = Date.now();
+    const rows = [
+      { _id: "szz", table: "signals", workspace: "team:t1", created_at: now - DAY, fingerprint: "szz:abc", role_id: "r1" },
+      ...Array.from({ length: 50 }, (_, i) => ({ _id: `err${i}`, table: "signals", workspace: "team:t1", created_at: now - DAY, fingerprint: `sentry:${i}`, role_id: "r1" })),
+      { _id: "after", table: "signals", workspace: "team:t1", created_at: now - DAY, fingerprint: "szzz", role_id: "r1" },
+    ];
+    const read: string[] = [];
+    const inputs = await readFixLoopCounts({ db: fakeDb(rows, read) }, "u1" as any, "t1" as any, now, [] as any);
+    expect(read).toEqual(["szz"]);
+    expect(inputs.bugsByRole.get("r1")).toBe(1);
   });
 });
