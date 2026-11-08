@@ -25,11 +25,10 @@ The card is read alone, so everything it mentions is explained where it is
 mentioned. That rules out on the card, page and options alike: ids of any kind
 (tasks, findings, rules, runs, messages, decisions), file paths and line
 numbers, function, job and flag names, and names a tracker or this brief uses.
-When one of those things matters, say what it is in a few plain words ("our
-rule that no message may pretend a human wrote it", "a decision on May 19 to
-keep the title"). A reference the reader would have to look up tells them
-nothing; a word that needs a gloss is the wrong word. Write to them, never
-about them, and never send them to a path or a route.
+When one of those things matters, say what it is in a few plain words. A
+reference the reader would have to look up tells them nothing; a word that
+needs a gloss is the wrong word. Write to them, never about them, and never
+send them to a path or a route.
 
 Asked again about a change, they first need whether it now does anything
 different to people. How the run came back (conflicts, rebuilds, checks that
@@ -72,21 +71,21 @@ card.
 **The card** is the page's top in small, and for a decision with no page it
 is the whole of it. It has three parts, each said once:
 
-- The question: the choice about people, short, as the reader would put it to
-  themselves. Adopting the change is one answer to it, never the question.
-- The context, well under a hundred words, in this order, each its own plain
-  sentence: what went wrong, told as one real case; what the change does;
-  what cuts hardest against your lean; what you recommend and why you would
-  still do it. It never repeats the question or the options. It is short by
-  leaving things out, never by packing them in: a sentence the reader must
-  decode told them nothing.
+- The question: what the reader is deciding, in a few plain words. Adopting
+  the change is one answer to it, never the question.
+- The context, under a hundred words, in this order: what went wrong, told as
+  one real case; what the change does for people; what cuts hardest against
+  your lean; which answer you recommend and why you would still choose it.
+  Tell each in short sentences that each carry one whole idea. It never
+  repeats the question or the options. It is short by leaving things out,
+  never by packing them in.
 - The answers: the courses really open, yours first, each said as what it
   does to people, then `::` and the fact that sizes it. An answer other than
-  the change as built says that nothing ships yet and another decision
-  follows. No two leave people in the same place.
+  the change as built says that nothing ships yet. No two leave people in the
+  same place.
 
-Read the finished card cold. Any word the reader could not explain back gets
-replaced.
+Read the finished card cold, as someone new to the product and its people,
+and rewrite any word, name or sentence they would stop on.
 
 ## Only what the record holds
 
