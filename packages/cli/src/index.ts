@@ -2,7 +2,6 @@
 import { LOGIN_PATH_FILENAME, recordLoginShellPath } from "./loginShellPath.js";
 import { DEFAULT_WEB_URL } from "./config/readLocalConfig.js";
 import { pickFields } from "./jsonFields.js";
-import { parseUntilStates, untilReached } from "./sessionsUntil.js";
 import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
 import { registerSyncVerbs } from "./cloud/syncCli.js";
 import { headForward, isSeatedAnchor } from "./anchorAlias.js";
@@ -7000,13 +6999,16 @@ program
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     let untilStates: Set<string> | null = null;
+    let untilReached: typeof import("./sessionsUntil.js").untilReached = () => false;
     if (options.until !== undefined) {
       if (!options.watch || options.messages) {
         console.error("--until works with -w on work states (not with --messages).");
         process.exit(1);
       }
       try {
-        untilStates = parseUntilStates(options.until);
+        const until = await import("./sessionsUntil.js");
+        untilReached = until.untilReached;
+        untilStates = until.parseUntilStates(options.until);
       } catch (e) {
         console.error(e instanceof Error ? e.message : String(e));
         process.exit(1);
