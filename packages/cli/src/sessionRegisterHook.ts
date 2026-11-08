@@ -3,15 +3,18 @@
 import { HOOK_FIELDS_READ } from "./hookJson.js";
 
 /** Body of the claim write. Returns instead of exiting so the combined
- *  UserPromptSubmit script can keep going. Assumes SESSION_ID is set. */
+ *  UserPromptSubmit script can keep going. Assumes SESSION_ID is set. A
+ *  SessionStart (HOOK_hook_event_name) always writes. */
 export const SESSION_REGISTER_JOB = `
 session_register_job() {
 REGISTRY_DIR="$HOME/.codecast/session-registry"
-# Fast path: a live claim for this session already names the process.
-# Re-walking \`ps\` four times on every prompt is what stacked with python3
-# startup to blow the hook timeout. SessionStart still writes (the file is
-# missing or the pid is dead).
-if [ -f "$REGISTRY_DIR/$SESSION_ID.json" ]; then
+# Fast path for UserPromptSubmit: a live claim for this session already names
+# the process. Re-walking \`ps\` four times on every prompt is what stacked
+# with python3 startup to blow the hook timeout. SessionStart skips it: a new
+# process for a session is the one to deliver to, even while an older copy of
+# the same session is still alive (a second \`cast resume\` on this machine).
+# Keeping the old claim sent every delivery to the stale copy's terminal.
+if [ "\${HOOK_hook_event_name:-}" != "SessionStart" ] && [ -f "$REGISTRY_DIR/$SESSION_ID.json" ]; then
   CLAIM=$(cat "$REGISTRY_DIR/$SESSION_ID.json" 2>/dev/null || true)
   OLD_PID=\${CLAIM#*\\"pid\\":}
   OLD_PID=\${OLD_PID%%,*}
