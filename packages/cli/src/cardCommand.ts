@@ -462,7 +462,7 @@ export function registerCardCommand(program: Command, deps: PublishDeps): void {
 
   card
     .command("build")
-    .description("Assemble, validate and render the change card for a task (LE10)")
+    .description("Assemble, validate and render the change card for a task: card.json and card.html; --publish attaches it as evidence")
     .requiredOption("--task <ct-N>", "The problem the card is for")
     .option("--eval-result <file>", "The eval station's eval-result.json: verdicts, proven freezes, flipped examples")
     .option("--proof <file>", "A proof recorded outside evals: { before: Check[], after: Check[] }, red then green")
