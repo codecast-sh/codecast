@@ -896,6 +896,12 @@ describe("stale target — the send that would rebuild a whole context", () => {
     ).rejects.toThrow(/was killed/);
     expect(tables.pending_messages).toHaveLength(0);
   });
+
+  test("a follow-up to the sender's own killed worker restarts it", async () => {
+    const { ctx, tables } = staleWorld({ ...idle, inbox_killed_at: Date.now() - HOUR, spawned_by_conversation_id: "convAlice" });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "one more fix", wake: false });
+    expect(tables.pending_messages).toHaveLength(1);
+  });
 });
 
 describe("stuck message pass split into plan and apply", () => {

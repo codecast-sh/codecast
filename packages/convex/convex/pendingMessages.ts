@@ -986,16 +986,20 @@ export async function performSessionSend(
   // and stops, unless the sender chose to wake it. Some recipients expect a wake
   // however long they waited: a role's seat (it exists to be woken), the line
   // between a session and the session that started it, either way, and one
-  // that declared itself dormant. Only callers that ask for the check get it
-  // (wake: false); older CLIs and relays send as before.
+  // that declared itself dormant. A killed session is held too, except for
+  // the session that started it: a follow-up to your own worker restarts it,
+  // since directing it is what you started it for. A report to a killed
+  // parent stays held: someone retired that session. Only callers that ask
+  // for the check get it (wake: false); older CLIs and relays send as before.
   if (args.wake === false && senderConversation && !args.raw && !args.direct && !roleTarget) {
     const cost = wakeCost({ ...target, ...wakeFieldsOf(target) }, Date.now());
     const startedBy = (row: any, other: any) => [row.spawned_by_conversation_id, row.parent_conversation_id]
       .some((id) => id != null && String(id) === String(other._id));
     const sameLine = startedBy(senderConversation, target) || startedBy(target, senderConversation);
     const roleSeat = !!(target.anchor_id || target.standing_role_id);
+    const ownWorker = startedBy(target, senderConversation);
     const expectsWake = sameLine || roleSeat || target.thread_state_status === "dormant";
-    if (cost.killed || (cost.cacheCold && !expectsWake)) {
+    if ((cost.killed && !ownWorker) || (cost.cacheCold && !expectsWake)) {
       throw new Error(staleSendMessage(target.short_id ?? String(target._id).slice(0, 7), cost));
     }
   }
