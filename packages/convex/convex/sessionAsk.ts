@@ -22,7 +22,7 @@
 import { action, internalAction, internalQuery } from "./functions";
 import type { ActionCtx } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
-import type { AskResult } from "@codecast/shared/contracts";
+import { explainAskFailure, type AskResult } from "@codecast/shared/contracts";
 import { internal } from "./_generated/api";
 import { readableConversation, readableConversationAs, streamMessageRows, isNonEmptyMessage } from "./conversations";
 import type { QueryCtx } from "./_generated/server";
@@ -137,8 +137,9 @@ const ACCESS_ERRORS: Record<string, { code: string; message: string }> = {
   "Access denied": { code: "FORBIDDEN", message: "You do not have access to that session" },
 };
 
-function accessError(error: string): ConvexError<{ code: string; message: string }> {
-  return new ConvexError(ACCESS_ERRORS[error] ?? { code: "FORBIDDEN", message: error });
+function accessError(error: string, cliRef?: string): ConvexError<{ code: string; message: string }> {
+  const known = ACCESS_ERRORS[error] ?? { code: "FORBIDDEN", message: error };
+  return new ConvexError(cliRef ? { ...known, message: explainAskFailure(known.message, cliRef) } : known);
 }
 
 const debugArgs = v.optional(v.object({
@@ -168,8 +169,12 @@ export async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<Ask
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("The server has no model key configured");
 
   const who: Caller = { api_token: args.api_token, conversation_id: args.conversation_id, ...(args.user_id ? { user_id: args.user_id } : {}) };
+  // A CLI caller's errors name the commands that work without the model; the
+  // web's side answers (user_id set) show their own recovery.
+  const cliRef = args.user_id ? undefined : args.conversation_id.length > 12 ? args.conversation_id.slice(0, 7) : args.conversation_id;
+  const explain = (message: string) => (cliRef ? explainAskFailure(message, cliRef) : message);
   const head: AskHead = await ctx.runQuery(internal.sessionAsk.askHead, who);
-  if ("error" in head) throw accessError(head.error);
+  if ("error" in head) throw accessError(head.error, cliRef);
   // A regulated team's session is read to Anthropic only once it holds a BAA: refused here, with its one line.
   const gate = { ctx, scope: { conversationId: head.conversation.id as Id<"conversations">, apiToken: args.api_token || undefined } };
   await requireVendorAllowed(ctx, gate.scope, "anthropic");
@@ -179,7 +184,7 @@ export async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<Ask
     max: ASK_RATE.max,
     window_ms: ASK_RATE.window_ms,
   });
-  if (!limited.ok) throw new ConvexError({ code: "RATE_LIMITED", message: askRateMessage(limited.retry_after_ms), retryable: true });
+  if (!limited.ok) throw new ConvexError({ code: "RATE_LIMITED", message: explain(askRateMessage(limited.retry_after_ms)), retryable: true });
 
   const usage = { input_tokens: 0, output_tokens: 0 };
   const expansion = await callModel({ ...askTermsRequest(question), label: "Ask terms", timeout_ms: ASK_TERMS_MS, gate });
@@ -198,13 +203,13 @@ export async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<Ask
       terms,
       max_rows: args.debug?.rows_per_step,
     });
-    if ("error" in page) throw accessError(page.error);
+    if ("error" in page) throw accessError(page.error, cliRef);
     return page;
   }, { maxSteps: args.debug?.max_steps ?? ASK_MAX_STEPS, maxMs: ASK_SCAN_MS });
   const lines = read.lines;
 
   const files = await ctx.runQuery(internal.sessionAsk.askFileChanges, who);
-  if ("error" in files) throw accessError(files.error);
+  if ("error" in files) throw accessError(files.error, cliRef);
   const idToLine = new Map(lines.map((l) => [l.id, l.line]));
   const extraFiles = new Map<number, string[]>();
   for (const change of files.changes) {
@@ -216,7 +221,7 @@ export async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<Ask
   const reply = answer.reply;
   // Name the API's own reason: an empty credit balance or a refused request
   // will not clear on retry, and the caller has to know that to stop retrying.
-  if (!reply) throw new ConvexError({ code: "MODEL_FAILED", message: `The model did not answer (${answer.error ?? "no reason given"})` });
+  if (!reply) throw new ConvexError({ code: "MODEL_FAILED", message: explain(`The model did not answer (${answer.error ?? "no reason given"})`) });
   usage.input_tokens += reply.usage.input_tokens;
   usage.output_tokens += reply.usage.output_tokens;
 

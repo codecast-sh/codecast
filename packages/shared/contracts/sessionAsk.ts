@@ -50,3 +50,28 @@ export interface SideAnswerRow {
   created_at: number;
   answered_at?: number;
 }
+
+/**
+ * An ask's failure with what to do next. A model failure is either transient
+ * (overloaded, timed out: a retry in a moment works) or not (no credit, a
+ * refused or invalid request: no retry helps), and both name the read that
+ * works without the model. The server words its own errors with this, and the
+ * CLI runs it again over whatever an older server or the connection said;
+ * text that already names a command passes through unchanged.
+ */
+export function explainAskFailure(message: string, shortId: string): string {
+  if (/cast (read|sessions|search|teams)/.test(message)) return message;
+  const read = `cast read ${shortId} -n 20 reads its end, cast read ${shortId} --grep "<text>" finds a phrase`;
+  if (/no session found|conversation not found/i.test(message)) {
+    return `${message}. Check the id with \`cast sessions ${shortId}\`, or find the session with \`cast search <words>\``;
+  }
+  if (/do not have access|access denied|forbidden/i.test(message)) {
+    return `${message}: it is private to its owner, or in a team you are not a member of. \`cast teams\` lists yours; the owner can share it`;
+  }
+  if (/asked a lot this hour/i.test(message)) return `${message}. Meanwhile ${read}`;
+  const permanent = /credit balance|billing|answered 40[0-4]\b|invalid.*api.?key|authenticat|permission|not allowed|refus|prompt is too long|BAA|no model key/i;
+  if (permanent.test(message)) return `${message}. Retrying will not help; ${read}`;
+  const transient = /did not answer|gave no answer|timed out|call failed|answered (408|429|5\d\d)\b|overloaded|network|fetch failed/i;
+  if (transient.test(message)) return `${message}. This usually clears: retry in about 30 s, or ${read}`;
+  return message;
+}
