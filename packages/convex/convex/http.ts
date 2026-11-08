@@ -5056,6 +5056,10 @@ cliRoute("/cli/sessions/rename", async (ctx, body) => ctx.runMutation(api.conver
 // line, shown pinned above the composer and on the inbox card. Empty text
 // clears it. body: { api_token, session, text? }.
 cliRoute("/cli/sessions/state/set", async (ctx, body) => ctx.runMutation(api.conversations.setThreadState, body));
+// A session's goal loop (`cast loop`, sessionGoals.ts).
+cliRoute("/cli/goals/set", async (ctx, body) => ctx.runMutation(api.sessionGoals.cliSet, body));
+cliRoute("/cli/goals/control", async (ctx, body) => ctx.runMutation(api.sessionGoals.cliControl, body));
+cliRoute("/cli/goals/show", async (ctx, body) => ctx.runQuery(api.sessionGoals.cliShow, body));
 // `cast browser pane <url>` / `cast preview <url>`: the agent offers a page,
 // the reader opens it beside the conversation.
 cliRoute("/cli/browser/pane-offer", async (ctx, body) => ctx.runMutation(api.conversations.offerBrowserPane, body));

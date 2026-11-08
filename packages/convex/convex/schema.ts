@@ -5209,6 +5209,39 @@ export default defineSchema({
   // An ordered set of decisions one person clears in one sitting (D5).
   // Access is the anchor rule (lib/orgAccess): team_id / scope_user_id carry
   // the boundary; owner_user_id is the host.
+  // A session's goal (shared/contracts/sessionGoal.ts, task ct-87437): the
+  // objective a person gave the session, and the loop's own state. Each turn
+  // end the judge reads it (managedSessions applyAgentStatus → sessionGoals
+  // scheduleGoalJudge); continue delivers the next round, done and blocked
+  // stop it. One row per goal; setting a new goal clears the session's
+  // previous one, so the newest row is the session's goal. Access follows the
+  // conversation (no workspace key: a goal is part of its session).
+  session_goals: defineTable({
+    conversation_id: v.id("conversations"),
+    // Who set it: the loop's messages are sent in their name.
+    set_by: v.id("users"),
+    objective: v.string(),
+    status: v.union(v.literal("active"), v.literal("paused"), v.literal("done"), v.literal("blocked"), v.literal("cleared")),
+    rounds: v.number(),
+    max_rounds: v.number(),
+    stalls: v.number(),
+    max_stalls: v.number(),
+    idle_limit_ms: v.number(),
+    reason: v.optional(v.string()),
+    next_step: v.optional(v.string()),
+    verdict: v.optional(v.union(v.literal("done"), v.literal("continue"), v.literal("blocked"), v.literal("paused"))),
+    // The newest agent_status_updated_at a judge was scheduled for, so two
+    // reports of one turn end judge it once.
+    judged_status_ts: v.optional(v.number()),
+    last_activity_at: v.number(),
+    // The web's optimistic stub key: /goal paints the pill under this before
+    // the server answers, and the feed's altKey supersedes it.
+    client_key: v.string(),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_conversation", ["conversation_id", "created_at"])
+    .index("by_client_key", ["client_key"]),
   decision_stacks: defineTable({
     short_id: v.string(), // "ds-N"
     title: v.string(),

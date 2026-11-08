@@ -13,6 +13,7 @@ import { applyAreasCore } from "./decisionAreas";
 import { shareOutCore } from "./decisionShareOut";
 import type { AreaAssignment } from "@codecast/shared/contracts/decisionAreas";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
+import { performGoalControl, performSetGoal } from "./sessionGoals";
 import { askCore as askDecisionCore, commentCore, deleteCore as deleteDecisionCommentCore, editCore as editDecisionCommentCore, resolveCore as resolveDecisionThreadCore } from "./decisionThread";
 import { sendLineChatCore } from "./lineChat";
 import { clearHoldCore, moveLiveFlowCore, setOnCore, startLiveFlowCore } from "./liveFlows";
@@ -248,6 +249,15 @@ async function hideForViewerByClientId(ctx: any, userId: Id<"users">, convId: st
 // set (see applyHideTransition's forceKill). Every other action patching
 // inbox_dismissed_at stays transition-gated.
 const EXPLICIT_KILL_ACTIONS = new Set(["killSession", "killSessions"]);
+
+async function goalRefusal(run: () => Promise<unknown>): Promise<{ ok: true } | { ok: false; refused: string }> {
+  try {
+    await run();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, refused: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 // Rows one applyPatches transaction applies before it schedules the rest.
 const PATCH_ROWS_INLINE = 25;
@@ -523,6 +533,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // refused the same way: returned, never thrown.
   sendLineChat: async (ctx, userId, [projectId, text, clientId, graph, focus]: [string, string, string, string | null, string | null]) =>
     sendLineChatCore(ctx, userId, { project_id: projectId, text, client_id: clientId, graph, focus }),
+  // A session's goal (sessionGoals.ts): /goal and the pill's controls. The
+  // store paints the row first; a refusal is returned, never thrown.
+  setSessionGoal: async (ctx, userId, [conversationId, objective, clientKey]: [string, string, string]) =>
+    goalRefusal(() => performSetGoal(ctx as any, userId, conversationId, objective, clientKey)),
+  pauseSessionGoal: async (ctx, userId, [conversationId]: [string]) => goalRefusal(() => performGoalControl(ctx as any, userId, conversationId, "pause")),
+  resumeSessionGoal: async (ctx, userId, [conversationId]: [string]) => goalRefusal(() => performGoalControl(ctx as any, userId, conversationId, "resume")),
+  clearSessionGoal: async (ctx, userId, [conversationId]: [string]) => goalRefusal(() => performGoalControl(ctx as any, userId, conversationId, "clear")),
   reorderStack: async (ctx, userId, [stackId, decisionIds]: [string, string[]]) =>
     reorderStackCore(ctx, userId, stackId, decisionIds as Id<"session_decisions">[]),
   removeFromStack: async (ctx, userId, [stackId, decisionId]: [string, string]) => removeFromStackCore(ctx, userId, stackId, decisionId),
