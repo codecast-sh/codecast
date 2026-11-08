@@ -103,6 +103,8 @@ export type MobileChatMessage = {
   editedAt?: number;
   deletedAt?: number;
   mentionsMe?: boolean;
+  /** Set on a reply (a broadcast in the channel): the thread it belongs to. */
+  threadRootId?: string;
   agentStatus?: 'thinking' | 'streaming' | 'done' | 'error';
   agentDeadlineAt?: number;
   pending?: boolean;
@@ -151,6 +153,7 @@ export function fromChatView(
     editedAt: view.editedAt,
     deletedAt: view.deletedAt,
     mentionsMe: view.mentionsMe,
+    threadRootId: view.threadRootId,
     agentStatus: status,
     agentDeadlineAt: (row as any)?.agent_deadline_at,
     pending: view.pending && !view.failed,

@@ -36,7 +36,7 @@ const STALE = 300;
 const UNCACHED_POLICY = "private, no-store";
 // Viewing capabilities that appear in the query string. A request holding one
 // is authorization-dependent and must not be answered from a shared cache.
-const GATE_PARAMS = ["k", "e"];
+const GATE_PARAMS = ["m", "k", "e"];
 // Answers that are live or single-use whatever the gates say.
 const LIVE_PARAMS = ["edit", "download"];
 // A page, an asset, the bundle redirect, a media redirect. Errors and the

@@ -65,12 +65,7 @@ export function buildPollPayload(questions: PollQuestion[], sels: PollSelections
         const qSels = sels[Number(k)];
         const ans = qSels.map((s) => s.text ?? s.label).join(", ");
         if (sorted.length === 1) return ans;
-        const q = questions[Number(k)];
-        const id =
-          q?.header?.trim() ||
-          q?.question?.replace(/\s+/g, " ").trim().slice(0, 60) ||
-          `Q${Number(k) + 1}`;
-        return `${id}: ${ans}`;
+        return `${typedAnswerId(questions[Number(k)], Number(k))}: ${ans}`;
       })
       .join("\n\n");
     return JSON.stringify({ __cc_poll: true, text, display });
@@ -170,6 +165,89 @@ export function parsePollAnswers(
     }
   }
   return answers;
+}
+
+/** How a typed multi-question answer names its question ("Shortlist: …"). */
+function typedAnswerId(q: PollQuestion | undefined, index: number): string {
+  return q?.header?.trim() || q?.question?.replace(/\s+/g, " ").trim().slice(0, 60) || `Q${index + 1}`;
+}
+
+/**
+ * The answers inside a typed decline (buildPollPayload's `text` form, which the
+ * daemon flattens to one line with "  ·  " between answers): a single question
+ * takes the whole text, and several are matched back by their `Header: ` prefix.
+ */
+export function parseTypedPollAnswers(questions: PollQuestion[], text: string | undefined): Record<string, string> {
+  const answers: Record<string, string> = {};
+  const typed = text?.trim();
+  if (!typed || questions.length === 0) return answers;
+  if (questions.length === 1) {
+    answers[questions[0].question] = typed;
+    return answers;
+  }
+  const ids = questions.map((q, i) => `${typedAnswerId(q, i)}: `);
+  let current: string | undefined;
+  for (const segment of typed.split(/\s*\n\n\s*| {2}· {2}/)) {
+    const i = ids.findIndex((id) => segment.startsWith(id));
+    if (i >= 0) {
+      current = questions[i].question;
+      answers[current] = segment.slice(ids[i].length).trim();
+    } else if (current) {
+      answers[current] += `  ·  ${segment}`;
+    }
+  }
+  return answers;
+}
+
+const DECLINED_RESULT = "The user doesn't want to proceed with this tool use";
+
+type PollTranscriptMessage = {
+  role: string;
+  content?: string | null;
+  tool_results?: Array<{ tool_use_id: string; content: string }>;
+};
+
+/**
+ * A card answered with free text closes its menu (the result is Claude Code's
+ * rejection) and types the answers as the next message. Pair each declined tool
+ * id with that message, so the card can show what was answered: the first
+ * typed user message after the rejection, past Claude Code's interrupt notice
+ * and before the agent speaks again.
+ */
+export function typedPollAnswerTexts(messages: readonly PollTranscriptMessage[]): Record<string, string> {
+  const texts: Record<string, string> = {};
+  let declined: string[] = [];
+  for (const msg of messages) {
+    if (msg.role === "assistant") {
+      declined = [];
+      continue;
+    }
+    if (msg.role !== "user") continue;
+    const rejections = (msg.tool_results ?? []).filter((r) => r.content?.startsWith(DECLINED_RESULT));
+    if (rejections.length > 0) {
+      declined = rejections.map((r) => r.tool_use_id);
+      continue;
+    }
+    const text = msg.content?.trim();
+    if (!text || declined.length === 0 || /^\[Request (?:interrupted|cancelled)/.test(text)) continue;
+    for (const id of declined) texts[id] = text;
+    declined = [];
+  }
+  return texts;
+}
+
+/**
+ * The answers a question card lights up: the ones the tool input carries, else
+ * the ones its result reports, else the ones typed after the menu was declined.
+ */
+export function pollCardAnswers(
+  questions: PollQuestion[],
+  inputAnswers: Record<string, string> | undefined,
+  result: { content?: string; typed_answer?: string } | undefined
+): Record<string, string> {
+  if (inputAnswers && typeof inputAnswers === "object") return inputAnswers;
+  const reported = parsePollAnswers(questions, result?.content);
+  return Object.keys(reported).length > 0 ? reported : parseTypedPollAnswers(questions, result?.typed_answer);
 }
 
 /**

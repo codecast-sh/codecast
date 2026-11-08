@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs, isDecideCastCommand, extractVaultArgs, vaultShortIdIn, isVaultRequestCastCommand } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs, isDecideCastCommand, extractVaultArgs, vaultShortIdIn, isVaultRequestCastCommand, sayTextOf } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -987,5 +987,26 @@ describe("browserTabOf", () => {
     const byResult = { id: "e2", name: "mcp__claude-in-chrome__computer", input: JSON.stringify({ action: "screenshot" }) };
     expect(browserTabOf(byResult, null, "Screenshot taken\n\nExecuted on tabId: 987", {})).toEqual({ kind: "extension", tabId: "987" });
     expect(browserTabOf(byResult, null, "Screenshot taken", {})).toBeNull();
+  });
+});
+
+describe("sayTextOf", () => {
+  const say = (cmd: string) => sayTextOf(parseCastCommandString(cmd));
+  test("a quoted argument, its quoting undone", () => {
+    expect(say(`cast say "Shipped the fix."`)).toBe("Shipped the fix.");
+    expect(say(`cast say 'It'\\''s done'`)).toBe("It's done");
+    expect(say(`cast say "two\nlines"`)).toBe("two\nlines");
+  });
+  test("bare words join", () => {
+    expect(say("cast say hello world")).toBe("hello world");
+  });
+  test("a heredoc body, past a cd and before the next command", () => {
+    expect(say("cd /x && cast say - <<'EOF'\n| a | b |\n|---|---|\nEOF\necho done")).toBe("| a | b |\n|---|---|");
+    expect(say("cast say - <<'EOF' 2>&1\nFair point.\n\n**Bold**\nEOF")).toBe("Fair point.\n\n**Bold**");
+  });
+  test("nothing for an empty say or another command", () => {
+    expect(say("cast say")).toBeNull();
+    expect(say("cast say -")).toBeNull();
+    expect(say(`cast send jx7abcd "hi"`)).toBeNull();
   });
 });

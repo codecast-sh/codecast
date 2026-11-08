@@ -132,18 +132,23 @@ test("size repair reads all row heights before changing geometry", async () => {
   }
 }, 30_000);
 
-test("fold mode keeps every reply of a multi-message turn on screen", async () => {
+test("fold mode draws the person's message and what the agent said, as bubbles, and nothing else", async () => {
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
-  const data = { ...conversation, _id: "fold-keeps-replies" as any };
-  const render = (foldWorkingTurns: boolean) => root.render(
-    <ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><ConversationView conversation={data} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} initialDensity="condensed" foldWorkingTurns={foldWorkingTurns} openAtTop /></MemoryRouter></ConvexProviderWithAuth>,
-  );
+  const say = { id: "say-1", name: "Bash", input: JSON.stringify({ command: `cast say "One funnel: introductions per week."` }) };
+  const data = { ...conversation, _id: "fold-clean" as any, messages: [
+    { _id: "clean-u1", role: "user", timestamp: 1_000_000, content: "What is your focus?" },
+    { _id: "clean-a1", role: "assistant", timestamp: 1_001_000, content: "Let me look at the funnel first.", tool_calls: [say] },
+    { _id: "clean-a2", role: "assistant", timestamp: 1_002_000, content: "Said it." },
+  ] } as any;
   try {
-    await act(async () => { render(true); });
-    const container = host.querySelector<HTMLElement>("[data-vkey]")!.parentElement!;
-    expect(host.textContent).toContain("Message 0");
-    expect(host.querySelector("[data-cc-compact-turn]")).toBeNull();
-    expect(Number.parseFloat(container.style.height)).toBeGreaterThan(1000);
+    await act(async () => { root.render(
+      <ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><ConversationView conversation={data} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} initialDensity="condensed" foldWorkingTurns openAtTop /></MemoryRouter></ConvexProviderWithAuth>,
+    ); });
+    expect(host.textContent).toContain("What is your focus?");
+    expect(host.textContent).toContain("One funnel: introductions per week.");
+    expect(host.textContent).not.toContain("Let me look at the funnel first.");
+    expect(host.textContent).not.toContain("Said it.");
+    expect(host.querySelectorAll("[data-cc-bubble]").length).toBe(2);
   } finally { await act(() => root.unmount()); host.remove(); }
 }, 30_000);

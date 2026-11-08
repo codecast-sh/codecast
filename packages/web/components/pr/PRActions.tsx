@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -16,6 +16,7 @@ import {
   Radio,
   RotateCcw,
   Send,
+  ShieldOff,
   UserPlus,
   XCircle,
 } from "lucide-react";
@@ -419,6 +420,7 @@ const METHODS: { key: MergeMethod; label: string; hint: string }[] = [
  *  branch moved since (an agent pushing while the person reads). */
 export function MergeMenu({ pr }: { pr: any }) {
   const merge = useAction(api.prCli.merge);
+  const mergeAccess = useAction(api.prCli.mergeAccess);
   const autoMerge = useAction(api.prCli.autoMerge);
   const updateBranch = useAction(api.prCli.updateBranch);
   // The method and the branch choice follow the person, through the same
@@ -428,11 +430,33 @@ export function MergeMenu({ pr }: { pr: any }) {
   const setMethod = (next: MergeMethod) => useInboxStore.getState().updateClientUI({ pr_merge_method: next });
   const setDeleteBranch = (next: boolean) => useInboxStore.getState().updateClientUI({ pr_delete_branch: next });
   const [busy, setBusy] = useState(false);
-  const [reviewing, setReviewing] = useState<"merge" | "auto" | "update" | null>(null);
+  const [reviewing, setReviewing] = useState<"merge" | "bypass" | "auto" | "update" | null>(null);
 
-  if (prStateKey(pr) !== "open") return null;
+  // A pull request the synced state says protection may hold: ask GitHub, as
+  // the account a merge would act as, whether it is held right now and whether
+  // that account may bypass it. Only someone GitHub answers yes for is offered
+  // the bypass. Per viewer and per head, so it is asked here, not stored.
+  const open = prStateKey(pr) === "open";
+  const maybeHeld = open && (pr.mergeable_state === "blocked" || pr.mergeable_state === "behind" || (pr.behind_by ?? 0) > 0);
+  const accessKey = maybeHeld ? `${pr.repository}#${pr.number}@${pr.head_sha ?? ""}` : null;
+  const [access, setAccess] = useState<{ key: string; held: boolean; can_bypass: boolean; merge_state: string; as?: string } | null>(null);
+  useEffect(() => {
+    if (!accessKey) return;
+    let live = true;
+    mergeAccess({ repository: pr.repository, number: pr.number })
+      .then((r: any) => { if (live && r && !r.error) setAccess({ key: accessKey, ...r }); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [accessKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!open) return null;
+  const known = access && access.key === accessKey ? access : null;
   const state = mergeStateMeta(pr);
-  const blocked = pr.mergeable === false || pr.mergeable_state === "blocked" || pr.mergeable_state === "dirty";
+  const blocked = known
+    ? known.held || known.merge_state === "DIRTY"
+    : pr.mergeable === false || pr.mergeable_state === "blocked" || pr.mergeable_state === "dirty";
+  const canBypass = !!known?.held && known.can_bypass;
+  const skips = known?.merge_state === "BEHIND" ? "Up-to-date branch rule" : "Required checks and reviews";
   const reason = blocked ? state?.label : pr.checks_state === "pending" ? "Checks are still running" : undefined;
   const behind = pr.mergeable_state === "behind" || (pr.behind_by ?? 0) > 0;
   const autoOn = !!pr.auto_merge;
@@ -455,11 +479,14 @@ export function MergeMenu({ pr }: { pr: any }) {
   };
   const go = {
     merge: () => act(() => merge({ ...target, method, delete_branch: deleteBranch }), (r) => (r?.branch_deleted ? `Merged, ${pr.head_ref} deleted` : "Merged")),
+    bypass: () => act(() => merge({ ...target, method, delete_branch: deleteBranch, bypass: true }), (r) => (r?.branch_deleted ? `Merged past protection, ${pr.head_ref} deleted` : "Merged past protection")),
     auto: () => act(() => autoMerge({ ...target, enabled: true, method }), () => "Auto-merge on"),
     update: () => act(() => updateBranch(target), () => `Merged ${pr.base_ref ?? "the base branch"} into ${pr.head_ref ?? "the branch"}`),
   };
+  const mergeFacts = { title: pr.title ?? "", number: pr.number, base: pr.base_ref ?? "the base branch", head: pr.head_ref, headSha: pr.head_sha, method: methodLabel, deleteBranch, files: pr.changed_files, additions: pr.additions, deletions: pr.deletions, checks: pr.checks_state, blockedBy: blocked ? state?.label : undefined };
   const ledger = {
-    merge: () => prMergeLedger({ title: pr.title ?? "", number: pr.number, base: pr.base_ref ?? "the base branch", head: pr.head_ref, headSha: pr.head_sha, method: methodLabel, deleteBranch, files: pr.changed_files, additions: pr.additions, deletions: pr.deletions, checks: pr.checks_state, blockedBy: blocked ? state?.label : undefined }),
+    merge: () => prMergeLedger(mergeFacts),
+    bypass: () => prMergeLedger({ ...mergeFacts, bypass: { skips, as: known?.as ?? "you" } }),
     auto: () => prAutoMergeLedger({ title: pr.title ?? "", number: pr.number, base: pr.base_ref ?? "the base branch", headSha: pr.head_sha, method: methodLabel, checks: pr.checks_state }),
     update: () => prUpdateBranchLedger({ title: pr.title ?? "", number: pr.number, base: pr.base_ref ?? "the base branch", head: pr.head_ref, headSha: pr.head_sha, behindBy: pr.behind_by }),
   };
@@ -472,7 +499,7 @@ export function MergeMenu({ pr }: { pr: any }) {
         onClick={ask}
         aria-haspopup="dialog"
         data-pr-merge
-        title={reason ? `${reason}. GitHub decides; try anyway from the menu.` : `${methodLabel}${deleteBranch ? ", then delete the branch" : ""}`}
+        title={reason ?? `${methodLabel}${deleteBranch ? ", then delete the branch" : ""}`}
         className="inline-flex items-center gap-1.5 px-3 py-1 text-[12px] font-medium text-sol-violet hover:bg-sol-violet/10 disabled:opacity-50 transition-colors"
       >
         <GitMerge className="w-3.5 h-3.5" />
@@ -529,11 +556,12 @@ export function MergeMenu({ pr }: { pr: any }) {
               Update branch from {pr.base_ref ?? "base"}
             </DropdownMenuItem>
           )}
-          {blocked && (
+          {canBypass && (
             <>
               <DropdownMenuSeparator className="bg-sol-border" />
-              <DropdownMenuItem className="cursor-pointer text-[12px] text-sol-text-muted" onClick={ask} data-pr-merge-anyway>
-                Try to merge anyway
+              <DropdownMenuItem className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-yellow" onClick={() => setReviewing("bypass")} data-pr-merge-bypass>
+                <ShieldOff className="w-3 h-3" />
+                Bypass protection and merge
               </DropdownMenuItem>
             </>
           )}

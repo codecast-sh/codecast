@@ -27,7 +27,7 @@ test("daemon GC is opt-in for retirement, never account or agent recycling", () 
   const source = fs.readFileSync(path.join(import.meta.dir, "daemon.ts"), "utf8");
   const kill = source.slice(source.indexOf("async function killConversationBackends("), source.indexOf("async function killConversationBackendsForAgentSwitch("));
   expect(kill).toContain("retireWorkspace = false");
-  expect(kill).toContain("if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardownPlan.reapPidTree)");
+  expect(kill).toContain("if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardown.killedSdk || teardownPlan.reapPidTree)");
   // Only the explicit kill command retires, and a kill that says the worktree is
   // someone else's (a workflow station's, shared by its run) keeps it.
   expect(source.match(/killConversationBackends\(\w+, \w+, [^\n]*?\)(?=;)/g)).toEqual([

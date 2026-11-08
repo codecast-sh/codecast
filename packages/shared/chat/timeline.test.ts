@@ -225,7 +225,8 @@ describe("buildChatTimeline — the unread rule", () => {
 });
 
 describe("tallyUnread", () => {
-  const m = (createdAt: number, authorId: string, extra: any = {}) => ({ createdAt, authorId, ...extra });
+  const m = (createdAt: number, authorId: string, extra: Record<string, unknown> = {}) => ({ created_at: createdAt, user_id: authorId, ...extra });
+  const mention = { mentions: ["me"] };
 
   it("counts only other people's messages after the read mark", () => {
     const t = tallyUnread(
@@ -237,12 +238,13 @@ describe("tallyUnread", () => {
   });
 
   it("counts mentions as a subset of unread", () => {
-    const t = tallyUnread(
-      [m(NOW - MIN, "u2", { mentionsViewer: true }), m(NOW - MIN, "u2")],
-      NOW - 5 * MIN,
-      "me",
-    );
+    const t = tallyUnread([m(NOW - MIN, "u2", mention), m(NOW - MIN, "u2")], NOW - 5 * MIN, "me");
     expect(t).toEqual({ unread: 2, mentions: 1 });
+  });
+
+  it("counts every line in a DM as a mention", () => {
+    const t = tallyUnread([m(NOW - MIN, "u2")], NOW - 5 * MIN, "me", { isDm: true });
+    expect(t).toEqual({ unread: 1, mentions: 1 });
   });
 
   it("treats the viewer's own newest line as read, even when the read mark lags", () => {
@@ -256,7 +258,7 @@ describe("tallyUnread", () => {
 
   it("does not let an agent posting under the viewer's id read for them", () => {
     const t = tallyUnread(
-      [m(NOW - 10 * MIN, "u2"), m(NOW - 5 * MIN, "me", { agent: true })],
+      [m(NOW - 10 * MIN, "u2"), m(NOW - 5 * MIN, "me", { author_kind: "agent" })],
       NOW - 60 * MIN,
       "me",
     );
@@ -264,19 +266,36 @@ describe("tallyUnread", () => {
   });
 
   it("ignores tombstones, so deleting a message clears its badge", () => {
-    const t = tallyUnread([m(NOW - MIN, "u2", { deletedAt: NOW })], NOW - 5 * MIN, "me");
+    const t = tallyUnread([m(NOW - MIN, "u2", { deleted_at: NOW })], NOW - 5 * MIN, "me");
     expect(t).toEqual({ unread: 0, mentions: 0 });
   });
 
   it("ignores a burst still being spoken: the badge waits for the release", () => {
-    const talking = tallyUnread(
-      [m(NOW - MIN, "u2", { voiceLive: true, mentionsViewer: true })], NOW - 5 * MIN, "me",
-    );
+    const talking = tallyUnread([m(NOW - MIN, "u2", { voice: { status: "live" }, ...mention })], NOW - 5 * MIN, "me");
     expect(talking).toEqual({ unread: 0, mentions: 0 });
-    const released = tallyUnread(
-      [m(NOW - MIN, "u2", { mentionsViewer: true })], NOW - 5 * MIN, "me",
-    );
+    const released = tallyUnread([m(NOW - MIN, "u2", { voice: { status: "done" }, ...mention })], NOW - 5 * MIN, "me");
     expect(released).toEqual({ unread: 1, mentions: 1 });
+  });
+
+  it("counts a thread reply's mention but not the reply, unless it was also sent to the channel", () => {
+    const reply = tallyUnread([m(NOW - MIN, "u2", { thread_root_id: "r", ...mention })], NOW - 5 * MIN, "me");
+    expect(reply).toEqual({ unread: 0, mentions: 1 });
+    const broadcast = tallyUnread([m(NOW - MIN, "u2", { thread_root_id: "r", broadcast: true })], NOW - 5 * MIN, "me");
+    expect(broadcast).toEqual({ unread: 1, mentions: 0 });
+  });
+
+  it("ignores agent rows nobody sees and answers still being written", () => {
+    const rows = ["listening", "passed", "thinking", "streaming"].map(status =>
+      m(NOW - MIN, "bot", { author_kind: "agent", agent_status: status, ...mention }));
+    expect(tallyUnread(rows, NOW - 5 * MIN, "me")).toEqual({ unread: 0, mentions: 0 });
+    const answered = tallyUnread([m(NOW - MIN, "bot", { author_kind: "agent", agent_status: "done" })], NOW - 5 * MIN, "me");
+    expect(answered).toEqual({ unread: 1, mentions: 0 });
+  });
+
+  it("ignores Slack history landing late", () => {
+    const imported = m(NOW - DAY, "bridge", { external: { synced_at: NOW }, ...mention });
+    const live = m(NOW - MIN, "bridge", { external: { synced_at: NOW - MIN + 1000 } });
+    expect(tallyUnread([imported, live], NOW - 2 * DAY, "me")).toEqual({ unread: 1, mentions: 0 });
   });
 
   it("treats a never-read channel as entirely unread", () => {
@@ -405,21 +424,6 @@ describe("chatToastTier", () => {
     expect(shouldToastChatMessage({ ...base, mentionsViewer: true })).toBe(true);
     expect(shouldToastChatMessage(base)).toBe(true);
     expect(shouldToastChatMessage({ ...base, doNotDisturb: true })).toBe(false);
-  });
-});
-
-describe("tallyUnread thread semantics", () => {
-  it("mirrors the server: replies do not tick unread, mentions count anywhere", () => {
-    const t = tallyUnread(
-      [
-        { createdAt: NOW - MIN, authorId: "u2" },
-        { createdAt: NOW - MIN, authorId: "u2", threadRootId: "r1" },
-        { createdAt: NOW - MIN, authorId: "u2", threadRootId: "r1", mentionsViewer: true },
-      ],
-      NOW - 5 * MIN,
-      "me",
-    );
-    expect(t).toEqual({ unread: 1, mentions: 1 });
   });
 });
 

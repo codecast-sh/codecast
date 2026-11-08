@@ -1118,13 +1118,16 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
     .description(
       "Merge a pull request on GitHub\n\n" +
       "Squashes by default. GitHub decides whether it may be merged, so a branch\n" +
-      "that is behind, conflicted or blocked comes back in GitHub's own words.",
+      "that is behind, conflicted or blocked comes back in GitHub's own words.\n" +
+      "A merge that branch protection holds goes through only with --admin, and\n" +
+      "only when GitHub lets your account bypass the protection.",
     )
     .option("--repo <owner/name>", "Repository to resolve the reference in")
     .option("--squash", "Squash the commits into one (default)")
     .option("--merge", "Keep the commits and add a merge commit")
     .option("--rebase", "Replay the commits onto the base branch")
     .option("--delete-branch", "Delete the head branch after it merges")
+    .option("--admin", "Bypass branch protection (required checks and reviews), if GitHub allows you")
     .option("--head <sha>", HEAD_GUARD)
     .option("--json", "Machine-readable output")
     .action(async (ref: string | undefined, options) => {
@@ -1135,6 +1138,7 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
         method,
         delete_branch: options.deleteBranch || undefined,
         expected_head_sha: options.head,
+        bypass: options.admin || undefined,
       });
       if (result.error) fail(result.error);
       if (options.json) {
@@ -1144,7 +1148,8 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
       console.log(
         `${c.green}ok${c.reset} merged ${c.cyan}${result.repository}#${result.number}${c.reset}` +
         (result.sha ? ` ${fmt.muted(String(result.sha).slice(0, 12))}` : "") +
-        (result.as ? ` ${fmt.muted(`as ${result.as}`)}` : ""),
+        (result.as ? ` ${fmt.muted(`as ${result.as}`)}` : "") +
+        (result.bypassed ? ` ${fmt.warning("bypassing branch protection")}` : ""),
       );
       if (options.deleteBranch && result.head_ref) {
         console.log(result.branch_deleted

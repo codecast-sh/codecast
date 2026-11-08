@@ -112,7 +112,10 @@ crons.interval(
 );
 
 crons.interval(
-  "retry stuck pending messages",
+  // An action: a query plans the pass and a short mutation applies it (see
+  // retryStuckMessages). As one long mutation it failed OCC on every retry, so its
+  // schedule never advanced and it re-ran back to back without committing.
+  "heal stuck pending messages",
   // Backstop only — the daemon drives live delivery via getPendingMessages. 30s was
   // needlessly aggressive and (with the old full-table scan) drove a scheduler
   // pileup. 60s keeps just-idle messages responsive while halving revive churn.
@@ -478,6 +481,15 @@ crons.interval(
 );
 
 crons.cron(
+  // Fix attribution (docs/architecture/regret.md R2): each machine that publishes a line profile traces what landed
+  // on its repository's main and what later fixed it, clear of the nightly backup window.
+  "trace fixes to the changes they repaired",
+  "30 3 * * *",
+  (internal as any).landedChanges.nightly,
+  {}
+);
+
+crons.cron(
   // External data upkeep (external-data.md X3): a source's *_today counters
   // start the day at zero, and groups drop bucket hours past the 72 hour
   // window. A batch already resets its own source's counters on a new UTC
@@ -600,5 +612,8 @@ crons.interval("redraw recent roles without an icon", { hours: 6 }, internal.rol
 
 // Bundle files uploaded for a publish that never attached them (artifacts.ts).
 crons.interval("sweep unattached page uploads", { hours: 6 }, internal.artifacts.sweepUploads, {});
+
+// A regulated team's permanent delete whose chain of passes stopped picks up where it left off (regulatedDeletion.ts).
+crons.interval("resume stalled data deletions", { minutes: 15 }, internal.regulatedDeletion.resumeStalledDeletions, {});
 
 export default crons;

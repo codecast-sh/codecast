@@ -20,12 +20,14 @@ export type SettingsSectionId =
   | "calls"
   | "team"
   | "managed-devices"
+  | "access-log"
   | "sync"
   | "privacy"
   | "integrations"
   | "agents"
   | "agent-library"
   | "harness"
+  | "approvals"
   | "daemon"
   | "provider-keys"
   | "claude-accounts"
@@ -49,6 +51,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/calls": "calls",
   "/settings/team": "team",
   "/settings/managed-devices": "managed-devices",
+  "/settings/access-log": "access-log",
   "/settings/sync": "sync",
   "/settings/privacy": "privacy",
   "/settings/integrations": "integrations",
@@ -56,6 +59,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/agents": "agents",
   "/settings/agent-library": "agent-library",
   "/settings/harness": "harness",
+  "/settings/approvals": "approvals",
   "/settings/daemon": "daemon",
   "/settings/provider-keys": "provider-keys",
   "/settings/claude-accounts": "claude-accounts",

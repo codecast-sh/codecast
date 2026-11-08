@@ -5,6 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation } from "./lib/access";
 import { isLowSignalPrompt, sampleEvenly } from "./titleGeneration";
 import { CHEAP_MODEL, callModel } from "./lib/anthropic";
+import type { VendorGate } from "./lib/vendorGuard";
 
 // Story and Summary are chunked first-person retellings of a session. Rather
 // than summarize every message (which just reproduces the conversation at 1:1),
@@ -211,8 +212,8 @@ export const writeLevel = internalMutation({
 
 // ── Haiku ────────────────────────────────────────────────────────────────────
 
-async function callHaiku(prompt: string, maxTokens: number): Promise<string | null> {
-  const reply = await callModel({ prompt, max_tokens: maxTokens, label: "storyMode Haiku" });
+async function callHaiku(gate: VendorGate, prompt: string, maxTokens: number): Promise<string | null> {
+  const reply = await callModel({ prompt, max_tokens: maxTokens, label: "storyMode Haiku", gate });
   return reply ? stripModelPreamble(reply.text) : null;
 }
 
@@ -283,6 +284,7 @@ ${notes}
 }
 
 async function mapBeats<T>(
+  gate: VendorGate,
   items: T[][],
   buildPrompt: (group: T[]) => string,
   anchorOf: (group: T[]) => { anchor_prompt: string; anchor_message_id: string; anchor_timestamp: number },
@@ -295,7 +297,7 @@ async function mapBeats<T>(
         const idx = i + j;
         const anchor = anchorOf(group);
         try {
-          const text = await callHaiku(buildPrompt(group), 700);
+          const text = await callHaiku(gate, buildPrompt(group), 700);
           const parsed = text ? parseHeadingBody(text) : null;
           out[idx] = {
             heading: parsed?.heading?.trim() || "",
@@ -326,7 +328,7 @@ export const generateStory = action({
 
     const turns = input.turns as Turn[];
     const groups = chunkInto(turns, beatCount(turns.length));
-    const beats = await mapBeats(groups, buildBeatPrompt, (g) => ({
+    const beats = await mapBeats({ ctx, scope: { conversationId: args.conversation_id } }, groups, buildBeatPrompt, (g) => ({
       anchor_prompt: g[0].prompt,
       anchor_message_id: g[0].promptId,
       anchor_timestamp: g[0].promptTs,
@@ -361,7 +363,7 @@ export const generateSummary = action({
 
     const beats = cached.beats as Beat[];
     const groups = chunkInto(beats, phaseCount(beats.length));
-    const phases = await mapBeats(groups, buildPhasePrompt, (g) => ({
+    const phases = await mapBeats({ ctx, scope: { conversationId: args.conversation_id } }, groups, buildPhasePrompt, (g) => ({
       anchor_prompt: g[0].anchor_prompt,
       anchor_message_id: g[0].anchor_message_id,
       anchor_timestamp: g[0].anchor_timestamp,
@@ -389,7 +391,7 @@ export const generateStoryInternal = internalAction({
     if (!input || input.turns.length === 0) return { ok: false };
     const turns = input.turns as Turn[];
     const groups = chunkInto(turns, beatCount(turns.length));
-    const beats = await mapBeats(groups, buildBeatPrompt, (g) => ({
+    const beats = await mapBeats({ ctx, scope: { conversationId: args.conversation_id } }, groups, buildBeatPrompt, (g) => ({
       anchor_prompt: g[0].prompt,
       anchor_message_id: g[0].promptId,
       anchor_timestamp: g[0].promptTs,

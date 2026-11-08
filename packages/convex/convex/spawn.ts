@@ -19,6 +19,7 @@ import { capsFor, countersFor, roleStartsOnItsOwn, roleTokensToday } from "./lib
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { charterLine, type CharterRow } from "./lib/orgCharter";
 import { applyHandoffLink, findHandoffSource, handoffChildFields } from "./handoff";
+import { defaultDeviceFor } from "./newSessionDefaults";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -388,6 +389,11 @@ export const createSessionFromCli = mutation({
       // on its machine, and path routing alone can pick another machine that
       // merely shares the path shape (/home/ubuntu/...).
       targetDeviceId = handoffFrom.owner_device_id;
+    } else if (!args.parent_session && !args.worktree_path && !args.cloud_device_id && !args.cloud_seed) {
+      // No machine named: the person's saved default, when it can take the
+      // work now. A worker stays beside its spawner's checkout, and a
+      // worktree or cloud start already names its machine.
+      targetDeviceId = await defaultDeviceFor(ctx, userId, [args.git_root, args.project_path].filter((p): p is string => !!p));
     }
 
     const subagentFields = args.parent_session

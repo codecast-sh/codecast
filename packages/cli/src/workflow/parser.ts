@@ -407,7 +407,7 @@ export function parseWorkflowSource(src: string, dir?: string, opts: ParseOption
   const read = opts.read ?? readDisk;
   const resolve = opts.resolveFlow ?? resolveFlowSource;
   const loaded = loadRaw(src, dir, read, file ? [file] : [], resolve);
-  const raw = expandFlows(loaded, dir, read, resolve, opts.inline !== false, []);
+  const raw = expandFlows(ownParams(loaded), dir, read, resolve, opts.inline !== false, []);
   const graph = buildGraph(raw);
   const sources = new Set<string>(raw.files);
   if (dir && opts.inline !== false) {
@@ -556,6 +556,30 @@ const STRING_FIELDS = ["prompt", "script", "doc", "card", "stop", "goal"];
 const ID_FIELDS = ["asker", "answerer", "retry_target"];
 
 /**
+ * A segment's params (`params="except above=50"`): `$except` in its stations
+ * and in its edges' conditions reads the composing node's attribute, else the
+ * default written after `=`, else nothing. A value lands in a script as
+ * written, so it is held to words and names.
+ */
+function paramSubstitution(spec: Attr | undefined, given: Record<string, Attr>, who: string): (text: string) => string {
+  const values = String(spec ?? "").split(/[\s,]+/).filter(Boolean).map((param) => {
+    const [name, ...rest] = param.split("=");
+    const value = given[name] === undefined ? rest.join("=") : String(given[name]);
+    if (!/^[\w .,:@/+-]*$/.test(value)) throw new Error(`${who} ${name}="${value}" may hold only words, names and paths`);
+    return { ref: new RegExp(`\\$${name}(?![\\w.])`, "g"), value };
+  });
+  return (text) => values.reduce((t, { ref, value }) => t.replace(ref, value), text);
+}
+
+/** A segment run on its own is its own composer with no attribute set: its params read their defaults. */
+function ownParams(raw: RawGraph): RawGraph {
+  if (raw.attrs.params === undefined) return raw;
+  const sub = paramSubstitution(raw.attrs.params, {}, `${raw.name}:`);
+  const nodes = new Map([...raw.nodes].map(([id, a]) => [id, Object.fromEntries(Object.entries(a).map(([k, v]) => [k, STRING_FIELDS.includes(k) && typeof v === "string" ? sub(v) : v]))]));
+  return { ...raw, nodes, edges: raw.edges.map((e) => (e.condition ? { ...e, condition: sub(e.condition) } : e)) };
+}
+
+/**
  * Every `flow="<slug>"` node replaced by that segment's stations, named
  * `<node>__<station>`. Edges into the node enter the segment where its start
  * leads; each plain exit leaves by the node's own edges with outcome success,
@@ -598,17 +622,9 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
     const alt = inner.filter((s) => s !== start).map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
     const varRefs = new RegExp(`\\$(${alt})(?=\\.)`, "g");
     const condRefs = new RegExp(`(^|[^\\w.$])(${alt})(?=\\.)`, "g");
-    // A segment's params (`params="except"`): `$except` in its stations reads the composing node's attribute, empty
-    // when the node sets none. A value lands in a script as written, so it is held to words and names.
-    const params = String(seg.attrs.params ?? "").split(/[\s,]+/).filter(Boolean);
-    const paramValues = params.map((name) => {
-      const value = attrs[name] === undefined ? "" : String(attrs[name]);
-      if (!/^[\w .,:@/+-]*$/.test(value)) throw new Error(`${raw.name}: ${id}'s ${name}="${value}" may hold only words, names and paths`);
-      return { ref: new RegExp(`\\$${name}(?![\\w.])`, "g"), value };
-    });
-    const withParams = (text: string) => paramValues.reduce((t, { ref, value }) => t.replace(ref, value), text);
+    const withParams = paramSubstitution(seg.attrs.params, attrs, `${raw.name}: ${id}'s`);
     const rewrite = (text: string) => withParams(alt ? text.replace(varRefs, (_m, sid: string) => `$${p}${sid}`) : text);
-    const rewriteCondition = (c: string) => (alt ? c.replace(condRefs, (_m, pre: string, sid: string) => `${pre}${p}${sid}`) : c);
+    const rewriteCondition = (c: string) => withParams(alt ? c.replace(condRefs, (_m, pre: string, sid: string) => `${pre}${p}${sid}`) : c);
     const out = edges.filter((e) => e.from === id);
     const routesFailure = out.some(mentionsFailure);
     edges = edges.filter((e) => e.from !== id);

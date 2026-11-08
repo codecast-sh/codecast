@@ -14,7 +14,7 @@ import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
 import { ENROLL_PATH, enrollHttp, profileIdentifier } from "./managedDevices";
-import { teamPolicyRefusal } from "./lib/teamPolicyGuard";
+import { regulatedTeamFor, teamPolicyRefusal } from "./lib/teamPolicyGuard";
 
 setDefaultTimeout(120_000);
 
@@ -82,6 +82,21 @@ describe("team policy", () => {
     expect(res.policy).toEqual({ public_sharing_disabled: true, auto_update: "off", excluded_paths: ["~/secret"] });
     expect((await t.run((ctx) => ctx.db.get(team)))!.policy).toEqual(res.policy);
     await expect(as(member).mutation(api.managedDevices.setTeamPolicy, { team_id: team, policy: {} })).rejects.toThrow();
+  });
+});
+
+describe("regulated data", () => {
+  test("a regulated team's workspace and its enrolled devices are regulated; other workspaces are not", async () => {
+    const { t, team, admin, member, as } = await setup();
+    await as(admin).mutation(api.managedDevices.setTeamPolicy, { team_id: team, policy: { regulated_data: true } });
+    const token = await laptop(t, member, team);
+    const other = await t.run((ctx) => ctx.db.insert("teams", { name: "Other", invite_code: "OTHER123", created_at: 1 } as any));
+    await t.run(async (ctx) => {
+      expect(await regulatedTeamFor(ctx, { workspace: `team:${team}` })).toEqual({ team_id: team, team_name: "Acme" });
+      expect(await regulatedTeamFor(ctx, { workspace: `user:${member}`, apiToken: token })).toEqual({ team_id: team, team_name: "Acme" });
+      expect(await regulatedTeamFor(ctx, { workspace: `team:${other}` })).toBeNull();
+      expect(await regulatedTeamFor(ctx, { workspace: `user:${admin}` })).toBeNull();
+    });
   });
 });
 
