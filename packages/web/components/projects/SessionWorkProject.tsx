@@ -4,35 +4,17 @@
 // it to filter the inbox to that project (alt excludes, shift adds), the same
 // gestures its chip takes. Silent when the inbox already shows only it.
 //
-// The card reads `workProjectSig` inside its one tracked subscription and
+// The card reads `workProjectSig` (lib/workProjectSig) inside its one tracked subscription and
 // hands the string down, so the pill costs no subscription of its own.
-import { workProjectChipKey, workProjectsBySession, type WorkProjectSource } from "../../store/workProjects";
+import { workProjectChipKey } from "../../store/workProjects";
+import { WORK_PROJECT_SEP } from "../../lib/workProjectSig";
 import { clickProjectChip } from "../../store/chipFilterClicks";
 import { projectDotClass } from "../../lib/projectColors";
 import { cn } from "../../lib/utils";
 
-const SEP = "\u0000";
-
-type SigState = WorkProjectSource & {
-  projects: Record<string, { title?: string; color?: string }>;
-  activeProjectFilter?: string | null;
-  chipFilterExclude?: boolean;
-  extraProjectFilters?: unknown[] | null;
-};
-
-/** The card's project as one short string (id, colour, title), empty when it
- *  has none or the inbox already shows only that project. */
-export function workProjectSig(s: SigState, sessionId: string): string {
-  const pid = workProjectsBySession(s).get(sessionId);
-  const p = pid ? s.projects[pid] : undefined;
-  if (!pid || !p) return "";
-  if (s.activeProjectFilter === workProjectChipKey(pid) && !s.chipFilterExclude && !s.extraProjectFilters?.length) return "";
-  return [pid, p.color ?? "", p.title ?? ""].join(SEP);
-}
-
 export function SessionWorkProject({ sig, className }: { sig: string; className?: string }) {
   if (!sig) return null;
-  const [pid, color, title] = sig.split(SEP);
+  const [pid, color, title] = sig.split(WORK_PROJECT_SEP);
   return (
     <>
       <span aria-hidden className="flex-shrink-0 text-[10px] text-sol-text-dim/50">·</span>

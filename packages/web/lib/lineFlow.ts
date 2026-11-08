@@ -23,6 +23,7 @@ import { priority as linePriority, type Severity } from "@codecast/convex/convex
 import { LINE_GOAL, NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
 import { lineRunOutcome, type AnsweredGate, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { runEnd, shippedUnanswered } from "@codecast/shared/contracts/causeHistory";
+import { quietWatchEnd } from "@codecast/shared/contracts/flowMap";
 import { isLiveRun, runLiveNode, type LineRun, type LiveNode, type RunNodeStatus } from "./taskLine";
 import { isConvexId } from "./entityLinks";
 import { runHref } from "./decisionLinks";
@@ -482,18 +483,7 @@ export function isLineCard(d: LineDecision): boolean {
   return d.status === "pending" && !!d.blocking && !!d.workflow_run_id;
 }
 
-/** LE12: the quiet watch end stamps resolved_at; a close after it is a later
- *  ship of a reopened cause. */
-const resolvedQuietly = (t: LineCauseTask) => typeof t.resolved_at === "number" && t.resolved_at >= (t.closed_at ?? 0);
-
-/** When a closed cause's watch ended quiet (LE12), or null: swept, it carries
- *  resolved_at; not swept yet, it still holds its past watch_until. The one
- *  rule /line, the map and a trace read "held" by. */
-export function quietWatchEnd(t: LineCauseTask, now: number): number | null {
-  if (!terminal(t.status) || inWatch(t, now)) return null;
-  if (resolvedQuietly(t)) return t.resolved_at!;
-  return typeof t.watch_until === "number" ? t.watch_until : null;
-}
+export { quietWatchEnd };
 
 /** The goal a cause names (LE5): an initiative ref ("in-3" or
  *  "in-3:metric"), a project ref, "line" (a change to the line itself, which

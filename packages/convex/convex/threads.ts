@@ -15,14 +15,14 @@
 // pass.
 
 import { mutation, query } from "./functions";
-import type { CommentWithUser, ListMinePayload, PageComment, PageThreadEntity, ThreadInboxEntry, ThreadLastReply, ThreadRead } from "./threadsTypes";
+import type { ListMinePayload, ThreadInboxEntry, ThreadRead } from "./threadsTypes";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { extractMentionHandles, isLiveVoiceRow, isSilentAgentRow } from "@codecast/shared/chat";
-import { parseCodeThreadRootKey, parseCommentThreadRootKey } from "@codecast/shared/comments";
-import { UNREAD_CAP, plainPreview } from "./chatText";
+import { isLiveVoiceRow, isSilentAgentRow } from "@codecast/shared/chat";
+import { parseCommentThreadRootKey } from "@codecast/shared/comments";
+import { plainPreview } from "./chatText";
 import {
   THREAD_UNREAD_SCAN,
   authorsFor,
@@ -34,10 +34,8 @@ import {
 import { isInCommentThread } from "./comments";
 import { listConversationComments } from "./commentStore";
 import type { ConversationComment } from "./lib/conversationCommentRows";
-import { canAccessComment, codeThreadRows } from "./codeComments";
 import { canAccessConversation, canAccessTask } from "./lib/access";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
-import { matchHandle } from "./lib/mentionResolve";
 import { decisionThreadKind } from "./decisionThread";
 import {
   THREAD_BADGE_SCAN,
@@ -48,111 +46,22 @@ import {
   taskCommentIsNews,
   taskThreadMembership,
   threadKindValidator,
-  type TaskThreadMembership,
   type ThreadKind,
 } from "./threadReads";
-
-type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
-
-/** Per-request memo: the same channel, conversation, task and author repeat
- *  across a page of rows, and a subscription read set should not grow with
- *  duplicates. */
-type PageCache = {
-  channels: Map<string, Doc<"chat_channels"> | null>;
-  roots: Map<string, Doc<"chat_messages"> | null>;
-  conversations: Map<string, Doc<"conversations"> | null>;
-  commentThreads: Map<string, ConversationComment[]>;
-  conversationComments: Map<string, ConversationComment[]>;
-  tasks: Map<string, Doc<"tasks"> | null>;
-  taskMembership: Map<string, TaskThreadMembership>;
-  taskComments: Map<string, Doc<"task_comments">[]>;
-  artifacts: Map<string, Doc<"artifacts"> | null>;
-  artifactComments: Map<string, Doc<"artifact_comments">[]>;
-  codeThreads: Map<string, Doc<"review_comments">[]>;
-  users: Map<string, Doc<"users"> | null>;
-};
-
-function newPageCache(): PageCache {
-  return {
-    channels: new Map(),
-    roots: new Map(),
-    conversations: new Map(),
-    commentThreads: new Map(),
-    conversationComments: new Map(),
-    tasks: new Map(),
-    taskMembership: new Map(),
-    taskComments: new Map(),
-    artifacts: new Map(),
-    artifactComments: new Map(),
-    codeThreads: new Map(),
-    users: new Map(),
-  };
-}
-
-async function memo<T>(map: Map<string, T>, key: string, load: () => Promise<T>): Promise<T> {
-  if (!map.has(key)) map.set(key, await load());
-  return map.get(key)!;
-}
-
-async function userFor(ctx: ReadCtx, cache: PageCache, userId: Id<"users"> | undefined): Promise<Doc<"users"> | null> {
-  if (!userId) return null;
-  return await memo(cache.users, String(userId), () => ctx.db.get(userId));
-}
-
-function displayName(user: Doc<"users"> | null): string | undefined {
-  return user?.name || user?.github_username || user?.email || undefined;
-}
-
-/** How many comment rows one thread ships per page: the newest, so a long
- *  thread still renders and replies in place. */
-const THREAD_PAYLOAD_ROWS = 50;
-
-function capped(counted: number): { unread: number; unread_capped: boolean } {
-  return { unread: Math.min(counted, UNREAD_CAP), unread_capped: counted > UNREAD_CAP };
-}
-
-type ThreadKindResolver = {
-  access(ctx: ReadCtx, userId: Id<"users">, row: ThreadRead, cache: PageCache): Promise<boolean>;
-  unread(ctx: ReadCtx, userId: Id<"users">, row: ThreadRead, cache: PageCache): Promise<{ unread: number; unread_capped: boolean }>;
-  /** The newest counted row's stamp, 0 when none. A read mark clamps to it. */
-  newestAt(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<number>;
-  load(ctx: ReadCtx, userId: Id<"users">, row: ThreadRead, cache: PageCache, payload: ListMinePayload): Promise<void>;
-  /** The reply the collapsed row previews: the newest one that is news for
-   *  the viewer, else the newest at all. */
-  preview(ctx: ReadCtx, userId: Id<"users">, row: ThreadRead, cache: PageCache): Promise<ThreadLastReply | null>;
-  title?(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<string | undefined>;
-  /** Whether the unread part waits on the viewer (waitsOnViewer's rule).
-   *  Only these threads count on the Threads badge; the rest read as
-   *  activity. A kind without it never counts (a decision's thread is the
-   *  Decisions badge's). */
-  forYou?(ctx: ReadCtx, userId: Id<"users">, row: ThreadRead, cache: PageCache): Promise<boolean>;
-};
-
-/** Does this text @-name the viewer? */
-async function namesViewer(ctx: ReadCtx, cache: PageCache, userId: Id<"users">, text: string | undefined): Promise<boolean> {
-  const handles = extractMentionHandles(text ?? "");
-  if (!handles.length) return false;
-  const viewer = await userFor(ctx, cache, userId);
-  return !!viewer && handles.some((h) => matchHandle([viewer], h));
-}
-
-/** The rule every kind shares for the Threads badge: an unread reply from a
- *  person waits on the viewer; an agent's only when it names them or answers
- *  something they asked. An agent's progress in a thread they follow is
- *  activity: shown, never counted. */
-async function waitsOnViewer<T>(
-  ctx: ReadCtx,
-  cache: PageCache,
-  userId: Id<"users">,
-  unread: T[],
-  rule: { isAgent: (c: T) => boolean; answersViewer: (c: T) => boolean; text: (c: T) => string | undefined },
-): Promise<boolean> {
-  for (const c of unread) {
-    if (!rule.isAgent(c) || rule.answersViewer(c)) return true;
-    if (await namesViewer(ctx, cache, userId, rule.text(c))) return true;
-  }
-  return false;
-}
+import {
+  type ReadCtx,
+  type PageCache,
+  newPageCache,
+  memo,
+  userFor,
+  displayName,
+  THREAD_PAYLOAD_ROWS,
+  capped,
+  type ThreadKindResolver,
+  namesViewer,
+  waitsOnViewer,
+} from "./threadKit";
+import { codeKind, pageKind } from "./threadPageCodeKinds";
 
 // ── chat ────────────────────────────────────────────────────────────────────
 
@@ -454,168 +363,6 @@ const taskKind: ThreadKindResolver = {
       session_title: withSession.session_info?.title ?? undefined,
       created_at: newest.created_at,
       preview: plainPreview(newest.text, 160),
-    };
-  },
-};
-
-// ── page ────────────────────────────────────────────────────────────────────
-
-function artifactId(row: ThreadRead): Id<"artifacts"> {
-  return row.artifact_id ?? (row.root_key as Id<"artifacts">);
-}
-
-async function artifactFor(ctx: ReadCtx, row: ThreadRead, cache: PageCache) {
-  return await memo(cache.artifacts, row.root_key, () => ctx.db.get(artifactId(row)));
-}
-
-/** The whole discussion, oldest first. Bounded by the page's real comment
- *  volume, like the owner panel and the CLI listing. */
-async function pageCommentsFor(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<Doc<"artifact_comments">[]> {
-  return await memo(cache.artifactComments, row.root_key, () =>
-    ctx.db
-      .query("artifact_comments")
-      .withIndex("by_artifact", (q: any) => q.eq("artifact_id", artifactId(row)))
-      .collect());
-}
-
-function stripCommentEmail(c: Doc<"artifact_comments">): PageComment {
-  const { author_email: _email, ...rest } = c;
-  return rest;
-}
-
-const pageKind: ThreadKindResolver = {
-  async access(ctx, userId, row, cache) {
-    // The owner and the verified commenters. A mention alone files the row
-    // but does not open the discussion: access arrives with their first
-    // comment. Anonymous commenters have no account and no inbox.
-    const artifact = await artifactFor(ctx, row, cache);
-    if (!artifact) return false;
-    if (String(artifact.user_id) === String(userId)) return true;
-    const comments = await pageCommentsFor(ctx, row, cache);
-    return comments.some((c) => String(c.author_user_id) === String(userId));
-  },
-  async unread(ctx, userId, row, cache) {
-    const rows = await pageCommentsFor(ctx, row, cache);
-    // A comment with no author_user_id is an anonymous viewer's: news.
-    const counted = rows.filter((c) =>
-      c.created_at > row.last_read_at && String(c.author_user_id) !== String(userId)).length;
-    return capped(counted);
-  },
-  async forYou(ctx, userId, row, cache) {
-    // Every page comment is a person's (a signed-in viewer or an anonymous
-    // one), so any unread comment waits on the owner and the commenters.
-    const rows = await pageCommentsFor(ctx, row, cache);
-    return rows.some((c) => c.created_at > row.last_read_at && String(c.author_user_id) !== String(userId));
-  },
-  async newestAt(ctx, row, cache) {
-    const rows = await pageCommentsFor(ctx, row, cache);
-    let newest = 0;
-    for (const c of rows) if (c.created_at > newest) newest = c.created_at;
-    return newest;
-  },
-  async load(ctx, _userId, row, cache, payload) {
-    const artifact = await artifactFor(ctx, row, cache);
-    if (!artifact) return;
-    const comments = (await pageCommentsFor(ctx, row, cache)).slice(-THREAD_PAYLOAD_ROWS);
-    payload.pages.push({
-      _id: String(artifact._id),
-      slug: artifact.slug,
-      title: artifact.title,
-      kind: artifact.kind,
-      user_id: String(artifact.user_id),
-      updated_at: artifact.updated_at,
-      comments: comments.map(stripCommentEmail),
-    });
-  },
-  async preview(ctx, _userId, row, cache) {
-    const rows = await pageCommentsFor(ctx, row, cache);
-    const newest = rows.reduce<Doc<"artifact_comments"> | null>(
-      (best, c) => (!best || c.created_at >= best.created_at ? c : best), null);
-    if (!newest) return null;
-    const user = await userFor(ctx, cache, newest.author_user_id);
-    return {
-      _id: String(newest._id),
-      user_id: newest.author_user_id ? String(newest.author_user_id) : undefined,
-      author_kind: "user",
-      author_name: displayName(user) ?? newest.author_name,
-      created_at: newest.created_at,
-      preview: plainPreview(newest.text, 160),
-    };
-  },
-};
-
-// ── code ────────────────────────────────────────────────────────────────────
-
-/** The whole thread, oldest first: every review_comments row on the anchor
- *  the root key names. The row's typed refs win over the parsed key. */
-async function codeThreadFor(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<Doc<"review_comments">[]> {
-  return await memo(cache.codeThreads, row.root_key, () => {
-    const parsed = parseCodeThreadRootKey(row.root_key);
-    return codeThreadRows(ctx as any, {
-      repository: row.repository ?? parsed.repository,
-      ref: row.ref ?? parsed.ref,
-      file_path: row.file_path ?? parsed.filePath,
-      line_number: row.line_number ?? parsed.lineNumber,
-    });
-  });
-}
-
-function isOthersCodeComment(c: Doc<"review_comments">, userId: Id<"users">): boolean {
-  // A GitHub or agent row has no codecast author; it is always news.
-  return !c.author_user_id || String(c.author_user_id) !== String(userId);
-}
-
-async function codeAuthorName(ctx: ReadCtx, cache: PageCache, c: Doc<"review_comments">): Promise<string | undefined> {
-  if (c.author_kind === "agent") return "Agent";
-  return displayName(await userFor(ctx, cache, c.author_user_id)) ?? c.author_github_username ?? undefined;
-}
-
-const codeKind: ThreadKindResolver = {
-  // A thread is readable when its root is: the author, the pull request, the
-  // session it came from, or the team that installed the App. One check per
-  // thread, on its oldest row.
-  async access(ctx, userId, row, cache) {
-    const rows = await codeThreadFor(ctx, row, cache);
-    const root = rows[0];
-    return !!root && (await canAccessComment(ctx as any, userId, root));
-  },
-  async unread(ctx, userId, row, cache) {
-    const rows = await codeThreadFor(ctx, row, cache);
-    const counted = rows.filter((c) => c.created_at > row.last_read_at && isOthersCodeComment(c, userId)).length;
-    return capped(counted);
-  },
-  async forYou(ctx, userId, row, cache) {
-    const rows = await codeThreadFor(ctx, row, cache);
-    const unread = rows.filter((c) => c.created_at > row.last_read_at && isOthersCodeComment(c, userId));
-    const viewerWroteBefore = (at: number) =>
-      rows.some((c) => !!c.author_user_id && String(c.author_user_id) === String(userId) && c.created_at < at);
-    return waitsOnViewer(ctx, cache, userId, unread, {
-      isAgent: (c) => c.author_kind === "agent",
-      answersViewer: (c) => viewerWroteBefore(c.created_at),
-      text: (c) => c.content,
-    });
-  },
-  async newestAt(ctx, row, cache) {
-    const rows = await codeThreadFor(ctx, row, cache);
-    let newest = 0;
-    for (const c of rows) if (c.created_at > newest) newest = c.created_at;
-    return newest;
-  },
-  async load(ctx, _userId, row, cache, payload) {
-    const rows = (await codeThreadFor(ctx, row, cache)).slice(-THREAD_PAYLOAD_ROWS);
-    payload.codeComments.push(...rows);
-  },
-  async preview(ctx, _userId, row, cache) {
-    const rows = await codeThreadFor(ctx, row, cache);
-    const newest = rows[rows.length - 1];
-    if (!newest) return null;
-    return {
-      _id: String(newest._id),
-      user_id: newest.author_user_id ? String(newest.author_user_id) : undefined,
-      author_kind: newest.author_kind === "agent" ? "agent" : "user",
-      author_name: await codeAuthorName(ctx, cache, newest),
-      created_at: newest.created_at,
-      preview: plainPreview(newest.content, 160),
     };
   },
 };

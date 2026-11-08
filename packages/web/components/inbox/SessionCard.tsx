@@ -14,7 +14,7 @@ import { sessionPanePath, startPaneDrag } from "../../lib/stage";
 import { identityPrefsOf, identityRowOf, identitySig, roleLookingAfter } from "../../lib/sessionIdentity";
 import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 import { clickBucketChip, clickProjectChip } from "../../store/chipFilterClicks";
-import { workProjectSig } from "../projects/SessionWorkProject";
+import { workProjectSig } from "../../lib/workProjectSig";
 import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
 import { useNowWhen } from "../../hooks/useCoarseNow";
