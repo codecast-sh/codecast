@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { heartbeat, updateAgentStatus, reapStaleManagedSessions, performListActiveSessions, REAP_PAGE_SIZE } from "./managedSessions";
+import { heartbeat, updateAgentStatus, reapStaleManagedSessions, REAP_PAGE_SIZE } from "./managedSessions";
+import { performListActiveSessions } from "./managedSessionsList";
 import { makeFakeDb } from "./testDb";
 
 function fixture(overrides: Record<string, unknown> = {}) {

@@ -12,16 +12,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PASTE_START, PASTE_END, prepareInjectedContent } from "./tmuxPaste";
+import { pollDeclineText, pollMenuSteps } from "./pollMessage";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 
 const source = readFileSync(join(import.meta.dir, "daemon.ts"), "utf8");
-const helpers = ["buildAppleScript", "writeKittyInjectionPayload", "writeTerminalInjectionScript", "pollDeclineText", "pollMenuSteps"]
+const helpers = ["buildAppleScript", "writeKittyInjectionPayload", "writeTerminalInjectionScript"]
   .map(name => functionBlock(source, name).text).join("\n").replace(/^export /gm, "");
 const { buildAppleScript, writeKittyInjectionPayload, writeTerminalInjectionScript } = new Function(
-  "fs", "path", "randomUUID", "CONFIG_DIR", "prepareInjectedContent", "PASTE_START", "PASTE_END",
+  "fs", "path", "randomUUID", "CONFIG_DIR", "prepareInjectedContent", "PASTE_START", "PASTE_END", "pollDeclineText", "pollMenuSteps",
   new Bun.Transpiler({ loader: "ts" }).transformSync(helpers) +
     "; return { buildAppleScript, writeKittyInjectionPayload, writeTerminalInjectionScript };",
-)(fs, path, randomUUID, "", prepareInjectedContent, PASTE_START, PASTE_END);
+)(fs, path, randomUUID, "", prepareInjectedContent, PASTE_START, PASTE_END, pollDeclineText, pollMenuSteps);
 
 const MULTILINE = 'first \\\\ path and "quotes"\nsecond line\nthird line';
 const MENU_WITH_TEXT_FIELD = { keys: ["4"], text: MULTILINE };

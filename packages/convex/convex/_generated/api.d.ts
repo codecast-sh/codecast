@@ -466,6 +466,7 @@ import type * as machineResourcesSchema from "../machineResourcesSchema.js";
 import type * as managedDevices from "../managedDevices.js";
 import type * as managedDevicesSchema from "../managedDevicesSchema.js";
 import type * as managedSessions from "../managedSessions.js";
+import type * as managedSessionsList from "../managedSessionsList.js";
 import type * as messageFeed from "../messageFeed.js";
 import type * as messageViewContracts from "../messageViewContracts.js";
 import type * as messages from "../messages.js";
@@ -676,7 +677,6 @@ import type * as workTimeline from "../workTimeline.js";
 import type * as workerSettle from "../workerSettle.js";
 import type * as workflow_runs from "../workflow_runs.js";
 import type * as workflows from "../workflows.js";
-import type * as zzOrgHealthProfile from "../zzOrgHealthProfile.js";
 
 import type {
   ApiFromModules,
@@ -1143,6 +1143,7 @@ declare const fullApi: ApiFromModules<{
   managedDevices: typeof managedDevices;
   managedDevicesSchema: typeof managedDevicesSchema;
   managedSessions: typeof managedSessions;
+  managedSessionsList: typeof managedSessionsList;
   messageFeed: typeof messageFeed;
   messageViewContracts: typeof messageViewContracts;
   messages: typeof messages;
@@ -1353,7 +1354,6 @@ declare const fullApi: ApiFromModules<{
   workerSettle: typeof workerSettle;
   workflow_runs: typeof workflow_runs;
   workflows: typeof workflows;
-  zzOrgHealthProfile: typeof zzOrgHealthProfile;
 }>;
 
 /**

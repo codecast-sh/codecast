@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performListActiveSessions } from "./managedSessions";
+import { performListActiveSessions } from "./managedSessionsList";
 
 // The /sessions page is the PROCESS/TMUX view, not the inbox. It used to drop
 // every killed row, so killing a session from that page made it vanish

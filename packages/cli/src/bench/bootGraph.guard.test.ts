@@ -339,7 +339,10 @@ describe("command groups stay off the boot graph", () => {
     // syncService.ts +5.3, triggerPrecheck.ts +4.7, processEnv.ts +2.6,
     // commandGroups.ts +1.8, teamFeatures.ts +1.7, daemonCommands.ts and
     // managedPolicy.ts +1.5 each, tmuxRoute.ts +1.4).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4519);
+    // 4520 later on 2026-11-08: growth in files already here, no new leaf
+    // (index.ts +0.6 for the help text overhaul, tmux.ts +0.2,
+    // contracts/inboxFields.ts and contracts/snippets.ts +0.2 each).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4520);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -498,7 +501,9 @@ describe("command groups stay off the boot graph", () => {
     // removalPreview, gitRepoProbe and terminal/terminalHub; fsAtomic,
     // ghostty, terminalHold, config/storedConfig and tmuxFleetInventory; and
     // the contracts index.ts names above plus commandRun and deliveryHold.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(576);
+    // 577 later the same day: contracts/approvalAnswers.ts, the four-line
+    // approval answer words commandRun.ts and assistant.ts share (e2056d25b).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(577);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
