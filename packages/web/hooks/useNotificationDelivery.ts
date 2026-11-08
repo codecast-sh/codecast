@@ -1,7 +1,7 @@
 import { useConvex, useConvexConnectionState } from "convex/react";
 import { useWatchEffect } from "./useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
-import { isElectron } from "../lib/desktop";
+import { installBrowserFocusHold, isElectron } from "../lib/desktop";
 import { getTerminalEndpoint, termHttpBase, type TerminalEndpoint } from "../lib/terminal/endpoint";
 import {
   agentAlertsSuppressed, claimBrowserAlert, createNotificationDelivery,
@@ -9,6 +9,7 @@ import {
 } from "../lib/notificationDelivery";
 
 export function useNotificationDelivery(ready: boolean) {
+  useWatchEffect(() => installBrowserFocusHold(), []);
   const convex = useConvex();
   const { isWebSocketConnected } = useConvexConnectionState();
   const viewer = useInboxStore((s) => s.currentUser?._id);
