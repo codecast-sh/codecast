@@ -13,6 +13,7 @@ import { applyAreasCore } from "./decisionAreas";
 import { shareOutCore } from "./decisionShareOut";
 import type { AreaAssignment } from "@codecast/shared/contracts/decisionAreas";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
+import { performGoalControl, performSetGoal } from "./sessionGoals";
 import { askCore as askDecisionCore, commentCore, deleteCore as deleteDecisionCommentCore, editCore as editDecisionCommentCore, resolveCore as resolveDecisionThreadCore } from "./decisionThread";
 import { sendLineChatCore } from "./lineChat";
 import { clearHoldCore, moveLiveFlowCore, setOnCore, startLiveFlowCore } from "./liveFlows";
@@ -523,6 +524,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // refused the same way: returned, never thrown.
   sendLineChat: async (ctx, userId, [projectId, text, clientId, graph, focus]: [string, string, string, string | null, string | null]) =>
     sendLineChatCore(ctx, userId, { project_id: projectId, text, client_id: clientId, graph, focus }),
+  // A session's goal (sessionGoals.ts): /goal and the pill's controls. The
+  // store paints first; a refusal throws, so the write rolls back whole and
+  // the client's permanent-refusal path takes the paint back and says why.
+  setSessionGoal: async (ctx, userId, [conversationId, objective, clientKey]: [string, string, string]) =>
+    performSetGoal(ctx as any, userId, conversationId, objective, clientKey),
+  pauseSessionGoal: async (ctx, userId, [conversationId]: [string]) => performGoalControl(ctx as any, userId, conversationId, "pause"),
+  resumeSessionGoal: async (ctx, userId, [conversationId]: [string]) => performGoalControl(ctx as any, userId, conversationId, "resume"),
+  clearSessionGoal: async (ctx, userId, [conversationId]: [string]) => performGoalControl(ctx as any, userId, conversationId, "clear"),
   reorderStack: async (ctx, userId, [stackId, decisionIds]: [string, string[]]) =>
     reorderStackCore(ctx, userId, stackId, decisionIds as Id<"session_decisions">[]),
   removeFromStack: async (ctx, userId, [stackId, decisionId]: [string, string]) => removeFromStackCore(ctx, userId, stackId, decisionId),
