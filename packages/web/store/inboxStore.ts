@@ -3972,6 +3972,14 @@ export function placeInboxRows(
     }
   }
   rideLeadPlacements(placements, (id) => scoped[id]);
+  // The open session is always on the list. A child row (a line station, a
+  // Task subagent) is placed on its own facts while focused, after the ride,
+  // so a parent that is set aside or absent cannot take it off the list: a
+  // task's run log is born stashed and hidden, so its stations never have an
+  // active parent. Under an active parent it still nests.
+  const focusedRow = focusedId ? visibleSessions[focusedId] : undefined;
+  const focusedChild = focusedRow && isOrphanOrSubagent(focusedRow) ? focusedRow : null;
+  if (focusedChild) placements.set(focusedChild._id, placeRowWithOverlays(focusedChild));
   const activeKeyed: RankedSession[] = [];
   const dismissed: InboxSession[] = [];
   const stashed: InboxSession[] = [];
@@ -4071,7 +4079,7 @@ export function placeInboxRows(
   // flat card (it would ignore membership and the fold). A MEMBER whose nest
   // parent is absent (a plan handoff under a dismissed planner) renders flat,
   // exactly as the server lists it.
-  const isOrphanSubagent = (s: InboxSession) => isOrphanOrSubagent(s) && !subsWithParent.has(s._id);
+  const isOrphanSubagent = (s: InboxSession) => isOrphanOrSubagent(s) && !subsWithParent.has(s._id) && s !== focusedChild;
   // A team worker whose lead is not on this list is not an inbox card.
   // Promoting it was the "loose ↳ in Done" leak: the lead finished or aged
   // out and every leftover reviewer became its own Done row. Same display
