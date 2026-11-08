@@ -132,7 +132,7 @@ crons.interval(
 // Separate entry from "check daemon health" so a failure in one alert never
 // stops the other. The 5 minute cadence is also this alert's debounce.
 // Pending permissions on a machine that stopped beating can never be answered;
-// expiring them keeps Needs Input honest. Its own entry, like the freeze alert.
+// expiring them keeps Needs You honest. Its own entry, like the freeze alert.
 crons.interval(
   "expire offline device permissions",
   { minutes: 5 },
