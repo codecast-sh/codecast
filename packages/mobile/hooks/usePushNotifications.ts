@@ -11,6 +11,7 @@ import { useNotificationCatchUp } from '@/hooks/useNotificationCatchUp';
 import { acceptInvite, declineInvite, joinCall } from '@/lib/calls/callManager';
 import { useAuth } from '@/lib/auth';
 import { catchUpConversation } from '@/lib/foregroundResume';
+import { openLink } from '@/lib/links';
 import {
   CALL_PUSH_ACTION_DECLINE,
   CALL_PUSH_ACTION_JOIN,
@@ -166,6 +167,8 @@ export function usePushNotifications() {
         void catchUpConversation(String(data.conversationId));
         // A hosted conversation opens as its own screen there, with its approval card.
         router.push(`/session/${data.conversationId}` as never);
+      } else if ((data.type === "task_completed" || data.type === "task_failed") && typeof data.url === "string") {
+        void openLink(data.url);
       } else if (data.channelId) {
         // A team chat push lands in the channel it came from — and when it was
         // a thread reply, in that thread, which is where the words actually
