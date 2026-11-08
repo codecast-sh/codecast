@@ -656,9 +656,9 @@ export class SyncService {
   // what triggers the auto-resume that adopts the freshly swapped credential.
   // `human`: a person wrote it (a cloud agent's launch prompt), so it counts
   // like the composer's messages.
-  // Resolves to whether the server queued it: null means it declined (a crash
-  // revive under recovery mode "off").
-  async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<boolean> {
+  // Resolves to the queued row's id, or null when the server declined it (a
+  // crash revive under recovery mode "off").
+  async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<string | null> {
     await this.throttle();
     const queued = await this.mutate("pendingMessages:sendMessageToSession" as any, {
       conversation_id: conversationId,
@@ -667,7 +667,7 @@ export class SyncService {
       ...(opts.human ? { human: true } : {}),
       api_token: this.apiToken,
     });
-    return queued !== null;
+    return queued === null || queued === undefined ? null : String(queued);
   }
 
   // After this (primary) daemon pushes a CHANGED credential to the remote
@@ -1751,10 +1751,12 @@ export class SyncService {
    * Owner device of a conversation, with whether that owner is a remote box and
    * online. Lets a local daemon distinguish "another laptop owns this, back off"
    * from "a remote owns this but can only serve an explicitly-moved session — if I
-   * have the checkout I should reclaim it." null if unknown/unowned.
+   * have the checkout I should reclaim it." null if unknown/unowned, or when
+   * the lookup failed; `strict` throws on the failure instead.
    */
   async getConversationOwnerInfo(
     conversationId: string,
+    opts: { strict?: boolean } = {},
   ): Promise<{ ownerDeviceId: string; ownerIsRemote: boolean; ownerOnline: boolean } | null> {
     try {
       const res = await this.client.query("devices:getConversationOwner" as any, {
@@ -1768,7 +1770,8 @@ export class SyncService {
         ownerIsRemote: !!(res as any).owner_is_remote,
         ownerOnline: !!(res as any).owner_online,
       };
-    } catch {
+    } catch (err) {
+      if (opts.strict) throw err;
       return null;
     }
   }
@@ -1787,10 +1790,13 @@ export class SyncService {
    * A and B return `hideStateKnown: true`; C is marked degraded so callers can
    * refuse to act on it. Returns null when nothing resolves, which callers read
    * as "unknown" and handle per their own fail-open/fail-closed policy.
+   * `strict` throws when the server could not be asked instead, so a caller
+   * that must tell "deleted" from "offline" can.
    */
   async getConversationLifecycle(
     conversationId: string,
     sessionId?: string,
+    opts: { strict?: boolean } = {},
   ): Promise<ConversationLifecycle | null> {
     if (shouldProbeLifecycleQuery(lifecycleQueryMissingSince, Date.now())) {
       try {
@@ -1839,6 +1845,7 @@ export class SyncService {
         // timeout) is transient: leave the latch alone and let the caller's own
         // fail-open/fail-closed policy handle this one call.
         if (isMissingFunctionError(err)) lifecycleQueryMissingSince = Date.now();
+        else if (opts.strict) throw err;
       }
     }
     // Legacy-backend path only — reached when the query above is undeployed or
@@ -1852,7 +1859,8 @@ export class SyncService {
         session_id: sessionId,
       });
       return res ? { status: res.status ?? null, hideStateKnown: false, source: "status-fallback" } : null;
-    } catch {
+    } catch (err) {
+      if (opts.strict) throw err;
       return null;
     }
   }
