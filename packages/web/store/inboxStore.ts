@@ -764,7 +764,7 @@ export type InboxSession = {
   is_deferred?: boolean;
   // When the user deferred the row; orders deferred rows by defer time.
   inbox_deferred_at?: number | null;
-  // The user's own rest verdict — where they filed the row (Needs Input, Done,
+  // The user's own rest verdict — where they filed the row (Needs You, Done,
   // Dormant) — current per the server's inbox_rest_at >= updated_at rule, the
   // same contract as is_deferred. The raw stamp rides along so the optimistic
   // write sets both and the client re-checks currency as updated_at moves.
@@ -2701,7 +2701,7 @@ const INBOX_FACT_FIELD_SET: ReadonlySet<string> = new Set(INBOX_FACT_FIELDS);
 // not carry reads as null — never "keep what was there": the server's trusted
 // status is undefined once the managed row is gone, the key is absent from
 // the payload, and a stale "stopped" would otherwise outlive it and file a
-// declared-done session under Needs Input on this replica alone.
+// declared-done session under Needs You on this replica alone.
 function mergeOverlayFacts(target: Record<string, unknown>, incoming: Record<string, unknown>, pending: Record<string, PendingEntry>): Record<string, PendingEntry> {
   const { fields: facts, pending: nextPending } = applySyncPatch("sessions", String(target._id), {
     ...Object.fromEntries(INBOX_FACT_FIELDS.map((key) => [key, incoming[key] ?? null])),
@@ -3505,7 +3505,7 @@ export interface PlacedInbox {
 // nested under a same-bucket lead. That is the honest number only while those
 // nested rows are on screen. With the subagent toggle off they render nowhere,
 // so the header claimed rows the reader could neither see nor reach: prod on
-// 2026-09-10 showed NEEDS INPUT (121) above 33 cards, while the sidebar badge
+// 2026-09-10 showed NEEDS YOU (121) above 33 cards, while the sidebar badge
 // (flat cards only) said 34. A chip filter narrows a section the same way, so a
 // filtered section always reports the cards it shows.
 export function sectionHeaderCount(
@@ -4306,7 +4306,7 @@ function assertPlacementParity(
   }
 }
 
-// The "your move" rows (Ctrl+I, queue advance): questions, NEEDS INPUT and
+// The "your move" rows (Ctrl+I, queue advance): questions, NEEDS YOU and
 // DONE, plus a fresh start held in NEW whose turn has settled on the person.
 export function yourMoveOf(placed: PlacedInbox): (s: InboxSession) => boolean {
   const keep = new Set([...placed.needsInput, ...placed.done].map((s) => s._id));
@@ -4337,7 +4337,7 @@ export function visualOrderSessions(
     // Grouped-view collapse: sessions inside a collapsed status section are
     // skipped, so Ctrl+J/K only walks cards the panel actually renders.
     collapsedSections?: Record<string, boolean>;
-    // Narrow the walk to the "your move" rows: questions, NEEDS INPUT and DONE
+    // Narrow the walk to the "your move" rows: questions, NEEDS YOU and DONE
     // exactly as the chokepoint files them (Ctrl+I, queue advance).
     yourMove?: boolean;
     // Which project each session works in, for project chips (store/workProjects).
@@ -5273,7 +5273,7 @@ export function computeVisualOrder(state: {
   questionResolutions?: QuestionResolutions;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
 }, opts: {
-  // Only the rows that are the user's move (questions, NEEDS INPUT, DONE), in
+  // Only the rows that are the user's move (questions, NEEDS YOU, DONE), in
   // the same on-screen order — see visualOrderSessions. Every mode honors it,
   // so Ctrl+I lands on the first such card the user can see, whatever lens or
   // flat view is up.
@@ -5551,7 +5551,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // not be current now (a launch from cache, a suspension, a dropped socket);
   // null while the feed is live. Placement reads time-driven terms (heartbeat
   // windows, trust TTLs) at this time instead of the device clock, so a row
-  // keeps its last known section instead of decaying into Needs Input on facts
+  // keeps its last known section instead of decaying into Needs You on facts
   // the device simply has not been sent. `livenessHoldSeq` bumps on every
   // hold: only a fresh read started after the latest hold releases it.
   livenessHeldAt: number | null;
@@ -6019,7 +6019,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setFeedCursor: (key: string, cursor: string | null) => void;
   sortedSessions: () => InboxSession[];
   visualOrder: () => InboxSession[];
-  // The on-screen rows that are the user's move (questions, NEEDS INPUT, DONE)
+  // The on-screen rows that are the user's move (questions, NEEDS YOU, DONE)
   // in render order — what Ctrl+I and the queue's advance walk. Same verdicts
   // as the panel, so the first entry is always the first such card visible.
   yourMoveOrder: () => InboxSession[];

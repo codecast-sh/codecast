@@ -2712,7 +2712,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 ) : agentStatus === "permission_blocked" ? (
                   <span className="flex items-center gap-1.5 text-sol-orange">
                     <span className="w-2 h-2 rounded-full bg-sol-orange animate-pulse" />
-                    {(pendingPermissionsCount ?? 0) > 0 ? "Permission needed" : hasAskUserQuestion ? "Answer needed" : "Needs input"}
+                    {(pendingPermissionsCount ?? 0) > 0 ? "Permission needed" : hasAskUserQuestion ? "Answer needed" : "Needs you"}
                   </span>
                 ) : agentStatus === "connected" ? (
                   <span className="flex items-center gap-1.5">
