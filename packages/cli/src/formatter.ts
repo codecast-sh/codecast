@@ -101,7 +101,10 @@ function summarizeToolCall(tc: { name?: string; input?: unknown }): string {
 }
 
 interface SearchMatch {
+  /** The match's rank within its session, not its place in the transcript. */
   line: number;
+  /** The message row, when the server sends it: `cast read <id>#<message_id>` opens it in place. */
+  message_id?: string;
   role: string;
   content: string;
   timestamp: string;
@@ -156,6 +159,32 @@ interface SearchResult {
 
 interface SearchOptions {
   projectPath?: string;
+  /** The query's free text (operators removed): what `cast read <id> --grep` looks for inside one session. */
+  text?: string;
+}
+
+/** The command that finds the query's text inside one session, with true line numbers. */
+function grepCommand(id: string, text: string | undefined): string {
+  return `cast read ${id} --grep ${JSON.stringify(text?.trim() || "<text>")}`;
+}
+
+/** `cast search -l`: one line per session, with how many of its messages matched. */
+export function formatSearchSessions(result: SearchResult, options: SearchOptions = {}): string {
+  if (result.conversations.length === 0) return "No matches found. Use --mine for only your sessions, -g for all teams.";
+  const lines = result.conversations.map((conv) => {
+    const who = conv.user?.name || conv.user?.email;
+    // A row with no message snippet matched on its title or summary.
+    const hits = conv.matches.length === 0 ? "title" : `${conv.matches.length} match${conv.matches.length === 1 ? "" : "es"}`;
+    return [
+      `${c.cyan}${truncateId(conv.id)}${c.reset}`,
+      hits.padEnd(10),
+      conv.title,
+      `${c.dim}${[formatRelativeTime(conv.updated_at), `${conv.message_count} msgs`, truncatePath(conv.project_path), who].filter(Boolean).join(" · ")}${c.reset}`,
+    ].join("  ");
+  });
+  for (const line of result.truncated ?? []) lines.unshift(`${c.yellow}Partial:${c.reset}${c.dim} ${line}${c.reset}`);
+  if (options.text?.trim()) lines.push(`${c.dim}inside one: ${grepCommand("<id>", options.text)}${c.reset}`);
+  return lines.join("\n");
 }
 
 interface ReadMessage {
@@ -173,10 +202,14 @@ interface ReadResult {
     title: string;
     project_path: string | null;
     message_count: number;
+    /** False when the count is the stored row count (a scan that stopped early), not the numbered lines. */
+    message_count_exact?: boolean;
     updated_at: string;
   };
   messages: ReadMessage[];
   target_line?: number;
+  /** A --grep read: how many messages matched, how many lines were searched, and whether more matches follow. */
+  grep?: { matches: number; searched?: number; more?: boolean };
 }
 
 function formatDate(isoDate: string): string {
@@ -454,13 +487,15 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
     }
     lines.push("");
 
+    // No line numbers here: the server ranks the best few messages without
+    // numbering the transcript. A message id opens the match in place.
     for (const msg of conv.matches) {
-      const lineNum = `${c.dim}${String(msg.line).padStart(3)}:${c.reset}`;
       const role = msg.role === "user"
         ? `${c.blue}[user]${c.reset}`
         : `${c.green}[assistant]${c.reset}`;
       if (msg.content) {
-        lines.push(`${lineNum} ${role} ${msg.content}`);
+        lines.push(`  ${role} ${msg.content}`);
+        if (msg.message_id) lines.push(`  ${c.dim}↳ cast read ${truncateId(conv.id)}#${msg.message_id} -c 3${c.reset}`);
       }
       lines.push("");
     }
@@ -468,9 +503,9 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 
   if (result.conversations.length > 0) {
     lines.push("To explore:");
-    lines.push("  cast read <id> <line>:<line>   # read message range");
-    lines.push("  cast read <id>                 # read all messages");
-    lines.push("  cast summary <id>              # get session summary");
+    lines.push(`  ${grepCommand("<id>", options.text)}   # every message in it with the text, by line number`);
+    lines.push("  cast read <id> -n 20           # its last 20 messages");
+    lines.push("  cast read <id> --ask \"<q>\"     # answer from the whole session, with citations");
     lines.push("  cast diff <id>                 # files a session changed, before attributing work");
   }
 
@@ -488,7 +523,12 @@ interface FormatOptions {
    * output past ~30K characters, so a read meant for one must fit under that.
    */
   maxChars?: number;
+  /** The text a --grep read looked for: the footer counts its matches instead of paging. */
+  grep?: string;
 }
+
+/** How far back a range from the end reaches: a tail read returns at most this many messages (READ_TAIL_MAX on the server). */
+export const READ_BACK_MAX = 500;
 
 /** A page `cast read` hands an agent: under the ~30K characters an agent's shell tool shows whole. */
 export const READ_PAGE_CHARS = 24_000;
@@ -516,12 +556,8 @@ export function formatAskResult(result: ReadAskResult): string {
   const out = [header + "─".repeat(Math.max(0, 60 - header.length))];
   out.push(`   ${fmt.id(conv.short_id)} | ${conv.lines}${result.scan_complete ? "" : "+"} lines | ${fmt.muted(result.question)}`, "");
   out.push(result.answer.trim(), "");
-  // Lines counted from the end open with a tail read reaching back to the earliest one.
-  const fromEnd = result.cited_lines.filter((l) => l < 0);
-  const reads = [
-    ...lineRanges(result.cited_lines.filter((l) => l > 0)).map((r) => `cast read ${conv.short_id} ${r}`),
-    ...(fromEnd.length ? [`cast read ${conv.short_id} -n ${-Math.min(...fromEnd)}`] : []),
-  ];
+  // Lines counted from the end read back the same way: `cast read <id> -12:-10`.
+  const reads = lineRanges(result.cited_lines).map((r) => `cast read ${conv.short_id} ${r}`);
   if (reads.length) out.push(`${fmt.label("read:")} ${reads.map((r) => fmt.cmd(r)).join("  ")}`);
   const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
   out.push(fmt.muted([
@@ -562,7 +598,9 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
     const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
     // Streaming artifacts carry nothing; a turn holding only tool results shows
     // nothing but its header unless --full prints the results.
-    if (!hasContent && !hasToolCalls && !(hasToolResults && options.full)) {
+    // A grep match can sit in a tool result alone: name it rather than drop it.
+    const resultOnlyMatch = options.grep !== undefined && hasToolResults && !options.full && !hasContent && !hasToolCalls;
+    if (!hasContent && !hasToolCalls && !(hasToolResults && options.full) && !resultOnlyMatch) {
       continue;
     }
     const block: string[] = [];
@@ -576,6 +614,7 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
       const indentedContent = msg.content.split("\n").map((l) => "       " + l).join("\n");
       block.push(indentedContent);
     }
+    if (resultOnlyMatch) block.push(`       ${fmt.muted(`(in a tool result: cast read ${truncateId(conv.id)} ${msg.line} --full)`)}`);
 
     if (hasToolCalls && msg.tool_calls) {
       if (options.full) {
@@ -600,7 +639,7 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
         // this collapsed line is all a non-full read shows of it — readers have
         // mistaken that for an empty result. Point at the exact command.
         if (calls.some((tc) => tc.name === "StructuredOutput")) {
-          block.push(`       ${fmt.muted(`↳ full payload: cast read ${truncateId(conv.id)} ${msg.line < 0 ? `-n ${-msg.line}` : msg.line} --full`)}`);
+          block.push(`       ${fmt.muted(`↳ full payload: cast read ${truncateId(conv.id)} ${msg.line} --full`)}`);
         }
       }
     }
@@ -620,18 +659,75 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
     blocks.push({ line: msg.line, text: block.join("\n") + "\n" });
   }
 
-  lines.push(...fitReadPage(blocks, options.maxChars, truncateId(conv.id)));
+  const id = truncateId(conv.id);
+  const page = fitReadPage(blocks, options.maxChars, id);
+  lines.push(...page.texts);
+  if (!page.cut) {
+    const footer = readFooter(result, id, options.grep);
+    if (footer) lines.push(fmt.muted(footer));
+  }
   return lines.join("\n");
 }
 
 /**
- * The blocks that fit in maxChars, always at least one. A forward read keeps
- * its start and names the range that continues it; a tail read (negative
- * lines count back from the end) keeps its newest messages.
+ * Where a read sits in its session and the commands that move from it: the
+ * lines shown out of the total, then the next page, the latest messages, or
+ * the earlier ones. Lines below zero count back from the end (a tail read on
+ * a session too long to number from the start).
  */
-function fitReadPage(blocks: Array<{ line: number; text: string }>, maxChars: number | undefined, id: string): string[] {
+function readFooter(result: ReadResult, id: string, grep?: string): string | null {
+  const shown = result.messages.map((m) => m.line);
+  const total = result.conversation.message_count;
+  const about = result.conversation.message_count_exact === false ? "about " : "";
+  if (grep !== undefined) {
+    const g = result.grep;
+    const found = g ? g.matches : shown.length;
+    const quoted = JSON.stringify(grep);
+    if (found === 0) return `no message in this session contains ${quoted}${g?.searched ? ` (searched ${g.searched} lines)` : ""}`;
+    const more = g?.more && shown.length ? `; more: cast read ${id} ${shown[shown.length - 1] + 1}: --grep ${quoted}` : "";
+    return `${found}${g?.more ? "+" : ""} message${found === 1 ? "" : "s"} contain ${quoted}${more}; open one with: cast read ${id} <line> -c 3`;
+  }
+  if (shown.length === 0) return null;
+  const first = shown[0];
+  const last = shown[shown.length - 1];
+  if (last < 0) {
+    const back = -first;
+    const span = back + last + 1;
+    const reach = Math.min(back + span, READ_BACK_MAX);
+    const parts = [last === -1
+      ? `the last ${back} of ${about}${total} lines, counted back from the end`
+      : `lines ${first} to ${last} of ${about}${total}, counted back from the end`];
+    if (reach > back) parts.push(`earlier: cast read ${id} -${reach}:-${back + 1}`);
+    if (last < -1) parts.push(`later: cast read ${id} ${last + 1}:`);
+    return parts.join("; ");
+  }
+  const parts = [first === last ? `line ${first} of ${about}${total}` : `lines ${first}-${last} of ${about}${total}`];
+  if (last < total) {
+    parts.push(`next: cast read ${id} ${last + 1}:${Math.min(total, last + 20)}`);
+    parts.push(`latest: cast read ${id} -n 10`);
+  } else if (first > 1) {
+    parts.push(`earlier: cast read ${id} ${Math.max(1, first - 20)}:${first - 1}`);
+  }
+  return parts.join("; ");
+}
+
+/**
+ * The blocks that fit in maxChars. A forward read keeps its start and names
+ * the range that continues it; a tail read (negative lines count back from
+ * the end) keeps its newest messages. A single message larger than the page
+ * is cut, with the command that prints it whole.
+ */
+export function fitReadPage(blocks: Array<{ line: number; text: string }>, maxChars: number | undefined, id: string): { texts: string[]; cut: boolean } {
   const total = blocks.reduce((n, b) => n + b.text.length, 0);
-  if (!maxChars || total <= maxChars) return blocks.map((b) => b.text);
+  if (!maxChars || total <= maxChars) return { texts: blocks.map((b) => b.text), cut: false };
+  const limit = `${Math.round(maxChars / 1000)}K-character page`;
+  if (blocks.length === 1) {
+    const b = blocks[0];
+    return {
+      texts: [b.text.slice(0, maxChars), fmt.muted(`… message ${b.line} is ${b.text.length} characters, cut to fit a ${limit}; whole: cast read ${id} ${b.line} --full --json`)],
+      cut: true,
+    };
+  }
   const fromEnd = blocks.some((b) => b.line < 0);
   const ordered = fromEnd ? [...blocks].reverse() : blocks;
   const kept: typeof blocks = [];
@@ -641,14 +737,19 @@ function fitReadPage(blocks: Array<{ line: number; text: string }>, maxChars: nu
     kept.push(b);
     used += b.text.length;
   }
+  if (kept.length === 1 && kept[0].text.length > maxChars) {
+    // The one message kept is itself past the page: cut it as above and name the rest.
+    const lone = fitReadPage(kept, maxChars, id).texts;
+    const rest = fromEnd ? `read further back: cast read ${id} ${kept[0].line - (blocks.length - 1)}:${kept[0].line - 1}` : `continue: cast read ${id} ${blocks[1].line}:${blocks[blocks.length - 1].line}`;
+    return { texts: [...lone, fmt.muted(`… ${rest}`)], cut: true };
+  }
   const cut = blocks.length - kept.length;
-  const limit = `${Math.round(maxChars / 1000)}K-character page`;
   if (fromEnd) {
-    return [fmt.muted(`… ${cut} older message${cut === 1 ? "" : "s"} cut to fit a ${limit}; read further back with a line range`) + "\n", ...kept.reverse().map((b) => b.text)];
+    return { texts: [fmt.muted(`… ${cut} older message${cut === 1 ? "" : "s"} cut to fit a ${limit}; read further back: cast read ${id} ${kept[kept.length - 1].line - cut}:${kept[kept.length - 1].line - 1}`) + "\n", ...kept.reverse().map((b) => b.text)], cut: true };
   }
   const next = blocks[kept.length].line;
   const last = blocks[blocks.length - 1].line;
-  return [...kept.map((b) => b.text), fmt.muted(`… page ends here (${limit}); continue: cast read ${id} ${next}:${last}`)];
+  return { texts: [...kept.map((b) => b.text), fmt.muted(`… page ends here (${limit}); continue: cast read ${id} ${next}:${last}`)], cut: true };
 }
 
 // One message rendered for the `cast sessions <id> -w` live follow: a timestamped
@@ -1849,6 +1950,7 @@ interface Decision {
   alternatives?: string[];
   tags?: string[];
   session_id?: string;
+  conversation_id?: string;
   message_index?: number;
   project_path?: string;
   created_at: string;
@@ -1874,20 +1976,22 @@ export function formatDecisionsResults(result: DecisionsResult): string {
     const shortId = truncateId(decision.id);
     const date = new Date(decision.created_at).toISOString().split("T")[0];
 
-    lines.push(`[${shortId}] ${date} - ${decision.title}`);
+    // Labelled, so the head of a Convex id never reads as another kind's short id.
+    lines.push(`[decision ${shortId}] ${date} - ${decision.title}`);
     lines.push(`  Why: ${decision.rationale}`);
 
     if (decision.tags && decision.tags.length > 0) {
       lines.push(`  Tags: ${decision.tags.join(", ")}`);
     }
 
-    if (decision.session_id) {
-      const sessionShort = truncateId(decision.session_id);
+    // The conversation's short id is what `cast read` takes; session_id is the
+    // agent's own uuid, which no command accepts, so a row without a
+    // conversation names no session.
+    if (decision.conversation_id) {
       const msgPart = decision.message_index !== undefined ? ` msg ${decision.message_index}` : "";
-      lines.push(`  Session: [${sessionShort}]${msgPart}`);
+      lines.push(`  Session: ${truncateId(decision.conversation_id)}${msgPart}`);
     }
 
-    lines.push(`  ID: ${decision.id}`);
     lines.push("");
   }
 
@@ -2382,8 +2486,8 @@ export function formatContextResults(input: ContextInput): string {
 
   if (sessions.length > 0) {
     const firstId = truncateId(sessions[0].id);
-    lines.push(`Use: cast read ${firstId} <range>  # read session messages`);
-    lines.push(`     cast summary ${firstId}        # get session summary`);
+    lines.push(`Use: cast read ${firstId} <range>      # read session messages, e.g. 12:20`);
+    lines.push(`     cast read ${firstId} --ask "<q>"   # answer from the whole session, with citations`);
   }
 
   lines.push("</CONTEXT>");

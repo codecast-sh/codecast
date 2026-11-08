@@ -84,6 +84,25 @@ export interface ThreadStateFields {
  * that is empty once trimmed — callers treat that as a clear.
  */
 export function normalizeThreadState(input: string): string {
+  const collapsed = collapseThreadState(input);
+  if (collapsed.length <= THREAD_STATE_MAX_CHARS) return collapsed;
+  return collapsed.slice(0, THREAD_STATE_MAX_CHARS - 1).trimEnd() + "…";
+}
+
+/**
+ * True when the cap cut text a reader would see. The pin and the card render
+ * the state without its json reports, and the report rides whole in
+ * `thread_state_result`, so a long json block past the cap loses nothing; only
+ * prose the cap dropped counts.
+ */
+export function threadStateProseCut(input: string): boolean {
+  const collapsed = collapseThreadState(input);
+  if (collapsed.length <= THREAD_STATE_MAX_CHARS) return false;
+  const shown = withoutJsonBlocks(normalizeThreadState(input)).replace(/…$/, "").trim();
+  return shown.length < withoutJsonBlocks(collapsed).trim().length;
+}
+
+function collapseThreadState(input: string): string {
   const lines = input.replace(/\r\n/g, "\n").split("\n").map((line) => line.trimEnd());
   // Drop the indentation the whole block shares — a heredoc written inside an
   // indented shell block carries it accidentally — while keeping the RELATIVE
@@ -97,8 +116,7 @@ export function normalizeThreadState(input: string): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  if (collapsed.length <= THREAD_STATE_MAX_CHARS) return collapsed;
-  return collapsed.slice(0, THREAD_STATE_MAX_CHARS - 1).trimEnd() + "…";
+  return collapsed;
 }
 
 /**
