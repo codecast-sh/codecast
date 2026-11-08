@@ -282,3 +282,8 @@ test("a message waiting on a cloud placement never offers kill and restart: ther
   // A restart the person already pressed keeps its progress.
   expect(pendingBannerState(undefined, { ...late, cloudPlacing: true, restartInFlight: true })).toBe("stuck");
 });
+
+test("a send that failed as unconfirmed reads as not confirmed, never as retrying", () => {
+  expect(sessionMessageQueueLabel("failed", "unconfirmed", "idle")).toBe("not confirmed");
+  expect(sessionMessageQueueLabel("failed", undefined, "idle")).toBe("queued · retrying");
+});

@@ -8,6 +8,7 @@
 // there would interrupt and discard live work. Only when the agent is genuinely idle
 // (or gone) and STILL hasn't taken the message is a restart the right escalation.
 
+import { UNCONFIRMED_DELIVERY_REASON } from "@codecast/shared/contracts";
 import { MID_TURN_AGENT_STATUSES, isRecoveryContinueClientId } from "@codecast/shared/contracts";
 
 export type LiveAgentStatus =
@@ -57,6 +58,8 @@ export type PendingBannerState = "none" | "queued" | "stuck";
 
 export function sessionMessageQueueLabel(status?: string, reason?: string, recipientStatus?: string): string | null {
   if (!status) return null;
+  // Typed into the session and never seen to arrive: nothing retries it.
+  if (status === "failed" && reason === UNCONFIRMED_DELIVERY_REASON) return "not confirmed";
   if (reason) return `queued · ${reason}`;
   if (status === "failed" || status === "undeliverable") return "queued · retrying";
   if (recipientStatus === "permission_blocked") return "queued · waiting for an answer";
