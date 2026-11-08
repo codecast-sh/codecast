@@ -79,7 +79,7 @@ const problem = (id: string, over: Record<string, any> = {}) => ({
 describe("a problem's outcome", () => {
   const run = (status: string, nodes: string[] = []) => ({ status, node_statuses: nodes.map((node_id) => ({ node_id, status: "completed" })) });
   test("reads the task and its newest run", () => {
-    expect(problemOutcome(problem("a"), null)).toBe("queued");
+    expect(problemOutcome(problem("a"), null)).toBe("unstarted");
     expect(problemOutcome(problem("a", { readiness: "needs_context" }), null)).toBe("notReady");
     expect(problemOutcome(problem("a", { workflow_run_id: "r" }), run("running"))).toBe("running");
     expect(problemOutcome(problem("a", { status: "in_review", workflow_run_id: "r" }), run("paused"))).toBe("waiting");
@@ -129,7 +129,7 @@ describe("the rollup's fold", () => {
       workspace: WS, now: NOW, from: recountFrom({ rolled_at: NOW - H, funnel: {} }, NOW), prev,
       counts: [{ source: "person", day: days[12], n: 2, last_at: NOW - 20 * H }, { source: "person", day: days[13], n: 1, last_at: NOW - H }],
       reopened: [{ task_id: "tasks_new", at: NOW - H }],
-      outcomes: [{ source: "person", outcome: "queued" }, { source: "person", outcome: "failed" }],
+      outcomes: [{ source: "person", outcome: "unstarted" }, { source: "person", outcome: "failed" }],
       escapes: {},
     });
     expect(out.sources).toEqual([{ key: "person", days: [{ day: days[5], n: 4 }, { day: days[12], n: 2 }, { day: days[13], n: 1 }], last_at: NOW - H, outcomes: { queued: 1, notReady: 0, running: 0, waiting: 0, shipped: 0, closed: 0, failed: 1, parked: 0, total: 2 }, escapes: 0 }]);
@@ -297,7 +297,7 @@ describe("rollup then forTeam", () => {
     expect(w30.signals).toBe(9);
     expect(w7.steps.map((s) => s.label)).toEqual(["Problems opened", "Runs started", "Investigate", "Rebase", "Build", "Decide", "Merged", "Live in production", "Closed clean"]);
     // Opened in the window: ar1, ar2, ar3, p1, p2, e1, w1, jr (ar4 merged into ar3; p3, ar5, old are 40 days old).
-    expect(w7.steps[0]).toMatchObject({ n: 8, drops: { queued: 2, closed: 1 } });
+    expect(w7.steps[0]).toMatchObject({ n: 8, drops: { unstarted: 2, closed: 1 } });
     // Runs: ar1, ar2 at Build; p1 waiting at Decide; p2 on a person's line at Rebase; e1 shipped and reopened.
     expect(w7.steps[1].n).toBe(5);
     const at = (key: string) => w7.steps.find((s) => s.key === key)!;

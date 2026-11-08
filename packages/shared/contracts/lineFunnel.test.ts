@@ -98,14 +98,14 @@ describe("funnelItem", () => {
     expect(item(task({ status: "dropped" }), run({ nodes: ["bind", "triage", "build", "dropped", "exit"] }))).toMatchObject({ level: level("build"), why: "dropped" });
   });
 
-  test("no run: queued when ready and over the bar, held back when not ready or under it; merged into another problem counts nowhere", () => {
-    expect(item(task({ readiness: "ready" }), null)).toMatchObject({ level: 0, why: "queued", run: null, status: null });
+  test("no run: not started when ready and over the bar, held back when not ready or under it; merged into another problem counts nowhere", () => {
+    expect(item(task({ readiness: "ready" }), null)).toMatchObject({ level: 0, why: "unstarted", run: null, status: null });
     expect(item(task({ readiness: "not_ready" }), null)!.why).toBe("held");
     const bar = { score: 60, findings: 3 };
     const at = (t: FunnelTask) => funnelItem({ task: t, run: null, stations, labels, bar, now: NOW })!.why;
     expect(at(task({ readiness: "ready", cause: { scored: { score: 40 }, signal_count: 1 } }))).toBe("held");
-    expect(at(task({ readiness: "ready", cause: { scored: { score: 40 }, signal_count: 3 } }))).toBe("queued");
-    expect(at(task({ readiness: "ready", cause: { scored: { score: 80 }, signal_count: 1 } }))).toBe("queued");
+    expect(at(task({ readiness: "ready", cause: { scored: { score: 40 }, signal_count: 3 } }))).toBe("unstarted");
+    expect(at(task({ readiness: "ready", cause: { scored: { score: 80 }, signal_count: 1 } }))).toBe("unstarted");
     expect(item(task({ cause: { merged_into: "t9" } }), null)).toBeNull();
   });
 
@@ -118,7 +118,7 @@ describe("foldFunnel", () => {
   const mk = (i: number, o: Partial<FunnelItem>): FunnelItem => ({ task: `t${i}`, ref: `ct-${i}`, title: `p${i}`, run: `r${i}`, at: NOW - DAY, level: 1, why: "here", node: null, status: "running", ...o });
   test("counts reach each step, drops split by why, windows by when the problem opened, signals by UTC day", () => {
     const items = [
-      mk(1, { level: 0, why: "queued", run: null }),
+      mk(1, { level: 0, why: "unstarted", run: null }),
       mk(2, { level: level("triage"), why: "closed" }),
       mk(3, { level: level("triage"), why: "closed", at: NOW - 10 * DAY }),
       mk(4, { level: level("decide"), why: "waiting" }),
@@ -134,7 +134,7 @@ describe("foldFunnel", () => {
     expect(n(w7)).toEqual([4, 3, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1]);
     expect(w7.steps[level("triage")].drops).toEqual({ closed: 1 });
     expect(w30.steps[level("triage")].drops).toEqual({ closed: 2 });
-    expect(w7.steps[0].drops).toEqual({ queued: 1 });
+    expect(w7.steps[0].drops).toEqual({ unstarted: 1 });
     expect(funnelItemsOf(f, 7, level("triage")).map((x) => x.task).sort()).toEqual(["t2", "t4", "t5"]);
     expect(funnelItemsOf(f, 30, level("triage"), "closed").map((x) => x.task)).toEqual(["t2", "t3"]);
   });

@@ -22,9 +22,9 @@ export const FUNNEL_ITEM_CAP = 40;
  *  failed or was cancelled, it stands there now, it waits on a person's card, it waits in the queue for the line (ready
  *  and over the flow's bar), it is held back (not ready, or under the bar), it is under watch, or it came back after
  *  it shipped. */
-export type FunnelReason = "closed" | "dropped" | "failed" | "cancelled" | "here" | "waiting" | "queued" | "held" | "watching" | "regressed" | "other";
+export type FunnelReason = "closed" | "dropped" | "failed" | "cancelled" | "here" | "waiting" | "unstarted" | "held" | "watching" | "regressed" | "other";
 /** Display order: what ended first, what still moves after. */
-export const FUNNEL_REASONS: readonly FunnelReason[] = ["closed", "dropped", "failed", "cancelled", "regressed", "other", "here", "waiting", "queued", "held", "watching"];
+export const FUNNEL_REASONS: readonly FunnelReason[] = ["closed", "dropped", "failed", "cancelled", "regressed", "other", "here", "waiting", "unstarted", "held", "watching"];
 
 /** A station step of the funnel: one or more graph nodes a run passes as one (a fan-out and its branches, Push with
  *  Merge and Ready to land). */
@@ -171,7 +171,7 @@ export function funnelItem(o: {
   labels: ReadonlyMap<string, string>;
   /** Its run waits on a person (paused at a card, a blocking decision names it). */
   waiting?: boolean;
-  /** The live flow's bar: a ready problem with no run under it is held back, over it queued. */
+  /** The live flow's bar: a ready problem with no run under it is held back, over it not started. */
   bar?: Pick<FlowBar, "score" | "findings"> | null;
   now: number;
 }): FunnelItem | null {
@@ -217,7 +217,7 @@ export function funnelItem(o: {
 
 function reasonOf(o: { task: FunnelTask; run: FunnelRun | null | undefined; level: number; merged: number; live: boolean; waiting: boolean; bar?: Pick<FlowBar, "score" | "findings"> | null; now: number }): FunnelReason {
   const { task, run } = o;
-  if (!run) return task.status === "dropped" ? "dropped" : task.status === "done" ? "closed" : task.readiness === "ready" && clearsBar(task, o.bar) ? "queued" : "held";
+  if (!run) return task.status === "dropped" ? "dropped" : task.status === "done" ? "closed" : task.readiness === "ready" && clearsBar(task, o.bar) ? "unstarted" : "held";
   if (o.live) return o.waiting ? "waiting" : "here";
   const end = runEnd(run);
   if (end?.kind === "dissolved") return "closed";

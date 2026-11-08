@@ -17,7 +17,7 @@
 .fv [data-why="other"] { --why: var(--lw-rule); }
 .fv [data-why="here"] { --why: var(--lw-live); }
 .fv [data-why="waiting"] { --why: var(--lw-person); }
-.fv [data-why="queued"] { --why: var(--lw-script); }
+.fv [data-why="unstarted"] { --why: var(--lw-script); }
 .fv [data-why="held"] { --why: color-mix(in srgb, var(--lw-script) 45%, var(--lw-paper)); }
 .fv [data-why="watching"] { --why: var(--lw-ok); }
 
