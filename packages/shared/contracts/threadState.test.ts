@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import {
   threadStateResult,
   normalizeThreadState,
+  threadStateProseCut,
   threadStateHeadline,
   threadStateCardLine,
   threadStateRows,
@@ -14,6 +15,22 @@ import {
   THREAD_STATE_STALE_MSGS,
   THREAD_STATE_STALE_MS,
 } from "./threadState";
+
+describe("threadStateProseCut", () => {
+  test("a long json report past the cap cuts nothing a reader sees", () => {
+    const report = JSON.stringify({ outcome: "red", evidence: "x".repeat(3000) });
+    expect(threadStateProseCut(`Reproduced it.\n\n\`\`\`json\n${report}\n\`\`\``)).toBe(false);
+  });
+
+  test("prose past the cap is a cut, with or without a json block", () => {
+    expect(threadStateProseCut("y".repeat(THREAD_STATE_MAX_CHARS + 10))).toBe(true);
+    expect(threadStateProseCut(`\`\`\`json\n{"a":1}\n\`\`\`\n${"y".repeat(THREAD_STATE_MAX_CHARS)}`)).toBe(true);
+  });
+
+  test("whitespace the normalizer drops does not count", () => {
+    expect(threadStateProseCut(`short\n${"\n".repeat(THREAD_STATE_MAX_CHARS)}end`)).toBe(false);
+  });
+});
 
 describe("normalizeThreadState", () => {
   test("trims and collapses blank-line runs", () => {
