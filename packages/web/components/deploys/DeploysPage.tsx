@@ -19,6 +19,8 @@ import { useDeployPress } from "../../hooks/useDeployPress";
 import { ageShort } from "../../lib/lineFlow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import type { CommitCiState, QueueGroup } from "@codecast/shared/contracts/deployTargets";
+import { entityRoute } from "@codecast/shared/entities";
+import { ShareControl } from "../ShareControl";
 import "./deploys.css";
 
 /** Who sent a deploy codecast did not start, by where it reports from. */
@@ -238,6 +240,7 @@ function DeployDetail({ d, now }: { d: TeamDeployRow; now: number }) {
         <dd>{ss.length ? <ul className="dpp-detail-sessions">{ss.map((x) => <li key={x.conversation_id}><Link href={`/conversation/${x.conversation_id}`}>{sessionWords(x)}</Link></li>)}</ul> : <span className="dpp-dim">{d.commits ? `${d.commits} commits, none from a session` : "Not recorded"}</span>}</dd>
       </dl>
       {d.url ? <a className="dpp-log" href={d.url} target="_blank" rel="noreferrer">{logWord(d)}</a> : null}
+      {d.short_id ? <ShareControl label="deploy" path={entityRoute("deploy", d.short_id)!} /> : null}
       <span className="dpp-age">{ago(now, d.created_at)}</span>
     </div>
   );

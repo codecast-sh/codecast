@@ -34,6 +34,8 @@ import { PinnedLead } from "./PinnedLead";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import type { OrgProposalListRow } from "./orgStaffingTypes";
 import type { OrgTree } from "./orgTypes";
+import { entityRoute } from "@codecast/shared/entities";
+import { ShareControl } from "../ShareControl";
 
 /** What the drawer shows, as the address names it. */
 export type OrgPanelTarget = { kind: "home" } | { kind: "proposal"; ref: string; /** One of its changes, by seq. */ focus?: string } | { kind: "session"; id: string };
@@ -195,6 +197,7 @@ export function OrgPanel({ tree, target, onTarget, onClose, onFocusChange, onRes
       <>
         <Back onPress={home} label={head ? `Back to ${head.name}` : "Back"} />
         {proposalRow ? <WorkspaceLine row={proposalRow} tree={tree} /> : <span className="font-mono text-[11.5px]" style={{ color: "var(--sol-violet)" }}>{target.ref}</span>}
+        <ShareControl label="proposal" path={entityRoute("proposal", target.ref)!} className="ml-auto" />
       </>
     );
     body = <ProposalView key={target.ref} refId={target.ref} tree={tree} headConversation={headConversation} onFocusChange={onFocusChange} />;

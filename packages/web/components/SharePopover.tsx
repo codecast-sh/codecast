@@ -152,6 +152,9 @@ export function SharePopover({
           <span className="inline-flex">
             <PopoverTrigger asChild>
               <button
+                type="button"
+                aria-label={`Share${forwardLabel ? ` ${forwardLabel}` : ""}`}
+                data-share-trigger
                 className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${status.label ? status.color : "text-sol-text-dim hover:text-sol-text-secondary"}`}
               >
                 {linkAccess === "anyone" ? (

@@ -11,8 +11,10 @@
 //
 // Skip inactivity jumps the clock over idle stretches (shared/replay/list.ts
 // idleRanges) whichever clock is playing. The address follows the scrubber
-// once it rests, so a copied URL opens where the person stopped, and Share
-// copies a link or a `rp-N@m:ss` moment that plays in place in a message.
+// once it rests, so a copied URL opens where the person stopped. The header's
+// Share (ShareControl, as every object page has) links the recording and sends
+// it to chat; the player bar's Share copies a link at the scrubber or a
+// `rp-N@m:ss` moment that plays in place in a message.
 // Copy repro writes the Playwright test toRepro builds; Start fix
 // goes through the consequential review and records the session on the
 // recording's issues, so a second press opens it instead.

@@ -64,12 +64,10 @@ test("Now: a role a proposal touches shows one violet line, and no way to approv
   await screen.unmount();
 });
 
-test("a person's sheet offers Copy link to its @handle address without printing the handle in the head", async () => {
+test("a person's sheet carries Share for its @handle address without printing the handle in the head", async () => {
   const { SheetFrame } = await import("./SheetFrame");
   const screen = await mountNode(h(SheetFrame, { kind: "person", idRef: null, linkRef: "samvit", glyph: null, title: "Samvit Jain", crumbs: [] }));
   expect(q("[data-sheet-id]", screen.el)).toBeNull();
-  await act(async () => { q("[data-sheet-menu]", screen.el)!.dispatchEvent(new (dom.window as any).KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
-  expect(q("[data-sheet-copy-link]")?.textContent).toBe("Copy link");
-  await act(async () => { document.dispatchEvent(new (dom.window as any).KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect(q("[data-sheet-actions] [data-share-trigger]", screen.el)?.getAttribute("aria-label")).toBe("Share person");
   await screen.unmount();
 });

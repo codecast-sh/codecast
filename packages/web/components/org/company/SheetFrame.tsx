@@ -9,13 +9,15 @@ import Link from "next/link";
 import { Ellipsis } from "lucide-react";
 import { objectHref, type OrgObjectKind } from "@codecast/shared/entities";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-import { copyText } from "../../../lib/copyText";
+import { ShareControl } from "../../ShareControl";
 import { cn } from "../../../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 import { SectionHead } from "../../initiatives/InitiativeRecord";
 import { ORG_BAND, ORG_RULE } from "../orgFrame";
 import { FactsLine } from "../lines/FactsLine";
 import { hasFacts } from "../lines/lineFacts";
+
+const SHARE_LABEL: Record<OrgObjectKind, string> = { initiative: "goal", project: "project", role: "role", person: "person" };
 
 export type Named = { kind: OrgObjectKind; ref: string; title: string };
 export type SheetFacts = { owner?: ReactNode; state?: ReactNode; measure?: ReactNode; date?: ReactNode };
@@ -58,7 +60,7 @@ export function SheetFrame({ kind, idRef, idLabel, sub, onRenameSub, linkRef, gl
   sub?: string | null;
   /** The sub is editable where the object's owner may rename it (a role's title). */
   onRenameSub?: (sub: string) => void;
-  /** The ref its address takes, for Copy link, when it is not shown (a person's handle). Defaults to idRef. */
+  /** The ref its address takes, for Share, when it is not shown (a person's handle). Defaults to idRef. */
   linkRef?: string | null;
   glyph: ReactNode;
   title: string;
@@ -108,6 +110,7 @@ export function SheetFrame({ kind, idRef, idLabel, sub, onRenameSub, linkRef, gl
           {sub ? <SheetSub sub={sub} onRename={onRenameSub} /> : (idLabel ?? idRef) && <span className="org-sheet-id mt-[6px] shrink-0 whitespace-nowrap font-mono text-[11px]" style={{ color: DIM }} data-sheet-id>{idLabel ?? idRef}</span>}
           <span className="flex shrink-0 items-center gap-1.5" data-sheet-actions>
             {actions}
+            {link && <ShareControl label={SHARE_LABEL[kind]} path={link} />}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button type="button" className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-md hover:bg-sol-bg-highlight/60" style={{ color: "var(--sol-text-muted)" }} aria-label="More" data-sheet-menu>
@@ -116,7 +119,6 @@ export function SheetFrame({ kind, idRef, idLabel, sub, onRenameSub, linkRef, gl
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[190px]">
                 {menu.filter((m) => !m.danger).map((m) => <DropdownMenuItem key={m.label} onSelect={m.onSelect}>{m.label}</DropdownMenuItem>)}
-                {link && <DropdownMenuItem onSelect={() => void copyText(`${window.location.origin}${link}`, "Link copied")} data-sheet-copy-link>Copy link</DropdownMenuItem>}
                 {menu.some((m) => m.danger) && <DropdownMenuSeparator />}
                 {menu.filter((m) => m.danger).map((m) => <DropdownMenuItem key={m.label} onSelect={m.onSelect} className="text-[var(--sol-red)] focus:text-[var(--sol-red)]">{m.label}</DropdownMenuItem>)}
               </DropdownMenuContent>

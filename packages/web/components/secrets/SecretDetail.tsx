@@ -21,6 +21,8 @@ import { FieldProblem, KindGlyph, MaskedField, ReplaceButton, RevealButton, Row,
 import { KIND } from "../../lib/secretLook";
 import { useCopy } from "../../hooks/useCopy";
 import { useReveal } from "../../hooks/useReveal";
+import { entityRoute } from "@codecast/shared/entities";
+import { ShareControl } from "../ShareControl";
 import { DeclineRequest, ValueEditor } from "./ValueForm";
 import { askFirstOffLedger, deleteLedger, restoreLedger, rotateLedger, type LedgerTeam } from "../../lib/secretLedgers";
 import { EVENT_TONE, EVENT_VERB, HEALTH, envVars, formatIn, isStub, nameIssue, namesIn, isStaged, secretHealth, splitList, withPendingAskFirst } from "./vaultModel";
@@ -488,6 +490,7 @@ export function SecretDetail({ row, rows, team, over, onClose }: { row: SecretMe
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <ShortIdButton id={row.short_id} />
+          {row.short_id && <ShareControl label="secret" path={entityRoute("secret", row.short_id)!} />}
           {!over && (
             <button type="button" onClick={onClose} aria-label="Close" className="inline-flex items-center gap-1 rounded p-1 text-sol-text-dim hover:text-sol-text">
               <span className="hidden sm:inline-flex">

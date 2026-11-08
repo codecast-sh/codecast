@@ -56,6 +56,7 @@ import { DeploysMoved } from "./views/deploys/DeploysMoved";
 import { FlowsView } from "./views/flows/FlowsView";
 import { TimelineView } from "./views/events/TimelineView";
 import { LineSettingsStage } from "../settings/LineSettingsStage";
+import { ShareControl } from "../../ShareControl";
 import "./workspace.css";
 
 // Imported with the shell, so a nav press paints the page in the same frame: a
@@ -317,6 +318,8 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
           {/* A project narrows Problems, and only Problems. */}
           {!embedded && !flow && stage === "problems" && <ProjectFilter selected={projectId} rollups={ws.allRollups} projects={ws.projects} byProject={ws.byProject} open={ws.open} onPick={(p) => select({ project: p })} />}
           <div className="lw-head-right">
+            {/* The view open here (a problem, a run, a decision) is in the address, so Share sends exactly what is on screen. Embedded, the address is the host's. */}
+            {!embedded && <ShareControl label={flow ? flow.name : "flow"} path={href({})} />}
             <Link href={settingsHref} className="lw-iconbtn" aria-label="Flow settings" aria-current={settings ? "page" : undefined} title={withShortcut("Settings", "line.settings")} data-line-settings-link><SlidersHorizontal className="w-4 h-4" /></Link>
           </div>
         </header>

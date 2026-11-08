@@ -1,4 +1,4 @@
-// The replay page's header and footer parts: Copy repro and Start fix, the
+// The replay page's header and footer parts: Share, Copy repro and Start fix, the
 // linked issues with their fixes, and the person's other recordings.
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -11,6 +11,7 @@ import { copyText } from "../../lib/copyText";
 import { relTimeShort } from "../../lib/utils";
 import { useInboxStore } from "../../store/inboxStore";
 import { EntityIdPill } from "../EntityIdPill";
+import { ShareControl } from "../ShareControl";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { type FixFacts, fixPrompt, replayBaseUrl } from "./opsModel";
 import { opsHref } from "./opsPaths";
@@ -26,7 +27,7 @@ import { pathOf, replayFixLedger, replayLengthText, replayPagePath } from "./rep
 import { useLinkedIssues } from "./replayPageData";
 import { personListHref } from "./replayPlayerModel";
 
-/** Copy repro, and the fix: open the one running, or start one through the review. */
+/** Share, Copy repro, and the fix: open the one running, or start one through the review. */
 export function ReplayActions({ replay, events, issues, vendor }: { replay: OpsReplay; events: ReplayEvent[] | null; issues: ReturnType<typeof useLinkedIssues>; vendor: { href: string; name: string } | null }) {
   const [reviewing, setReviewing] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
@@ -93,6 +94,7 @@ export function ReplayActions({ replay, events, issues, vendor }: { replay: OpsR
           <Wand2 className="w-3.5 h-3.5" /> {startLabel}
         </button>
       )}
+      <ShareControl label="replay" path={opsHref.replay(replay.short_id || replay._id)} />
       {reviewing && <SwitchReview ledger={ledger()} onClose={() => setReviewing(false)} onConfirm={start} onPick={setFolder} />}
     </div>
   );

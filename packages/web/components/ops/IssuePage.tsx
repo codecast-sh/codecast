@@ -44,6 +44,7 @@ import { causeSearchHref, issueListBack, issueStep, rememberIssueFocus } from ".
 import { useMetricBreakdown } from "./useMetricBreakdown";
 import type { OpsEvent, OpsGroup, OpsReplay, OpsSample, OpsSource } from "./opsTypes";
 import "./issues.css";
+import { ShareControl } from "../ShareControl";
 import { DetailsCard, EventCard, SamplesIndex, SkeletonCard, StackCard, TagsCard, type SamplesState } from "./issueSampleCards";
 
 const ref = (g: OpsGroup) => g.short_id || g._id;
@@ -252,6 +253,7 @@ function IssueBody({ group, source, samples, samplesState, retry, events, now }:
           ) : (
             <button type="button" className="ops-btn" onClick={() => setStatus("open")}>Reopen <KeyCap size="xs">u</KeyCap></button>
           )}
+          <ShareControl label="issue" path={opsHref.issue(ref(group))} />
         </div>
       </div>
 

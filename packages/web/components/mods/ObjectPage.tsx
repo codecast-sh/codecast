@@ -10,7 +10,8 @@ import { objectStatusIsDone, type ModSurface } from "@codecast/shared/contracts/
 import { useInboxStore } from "../../store/inboxStore";
 import { formatRelativeTime } from "../../lib/conversationFormat";
 import { modHost, modNavigate } from "../../lib/mods/host";
-import { objectKind, objectsHref, statusTone, type KindEntry } from "../../lib/mods/objects";
+import { objectHref, objectKind, objectsHref, statusTone, type KindEntry } from "../../lib/mods/objects";
+import { ShareControl } from "../ShareControl";
 import { useModHostVersion, useModRows, useObjectRow, type ObjectRow } from "../../lib/mods/useMods";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { ModSurfaceView } from "./ModSurface";
@@ -54,6 +55,7 @@ export function ObjectPage({ id }: { id: string }) {
           <span>/</span>
           <span className="font-mono">{row.short_id}</span>
           {kind?.modTitle ? <span className="ml-auto">{kind.modTitle}</span> : null}
+          <ShareControl label={(kind?.title ?? "object").toLowerCase()} path={objectHref(row.short_id)} className={kind?.modTitle ? undefined : "ml-auto"} />
         </nav>
         <h1 className="text-[24px] font-semibold tracking-tight text-sol-text">{row.title}</h1>
         {drawsPage && surface ? <div className="mt-5"><ModSurfaceView runtime={runtime} surface={surface} instance={row.short_id} /></div> : <ExternalRow row={row} kind={kind} />}
@@ -69,6 +71,7 @@ export function ObjectPage({ id }: { id: string }) {
         <span>/</span>
         <span className="font-mono">{row.short_id}</span>
         <span className="ml-auto">updated {formatRelativeTime(row.updated_at)}</span>
+        <ShareControl label={(kind?.title ?? "object").toLowerCase()} path={objectHref(row.short_id)} />
       </nav>
       <input
         value={title}

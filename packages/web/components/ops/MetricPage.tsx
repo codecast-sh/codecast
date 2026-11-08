@@ -42,6 +42,7 @@ import { CARD_BUCKETS, DETAIL_BUCKETS, changeRange, changeSpan, changeState, cha
 import { currentEpisodeSince, episodeSummary, runningCrossing, relatedShips, shipMarks, SHIPS_SHOWN_MAX, transitionRows, transitionsIn, watchErrorText, watchMarks, windowAround, type ChartMark, type ShipTask, type TransitionRow } from "./metricEvents";
 import { allWindow, intervalLabel } from "./metricEditing";
 import { opsHref } from "./opsPaths";
+import { ShareControl } from "../ShareControl";
 import { OpsNotFound } from "./OpsShellParts";
 import { OpsFeedEmpty, ProviderIcon, SOURCE_PROVIDER_LABEL, useOpsFeed } from "./parts";
 import { QueryEditor, WatchSettings } from "./WatchEditor";
@@ -166,6 +167,9 @@ function ElsewherePreview({ watch, issue }: { watch: OpsWatch; issue: ElsewhereI
             <span>every {intervalLabel(watch.interval_ms)}</span>
             {issue && <span className="ops-mono" title={issue.title}>{issue.short_id}</span>}
           </div>
+        </div>
+        <div className="mxp-actions">
+          <ShareControl label="metric" path={opsHref.metric(watch.short_id || watch._id)} />
         </div>
       </header>
       <div className="mxp-hero">
@@ -382,6 +386,7 @@ function WatchView({ watch }: { watch: OpsWatch }) {
         <div className="mxp-actions">
           {watch.threshold !== undefined && <MuteControl watch={watch} muted={muted} onMute={(until) => update(watch._id, { muted_until: until })} />}
           {group && stage && <FixAction group={group} source={source} stage={stage} now={now} />}
+          <ShareControl label="metric" path={opsHref.metric(watch.short_id || watch._id)} />
         </div>
       </header>
 

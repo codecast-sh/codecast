@@ -9,6 +9,7 @@ import { ModSurfaceView } from "./ModSurface";
 import { ModLogList } from "./ModLogList";
 import { modNavigate, takePaneProps } from "../../lib/mods/host";
 import { useModRows, useModRuntime } from "../../lib/mods/useMods";
+import { ShareControl } from "../ShareControl";
 
 export function ModPanePage({ mod, pane }: { mod: string; pane?: string }) {
   const rows = useModRows();
@@ -70,6 +71,7 @@ export function ModPanePage({ mod, pane }: { mod: string; pane?: string }) {
             Logs{errors ? <span className="ml-1 text-sol-red tabular-nums">{errors}</span> : null}
           </button>
           <button onClick={() => modNavigate("/mods")} className="rounded-md px-2 py-1 text-[12px] text-sol-text-muted hover:text-sol-text">All mods</button>
+          <ShareControl label={row.title ?? row.name} path={active ? `/m/${mod}/${active}` : `/m/${mod}`} />
         </div>
       </header>
       <div className="flex min-h-0 flex-1">

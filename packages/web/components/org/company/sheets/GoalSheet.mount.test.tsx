@@ -229,7 +229,7 @@ async function verifySheets() {
   assert.equal(q("[data-goal-still]")!.textContent, "Still to write: why it matters · a number · what done looks like");
   assert.deepEqual(qa("[data-goal-sheet] .italic").map((e) => e.outerHTML), [], "no column of italics under the head");
   assert.doesNotMatch(q("[data-sheet-body]")!.textContent!, /Nobody|No milestones|No project carries|No update yet|Nothing recorded/);
-  assert.deepEqual(menu(), ["Post an update", "Add a number", "Add a project", "Copy link", "Cancel this goal"]);
+  assert.deepEqual(menu(), ["Post an update", "Add a number", "Add a project", "Cancel this goal"]);
   // "why it matters" opens Why on its editor; cancelled unwritten, Why goes and the phrase is back.
   await click(q("[data-goal-still-item='why']"));
   assert.ok(q("[data-goal-why] [data-initiative-field='why']"), "Why opens on its editor");
