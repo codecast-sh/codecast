@@ -65,7 +65,7 @@ describe("focusBrowserTab", () => {
         calls.push(`raise:${pid}`);
       },
     });
-    expect(result).toEqual({ ok: true, pid: 1234 });
+    expect(result).toEqual({ ok: true, tab: T1, pid: 1234 });
     expect(calls).toEqual([`builtin:activate:${T1}@9333`, "raise:1234"]);
   });
 
@@ -125,7 +125,7 @@ describe("focusBrowserTab", () => {
         calls.push(`raise:${pid}`);
       },
     });
-    expect(result).toEqual({ ok: true, pid: 57386 });
+    expect(result).toEqual({ ok: true, tab: T2, pid: 57386 });
     expect(calls).toEqual([`local-chrome:activate:${T2}@51078`, "raise:57386"]);
   });
 
@@ -146,7 +146,7 @@ describe("focusBrowserTab", () => {
       engines: [slow("builtin", 20, []), slow("local-chrome", 400, [tab(T1, { port: 1111 })]), slow("bridge", 60, [tab(T1, { port: 2222 })])],
       raiseApp: () => {},
     });
-    expect(result).toEqual({ ok: true, pid: 1234 });
+    expect(result).toEqual({ ok: true, tab: T1, pid: 1234 });
     // The bridge answered at 60ms with the tab; the 400ms process scan did
     // not hold the click.
     expect(calls).toEqual([`bridge:activate:${T1}@2222`]);
@@ -161,7 +161,7 @@ describe("focusBrowserTab", () => {
       engines: [slow("builtin", 10, [tab(T2)]), slow("local-chrome", 20, new Error("gone")), slow("bridge", 120, [tab(T1)])],
       raiseApp: () => {},
     });
-    expect(result).toEqual({ ok: true, pid: 1234 });
+    expect(result).toEqual({ ok: true, tab: T1, pid: 1234 });
     expect(calls).toEqual([`bridge:activate:${T1}@9333`]);
   });
 
@@ -173,7 +173,7 @@ describe("focusBrowserTab", () => {
         calls.push(`raise:${pid}`);
       },
     });
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, tab: T1 });
     expect(calls).toEqual([`local-chrome:activate:${T1}@9333`]);
   });
 });
@@ -181,7 +181,7 @@ describe("focusBrowserTab", () => {
 describe("probeBrowserTab", () => {
   test("finds the tab without activating or raising anything", async () => {
     const calls: string[] = [];
-    expect(await probeBrowserTab("2be86883", { engines: [engine("builtin", { calls })] })).toEqual({ ok: true });
+    expect(await probeBrowserTab("2be86883", { engines: [engine("builtin", { calls })] })).toEqual({ ok: true, tab: T1 });
     expect(calls).toEqual([]);
   });
 
@@ -233,20 +233,20 @@ describe("bridge focus engine", () => {
         calls.push(`raise:${pid}`);
       },
     });
-    expect(result).toEqual({ ok: true, pid: 90468 });
+    expect(result).toEqual({ ok: true, tab: "1E21CD78", pid: 90468 });
     expect(calls).toEqual(['bridge:activate:1E21CD78@{"port":41729,"token":"t0k","raise":true}', "raise:90468"]);
   });
 });
 
 describe("focusRequestedTab", () => {
-  test("a row's own tab id wins over the session", async () => {
+  test("a row's own tab id wins over the session's current tab", async () => {
     const calls: string[] = [];
     const out = await focusRequestedTab(new URLSearchParams({ tab: "2be86883", session_uuid: "s-1" }), {
-      engines: [engine("builtin", { calls })],
+      engines: [engine("builtin", { calls, listTabs: async () => [tab(T2), tab(T1)] })],
       raiseApp: () => {},
-      resolveSessionTab: () => { throw new Error("not asked"); },
+      resolveSessionTab: () => T2,
     });
-    expect(out).toEqual({ tab: "2be86883", result: { ok: true, pid: 1234 } });
+    expect(out).toEqual({ tab: T1, result: { ok: true, tab: T1, pid: 1234 } });
     expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
   });
 
@@ -259,7 +259,7 @@ describe("focusRequestedTab", () => {
       resolveSessionTab: (keys) => (asked.push(keys), T1),
     });
     expect(asked).toEqual([["session:s-1", "env:s-1"]]);
-    expect(out).toEqual({ tab: T1, result: { ok: true, pid: 1234 } });
+    expect(out).toEqual({ tab: T1, result: { ok: true, tab: T1, pid: 1234 } });
     expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
   });
 
@@ -273,8 +273,23 @@ describe("focusRequestedTab", () => {
       raiseApp: () => {},
       resolveSessionTab: () => T1,
     });
-    expect(out).toEqual({ tab: T1, result: { ok: true, pid: 1234 } });
+    expect(out).toEqual({ tab: T1, result: { ok: true, tab: T1, pid: 1234 } });
     expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
+  });
+
+  // Every row of an older session names a tab that is gone, and a process
+  // scan on a loaded machine takes tens of seconds: the browser holding the
+  // session's tab answers for the row's tab too, so the click waits on it alone.
+  test("a gone row tab raises the session's tab without waiting on a slower engine", async () => {
+    const calls: string[] = [];
+    const never = engine("local-chrome", { calls, listTabs: () => new Promise<FocusTab[]>(() => {}) });
+    const out = await focusRequestedTab(new URLSearchParams({ tab: "4a2cdc7e", session_uuid: "s-1" }), {
+      engines: [never, engine("bridge", { calls })],
+      raiseApp: () => {},
+      resolveSessionTab: () => T1,
+    });
+    expect(out).toEqual({ tab: T1, result: { ok: true, tab: T1, pid: 1234 } });
+    expect(calls).toEqual([`bridge:activate:${T1}@9333`]);
   });
 
   test("a gone row tab with no session tab stays tab-not-found, so the reopen is offered", async () => {
