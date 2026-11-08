@@ -33,8 +33,9 @@ function world(over: { sdk?: "live" | "exited"; process?: boolean; pending?: boo
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "turn-claims-wiring-"));
   dirs.push(dir);
   // The ledger's clock is when the claim was opened; the pass judges it now.
-  const ledger = new TurnClaimLedger(path.join(dir, "claims.json"), () => over.openedAt ?? Date.now());
   const calls: string[] = [];
+  // Withdrawals go to the server as cancels, as the daemon's ledger sends them.
+  const ledger = new TurnClaimLedger(path.join(dir, "claims.json"), () => over.openedAt ?? Date.now(), (id) => calls.push(`cancel:${id}`));
   const lastHookStatus = new Map<string, { ts: number }>();
   if (over.statusAt !== undefined) lastHookStatus.set("sess", { ts: over.statusAt / 1000 });
   const deps = {
@@ -164,6 +165,20 @@ test("a stalled continue lets the next attempt go, though the conversation still
   expect(w.ledger.get("sess")).toMatchObject({ attempts: 2 });
 });
 
+// The resumed pane came up and sat idle; the person cancelled the restart
+// notice; hibernation then killed the pane outside teardown. The cancel holds.
+test("a continue cancelled after the resumed process spoke is honoured once the process is gone", async () => {
+  const w = world({ statusAt: BOOTED_AT - MIN, continueOutcome: "cancelled" });
+  claim(w, BOOTED_AT - MIN);
+  w.ledger.beginAttempt("sess", Date.now() - 40 * MIN);
+  w.ledger.setContinue("sess", "msg-1");
+  w.ledger.apply("sess", "conv", "idle", { sessionBoundary: true, at: Date.now() - 39 * MIN });
+  await w.recovery.request();
+  expect(w.calls).not.toContain("queue");
+  expect(w.calls).toContain("completed");
+  expect(w.ledger.get("sess")).toBeUndefined();
+});
+
 // A reboot with the network still down: the lookups fail, which is no answer.
 test("a dead pane whose lookups fail is kept for the next pass, never completed", async () => {
   const w = world({ statusAt: BOOTED_AT - MIN, offline: true });
@@ -201,6 +216,8 @@ test("the status sink, teardown, the CC-FLEET restart and the warm pool keep the
   expect(source).toMatch(/\[CC-FLEET\][\s\S]{0,400}keepTurnClaims: true/);
   expect(functionBlock(source, "prewarmRecentlyActiveSessions").text).toContain("if (turnClaims().get(sessionId)) continue;");
   expect(functionBlock(source, "handleDeadSession").text).toContain("observedDeadPanes.add(sessionId)");
+  // A claimed session is the pass's in the sweep whatever its file says (a death mid auto-compaction is not completed).
+  expect(source).toMatch(/if \(turnClaims\(\)\.get\(sessionId\)\) continue;\s*if \(claimTransition\(data\.status/);
   // The sweep opens from a status file only what a live status would open (no manual /compact).
   expect(source).toContain('claimTransition(data.status ?? "") === "open" && turnClaims().open(sessionId, convId, data.ts * 1000)');
 });

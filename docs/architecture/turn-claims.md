@@ -45,7 +45,10 @@ unfinished status file). A status older than the mark never reopens the
 claim (a live status in the same second as a Stop or a teardown is the next
 turn and does, a status file from that second does not; teardown marks are
 cut to whole seconds, the precision statuses carry), so a status file a kill left at `working` cannot bring it back through
-the boot replay or the watchdog.
+the boot replay or the watchdog. The watchdog's status sweep leaves a claimed
+session to the pass whatever its file says (a death during an automatic
+compaction leaves `compacting`), and opens a claim only from a file a live
+status would open one from.
 The launch token fence runs first, so a stale launch cannot open or release
 anything.
 
@@ -67,15 +70,22 @@ server lookup. For each claim:
    would only stack behind it. Stalled (failed or undeliverable: delivery gave
    up on a session that never came up, and the server puts it back only once
    the session is up and idle again) counts as landed, so the next attempt can
-   go and the cap can end the loop visibly. Each new attempt cancels the
-   continue it supersedes, so a stalled one never comes back later as a stray
-   restart notice on a healthy session.
-   Cancelled by a person: release, once the process is known to be gone.
+   go and the cap can end the loop visibly. The ledger cancels a claim's
+   continue whenever a newer attempt supersedes it or the claim ends for any
+   reason (a Stop, a teardown, a release by the pass, giving up), so a stalled
+   one never comes back later as a stray restart notice on a healthy session
+   (cancelling one already delivered changes nothing). A claim carried to a
+   new session id keeps its continue.
+   Cancelled by a person: release, once the process is known to be gone. That
+   holds after the resumed process spoke too (its pane came up idle and was
+   later killed outside teardown, by hibernation or a reboot): the pass asks
+   about the continue again once the process is gone.
    Landed, or nobody can say: the process gets 30 minutes to report;
    silence past that means the resume died before its first hook, and that
    attempt is spent.
-2. The conversation now runs on another machine (a move): release. The server
-   already queued that machine's continue (`queueMoveContinue`).
+2. The conversation now runs on another machine (a move): release, ahead of
+   step 1, and withdraw this machine's continue so it does not follow the
+   conversation there.
 3. Is the agent process there? Live or unverifiable: keep, and never start a
    second process beside it.
    - SDK: the host's pid (`ClaudeSdkBackend.hostVerdict`). A start, attach or
@@ -135,7 +145,7 @@ server lookup. For each claim:
    also starts a fresh count, for the same reason. A revive is recorded before its message is queued and
    taken back when the queue call fails or is declined. A continue still
    queued when the session fails is cancelled. A claim that goes 24 hours silent after a resume of its own fails
-   the same way rather than being marked completed. Release, report stopped,
+   the same way (with the "too old" message when no resume ever got its continue in) rather than being marked completed. Release, report stopped,
    and set the session error: "Codecast restarted this session 3 times after
    its agent process died, and it did not come back to finish, so it stopped
    trying. The conversation is intact; send a message to continue."
@@ -238,6 +248,12 @@ sink, so they never get a second claim here.
 - **A death at a permission prompt is resumed** (the turn was open), where the
   revive path left it stopped. The continue makes Claude ask again, which
   opens a fresh card.
+- **A withdrawal that fails is not retried.** The cancel of an ended claim's
+  continue is one call; a Stop replayed from the spool at boot while the
+  network is still down loses it, and a stalled continue can then come back
+  later as a restart notice.
+- **The revive budget starts fresh once on upgrade.** It is now kept per
+  conversation; entries the old build wrote per session are not read.
 - **A teardown and a hook in the same second.** Teardown marks are cut to
   whole seconds, so a status the dying process posted in the same second as
   the post-stop release reopens the claim. After a restart or an agent switch

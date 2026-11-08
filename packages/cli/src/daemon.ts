@@ -29643,7 +29643,10 @@ const TURN_CLAIMS_FILE = process.env.NODE_ENV === "test"
   : path.join(CONFIG_DIR, "turn-claims.json");
 let turnClaimLedger: TurnClaimLedger | null = null;
 function turnClaims(): TurnClaimLedger {
-  return turnClaimLedger ??= new TurnClaimLedger(TURN_CLAIMS_FILE);
+  return turnClaimLedger ??= new TurnClaimLedger(TURN_CLAIMS_FILE, Date.now, (continueId) => {
+    // A claim that ended, or an attempt superseded: its continue must not arrive later as a stray restart notice.
+    syncServiceRef?.cancelPendingMessage(continueId).catch(() => {});
+  });
 }
 let turnClaimRecovery: TurnClaimRecovery | null = null;
 // Sessions whose pane this daemon saw disappear (handleDeadSession): an
@@ -29680,15 +29683,15 @@ function makeTurnClaimRecovery(syncService: SyncService): TurnClaimRecovery {
       const sdk = !!claudeSdkBackend?.owns(conversationId);
       const statusAt = Math.max(claimedAt, (lastHookStatus.get(sessionId)?.ts ?? 0) * 1000);
       const recentResumes = recentRevives(priorRevives(REVIVE_LEDGER_FILE, conversationId), now);
-      // Asked only while a resume has not reported back: is its continue still queued?
-      const continueState: ClaimFacts["continueState"] = awaitingResume(claim) && claim.continueId
-        ? await pendingMessageOutcome(syncService, claim.continueId).then(
-          // Stalled (failed, undeliverable): delivery gave up on a session that
-          // never came up, so the attempt is spent like one that landed.
-          (outcome) => outcome === "open" ? "pending" as const : outcome === "cancelled" ? "cancelled" as const : outcome === "stalled" ? "stalled" as const : "landed" as const,
-          () => "unknown" as const,
-        )
-        : "unknown";
+      // Is the claim's continue still queued, or did a person cancel it? Asked
+      // up front while the resume has not reported back (it decides whether the
+      // attempt is still in flight), and otherwise only once the process is gone.
+      // Stalled (failed, undeliverable): delivery gave up on a session that
+      // never came up, so the attempt is spent like one that landed.
+      const askContinue = (): Promise<ClaimFacts["continueState"]> => claim.continueId && !claim.continuedAt
+        ? pendingMessageOutcome(syncService, claim.continueId).catch(() => "unknown" as const)
+        : Promise.resolve("unknown");
+      let continueState = awaitingResume(claim) ? await askContinue() : "unknown";
       const unknown = { ownedElsewhere: false, lifecycle: undefined, interruptedByUser: false, limitParked: false, lastLifeAt: statusAt, recentRevives: recentResumes, continueState };
       // Delivery is bringing the session back right now (a person's message, a
       // restart): whatever it starts reports its own statuses.
@@ -29707,6 +29710,7 @@ function makeTurnClaimRecovery(syncService: SyncService): TurnClaimRecovery {
           () => findSessionProcess(sessionId, detectSessionAgentType(sessionId)),
         );
       if (!authorizesTeardown(liveness)) return { ...unknown, liveness, lastLifeAt };
+      if (!awaitingResume(claim)) continueState = await askContinue();
       const facts = await deadSessionFacts(syncService, sessionId, conversationId, now, { lastLifeAt });
       const ownedElsewhere = await syncService.getConversationOwnerInfo(conversationId, { strict: true }).then((info) => ownedByAnotherDevice(info), () => null);
       // The claim's own continue keeps the flag set while it is stalled, and
@@ -29721,10 +29725,8 @@ function makeTurnClaimRecovery(syncService: SyncService): TurnClaimRecovery {
       if (reason === "moved" || claudeSdkBackend?.owns(claim.conversationId)) return forgetStatusFile(claim.sessionId);
       markDeadSessionCompleted(syncService, claim.conversationId, claim.sessionId, `turn claim of ${claim.sessionId.slice(0, 8)} conv=${claim.conversationId.slice(0, 12)} released (${reason})`);
     },
-    cancelContinue: (id) => { syncService.cancelPendingMessage(id).catch(() => {}); },
+    // The ledger withdraws a continue still queued (turnClaims' withdraw), so it cannot resume the session behind this message.
     fail: (claim, message) => {
-      // Given up: a continue still queued must not resume it behind the message saying so.
-      if (claim.continueId) syncService.cancelPendingMessage(claim.continueId).catch(() => {});
       forgetStatusFile(claim.sessionId);
       syncService.setSessionError(claim.conversationId, message).catch(logConvexFailure);
       sendAgentStatus(syncService, claim.conversationId, claim.sessionId, "stopped");
@@ -29920,6 +29922,8 @@ function startWatchdog(
           // (turnClaims.ts). A status from before the ledger existed opens it.
           // A claim released since (a kill, a restart) refuses it: then the
           // file is stale, and the sweep below settles it as before.
+          // A claimed session is the pass's whatever its file says (a death during an automatic compaction).
+          if (turnClaims().get(sessionId)) continue;
           if (claimTransition(data.status ?? "") === "open" && turnClaims().open(sessionId, convId, data.ts * 1000)) continue;
           // An SDK session's Claude has no tty for the process lookup below to find, and its host
           // says itself when it is gone: idle there is a person not typing, not an exit. Matched by

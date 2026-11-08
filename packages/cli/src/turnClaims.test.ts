@@ -204,6 +204,40 @@ describe("TurnClaimLedger", () => {
     expect(ledger.touchMark("s1")).toBe(mark);
   });
 
+  // The person's own message brought the session back, its turn ended, and a
+  // stalled continue the server would put back must not arrive afterwards.
+  test("a claim that ends withdraws its continue; a superseded one is withdrawn; a carried one is not", () => {
+    const withdrawn: string[] = [];
+    const ledger = new TurnClaimLedger(path.join(scratch(), "claims.json"), () => 0, (id) => withdrawn.push(id));
+    ledger.apply("s1", "c1", "working", { at: 1000 });
+    ledger.beginAttempt("s1", 2000);
+    ledger.setContinue("s1", "m1");
+    ledger.beginAttempt("s1", 3000); // a newer attempt supersedes it
+    expect(withdrawn).toEqual(["m1"]);
+    ledger.setContinue("s1", "m2");
+    ledger.apply("s1", "c1", "idle", { sessionBoundary: true, at: 4000 });
+    ledger.apply("s1", "c1", "thinking", { at: 5000 });
+    ledger.apply("s1", "c1", "idle", { turnEnded: true, at: 6000 }); // the Stop
+    expect(withdrawn).toEqual(["m1", "m2"]);
+    // Carried to a new session id: still the claim's own, not withdrawn; a teardown then withdraws it.
+    ledger.apply("s2", "c2", "working", { at: 1000 });
+    ledger.beginAttempt("s2", 2000);
+    ledger.setContinue("s2", "m3");
+    ledger.apply("s3", "c2", "idle", { sessionBoundary: true, at: 3000 });
+    expect(withdrawn).toEqual(["m1", "m2"]);
+    ledger.releaseConversation("c2");
+    expect(withdrawn).toEqual(["m1", "m2", "m3"]);
+    // A second prompt inside a resumed turn whose continue never got in replaces the claim: its continue goes too.
+    ledger.apply("s4", "c4", "working", { at: 1000 });
+    ledger.beginAttempt("s4", 2000);
+    ledger.setContinue("s4", "m4");
+    ledger.apply("s4", "c4", "idle", { sessionBoundary: true, at: 3000 });
+    ledger.apply("s4", "c4", "thinking", { at: 4000 }); // the person's prompt, taken as the continue
+    ledger.apply("s4", "c4", "thinking", { at: 5000 }); // a second prompt: a new turn
+    expect(withdrawn).toEqual(["m1", "m2", "m3", "m4"]);
+    expect(ledger.get("s4")?.continueId).toBeUndefined();
+  });
+
   test("releaseConversation drops every claim of a stopped conversation", () => {
     const ledger = new TurnClaimLedger(path.join(scratch(), "claims.json"), () => 0);
     ledger.open("s1", "c1", 1);
@@ -231,9 +265,9 @@ describe("claimDecision", () => {
     expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: now - RESUME_START_MS + MIN }, dead({ lastLifeAt: now }), now)).toEqual({ action: "keep", reason: "resume-in-flight" });
     // A resume that never reported in that long died before its first hook: the next attempt goes.
     expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: now - RESUME_START_MS - MIN }, dead({ lastLifeAt: now }), now)).toEqual({ action: "resume" });
-    expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: now - RESUME_START_MS - MIN }, dead({ lastLifeAt: now, continueState: "landed" }), now)).toEqual({ action: "resume" });
+    expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: now - RESUME_START_MS - MIN }, dead({ lastLifeAt: now, continueState: "delivered" }), now)).toEqual({ action: "resume" });
     // ...unless its continue is still queued on the server: delivery is slow, nothing died again.
-    expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: MIN }, dead({ lastLifeAt: MIN, continueState: "pending" }), 10 * RESUME_START_MS)).toEqual({ action: "keep", reason: "resume-in-flight" });
+    expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: MIN }, dead({ lastLifeAt: MIN, continueState: "open" }), 10 * RESUME_START_MS)).toEqual({ action: "keep", reason: "resume-in-flight" });
     // A person cancelled the continue: they do not want the turn back.
     expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: now - MIN }, dead({ continueState: "cancelled" }), now)).toEqual({ action: "release", reason: "continue-cancelled" });
     // ...but a session that is already up again is not marked completed for it.
@@ -265,7 +299,9 @@ describe("claimDecision", () => {
     const later = CLAIM_MAX_AGE_MS + 2 * MIN;
     expect(claimDecision(claim, dead({ lastLifeAt: MIN }), later)).toEqual({ action: "fail", reason: "too-old" });
     // Gone that long after a resume of its own: the session says so, not a quiet "completed".
-    expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: MIN }, dead({ lastLifeAt: MIN }), later)).toEqual({ action: "fail", reason: "attempts-spent" });
+    expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: MIN, continuedAt: MIN }, dead({ lastLifeAt: MIN }), later)).toEqual({ action: "fail", reason: "attempts-spent" });
+    // ...but a resume whose continue never got in (the machine went off after queueing it) did not "fail to come back".
+    expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: MIN }, dead({ lastLifeAt: MIN }), later)).toEqual({ action: "fail", reason: "too-old" });
   });
 
   // An Escape or a failed turn leaves the claim open while the pane lives;
@@ -277,7 +313,7 @@ describe("claimDecision", () => {
     expect(claimDecision(claim, dead({ limitParked: true, lifecycle: undefined, lastLifeAt: MIN }), days)).toEqual({ action: "release", reason: "limit-parked" });
     // A message already waiting brings the session back; one stuck in the queue cannot hold the claim past the age bound.
     expect(claimDecision(claim, dead({ messagePending: true, lastLifeAt: 60 * MIN }), 61 * MIN)).toEqual({ action: "keep", reason: "message-pending" });
-    expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: MIN }, dead({ messagePending: true, lastLifeAt: MIN }), days)).toEqual({ action: "fail", reason: "attempts-spent" });
+    expect(claimDecision({ ...claim, attempts: 1, lastAttemptAt: MIN }, dead({ messagePending: true, lastLifeAt: MIN }), days)).toEqual({ action: "fail", reason: "too-old" });
     // A Stop the ledger never saw (a dropped post): the transcript's last turn ended, so nothing to continue.
     expect(claimDecision(claim, dead({ turnFinished: true, lastLifeAt: MIN }), days)).toEqual({ action: "release", reason: "turn-finished" });
     expect(claimDecision(claim, dead({ turnFinished: true, lastLifeAt: 60 * MIN }), 61 * MIN)).toEqual({ action: "release", reason: "turn-finished" });

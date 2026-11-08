@@ -18,6 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { MID_TURN_AGENT_STATUSES, authorizesTeardown, type LivenessVerdict } from "@codecast/shared/contracts";
+import type { PendingMessageOutcome } from "./tmuxDeliveryJournal.js";
 import { REVIVE_BUDGET, REVIVE_BUDGET_WINDOW_MS, retiredByPerson, reviveRefusal, turnEndedRefusal, type ReviveLifecycle } from "./midWorkRevive.js";
 import { writeFileAtomic } from "./fsAtomic.js";
 
@@ -89,7 +90,14 @@ export class TurnClaimLedger {
   private readonly touched = new Map<string, number>();
   private seq = 0;
 
-  constructor(private readonly file: string, private readonly clock: () => number = Date.now) {
+  /**
+   * `withdraw` cancels a claim's queued continue whenever the claim ends or a
+   * newer attempt supersedes it. The server puts a stalled one (failed,
+   * undeliverable) back once the session is up, where it would arrive as a
+   * restart notice in a session with nothing to continue. Cancelling one
+   * already delivered changes nothing.
+   */
+  constructor(private readonly file: string, private readonly clock: () => number = Date.now, private readonly withdraw: (continueId: string) => void = () => {}) {
     try {
       const saved = JSON.parse(fs.readFileSync(file, "utf8")) as { claims?: Record<string, TurnClaim>; released?: Record<string, number> };
       for (const [id, c] of Object.entries(saved?.claims ?? {})) {
@@ -130,8 +138,9 @@ export class TurnClaimLedger {
       // session that moved on, a delivery restart) is the same turn: its
       // attempts go with it, or a process that dies on every resume would
       // leave no claim behind once it first spoke.
-      if (awaitingResume(c) && !this.claims.has(sessionId)) this.claims.set(sessionId, { ...c, sessionId });
-      changed = this.drop(id, opts.at) || changed;
+      const carried = awaitingResume(c) && !this.claims.has(sessionId);
+      if (carried) this.claims.set(sessionId, { ...c, sessionId });
+      changed = this.drop(id, opts.at, { carried }) || changed;
     }
     const c = this.claims.get(sessionId);
     // The first status after a resume: the resumed process is up. Statuses a
@@ -150,6 +159,7 @@ export class TurnClaimLedger {
         this.claims.set(sessionId, { ...cur, continuedAt: opts.at });
         changed = true;
       } else if (cur && cur.conversationId === conversationId && !awaitingResume(cur)) {
+        if (cur.continueId) this.withdraw(cur.continueId);
         this.claims.set(sessionId, { sessionId, conversationId, claimedAt: opts.at, attempts: 0 });
         changed = true;
       }
@@ -189,8 +199,10 @@ export class TurnClaimLedger {
     return true;
   }
 
-  private drop(sessionId: string, at: number): boolean {
-    if (!this.claims.delete(sessionId)) return false;
+  private drop(sessionId: string, at: number, opts: { carried?: boolean } = {}): boolean {
+    const c = this.claims.get(sessionId);
+    if (!c || !this.claims.delete(sessionId)) return false;
+    if (c.continueId && !opts.carried) this.withdraw(c.continueId);
     this.released.set(sessionId, Math.max(at, this.released.get(sessionId) ?? 0));
     return true;
   }
@@ -222,6 +234,7 @@ export class TurnClaimLedger {
   beginAttempt(sessionId: string, at: number): TurnClaim | undefined {
     const c = this.claims.get(sessionId);
     if (!c) return undefined;
+    if (c.continueId) this.withdraw(c.continueId);
     const next: TurnClaim = { ...c, attempts: c.attempts + 1, lastAttemptAt: at, heardAt: undefined, continueId: undefined, continuedAt: undefined };
     this.claims.set(sessionId, next);
     // The one write the cap rests on, so it reaches the disk before the continue is queued.
@@ -275,7 +288,7 @@ export type ClaimFacts = {
    * (delivered, or ended undeliverable), cancelled by a person, or unknown (no
    * id, a failed lookup, or not asked because the process already spoke).
    */
-  continueState: "pending" | "landed" | "stalled" | "cancelled" | "unknown";
+  continueState: PendingMessageOutcome | "unknown";
   /** A message already waits for the session (a person's, or this claim's own continue): delivery brings it back. */
   messagePending?: boolean;
 };
@@ -304,12 +317,13 @@ export function awaitingResume(claim: TurnClaim): boolean {
  */
 export function continueInFlight(claim: TurnClaim, now: number, continueState: ClaimFacts["continueState"] = "unknown"): boolean {
   if (!awaitingResume(claim) || continueState === "cancelled") return false;
-  return continueState === "pending" || now - claim.lastAttemptAt! < RESUME_START_MS;
+  return continueState === "open" || now - claim.lastAttemptAt! < RESUME_START_MS;
 }
 
 export function claimDecision(claim: TurnClaim, f: ClaimFacts, now: number): ClaimDecision {
-  if (continueInFlight(claim, now, f.continueState) && now - claim.lastAttemptAt! < CLAIM_MAX_AGE_MS) return { action: "keep", reason: "resume-in-flight" };
+  // Moved first: the destination continues it, and the ledger withdraws this machine's continue.
   if (f.ownedElsewhere) return { action: "release", reason: "moved" };
+  if (continueInFlight(claim, now, f.continueState) && now - claim.lastAttemptAt! < CLAIM_MAX_AGE_MS) return { action: "keep", reason: "resume-in-flight" };
   // Alive, or we could not tell: never start a second process beside one that
   // may be running, and never end its claim (a pane idle at its prompt after
   // an Escape, a permission prompt left open over a weekend).
@@ -325,13 +339,13 @@ export function claimDecision(claim: TurnClaim, f: ClaimFacts, now: number): Cla
   // Gone, and old: nobody expects it to resume now. Ahead of the remaining
   // lookups, so a claim whose lookups keep failing still ends, and visibly:
   // the turn did not finish and nothing will continue it.
-  if (now - Math.max(f.lastLifeAt, claim.claimedAt, claim.lastAttemptAt ?? 0) > CLAIM_MAX_AGE_MS) return { action: "fail", reason: claim.attempts ? "attempts-spent" : "too-old" };
+  if (now - Math.max(f.lastLifeAt, claim.claimedAt, claim.lastAttemptAt ?? 0) > CLAIM_MAX_AGE_MS) return { action: "fail", reason: claim.attempts >= MAX_TURN_RESUME_ATTEMPTS || claim.continuedAt ? "attempts-spent" : "too-old" };
   // A message already waiting brings the session back through delivery:
   // another continue would stack behind it. After the age bound, so a message
   // stuck in the queue cannot hold the claim forever.
   if (f.messagePending) return { action: "keep", reason: "message-pending" };
   // A person cancelled the continue: they do not want the turn back.
-  if (awaitingResume(claim) && f.continueState === "cancelled") return { action: "release", reason: "continue-cancelled" };
+  if (f.continueState === "cancelled") return { action: "release", reason: "continue-cancelled" };
   // A blip is not a decision: the legacy fallback answers without hide state.
   if (f.ownedElsewhere === null || f.lifecycle === undefined || !f.lifecycle.hideStateKnown) return { action: "keep", reason: "lookup-failed" };
   const refusal = reviveRefusal(f);
@@ -368,12 +382,6 @@ export interface TurnClaimRecoveryDeps {
   settle: (claim: TurnClaim, reason: string) => void;
   /** Every attempt is spent: say so on the session. */
   fail: (claim: TurnClaim, message: string) => void;
-  /**
-   * Withdraw a continue an attempt superseded. A stalled one (failed,
-   * undeliverable) is not final on the server: it is put back once the
-   * session is up again, and would then arrive as a stray restart notice.
-   */
-  cancelContinue?: (continueId: string) => void;
   /** The machine's load governor; false holds the resume to a later pass. */
   admit?: (claim: TurnClaim) => boolean;
   /** Which claims a pass works first (a workflow station's hand before interactive sessions). */
@@ -439,7 +447,6 @@ export class TurnClaimRecovery {
           continue;
         }
         if (this.deps.admit && !this.deps.admit(current)) continue;
-        if (current.continueId) this.deps.cancelContinue?.(current.continueId);
         const attempt = ledger.beginAttempt(claim.sessionId, now)!;
         let queued: string | null;
         try {
