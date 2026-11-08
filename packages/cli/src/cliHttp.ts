@@ -65,6 +65,26 @@ export async function cliFetch(
     if (process.env.CAST_DEBUG) console.error(`[cast] ${url} ${reason}; retrying (${attempt + 1}/${retries})`);
   };
 
+  // A slow backend otherwise looks like a hung command: say once that the CLI is waiting on it.
+  const waitNote = setTimeout(() => process.stderr.write(`waiting on the codecast backend (${new URL(url).pathname})…\n`), WAIT_NOTE_MS);
+  waitNote.unref?.();
+  try {
+    return await fetchWithRetries(url, init, timeoutMs, retries, notifyRetry);
+  } finally {
+    clearTimeout(waitNote);
+  }
+}
+
+/** After this long without an answer, one line on stderr says the CLI is waiting on the backend. */
+export const WAIT_NOTE_MS = 10_000;
+
+async function fetchWithRetries(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  retries: number,
+  notifyRetry: (attempt: number, reason: string) => void,
+): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -93,7 +113,7 @@ export async function cliFetch(
       }
       // Surface a legible message instead of a raw AbortError stack trace.
       if (isTimeoutError(err)) {
-        throw new Error(`Request to ${url} timed out after ${timeoutMs}ms (backend may be overloaded)`);
+        throw new Error(`The codecast backend timed out after ${timeoutMs}ms on ${new URL(url).pathname}; it may be overloaded. A read can be retried as is; a write may still have landed, so read it back before sending it again.`);
       }
       throw err;
     }

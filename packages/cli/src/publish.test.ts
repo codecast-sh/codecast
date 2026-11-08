@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildPublishPayload, describeEvidence, findChrome, pathsToUpload, publishRequestBody, thumbArgs, walkBundleDir } from "./publish";
+import { buildPublishPayload, describeEvidence, findChrome, pathsToUpload, publishRequestBody, showsManageLink, thumbArgs, walkBundleDir } from "./publish";
 
 let dir: string;
 
@@ -207,5 +207,17 @@ describe("pathsToUpload", () => {
       { path: "mid.json", size: 3 * MB },
     ];
     expect(pathsToUpload(files, "index.html", 8 * MB)).toEqual(["big.bin", "mid.json"]);
+  });
+});
+
+describe("showsManageLink", () => {
+  const url = "https://codecast.sh/a/abc";
+  it("prints the owner link on the first publish only", () => {
+    expect(showsManageLink({ url, manage_url: `${url}#o=k` })).toBe(true);
+    expect(showsManageLink({ url, manage_url: `${url}#o=k`, updated: true })).toBe(false);
+  });
+  it("prints nothing when there is no owner key", () => {
+    expect(showsManageLink({ url, manage_url: url })).toBe(false);
+    expect(showsManageLink({ url })).toBe(false);
   });
 });
