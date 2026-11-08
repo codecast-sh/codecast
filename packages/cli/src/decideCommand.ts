@@ -31,6 +31,7 @@
 //
 // Registered from index.ts via registerDecideCommand(program, deps), with the publish command's deps
 // contract, so it reuses cliFetch auth and the artifact publish payload builder rather than its own plumbing.
+import { RUN_OPTIONS, commandLine, parseRunCommand } from "@codecast/shared/contracts/commandRun";
 import * as fs from "fs";
 import * as http from "http";
 import * as path from "path";
@@ -574,7 +575,7 @@ async function publishReport(deps: PublishDeps, file: string, sessionId: string)
 
 // What the human will see, printed back to the one party that can still fix a
 // thin payload. Shared by ask and edit.
-function printPreview(question: string, optionList: DecideOption[], defaultOption: number | undefined, contextMd: string | undefined, reportUrl: string | undefined, reportSlug: string | undefined, pageUrls: Record<number, string | undefined> = {}) {
+function printPreview(question: string, optionList: DecideOption[], defaultOption: number | undefined, contextMd: string | undefined, reportUrl: string | undefined, reportSlug: string | undefined, pageUrls: Record<number, string | undefined> = {}, runCard = false) {
   for (let i = 0; i < optionList.length; i++) {
     const opt = optionList[i];
     const marker = defaultOption === i ? "  (your default)" : "";
@@ -591,6 +592,8 @@ function printPreview(question: string, optionList: DecideOption[], defaultOptio
   // A decision they cannot resolve from the card costs them a session open,
   // which is the whole thing the queue exists to avoid.
   const contextChars = (contextMd ?? "").trim().length;
+  // A --run card's command is its substance, and its options are fixed.
+  if (runCard) return;
   if (!reportSlug && contextChars < 200) {
     console.log(
       fmt.muted(
@@ -654,6 +657,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--context <text>", stdinText("Markdown context for someone who never saw this session: what you would pick and why, the finding that forces the choice, what each answer does; a cast-canvas block renders inline, so options worth comparing can sit side by side"))
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
     .option("--proposal <xp-N>", "The expectations proposal this decision settles: an answer opening with Apply lands it, one opening with Keep closes it, any other course leaves it open for you")
+    .option("--run <command>", "A cast command only your person may run (a grant, a spend, a publish): the card shows it with Run and Don't run; Run executes it on this machine as theirs and the output comes back as the answer")
     .option("--card <card.json>", "A change card (cast card build) the decision is about; the queue draws it natively. Without -o the options are Ship, Revise, Drop")
     .option("--advisory", "Don't block: proceed with --default. Only when the default is cheap to undo — the answer often lands an hour later and may override you")
     .option("--default <n>", "1-based option you proceed with when --advisory (required with it)")
@@ -710,7 +714,15 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       const rawOptions = options.option as string[];
       // LE11: a change card decides Ship, Revise or Drop unless -o says otherwise.
       const card: ChangeCard | undefined = options.card ? (() => { const r = readCardFile(options.card); return "error" in r ? fail(r.error) : r.card; })() : undefined;
-      let optionList: DecideOption[] | undefined = rawOptions.length > 0 ? rawOptions.map(parseDecideOption) : spec?.options ?? (card && !sub ? CARD_DECISION_OPTIONS.map((o) => ({ ...o })) : undefined);
+      // --run: the card is the command, answered Run or Don't run (commandRun.ts).
+      const runLine: string | undefined = typeof options.run === "string" ? options.run : undefined;
+      if (runLine !== undefined) {
+        const parsedRun = parseRunCommand(runLine);
+        if ("error" in parsedRun) fail(parsedRun.error);
+        if (sub) fail("--run asks a new decision; to change the command, cancel the decision and ask again.");
+        if (rawOptions.length || card || options.advisory || options.kind || options.line || options.spec) fail("--run sets the options itself (Run, Don't run) and always blocks: drop -o, --card, --advisory, --kind, --line and --spec.");
+      }
+      let optionList: DecideOption[] | undefined = runLine !== undefined ? RUN_OPTIONS.map((o) => ({ ...o })) : rawOptions.length > 0 ? rawOptions.map(parseDecideOption) : spec?.options ?? (card && !sub ? CARD_DECISION_OPTIONS.map((o) => ({ ...o })) : undefined);
       // An advisory card proceeds with what the card recommends unless --default names another.
       if (card && options.advisory && !options.default && optionList) {
         const at = cardVerdictIndexes(optionList)?.[card.recommend.verdict];
@@ -904,7 +916,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       if (!question) fail('Usage: cast decide "<question>" -o … -o … --context … — or: ls | show | edit [id] | cancel [id] | recommend | answer');
       if (!optionList) fail("Provide 1-9 options (-o), they map to keys 1-9 in the queue.");
       const docMd: string | undefined = options.doc ? bodyFromArg(options.doc, "--doc") : spec?.doc_md;
-      if (!contextMd && !options.report && !docMd && !card) {
+      if (!contextMd && !options.report && !docMd && !card && runLine === undefined) {
         fail("A bare question is not decidable. Pass --context (or --report, --doc or --card) with the reasoning and the tradeoff.");
       }
       if (options.blocking) fail("--blocking is for `cast decide edit`; a new decision blocks unless you pass --advisory.");
@@ -939,6 +951,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         context_md: contextMd,
         report_slug: reportSlug,
         ...(card ? { card } : {}),
+        ...(runLine !== undefined ? { run: runLine } : {}),
         blocking: !options.advisory,
         default_option: defaultOption,
         kind,
@@ -971,8 +984,14 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       if (ladder.length) {
         console.log(fmt.muted(`  ladder: ${ladder.length} role${ladder.length === 1 ? "" : "s"} (${ladder.filter((h) => h.woken).length} woken${ladder.some((h) => h.skipped) ? `, ${ladder.filter((h) => h.skipped).length} skipped` : ""}); people: ${result.people ?? 1}`));
       }
-      printPreview(question, optionList, defaultOption, contextMd, reportUrl, reportSlug, pageUrls);
+      printPreview(question, optionList, defaultOption, contextMd, reportUrl, reportSlug, pageUrls, runLine !== undefined);
 
+      if (runLine !== undefined) {
+        const parsed = parseRunCommand(runLine);
+        if ("argv" in parsed) console.log(fmt.muted(`  runs: ${commandLine(parsed.argv)}`));
+        console.log(fmt.muted("\nThe card shows this command with Run and Don't run. Do not run it yourself and do not paste it for them: end your turn. A Run executes it on this machine as theirs, and the answer arrives with its output."));
+        return;
+      }
       console.log(fmt.muted("\nThis renders as a card in the conversation and in their queue. Do not repeat the question, options, or reasoning in prose."));
       console.log(fmt.muted("If the facts change: cast decide edit — never a second decision. If it no longer applies: cast decide cancel."));
 

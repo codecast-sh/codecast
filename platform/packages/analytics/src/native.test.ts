@@ -69,8 +69,9 @@ describe("initAnalytics (native)", () => {
     expect(c.options.host).toBe("https://us.i.posthog.com");
     expect(c.options.disabled).toBe(false);
     expect(c.options.captureAppLifecycleEvents).toBe(true);
-    expect(c.options.enableSessionReplay).toBe(true);
+    expect(c.options.enableSessionReplay).toBe(false);
     expect(c.options.sessionReplayConfig).toEqual({
+      sampleRate: 0,
       maskAllTextInputs: true,
       maskAllImages: false,
       captureLog: true,
@@ -86,9 +87,10 @@ describe("initAnalytics (native)", () => {
     expect(client().options.disabled).toBe(true);
   });
 
-  it("enableSessionReplay false passes through", () => {
-    native.initAnalytics({ ...base, enableSessionReplay: false });
-    expect(client().options.enableSessionReplay).toBe(false);
+  it("records the configured sample of sessions", () => {
+    native.initAnalytics({ ...base, sessionReplaySampleRate: 0.1 });
+    expect(client().options.enableSessionReplay).toBe(true);
+    expect(client().options.sessionReplayConfig.sampleRate).toBe(0.1);
   });
 
   it("initializes Sentry enabled in production with the donor sample rate", () => {

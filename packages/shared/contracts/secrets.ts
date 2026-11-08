@@ -783,7 +783,7 @@ export const PRESENCE_REQUIRED = "presence_required";
 /** What each action does, as a clause after "to": the refusal and the confirm page both say it. */
 export const PRESENCE_PHRASE: Record<PresenceAction, string> = {
   reveal: "reveal an Ask first secret",
-  approve: "approve an Ask first read",
+  approve: "approve this decision",
   ask_first_off: "turn Ask first off",
   add_passkey: "add another passkey",
   remove_passkey: "remove a passkey",

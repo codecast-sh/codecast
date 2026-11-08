@@ -30,6 +30,7 @@ import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueStartSession } from "./devices";
 import { isBannerTurn } from "./inboxFilters";
 import { callModel, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
+import type { VendorGate } from "./lib/vendorGuard";
 import {
   composeHandoffPrompt,
   composeContextRecoveryPrompt,
@@ -260,8 +261,8 @@ export const briefInput = internalQuery({
   },
 });
 
-async function askForBrief(input: HandoffBriefInput): Promise<string | null> {
-  const reply = await callModel({ ...handoffBriefRequest(input), label: "Handoff brief" });
+async function askForBrief(gate: VendorGate, input: HandoffBriefInput): Promise<string | null> {
+  const reply = await callModel({ ...handoffBriefRequest(input), label: "Handoff brief", gate });
   return reply?.text ?? null;
 }
 
@@ -291,7 +292,7 @@ export const start = action({
     });
     const agentType = args.agent_type ?? (source.agent_type as (typeof AGENT_TYPES)[number] | null) ?? "claude_code";
     const briefInputs = handoffBriefInput(source, messages);
-    const modelBrief = messages.length ? await askForBrief(briefInputs) : null;
+    const modelBrief = messages.length ? await askForBrief({ ctx, scope: { conversationId: source.conversation_id as Id<"conversations">, apiToken: args.api_token } }, briefInputs) : null;
     const brief = modelBrief ?? fallbackHandoffBrief(briefInputs);
     const prompt = composeHandoffPrompt({ source, brief, direction: args.direction });
 
@@ -538,7 +539,7 @@ export const recoverContext = internalAction({
       prompt = composeContextRebuildPrompt({ source: input.source, roleBrief: input.role_brief });
     } else {
       const briefInputs: HandoffBriefInput = { ...handoffBriefInput(input.source, input.messages), recovery: true };
-      const modelBrief = input.messages.length ? await askForBrief(briefInputs) : null;
+      const modelBrief = input.messages.length ? await askForBrief({ ctx, scope: { conversationId: args.conversation_id } }, briefInputs) : null;
       prompt = composeContextRecoveryPrompt({
         source: input.source,
         brief: modelBrief ?? fallbackHandoffBrief(briefInputs),

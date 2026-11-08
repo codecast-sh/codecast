@@ -1046,6 +1046,32 @@ export function parseEntityUrl(
 }
 
 /**
+ * A codecast object link that carries its share token
+ * (`/conversation/<id>?share=…`): the object it names, plus the in-app path
+ * with the token kept, so a pill for it still opens through the grant.
+ * parseEntityUrl refuses these because a bare reference would drop the token.
+ */
+export function parseSharedEntityUrl(
+  href: string | undefined | null,
+): { type: EntityType; id: string; to: string } | null {
+  if (!href || typeof href !== "string" || !/[?&]share=/.test(href)) return null;
+  const absolute = /^https?:\/\//i.test(href.trim());
+  if (!absolute && !href.trim().startsWith("/")) return null;
+  let u: URL;
+  try {
+    u = new URL(href.trim(), "https://codecast.sh");
+  } catch {
+    return null;
+  }
+  if (absolute && !isAppHost(u.host)) return null;
+  const bare = new URLSearchParams(u.search);
+  bare.delete("share");
+  const rest = bare.toString();
+  const ref = parseEntityUrl(`${u.pathname}${rest ? `?${rest}` : ""}`);
+  return ref ? { ...ref, to: `${u.pathname}${u.search}${u.hash}` } : null;
+}
+
+/**
  * If `href` points at a published page (`cast publish` output), return its
  * slug; otherwise null. Accepts the canonical share URL
  * (https://codecast.sh/a/<slug>), the raw serving origin

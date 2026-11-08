@@ -15,6 +15,7 @@
 //  3. The answer: what the station pinned (`cast state ... ```json```), read
 //     from the run's stream, with the reply, the cost and every refused write.
 // Nothing ships from a try: the guard and the sandbox see to that.
+import { shellWords } from "@codecast/shared/contracts/shellWords";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -221,25 +222,7 @@ export function decisionFromPin(command: string): TryDecision {
   return { status, words: words.slice(0, 600), result: json && !Array.isArray(json) ? (json as Record<string, unknown>) : null };
 }
 
-/** A shell line's words, quotes resolved ('...', "..." with its escapes, and their concatenations). */
-export function shellWords(line: string): string[] {
-  const out: string[] = [];
-  let cur: string | null = null;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === "'") { const end = line.indexOf("'", i + 1); cur = (cur ?? "") + line.slice(i + 1, end < 0 ? line.length : end); i = end < 0 ? line.length : end; continue; }
-    if (ch === '"') {
-      let j = i + 1; let v = "";
-      while (j < line.length && line[j] !== '"') { if (line[j] === "\\" && /["\\$`\n]/.test(line[j + 1] ?? "")) { v += line[j + 1]; j += 2; } else v += line[j++]; }
-      cur = (cur ?? "") + v; i = j; continue;
-    }
-    if (ch === "\\") { cur = (cur ?? "") + (line[i + 1] ?? ""); i++; continue; }
-    if (/\s/.test(ch) || ch === "|" || ch === ";" || ch === "&") { if (cur !== null) out.push(cur); cur = null; if (ch !== " " && ch !== "\t" && ch !== "\n") out.push(ch); continue; }
-    cur = (cur ?? "") + ch;
-  }
-  if (cur !== null) out.push(cur);
-  return out;
-}
+export { shellWords };
 
 /** The text a `printf '%s\n' a b c | cast state ...` pipes in: its arguments, one a line. Null when the pin is not written that way. */
 function printedBody(command: string): string | null {

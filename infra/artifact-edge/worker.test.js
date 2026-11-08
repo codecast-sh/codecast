@@ -170,6 +170,7 @@ describe("artifact edge cache", () => {
   for (const path of [
     "/abcdefghijkl?k=deadbeef",
     "/abcdefghijkl?e=tok",
+    "/abcdefghijkl?m=tok",
     "/abcdefghijkl/img/logo.png?k=tok",
   ]) {
     test(`${path} is never stored here, and kept only by its own browser`, async () => {

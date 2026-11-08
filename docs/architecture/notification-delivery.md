@@ -35,3 +35,9 @@ The desktop shell still chooses which of its windows may sound an announcement. 
 Without an updated local daemon, or when local-network access is unavailable, browser tabs still deduplicate within their origin and profile. Desktop/browser and cross-origin coordination require the updated daemon and a reachable authenticated loopback connection. There is no account-wide desktop-presence fallback: a desktop running on a different computer must not silence this one.
 
 Sound-category and volume preferences continue to sync across devices. The Sounds settings text describes that scope explicitly.
+
+## What a phone push may carry
+
+Phone pushes leave our servers: Expo (`exp.host`) relays them to Apple and Google, and Live Activity updates and CallKit rings go to Apple directly. None of them has a BAA with us, so a person in any team whose managed policy sets `regulated_data` gets pushes that name the event and the project folder ("Session waiting for input", "In intake-service") with routing ids only: no message text, tool output, chat text, decision content or session title. Titles count as content because most are generated from the first message. The decision is by recipient, not by the row the push is about, so it also covers that person's personal sessions and every push kind, current or future. The full text stays in the notification row and the push ring, which the app reads from us once opened.
+
+`lib/pushPrivacy.ts` holds the rule. `sendPushNotification` (the only Expo sender), `sendVoipRing` and `collectLiveActivitySessions` apply it. Web and desktop banners are shown by the local OS from data the app already holds, so they pass through no third party and are unchanged.

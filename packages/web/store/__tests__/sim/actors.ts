@@ -18,7 +18,7 @@
 // gap and propagates.
 
 import type { SimClient } from "@codecast/convex/convex/simBackend.testing";
-import { pairDeliveryAcks, type AgentStatus } from "@codecast/shared/contracts";
+import { type AgentStatus } from "@codecast/shared/contracts";
 import { performRedo, performUndo } from "../../undoStack";
 import type { RealmWindow } from "./realm";
 import { daemonDeviceFor, sessionIdFor, type SimWorld } from "./world";
@@ -235,10 +235,9 @@ export function makeActors(world: ActorWorld): Actors {
         }),
       // The paste landed: each claimed row goes to injected (paste verified),
       // and the transcript sync uploads the user line it echoed, wrapped in
-      // <pasted_content> as Claude Code 2.1.277+ writes every paste (the
-      // server strips it to match the row). Then the daemon acks what it
-      // pasted, pairing each row with its echo as daemon.ts does
-      // (pairDeliveryAcks), so the server stamps the exact client_id.
+      // <pasted_content> as Claude Code 2.1.277+ writes every paste, stamped
+      // with the delivery it echoes as the daemon's ledger stamps it
+      // (deliveryEchoLedger), so the server settles that row by id.
       ack: (session) =>
         verb(actor, "ack", session, async () => {
           const conversation_id = world.idOf(session);
@@ -247,19 +246,10 @@ export function makeActors(world: ActorWorld): Actors {
           for (const message_id of ids) {
             await cli().mutation("pendingMessages:updateMessageStatus", { message_id, status: "injected", paste_verified: true, device_id });
           }
-          let acks: ReturnType<typeof pairDeliveryAcks> = [];
-          if (ids.length) {
-            const synced: { ids: string[] } = await cli().mutation("messages:addMessages", {
-              conversation_id,
-              messages: ids.map((id) => ({ message_uuid: `sim-echo-${id}`, role: "user", content: pastedEcho(id, pasted.get(id) ?? ""), timestamp: world.realm.now() })),
-            });
-            acks = pairDeliveryAcks(ids, synced.ids);
-          }
-          return cli().mutation("pendingMessages:ackInjectedMessages", {
+          return cli().mutation("messages:addMessages", {
             conversation_id,
-            device_id,
-            message_ids: ids,
-            ...(acks.length ? { delivery_acks: acks.map((a) => ({ pending_message_id: a.pendingMessageId, transcript_message_id: a.transcriptMessageId })) } : {}),
+            echo_ids: true,
+            messages: ids.map((id) => ({ message_uuid: `sim-echo-${id}`, role: "user", content: pastedEcho(id, pasted.get(id) ?? ""), timestamp: world.realm.now(), delivery_ids: [id] })),
           });
         }),
       // Resuming a parked session goes through resumeConversationSession, as

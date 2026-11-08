@@ -251,6 +251,19 @@ describe("F2 org.scopeFeed", () => {
     expect(rows.map((r) => r.kind)).toEqual(["task", "session", "task"]);
   });
 
+  test("a session put in a scope project is in scope, and so is the session it spawned (session-projects.md)", async () => {
+    const db = fixtures({
+      conversations: [
+        { _id: "conversations_s4", user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", title: "Project lead", short_id: "jx4", project_id: P, updated_at: NOW - H / 2, created_at: 1, message_count: 1 },
+        { _id: "conversations_s5", user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", title: "Spawned", short_id: "jx5", spawned_by_conversation_id: "conversations_s4", updated_at: NOW - H / 3, created_at: 1, message_count: 1 },
+        { _id: "conversations_s6", user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", title: "Other project", short_id: "jx6", project_id: Q, updated_at: NOW - H / 4, created_at: 1, message_count: 1 },
+      ],
+    });
+    const { resolved } = await scoped(db);
+    const { rows } = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, kinds: ["session"] });
+    expect(rows.map((r) => r.short_id).sort()).toEqual(["jx4", "jx5"]);
+  });
+
   test("an explicit scope works without a role, and a session bound to a task in scope is in scope", async () => {
     const db = fixtures({
       conversations: [

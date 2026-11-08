@@ -111,3 +111,27 @@ test("a blocked ledger cannot be confirmed, by button or by chord", async () => 
     assert.deepEqual(calls, []);
   } finally { await done(); }
 }, 120_000);
+
+test("a typed confirm: the button and the chord do nothing until the typed word matches", async () => {
+  const { React, w, render, q, calls, done } = await mount();
+  try {
+    await render(false, { ...LEDGER, typed: { k: "Team name", expect: "Acme Health" } });
+    await React.act(async () => q('[data-consequential="off"]')!.click());
+    const input = q("[data-switch-typed-input]") as HTMLInputElement;
+    const type = (text: string) => React.act(async () => {
+      Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, "value")!.set!.call(input, text);
+      input.dispatchEvent(new w.Event("input", { bubbles: true }));
+    });
+    assert.ok((q("[data-switch-confirm]") as HTMLButtonElement).disabled);
+    await type("Acme");
+    await React.act(async () => { w.document.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })); });
+    await React.act(async () => q("[data-switch-confirm]")!.click());
+    assert.deepEqual(calls, [], "a partial name confirms nothing");
+    await type("Acme Health");
+    assert.equal((q("[data-switch-confirm]") as HTMLButtonElement).disabled, false);
+    await React.act(async () => q("[data-switch-confirm]")!.click());
+    assert.deepEqual(calls, ["on"]);
+  } finally {
+    await done();
+  }
+});

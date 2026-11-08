@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { closeSessionTab, closeTargetLater, ownerState, reapEngineOrphans, sessionEndpoint, withEndedSession, type LiveOwners } from "./engineReap.js";
+import { closeSessionTab, closeTargetLater, detachSessionDaemon, ownerState, reapEngineOrphans, sessionEndpoint, withEndedSession, type LiveOwners } from "./engineReap.js";
 import type { LivenessVerdict } from "@codecast/shared/contracts";
 import { writeBridgeState } from "./bridge/host.js";
 import { FakeExtension, testBridgeHost } from "./bridge/host.testutil.js";
@@ -252,4 +252,31 @@ describe("engineStateDir follows the engine's socket dir rule", () => {
   test("AGENT_BROWSER_HOME is not a name the engine reads, so it must not move the state dir", () => {
     expect(engineStateDir({ AGENT_BROWSER_HOME: "/elsewhere" })).toBe(path.join(os.homedir(), ".agent-browser"));
   });
+});
+
+// `close` returns while the daemon is still exiting; a verb retried in that
+// window dialled its removed socket ("Failed to connect: No such file or
+// directory", soak ct-87421). The detach now returns only once the daemon is gone.
+describe("detachSessionDaemon", () => {
+  test("returns only after the daemon process has exited", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-detach-test-"));
+    const prev = process.env.AGENT_BROWSER_SOCKET_DIR;
+    process.env.AGENT_BROWSER_SOCKET_DIR = stateDir;
+    try {
+      // A daemon that is not our child (launchd reaps it), so a dead one is not a zombie we hold.
+      const pid = Number(Bun.spawnSync(["sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $!"]).stdout.toString().trim());
+      fs.writeFileSync(path.join(stateDir, "env-detach-real.pid"), String(pid));
+      // An engine whose `close` answers at once and lets the daemon exit a second later.
+      const engine = path.join(stateDir, "fake-engine");
+      fs.writeFileSync(engine, `#!/bin/sh\n[ "$1" = close ] || exit 1\n(sleep 1; kill $(cat "$AGENT_BROWSER_SOCKET_DIR/$AGENT_BROWSER_SESSION.pid")) >/dev/null 2>&1 &\nexit 0\n`, { mode: 0o755 });
+      const started = Date.now();
+      expect(detachSessionDaemon("env-detach-real", engine)).toBe(true);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(800);
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      if (prev === undefined) delete process.env.AGENT_BROWSER_SOCKET_DIR;
+      else process.env.AGENT_BROWSER_SOCKET_DIR = prev;
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

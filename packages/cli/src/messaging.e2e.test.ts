@@ -49,6 +49,12 @@ import {
   type FakeModelEndpoint,
   type Harness,
 } from "./test-helpers/messagingHarness.js";
+import { afterAll as restoreCodecastDirAfterAll } from "bun:test";
+import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+
+// Deliveries these tests make record into the delivery echo ledger in CODECAST_DIR.
+const codecastDir = isolateCodecastDir();
+restoreCodecastDirAfterAll(() => codecastDir.restore());
 
 // Latency budgets — these are CORRECTNESS upper bounds (test fails if
 // exceeded), not perf targets. The speedup PR's job is to drive the

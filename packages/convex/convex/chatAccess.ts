@@ -96,10 +96,11 @@ export async function canAccessChannel(
     // may enter those rooms too. Their machine runs the anchor and holds the
     // transcript, so this widens nothing they could not already see. Only DM
     // rooms: a private channel never has a bot member.
-    if (channel.kind === "dm") return await hostsAnchorIn(ctx, channel._id, userId);
-    // A role or session a member put in a private room reads and answers
-    // there as the person who runs it, the same stand-in an anchor's host is
-    // for its DM rooms: the lines reach that person's machine anyway.
+    if (channel.kind === "dm" && await hostsAnchorIn(ctx, channel._id, userId)) return true;
+    // A role or session in a room (a member put it in a private room, or a
+    // session's own DM with people) reads and answers there as the person who
+    // runs it, the same stand-in an anchor's host is for its DM rooms: the
+    // lines reach that person's machine anyway.
     return await runsAgentIn(ctx, channel._id, userId);
   }
   return true;

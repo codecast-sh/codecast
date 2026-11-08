@@ -9,7 +9,7 @@ import { useInboxStore, type AccountSwitchArgs } from "../store/inboxStore";
 import { isParkedDispatchError, isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { MACHINE_SWITCH_TIMEOUT_MS } from "./machineAccountSwitch";
 
-export type SessionCommandKind = "restart" | "repair" | "move" | "switch" | "line_edit" | "interrupt";
+export type SessionCommandKind = "restart" | "repair" | "move" | "switch" | "line_edit" | "interrupt" | "backend" | "rewind";
 
 export type SessionCommandRow = {
   _id: string;
@@ -34,10 +34,15 @@ export type SessionCommandRow = {
   project_id?: string;
   edits?: unknown[];
   keys?: string[];
+  /** A Claude backend switch: where the session is going. */
+  backend?: "sdk" | "tmux";
+  // A rewind step (lib/rewindFiles): which one, and the message it rewinds to.
+  op?: string;
+  message_ts?: number;
 };
 
 // The store actions whose first argument is a sessionCommands request id.
-export const SESSION_COMMAND_ACTIONS = new Set(["hibernateSession", "restartSession", "moveSessionToDevice", "requestAccountSwitch", "editLineProfile"]);
+export const SESSION_COMMAND_ACTIONS = new Set(["hibernateSession", "restartSession", "moveSessionToDevice", "requestAccountSwitch", "editLineProfile", "switchClaudeBackend", "rewindFiles"]);
 
 // Marks a row the server refused outright (no daemon will ever answer it).
 export const DISPATCH_REFUSED = "dispatch_refused";
@@ -52,6 +57,9 @@ export const MOVE_GIVE_UP_REMOTE_MS = 10 * 60_000;
 // A request no daemon has stamped after this long usually means the owning
 // device is offline: the one failure the command rows cannot report.
 export const COMMAND_UNCLAIMED_WARN_MS = 20_000;
+// A backend switch: an interrupted turn's wind-down (30s), the old backend's
+// stop, and an SDK host's start (Claude's initialize may take minutes).
+export const BACKEND_SWITCH_GIVE_UP_MS = 5 * 60_000;
 
 /** A request id the server accepts (1-128 of [A-Za-z0-9_-]). */
 export function newRequestId(): string {
@@ -70,6 +78,7 @@ export function sessionCommandDeadline(row: SessionCommandRow): number {
     row.kind === "restart" || row.kind === "repair" ? RESTART_GIVE_UP_AFTER_MS
     : row.kind === "move" ? (row.to_remote ? MOVE_GIVE_UP_REMOTE_MS : MOVE_GIVE_UP_LOCAL_MS)
     : row.kind === "switch" ? MACHINE_SWITCH_TIMEOUT_MS
+    : row.kind === "backend" ? BACKEND_SWITCH_GIVE_UP_MS
     : Infinity;
   return sessionCommandStartedAt(row) + budget;
 }
@@ -277,4 +286,53 @@ export function requestAccountSwitchCommand(args: AccountSwitchArgs, intent: { p
       if (!isParkedDispatchError(error)) recordSessionCommandDispatchError(requestId, error);
       throw error;
     });
+}
+
+// ── Claude backend (tmux / Agent SDK) ───────────────────────────────────────
+
+export function latestBackendRow(rows: Record<string, SessionCommandRow> | undefined | null, conversationId: string | undefined) {
+  return conversationId ? latestSessionCommand(rows, (r) => r.conversation_id === conversationId && r.kind === "backend") : undefined;
+}
+
+// How long a refused or failed switch keeps saying why.
+export const BACKEND_VERDICT_LINGER_MS = 2 * 60_000;
+
+/**
+ * Where a backend switch stands: moving (asked, not reported, not past its
+ * deadline), failed with the daemon's reason (or no daemon took it), or
+ * nothing to say (it landed, or its verdict is old).
+ */
+export function backendSwitchState(row: SessionCommandRow | undefined, actual: "sdk" | "tmux", now: number): { moving: "sdk" | "tmux" } | { failed: string } | null {
+  if (!row?.backend) return null;
+  if (!row.executed_at) {
+    if (!sessionCommandTimedOut(row, now)) return { moving: row.backend };
+    return now - sessionCommandDeadline(row) < BACKEND_VERDICT_LINGER_MS ? { failed: "The switch never reported back; check where the session runs" } : null;
+  }
+  if (now - row.executed_at >= BACKEND_VERDICT_LINGER_MS) return null;
+  if (row.error) return { failed: row.result === DISPATCH_REFUSED ? "The switch was refused" : row.error };
+  const landed = landedOn(row);
+  if (landed.fellBack) return { failed: `The SDK host did not start, so it runs in the terminal: ${landed.fellBack}` };
+  // Landed: the session's own registration says where it runs a moment later.
+  return actual !== landed.backend && now - row.executed_at < BACKEND_FACT_LAG_MS ? { moving: landed.backend } : null;
+}
+
+// How long a landed switch waits for the session's backend fact to follow.
+const BACKEND_FACT_LAG_MS = 20_000;
+
+/** Where a landed switch put the session: its target, or tmux when the SDK host did not come up. */
+function landedOn(row: SessionCommandRow): { backend: "sdk" | "tmux"; fellBack?: string } {
+  try {
+    const r = JSON.parse(row.result ?? "{}");
+    if (r.backend === "sdk" || r.backend === "tmux") return { backend: r.backend, ...(typeof r.fell_back === "string" ? { fellBack: r.fell_back } : {}) };
+  } catch {}
+  return { backend: row.backend! };
+}
+
+/** Switch a Claude conversation's backend: paints the row and dispatches it. */
+export function requestBackendSwitch(conversationId: string, backend: "sdk" | "tmux", interrupt: boolean): Promise<unknown> {
+  const requestId = newRequestId();
+  return useInboxStore.getState().switchClaudeBackend(requestId, conversationId, backend, interrupt).catch((error: unknown) => {
+    if (!isParkedDispatchError(error)) recordSessionCommandDispatchError(requestId, error);
+    throw error;
+  });
 }

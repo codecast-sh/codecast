@@ -56,7 +56,11 @@ export const sendVoipRing = internalAction({
     caller_image: v.optional(v.string()),
     anchor_title: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): ReturnType<typeof sendVoip> => {
+    // The anchor is a session or channel line: content a regulated
+    // recipient's ring must not carry to Apple (pushPrivacy.ts).
+    const { strip }: { strip: boolean } = await ctx.runQuery(internal.notifications.pushPrivacyFor, { user_id: args.user_id });
+    const anchorTitle = strip ? undefined : args.anchor_title;
     return sendVoip(ctx, {
       token: args.voip_push_token,
       user_id: args.user_id,
@@ -75,7 +79,7 @@ export const sendVoipRing = internalAction({
             type: CALL_PUSH_TYPE_RING,
             invite_id: args.invite_id,
             room_key: args.room_key,
-            ...(args.anchor_title ? { anchor_title: args.anchor_title } : {}),
+            ...(anchorTitle ? { anchor_title: anchorTitle } : {}),
           },
         },
       },

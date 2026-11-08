@@ -154,3 +154,4 @@ a.fs-hot-s:hover { border-color: var(--lw-rule); color: var(--lw-ink); }
 .fs-full > .fs-map { position: absolute; inset: 0; height: auto; }
 .fs-full[data-drawer] > .fs-map { right: var(--lw-drawer-w); }
 :root[data-flows-full] .lw-body > .lw-drawer { visibility: hidden; }
+.fs-view { margin-right: 4px; }

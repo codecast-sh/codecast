@@ -543,8 +543,8 @@ describe("org.analysisInputs", () => {
       ],
       anchors: [{ _id: "anchors_g", team_id: TEAM, host_user_id: ME, bot_user_id: ME, org_role_id: "org_roles_1", conversation_id: "conv_g", status: "active" }],
       messages: [
-        { _id: "mw1", conversation_id: "conv_g", role: "user", content: "hi", timestamp: NOW - H },
-        { _id: "mw2", conversation_id: "conv_g", role: "user", content: "hi", timestamp: NOW - 2 * H },
+        { _id: "mw1", conversation_id: "conv_g", role: "user", content: "hi", nav_prompt: true, timestamp: NOW - H },
+        { _id: "mw2", conversation_id: "conv_g", role: "user", content: "hi", nav_prompt: true, timestamp: NOW - 2 * H },
       ],
     });
     const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);

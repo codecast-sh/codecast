@@ -76,3 +76,16 @@ export function diffLineElements(scope: ParentNode): Array<{ el: HTMLElement; an
 export function findDiffLine(scope: ParentNode, anchor: DiffLineAnchor): HTMLElement | null {
   return diffLineElements(scope).find(({ anchor: a }) => a.side === anchor.side && a.lineNumber === anchor.lineNumber)?.el ?? null;
 }
+
+/** A long diff draws only the rows near the viewport (components/diff/virtualizer.ts).
+ *  When a diff under `scope` shows the line `anchor` names but has not drawn it,
+ *  scroll it into the drawn window and return true: the line is there on the
+ *  next look. False when no diff under `scope` will draw it. `orEarlier`
+ *  takes the nearest drawable line before one inside a collapsed stretch. */
+export function revealDiffLine(scope: ParentNode, anchor: DiffLineAnchor, opts: { orEarlier?: boolean } = {}): boolean {
+  if (!pierre) return false;
+  for (const host of scope.querySelectorAll<HTMLElement>("diffs-container")) {
+    if (pierre.revealVirtualLine(host, anchor, opts)) return true;
+  }
+  return false;
+}

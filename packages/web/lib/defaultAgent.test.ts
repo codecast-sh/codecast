@@ -36,10 +36,14 @@ describe("defaultAgentType", () => {
 });
 
 describe("newConversationAgentType", () => {
-  test("carries the conversation's own agent, else the default", () => {
+  test("saved default, then last hand pick, then the conversation's own agent", () => {
     expect(newConversationAgentType(state({}), "gemini")).toBe("gemini");
     expect(newConversationAgentType(state({ default_agent: "codex" }), undefined)).toBe("codex");
     expect(newConversationAgentType(state({ default_agent: "codex" }), "bogus")).toBe("codex");
+    expect(newConversationAgentType(state({ default_agent: "codex", last_picked_agent: "gemini" }), "claude_code")).toBe("codex");
+    expect(newConversationAgentType(state({ default_agent: null, last_picked_agent: "gemini" }), "claude_code")).toBe("gemini");
+    expect(newConversationAgentType(state({ last_picked_agent: "bogus" }), "codex")).toBe("codex");
+    expect(defaultAgentType(state({ last_picked_agent: "gemini" }))).toBe("gemini");
   });
 
   test("a machine-less account always starts the hosted assistant", () => {

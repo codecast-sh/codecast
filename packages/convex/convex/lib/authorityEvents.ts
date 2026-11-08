@@ -14,6 +14,8 @@ import { sha256Hex } from "./hash";
 
 export const AUTHORITY_EVENT_KINDS = [
   "permission_answered",
+  "permission_rule_saved",
+  "permission_rule_removed",
   "share_link_minted",
   "share_link_revoked",
   "share_link_redeemed",

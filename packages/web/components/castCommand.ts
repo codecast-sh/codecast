@@ -694,6 +694,21 @@ export function parseCastCommandString(rawCommand: string): ParsedCastCommand | 
   return null;
 }
 
+/**
+ * What a `cast say` told the person (packages/cli/src/sayCommand.ts): the
+ * heredoc body, or the words of its argument with the shell quoting undone.
+ * The command keeps no copy of its own, so the transcript's tool call is the
+ * message. Null for any other command and for a say with nothing in it.
+ */
+export function sayTextOf(cmd: ParsedCastCommand | null): string | null {
+  if (!cmd || cmd.category !== "say") return null;
+  const rest = cmd.fullCmd.replace(/^cast\s+say\b\s*/, "");
+  const text = /^-(?:\s|$)/.test(rest)
+    ? extractSendBody(rest).body
+    : tokenizeShellArgs(rest).map((t) => t.value).join(" ");
+  return text.trim() && text.trim() !== "-" ? text.trim() : null;
+}
+
 // ── cast browser page URLs ──────────────────────────────────────────────────
 // `cast browser` drives one stateful page per agent, but only some verbs print
 // where it is: open/snapshot/reload/back/forward emit the page URL line, and a

@@ -138,7 +138,7 @@ export const rosterForUser = internalQuery({
 /** A refusal; `budget` when the team's model budget had no room, so the person can be sent to set one. */
 type MapRefusal = { error: string; budget?: true };
 
-async function mapWords(ctx: { runMutation: any; scheduler: any }, roster: AreasRoster, words: string): Promise<AreasPreview | MapRefusal> {
+async function mapWords(ctx: { runQuery: any; runMutation: any; scheduler: any }, roster: AreasRoster, words: string): Promise<AreasPreview | MapRefusal> {
   if (!words.trim()) return { error: "Say who decides for which areas" };
   if (roster.projects.length === 0) return { error: "This team has no projects to give out" };
   const reply = await runModelCall(ctx, { workspace: `team:${roster.team_id}`, team_id: roster.team_id }, "call", {

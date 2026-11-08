@@ -1,5 +1,6 @@
 import { internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import { clipText } from "./lib/wellFormed";
 
 // Recent-window mirror for message content search (ct-37627).
 //
@@ -82,7 +83,7 @@ async function walkMessages(
   let cursor = from;
   for (const msg of rows) {
     cursor = msg._creationTime;
-    const content = msg.content?.trim() ? msg.content.slice(0, MAX_CONTENT_CHARS) : null;
+    const content = msg.content?.trim() ? clipText(msg.content, MAX_CONTENT_CHARS) : null;
     if (!content) continue;
     if (budget.content - content.length < 0 || budget.copied >= MAX_UPSERTS_PER_RUN) {
       budget.broke = true;

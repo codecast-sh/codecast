@@ -1234,6 +1234,18 @@ describe("parser - harness text riding a tool_result row", () => {
     expect(msg.toolResults?.[0].content).toBe(`Fork started — processing in background\n\n${directive}`);
   });
 
+  test("a ToolSearch result names the tools it loaded", () => {
+    const [msg] = parseSessionFile(JSON.stringify({
+      type: "user", uuid: "u-search", timestamp: "2026-11-05T12:42:00.000Z",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_s", content: [
+        { type: "tool_reference", tool_name: "Monitor" },
+        { type: "tool_reference", tool_name: "WebFetch" },
+      ] }] },
+      toolUseResult: { matches: ["Monitor", "WebFetch"], query: "select:Monitor,WebFetch", total_deferred_tools: 58 },
+    }));
+    expect(msg.toolResults?.[0].content).toBe("Loaded tool: Monitor\nLoaded tool: WebFetch");
+  });
+
   test("a typed prompt in its own row is untouched", () => {
     const [msg] = parseSessionFile(JSON.stringify({
       type: "user", uuid: "u-typed", timestamp: "2026-09-07T15:36:46.786Z",

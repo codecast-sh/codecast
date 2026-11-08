@@ -26,3 +26,27 @@ export interface AskResult {
   /** Only with debug.include_prompt. */
   prompt?: string;
 }
+
+/** When a side answer still pending is settled failed (convex sideAnswers.expire),
+ *  and when the web stops showing it as coming. The read is bounded well inside
+ *  this (convex sessionAsk.ts: a 120s scan, 20s and 90s model calls). */
+export const SIDE_ANSWER_EXPIRE_MS = 10 * 60 * 1000;
+
+/** A side answer (`/btw` in the composer, convex/sideAnswers.ts): one person's
+ *  question about a conversation and the cheap model's answer, private to the
+ *  asker and never sent to the agent. The web's optimistic row carries the same
+ *  shape with a stub `_id` until the server row with its `client_id` lands. */
+export interface SideAnswerRow {
+  _id: string;
+  conversation_id: string;
+  client_id: string;
+  question: string;
+  status: "pending" | "answered" | "failed";
+  answer?: string;
+  citations?: Array<{ line: number; message_id: string }>;
+  unread?: { after: number; before: number };
+  error_code?: string;
+  error_message?: string;
+  created_at: number;
+  answered_at?: number;
+}

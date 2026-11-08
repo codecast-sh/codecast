@@ -169,3 +169,33 @@ describe("a flow a session built on a backbone", () => {
     expect(flowDiagram(backbone).steps[0]).toMatchObject({ kind: "segment", slot: { does: "Make the change", filled: "empty" } });
   });
 });
+
+describe("a flow run around one step", () => {
+  // onefix's shape: Build sends the work, by its outcome, to a stage that hands it back; Watch then ends the run.
+  const n = (id: string, type = "command", label = id[0].toUpperCase() + id.slice(1)) => ({ id, label, type });
+  const e = (from: string, to: string, condition?: string, label?: string) => ({ from, to, ...(condition ? { condition } : {}), ...(label ? { label } : {}) });
+  const hubFlow = {
+    nodes: [n("start", "start"), n("exit", "exit", "Exit"), n("triage", "agent"), n("build", "agent"), n("critique", "agent"), n("decide", "human"), n("push"), n("merge"), n("deploy"), n("watch"), n("closed"), n("stopped")],
+    edges: [
+      e("start", "triage"), e("triage", "build"),
+      e("build", "critique", "build.json.outcome = critique"), e("build", "decide", "build.json.outcome = present"), e("build", "push", "build.json.outcome = ready"),
+      e("build", "deploy", "build.json.outcome = landed"), e("build", "watch", "build.json.outcome = watching"), e("build", "closed", "build.json.outcome = closed"), e("build", "stopped", "build.json.outcome = stopped"),
+      e("critique", "build"), e("decide", "build"), e("push", "merge", "outcome = success"), e("push", "build", "outcome = failure", "push refused"), e("merge", "build", undefined, "on main"),
+      e("deploy", "build"), e("watch", "exit"), e("closed", "exit"), e("stopped", "exit"),
+    ],
+  };
+
+  test("its stages follow it in the order it names them, a stage's own next step with it, and the path ends where Watch does", () => {
+    const d = flowDiagram(hubFlow as any);
+    expect(d.hub).toEqual({ id: "build", label: "Build" });
+    expect(d.steps.map((s) => s.label)).toEqual(["Triage", "Build", "Critique", "Decide", "Push", "Merge", "Deploy", "Watch"]);
+    expect(d.end).toBe("Exit");
+  });
+
+  test("the hub keeps only its ends as routes, and each stage's way back leads to it", () => {
+    const d = flowDiagram(hubFlow as any);
+    const build = d.steps[1].side.map((r) => [r.tone, r.outcome, r.leadsTo]);
+    expect(build).toEqual([["out", "Closed", null], ["stop", "Stopped", null]]);
+    expect(d.steps.find((s) => s.label === "Merge")!.side).toContainEqual(expect.objectContaining({ tone: "back", leadsTo: "Build" }));
+  });
+});

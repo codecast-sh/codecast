@@ -75,10 +75,11 @@ const START_FROM_OPTIONS: Array<{ value: "checkout" | "origin_main"; label: stri
 ];
 
 /** One of the meta row's switches: a small track and its label, lit in `accent` while on. */
-function ModeSwitch({ on, accent, label, title, onClick, disabled = false }: { on: boolean; accent: "cyan" | "violet"; label: string; title: string; onClick: () => void; disabled?: boolean }) {
+export function ModeSwitch({ on, accent, label, title, onClick, disabled = false }: { on: boolean; accent: "cyan" | "violet"; label: string; title: string; onClick: () => void; disabled?: boolean }) {
   const lit = accent === "cyan" ? { track: "bg-sol-cyan/30", knob: "bg-sol-cyan", text: "text-sol-cyan" } : { track: "bg-sol-violet/30", knob: "bg-sol-violet", text: "text-sol-violet" };
   return (
     <button
+      type="button"
       onClick={() => { if (!disabled) onClick(); }}
       disabled={disabled}
       role="switch"
