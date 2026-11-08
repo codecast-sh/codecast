@@ -133,7 +133,6 @@ import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, routineLine, standingSessionLine } from "./briefLines.js";
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
-import { orgAuthorityGrantsError } from "@codecast/shared/contracts/orgProposal";
 import { parkedNote, planReadiness, stuckAdvice, stuckNote } from "./planReadiness.js";
 import { listedBlockers, listedReady } from "./listedReadiness.js";
 import { checkoutWords } from "./checkoutWords.js";
@@ -13979,6 +13978,7 @@ roleGroup
     const role_id = await resolveRoleId(handle, options.team);
     const raw = options.grant === "-" ? readStdinBody() : options.grant;
     const authority = raw ? JSON.parse(raw) : [];
+    const { orgAuthorityGrantsError } = await import("@codecast/shared/contracts/orgProposal");
     const invalid = orgAuthorityGrantsError(authority);
     if (invalid) { console.error(`--grant: ${invalid}`); process.exit(1); }
     const result = await cliPost("/cli/role/authority", { role_id, authority, revoke: options.revoke, from_session: callingSession() });

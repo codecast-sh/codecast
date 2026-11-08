@@ -135,6 +135,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   removeQuoteDrafts: INTERNAL,
   setSessionTargetDevice: DRAFT,
   setStableContextPrefs: DRAFT,
+  setSessionNewProject: DRAFT,
 
   // Creates
   createBucket: CREATE,
@@ -156,6 +157,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   promoteDocToPlan: CREATE,
   publishToDirectory: CREATE,
   addIssueSyncSource: CREATE,
+  addPermissionRule: CREATE,
   createOpsSource: CREATE,
   createOpsWatch: CREATE,
   rotateOpsSourceKey: never("key rotation: the new key is shown once and the old one cannot be made current again"),
@@ -166,6 +168,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   settleSecretStub: never("create: settles that painted row onto the server's answer"),
 
   // Deletes
+  removePermissionRule: DELETE,
   deleteCallRecording: DELETE,
   deleteCall: DELETE,
   admitGuestKnock: never("door: letting a stranger into a call is not taken back by an undo; remove them"),
@@ -288,6 +291,10 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setSessionBackground: MACHINE,
   markBlockedReviveRequested: MACHINE,
   clearBlockedReviveRequested: MACHINE,
+  setSessionGoal: never("machine control: the agent starts working toward the goal at once; clear it to stop"),
+  pauseSessionGoal: MACHINE,
+  resumeSessionGoal: MACHINE,
+  clearSessionGoal: MACHINE,
 
   // Sharing
   setCallShareVideo: SHARING,

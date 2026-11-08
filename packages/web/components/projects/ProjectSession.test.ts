@@ -2,7 +2,7 @@
 // standing session, else the canonical one.
 // Run: bun test components/projects/ProjectSession.test.ts
 import { describe, expect, test } from "bun:test";
-import { projectDefaultSessionOf } from "./ProjectSession";
+import { projectDefaultSessionOf } from "../../lib/projectDefaultSession";
 import type { InboxSession } from "../../store/inboxStore";
 
 const row = (id: string, extra: Partial<InboxSession> = {}): InboxSession =>

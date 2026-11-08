@@ -115,7 +115,9 @@ test("the card's gate: settled store, a person, not the org page, not a phone, n
 
 async function mountAnywhere() {
   const root = createRoot(document.getElementById("root")!);
-  const render = () => act(async () => root.render(React.createElement(card.OrgIntroAnywhere)));
+  // The corner reads the router's own location (the setup flow keeps it quiet).
+  const { MemoryRouter } = await import("react-router");
+  const render = () => act(async () => root.render(React.createElement(MemoryRouter, null, React.createElement(card.OrgIntroAnywhere))));
   await render();
   return { root, render };
 }
