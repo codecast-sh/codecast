@@ -240,6 +240,19 @@ describe("liveFlows (one live flow per team)", () => {
     expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_mid"]);
   });
 
+  test("the sweep reads each led project, so problems no lead owns never hide the ones it can start", async () => {
+    // More problems than either workspace window holds, in a project nobody leads, older and newer than the one
+    // problem a lead owns: every row both windows read is one the flow can never start.
+    const orphan = { ...growth.project, _id: "projects_orphan", short_id: "pj-orphan", title: "orphan", owner_role_id: undefined };
+    const stray = (id: string, at: number) => problem(id, "orphan", null, { created_at: at, updated_at: at });
+    const old = Array.from({ length: 210 }, (_, i) => stray(`o${i}`, NOW - 500_000 + i));
+    const fresh = Array.from({ length: 210 }, (_, i) => stray(`n${i}`, NOW - 100_000 + i));
+    const led = problem("led", "growth", null, { created_at: NOW - 300_000, updated_at: NOW - 300_000 });
+    const { ctx, tables } = fixtures({ tasks: [...old, led, ...fresh], extra: { projects: [growth.project, deals.project, orphan] } });
+    expect((await liveFlowView(ctx, tables.live_flows[0], NOW)).queue.map((q) => q.task_id)).toEqual(["tasks_led"]);
+    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_led"]);
+  });
+
   test("only a team admin sets the bar; the CLI says it in words, refuses a bad one, and takes it off", async () => {
     const token = "cx_live_flow_bar_token";
     const { ctx, tables } = fixtures({ tasks: [problem("g70", "growth", 70)], extra: { api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(token), name: "cli", created_at: 1 }] } });

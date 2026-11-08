@@ -405,7 +405,8 @@ async function notifyRunAttention(
   now: number,
 ): Promise<void> {
   const user = await ctx.db.get(task.user_id);
-  if (!user || user.notification_preferences?.task_activity === false || !conversationId) return;
+  if (!user || user.notification_preferences?.task_activity === false) return;
+  const link = conversationId ? undefined : `${process.env.SITE_URL || "https://codecast.sh"}/triggers/${task._id}`;
   const message = `${detail.trim() || "Review this run and decide the next step."} — ${task.title}`;
   const unread = await ctx.db.query("notifications")
     .withIndex("by_recipient_read", (q: any) => q.eq("recipient_user_id", task.user_id).eq("read", false))
@@ -413,7 +414,7 @@ async function notifyRunAttention(
   const existing = unread.find((n: any) => n.entity_id === String(task._id) &&
     (n.type === "task_completed" || n.type === "task_failed"));
   if (existing) {
-    await ctx.db.patch(existing._id, { type, message, conversation_id: conversationId, created_at: now });
+    await ctx.db.patch(existing._id, { type, message, conversation_id: conversationId, link, created_at: now });
     return;
   }
   const notificationId = await ctx.db.insert("notifications", {
@@ -422,6 +423,7 @@ async function notifyRunAttention(
     message,
     entity_id: String(task._id),
     conversation_id: conversationId,
+    link,
     read: false,
     created_at: now,
   });
@@ -432,7 +434,7 @@ async function notifyRunAttention(
       type,
       title: type === "task_failed" ? "Run stopped — needs attention" : "Needs attention",
       body: message,
-      data: { type, taskId: task._id, conversationId },
+      data: { type, taskId: task._id, conversationId, ...(link ? { url: link } : {}) },
     });
   }
 }

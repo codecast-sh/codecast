@@ -20,6 +20,7 @@ import { flowAgents, WORKING_RUN_STATUSES } from "./lib/linePlacement";
 import { barWords, byStartOrder, clearsBar, startValue, type FlowBar } from "./lib/linePriority";
 import { problemSourceOf } from "./workflows";
 import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
+import { projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { flowRouteFor } from "./lib/flowRoute";
 import { agentAssignee, claimSlot, freeSlots, isReadyCause, lineLoadFor, lineOwnerOf, takeAdmissible, type LineLoad, type LineLoads, type RunPlace } from "./orgLine";
 
@@ -31,6 +32,12 @@ type Ctx = { db: any };
  * that read fewer rows than the page saw none of the queue the page showed next (Nov 8: no start for 14 hours).
  */
 export const LIVE_FLOW_WINDOW = 200;
+/**
+ * How many of each led project's open, ready problems a queue read takes, oldest first, beside the workspace's windows:
+ * the read each lead's own line makes (orgLine linePool). Problems no lead owns can never start, and a workspace with
+ * thousands of them fills both windows with nothing startable (Union, Nov 8: about 14k open, most with no lead).
+ */
+export const LIVE_FLOW_PER_PROJECT = 20;
 /** How many of the queue a view shows. */
 export const LIVE_FLOW_SHOWN = 50;
 
@@ -72,6 +79,13 @@ export async function liveFlowCandidates(ctx: Ctx, flow: any, roles: any[], limi
     ...await ctx.db.query("tasks").withIndex("by_workspace_source_status_readiness_score", head).order("desc").take(window),
     ...await ctx.db.query("tasks").withIndex("by_workspace_source_status_readiness_score", (q: any) => head(q).eq("cause.scored.score", undefined)).take(window),
   ];
+  // Each project a flow lead leads, as lineOwnerOf decides it, read the way that lead's own line reads it.
+  for (const p of await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", flow.workspace)).collect()) {
+    if (projectLeadOf(p, team).kind !== "lead") continue;
+    rows.push(...await ctx.db.query("tasks")
+      .withIndex("by_project_source_status_readiness", (q: any) => q.eq("project_id", p._id).eq("source", "signal").eq("status", "open").eq("readiness", "ready"))
+      .take(LIVE_FLOW_PER_PROJECT));
+  }
   for (const r of team) {
     for (const a of [agentAssignee(r), String(r._id)]) {
       rows.push(...await ctx.db.query("tasks").withIndex("by_assignee_status", (q: any) => q.eq("assignee", a).eq("status", "open")).collect());
