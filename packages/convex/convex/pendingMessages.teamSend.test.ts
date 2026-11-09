@@ -796,6 +796,10 @@ describe("stuckSendReach", () => {
   test("a terminal hold outranks the live guesses", () => {
     expect(stuckSendReach(held, { gone: false, live: true, ready: true })).toBe("terminal");
   });
+  test("a terminal hold that names its fix is still a terminal hold", () => {
+    const withHint = { delivery_disposition_reason: `${held.delivery_disposition_reason}: macOS does not let Codecast control Ghostty on that Mac` };
+    expect(stuckSendReach(withHint, { gone: false, live: false, ready: false })).toBe("terminal");
+  });
   test("a target that no longer exists still reads as gone", () => {
     expect(stuckSendReach(held, { gone: true, live: false, ready: false })).toBe("gone");
   });

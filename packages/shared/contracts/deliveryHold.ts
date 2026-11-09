@@ -9,13 +9,23 @@
 const PREFIX = "runs in ";
 const SUFFIX = ", which Codecast can't type into";
 
-export function unreachableTerminalHoldReason(terminalLabel: string): string {
-  return `${PREFIX}${terminalLabel}${SUFFIX}`;
+// A hint, when the daemon knows why the terminal is out of reach and what
+// clears it, follows after ": " (macOS refused Codecast's Automation request
+// for Ghostty on that Mac, 2026-11-08), so the sender is told what to fix.
+const HINT_SEPARATOR = ": ";
+
+export function unreachableTerminalHoldReason(terminalLabel: string, hint?: string | null): string {
+  const base = `${PREFIX}${terminalLabel}${SUFFIX}`;
+  return hint ? `${base}${HINT_SEPARATOR}${hint}` : base;
 }
 
 /** The terminal named by an unreachable-terminal hold reason, or null for any other reason. */
 export function unreachableTerminalOf(reason: string | null | undefined): string | null {
-  if (!reason || !reason.startsWith(PREFIX) || !reason.endsWith(SUFFIX)) return null;
-  const label = reason.slice(PREFIX.length, reason.length - SUFFIX.length);
+  if (!reason || !reason.startsWith(PREFIX)) return null;
+  const end = reason.indexOf(SUFFIX, PREFIX.length);
+  if (end < 0) return null;
+  const rest = reason.slice(end + SUFFIX.length);
+  if (rest && !rest.startsWith(HINT_SEPARATOR)) return null;
+  const label = reason.slice(PREFIX.length, end);
   return label || null;
 }

@@ -99,18 +99,43 @@ const PROBE_SCRIPT = `on run argv
 end run`;
 
 /**
+ * What the person must do for a failed probe, when the failure says. macOS
+ * answers -1743 once the daemon's Automation request for Ghostty is refused,
+ * including when the consent prompt timed out on a locked, unattended Mac
+ * (TCC auth_reason 9 on the Mac Studio, 2026-11-08): from then on every
+ * delivery was held as "can't type into" while the fix sat in System Settings.
+ * A probe that runs out the clock is a consent prompt still on screen or a
+ * Ghostty that stopped answering Apple events.
+ */
+export function ghosttyUnscriptableHint(err: { stderr?: string; message?: string; killed?: boolean; signal?: string | null }): string | null {
+  const text = `${err.stderr ?? ""}\n${err.message ?? ""}`;
+  if (/-1743\b|not authori[sz]ed to send apple events/i.test(text)) {
+    return "macOS does not let Codecast control Ghostty on that Mac. Turn on Ghostty under codecast in System Settings, Privacy & Security, Automation";
+  }
+  if (err.killed || err.signal === "SIGTERM" || /-1712\b|timed out/i.test(text)) {
+    return "Ghostty did not answer. On that Mac, allow Codecast to control Ghostty if macOS is asking, or restart Ghostty";
+  }
+  if (/-1708\b|-2741\b|-1728\b|doesn.t understand|expected .* but found/i.test(text)) {
+    return "that Ghostty has no scripting. Update to Ghostty 1.3 or later with macos-applescript on";
+  }
+  return null;
+}
+
+/**
  * Whether the daemon can drive the Ghostty terminal on `tty`. "unscriptable"
  * covers every way the dictionary is out of reach: a Ghostty older than 1.3,
- * `macos-applescript = false`, or no Automation grant for the daemon (-1743).
- * None of those is fixed by retrying, so the caller holds the message instead.
+ * `macos-applescript = false`, no Automation grant for the daemon (-1743), or
+ * a Ghostty that does not answer. None of those is fixed by retrying, so the
+ * caller holds the message instead, with the hint that clears it.
  */
-export async function probeGhostty(tty: string): Promise<{ state: "ok" | "not_found" } | { state: "unscriptable"; detail: string }> {
+export async function probeGhostty(tty: string): Promise<{ state: "ok" | "not_found" } | { state: "unscriptable"; detail: string; hint?: string | null }> {
   try {
     const count = Number((await osascript(["-e", PROBE_SCRIPT, tty])).trim());
     return { state: count > 0 ? "ok" : "not_found" };
   } catch (err) {
-    const e = err as { stderr?: string; message?: string };
-    return { state: "unscriptable", detail: (e.stderr || e.message || String(err)).trim() };
+    const e = err as { stderr?: string; message?: string; killed?: boolean; signal?: string | null };
+    const detail = (e.stderr || e.message || String(err)).trim();
+    return { state: "unscriptable", detail: e.killed ? `${detail} (no answer in ${OSASCRIPT_TIMEOUT_MS / 1000}s)` : detail, hint: ghosttyUnscriptableHint(e) };
   }
 }
 
@@ -166,7 +191,7 @@ export async function ghosttyPane(tty: string, bracketed: boolean, log: (line: s
   const probe = await io.probe(tty);
   if (probe.state === "unscriptable") {
     log(`Ghostty scripting unavailable for TTY ${tty}: ${probe.detail}`);
-    throw new TerminalHoldError("Ghostty");
+    throw new TerminalHoldError("Ghostty", probe.hint);
   }
   if (probe.state === "not_found") throw new Error(`Ghostty terminal not found for TTY ${tty}`);
   return {

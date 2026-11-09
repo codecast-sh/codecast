@@ -8,6 +8,13 @@ describe("unreachable terminal hold reason", () => {
     expect(unreachableTerminalOf(reason)).toBe("Ghostty");
   });
 
+  test("carries a hint on what clears the hold and still reads back", () => {
+    const reason = unreachableTerminalHoldReason("Ghostty", "turn it on in System Settings");
+    expect(reason).toBe("runs in Ghostty, which Codecast can't type into: turn it on in System Settings");
+    expect(unreachableTerminalOf(reason)).toBe("Ghostty");
+    expect(unreachableTerminalOf("runs in Ghostty, which Codecast can't type into, or so")).toBeNull();
+  });
+
   test("any other hold names no terminal", () => {
     for (const reason of ["waiting for a human answer in the terminal", "waiting for terminal input confirmation", "", undefined, null]) {
       expect(unreachableTerminalOf(reason)).toBeNull();
