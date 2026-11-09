@@ -11,6 +11,7 @@ import {
   retryPendingMessageForUser,
   planStuckMessageIds,
   planStuckSendNotify,
+  stuckSendReach,
   STUCK_SEND_NOTIFY_DEADLINE_MS,
   DEAD_SESSION_REVIVE_WINDOW_MS,
   planDeadSessionRevive,
@@ -784,6 +785,25 @@ describe("a session's own agents: the sender hears only a stuck wait", () => {
 
     expect((await healAndNotifyStuckMessages(ctx as any, now)).notified).toBe(0);
     expect(tables.pending_messages.filter((m) => m.conversation_id === "convBobPriv")).toHaveLength(0);
+  });
+});
+
+describe("stuckSendReach", () => {
+  const held = { delivery_disposition_reason: "runs in Ghostty, which Codecast can't type into" };
+  test("a terminal hold is named even when no managed row says the session is live", () => {
+    expect(stuckSendReach(held, { gone: false, live: false, ready: false })).toBe("terminal");
+  });
+  test("a terminal hold outranks the live guesses", () => {
+    expect(stuckSendReach(held, { gone: false, live: true, ready: true })).toBe("terminal");
+  });
+  test("a target that no longer exists still reads as gone", () => {
+    expect(stuckSendReach(held, { gone: true, live: false, ready: false })).toBe("gone");
+  });
+  test("without a hold, liveness decides as before", () => {
+    expect(stuckSendReach({}, { gone: false, live: false, ready: false })).toBe("offline");
+    expect(stuckSendReach({}, { gone: false, live: true, ready: false })).toBe("busy");
+    expect(stuckSendReach({}, { gone: false, live: true, ready: true })).toBe("stuck");
+    expect(stuckSendReach({ delivery_disposition_reason: "waiting for a human answer" }, { gone: false, live: false, ready: false })).toBe("offline");
   });
 });
 

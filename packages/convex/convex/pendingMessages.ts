@@ -1,4 +1,5 @@
 import { UNCONFIRMED_DELIVERY_REASON } from "@codecast/shared/contracts";
+import { unreachableTerminalOf } from "@codecast/shared/contracts/deliveryHold";
 import { isWorkflowRunLog } from "./lib/runLog";
 import { clientRunAnswerRefusal } from "./lib/commandRuns";
 import { formatIdle, formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
@@ -2000,7 +2001,8 @@ async function liveAndReadyConversationIds(
 export const STUCK_SEND_NOTIFY_DEADLINE_MS = 3 * 60_000;
 
 // busy: live and mid-turn. stuck: live and idle, yet the message is still not in.
-export type TargetReach = "busy" | "stuck" | "offline" | "gone" | "unconfirmed";
+// terminal: the daemon holds it because the session runs in a terminal it can't type into.
+export type TargetReach = "busy" | "stuck" | "offline" | "gone" | "unconfirmed" | "terminal";
 export type StuckSendNotify = { kind: "skip" } | { kind: "notify"; reach: TargetReach };
 
 // Pure decision: should the sending session be told its message is stuck? Fires at most once
@@ -2033,6 +2035,20 @@ export function planStuckSendNotify(
   return { kind: "notify", reach };
 }
 
+// Why a message is stuck, for the sender's receipt. A hold the daemon wrote because the session
+// runs in a terminal it can't type into outranks the liveness guess: a session someone started by
+// hand in Ghostty has no managed row, so it read as "offline" while its machine was up and holding
+// the message (jx7a66w, 2026-11-08).
+export function stuckSendReach(
+  msg: { delivery_disposition_reason?: string },
+  target: { gone: boolean; live: boolean; ready: boolean },
+): TargetReach {
+  if (target.gone) return "gone";
+  if (unreachableTerminalOf(msg.delivery_disposition_reason)) return "terminal";
+  if (target.live) return target.ready ? "stuck" : "busy";
+  return "offline";
+}
+
 // Deliver a delay receipt back into the sender's own session and mark the original so we don't
 // notify again. Only a target that no longer exists cancels the original.
 async function notifyStuckSend(
@@ -2058,6 +2074,8 @@ async function notifyStuckSend(
     ? `Your message to session ${targetLabel} could not be delivered — that session no longer exists, so the message was dropped.\n\n> ${preview}`
     : reach === "offline"
     ? `Your message to session ${targetLabel} hasn't been delivered yet — it has no live daemon right now (its machine may be asleep or offline). It stays queued and is delivered when that daemon comes back; no action needed unless it is urgent.\n\n> ${preview}`
+    : reach === "terminal"
+    ? `Your message to session ${targetLabel} is held: that session ${msg.delivery_disposition_reason}. Its machine is up and keeps the message queued. It goes in once that terminal can be scripted, or once the agent there exits and codecast resumes the session in its own tmux.\n\n> ${preview}`
     : reach === "unconfirmed"
     ? `Your message to session ${targetLabel} was typed into it, but its arrival was never confirmed. It may have landed: read that session before sending it again.\n\n> ${preview}`
     : reach === "stuck"
@@ -2254,9 +2272,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
       // Sender feedback runs regardless of the target's readiness: a message stuck past the
       // deadline tells its sending session why. planStuckSendNotify no-ops on already-notified
       // rows and on the sender's own busy session.
-      const reach: TargetReach = gone.has(conversationId) ? "gone"
-        : live.has(conversationId) ? (ready.has(conversationId) ? "stuck" : "busy")
-        : "offline";
+      const reach = stuckSendReach(msg, { gone: gone.has(conversationId), live: live.has(conversationId), ready: ready.has(conversationId) });
       const senderNotify = planStuckSendNotify(msg, reach, now);
       if (senderNotify.kind === "notify") {
         acted.add(msg._id);
