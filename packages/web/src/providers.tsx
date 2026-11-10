@@ -14,7 +14,7 @@ import { OpenInDesktopHandoff } from "@/components/OpenInDesktopHandoff";
 import { ShortcutProvider, setKeyBindings, isMac } from "@/shortcuts";
 import { shortcutCatalog } from "@/shortcuts/registry";
 import { desktopMenuKeys } from "@codecast/shared/contracts/keyBindings";
-import { PRESENCE_REQUIRED } from "@codecast/shared/contracts/secrets";
+import { dispatchRefusalReason } from "@/lib/dispatchBinding";
 import { bridge } from "@/lib/desktop";
 import { TipProvider } from "@/tips/TipProvider";
 import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
@@ -81,16 +81,7 @@ function describeDispatchFailure(f: { action: string; args: unknown; message: st
     .toLowerCase()
     .trim()
     .replace(/^./, (c) => c.toUpperCase());
-  const reason =
-    f.message
-      .split(/Uncaught (?:Convex)?Error:/)
-      .pop()
-      ?.split("\n")[0]
-      ?.replace(/\s+at handler.*$/, "")
-      .replace(/\s+Called by client.*$/, "")
-      .replace(`${PRESENCE_REQUIRED}: `, "")
-      .trim() || "rejected by the server";
-  const friendly = /not authorized/i.test(reason) ? "you don't have access to that session" : reason;
+  const friendly = dispatchRefusalReason(f.message);
   return `${label} didn't go through — ${friendly}`;
 }
 
