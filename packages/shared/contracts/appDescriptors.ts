@@ -75,8 +75,6 @@ export interface TokenConfigField {
 /** Who a connection belongs to once made: the whole team, or one person. */
 export type AppConnectionScope = "team" | "personal";
 
-export const APP_CONNECTION_SCOPES: readonly AppConnectionScope[] = ["team", "personal"];
-
 export function isAppConnectionScope(value: unknown): value is AppConnectionScope {
   return value === "team" || value === "personal";
 }

@@ -18,7 +18,6 @@
 
 /** NIST P-256 / prime256v1 — the one curve SubtleCrypto and node both speak with
  *  raw-uncompressed public keys and a 32-byte ECDH shared secret. */
-export const PROVIDER_KEY_ECDH_CURVE = "P-256" as const;
 export const PROVIDER_KEY_ECDH_NAMED_CURVE = "prime256v1" as const; // node's name for P-256
 
 /** HKDF-SHA256 with an empty salt and this info string derives the AES key from the

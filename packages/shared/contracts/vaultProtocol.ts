@@ -36,11 +36,6 @@ export interface VaultInfo {
   mirror?: boolean;
 }
 
-/** GET /vault/roots response. */
-export interface VaultRootsResponse {
-  vaults: VaultInfo[];
-}
-
 /** GET /vault/locate?path=<absolute local path> response: the vault that holds
  *  the path, registered on the spot when none did (vaultRegistry.locateVault),
  *  and the path's vault-relative form ("" for the root itself). 404 when the

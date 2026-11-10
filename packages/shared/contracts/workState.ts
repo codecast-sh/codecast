@@ -23,11 +23,6 @@ export const WORK_STATES = ["working", "needs_input", "done", "dormant", "idle"]
 
 export type WorkState = (typeof WORK_STATES)[number];
 
-// The settled-with-content states: the agent's turn is over and the row rests
-// in one of these until something wakes it. Everything else is either in
-// motion ("working") or empty/retired ("idle").
-export const REST_WORK_STATES: ReadonlySet<string> = new Set<string>(["needs_input", "done", "dormant"]);
-
 // Accepted `--state` filter values for CLI discovery, normalized to a canonical
 // token. "pinned" and "live" are orthogonal to work_state (they filter the
 // is_pinned / is_live flags), so callers handle them specially. Returns null for

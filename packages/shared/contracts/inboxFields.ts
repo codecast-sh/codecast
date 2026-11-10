@@ -60,8 +60,6 @@ export const INBOX_FACT_FIELDS = [
   "last_model_call_at",
 ] as const;
 
-export type InboxFactField = (typeof INBOX_FACT_FIELDS)[number];
-
 // The inbox row's BODY fields: every key a base sessions channel writes
 // besides the facts (enrichInboxSessionRow, stampInboxViewerFields and
 // buildSubagentChildRow in conversations.ts). A row is an allowlist, not the
@@ -115,5 +113,3 @@ export const INBOX_PROJECTION_FIELDS = [
   "bucket_stale_at",
   "stale_bucket",
 ] as const;
-
-export type InboxProjectionField = (typeof INBOX_PROJECTION_FIELDS)[number];

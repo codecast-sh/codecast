@@ -14,7 +14,6 @@
 import { compareVersions, type OrgTemplate } from "./orgTemplateManifest";
 
 export type ReleaseClass = "content" | "structure" | "authority";
-export const RELEASE_CLASSES: ReleaseClass[] = ["content", "structure", "authority"];
 export type VersionBump = "major" | "minor" | "patch" | "none";
 /** The smallest bump each class needs. */
 export const REQUIRED_BUMP: Record<ReleaseClass, Exclude<VersionBump, "none">> = { content: "patch", structure: "minor", authority: "major" };

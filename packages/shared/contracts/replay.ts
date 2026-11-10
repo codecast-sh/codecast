@@ -38,12 +38,6 @@ export type ReplayEvent =
   // App-defined state markers.
   | (At & { type: "mark"; name: string; data?: Record<string, unknown> });
 
-export type ReplayEventType = ReplayEvent["type"];
-
-export const REPLAY_EVENT_TYPES: readonly ReplayEventType[] = [
-  "nav", "click", "input", "submit", "key", "scroll", "console", "network", "error", "view", "mark",
-];
-
 /** Where a replay came from: our recorder, or a vendor recording mirrored on first read. */
 export const REPLAY_PROVIDERS = ["sdk", "posthog", "sentry"] as const;
 export type ReplayProvider = (typeof REPLAY_PROVIDERS)[number];

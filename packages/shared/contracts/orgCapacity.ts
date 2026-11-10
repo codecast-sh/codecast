@@ -223,8 +223,6 @@ export function overloadDetails(load: RoleLoad): Array<[number, RoleCapacityKey,
 export function isOverloaded(load: RoleLoad): boolean { return overloadDetails(load).length > 0; }
 /** The line a role's live hands are read against: its own cap, else the default. */
 export function handsLine(load: RoleLoad): number { return load.hands_cap && load.hands_cap > 0 ? load.hands_cap : capacity("live_hands"); }
-/** The model's line for one load axis of one role. */
-export function loadLine(key: RoleCapacityKey, load: RoleLoad): number { return key === "live_hands" ? handsLine(load) : capacity(key); }
 
 /** How far the busiest VOLUME axis sits past the model: the largest of items
  *  a day, decisions a day and live hands, each divided by its line. 1 is the

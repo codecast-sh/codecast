@@ -275,8 +275,6 @@ export const DAEMON_COMMANDS = [
   "cap_publish",
 ] as const;
 
-export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
-
 /** How long a command waits for its daemon: one not picked up by then is
  *  closed with error "expired_ttl" and never runs. */
 export const DAEMON_COMMAND_TTL_MS = 5 * 60 * 1000;

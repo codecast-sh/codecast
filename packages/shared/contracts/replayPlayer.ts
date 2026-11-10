@@ -14,7 +14,7 @@
 // frame imports this file: the Convex mint and manifest route, the worker and
 // its page, the web embed and the CLI.
 
-import { formatCallTime, parseCallTime, CALL_TIME_SOURCE } from "./callRecordings";
+import { formatCallTime, parseCallTime } from "./callRecordings";
 
 /** The origin the player is served from. Never codecast.sh itself. */
 export const REPLAY_PLAYER_ORIGIN = "https://replay.codecast.sh";
@@ -375,9 +375,6 @@ export interface ReplayFrameResponse {
 // `rp-12@1:23`, `rp-12@83s`. A stretch, for frames across it, is two times:
 // `rp-12@1:00-2:30`. The clock is the replay's (ms since its first event),
 // the same one the semantic timeline prints and the player shows.
-
-/** A moment of a replay, as prose writes it. */
-export const REPLAY_MOMENT_REF_SOURCE = `rp-\\d+@(?:${CALL_TIME_SOURCE})`;
 
 export interface ReplayRef {
   replay: string;

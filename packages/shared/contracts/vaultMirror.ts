@@ -88,41 +88,6 @@ export interface VaultMirrorUpsertResponse {
   note_count: number;
 }
 
-/** POST /cli/vault/register — announces the vault itself before any notes. */
-export interface VaultMirrorRegisterRequest {
-  device_id: string;
-  vault_id: string;
-  name: string;
-  root: string;
-  /** Absent leaves the stored flag alone; false tears the mirror down. */
-  enabled?: boolean;
-}
-
-/** A mirrored vault as the web reader sees it. */
-export interface VaultMirrorSummary {
-  vault_id: string;
-  device_id: string;
-  name: string;
-  root: string;
-  note_count: number;
-  last_synced_at: number;
-}
-
-/** A mirrored note as the web reader sees it: the pushed metadata plus where
- *  the body can be fetched, when one has been uploaded. */
-export interface VaultMirrorNoteRow extends VaultMirrorNote {
-  vault_id: string;
-  device_id: string;
-  updated_at: number;
-}
-
-export interface VaultMirrorNoteBody {
-  note: VaultMirrorNoteRow;
-  /** Signed, expiring URL for the body blob; null when the body was never
-   *  uploaded (too large for the size gate, or not yet requested). */
-  body_url: string | null;
-}
-
 /** Bodies above this are pushed as metadata only. A note is prose: 64KB is a
  *  very long one, and the cap is what stops a stray dump file in a vault from
  *  turning a mirror sync into a bulk upload. */

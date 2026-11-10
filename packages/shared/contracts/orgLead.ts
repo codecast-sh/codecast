@@ -82,10 +82,6 @@ export type AssistantReach<TeamId = unknown> = { reach: "global" } | { reach: "t
 export const isHeadOfPeopleRole = (r: { handle?: string; assistant?: unknown }): boolean =>
   !r.assistant && (r.handle === HEAD_OF_PEOPLE_HANDLE || r.handle === LEGACY_HEAD_OF_PEOPLE_HANDLE);
 
-/** The handle a reader looks up for the one typed: the old handle still finds
- *  the Head of People. */
-export const canonicalHeadHandle = (h: string) => (h === LEGACY_HEAD_OF_PEOPLE_HANDLE ? HEAD_OF_PEOPLE_HANDLE : h);
-
 /** The role names projects or plans it looks after. */
 export const hasScope = (r: LeadRole) => (r.scope?.project_ids ?? []).length > 0 || (r.scope?.plan_ids ?? []).length > 0;
 

@@ -54,19 +54,6 @@ export interface PageDataResult {
   truncated?: boolean;
 }
 
-export interface PageQueryDeclaration {
-  reader: string;
-  args?: Record<string, unknown>;
-  refresh?: string | number;
-  title?: string;
-}
-
-export interface PageDataDeclaration {
-  queries: Record<string, PageQueryDeclaration>;
-  /** team:<id> or user:<id>; absent = the publishing session's workspace. */
-  workspace?: string;
-}
-
 const QUERY_ID = /^[a-z][a-z0-9_-]{0,47}$/;
 
 /** "90s", "15m", "2h", "1d" or milliseconds → ms, bounded; a string error otherwise. */

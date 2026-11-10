@@ -19,7 +19,6 @@ export const ADDABLE_SOURCE_PROVIDERS = ["sentry", "posthog", "sdk", "http", "ap
 export const SYSTEM_SOURCE_PROVIDERS = ["github"] as const;
 export const SOURCE_PROVIDERS = [...ADDABLE_SOURCE_PROVIDERS, ...SYSTEM_SOURCE_PROVIDERS] as const;
 export type SourceProvider = (typeof SOURCE_PROVIDERS)[number];
-export type AddableSourceProvider = (typeof ADDABLE_SOURCE_PROVIDERS)[number];
 
 /** The system source CI runs on a default branch file under, one per workspace; `--source github-ci` names it. */
 export const GITHUB_CI_SOURCE_NAME = "github-ci";
@@ -472,9 +471,6 @@ export type IngestItem =
     }
   /** Something worth judging happened (learning-loop.md LL7): kept and coalesced into a moment, never counted only. */
   | MomentEventItem;
-
-export type IngestItemType = IngestItem["type"];
-export const INGEST_ITEM_TYPES: readonly IngestItemType[] = ["error", "log", "job_failed", "check", "event", "deploy", "replay", "moment"];
 
 export interface IngestEnvelope {
   sdk: { name: string; version: string };

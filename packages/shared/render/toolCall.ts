@@ -32,9 +32,6 @@ export interface NestedAction extends ToolCallLike {
   source?: string;
 }
 
-/** @deprecated name kept for readers of old call sites; the type is NestedAction. */
-export type CodexExecAction = NestedAction;
-
 function skipQuoted(source: string, start: number): number {
   const quote = source[start];
   let escaped = false;
@@ -293,9 +290,6 @@ export function summarizeNestedActions(actions: readonly NestedAction[]): string
   if (counts.size > 3) groups.push(`+${counts.size - 3} more`);
   return `${actions.length} actions · ${groups.join(" · ")}`;
 }
-
-/** @deprecated use summarizeNestedActions. */
-export const summarizeCodexExecActions = summarizeNestedActions;
 
 // The outcome of one step of a batch, aligned by index with its actions.
 export interface NestedStepOutcome {

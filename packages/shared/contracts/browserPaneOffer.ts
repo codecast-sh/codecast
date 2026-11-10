@@ -77,16 +77,6 @@ export function normalizePaneUrl(input: string): string | null {
   return u.toString();
 }
 
-/** True when only the machine the agent ran on can serve this address. The
- *  chip says so, since a reader on another laptop gets a dead pane. */
-export function isLoopbackPaneUrl(url: string): boolean {
-  try {
-    return isLoopbackHost(new URL(url).hostname);
-  } catch {
-    return false;
-  }
-}
-
 /** An offer nobody acted on goes quiet after a day. The dev server it names is
  *  long dead by then, and a chip that never expires teaches people to ignore
  *  chips. */

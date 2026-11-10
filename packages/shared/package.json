@@ -11,7 +11,6 @@
   "exports": {
     ".": "./index.ts",
     "./network": "./network/index.ts",
-    "./encryption": "./encryption/index.ts",
     "./contracts": "./contracts/index.ts",
     "./contracts/resourceOffloadIntent": "./contracts/resourceOffloadIntent.ts",
     "./contracts/moveRehearsal": "./contracts/moveRehearsal.ts",
@@ -146,7 +145,6 @@
     "./vault/frontmatter": "./vault/frontmatter.ts",
     "./memory": "./memory/index.ts",
     "./chat": "./chat/index.ts",
-    "./chat/dm": "./chat/dm.ts",
     "./comments": "./comments/index.ts",
     "./blame": "./blame/index.ts",
     "./diff": "./diff/index.ts",
@@ -163,7 +161,6 @@
     "./contracts/secretRules": "./contracts/secretRules.ts",
     "./contracts/secretShapes": "./contracts/secretShapes.ts",
     "./contracts/theme": "./contracts/theme.ts",
-    "./mods/sdk": "./mods/sdk.ts",
     "./mods/inspect": "./mods/inspect.ts"
   },
   "dependencies": {

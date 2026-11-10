@@ -828,13 +828,6 @@ export type SecretNeedsApproval = {
 };
 
 /**
- * What `refresh` answers when the value changed since this machine read it.
- * `value_updated_at` is the value's own version (cliRead, rotate, fill and
- * refresh return it): a metadata edit leaves it alone.
- */
-export type SecretStaleWrite = { stale: true; value_updated_at: number; message: string };
-
-/**
  * The row a name means among rows of several workspaces, the one rule the
  * backend (findSecret) and the CLI's planners share: the preferred
  * workspace's row (the repo profile's), else the only row with that status

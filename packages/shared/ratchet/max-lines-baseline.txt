@@ -7,12 +7,12 @@
 #   cd packages/shared && RATCHET_WRITE=prune bun test ratchet/maxLines.ratchet.test.ts
 packages/cli/src/app/cli.ts 950
 packages/cli/src/blame.ts 1000
-packages/cli/src/browser/bridge/host.test.ts to
-packages/cli/src/browser/bridge/host.ts to
+packages/cli/src/browser/bridge/host.test.ts
+packages/cli/src/browser/bridge/host.ts
 packages/cli/src/browser/cli.ts 1450
-packages/cli/src/browser/cliEngine.ts to
+packages/cli/src/browser/cliEngine.ts
 packages/cli/src/browser/instance.ts 900
-packages/cli/src/browser/provisionLinux.ts to
+packages/cli/src/browser/provisionLinux.ts
 packages/cli/src/callSnap.test.ts 2050
 packages/cli/src/callSnap.ts 2900
 packages/cli/src/capabilities/inventory.ts 1150
@@ -25,52 +25,52 @@ packages/cli/src/cloud/hostTools.ts 1200
 packages/cli/src/cloud/mirror/apply.test.ts 1100
 packages/cli/src/cloud/mirror/apply.ts 1300
 packages/cli/src/cloud/mirror/transform.ts 850
-packages/cli/src/cloud/prepare.ts to
+packages/cli/src/cloud/prepare.ts
 packages/cli/src/cloud/transfer.test.ts 1250
 packages/cli/src/cloudAgents/codex.test.ts 950
 packages/cli/src/cloudAgents/codex.ts 950
 packages/cli/src/cloudAgents/watcher.ts 850
 packages/cli/src/codexAppServer.ts 1400
 packages/cli/src/daemon.interactive-prompt-parse.test.ts 900
-packages/cli/src/daemon.machine-prompt-safety.test.ts to
-packages/cli/src/daemon.tmux-classify.test.ts to
-packages/cli/src/daemon.ts to
+packages/cli/src/daemon.machine-prompt-safety.test.ts
+packages/cli/src/daemon.tmux-classify.test.ts
+packages/cli/src/daemon.ts
 packages/cli/src/daemon.waiting-tasks.test.ts 900
-packages/cli/src/decideCommand.ts to
+packages/cli/src/decideCommand.ts
 packages/cli/src/doctor.ts 950
 packages/cli/src/execution/coordinator.ts 1000
-packages/cli/src/formatter.ts 2650
+packages/cli/src/formatter.ts 2500
 packages/cli/src/hosts/cli.ts 1800
-packages/cli/src/index.ts to
+packages/cli/src/index.ts
 packages/cli/src/jsonlGenerator.test.ts 900
 packages/cli/src/jsonlGenerator.ts 1050
 packages/cli/src/judgeFixCommand.ts 850
 packages/cli/src/orgTemplate.test.ts 1200
 packages/cli/src/orgTemplateRun.ts 1100
 packages/cli/src/parser.test.ts 1350
-packages/cli/src/parser.ts 2600
+packages/cli/src/parser.ts 2500
 packages/cli/src/prCommand.ts 1250
 packages/cli/src/publish.ts 1000
-packages/cli/src/remote/session-move.ts 1550
+packages/cli/src/remote/session-move.ts 1500
 packages/cli/src/retryQueue.test.ts 1100
 packages/cli/src/secrets/command.ts 850
 packages/cli/src/snippets.sections.test.ts 950
-packages/cli/src/syncService.ts to
+packages/cli/src/syncService.ts
 packages/cli/src/test-helpers/messagingHarness.ts 950
-packages/cli/src/workflow/runner.test.ts to
-packages/cli/src/workflow/runner.ts to
+packages/cli/src/workflow/runner.test.ts
+packages/cli/src/workflow/runner.ts
 packages/cli/src/workspace/lifecycle.test.ts 1000
 packages/cli/src/workspace/lifecycle.ts 950
 packages/convex/convex/accountSwitch.test.ts 1650
-packages/convex/convex/accountSwitch.ts 2750
-packages/convex/convex/agentTasks.ts to
+packages/convex/convex/accountSwitch.ts 2700
+packages/convex/convex/agentTasks.ts
 packages/convex/convex/anchors.ts 900
 packages/convex/convex/artifactPages.ts 2300
 packages/convex/convex/artifacts.test.ts 1100
-packages/convex/convex/artifacts.ts to
-packages/convex/convex/artifactsHttp.ts to
+packages/convex/convex/artifacts.ts
+packages/convex/convex/artifactsHttp.ts
 packages/convex/convex/assistant.entry.test.ts 900
-packages/convex/convex/assistant/turns.test.ts to
+packages/convex/convex/assistant/turns.test.ts
 packages/convex/convex/assistant/turns.ts 1200
 packages/convex/convex/billing.test.ts 1150
 packages/convex/convex/callGuests.test.ts 1700
@@ -81,27 +81,25 @@ packages/convex/convex/calls.test.ts 1000
 packages/convex/convex/calls.ts 1400
 packages/convex/convex/capabilities.test.ts 1800
 packages/convex/convex/capabilityState.ts 1950
-packages/convex/convex/ccAccountsShared.ts to
+packages/convex/convex/ccAccountsShared.ts
 packages/convex/convex/changesProse.ts 1350
-packages/convex/convex/chat.test.ts to
-packages/convex/convex/chat.ts 5050
-packages/convex/convex/cleanup.ts 900
+packages/convex/convex/chat.test.ts
+packages/convex/convex/chat.ts 5000
 packages/convex/convex/cloud.ts 1150
 packages/convex/convex/codeComments.ts 1100
 packages/convex/convex/comments.ts 1400
 packages/convex/convex/comments.v2.test.ts 1300
-packages/convex/convex/composerSuggestions.ts 1050
+packages/convex/convex/composerSuggestions.ts 1000
 packages/convex/convex/conversations.projection.test.ts 1000
-packages/convex/convex/conversations.ts to
-packages/convex/convex/debugTmp.ts 1150
+packages/convex/convex/conversations.ts
 packages/convex/convex/devices.ts 2200
 packages/convex/convex/dispatch.test.ts 1500
-packages/convex/convex/dispatch.ts to
-packages/convex/convex/docs.ts 2750
+packages/convex/convex/dispatch.ts
+packages/convex/convex/docs.ts 2550
 packages/convex/convex/executionBindings.test.ts 1550
 packages/convex/convex/executionBindings.ts 3300
-packages/convex/convex/githubApi.ts to
-packages/convex/convex/githubApp.ts 1600
+packages/convex/convex/githubApi.ts
+packages/convex/convex/githubApp.ts 1500
 packages/convex/convex/githubWebhooks.checks.test.ts 850
 packages/convex/convex/githubWebhooks.ts 2350
 packages/convex/convex/googleOAuth.test.ts 1100
@@ -113,56 +111,56 @@ packages/convex/convex/issueSync.ts 1900
 packages/convex/convex/lib/callRecordingRuns.ts 1100
 packages/convex/convex/lineTrial.test.ts 900
 packages/convex/convex/lineTrial.ts 2150
-packages/convex/convex/managedSessions.ts 1400
-packages/convex/convex/messages.ts to
-packages/convex/convex/migrations.ts 1200
+packages/convex/convex/managedSessions.ts 1300
+packages/convex/convex/messages.ts
+packages/convex/convex/migrations.ts 950
 packages/convex/convex/notifications.needsInput.test.ts 1300
-packages/convex/convex/notifications.ts to
+packages/convex/convex/notifications.ts
 packages/convex/convex/oauthConnectors.test.ts 850
-packages/convex/convex/org.ts to
-packages/convex/convex/orgHealth.ts to
+packages/convex/convex/org.ts
+packages/convex/convex/orgHealth.ts
 packages/convex/convex/orgInit.ts 2000
 packages/convex/convex/orgProposals.test.ts 1850
 packages/convex/convex/orgProposals.ts 1550
-packages/convex/convex/orgRoles.ts to
-packages/convex/convex/pendingMessages.teamSend.test.ts to
+packages/convex/convex/orgRoles.ts
+packages/convex/convex/pendingMessages.teamSend.test.ts
 packages/convex/convex/pendingMessages.test.ts 950
-packages/convex/convex/pendingMessages.ts to
-packages/convex/convex/plans.ts 2000
-packages/convex/convex/prCli.ts to
+packages/convex/convex/pendingMessages.ts
+packages/convex/convex/plans.ts 1950
+packages/convex/convex/prCli.ts
 packages/convex/convex/prShepherd.ts 1050
 packages/convex/convex/pushRouter.test.ts 950
 packages/convex/convex/replays.ts 950
 packages/convex/convex/repos.ts 1600
-packages/convex/convex/schema.ts to
+packages/convex/convex/schema.ts
 packages/convex/convex/secrets.test.ts 1050
 packages/convex/convex/secrets.ts 1550
 packages/convex/convex/sessionDecisions.test.ts 1300
-packages/convex/convex/sessionDecisions.ts to
+packages/convex/convex/sessionDecisions.ts
 packages/convex/convex/sessionInsights.ts 900
 packages/convex/convex/sessionMigrations.ts 1300
-packages/convex/convex/sessionOwnership.ts 1200
+packages/convex/convex/sessionOwnership.ts 1150
 packages/convex/convex/signals.test.ts 1400
 packages/convex/convex/signals.ts 2300
 packages/convex/convex/slackSync.test.ts 900
-packages/convex/convex/slackSync.ts 3300
+packages/convex/convex/slackSync.ts 3250
 packages/convex/convex/smallViews.v2.test.ts 850
 packages/convex/convex/sources/sentry.test.ts 950
 packages/convex/convex/sources/sentry.ts 1100
 packages/convex/convex/syncLog.test.ts 950
 packages/convex/convex/taskWaits.test.ts 950
 packages/convex/convex/taskWaits.ts 950
-packages/convex/convex/tasks.ts 5000
-packages/convex/convex/teams.ts 1700
+packages/convex/convex/tasks.ts 4950
+packages/convex/convex/teams.ts 1650
 packages/convex/convex/transcripts.test.ts 2050
 packages/convex/convex/transcripts.ts 3000
-packages/convex/convex/users.ts 4250
-packages/convex/convex/workflow_runs.ts to
-packages/mobile/app/(tabs)/inbox.tsx 1100
+packages/convex/convex/users.ts 4150
+packages/convex/convex/workflow_runs.ts
+packages/mobile/app/(tabs)/inbox.tsx 1050
 packages/mobile/app/(tabs)/tasks.tsx 1250
 packages/mobile/app/call.tsx 950
-packages/mobile/app/session/[id].tsx 6800
-packages/mobile/app/task/[id].tsx 900
+packages/mobile/app/session/[id].tsx 6600
+packages/mobile/app/task/[id].tsx 850
 packages/mobile/components/MarkdownRenderer.tsx 950
 packages/mobile/components/session/NewSessionSheet.tsx 850
 packages/shared/contracts/agentClients.ts 1500
@@ -173,17 +171,17 @@ packages/shared/contracts/changeCard.ts 850
 packages/shared/contracts/fleetDiff.ts 850
 packages/shared/contracts/inboxProjection.test.ts 1100
 packages/shared/contracts/inboxProjection.ts 1650
-packages/shared/contracts/orgProposal.test.ts to
+packages/shared/contracts/orgProposal.test.ts
 packages/shared/contracts/orgProposal.ts 2000
 packages/shared/contracts/secrets.ts 950
 packages/shared/contracts/snippets.ts 1900
-packages/shared/entities/index.ts to
+packages/shared/entities/index.ts
 packages/shared/render/toolCall.ts 900
 packages/shared/tasks/graph.ts 950
 packages/web/app/(marketing)/compare/comparisons.ts 1100
 packages/web/app/(marketing)/documentation/page.tsx 1500
 packages/web/app/(marketing)/features/browser/Sections.tsx 850
-packages/web/app/(marketing)/heroFly/timeline.ts 1050
+packages/web/app/(marketing)/heroFly/timeline.ts 1000
 packages/web/app/admin/daemon-logs/page.tsx 900
 packages/web/app/calls/page.tsx 1350
 packages/web/app/chat/page.tsx 900
@@ -195,27 +193,27 @@ packages/web/app/tasks/[id]/page.tsx 1000
 packages/web/app/tasks/page.tsx 1500
 packages/web/app/triggers/page.tsx 1250
 packages/web/components/ActivityFeed.tsx 1000
-packages/web/components/CommandPalette.tsx to
+packages/web/components/CommandPalette.tsx
 packages/web/components/ComposeView.tsx 900
 packages/web/components/ConversationList.tsx 1100
-packages/web/components/ConversationView.tsx to
+packages/web/components/ConversationView.tsx
 packages/web/components/DashboardLayout.tsx 1650
 packages/web/components/EntityIdPill.references.test.tsx 850
 packages/web/components/EntityIdPill.tsx 1550
 packages/web/components/EntityObjectCard.tsx 950
 packages/web/components/FileDiffLayout.tsx 1500
 packages/web/components/GenericListView.tsx 1500
-packages/web/components/GlobalSessionPanel.tsx 4000
+packages/web/components/GlobalSessionPanel.tsx 3850
 packages/web/components/LabelChipsRow.tsx 1000
-packages/web/components/MessageInput.tsx to
+packages/web/components/MessageInput.tsx
 packages/web/components/MessageReview.tsx 1050
 packages/web/components/PlanDetailPanel.tsx 1250
 packages/web/components/PublishedPageEmbed.tsx 950
-packages/web/components/Sidebar.tsx 1000
+packages/web/components/Sidebar.tsx 950
 packages/web/components/TriggerContextPanel.tsx 900
 packages/web/components/calls/CallStage.tsx 1150
 packages/web/components/calls/RoomThread.tsx 1050
-packages/web/components/castCommand.test.ts to
+packages/web/components/castCommand.test.ts
 packages/web/components/castCommand.ts 1000
 packages/web/components/chat/ChatMessage.tsx 900
 packages/web/components/conversation/blocks/castBlocks.tsx 1050
@@ -224,7 +222,7 @@ packages/web/components/conversation/blocks/toolBlocks.tsx 1750
 packages/web/components/conversation/blocks/turnBlocks.tsx 1850
 packages/web/components/conversation/classify.ts 850
 packages/web/components/conversation/sessionChrome.tsx 950
-packages/web/components/conversation/sessionControls.tsx to
+packages/web/components/conversation/sessionControls.tsx
 packages/web/components/decisions/ChangeCardView.tsx 1250
 packages/web/components/faces/FaceRow.tsx 1050
 packages/web/components/faces/__tests__/faceRow.mount.test.tsx 1050
@@ -237,8 +235,8 @@ packages/web/hooks/useWalkie.ts 1000
 packages/web/lib/__tests__/walkieOrder.test.ts 1600
 packages/web/lib/calls/callManager.ts 1700
 packages/web/lib/calls/walkie.ts 1850
-packages/web/lib/desktop.test.ts to
-packages/web/lib/desktop.ts to
+packages/web/lib/desktop.test.ts
+packages/web/lib/desktop.ts
 packages/web/lib/faces/faceRow.ts 1000
 packages/web/lib/line/lineModel.ts 1350
 packages/web/lib/line/problemPage.ts 1150
@@ -254,10 +252,10 @@ packages/web/store/__tests__/inboxStore.test.ts 5100
 packages/web/store/__tests__/outboxRetention.test.ts 1400
 packages/web/store/capabilities.ts 1300
 packages/web/store/chatSlice.ts 1800
-packages/web/store/clientSyncRegistry.ts to
+packages/web/store/clientSyncRegistry.ts
 packages/web/store/idbCache.native.ts 900
 packages/web/store/idbCache.ts 900
-packages/web/store/inboxStore.ts to
+packages/web/store/inboxStore.ts
 packages/web/store/orgSlice.ts 1600
 packages/web/store/strandedStub.test.ts 950
 packages/web/store/undo/policies/work.ts 950

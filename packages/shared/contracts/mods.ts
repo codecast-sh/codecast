@@ -165,9 +165,6 @@ export type ModSecret = { name: string; description?: string; origins: string[];
 export const MOD_SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{1,39}$/;
 const ORIGIN_RE = /^https?:\/\/[^/\s]+$/;
 
-/** A local half's published value, as the sandboxed half reads it ($.local.get). */
-export type ModLocalState = { mod_id: string; key: string; value: unknown; device_name?: string; updated_at: number };
-
 export type ManifestCheck = { ok: true; manifest: ModManifest } | { ok: false; errors: string[] };
 
 function isList(v: unknown): v is unknown[] {
@@ -316,8 +313,6 @@ export function canWrite(manifest: ModManifest, write: string): boolean {
 
 // -- Element trees ----------------------------------------------------------
 
-/** A handler in a tree: the SDK swaps each function prop for one of these. */
-export type ModHandlerRef = { $fn: string };
 export type ModNode = ModElement | string | number | null;
 export type ModElement = { t: string; p?: Record<string, unknown>; c?: ModNode[] };
 
@@ -327,7 +322,6 @@ export const MOD_ELEMENTS = [
   "Table", "Tabs", "Tab", "Badge", "Ref", "Chart", "Markdown", "Canvas", "Code", "Progress", "Divider", "Spacer",
   "Icon", "Link", "Image", "Kbd", "Stat", "Empty", "List", "Item", "Time", "Avatar", "Sparkline",
 ] as const;
-export type ModElementName = (typeof MOD_ELEMENTS)[number];
 
 // -- Surfaces and events ----------------------------------------------------
 
@@ -398,4 +392,3 @@ export const MOD_METHODS = [
   "connector.read",
   "me",
 ] as const;
-export type ModMethod = (typeof MOD_METHODS)[number];

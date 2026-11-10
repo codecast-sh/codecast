@@ -17,8 +17,6 @@ export const PENDING_MESSAGE_STATUSES = [
   "held",
 ] as const;
 
-export type PendingMessageStatus = (typeof PENDING_MESSAGE_STATUSES)[number];
-
 /**
  * A row the agent took an Enter for whose echo never came. It may have
  * landed, so nothing types it again: it waits for a person's retry, and a

@@ -169,10 +169,6 @@ export const HARNESS_HOOKS: readonly HarnessHook[] = [
   },
 ];
 
-export function harnessHookByFile(file: string): HarnessHook | undefined {
-  return HARNESS_HOOKS.find((h) => h.file === file);
-}
-
 /**
  * Should `hook` be installed, given the hooks switch and which Agent Features
  * are on? One rule for the CLI installer and the Harness page, so the page's
