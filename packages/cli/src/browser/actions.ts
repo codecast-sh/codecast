@@ -296,17 +296,25 @@ const MODIFIER_BITS: Record<string, number> = { alt: 1, ctrl: 2, control: 2, met
 
 /**
  * Press a key, optionally with modifiers: "Enter", "Escape", "cmd+a",
- * "ctrl+shift+Tab". Single characters are allowed too ("/" opens search on
- * many sites).
+ * "ctrl+shift+Tab", "F5", "cmd++". Single characters are allowed too ("/"
+ * opens search on many sites).
  */
 export async function pressKey(page: PageSession, combo: string): Promise<void> {
   const { conn, sessionId } = page;
-  const parts = combo.split("+");
-  const keyName = parts.pop()!;
+  // "+" separates, and is also a key: "+" alone, or last as in "cmd++".
+  const plus = combo === "+" || combo.endsWith("++");
+  const parts = (plus ? combo.slice(0, -1) : combo).split("+").filter((p, i, all) => !(plus && i === all.length - 1 && p === ""));
+  const keyName = plus ? "+" : parts.pop()!;
+  if (!keyName) throw new Error(`'${combo}' names no key — use a key name or character, with modifiers before it: Enter, cmd+a, ctrl+shift+Tab`);
   let modifiers = 0;
   for (const m of parts) modifiers |= MODIFIER_BITS[m.toLowerCase()] ?? 0;
 
-  const known = KEYS[keyName] ?? KEYS[keyName[0].toUpperCase() + keyName.slice(1)];
+  const fn = /^f([1-9]|1[0-2])$/i.exec(keyName);
+  const known = fn
+    ? { code: `F${fn[1]}`, key: `F${fn[1]}`, vk: 111 + Number(fn[1]) }
+    : plus
+      ? { code: "Equal", key: "+", vk: 187, text: "+" }
+      : KEYS[keyName] ?? KEYS[keyName[0].toUpperCase() + keyName.slice(1)];
   const spec = known ?? {
     code: `Key${keyName.toUpperCase()}`,
     key: keyName,
@@ -488,7 +496,11 @@ export async function screenshot(page: PageSession, opts: ShotOptions = {}): Pro
     });
     const { model } = await conn.send<any>("DOM.getBoxModel", { backendNodeId: opts.ref }, sessionId);
     const [x1, y1, , , x3, y3] = model.border;
-    params.clip = { x: x1, y: y1, width: x3 - x1, height: y3 - y1, scale: 1 };
+    // The box model is in viewport coordinates and a clip is in page
+    // coordinates: on a scrolled page the two differ by the scroll offset.
+    const metrics = await conn.send<any>("Page.getLayoutMetrics", {}, sessionId).catch(() => null);
+    const vv = metrics?.cssVisualViewport ?? metrics?.visualViewport;
+    params.clip = { x: x1 + (vv?.pageX ?? 0), y: y1 + (vv?.pageY ?? 0), width: x3 - x1, height: y3 - y1, scale: 1 };
   } else if (opts.fullPage) {
     // captureBeyondViewport renders the whole scroll height without the
     // scroll-and-stitch dance, which double-fires lazy loaders.

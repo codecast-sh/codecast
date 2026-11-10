@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { hashPath, projectHash, sessionHash } from "./hash.js";
+import { hashPath, projectHash } from "./hash.js";
 
 describe("hashPath", () => {
   test("returns consistent hash for same path", () => {
@@ -50,20 +50,5 @@ describe("projectHash", () => {
     const hash1 = projectHash(path);
     const hash2 = projectHash(path);
     expect(hash1).toBe(hash2);
-  });
-});
-
-describe("sessionHash", () => {
-  test("returns consistent hash for same session ID", () => {
-    const sessionId = "abc123-def456";
-    const hash1 = sessionHash(sessionId);
-    const hash2 = sessionHash(sessionId);
-    expect(hash1).toBe(hash2);
-  });
-
-  test("returns 64 char hex string", () => {
-    const hash = sessionHash("some-session");
-    expect(hash).toHaveLength(64);
-    expect(hash).toMatch(/^[a-f0-9]{64}$/);
   });
 });

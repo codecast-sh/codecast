@@ -32,7 +32,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { whichBin } from "./proc.js";
-import { AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, type AgentClientId, type LocalAgentClientId, type AgentClientDescriptor } from "@codecast/shared/contracts";
+import { LOCAL_AGENT_CLIENTS, type AgentClientId, type LocalAgentClientId, type AgentClientDescriptor } from "@codecast/shared/contracts";
 import { parseTranscriptFor } from "./parser.js";
 import { SessionWatcher } from "./sessionWatcher.js";
 import { TranscriptDirWatcher, transcriptDirWatcherConfig, expandTranscriptRoot, encodeGrokCwdSlug } from "./transcriptDirWatcher.js";

@@ -57,19 +57,20 @@ import { markChallengedTab } from "./humanInput.js";
 import { tabIdOfTarget } from "./bridge/protocol.js";
 import { retryOnStall, shouldRetryAfterStall, STALL_NOTE, STALL_RETRY_DELAY_MS } from "./stall.js";
 import { formatBytes, keepsOwnLogin, listRealProfiles } from "./profile.js";
-import { DEFAULT_START, startLocalBrowser, startManagedBrowser, type StartOptions } from "./managedBrowser.js";
+import { DEFAULT_START, startLocalBrowser, startManagedBrowser, stopRemoteManagedBrowser, type StartOptions } from "./managedBrowser.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
-import { probeLiveness, readState, stopInstance, writeState } from "./instance.js";
+import { clearState, probeLiveness, readState, stopInstance, writeState } from "./instance.js";
 import { provisionLocalLogins } from "./credentials.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
-import { auditLanding, browserJarRead, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal } from "./siteGuard.js";
+import { auditExplicitLoads, auditLanding, browserJarRead, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal } from "./siteGuard.js";
 import { focusBrowserTabBlocking } from "./focusHttp.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
 import { registerAuditCommand } from "./auditCommand.js";
 import { autoShotsEnabled, clearAutoShots, isMutatingStep, maybeAutoShot, setAutoShots, type AutoShotSource } from "./autoShot.js";
 import { opensATab, tabFooterLines, TAB_AFFECTING_VERBS, TAB_CLEANUP_NOTE } from "./tabFooter.js";
 import { tokenize } from "./batch.js";
+import { readStepPlan } from "../stepBatch.js";
 import { armVerbDeadline, deadlineSeconds, DEADLINE_ENV, DEFAULT_DEADLINE_S, setStage } from "./deadline.js";
 import { captureFullPage, evalInPage, grantPermissions, type PageCtx } from "./pageEval.js";
 import { ownerKey } from "./owner.js";
@@ -874,6 +875,9 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
       return res.status;
     }
   }
+
+  // `tab new <url>`, `read <url>`, `pushstate`: loads the footer's landing audit never sees.
+  auditExplicitLoads(verb, args, `engine:${o.session}`, owner, () => tabUrl(o));
 
   const mutating = isMutatingStep(verb, forwarded);
   if (mutating) settle(o);
@@ -1768,16 +1772,7 @@ One auto screenshot per flow, after the last page-changing step — intermediate
 frames are superseded before anyone reads them.`,
     )
     .action(async (steps: string[] = [], o: { keepGoing?: boolean; shot?: boolean; capture?: boolean } & TargetChoice) => {
-      let plan = steps;
-      if (steps.length === 1 && steps[0] === "-") {
-        const stdin = await new Promise<string>((resolve) => {
-          let buf = "";
-          process.stdin.setEncoding("utf-8");
-          process.stdin.on("data", (d) => (buf += d));
-          process.stdin.on("end", () => resolve(buf));
-        });
-        plan = stdin.split("\n").map((l) => l.trim()).filter(Boolean);
-      }
+      const plan = await readStepPlan(steps);
       if (!plan.length) die("no steps given", 'try: cast browser do "open example.com" snapshot');
       process.exit(await runFlow(plan, o, await ctx(o), deps));
     });
@@ -1848,9 +1843,6 @@ frames are superseded before anyone reads them.`,
         process.exit(0);
       }
       const code = await runVerb("tab", ["list"], c);
-      // Only this session's tabs are listed, and in real mode they sit among
-      // the human's own: name where they are.
-      if (code === 0 && isRealSession(c.session)) console.log(fmt.muted(`  in your real Chrome, via the cast extension${ownerKey() ? " — the other tabs there are the human's; `--all` lists the other agents'" : ""}`));
       if (code === 0 && isPaneSession(c.session)) console.log(fmt.muted("  the desktop app's pane opened for this session, driven over the app's CDP port"));
       process.exit(code);
     });
@@ -2071,7 +2063,7 @@ Before any page is open, the size is kept and applied by the next \`open\`.`,
       const browser = await pinnedTabBrowser(c.session);
       const tabs = browser ? await listTargets(browser.endpoint) : [];
       if (tabs.length) {
-        console.log(`  tabs (→ is this session's):`);
+        console.log(`  tabs:`);
         for (const tab of tabs) console.log(`    [${tab.targetId}] ${tab.title || tab.url} - ${tab.url}`);
       }
       const others = listEngineSessions().filter((x) => x.running && x.key !== c.session);
@@ -2097,8 +2089,12 @@ Before any page is open, the size is kept and applied by the next \`open\`.`,
   targetFlags(br.command("stop"))
     .description("Close this session's tab; --all closes every session's and the browser")
     .option("--all", "Close every session's tab and the browser itself")
-    .option("--wipe", "With --all: also remove the cloned profile")
+    .option("--wipe", "Also remove the cloned profile (implies --all)")
     .action(async (o: { all?: boolean; wipe?: boolean } & TargetChoice) => {
+      // The profile cannot be removed under a running browser, so --wipe means
+      // --all, as it means --force on the built-in driver. Alone it used to
+      // close one tab, remove nothing and say nothing.
+      if (o.wipe) o.all = true;
       const { session } = await ctx(o);
       if ((isRealSession(session) || isPaneSession(session)) && (o.all || o.wipe)) die("Ordinary browser commands cannot stop or wipe a separate browser.");
       // Detach the engine and close the tab it was pinned to; the browser
@@ -2112,13 +2108,20 @@ Before any page is open, the size is kept and applied by the next \`open\`.`,
       if (isRealSession(session)) return;
       if (o.all) {
         const state = readState();
-        if (state) {
+        if (state?.remote) {
+          const { wiped } = await stopRemoteManagedBrowser(state);
+          console.log(wiped
+            ? `${OK} remote browser stopped and its profile wiped`
+            : `${OK} closed the tunnel to ${state.remote.user}@${state.remote.host}; that host is no longer registered here, so its browser profile was not wiped`);
+        } else if (state) {
           await stopInstance(state);
+          // Forget it, or the next command reads a browser that is gone.
+          clearState();
           console.log(`${OK} browser stopped`);
-          if (o.wipe) {
-            fs.rmSync(state.userDataDir, { recursive: true, force: true });
-            console.log(`${OK} removed the cloned profile`);
-          }
+        }
+        if (state && o.wipe) {
+          fs.rmSync(state.userDataDir, { recursive: true, force: true });
+          console.log(`${OK} removed the cloned profile`);
         }
       }
     });

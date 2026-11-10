@@ -19,7 +19,7 @@
  *     refreshToken, but copy a FRESH credential at move time.
  */
 
-import { execFileSync, execSync, spawn, spawnSync } from "../proc.js";
+import { execFileSync, spawn, spawnSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1395,11 +1395,6 @@ export function refreshRemoteCredential(host: RemoteHost): CredentialPushOutcome
 }
 
 const SCALEWAY_DIR = path.join(defaultConfigDir(), "scaleway");
-
-/** Cheap check for the daemon's periodic refresh: is any remote Mac registered? */
-export function remoteHostsRegistered(): boolean {
-  return fs.existsSync(path.join(SCALEWAY_DIR, "hosts.json"));
-}
 
 /**
  * Every usable Scaleway Mac, as RemoteHosts. Stopped entries are excluded —

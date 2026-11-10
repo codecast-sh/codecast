@@ -19,12 +19,9 @@ import { clientInstallSnippet, HOST_TOOLS_PATH, NODE_FLOOR_MAJOR, nodeInstallSni
 export { NODE_22_VERSION } from "../cloud/hostTools.js";
 
 /**
- * Idempotent bash: node guard, then `command -v` guarded installs, then a
- * /usr/local/bin symlink for each binary found, then one `<bin>=<version|
- * missing>` line per client, `node=<v>` and `AGENT-CLIS-OK`. A version that
- * is not x.y.z is not interpolated (the install runs unpinned). The report
- * loop runs under `set -e`, so a CLI whose `--version` fails (gemini on an
- * old node) reports empty instead of aborting the step after the installs.
+ * Bash that brings the host's Codex up to the laptop's version when it is
+ * older, and stops setup when it still is afterwards. Empty when the version
+ * is not x.y.z.
  */
 export function codexCompatibilityScript(version: string | undefined): string {
   const wanted = safeVersion(version);
@@ -43,6 +40,14 @@ if ! codex_compatible; then
 fi`;
 }
 
+/**
+ * Idempotent bash: node guard, then `command -v` guarded installs, then a
+ * /usr/local/bin symlink for each binary found, then one `<bin>=<version|
+ * missing>` line per client, `node=<v>` and `AGENT-CLIS-OK`. A version that
+ * is not x.y.z is not interpolated (the install runs unpinned). The report
+ * loop runs under `set -e`, so a CLI whose `--version` fails (gemini on an
+ * old node) reports empty instead of aborting the step after the installs.
+ */
 export function agentCliInstallScript(versions: Partial<Record<InstallableClient, string>>, opts: { upgradeCodex?: boolean } = {}): string {
   const lines: string[] = [];
   lines.push(`set -euo pipefail

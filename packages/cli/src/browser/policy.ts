@@ -24,11 +24,13 @@
  *   *                    allow every public site (an explicit escape hatch)
  *
  * Wildcards (`*` and `*.x`) never match a private address: loopback,
- * link-local, RFC 1918 and CGNAT IPs, unique-local IPv6, `localhost` and the
- * `.local`/`.internal`/`.localhost` names. A dev server, a router or a cloud
- * metadata endpoint is reachable only through an entry naming it exactly
- * (`localhost:3200`, `169.254.169.254`), so a broad list cannot open the
- * machine's own network by accident.
+ * link-local, RFC 1918 and CGNAT IPs, unique-local IPv6, `localhost` and
+ * `*.localhost` names (isPrivateHost; judged from the name, no DNS lookup).
+ * A dev server, a router or a cloud metadata endpoint is reachable only
+ * through an entry naming it exactly (`localhost:3200`, `169.254.169.254`),
+ * so a broad list cannot open the machine's own network by accident. Other
+ * private-looking names (`corp.internal`, `printer.local`) match a wildcard
+ * like any public name.
  *
  * A pattern without a scheme matches http and https only. URLs on other
  * schemes (file:, data:, ...) are refused while a policy is active unless a
@@ -206,10 +208,6 @@ export function originOf(url: string): string {
 // ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
-
-function codecastRoot(): string {
-  return codecastDir();
-}
 
 /** Walk up from `cwd` to the nearest .codecast/workspace.toml, if any. */
 export function findManifestFile(cwd: string): string | null {

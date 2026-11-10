@@ -182,9 +182,9 @@ export function rotateBridgeToken(): BridgeState {
   return next;
 }
 
-/** A new token for one cloud host, replacing any it held; only its hash is stored. */
 /**
- * A fresh token for one host's link, held by `holder`. Refused while another
+ * A fresh token for one host's link, held by `holder`; only its hash is
+ * stored. Refused while another
  * live process holds that host's link: replacing its token would cut its
  * clients, and its own exit would then revoke the new one.
  */
@@ -397,11 +397,6 @@ export async function retireOlderHost(state: BridgeState, note?: (line: string) 
   const gone = Date.now() + 10_000;
   while (Date.now() < gone && (await probeHost(state, 500)) !== "down") await sleep(150);
   return "retired";
-}
-
-/** Is OUR bridge host answering on this port? */
-export async function isHostAlive(state: Pick<BridgeState, "port" | "token">, timeoutMs = 1200): Promise<boolean> {
-  return (await probeHost(state, timeoutMs)) === "alive";
 }
 
 /** The config as a proven host, or the reason the port cannot be trusted. */
@@ -625,7 +620,7 @@ export async function bridgeStatus(state: ProvenBridge): Promise<BridgeHostStatu
  * the op exists answers "unknown op", which the host relays as the error.
  */
 export async function reloadExtension(state: ProvenBridge): Promise<void> {
-  const res = await fetch(`http://127.0.0.1:${state.port}/reload?token=${encodeURIComponent(state.token)}`, {
+  const res = await fetchBridge(`http://127.0.0.1:${state.port}/reload?token=${encodeURIComponent(state.token)}`, {
     method: "POST",
     signal: AbortSignal.timeout(8000),
   });
@@ -1519,7 +1514,7 @@ export async function startBridgeHost(opts: {
       case "Target.attachToTarget": {
         const t = await grantedTarget(client, params?.targetId);
         const tabId = t.tabId;
-        await extCall("attach", { tabId, owned: !!t && isCast(t) }, 40_000);
+        await extCall("attach", { tabId, owned: isCast(t) }, 40_000);
         const sessionId = crypto.randomBytes(16).toString("hex").toUpperCase();
         client.sessions.set(sessionId, tabId);
         tabUrls.set(tabId, t.url);
@@ -1527,12 +1522,12 @@ export async function startBridgeHost(opts: {
         // a group only for groups it created itself (background.js
         // ownedGroups), so a human's tab, grouped by the human or not, never
         // hands the session a group of the human's.
-        if (t?.group) client.group = t.group;
+        if (t.group) client.group = t.group;
         sendJson(client.ws, {
           method: "Target.attachedToTarget",
           params: {
             sessionId,
-            targetInfo: t ? targetInfo(t) : { targetId: targetIdOfTab(tabId), type: "page", title: "", url: "", attached: true },
+            targetInfo: targetInfo(t),
             waitingForDebugger: false,
           },
         });

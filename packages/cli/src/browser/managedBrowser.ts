@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { browserSocketUrl } from "./cdp.js";
 import {
-  acquireStartLock, freePort, killStrayChrome, launchManagedChrome, probeLiveness, readState,
+  acquireStartLock, clearState, freePort, killStrayChrome, launchManagedChrome, probeLiveness, readState,
   waitForStraysGone, writeState, type InstanceState,
 } from "./instance.js";
 import {
@@ -23,7 +23,7 @@ import {
   type ChromeChannel, type SeparateReport,
 } from "./profile.js";
 import { sharesGoogleSession } from "./credentials.js";
-import { startRemoteBrowser } from "./remote.js";
+import { recordedRemoteHost, startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
 import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
 import { readHosts, ensureUp, toRemoteHost } from "./cloudHost.js";
 import { fmt, icons } from "../colors.js";
@@ -295,7 +295,8 @@ export async function startRemoteManagedBrowser(o: StartOptions): Promise<Instan
       userDataDir: clonePath(DEFAULT_CLONE),   // the LOCAL profile we read cookies from
       headless: true, sourceProfile: null, channel: o.channel,
       startedAt: Date.now(), activeTargetId: null,
-      remote: { host: host.address, user: host.user, sshPid: rb.sshPid },
+      // The whole host, so `stop` reaches this machine and no other (stopRemoteManagedBrowser).
+      remote: { host: host.address, user: host.user, sshPid: rb.sshPid, keyPath: host.keyPath, remoteBaseDir: host.remoteBaseDir, ...(host.homeDir ? { homeDir: host.homeDir } : {}) },
     });
     console.log(`${OK} remote browser up — ${rb.chromeVersion.trim()}`);
     console.log(fmt.muted(`  CDP tunnelled to 127.0.0.1:${rb.localPort}; its profile starts signed out.`));
@@ -304,6 +305,33 @@ export async function startRemoteManagedBrowser(o: StartOptions): Promise<Instan
   } finally {
     release();
   }
+}
+
+/** Every host either registry knows, for a state file that recorded only an address (recordedRemoteHost). */
+function knownRemoteHosts(): RemoteHost[] {
+  const out: RemoteHost[] = [];
+  for (const h of readHosts()) {
+    if (!h.address) continue;
+    try {
+      out.push(toRemoteHost(h), toRemoteHost({ ...h, tailnet: undefined }));
+    } catch { /* a host with no address is not running anything */ }
+  }
+  try {
+    out.push(loadRemoteHost());
+  } catch { /* no Mac registry */ }
+  return out;
+}
+
+/**
+ * Stop the remote browser this state records: close its tunnel, wipe its
+ * profile on the machine it was started on, and forget it. `wiped` is false
+ * when that machine is no longer known, so only the tunnel could be closed.
+ */
+export async function stopRemoteManagedBrowser(state: InstanceState): Promise<{ wiped: boolean }> {
+  const host = state.remote ? recordedRemoteHost(state.remote, knownRemoteHosts) : null;
+  await stopRemoteBrowser(host, state.remote?.sshPid ?? state.pid);
+  clearState();
+  return { wiped: !!host };
 }
 
 /** Start (or reuse) the managed browser, local or remote. */

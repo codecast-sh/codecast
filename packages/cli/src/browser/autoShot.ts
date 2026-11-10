@@ -26,7 +26,6 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { screenshot } from "./actions.js";
 import { ownerKey } from "./owner.js";
@@ -93,6 +92,9 @@ export function clearAutoShots(configDir = defaultConfigDir()): void {
 
 // ------------------------------------------------------------------- dedupe
 
+/** How many tabs' last hashes are kept. */
+export const MAX_HASHES = 500;
+
 function hashStorePath(stateDir: string): string {
   return path.join(stateDir, "auto-shots.json");
 }
@@ -114,14 +116,22 @@ function readHashes(stateDir: string): Record<string, string> {
 export function recordIfChanged(targetId: string, hash: string, stateDir = browserHome()): boolean {
   const map = readHashes(stateDir);
   if (map[targetId] === hash) return false;
+  // Re-inserted, so the object's order is oldest write first.
+  delete map[targetId];
   map[targetId] = hash;
+  // The engine keys a tab by its session (`engine:<session>`) and no caller
+  // there knows the live set to prune by, so the store is capped here: the
+  // tabs written longest ago go first. A dropped tab costs one repeat shot.
+  const keys = Object.keys(map);
+  for (const stale of keys.slice(0, Math.max(0, keys.length - MAX_HASHES))) delete map[stale];
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(hashStorePath(stateDir), JSON.stringify(map));
   return true;
 }
 
-/** Drop hash entries for tabs that no longer exist, so the store cannot grow
- *  without bound. Piggybacks on callers that already know the live tab set. */
+/** Drop hash entries for tabs that no longer exist. Piggybacks on callers
+ *  that already know the live tab set (the built-in driver's `tabs`); the
+ *  cap in recordIfChanged bounds the store for the rest. */
 export function pruneHashes(liveTargetIds: Set<string>, stateDir = browserHome()): void {
   const map = readHashes(stateDir);
   const kept = Object.fromEntries(Object.entries(map).filter(([id]) => liveTargetIds.has(id)));

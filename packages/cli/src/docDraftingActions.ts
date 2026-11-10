@@ -1,8 +1,6 @@
-import type { Command } from "commander";
 import {
   FLAG_LABELS,
   LAB_FLAGS,
-  LAB_TRIMS,
   TRIM_REASON,
   DraftTargetError,
   addAlternatives,

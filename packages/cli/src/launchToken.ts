@@ -35,7 +35,6 @@
  */
 
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { isLaunchToken, mintLaunchToken } from "./agentEnv.js";
 import { atomicWriteFile } from "./atomicWrite.js";

@@ -55,15 +55,20 @@ ${HOOK_FIELDS_AWK}
 EOF
 `;
 
+// The one line by which a hook finds the state directory lives beside its
+// TypeScript twin; hook modules take it from here with the rest.
+export { HOOK_STATE_DIR } from "./config/configDir.js";
+
 /**
- * Bash: `feature_on <config key>` succeeds when ~/.codecast/config.json sets
- * that key to true. A hook job that belongs to an Agent Features entry (the
- * thread state and task reminders) checks it first, so turning the feature
- * off stops the job even inside the shared prompt script, whose bytes are the
- * same on every machine. A grep, not a JSON parse: this runs on every prompt.
+ * Bash: `feature_on <config key>` succeeds when config.json in the state
+ * directory ($CC_DIR, from HOOK_STATE_DIR) sets that key to true. A script
+ * includes this once, however many of its jobs call it. A hook job that
+ * belongs to an Agent Features entry (the thread state and task reminders)
+ * checks it first, so turning the feature off stops the job even inside the
+ * shared prompt script, whose bytes are the same on every machine. A grep, not a JSON parse: this runs on every prompt.
  */
 export const HOOK_FEATURE_ON = `
 feature_on() {
-  grep -Eq "\\"$1\\"[[:space:]]*:[[:space:]]*true" "\${CODECAST_DIR:-$HOME/.codecast}/config.json" 2>/dev/null
+  grep -Eq "\\"$1\\"[[:space:]]*:[[:space:]]*true" "$CC_DIR/config.json" 2>/dev/null
 }
 `;

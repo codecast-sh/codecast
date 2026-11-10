@@ -14,7 +14,6 @@
 // chain into the daemon bundle for one file read. ct-49546.
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { parseThreadStateStatus, type ThreadStateStatus } from "@codecast/shared/contracts";
 import { defaultConfigDir } from "./config/configDir.js";

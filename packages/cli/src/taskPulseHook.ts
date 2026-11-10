@@ -1,62 +1,61 @@
-// Claude Code UserPromptSubmit -> periodic task/plan reminder,
-// installed to ~/.claude/hooks/task-pulse.sh (and inlined into codecast-prompt.sh).
-import { HOOK_FEATURE_ON, HOOK_FIELDS_READ } from "./hookJson.js";
+// Claude Code UserPromptSubmit -> periodic task/plan reminder. Not a script of
+// its own: the job runs inside codecast-prompt.sh (userPromptHook.ts).
 
-/** Assumes SESSION_ID is set. Returns instead of exiting. */
-export const TASK_PULSE_JOB = `${HOOK_FEATURE_ON}
+/** Assumes SESSION_ID, CC_DIR and feature_on (HOOK_STATE_DIR and
+ *  HOOK_FEATURE_ON in hookJson.ts). Returns instead of exiting, and keeps
+ *  every name it sets to itself: the jobs after it read the envelope's HOOK_*
+ *  and their own COUNT. */
+export const TASK_PULSE_JOB = `
 task_pulse_job() {
+local pulse_file counter_file count pulse task_id plan_id key val what
 # Part of Tasks & Plans in Agent Features: off there, silent here.
 feature_on work_enabled || return 0
-PULSE_FILE="$HOME/.codecast/task-pulse/$SESSION_ID.json"
-[ -f "$PULSE_FILE" ] || return 0
+pulse_file="$CC_DIR/task-pulse/$SESSION_ID.json"
+[ -f "$pulse_file" ] || return 0
 
-COUNTER_DIR="$HOME/.codecast/task-pulse/counters"
-mkdir -p "$COUNTER_DIR"
-COUNTER_FILE="$COUNTER_DIR/$SESSION_ID"
-COUNT=0
-[ -f "$COUNTER_FILE" ] && COUNT=$(cat "$COUNTER_FILE")
-COUNT=$((COUNT + 1))
-echo "$COUNT" > "$COUNTER_FILE"
+mkdir -p "$CC_DIR/task-pulse/counters"
+counter_file="$CC_DIR/task-pulse/counters/$SESSION_ID"
+count=0
+[ -f "$counter_file" ] && IFS= read -r count <"$counter_file" 2>/dev/null
+case "\${count:-}" in ''|*[!0-9]*) count=0 ;; esac
+count=$((count + 1))
+echo "$count" > "$counter_file"
 
 # Emit every 8 turns
-[ $((COUNT % 8)) -ne 0 ] && return 0
+[ $((count % 8)) -ne 0 ] && return 0
 
-INPUT=$(cat "$PULSE_FILE" 2>/dev/null || true)
-${HOOK_FIELDS_READ}
-TASK_ID="\${HOOK_task:-}"
-PLAN_ID="\${HOOK_plan:-}"
-TASK=""
-[ -n "$TASK_ID" ] && TASK="task $TASK_ID"
-if [ -n "$PLAN_ID" ]; then
-  if [ -n "$TASK" ]; then
-    TASK="$TASK, plan $PLAN_ID"
+# The pulse is one small JSON object the CLI writes (taskPulse.ts) and its ids
+# are short plain ids, so cutting at the key reads them with builtins: no
+# second JSON parser in the script and no process.
+pulse=
+IFS= read -r -d '' pulse <"$pulse_file" 2>/dev/null || true
+task_id=
+plan_id=
+for key in task plan; do
+  val=
+  case "$pulse" in
+    *"\\"$key\\""*)
+      # Past the key, optional space, the colon, optional space, to a quoted
+      # string. Anything else there (null, a number) reads as no id.
+      val=\${pulse#*"\\"$key\\""}
+      val=\${val#"\${val%%[![:space:]]*}"}
+      case "$val" in :*) val=\${val#:}; val=\${val#"\${val%%[![:space:]]*}"} ;; *) val= ;; esac
+      case "$val" in '"'*) val=\${val#'"'}; val=\${val%%'"'*} ;; *) val= ;; esac
+      ;;
+  esac
+  if [ "$key" = task ]; then task_id=$val; else plan_id=$val; fi
+done
+what=""
+[ -n "$task_id" ] && what="task $task_id"
+if [ -n "$plan_id" ]; then
+  if [ -n "$what" ]; then
+    what="$what, plan $plan_id"
   else
-    TASK="plan $PLAN_ID"
+    what="plan $plan_id"
   fi
 fi
-[ -z "$TASK" ] && return 0
+[ -z "$what" ] && return 0
 
-echo "<task-reminder>You are working on $TASK. Check progress against acceptance criteria.</task-reminder>"
+echo "<task-reminder>You are working on $what. Check progress against acceptance criteria.</task-reminder>"
 }
-`;
-
-export const TASK_PULSE_HOOK = `#!/bin/bash
-# Periodic task/plan reminder — emits a short nudge every N user messages
-set -uo pipefail
-
-INPUT=$(dd bs=65536 count=1 2>/dev/null || true)
-[ -n "$INPUT" ] || exit 0
-
-${HOOK_FIELDS_READ}
-
-SESSION_ID="\${HOOK_session_id:-}"
-[ -z "$SESSION_ID" ] && SESSION_ID="\${HOOK_sessionId:-}"
-[ -z "$SESSION_ID" ] && exit 0
-case "$SESSION_ID" in
-  ""|[!A-Za-z0-9_-]*|*[!A-Za-z0-9._-]*) exit 0 ;;
-esac
-[ \${#SESSION_ID} -le 128 ] || exit 0
-
-${TASK_PULSE_JOB}
-task_pulse_job
 `;

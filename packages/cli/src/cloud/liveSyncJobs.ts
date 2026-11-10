@@ -102,6 +102,7 @@ export class LiveSyncJobs {
   private timer: ReturnType<typeof setInterval> | null = null;
   private activityAt = 0;
   private running: Promise<void> | null = null;
+  private timerPassQueued = false;
 
   constructor(private deps: LiveSyncJobsDeps) {}
 
@@ -176,11 +177,13 @@ export class LiveSyncJobs {
     const host = this.hostSide(job);
     if (!host) throw new Error("this laptop does not manage that cloud host (cast hosts ls)");
     await this.serialized(async () => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const out = await resolveConflicts(job.dir!, job.state, host, r.keep, r.paths, this.scope(job));
-        if ("resolved" in out) break;
+      let settled = false;
+      for (let attempt = 0; attempt < 3 && !settled; attempt++) {
+        settled = "resolved" in await resolveConflicts(job.dir!, job.state, host, r.keep, r.paths, this.scope(job));
       }
       this.save();
+      // Every attempt lost to a file changing under it: the pick did not land, and saying it did would hide the conflict.
+      if (!settled) throw new Error("files kept changing while settling; run it again in a moment");
       job.activeAt = this.now();
       job.nextTickAt = 0;
       await this.tick(job, this.now());
@@ -207,7 +210,12 @@ export class LiveSyncJobs {
 
   private ensureTimer(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => { void this.pass(); }, 1_000);
+    // One timer pass waiting at most: a pass slower than the interval would otherwise queue one more each second.
+    this.timer = setInterval(() => {
+      if (this.timerPassQueued) return;
+      this.timerPassQueued = true;
+      void this.pass().catch(() => {}).finally(() => { this.timerPassQueued = false; });
+    }, 1_000);
     (this.timer as any).unref?.();
   }
 
@@ -223,6 +231,8 @@ export class LiveSyncJobs {
   }
 
   private async setStatus(job: Job, status: LocalMirrorStatus, extra: Omit<MirrorReport, "status">): Promise<void> {
+    // A tick that was in flight when the job stopped: its report would arrive after "off" and bring the sync back on the web.
+    if (this.jobs.get(job.spec.conversation_id) !== job) return;
     const skipped = this.skippedReport(job);
     const changed = job.status !== status || extra.last_landed_at !== undefined || extra.error !== job.error || !!skipped || extra.conflicts !== undefined;
     job.status = status;

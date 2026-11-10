@@ -29,6 +29,7 @@ function harness() {
   let hostCalls = 0;
   const activity: MirrorActivity = { conversation_id: "conv1", message_count: 5, status: "active", owner_device_id: "host-dev", host_online: true };
   const host = path.join(dir, "host");
+  const hooks: { beforeSnapshot?: () => Promise<void>; land?: () => Promise<LandResult> } = {};
   const jobs = new LiveSyncJobs({
     report: async (_id, r) => { reports.push(r); },
     activity: async () => [{ ...activity }],
@@ -37,13 +38,13 @@ function harness() {
     jobsFile: path.join(dir, "jobs.json"),
     now: () => clock,
     hostSide: (_spec, _h, local): HostSide => ({
-      snapshot: () => { hostCalls++; return runSide<SnapshotResult>({ op: "snapshot", cwd: host, commit: true, ref: "refs/codecast/sync/conv1" }); },
-      land: (sha, expectTree) => { hostCalls++; return runSide<LandResult>({ op: "land", cwd: host, sha, expectTree }); },
+      snapshot: async () => { hostCalls++; await hooks.beforeSnapshot?.(); return runSide<SnapshotResult>({ op: "snapshot", cwd: host, commit: true, ref: "refs/codecast/sync/conv1" }); },
+      land: (sha, expectTree) => { hostCalls++; return hooks.land ? hooks.land() : runSide<LandResult>({ op: "land", cwd: host, sha, expectTree }); },
       fetch: async () => { git(local, "fetch", "-q", host, "+refs/codecast/sync/conv1:refs/codecast/sync/conv1"); },
       send: async (sha) => { git(local, "push", "-q", "--force", host, `${sha}:refs/codecast/sync/conv1-laptop`); },
     }),
   });
-  return { jobs, reports, activity, host, advance: (ms: number) => { clock += ms; }, hostCalls: () => hostCalls };
+  return { jobs, reports, activity, host, hooks, advance: (ms: number) => { clock += ms; }, hostCalls: () => hostCalls };
 }
 const spec = () => ({ conversation_id: "conv1", host_device_id: "host-dev", remote_cwd: "/w/r", local_root: path.join(dir, "laptop") });
 const mirrorDir = () => path.join(dir, "laptop/.codecast/worktrees/sync-conv1");
@@ -110,6 +111,40 @@ test("a conflict is reported with its files, and a pick from the web settles it"
   h.advance(5_000); await h.jobs.pass();
   expect(h.reports.at(-1)).toMatchObject({ status: "live", conflicts: [] });
   await h.jobs.stop("conv1");
+});
+
+test("a pick that never lands, because the host's files keep changing under it, is an error and the conflict stays", async () => {
+  const h = harness();
+  await h.jobs.handleCommand({ ...spec(), enable: true });
+  await h.jobs.pass();
+  fs.writeFileSync(path.join(mirrorDir(), "a.txt"), "laptop\n");
+  fs.writeFileSync(path.join(h.host, "a.txt"), "host\n");
+  h.advance(5_000); await h.jobs.pass();
+  expect(h.reports.at(-1)).toMatchObject({ status: "conflict", conflicts: ["a.txt"] });
+  let lands = 0;
+  h.hooks.land = async () => { lands++; return { landed: false, reason: "moved", tree: "" }; };
+  await expect(h.jobs.handleCommand({ ...spec(), enable: true, resolve: { keep: "laptop" } })).rejects.toThrow(/kept changing/);
+  expect(lands).toBe(3);
+  expect(h.jobs.describe("conv1")!.conflicts).toEqual(["a.txt"]);
+  h.hooks.land = undefined;
+  await h.jobs.stop("conv1");
+});
+
+test("a tick still in flight when the sync stops reports nothing after off", async () => {
+  const h = harness();
+  await h.jobs.handleCommand({ ...spec(), enable: true });
+  fs.writeFileSync(path.join(h.host, "a.txt"), "host edit\n");
+  let release!: () => void;
+  let reached!: () => void;
+  const atSnapshot = new Promise<void>((r) => { reached = r; });
+  h.hooks.beforeSnapshot = () => { reached(); return new Promise<void>((r) => { release = r; }); };
+  const pass = h.jobs.pass();
+  await atSnapshot;
+  await h.jobs.stop("conv1");
+  h.hooks.beforeSnapshot = undefined;
+  release();
+  await pass;
+  expect(h.reports.map((r) => r.status)).toEqual(["starting", "off"]);
 });
 
 test("watch only: an edit in the laptop copy stops it; overwrite keeps that edit under a backup ref and lands the host's", async () => {

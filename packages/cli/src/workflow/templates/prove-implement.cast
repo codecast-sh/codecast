@@ -8,7 +8,7 @@ digraph prove_implement {
   dissolve [label="Dissolve", shape=parallelogram, script="@line/dissolve.sh"]
   implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, timeout=10800, prompt="@line/implement.md"]
   verify [label="Verify", shape=parallelogram, timeout=3600,
-    script="cd \"$(cast ws path $worktree)\" && bash -c $line.commands.check"]
+    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && bash -c $line.commands.check"]
   green [label="Green", shape=parallelogram, timeout=1800, script="@line/green.sh"]
   built     [shape=Msquare, label="Built and green"]
   dissolved [shape=Msquare, label="Dissolved"]

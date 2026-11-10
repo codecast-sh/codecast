@@ -28,7 +28,6 @@
 // account store needs (no runtime targets, no WSL distros, no mutation queue).
 
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 import { atomicWriteFile } from "./atomicWrite.js";

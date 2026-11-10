@@ -516,6 +516,18 @@ describe("ordinals", () => {
     ]);
     expect(matchRefs(s.refs, "Delete")).toHaveLength(3);
   });
+
+  test("a name with a dollar sign keeps it when the ordinal is added", async () => {
+    // `$&` and `$1` in a replacement string are patterns; the label is text.
+    const s = await snap({
+      id: "1", role: "RootWebArea",
+      children: [
+        { id: "2", role: "button", name: "Pay $& now $1", backendId: 11 },
+        { id: "3", role: "button", name: "Pay $& now $1", backendId: 12 },
+      ],
+    });
+    expect(s.text.split("\n")).toEqual(['button "Pay $& now $1" #e11', 'button "Pay $& now $1 (2nd)" #e12']);
+  });
 });
 
 describe("snapshot --json", () => {

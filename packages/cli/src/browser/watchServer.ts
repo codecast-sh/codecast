@@ -216,7 +216,7 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
           return;
         }
         if (m?.type !== "input" || !Array.isArray(m.events) || m.events.length > 64) return;
-        for (const ev of m.events) void source?.input?.(ev);
+        for (const ev of m.events) if (ev && typeof ev === "object") void source?.input?.(ev);
       });
     }
 

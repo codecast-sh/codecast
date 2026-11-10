@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { looksLikeToken, redactHar, redactHarFile, Redactor, redactSnapshotOutput, redactSnapshotValues } from "./redaction.js";
+import { HIDDEN_VALUE_MAX, looksLikeToken, SECRET_NAME, redactHar, redactHarFile, Redactor, redactSnapshotOutput, redactSnapshotValues } from "./redaction.js";
 
 const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJlLXZhbHVl";
 
@@ -35,6 +35,24 @@ describe("Redactor headers", () => {
     const a = r.header("Authorization", `Bearer ${JWT}`);
     const b = r.header("x-auth-token", JWT);
     expect(a.split(" ")[1]).toBe(b);
+  });
+});
+
+describe("SECRET_NAME", () => {
+  test("credential names match; author, :authority and token counts do not", () => {
+    for (const n of ["authorization", "Authorisation", "x-auth-token", "oauth_state", "www-authenticate", "access_token", "id_token", "tokens", "refreshToken", "csrf", "session_id"]) {
+      expect([n, SECRET_NAME.test(n)]).toEqual([n, true]);
+    }
+    for (const n of ["author", "authors", "co_author", ":authority", "authority", "max_tokens", "maxTokens", "prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "num_tokens"]) {
+      expect([n, SECRET_NAME.test(n)]).toEqual([n, false]);
+    }
+  });
+
+  test("an author or an HTTP/2 authority is not swept out of the rest of a HAR", () => {
+    const har = { log: { entries: [{ request: { url: "https://api.example.com/posts", headers: [{ name: ":authority", value: "api.example.com" }], postData: { mimeType: "application/json", text: JSON.stringify({ author: "Ada Lovelace", max_tokens: 4096 }) } }, response: { content: { mimeType: "text/html", text: "<p>By Ada Lovelace</p>" } } }] } };
+    expect(redactHar(har)).toBe(0);
+    expect(JSON.stringify(har)).toContain("By Ada Lovelace");
+    expect(har.log.entries[0].request.url).toBe("https://api.example.com/posts");
   });
 });
 
@@ -210,6 +228,15 @@ describe("redactSnapshotValues", () => {
       '  - StaticText "[hidden]"',
       '- StaticText "Your code ends in 1234"',
     ].join("\n"));
+  });
+
+  test("a value cut by the probe or shortened by the tree is still hidden", () => {
+    const long = "x9".repeat(1500); // 3000 chars; the probe sends the first HIDDEN_VALUE_MAX
+    expect(redactSnapshotValues(`- textbox "Key" [ref=e1]: ${long}`, [long.slice(0, HIDDEN_VALUE_MAX)])).toBe('- textbox "Key" [ref=e1]: [hidden]');
+    const pass = "correct horse battery staple and then some";
+    expect(redactSnapshotValues(`- textbox "Passphrase" [ref=e2]: ${pass.slice(0, 20)}…`, [pass])).toBe('- textbox "Passphrase" [ref=e2]: [hidden]');
+    // A short prefix proves nothing: "cor" is not the passphrase.
+    expect(redactSnapshotValues('- textbox "Search" [ref=e3]: cor', [pass])).toBe('- textbox "Search" [ref=e3]: cor');
   });
 
   test("the engine's --json envelope is redacted inside its snapshot text, refs intact", () => {

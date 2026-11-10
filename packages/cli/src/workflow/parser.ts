@@ -94,7 +94,8 @@ function tokenize(src: string): Token[] {
     // Identifier (alphanum + _ + .)
     if (/[a-zA-Z_@$]/.test(src[i])) {
       let id = '';
-      while (i < src.length && /[a-zA-Z0-9_.$@/\-]/.test(src[i])) id += src[i++];
+      // A `-` belongs to the name (`fix-check`) unless it opens an arrow: `a->b` is an edge.
+      while (i < src.length && /[a-zA-Z0-9_.$@/\-]/.test(src[i]) && !(src[i] === '-' && src[i + 1] === '>')) id += src[i++];
       tokens.push({ type: "IDENT", value: id });
       continue;
     }

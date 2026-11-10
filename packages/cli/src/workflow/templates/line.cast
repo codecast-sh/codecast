@@ -20,9 +20,10 @@
 // docs/architecture/line-profile.md), loaded once per run: its commands
 // ($line.commands.check|prove|eval|ship), principles, prompting standard,
 // size budget and watch days. This file names no repository path and no tool
-// of any one project. A command the profile leaves out makes its station pass
-// with a note on the task saying the project has none; without a ship command
-// the ship station runs Ship (`cast ship run`, docs/architecture/ship.md).
+// of any one project. A prove or eval command the profile leaves out makes its
+// station pass with a note on the task saying the project has none, and an
+// empty check command passes without one; without a ship command the ship
+// station runs Ship (`cast ship run`, docs/architecture/ship.md).
 //
 // Stations, in order:
 //   ground      ties the cause to a goal and rates it; anything not ready, or
@@ -122,7 +123,7 @@ digraph line {
 
   verify [label="Verify", shape=parallelogram,
     timeout=3600,
-    script="cd \"$(cast ws path $worktree)\" && bash -c $line.commands.check"]
+    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && bash -c $line.commands.check"]
 
   green [label="Green", shape=parallelogram, timeout=1800, script="@line/green.sh"]
 
@@ -134,7 +135,7 @@ digraph line {
   review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@line/review.md"]
 
   card_draft [label="Card draft", shape=parallelogram, timeout=300,
-    script="cd \"$(cast ws path $worktree)\" || exit 1; cast card build --task $task_id --dir $run_dir --base $default_branch --json; exit 0"]
+    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" || exit 1; cast card build --task $task_id --dir $run_dir --base $default_branch --json; exit 0"]
 
   // The presenting station: the gate below names it as its asker, so it reads
   // codecast's base presenter (workflow/presenter.md) with this prompt as the
@@ -142,7 +143,7 @@ digraph line {
   card_write [label="Present", shape=tab, backend=session, agent=claude, max_visits=2, prompt="@line/card_write.md"]
 
   card [label="Card", shape=parallelogram, timeout=300,
-    script="cd \"$(cast ws path $worktree)\" && cast card build --task $task_id --dir $run_dir --base $default_branch --publish --words $card_write.json"]
+    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && cast card build --task $task_id --dir $run_dir --base $default_branch --publish --words $card_write.json"]
 
   decide [label="Decide", shape=hexagon, category=review, asker=card_write,
     prompt="$card_write.json.question",

@@ -9,7 +9,7 @@
 // the session had started a turn — which is how a delivered message kept
 // showing "hasn't reached the agent" in the web UI.
 // python3 remains only for the AskUserQuestion sidecar (nested JSON dump).
-import { HOOK_FIELDS_READ } from "./hookJson.js";
+import { HOOK_FIELDS_READ, HOOK_STATE_DIR } from "./hookJson.js";
 import { HOOK_TOKEN_READ } from "./hookIdentity.js";
 import { PERMISSION_HOOK_PATH, PERMISSION_HOOK_WAIT_MS, PERMISSION_LAUNCH_TOKEN_HEADER } from "./permissionHookWait.js";
 
@@ -21,7 +21,7 @@ import { PERMISSION_HOOK_PATH, PERMISSION_HOOK_WAIT_MS, PERMISSION_LAUNCH_TOKEN_
 export const CODECAST_PERMISSION_WAIT = `
 codecast_permission_wait() {
 PORT=
-[ -f "$HOME/.codecast/hook-port" ] && IFS= read -r PORT <"$HOME/.codecast/hook-port" 2>/dev/null
+[ -f "$CC_DIR/hook-port" ] && IFS= read -r PORT <"$CC_DIR/hook-port" 2>/dev/null
 [ -n "$PORT" ] || return 1
 ${HOOK_TOKEN_READ}
 set -- -s -f -X POST "http://127.0.0.1:$PORT${PERMISSION_HOOK_PATH}" --connect-timeout 1 --max-time ${PERMISSION_HOOK_WAIT_MS / 1000 + 10}
@@ -69,9 +69,10 @@ FB="{\\"status\\":\\"$(json_esc "$STATUS")\\",\\"ts\\":$ts"
 FB="$FB}"
 
 # Try HTTP push first (instant), fall back to file write (polled)
-HOOK_PORT_FILE="$HOME/.codecast/hook-port"
+HOOK_PORT_FILE="$CC_DIR/hook-port"
 if [ -f "$HOOK_PORT_FILE" ]; then
-  PORT=$(cat "$HOOK_PORT_FILE" 2>/dev/null)
+  PORT=
+  IFS= read -r PORT <"$HOOK_PORT_FILE" 2>/dev/null
   if [ -n "$PORT" ]; then
     set -- -s -G "http://127.0.0.1:$PORT/hook/status" --connect-timeout 1 --max-time 2
     # Proves this post came from a hook this user installed. Without it the
@@ -116,7 +117,7 @@ case "$SESSION_ID" in
 esac
 [ \${#SESSION_ID} -le 128 ] || exit 0
 
-STATUS_DIR="$HOME/.codecast/agent-status"
+STATUS_DIR="$CC_DIR/agent-status"
 mkdir -p "$STATUS_DIR"
 if [ "$STATUS" != "working" ]; then
   printf '%s\\n' "$FB" >> "$STATUS_DIR/$SESSION_ID.jsonl"
@@ -128,6 +129,7 @@ printf '%s\\n' "$FB" > "$STATUS_DIR/$SESSION_ID.json"
 export const CODECAST_STATUS_HOOK = `#!/bin/bash
 # Reports Claude Code lifecycle events to codecast daemon via status files
 set -uo pipefail
+${HOOK_STATE_DIR}
 
 # A session on codecast's Claude SDK backend reports status and answers its
 # permission prompts through its host process, so this hook stands down there.
@@ -284,7 +286,7 @@ fi
 # box-art menu. Written atomically; best-effort. SESSION_ID is already gated.
 if [ "$TOOL" = "AskUserQuestion" ] && { [ "$EVENT" = "PreToolUse" ] || [ "$EVENT" = "PermissionRequest" ]; }; then
   export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/bin:$HOME/.local/bin:$PATH"
-  printf '%s' "$INPUT" | SESSION_ID="$SESSION_ID" python3 -c "
+  printf '%s' "$INPUT" | SESSION_ID="$SESSION_ID" CC_DIR="$CC_DIR" python3 -c "
 import sys, json, os, tempfile, time
 try:
     d = json.load(sys.stdin)
@@ -296,7 +298,7 @@ if not sid:
 try:
     qs = (d.get('tool_input') or {}).get('questions')
     if qs:
-        dd = os.path.join(os.path.expanduser('~'), '.codecast', 'ask-input')
+        dd = os.path.join(os.environ.get('CC_DIR') or os.path.join(os.path.expanduser('~'), '.codecast'), 'ask-input')
         os.makedirs(dd, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=dd)
         with os.fdopen(fd, 'w') as f:

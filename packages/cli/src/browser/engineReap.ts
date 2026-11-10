@@ -80,7 +80,12 @@ export function listEngineSessions(stateDir = engineStateDir()): EngineSessionIn
       /* raced with a removal */
     }
     if (m[2] === "pid") {
-      const pid = parseInt(fs.readFileSync(full, "utf-8").trim(), 10);
+      let pid = NaN;
+      try {
+        pid = parseInt(fs.readFileSync(full, "utf-8").trim(), 10);
+      } catch {
+        /* raced with a removal */
+      }
       if (pid > 0) {
         info.pid = pid;
         info.running = isAlive(pid);
@@ -402,10 +407,10 @@ export async function closeSessionTab(key: string, binary: string | null = findE
   if (binary && browser && listEngineSessions().some((session) => session.key === key && session.running)) {
     const env = { ...process.env, AGENT_BROWSER_SESSION: key };
     const closedTab = runEngine(["tab", "close"], { ...browser, timeoutMs: 15_000 });
-    if (closedTab.status !== 0 && target) await closeTargetLater(target, await sessionEndpoint(key));
+    if (closedTab.status !== 0) await closeTargetLater(target, await sessionEndpoint(key));
     const res = spawnSync(binary, ["close"], { encoding: "utf-8", timeout: 20_000, stdio: ["ignore", "pipe", "pipe"], env });
     ok = res.status === 0;
-  } else if (target) {
+  } else {
     await closeTargetLater(target, await sessionEndpoint(key));
   }
   return ok;

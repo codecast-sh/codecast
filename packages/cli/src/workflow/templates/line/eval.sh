@@ -4,7 +4,8 @@
 # into eval-result.json for the card, and its exit code is the station's.
 # Its last line is one JSON result, {"why"}, which the run report reads as
 # its sentence.
-cd "$(cast ws path $worktree)" || exit 1
+wt="$(cast ws path $worktree)"
+[ -n "$wt" ] && cd "$wt" || exit 1
 dir=$run_dir
 cmd=$line.commands.eval
 if [ -z "$cmd" ]; then

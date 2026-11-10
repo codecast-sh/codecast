@@ -115,7 +115,8 @@ const isAddMessagesFor = (op: RetryOperation, conversationId: string): boolean =
 // current api_token. Retrying with the same params will fail forever — the only
 // recovery is for the caller to re-resolve the conversation (which happens on the
 // next processSessionFile pass once the local conversation cache is dropped).
-function isStaleConversationError(error: string): boolean {
+/** The server no longer has (or no longer lets this account write) the conversation. */
+export function isStaleConversationError(error: string): boolean {
   return error.includes("Conversation not found") ||
     error.includes("Unauthorized: can only add messages to your own conversations");
 }

@@ -113,7 +113,7 @@ export async function runComputerSetup(opts: { yes?: boolean }, deps: ComputerSe
     throw new ComputerError("accessibility_error", status.helperUnavailableReason);
   }
   if (status.permissions.some((p) => p.status === "unsupported")) {
-    throw new ComputerError("unsupported_capability", `cast computer runs on macOS only; this is ${status.platform}`);
+    throw new ComputerError("unsupported_capability", `cast computer runs on macOS and on Linux (X11); this is ${status.platform}`);
   }
 
   const report = (verdict: string) => {
@@ -172,6 +172,9 @@ export async function runComputerSetup(opts: { yes?: boolean }, deps: ComputerSe
   } finally {
     release();
   }
+  // The setup window has done its job once every grant is in. A wait that
+  // stopped short leaves it up: the human may still be about to grant.
+  if (opened.size && !missing.length) deps.permissions.closePermissionSettings?.();
 
   if (cancelled) say("Stopped.");
   return report(

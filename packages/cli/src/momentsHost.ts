@@ -227,8 +227,6 @@ async function handOne(deps: MomentsTickDeps, claim: MomentClaim): Promise<{ mom
   return outcome;
 }
 
-/** How often the daemon looks for due moments; only a machine that published extractors asks. */
-export const MOMENTS_TICK_MS = 60_000;
 let lastPrune = 0;
 let ticking = false;
 

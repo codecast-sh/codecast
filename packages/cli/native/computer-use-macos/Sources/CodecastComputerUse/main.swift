@@ -3227,8 +3227,16 @@ private final class SocketListener: @unchecked Sendable {
         while !isStopped {
             let fd = accept(socketFd, nil, nil)
             if fd < 0 {
+                let acceptErrno = errno
                 if !isStopped {
-                    fputs("computer socket accept failed: \(String(cString: strerror(errno)))\n", stderr)
+                    // An interrupted call is retried at once. Anything else
+                    // (EMFILE, ENFILE, ENOMEM) may persist, so the loop waits
+                    // before trying again and does not spin a core filling the log.
+                    if acceptErrno == EINTR || acceptErrno == ECONNABORTED {
+                        continue
+                    }
+                    fputs("computer socket accept failed: \(String(cString: strerror(acceptErrno)))\n", stderr)
+                    usleep(200_000)
                 }
                 continue
             }
@@ -3557,6 +3565,12 @@ private final class PermissionRuntime: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         self.window = window
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // The setup window is all this process is: closing it ends the process,
+    // which otherwise stayed in the Dock with no window and no menu.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return true
     }
 
     @objc private func revealHelper() {

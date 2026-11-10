@@ -2,7 +2,6 @@ import * as fs from "fs";
 import { rebindingStore } from "./cachedJsonStore.js";
 import { codecastPath } from "./codecastDir.js";
 import * as path from "path";
-import { CachedJsonStore } from "./cachedJsonStore.js";
 import { defaultConfigDir } from "./config/configDir.js";
 
 const CONFIG_DIR = defaultConfigDir();

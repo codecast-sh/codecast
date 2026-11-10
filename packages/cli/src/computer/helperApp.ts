@@ -22,7 +22,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "../proc.js";
@@ -341,7 +340,8 @@ export interface MaterializeResult {
   appPath: string;
   executablePath: string;
   /** A swap ran (a first install or an update), rather than the stamp
-   *  matching and the whole thing costing one small read. */
+   *  matching. The no-op path still reads and hashes the whole embedded
+   *  payload to compare it with the stamp. */
   installed: boolean;
   /** The bundle came from the fixed path rather than from this CLI's payload,
    *  because this CLI carries none. The launcher uses it to drop the

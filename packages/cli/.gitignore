@@ -5,3 +5,6 @@
 
 .env.cloud-test
 npm/vendor/
+
+# A state tree written under a home path that stringified to "undefined".
+/undefined/

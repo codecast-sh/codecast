@@ -103,26 +103,56 @@ export function webAuthnRefusal(verb: string, args: readonly string[]): { messag
   return { message: WEBAUTHN_REFUSAL, hint: "Touch ID confirms a Vault action only from the person; hand them the step." };
 }
 
+/** An argument that reads as a URL: an explicit scheme, or a bare host (`x.com`, `localhost:3200/vault`). */
+function urlShaped(arg: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(arg) || /^(?:localhost|[\w-]+(?:\.[\w-]+)+)(?::\d+)?(?:[/?#]|$)/i.test(arg);
+}
+
 /**
  * The URLs an engine command loads by itself, each to pass the gate `open`
  * passes: `open`, `goto` and `navigate <url>`, `read <url>`, `tab new <url>`,
  * `diff url <a> <b>`, and `pushstate <url>`, read against the page the tab is
  * on (`pageUrl`, else the web app), since a client-side push reaches a route
  * without loading it.
+ *
+ * Which positional the engine takes as the URL depends on which flags take a
+ * value, and this file does not know the engine's flag table: in
+ * `open --wait-until load x.com/vault` the first positional is `load`. So the
+ * expected slot is gated and so is every other argument shaped like a URL,
+ * including a `--flag=<url>` value. A flag value that merely looks like a
+ * host is gated too; refusing one command too many is the safe side.
  */
 export function urlsLoadedBy(verb: string, args: readonly string[], pageUrl: () => string | null = () => null): string[] {
   const pos = args.filter((a) => !a.startsWith("-"));
-  if (verb === "open" || verb === "goto" || verb === "navigate" || verb === "read") return pos.slice(0, 1);
-  if (verb === "tab") return pos[0] === "new" ? pos.slice(1, 2) : [];
-  if (verb === "diff") return pos[0] === "url" ? pos.slice(1, 3) : [];
+  const withUrlShaped = (expected: string[]): string[] => {
+    const flagValues = args.filter((a) => a.startsWith("-") && a.includes("=")).map((a) => a.slice(a.indexOf("=") + 1));
+    return [...new Set([...expected, ...[...pos, ...flagValues].filter(urlShaped)])];
+  };
+  if (verb === "open" || verb === "goto" || verb === "navigate" || verb === "read") return withUrlShaped(pos.slice(0, 1));
+  if (verb === "tab") return pos[0] === "new" ? withUrlShaped(pos.slice(1, 2)) : [];
+  if (verb === "diff") return pos[0] === "url" ? withUrlShaped(pos.slice(1, 3)) : [];
   if (verb === "pushstate" && pos[0]) {
-    try {
-      return [new URL(pos[0], pageUrl() ?? webBaseUrl()).href];
-    } catch {
-      return [pos[0]];
-    }
+    const resolve = (raw: string): string => {
+      try {
+        return new URL(raw, pageUrl() ?? webBaseUrl()).href;
+      } catch {
+        return raw;
+      }
+    };
+    return [...new Set([resolve(pos[0]), ...pos.slice(1).filter(urlShaped).map(resolve)])];
   }
   return [];
+}
+
+/**
+ * The audit row for a page a command loaded by naming its URL, for the verbs
+ * NAVIGATING_VERBS does not cover (`tab new <url>`, `read <url>`,
+ * `navigate`, `pushstate`, `diff url`): their landing is not read off the
+ * session's tab afterwards, so the URL asked for is what gets recorded.
+ */
+export function auditExplicitLoads(verb: string, args: readonly string[], tab: string, session: string | null, pageUrl: () => string | null = () => null): void {
+  if (NAVIGATING_VERBS.has(verb)) return;
+  for (const url of urlsLoadedBy(verb, args, pageUrl)) auditLanding({ url: withScheme(url), tab, session, via: "open" });
 }
 
 /**

@@ -321,7 +321,8 @@ export async function runRecorder(cfg: RecorderConfig, connect: (url: string) =>
       const last = ring.last;
       if (!last || !last.data.equals(buf)) ring.push({ data: buf, at: Date.now() });
     } catch (err) {
-      if (/No target|not attached|detached|closed/i.test((err as Error).message)) end();
+      // "not open" is CdpConnection.send on a socket that has closed (cdp.ts).
+      if (/No target|not attached|detached|closed|not open/i.test((err as Error).message)) end();
     } finally {
       shooting = false;
     }

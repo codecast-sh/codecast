@@ -13,7 +13,6 @@
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
 const TASK_VERSION = "9"; // bumped: product events and --source, and the external data verbs (sources, events, replay, metrics, connector)
 const WORK_VERSION = "12"; // bumped: hand a code change off with a change guide (--guide)
-const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "2";
 const MESSAGING_VERSION = "10";
 const VISUAL_VERSION = "8"; // 8: no password prompt for published pages; 7: image sizing, "wide"/"small" titles; 6: image captions from alt text + side-by-side rows for adjacent images
@@ -43,10 +42,6 @@ export function getTaskVersion(): string {
 
 export function getWorkVersion(): string {
   return WORK_VERSION;
-}
-
-export function getPlanVersion(): string {
-  return PLAN_VERSION;
 }
 
 export function getWorkflowVersion(): string {

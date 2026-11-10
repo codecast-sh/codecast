@@ -32,9 +32,10 @@ type CloudAgentListPage = { items: CloudAgentListItem<unknown>[]; nextCursor?: s
 /**
  * One mirror of an agent: `known`, the provider's record already read (the
  * list's, or its parent's); `probing`, a paused lane's check (probe()), the
- * one read it allows; `listed`, the provider listed it moments ago.
+ * one read it allows; `listed`, the provider listed it moments ago;
+ * `unlisted`, read by id because a whole list no longer shows it
+ * (AgentState.unlisted).
  */
-/** `unlisted`: read by id because a whole list no longer shows it (AgentState.unlisted). */
 interface MirrorOptions { known?: unknown; probing?: boolean; listed?: boolean; unlisted?: boolean }
 
 /** A pass's reads of single agents (UNEXPECTED_AGENTS_TO_PAUSE): the ones that answered unexpectedly, and how many did anything else. */
@@ -600,6 +601,7 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
     this.state.agents[agentId] = { ...st, gone: true };
     this.followed.delete(agentId);
     this.failing.delete(agentId);
+    this.release(agentId);
     if (running) this.emit("unfollowed", agentId);
     this.log(`${logTag(this.adapter)} ${agentId} is gone on ${this.adapter.spec.label}: keeping its mirror as it is`);
     void this.saveState();
@@ -656,6 +658,7 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
       // A child its parent no longer has: forgotten, or every pass would read it again.
       if (this.state.agents[agentId]?.parent) {
         delete this.state.agents[agentId];
+        this.release(agentId);
         await this.saveState();
       }
       return;
@@ -716,6 +719,19 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
       this.renderTimers.delete(agentId);
       void this.mirrorNow(agentId);
     }, 750));
+  }
+
+  /**
+   * Drop what is held in memory for an agent that is not read again (gone on
+   * the provider, or a child its parent forgot): its event record and handle
+   * would otherwise stay for the daemon's life. The record on disk stays, and
+   * anything that does ask again reads it from there.
+   */
+  private release(agentId: string): void {
+    const timer = this.renderTimers.get(agentId);
+    if (timer) { clearTimeout(timer); this.renderTimers.delete(agentId); }
+    this.data.delete(agentId);
+    this.handles.delete(agentId);
   }
 
   private handle(agentId: string): CloudAgentHandle<unknown> {

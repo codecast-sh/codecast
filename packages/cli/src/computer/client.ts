@@ -252,7 +252,12 @@ export class ComputerClient {
     if (this.caps) return;
     let caps = await this.handshake();
     if (caps.protocolVersion !== COMPUTER_PROTOCOL_VERSION) {
-      this.shutdown();
+      // Dropping the connection alone reattaches to the same live helper
+      // through instance.json and fails the same way, and each attempt resets
+      // its idle timer: the helper itself has to go before a fresh one starts.
+      const stale = this.state ?? readInstance();
+      if (stale) await this.stopHelper(stale);
+      else this.shutdown();
       caps = await this.handshake();
       if (caps.protocolVersion !== COMPUTER_PROTOCOL_VERSION) {
         throw new ComputerError(
@@ -519,9 +524,6 @@ export class ComputerClient {
     };
     const onError = (err: Error) => {
       if (this.socket !== socket) return;
-      this.socket = null;
-      this.detach?.();
-      this.detach = null;
       forget();
       if (!socket.destroyed) socket.destroy();
       this.rejectPending(asComputerError(err));

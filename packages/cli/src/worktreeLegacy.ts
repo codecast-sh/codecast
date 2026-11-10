@@ -131,15 +131,6 @@ export function createWorktreeLegacy(repoRoot: string, name: string, log: (messa
     return { error: (e?.stderr?.toString().trim() || e?.message || String(lastErr)).split("\n").find((l) => /^(fatal|error):/.test(l.trim())) ?? (e?.message || String(lastErr)).split("\n")[0] };
   }
 
-  // Remove large build artifact directories that bloat the worktree
-  const LARGE_ARTIFACT_DIRS = ["packages/desktop/src-tauri/target"];
-  for (const dir of LARGE_ARTIFACT_DIRS) {
-    const fullPath = path.join(worktreePath, dir);
-    if (fs.existsSync(fullPath)) {
-      try { execSync(`/bin/rm -rf ${JSON.stringify(fullPath)}`, { stdio: "ignore" }); } catch {}
-    }
-  }
-
   copySetupFiles(repoRoot, worktreePath);
 
   return {

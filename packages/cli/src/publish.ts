@@ -38,7 +38,7 @@ import {
   type AccessFlagValues,
   type ArtifactLsRow,
 } from "./publishCommand.js";
-import { apiPost, apiUpload, missingRouteError, type PublishDeps } from "./castApi.js";
+import { apiPost, apiUpload, type PublishDeps } from "./castApi.js";
 import { CAST_PLAYER_GUIDE, describePageAnchor, pageEmbedUrl, pageIsMotion, pageUsesPlayer, parsePageAnchor } from "@codecast/shared/contracts";
 import { commandGroup } from "./commandGroups.js";
 import { addVerbHelp, type VerbHelpSpec } from "./verbHelp.js";

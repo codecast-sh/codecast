@@ -27,8 +27,8 @@
  */
 
 import type { CloudPlacementStep } from "@codecast/shared/contracts";
-import { spawnSync } from "node:child_process";
-import { lastErrorLine } from "../proc.js";
+import { lastErrorLine, spawnSync } from "../proc.js";
+import { HOST_PATH_EXPORT } from "./syncSide.js";
 import * as path from "node:path";
 import {
   ensureUp,
@@ -526,16 +526,6 @@ export function gitForPrepare(
 }
 
 /**
- * The host-home steps every wake/prepare runs, in a fixed order, each
- * non-fatal and logged: (0) the host's cast brought up to this laptop's, so
- * the host half of every later step is current, (1) agent logins (the Claude credential, the agent
- * auth bundle with the repo checkout as codex trust path, then the tools
- * the repo and the mirrored home need), (2) host git readiness, (3) the
- * home mirror. Callers: prepareCloudHost, `cast cloud wake`,
- * `cast hosts wake`, `cast hosts sync-auth`, provisionLinuxHost (with
- * force), performMoveToRemote.
- */
-/**
  * The cast step, first of the host-home steps: a host runs at least this
  * laptop's cast before anything starts there
  * (hosts/updateHost castForPrepare, which throws HostCastBehind otherwise).
@@ -556,6 +546,16 @@ export async function readyHostCast(
   return (step ?? castForPrepare)(host, hostCastPlatform(entry), log);
 }
 
+/**
+ * The host-home steps every wake/prepare runs, in a fixed order, each
+ * non-fatal and logged: (0) the host's cast brought up to this laptop's, so
+ * the host half of every later step is current, (1) agent logins (the Claude credential, the agent
+ * auth bundle with the repo checkout as codex trust path, then the tools
+ * the repo and the mirrored home need), (2) host git readiness, (3) the
+ * home mirror. Callers: prepareCloudHost, `cast cloud wake`,
+ * `cast hosts wake`, `cast hosts sync-auth`, provisionLinuxHost (with
+ * force), performMoveToRemote.
+ */
 export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions = {}): Promise<ReadyHostHomeReport> {
   const log = opts.onProgress ?? (() => {});
   const cloudId = opts.cloudId ?? host.address;
@@ -602,13 +602,6 @@ export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions
   return { mirror, ...(cast ? { cast } : {}), ...(castBehind ? { castBehind } : {}), ...(git ? { git } : {}), ...(logins ? { logins } : {}), ...(tools ? { tools } : {}) };
 }
 
-/**
- * Wake the host and bring its HOME up to date, touching nothing in the
- * checkout: manifest preflight, registry lookup, ensureUp, the daemon's
- * device id, the host-home steps (readyHostHome). What a shared placement
- * runs BEFORE its Convex claim, so a refused claim has changed nothing on
- * the box.
- */
 export interface PrepareCloudHostOptions {
   hostArg?: string;
   /** The laptop worktree the seed and manifest inputs come from (resolveSeedRoots). */
@@ -624,6 +617,13 @@ export interface PrepareCloudHostOptions {
   castStep?: ReadyHostHomeOptions["castStep"];
 }
 
+/**
+ * Wake the host and bring its HOME up to date, touching nothing in the
+ * checkout: manifest preflight, registry lookup, ensureUp, the daemon's
+ * device id, the host-home steps (readyHostHome). What a shared placement
+ * runs BEFORE its Convex claim, so a refused claim has changed nothing on
+ * the box.
+ */
 export async function wakeCloudHost(opts: PrepareCloudHostOptions): Promise<PreparedHost> {
   const log = opts.onProgress ?? (() => {});
   cloudCopyFiles(opts.seedCwd);
@@ -843,7 +843,7 @@ export interface AcquireRemoteOptions {
   previousAddress?: string;
 }
 
-const HOST_PATH = `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"`;
+const HOST_PATH = HOST_PATH_EXPORT;
 
 export type AcquiredRemoteWorkspace = RemoteWorkspace & { head: string; seed: CloudSeed };
 

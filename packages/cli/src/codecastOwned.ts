@@ -2,7 +2,7 @@
  * What codecast itself installs into a user's home, in one importable table.
  *
  * Three writers used to carry these names as private literals: the hook
- * installer in index.ts (`installHookScript("codecast-status.sh", …)`), the
+ * installer (now harnessHooksInstall.ts, then literals in index.ts), the
  * orchestration installer (skill dir, three agent files, the
  * `/.codecast/orchestration/` marker its settings.json hooks are found by) and
  * stableContext.ts (`stable-feed.sh`). The cloud home mirror (cloud/mirror)
@@ -29,8 +29,9 @@ export const CODECAST_HOOK_SCRIPTS = [
 ] as const;
 
 /**
- * The statusline hook, written by `cast install` on every machine rather
- * than by installHookScript (statuslineHook.ts). Owned like the others: a copy
+ * The statusline hook (statuslineHook.ts), registered as the statusLine
+ * command rather than under a hook event; harnessHooksInstall.ts writes it
+ * with the rest. Owned like the others: a copy
  * mirrored to a host is overwritten there and reads as a remote edit.
  */
 export const STATUSLINE_HOOK_SCRIPT = "codecast-statusline.sh";

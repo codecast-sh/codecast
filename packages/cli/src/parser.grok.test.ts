@@ -17,7 +17,6 @@ import {
   parseGrokSessionFile,
   parseTranscriptFor,
   extractGrokCwd,
-  extractGrokSessionId,
   isGrokInternalSession,
 } from "./parser.js";
 import { classifyGrokTranscriptTail, classifyTranscriptTailFor } from "./daemon.js";
@@ -106,12 +105,6 @@ describe("parseGrokSessionFile — linear turn with a bash tool call", () => {
   test("agent_result does NOT duplicate the reply when chunks already carried text", () => {
     const finals = messages.filter((m) => m.content.includes("Three entries"));
     expect(finals.length).toBe(1);
-  });
-
-  test("legacy method-less first line parses without deranging the stream", () => {
-    // available_commands_update (legacy raw-ACP shape) is meta — no message,
-    // no crash, and extractGrokSessionId reads its top-level sessionId.
-    expect(extractGrokSessionId(content)).toBe("c3f8a1b2-4d5e-4f60-8a9b-0c1d2e3f4a5b");
   });
 });
 

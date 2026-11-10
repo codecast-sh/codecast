@@ -40,7 +40,6 @@
 import { codecastPath } from "./codecastDir.js";
 import { CHECK_CONFIG_REL_PATH } from "./checkConfigPath.js";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";

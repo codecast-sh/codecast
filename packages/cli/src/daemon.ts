@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { LOGIN_PATH_FILENAME } from "./loginShellPath.js";
-import { parsePollMessage, pollDeclineText, pollMenuSteps, type PollMessage } from "./pollMessage.js";
+import { parsePollMessage, pollDeclineText, pollMenuSteps } from "./pollMessage.js";
 import { ClaudeSdkBackend } from "./claudeSdk/backend.js";
 import { chooseClaudeBackend, sdkBackendRefusal } from "./claudeSdk/select.js";
 import { BackendSwitchHoldError, backendSwitchHeld, cancelBackendSwitch, switchClaudeBackend } from "./claudeSdk/switchBackend.js";
@@ -13,7 +13,7 @@ import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeli
 import { handoffParentSessionId, linkPlanHandoffChild, planHandoffTarget } from "./planHandoff.js";
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { mapLimit } from "@codecast/shared/async";
@@ -40,7 +40,6 @@ import { randomUUID, createHash, randomBytes } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
 import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync, whichBin } from "./proc.js";
-import type { ChildProcess } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { raiseThreadToInteractiveQos } from "./threadQos.js";
 import { countingSemaphore } from "./semaphore.js";
@@ -161,7 +160,6 @@ import {
   readProfileSecretCredentialsAsync,
   writeActiveCredential,
   credentialIsFresher,
-  CcAccountError,
   readActiveOauth,
   ingestStatusLineUsage,
   extractSetupToken,
@@ -197,7 +195,6 @@ import {
   assembleOpencodeSession,
   sessionExistsInOpencodeDb,
   resolveOpencodeSessionCwd,
-  readOpencodeSessionLineage,
 } from "./opencodeStorage.js";
 import { OpencodeServer } from "./opencodeServer.js";
 import {
@@ -234,8 +231,7 @@ import {
   type HangMarker,
 } from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
-import { readCodexModelBeforeOffset } from "./codexTranscriptModel.js";
-import { claudeBannerText, detectCliFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGeminiProjectHash, extractGrokCwd, extractParentUuid, extractPiCwd, extractMuseCwd, extractSlug, extractSummaryTitle, extractTeamInfo, isCompletedNativeCodexReviewChild, isCodexProgramLaunch, isCompletedStandaloneCodexReview, isCursorRoleHeaderLine, isGrokInternalSession, parseCodexSessionFile, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
+import { claudeBannerText, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGrokCwd, extractMuseCwd, extractSummaryTitle, extractTeamInfo, isCodexProgramLaunch, isGrokInternalSession, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
 import {
   CodexAppServer,
   threadForkTimeoutMsForBytes,
@@ -269,7 +265,6 @@ import {
   type ProcessOwnership,
   type ProcessSessionClaim,
 } from "./sessionProcessMatcher.js";
-import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { TokenDecryptError } from "./tokenEncryption.js";
 import { bearerFromStored, secretFromStored } from "./bearerToken.js";
@@ -296,11 +291,11 @@ import { redactSecrets, maskToken } from "./redact.js";
 import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
 import { RUN_TIMEOUT_MS } from "@codecast/shared/contracts/commandRun";
 import { personEnv } from "./sessionIdentity.js";
-import { RetryQueue, flushRetryQueueForShutdown, isSessionRefusal, type RetryOperation } from "./retryQueue.js";
+import { RetryQueue, flushRetryQueueForShutdown, isSessionRefusal, isStaleConversationError, type RetryOperation } from "./retryQueue.js";
+import { isPidAlive } from "./pidAlive.js";
 import { cursorDbOpenPath } from "./cursorDbPath.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
-import { detectPermissionPrompt } from "./permissionDetector.js";
 import { watchPromptSettled } from "./permissionPromptWatch.js";
 import { describeRemovals, type RemovalPreview } from "./removalPreview.js";
 import { isOutsideGitRepo } from "./gitRepoProbe.js";
@@ -359,7 +354,6 @@ import {
   stripComposerChrome,
 } from "./tmuxPaste.js";
 import { LaunchPromptCarriedError, launchPromptFragment, pickLaunchPrompt, transcriptHasUserPrompt } from "./launchPrompt.js";
-import { formatFeedResults } from "./formatter.js";
 import {
   attachTerminalServer,
   handleTerminalHttp,
@@ -383,6 +377,7 @@ import {
   drainStatusSpool,
   isSpoolableStatus,
   sweepStatusSpools,
+  isSafeStatusSessionId,
 } from "./statusSpool.js";
 import { startPaneStream, isPaneStreaming, writePane } from "./terminal/paneStream.js";
 import { attachWatchServer } from "./browser/watchServer.js";
@@ -445,7 +440,7 @@ import {
 import { ClaudeCloudWatcher, cloudEventUuid } from "./claudeCloud.js";
 import { CloudAgentHoldError, CloudAgentRegistry, CloudAgentUnsentError, cloudAgentAdapters, logTag as cloudAgentLogTag, readMetaJson, withMirrorSynced, writeMirrorSynced, type CloudAgentDeviceCode, type CloudAgentGit, type CloudAgentLoginCommand } from "./cloudAgents/index.js";
 import { CLOUD_MIRROR_LOCAL_GIT_FIELDS, cloudMirrorRepoFacts } from "./cloudAgents/poll.js";
-import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, decodePiCwdSlug, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
+import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, decodePiCwdSlug, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, claudeSessionIdArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, claudePermissionFlagsFor, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, HeartbeatTeamPolicy, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskReport, PaneTerminalModes, ResourceProcess, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
@@ -2010,15 +2005,9 @@ const closedSyntheticPrompts = new Map<string, number>();
 // lifecycle is otherwise only reachable through live tmux scrapes.
 export const syntheticPromptTestSeam = { lastEmittedSyntheticPrompt, closedSyntheticPrompts };
 const AGENT_STATUS_DIR = path.join(CONFIG_DIR, "agent-status");
-// A session id that is safe to use as a file name inside AGENT_STATUS_DIR. The
-// leading character cannot be a dot, so no id can name a parent directory, and
-// no separator is allowed, so no id can leave the directory at all. Real ids
-// are uuids, so this rejects nothing a real caller sends. Exported for the
-// test that covers the traversal shapes.
-const SAFE_STATUS_SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
-export function isSafeStatusSessionId(sessionId: string): boolean {
-  return SAFE_STATUS_SESSION_ID.test(sessionId);
-}
+// The id check for any path built inside AGENT_STATUS_DIR lives in
+// statusSpool.ts; re-exported for the test that covers the traversal shapes.
+export { isSafeStatusSessionId };
 // The last status the hook wrote for a session, read from its file. Unlike
 // lastSentAgentStatus it survives a daemon restart.
 export function agentStatusOnDisk(sessionId: string, dir = AGENT_STATUS_DIR): AgentStatus | undefined {
@@ -6142,10 +6131,6 @@ async function reconcileGatedSnippets(avail: Record<string, boolean>): Promise<v
 // would race the same rows. Dead pids drop out on the next check.
 const migrationRunners = new Map<string, number>();
 
-function pidAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
-}
-
 export function startMigrationRunner(batchId: string): { started: boolean; pid?: number; reason?: string; log?: string } {
   return startMigrateChild(batchId, ["migrate", "run", batchId]);
 }
@@ -6153,7 +6138,7 @@ export function startMigrationRunner(batchId: string): { started: boolean; pid?:
 /** A detached `cast migrate …` child keyed by its batch or request id, logging to ~/.codecast/migrations/<key>.log. */
 function startMigrateChild(key: string, args: string[]): { started: boolean; pid?: number; reason?: string; log?: string } {
   const running = migrationRunners.get(key);
-  if (running && pidAlive(running)) return { started: false, pid: running, reason: "already running on this machine" };
+  if (running && isPidAlive(running)) return { started: false, pid: running, reason: "already running on this machine" };
   const logDir = path.join(CONFIG_DIR, "migrations");
   let logFd: number | undefined;
   let logPath: string | undefined;
@@ -6571,9 +6556,9 @@ async function killConversationBackends(
   // gone when the command reports done. One that outlived its pane's reap
   // (a tree that left the pane, a SIGTERM it ignored) is reaped once more, and
   // one that still stands is the command's error, never a quiet "killed".
-  if (sessionPid && pidAlive(sessionPid)) {
+  if (sessionPid && isPidAlive(sessionPid)) {
     await reapPidTree(sessionPid);
-    if (pidAlive(sessionPid)) error = `pid ${sessionPid} of session ${shortId(sessionId!)} survived the kill`;
+    if (isPidAlive(sessionPid)) error = `pid ${sessionPid} of session ${shortId(sessionId!)} survived the kill`;
   }
 
   // A kill is a clean slate. Wipe per-session/per-conversation caches that
@@ -10838,11 +10823,6 @@ export type RawMessage = { uuid?: string; role: string; content: string; timesta
 // now belongs to a different user (Convex returns "Unauthorized: can only add messages to
 // your own conversations"). Both mean: drop the cache, let createConversation re-resolve
 // by (session_id, current user_id). Retrying without re-resolving spins forever.
-function isStaleConversationError(errMsg: string): boolean {
-  return errMsg.includes("Conversation not found") ||
-    errMsg.includes("Unauthorized: can only add messages to your own conversations");
-}
-
 function mapRole(role: string): "human" | "assistant" | "system" {
   return role === "user" ? "human" : role === "system" ? "system" : "assistant";
 }
@@ -24385,10 +24365,6 @@ let lastResourceTickAt = 0;
 // (sleep) or stalled — either way that interval is not real awake-idle time.
 const RESOURCE_TICK_SLEEP_GAP_MS = RESOURCE_MONITOR_INTERVAL_MS * 2.5;
 
-export function getLatestSessionResources(): ReadonlyMap<string, SessionResources> {
-  return latestSessionResources;
-}
-
 // Each session's transcript size, the activity fact the awake-idle snapshot
 // records and the restore compares (restorableAwakeIdle). A session without a
 // transcript of its own (none indexed, or opencode's shared database) reports
@@ -30398,7 +30374,8 @@ async function main(): Promise<void> {
 
   const { config, convexUrl } = await waitForConfig();
   activeConfig = config;
-  configureDaemonWorkers(config.daemon_workers === true);
+  // Not awaited (nothing may delay the listener below); caught because a host that cannot start leaves the in-process paths working.
+  void configureDaemonWorkers(config.daemon_workers === true).catch((err) => logError("daemon workers failed to start; continuing without them", err as Error));
 
   log(`User ID: ${config.user_id}`);
   pendingAccountClaimUser = previousAccountToClaim(readDeviceAccountStamp(CONFIG_DIR), config.user_id);

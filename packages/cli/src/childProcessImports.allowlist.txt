@@ -15,8 +15,7 @@ src/browser/provisionLinux.ts 1
 src/browser/raiseApp.ts 1
 src/browser/remote.ts 1
 src/capabilities/equip.ts 1
-src/cloud/prepare.ts 1
-src/cloud/transfer.ts 2
+src/cloud/transfer.ts 1
 src/disclaim.ts 2
 src/doctor.ts 1
 src/hosts/cli.ts 1

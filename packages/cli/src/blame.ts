@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import open from "open";
 import { cliFetchRead } from "./cliHttp.js";
-import { contentLinesToMatch as selectContentLines, extractSessionTrailer, MAX_CONTENT_LINES, overlapLinesBySha, type ContentLine } from "@codecast/shared/blame";
+import { contentLinesToMatch as selectContentLines, extractSessionTrailer, overlapLinesBySha, type ContentLine } from "@codecast/shared/blame";
 import { defaultConfigDir } from "./config/configDir.js";
 import { webBaseUrl } from "./config/readLocalConfig.js";
 

@@ -35,6 +35,7 @@ import type { CloudHost } from "../browser/cloudHost.js";
 import { shq, type RemoteHost } from "../remote/session-move.js";
 import { codecastPath } from "../codecastDir.js";
 import { heldSshArgs } from "./agentBridge.js";
+import { credentialStoreFor } from "./mirror/discovery.js";
 
 export interface ReachFolder {
   /** Absolute laptop path as the human named it; also the mountpoint on the host. */
@@ -83,10 +84,6 @@ export function reachRefusal(code: number | null, hostId: string, mountpoint: st
   return null;
 }
 
-export function reachKey(hostId: string, folder: string): string {
-  return `${hostId}\0${folder}`;
-}
-
 /**
  * Why `cast hosts reach` must refuse this host, or null. A reach holds an ssh
  * connection for as long as it is on, so a watchdog that counts it would keep
@@ -113,8 +110,8 @@ export function normalizeReachFolder(input: string, home = os.homedir()): string
   if (!fs.statSync(real).isDirectory()) throw new Error(`${abs} is not a folder`);
   const realHome = (() => { try { return fs.realpathSync(home); } catch { return home; } })();
   if (real === "/" || real === realHome || realHome.startsWith(real + "/")) throw new Error(`${abs} is too broad: it holds your whole home folder. Reach a project or notes folder inside it`);
-  const sensitive = [".ssh", ".gnupg", ".aws", ".codecast", "Library/Keychains"].map((p) => path.join(realHome, p));
-  if (sensitive.some((s) => real === s || real.startsWith(s + "/"))) throw new Error(`${abs} holds credentials; it cannot be reached`);
+  // The folder itself, one inside a credential store, or one that contains a store (~/.config holds ~/.config/gh).
+  if (real.startsWith(realHome + "/") && credentialStoreFor(path.relative(realHome, real), true)) throw new Error(`${abs} holds credentials; it cannot be reached`);
   return abs;
 }
 

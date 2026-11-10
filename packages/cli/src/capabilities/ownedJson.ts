@@ -147,6 +147,7 @@ export function planJsonMerge(
   current: unknown,
   desired: OwnedKey[],
   previousLedger: OwnershipLedger = {},
+  opts: { removable?: (encodedKey: string) => boolean } = {},
 ): MergePlan {
   let next: Record<string, unknown> = isRecord(current) ? current : {};
   const writes: string[][] = [];
@@ -193,6 +194,10 @@ export function planJsonMerge(
 
   for (const [encoded, wroteValue] of Object.entries(previousLedger)) {
     if (desiredByKey.has(encoded)) continue;
+    // A ledger entry the caller will not vouch for (a ledger whose MAC failed)
+    // is no authority to delete: the key stays in the file and drops out of
+    // the ledger, exactly as if the user had adopted it.
+    if (opts.removable && !opts.removable(encoded)) continue;
     const keyPath = decodeKeyPath(encoded);
     const existing = getAt(next, keyPath);
     if (!existing.found) continue; // already gone
@@ -309,6 +314,10 @@ export interface ApplyResult extends MergePlan {
   status: "applied" | "needs_upgrade";
   /** False in a dry run, or when nothing needed writing. */
   wrote: boolean;
+  /** The ledger's MAC did not verify, so nothing it listed was removed: keys
+   *  it claimed and this pass no longer wants were left in the file and
+   *  released. */
+  ledgerTampered?: true;
 }
 
 /**
@@ -343,7 +352,11 @@ export function applyOwnedJson(
   // value into what it is asking for, so the default rule ("a key I do not own is
   // a conflict") would refuse to write the very merge it was handed. Anywhere the
   // value is wholly ours, the default is the safer answer and stays.
-  const previous = readLedger(target);
+  const detailed = readLedgerDetailed(target);
+  const previous = { ...detailed.entries };
+  // Keys this call may remove when the ledger itself cannot be trusted: only
+  // the ones the caller proved are ours (`claim`), never the ledger's word.
+  const vouched = new Set<string>();
   if (opts.adopt) {
     for (const want of desired) {
       const key = encodeKeyPath(want.keyPath);
@@ -358,12 +371,25 @@ export function applyOwnedJson(
   // leaving them out of `desired` removes them.
   for (const keyPath of opts.claim ?? []) {
     const key = encodeKeyPath(keyPath);
-    if (key in previous) continue;
+    if (key in previous) {
+      // Under a tampered ledger the recorded value is as untrusted as the
+      // entry, so the caller's proof covers the key as it stands on disk.
+      if (detailed.tampered) {
+        const existing = getAt(raw, keyPath);
+        if (existing.found) {
+          previous[key] = existing.value;
+          vouched.add(key);
+        }
+      }
+      continue;
+    }
     const existing = getAt(raw, keyPath);
-    if (existing.found) previous[key] = existing.value;
+    if (existing.found) {
+      previous[key] = existing.value;
+      vouched.add(key);
+    }
   }
   // A ledger from a NEWER binary: this one writes nothing and removes nothing.
-  const detailed = readLedgerDetailed(target);
   if (detailed.needsUpgrade) {
     return {
       status: "needs_upgrade",
@@ -377,16 +403,27 @@ export function applyOwnedJson(
     };
   }
 
-  const plan = planJsonMerge(raw, desired, previous);
+  // A ledger whose MAC failed (hand-edited, tool-mangled) is still read for
+  // what we own, so our keys keep updating, but it is refused as authority
+  // for DELETION: only keys the caller vouched for may be removed.
+  const plan = planJsonMerge(
+    raw,
+    desired,
+    previous,
+    detailed.tampered ? { removable: (key) => vouched.has(key) } : {},
+  );
+  const tamperNote = detailed.tampered ? { ledgerTampered: true as const } : {};
 
   // The ledger must be persisted even when the document is unchanged: claiming
   // a key that already held the right value, or releasing one the user took
   // over, changes what we may touch next time without changing the file.
   const ledgerFile = ledgerPathFor(target);
-  const ledgerChanged = !sameValue(plan.ledger, readLedger(target));
+  // A tampered ledger is always rewritten, so the refusal happens once and the
+  // next pass reads a ledger this binary MACed.
+  const ledgerChanged = detailed.tampered || !sameValue(plan.ledger, detailed.entries);
 
   if (opts.dryRun || (!plan.changed && !ledgerChanged)) {
-    return { ...plan, status: "applied", wrote: false };
+    return { ...plan, status: "applied", wrote: false, ...tamperNote };
   }
 
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -410,5 +447,5 @@ export function applyOwnedJson(
     };
     fs.writeFileSync(ledgerFile, JSON.stringify(envelope, null, 2) + "\n", { mode: 0o600 });
   }
-  return { ...plan, status: "applied", wrote: plan.changed };
+  return { ...plan, status: "applied", wrote: plan.changed, ...tamperNote };
 }

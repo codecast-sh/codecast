@@ -33,11 +33,11 @@ export function hookTokenFile(configDir: string): string {
 export const HOOK_TOKEN_MARKER = "CODECAST_HOOK_TOKEN";
 
 /** Shell that leaves the token in $CODECAST_HOOK_TOKEN (empty when the daemon
- *  has never written one). Builtins only: a hook runs on every tool call, and
+ *  has never written one). Assumes $CC_DIR (HOOK_STATE_DIR in hookJson.ts). Builtins only: a hook runs on every tool call, and
  *  one extra process per event is what blew Claude Code's hook timeout before. */
 export const HOOK_TOKEN_READ = `
 CODECAST_HOOK_TOKEN=
-[ -f "$HOME/.codecast/hook-token" ] && IFS= read -r CODECAST_HOOK_TOKEN <"$HOME/.codecast/hook-token" 2>/dev/null
+[ -f "$CC_DIR/hook-token" ] && IFS= read -r CODECAST_HOOK_TOKEN <"$CC_DIR/hook-token" 2>/dev/null
 `;
 
 export function readHookToken(configDir: string): string {

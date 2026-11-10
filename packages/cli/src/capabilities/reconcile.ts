@@ -12,7 +12,7 @@
 // is both expensive AND incomplete; the active-conversation set is small and
 // is exactly where a wrong capability would bite next.
 
-import { reconcileNeeded, convergenceState, markRevisionApplied } from "./heartbeat.js";
+import { reconcileNeeded, convergenceState, markRevisionApplied, markRevisionPlanned } from "./heartbeat.js";
 import { withLock } from "./lock.js";
 import { runMigrations } from "./migrations.js";
 import { plan, apply, type DesiredFile, type DriverLedger, type PlannedOp } from "./driver.js";
@@ -38,7 +38,7 @@ export interface ReconcileDeps {
 export interface ReconcileOutcome {
   ran: boolean;
   mode: string;
-  skipped?: "mode_off" | "revision_current" | "lock_busy" | "budget_exceeded";
+  skipped?: "mode_off" | "revision_current" | "lock_busy" | "budget_exceeded" | "fetch_failed" | "in_flight";
   planned?: number;
   wrote?: number;
   conflicts?: number;
@@ -96,6 +96,8 @@ export function reconcileOnce(deps: ReconcileDeps, now: () => number = Date.now)
     return { ran: true, mode: gate.mode, skipped: "budget_exceeded", planned: value.ops.length, conflicts, elapsedMs };
   }
   if ("dry" in value) {
+    // Planned once per revision: the next dry beat is free until it moves.
+    if (conflicts === 0) markRevisionPlanned(convergenceState().desired);
     line("dry (nothing written)");
     return { ran: true, mode: gate.mode, planned: value.ops.length, wrote: 0, conflicts, elapsedMs };
   }
@@ -140,6 +142,39 @@ export interface HeartbeatReconcileDeps {
   deviceId?: string;
   /** The device setting capabilities.project_writes. */
   projectWrites?: ProjectWritesSetting;
+  /** Project scope keys of the recently active conversations on this machine
+   *  (see `activeProjectScopeKeys`). These are the "live" project scopes the
+   *  header describes: a project binding applies when its key is one of them.
+   *  When omitted, only the key of `home` itself is resolved, which matches a
+   *  project binding only when the home directory is the checkout. */
+  projectKeys?: readonly string[];
+}
+
+const projectKeyByCwd = new Map<string, string | null>();
+const PROJECT_KEY_CACHE_MAX = 200;
+
+/**
+ * The project scope keys for a set of working directories, deduplicated: what
+ * the daemon passes as `projectKeys`, built from the cwds of its recently
+ * active conversations. Keying a directory spawns git twice, so each cwd is
+ * keyed once per process (bounded; the oldest entries go first).
+ */
+export function activeProjectScopeKeys(userId: string, cwds: Iterable<string>): string[] {
+  const keys = new Set<string>();
+  for (const cwd of cwds) {
+    if (!cwd) continue;
+    const memo = `${userId}\0${cwd}`;
+    let key = projectKeyByCwd.get(memo);
+    if (key === undefined) {
+      key = currentProjectScopeKey(userId, cwd);
+      if (projectKeyByCwd.size >= PROJECT_KEY_CACHE_MAX) {
+        projectKeyByCwd.delete(projectKeyByCwd.keys().next().value as string);
+      }
+      projectKeyByCwd.set(memo, key);
+    }
+    if (key) keys.add(key);
+  }
+  return [...keys];
 }
 
 /** What this machine did with one kit slug, as reportKitApplied takes it. */
@@ -300,10 +335,25 @@ export async function resolveKitEntries(state: DesiredState, deps: HeartbeatReco
  * sections through instructionFragments. What happened to each kit slug is
  * reported to /cli/cap/kit/applied after the lock is released.
  */
+let heartbeatPassInFlight = false;
+
 export async function reconcileFromHeartbeat(deps: HeartbeatReconcileDeps): Promise<ReconcileOutcome> {
   const gate = reconcileNeeded();
   if (gate.mode === "off") return { ran: false, mode: "off", skipped: "mode_off" };
   if (!gate.behind) return { ran: false, mode: gate.mode, skipped: "revision_current" };
+  // The daemon fires this from every beat without awaiting it. A pass slower
+  // than the beat (a kit download on a bad link) must not stack a second one
+  // on the same fetches and the same lock.
+  if (heartbeatPassInFlight) return { ran: false, mode: gate.mode, skipped: "in_flight" };
+  heartbeatPassInFlight = true;
+  try {
+    return await reconcilePass(deps, gate);
+  } finally {
+    heartbeatPassInFlight = false;
+  }
+}
+
+async function reconcilePass(deps: HeartbeatReconcileDeps, gate: ReturnType<typeof reconcileNeeded>): Promise<ReconcileOutcome> {
   const desiredRevision = convergenceState().desired;
 
   const started = Date.now();
@@ -322,14 +372,14 @@ export async function reconcileFromHeartbeat(deps: HeartbeatReconcileDeps): Prom
     }));
   } catch (err) {
     deps.log(`[capabilities] reconcile skipped: could not fetch bindings (${String(err).slice(0, 100)})`);
-    return { ran: false, mode: gate.mode, skipped: "lock_busy", elapsedMs: Date.now() - started };
+    return { ran: false, mode: gate.mode, skipped: "fetch_failed", elapsedMs: Date.now() - started };
   }
 
-  const projectKey = currentProjectScopeKey(deps.userId, deps.home);
+  const projectKeys = deps.projectKeys ? [...deps.projectKeys] : activeProjectScopeKeys(deps.userId, [deps.home]);
   const state = resolveCapabilities(bindings, {
     userId: deps.userId,
     deviceId: deps.deviceId ?? localDeviceId(),
-    projectKeys: projectKey ? [projectKey] : [],
+    projectKeys,
     client: "claude",
   });
 
@@ -352,7 +402,7 @@ export async function reconcileFromHeartbeat(deps: HeartbeatReconcileDeps): Prom
       kitWrote = applied.wrote.length;
       kitRemoved = applied.removed.length;
       moved = applied.moved;
-      applyConflicts = applied.conflicts.filter((c) => c.reason === "move_aside_failed");
+      applyConflicts = applied.conflicts.filter((c) => c.reason === "move_aside_failed" || c.reason === "write_failed");
     }
     const sections = applyInstructionFragments({
       home: deps.home,
@@ -369,7 +419,8 @@ export async function reconcileFromHeartbeat(deps: HeartbeatReconcileDeps): Prom
 
   const { builtins: o, kitOps, kitWrote, kitRemoved, moved, applyConflicts, sections } = locked.value;
   const conflictsBySlug = new Map<string, string>();
-  for (const op of [...kitOps, ...sections.ops, ...applyConflicts.map((c) => ({ op: "conflict" as const, ...c }))]) {
+  const sectionFailures = sections.conflicts.filter((c) => c.reason === "write_failed");
+  for (const op of [...kitOps, ...sections.ops, ...[...applyConflicts, ...sectionFailures].map((c) => ({ op: "conflict" as const, ...c }))]) {
     if (op.op === "conflict" && !conflictsBySlug.has(op.slug)) conflictsBySlug.set(op.slug, `${op.reason}${op.detail ? `: ${op.detail}` : ""}`);
   }
   const homeRel = (p: string) => (p.startsWith(deps.home + "/") ? `~${p.slice(deps.home.length)}` : p);
@@ -405,6 +456,9 @@ export async function reconcileFromHeartbeat(deps: HeartbeatReconcileDeps): Prom
   // keeps the machine behind so the next beat tries again. A pending consent
   // is converged; granting it bumps the revision.
   if (gate.mode === "on" && conflicts === 0 && errors === 0) markRevisionApplied(desiredRevision);
+  // Dry mode never applies, so it remembers the revision it planned instead:
+  // otherwise this whole pass reran on every beat while the mode stayed dry.
+  if (dry && conflicts === 0 && errors === 0) markRevisionPlanned(desiredRevision);
   const planned = touched + kitOps.length + sections.ops.length;
   return { ran: true, mode: gate.mode, planned, wrote: dry ? 0 : touched + kitWrote + kitRemoved + sections.wrote.length + sections.removed.length, conflicts, elapsedMs };
 }

@@ -36,7 +36,6 @@ import * as path from "node:path";
 import { agentSpawnPath } from "../agentSpawnPath.js";
 import type { RemoteHost } from "../remote/session-move.js";
 import { codecastPath } from "../codecastDir.js";
-import { defaultConfigDir } from "../config/configDir.js";
 import { HOST_TAILNET_COMMAND, localTailnet, readHostTailnet, tailnetDialAddress, type TailnetRecord } from "../cloud/tailnet.js";
 
 export type HostState = "running" | "stopped" | "pending" | "missing";
@@ -133,7 +132,6 @@ export function hostForDevice(deviceId: string): CloudHost | undefined {
 
 function registryPath(): string {
   return codecastPath("browser", "hosts.json");
-  return path.join(defaultConfigDir(), "browser", "hosts.json");
 }
 
 /** The lock every field-level registry write takes (patchHost). Exported for tests. */
@@ -336,11 +334,12 @@ export function inspectHost(host: CloudHost): {
 const AUTO_RULE_TAG = "codecast-auto";
 const ANYWHERE = "0.0.0.0/0";
 
-export function healSecurityGroup(host: CloudHost, onProgress: (m: string) => void = () => {}): void {
+export function healSecurityGroup(host: CloudHost, onProgress: (m: string) => void = () => {}, described?: any): void {
   if (host.provider !== "aws" || host.platform === "darwin") return;
   try {
-    const r = aws(["ec2", "describe-instances", "--instance-ids", host.id], host.region, host.profile);
-    const groupId = r?.Reservations?.[0]?.Instances?.[0]?.SecurityGroups?.[0]?.GroupId;
+    // A caller that has just described the instance (ensureUp) hands it over.
+    const inst = described ?? describeInstance(host);
+    const groupId = inst?.SecurityGroups?.[0]?.GroupId;
     if (!groupId) return;
 
     const sg = aws(["ec2", "describe-security-groups", "--group-ids", groupId], host.region, host.profile);
@@ -396,7 +395,8 @@ export async function ensureUp(
 ): Promise<CloudHost> {
   if (host.provider !== "aws") return host;
 
-  let { state, address } = hostState(host);
+  let inst = describeInstance(host);
+  let { state, address } = inst ? instanceFacts(inst) : { state: "missing" as HostState, address: undefined };
   if (state === "missing") throw new HostGone(host);
   const wasRunning = state === "running";
 
@@ -411,13 +411,14 @@ export async function ensureUp(
   while (state !== "running") {
     if (Date.now() > deadline) throw new Error(`${host.id} did not reach "running" within ${bootMinutes} minutes`);
     await new Promise((r) => setTimeout(r, 4000));
-    ({ state, address } = hostState(host));
+    inst = describeInstance(host);
+    ({ state, address } = inst ? instanceFacts(inst) : { state: "missing" as HostState, address: undefined });
     if (state === "missing") throw new HostGone(host);
   }
 
   if (!address) throw new Error(`${host.id} is running but has no public address`);
 
-  healSecurityGroup(host, onProgress);
+  healSecurityGroup(host, onProgress, inst);
 
   // Running is not the same as accepting SSH: sshd comes up seconds later, and
   // a connection attempted in that window fails in a way that reads as a key

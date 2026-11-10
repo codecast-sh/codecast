@@ -23,7 +23,7 @@ import { isMutatingStep } from "./autoShot.js";
 import { runSteps, type StepResult } from "../stepBatch.js";
 import { snapshotPage, matchRefs, nearMatches, type Snapshot } from "./snapshot.js";
 import {
-  clearViewport, click, clickAt, DEVICES, evaluate, focus, hover, locate, pressKey,
+  clearViewport, click, DEVICES, evaluate, focus, hover, pressKey,
   scroll, selectOption, setViewport, type, type DeviceProfile,
 } from "./actions.js";
 
@@ -36,7 +36,7 @@ const refOf = (raw: string): number => {
 };
 
 /** Steps that need the page to have finished changing before the next one runs. */
-const SETTLES = new Set(["open", "click", "type", "press", "select", "reload", "back"]);
+const SETTLES = new Set(["open", "goto", "click", "type", "press", "select", "reload"]);
 
 export interface BatchContext {
   page: PageSession;

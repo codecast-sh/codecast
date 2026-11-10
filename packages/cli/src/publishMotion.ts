@@ -84,7 +84,7 @@ export function renderMotion(dir: string, relPaths: string[]): MotionRenderManif
   const entry = motionEntry(dir, relPaths);
   if (!entry) {
     throw new Error(
-      "--render needs a HyperFrames composition: an index.html whose root element carries data-composition-id, data-width and data-height (cast skill cast-motion)",
+      "--render needs a HyperFrames composition: an index.html whose root element carries data-composition-id, data-width and data-height (see the /cast-motion skill)",
     );
   }
   const outDir = path.join(dir, MOTION_RENDER_DIR);

@@ -10,6 +10,7 @@ import type { Config } from "./config/types.js";
 import { readAuthConfig } from "./config/readAuthConfig.js";
 import { resolveClaudeInstall, stableClaudeBinary } from "./stableClaudeBinary.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { parsePollMessage, pollDeclineText, pollMenuSteps } from "./pollMessage.js";
 
 const CONFIG_DIR = defaultConfigDir();
 const INBOX_DIR = path.join(CONFIG_DIR, "inbox");
@@ -91,12 +92,67 @@ async function pasteClaudeMessage(target: string, content: string): Promise<void
   );
 }
 
-function parsePollMessage(content: string): { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string } | null {
-  try {
-    const parsed = JSON.parse(content);
-    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps))) return parsed;
-  } catch {}
-  return null;
+export type InjectionAction = { op: "key"; key: string } | { op: "paste"; text: string } | { op: "sleep"; ms: number };
+
+// What to send to the pane for one pending message, in order. Poll answers follow the
+// daemon's tmux path (injectViaTmuxInner in daemon.ts): a free-text answer declines the
+// menu ONCE (Escape) and is typed at the prompt; otherwise the option keys are pressed and
+// `poll.text`, if any, is typed into the field the last option opened. See pollDeclineText
+// for why the decline must not happen per step. Unlike the daemon, the wrapper does not
+// check that the menu is still on screen before pressing keys.
+export function planInjection(content: string): { poll: boolean; actions: InjectionAction[] } {
+  const actions: InjectionAction[] = [];
+  const key = (k: string) => actions.push({ op: "key", key: k });
+  const paste = (text: string) => actions.push({ op: "paste", text });
+  const wait = (ms: number) => actions.push({ op: "sleep", ms });
+
+  const poll = parsePollMessage(content);
+  if (!poll) {
+    // Clear any stale input before injecting to prevent submitting draft text
+    key("Escape"); wait(100);
+    key("C-u"); wait(100);
+    paste(content); wait(150);
+    key("Enter");
+    return { poll: false, actions };
+  }
+
+  const declineText = pollDeclineText(poll);
+  if (declineText !== null) {
+    key("Escape"); wait(500);
+    if (declineText) {
+      paste(declineText); wait(150);
+      key("Enter");
+    }
+    return { poll: true, actions };
+  }
+
+  for (const step of pollMenuSteps(poll)) {
+    key(step.key); wait(500);
+  }
+  if (poll.text) {
+    wait(300);
+    paste(poll.text); wait(150);
+    key("Enter");
+  }
+  return { poll: true, actions };
+}
+
+// The text a poll answer carries, for a transport that can only write text (no keys):
+// the free-text answer, or null when the message is not a poll or carries keys only.
+export function pollAnswerText(content: string): string | null {
+  const poll = parsePollMessage(content);
+  if (!poll) return null;
+  return (poll.text || pollDeclineText(poll) || "").trim() || null;
+}
+
+async function injectIntoPane(target: string, content: string): Promise<boolean> {
+  const plan = planInjection(content);
+  for (const action of plan.actions) {
+    if (action.op === "key") tmuxExecSync(["send-keys", "-t", target, action.key]);
+    else if (action.op === "paste") await pasteClaudeMessage(target, action.text);
+    else await sleep(action.ms);
+  }
+  return plan.poll;
 }
 
 export async function runClaudeWrapper(args: string[]): Promise<void> {
@@ -192,40 +248,10 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
           for (const msg of messages as any[]) {
             log(`Delivering message: ${msg.content.slice(0, 50)}...`);
             try {
-              const poll = parsePollMessage(msg.content);
-              if (poll) {
-                const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
-                for (const step of steps) {
-                  if (step.text) {
-                    tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Escape"]);
-                    await sleep(500);
-                    await pasteClaudeMessage(tmuxSessionName!, step.text);
-                    await sleep(150);
-                    tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
-                    await sleep(500);
-                  } else {
-                    tmuxExecSync(["send-keys", "-t", tmuxSessionName!, step.key]);
-                    await sleep(500);
-                  }
-                }
-                if (poll.text) {
-                  await sleep(300);
-                  await pasteClaudeMessage(tmuxSessionName!, poll.text);
-                  await sleep(150);
-                  tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
-                }
-                log(`Injected poll response via tmux to session ${tmuxSessionName}`);
-              } else {
-                // Clear any stale input before injecting to prevent submitting draft text
-                tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Escape"]);
-                await sleep(100);
-                tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "C-u"]);
-                await sleep(100);
-                await pasteClaudeMessage(tmuxSessionName!, msg.content);
-                await sleep(150);
-                tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
-                log(`Injected via tmux paste to session ${tmuxSessionName}`);
-              }
+              const wasPoll = await injectIntoPane(tmuxSessionName!, msg.content);
+              log(wasPoll
+                ? `Injected poll response via tmux to session ${tmuxSessionName}`
+                : `Injected via tmux paste to session ${tmuxSessionName}`);
 
               await client.mutation("managedSessions:markMessageDelivered" as any, {
                 message_id: msg._id,
@@ -341,40 +367,10 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
   const injectMessage = async (content: string): Promise<boolean> => {
     if (tmuxPane) {
       try {
-        const poll = parsePollMessage(content);
-        if (poll) {
-          const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
-          for (const step of steps) {
-            if (step.text) {
-              tmuxExecSync(["send-keys", "-t", tmuxPane, "Escape"]);
-              await sleep(500);
-              await pasteClaudeMessage(tmuxPane, step.text);
-              await sleep(150);
-              tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
-              await sleep(500);
-            } else {
-              tmuxExecSync(["send-keys", "-t", tmuxPane, step.key]);
-              await sleep(500);
-            }
-          }
-          if (poll.text) {
-            await sleep(300);
-            await pasteClaudeMessage(tmuxPane, poll.text);
-            await sleep(150);
-            tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
-          }
-          log(`Injected poll response via tmux to pane ${tmuxPane}`);
-        } else {
-          // Clear any stale input before injecting to prevent submitting draft text
-          tmuxExecSync(["send-keys", "-t", tmuxPane, "Escape"]);
-          await sleep(100);
-          tmuxExecSync(["send-keys", "-t", tmuxPane, "C-u"]);
-          await sleep(100);
-          await pasteClaudeMessage(tmuxPane, content);
-          await sleep(150);
-          tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
-          log(`Injected via tmux paste to pane ${tmuxPane}`);
-        }
+        const wasPoll = await injectIntoPane(tmuxPane, content);
+        log(wasPoll
+          ? `Injected poll response via tmux to pane ${tmuxPane}`
+          : `Injected via tmux paste to pane ${tmuxPane}`);
         return true;
       } catch (err) {
         log(`Failed to inject via tmux: ${err}`);
@@ -389,7 +385,8 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
 
     try {
       const fd = fs.openSync(ttyPath, "w");
-      fs.writeSync(fd, content + "\n");
+      // A poll's free-text answer goes out as its text, never as the raw __cc_poll JSON.
+      fs.writeSync(fd, (pollAnswerText(content) ?? content) + "\n");
       fs.closeSync(fd);
       log("Injected via TTY file write");
       return true;

@@ -530,43 +530,53 @@ export function engineHelpText(engineVerb: string): string | null {
   return text;
 }
 
-/** Version string of the installed engine, for `status`. */
+/**
+ * Version string of the installed engine. Every `cast browser …` asks at
+ * registration (engineFitness), so the answer is remembered on disk against
+ * the binary it came from (its resolved path, size and mtime): the engine is
+ * spawned for `--version` only when that file is new or has changed.
+ */
 export function engineVersion(): string | null {
   const binary = findEngine();
   if (!binary) return null;
+  const stamp = engineBinaryStamp(binary);
+  const cacheFile = path.join(engineHome(), "version-cache.json");
+  if (stamp) {
+    try {
+      const cached = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as { stamp?: unknown; version?: unknown };
+      if (cached.stamp === stamp && typeof cached.version === "string" && cached.version) return cached.version;
+    } catch {
+      /* no cache yet, or an unreadable one: ask the engine */
+    }
+  }
   const res = spawnSync(binary, ["--version"], { encoding: "utf-8", timeout: 15_000 });
   if (res.status !== 0) return null;
-  return ((res.stdout as string) ?? "").trim().replace(/^agent-browser\s+/, "") || null;
+  const version = ((res.stdout as string) ?? "").trim().replace(/^agent-browser\s+/, "") || null;
+  if (stamp && version) {
+    try {
+      fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+      fs.writeFileSync(cacheFile, JSON.stringify({ stamp, version }));
+    } catch {
+      /* the cache is a saving, never a requirement */
+    }
+  }
+  return version;
+}
+
+/** What identifies one installed engine binary, or null when it cannot be read. */
+function engineBinaryStamp(binary: string): string | null {
+  try {
+    const real = fs.realpathSync(binary);
+    const st = fs.statSync(real);
+    return `${real}:${st.size}:${st.mtimeMs}`;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Raw CDP access to the engine's browser
+// The engine's tabs
 // ---------------------------------------------------------------------------
-
-/**
- * The engine drives over its own daemon, but the Chrome underneath is an
- * ordinary browser with an ordinary debugging port — so anything that needs the
- * protocol directly can still have it.
- *
- * This matters more than it looks. Several codecast features cannot be
- * expressed as CLI verbs at all: streaming `Page.startScreencast` frames to a
- * web pane, raising a specific tab with `Page.bringToFront`, or driving the
- * user's real Chrome through the extension bridge's `CdpClient`. Without a way
- * back down to CDP, adopting the engine would have meant abandoning them.
- *
- * The port is not on the command line — the engine launches Chrome with
- * `--remote-debugging-port=0`, so Chrome picks a free one and writes it to
- * `DevToolsActivePort` in its user-data-dir. Rather than guess which directory
- * belongs to which session from its name, we ask the engine for a target id it
- * owns and then find the port whose target list contains it. That mapping stays
- * correct even if the engine renames its directories.
- */
-export interface EngineCdp {
-  port: number;
-  webSocketDebuggerUrl: string;
-  /** Target ids this session owns, active one first. */
-  targetIds: string[];
-}
 
 interface EngineTab {
   tabId: string;
@@ -584,70 +594,4 @@ export function engineTabs(opts: EngineOptions = {}): EngineTab[] {
   } catch {
     return [];
   }
-}
-
-/** Every debugging port a Chrome on this machine is currently listening on. */
-function candidatePorts(): number[] {
-  const ports = new Set<number>();
-  try {
-    const out = spawnSync("bash", ["-lc", `ps ax -o command= | grep -o -- '--user-data-dir=[^ ]*' | sort -u`], {
-      encoding: "utf-8",
-      timeout: 10_000,
-    });
-    for (const line of ((out.stdout as string) ?? "").split("\n")) {
-      const dir = line.replace("--user-data-dir=", "").trim();
-      if (!dir) continue;
-      try {
-        const first = fs.readFileSync(path.join(dir, "DevToolsActivePort"), "utf-8").split("\n")[0];
-        const port = parseInt(first, 10);
-        if (port > 0) ports.add(port);
-      } catch {
-        /* not every profile has a live port */
-      }
-    }
-  } catch {
-    /* ps unavailable */
-  }
-  return [...ports];
-}
-
-/**
- * Find the CDP endpoint backing this session, or null if it has no browser.
- *
- * Matched by target id rather than by directory name, so it survives the engine
- * changing how it names things.
- */
-export async function engineCdpEndpoint(opts: EngineOptions = {}): Promise<EngineCdp | null> {
-  const tabs = engineTabs(opts);
-  if (!tabs.length) return null;
-  const owned = new Set(tabs.map((t) => t.targetId).filter(Boolean));
-  if (!owned.size) return null;
-
-  // The managed browser first — that is where sessions attach — then any
-  // other Chrome on the machine, for a session driving something else.
-  const managed = managedPort();
-  const ports = managed ? [managed, ...candidatePorts().filter((p) => p !== managed)] : candidatePorts();
-  for (const port of ports) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) });
-      if (!res.ok) continue;
-      const list = (await res.json()) as Array<{ id: string }>;
-      if (!list.some((t) => owned.has(t.id))) continue;
-
-      const ver = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) });
-      const body = (await ver.json()) as { webSocketDebuggerUrl?: string };
-      if (!body.webSocketDebuggerUrl) continue;
-      return {
-        port,
-        webSocketDebuggerUrl: body.webSocketDebuggerUrl,
-        targetIds: [
-          ...tabs.filter((t) => t.active).map((t) => t.targetId),
-          ...tabs.filter((t) => !t.active).map((t) => t.targetId),
-        ].filter(Boolean),
-      };
-    } catch {
-      /* a port that went away between listing and probing */
-    }
-  }
-  return null;
 }

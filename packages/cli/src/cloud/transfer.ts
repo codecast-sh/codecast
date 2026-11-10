@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,7 +10,7 @@ import { buildMirrorBundle } from "./mirror/bundle.js";
 import { kindForPath, transformForHost } from "./mirror/transform.js";
 import { collectProjectContext } from "./mirror/discovery.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
-import { runSide, type Skipped, type SnapshotResult } from "./syncSide.js";
+import { HOST_PATH_EXPORT, runSide, type Skipped, type SnapshotResult } from "./syncSide.js";
 import { readSyncScope } from "./syncScope.js";
 
 function checked(result: SpawnSyncReturns<string>, operation: string): string {
@@ -474,7 +474,7 @@ export function stageCloudInputs(
   // worktree of that name still refuses. Without it, an existing state dir
   // is a refusal (the name is taken).
   const reserved = checked(remote(host,
-    `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; bun -e ${shq(reserveInputs)} -- ${shq(repoPath)} ${shq(name)}${opts.reuse ? " reuse" : ""}`),
+    `${HOST_PATH_EXPORT}; bun -e ${shq(reserveInputs)} -- ${shq(repoPath)} ${shq(name)}${opts.reuse ? " reuse" : ""}`),
   `reserve inputs for workspace ${name}; existing worktree or state must be retained`);
   if (reserved !== "reserved") throw new Error(`input reservation for workspace ${name} was not confirmed by the host`);
   copyCloudFiles(host, localGitRoot, inputRoot, files, { warn: opts.warn ?? ((m) => console.error(`WARNING: ${m}`)) });
@@ -527,7 +527,7 @@ export function copyCloudFiles(
   if (staged.length > STAGING_BATCH_THRESHOLD && stageBatched(host, repoPath, staged)) return;
   for (const { rel, bytes, mode } of staged) {
     const received = checked(remote(host,
-      `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; bun -e ${shq(receiveFile)} -- ${shq(repoPath)} ${shq(rel)} ${shq(String(mode))}`, bytes),
+      `${HOST_PATH_EXPORT}; bun -e ${shq(receiveFile)} -- ${shq(repoPath)} ${shq(rel)} ${shq(String(mode))}`, bytes),
     `transfer workspace file ${rel}`);
     if (received !== "copied") throw new Error(`transfer workspace file ${rel} was not confirmed by the host`);
   }
@@ -540,7 +540,7 @@ function stageBatched(host: RemoteHost, repoPath: string, staged: Array<{ rel: s
     { source: { device_id: "", user_id: "", home: "", platform: process.platform, cast_version: "" }, target_home: repoPath, managed_roots: [] },
   );
   const result = remote(host,
-    `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; cast cloud mirror-apply --stdin --into ${shq(repoPath)}`, bundle.bytes);
+    `${HOST_PATH_EXPORT}; cast cloud mirror-apply --stdin --into ${shq(repoPath)}`, bundle.bytes);
   if (result.status !== 0 && (result.status === 127 || /unknown command|error: unknown|not found/i.test(result.stderr ?? ""))) return false;
   const line = (result.stdout ?? "").trim().split("\n").reverse().find((l) => l.trimStart().startsWith("{"));
   let reply: { copied?: unknown; errors?: unknown } | null = null;

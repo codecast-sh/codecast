@@ -7,6 +7,7 @@
 // honest one. The end-to-end run was done by hand — the real script against a
 // real loopback server — and the receipt is on ct-53055.
 
+import { HOOK_STATE_DIR } from "./hookJson.js";
 import { describe, expect, test } from "bun:test";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { USER_PROMPT_HOOK } from "./userPromptHook.js";
@@ -20,7 +21,9 @@ const POSTING_SCRIPTS: Array<[string, string]> = [
 
 describe("installed hook scripts", () => {
   test.each(POSTING_SCRIPTS)("%s reads the secret from the 0600 file", (_name, script) => {
-    expect(script).toContain('.codecast/hook-token');
+    // From the state directory every hook resolves once (HOOK_STATE_DIR).
+    expect(script).toContain(HOOK_STATE_DIR);
+    expect(script).toContain('<"$CC_DIR/hook-token"');
   });
 
   test.each(POSTING_SCRIPTS)("%s sends it as a bearer header", (_name, script) => {

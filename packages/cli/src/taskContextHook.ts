@@ -17,7 +17,7 @@ import { formatTaskResume, formatTaskResumeUnavailable, restoresTaskContext, typ
 import { readTaskPulseFor } from "./taskPulse.js";
 import { checkoutWords } from "./checkoutWords.js";
 import { codecastHooksDir, installCodexSessionStartHook, removeCodexSessionStartHook, wrapForClient, type StableHookClient, type StableContextConfig } from "./stableContext.js";
-import { HOOK_FEATURE_ON, HOOK_FIELDS_READ } from "./hookJson.js";
+import { HOOK_FEATURE_ON, HOOK_FIELDS_READ, HOOK_STATE_DIR } from "./hookJson.js";
 import { writeHarnessFile } from "./harness.js";
 import { defaultConfigDir } from "./config/configDir.js";
 
@@ -36,6 +36,7 @@ function taskContextHookScript(client: HookClient): string {
   return `#!/bin/bash
 # Puts the bound task back in front of the agent after compaction or a resume (${client}).
 set -uo pipefail
+${HOOK_STATE_DIR}
 
 INPUT=$(dd bs=65536 count=1 2>/dev/null || true)
 [ -n "$INPUT" ] || exit 0
@@ -56,8 +57,7 @@ esac
 
 ${HOOK_FEATURE_ON}
 feature_on work_enabled || exit 0
-DIR="\${CODECAST_DIR:-$HOME/.codecast}"
-LOG="$DIR/${TASK_CONTEXT_LOG_FILE}"
+LOG="$CC_DIR/${TASK_CONTEXT_LOG_FILE}"
 
 export PATH="$HOME/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 command -v codecast >/dev/null 2>&1 || exit 0

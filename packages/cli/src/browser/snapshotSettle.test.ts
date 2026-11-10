@@ -171,6 +171,25 @@ describe("the probe", () => {
     expect(probe(true)?.hidden).toEqual(["ada@a.test", "hunter2", "123456", "94110", "John", "X1234567", "321"]);
   });
 
+  test("reads fields inside same-origin frames and open shadow roots, and past the fiftieth field", () => {
+    const g: any = { location: { href: "https://a.test/x" }, performance: { now: () => 500 } };
+    const doc = (fields: any[], frames: any[] = [], hosts: any[] = []) => ({
+      querySelectorAll: (sel: string) => (sel === "input, textarea" ? fields : sel === "iframe, frame" ? frames : hosts),
+    });
+    const shadow = doc([{ type: "password", value: "in-shadow" }]);
+    const framed = doc([{ type: "password", value: "in-frame" }]);
+    const crossOrigin = { get contentDocument() { throw new Error("SecurityError"); } };
+    const many = Array.from({ length: 60 }, (_, i) => ({ type: "password", value: `pw-${i}` }));
+    g.document = doc(many, [{ contentDocument: framed }, crossOrigin], [{ shadowRoot: shadow }, {}]);
+    g.window = g;
+    g.MutationObserver = class { observe() {} };
+    const probe = parseSettleProbe(JSON.stringify(new Function("window", "location", "performance", "document", "MutationObserver", `return ${settleProbeSource()}`)(g, g.location, g.performance, g.document, g.MutationObserver)));
+    expect(probe?.hidden).toHaveLength(62);
+    expect(probe?.hidden).toContain("pw-59");
+    expect(probe?.hidden).toContain("in-frame");
+    expect(probe?.hidden).toContain("in-shadow");
+  });
+
   test("parses the engine's JSON envelope and bare output alike", () => {
     const inner = JSON.stringify({ url: "u", sinceLoad: 1, sinceMutation: 2 });
     expect(parseSettleProbe(JSON.stringify({ success: true, data: { result: inner } }))?.url).toBe("u");

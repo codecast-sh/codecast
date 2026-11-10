@@ -544,7 +544,11 @@ describe("registration cost", () => {
     const free = ["../commandGroups.js", "../commandSuggestion.js"];
     expect(staticImports(path.join(import.meta.dir, "cli.ts"))).toEqual(free);
     const startup = staticImports(path.resolve(import.meta.dir, "..", "index.ts"));
-    for (const module of free) expect(startup).toContain(module.replace("../", "./"));
+    // index.ts reaches commandGroups.js through commandGroupActivation.js (its
+    // own import of it is type-only), which loads it just as early.
+    expect(startup).toContain("./commandGroupActivation.js");
+    expect(staticImports(path.resolve(import.meta.dir, "..", "commandGroupActivation.ts"))).toContain("./commandGroups.js");
+    expect(startup).toContain("./commandSuggestion.js");
   });
 
   test("nothing on the CLI's startup path pulls the computer feature in", () => {

@@ -434,8 +434,35 @@ export async function withCdpTunnel<T>(
   }
 }
 
-/** Close the tunnel and stop the remote browser. */
-export async function stopRemoteBrowser(host: RemoteHost, sshPid?: number): Promise<void> {
+/**
+ * The machine a recorded remote browser runs on, from what `start --remote`
+ * wrote into the instance state. A state file from before the key was
+ * recorded names only address and user: then the host is whichever of
+ * `known` (every registry's hosts) has that address and user, and null when
+ * none does. Never "the default host": wiping a profile on a machine the
+ * browser was not started on is the one thing stop must not do.
+ */
+export function recordedRemoteHost(
+  remote: { host: string; user: string; keyPath?: string; remoteBaseDir?: string; homeDir?: string },
+  known: () => RemoteHost[] = () => [],
+): RemoteHost | null {
+  if (remote.keyPath) {
+    return {
+      address: remote.host,
+      user: remote.user,
+      keyPath: remote.keyPath,
+      remoteBaseDir: remote.remoteBaseDir ?? `${remote.homeDir ?? `/Users/${remote.user}`}/work`,
+      ...(remote.homeDir ? { homeDir: remote.homeDir } : {}),
+    };
+  }
+  return known().find((h) => h.address === remote.host && h.user === remote.user) ?? null;
+}
+
+/**
+ * Close the tunnel and stop the remote browser. With no host (a recorded
+ * browser whose machine is no longer known) only the tunnel is closed.
+ */
+export async function stopRemoteBrowser(host: RemoteHost | null, sshPid?: number): Promise<void> {
   if (sshPid) {
     try {
       process.kill(sshPid, "SIGTERM");
@@ -443,6 +470,7 @@ export async function stopRemoteBrowser(host: RemoteHost, sshPid?: number): Prom
       /* already gone */
     }
   }
+  if (!host) return;
   try {
     // Wipe the profile as well: it holds cookies this machine sent, and a
     // rented host should not keep them once the work is over.

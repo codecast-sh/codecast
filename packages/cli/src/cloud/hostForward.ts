@@ -148,7 +148,7 @@ function listen(
   });
 }
 
-/** Close every listener (daemon shutdown, tests). */
+/** Close every listener. Only tests call it today: the daemon leaves its forwards to die with the process. */
 export async function closeHostForwards(): Promise<void> {
   const all = [...forwards.values()];
   forwards.clear();

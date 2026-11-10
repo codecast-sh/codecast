@@ -1,10 +1,8 @@
-import { execFileSync } from "../proc.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Option, type Command } from "commander";
-import { agentSpawnPath } from "../agentSpawnPath.js";
 import { describeInstance, readHosts, upsertHost, type CloudHost } from "../browser/cloudHost.js";
 import { readRepoNeed } from "../repoNeed.js";
 import { sizeFor } from "../cloud/hostHeadroom.js";

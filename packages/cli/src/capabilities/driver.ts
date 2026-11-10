@@ -449,9 +449,19 @@ export function apply(ops: PlannedOp[], ledger: DriverLedger): ApplyOutcome {
     next.sections = Object.fromEntries(Object.entries(ledger.sections).map(([k, v]) => [k, { ...v }]));
   }
   const outcome: ApplyOutcome = { wrote: [], removed: [], conflicts: [], moved: [], ledger: next };
-  // A slug whose move_aside failed writes nothing more: its later ops would
-  // land on the very file that could not be moved.
+  // A slug whose move_aside or write failed writes nothing more: its later ops
+  // would land on the very file that could not be moved, or pile onto a
+  // half-installed item.
   const halted = new Set<string>();
+  // A write that throws (a read-only directory, a full disk) must not abort
+  // the pass: the caller persists `outcome.ledger` only on return, so every
+  // file already written would go unrecorded and the next plan would report
+  // codecast's own files as `not_ours`. The failure becomes a conflict, the
+  // slug stops, and what did land stays in the ledger.
+  const writeFailed = (op: { slug: string; path: string }, err: unknown) => {
+    outcome.conflicts.push({ slug: op.slug, reason: "write_failed", detail: `${op.path}: ${String(err).slice(0, 160)}` });
+    halted.add(op.slug);
+  };
 
   for (const op of ops) {
     if (halted.has(op.slug)) continue;
@@ -460,10 +470,15 @@ export function apply(ops: PlannedOp[], ledger: DriverLedger): ApplyOutcome {
       continue;
     }
     if (op.op === "write_file") {
-      writeHarnessFile(op.path, op.bytes ?? op.content, `capability:${op.slug}`, {
-        mode: op.mode,
-        executable: op.mode !== undefined && (op.mode & 0o111) !== 0,
-      });
+      try {
+        writeHarnessFile(op.path, op.bytes ?? op.content, `capability:${op.slug}`, {
+          mode: op.mode,
+          executable: op.mode !== undefined && (op.mode & 0o111) !== 0,
+        });
+      } catch (err) {
+        writeFailed(op, err);
+        continue;
+      }
       const list = next.files[op.slug] ?? [];
       if (!list.includes(op.path)) list.push(op.path);
       next.files[op.slug] = list;
@@ -471,7 +486,13 @@ export function apply(ops: PlannedOp[], ledger: DriverLedger): ApplyOutcome {
       continue;
     }
     if (op.op === "markdown_section") {
-      const changed = writeOwnedSection({ filePath: op.path }, op.spec, op.body, `capability:${op.slug}`);
+      let changed: boolean;
+      try {
+        changed = writeOwnedSection({ filePath: op.path }, op.spec, op.body, `capability:${op.slug}`);
+      } catch (err) {
+        writeFailed(op, err);
+        continue;
+      }
       if (changed) (op.body === null ? outcome.removed : outcome.wrote).push(op.path);
       const sections = (next.sections ??= {});
       const files = (sections[op.slug] ??= {});
@@ -494,13 +515,18 @@ export function apply(ops: PlannedOp[], ledger: DriverLedger): ApplyOutcome {
       continue;
     }
     if (op.op === "symlink") {
-      fs.mkdirSync(path.dirname(op.path), { recursive: true });
       try {
-        fs.unlinkSync(op.path);
-      } catch {
-        // absent is fine
+        fs.mkdirSync(path.dirname(op.path), { recursive: true });
+        try {
+          fs.unlinkSync(op.path);
+        } catch {
+          // absent is fine
+        }
+        fs.symlinkSync(op.target, op.path);
+      } catch (err) {
+        writeFailed(op, err);
+        continue;
       }
-      fs.symlinkSync(op.target, op.path);
       recordHarnessChange(op.path, "created", `capability:${op.slug}`);
       const list = next.files[op.slug] ?? [];
       if (!list.includes(op.path)) list.push(op.path);

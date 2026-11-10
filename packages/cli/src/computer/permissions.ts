@@ -227,7 +227,6 @@ function silentLaunch(): ObservedLaunch {
   };
 }
 
-/** `open`, with its refusal turned into an error that names itself. */
 export interface PermissionSetupResult extends ComputerPermissionStatusResult {
   permissionId?: ComputerPermissionId;
   launchedHelper: boolean;
@@ -292,9 +291,19 @@ export async function openPermissionSettings(permissionId?: ComputerPermissionId
  * its own status read.
  */
 function closeExistingSetupHelpers(): void {
+  if (process.platform !== "darwin") return;
   for (const flag of ["--permission", "--permissions"]) {
     spawnSync("/usr/bin/pkill", ["-f", `codecast-computer[[:space:]]+${flag}([[:space:]]|$)`], { stdio: "ignore", timeout: 10_000 });
   }
+}
+
+/**
+ * Close the setup window `openPermissionSettings` put up. `cast computer setup`
+ * calls it once the grants it opened the window for have landed: the window is
+ * a regular Dock app, and left alone it stayed running after setup said "ready".
+ */
+export function closePermissionSettings(): void {
+  closeExistingSetupHelpers();
 }
 
 export interface PermissionResetResult extends ComputerPermissionStatusResult {

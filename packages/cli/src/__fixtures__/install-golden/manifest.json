@@ -52,8 +52,7 @@
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/task-context.sh": "4761306aa8abbaea",
-      ".claude/hooks/task-pulse.sh": "689c09bc0e8a5330",
+      ".claude/hooks/task-context.sh": "c867cd205665d424",
       ".claude/settings.json": "94ffa3aac59be407"
     }
   },
@@ -101,7 +100,7 @@
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/thread-state.sh": "575b47aa8d2411f0",
+      ".claude/hooks/thread-state.sh": "dcdc1ed7ad870295",
       ".claude/settings.json": "6d57b0e7e2769331"
     }
   },

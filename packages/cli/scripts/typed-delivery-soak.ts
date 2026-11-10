@@ -31,8 +31,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { cpuLoad } from "../src/test-helpers/cpuLoad.ts";
 import {
-  capturePane, composerReady, dialogSignature, dismissDialogs, launchClaude as launchScratch,
-  sendKey as sendKeyTo, sendLiteral as sendLiteralTo, sleep, tmux, unplantLogins, waitFor as waitForPane,
+  capturePane,
+  dialogSignature,
+  dismissDialogs,
+  launchClaude as launchScratch,
+  sendKey as sendKeyTo,
+  sendLiteral as sendLiteralTo,
+  sleep,
+  tmux,
+  unplantLogins,
+  waitFor as waitForPane,
 } from "./lib/claudeScratch.ts";
 
 function arg(name: string, fallback?: string): string | undefined {

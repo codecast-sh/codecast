@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { ElementGone, click, locate, pressKey, scroll, type } from "./actions.js";
+import { ElementGone, click, locate, pressKey, screenshot, scroll, type } from "./actions.js";
 import type { PageSession } from "./instance.js";
 
 interface Call {
@@ -173,6 +173,24 @@ describe("pressKey", () => {
     expect(keyEvents(calls)[0].text).toBe("/");
   });
 
+  test("plus is a key as well as the separator", async () => {
+    const { page, calls } = recorder();
+    await pressKey(page, "+");
+    expect(keyEvents(calls)[0]).toMatchObject({ key: "+", text: "+", modifiers: 0 });
+    await pressKey(page, "cmd++");
+    expect(keyEvents(calls)[2]).toMatchObject({ key: "+", modifiers: 4, type: "rawKeyDown" });
+    await expect(pressKey(page, "cmd+")).rejects.toThrow(/names no key/);
+  });
+
+  test("function keys are themselves, not the letter F", async () => {
+    const { page, calls } = recorder();
+    await pressKey(page, "F5");
+    expect(keyEvents(calls)[0]).toMatchObject({ key: "F5", code: "F5", windowsVirtualKeyCode: 116 });
+    expect(keyEvents(calls)[0].text).toBeUndefined();
+    await pressKey(page, "shift+f12");
+    expect(keyEvents(calls)[2]).toMatchObject({ key: "F12", windowsVirtualKeyCode: 123, modifiers: 8 });
+  });
+
   test("treats key names case-insensitively", async () => {
     const { page, calls } = recorder();
     await pressKey(page, "escape");
@@ -270,5 +288,26 @@ describe("scroll", () => {
     await scroll(page, 900);
     const r = await scroll(page, -900);
     expect(r.y).toBe(0);
+  });
+});
+
+describe("screenshot --ref", () => {
+  test("the clip is the element's box in page coordinates, so a scrolled page captures the element", async () => {
+    const calls: Call[] = [];
+    const page = {
+      sessionId: "s1",
+      targetId: "t1",
+      conn: {
+        send: async (method: string, params: any = {}) => {
+          calls.push({ method, params });
+          if (method === "DOM.getBoxModel") return { model: { border: [10, 20, 110, 20, 110, 70, 10, 70] } };
+          if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { pageX: 0, pageY: 1500 } };
+          if (method === "Page.captureScreenshot") return { data: Buffer.from("png").toString("base64") };
+          return {};
+        },
+      },
+    } as any;
+    await screenshot(page, { ref: 7 });
+    expect(calls.find((c) => c.method === "Page.captureScreenshot")!.params.clip).toEqual({ x: 10, y: 1520, width: 100, height: 50, scale: 1 });
   });
 });

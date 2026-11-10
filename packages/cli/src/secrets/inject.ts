@@ -3,6 +3,7 @@
 // read secrets into a child's env, file secrets into 0600 temp files that live
 // exactly as long as the child, and `export` lines for eval. Pure where it can
 // be, so the tests hold the rules without a backend.
+import { isPidAlive } from "../pidAlive.js";
 import { spawn } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -243,15 +244,6 @@ const TEMP_PREFIX = "cast-vault-";
 /** A temp directory from before its name carried its owner's pid is removed once it is this old. */
 export const LEGACY_TEMP_MS = 60 * 60_000;
 
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 /**
  * Remove the file secrets an earlier run left on disk when it died without
  * cleaning up (kill -9, a crash, power loss): each `cast-vault-<pid>-*`
@@ -259,7 +251,7 @@ function pidAlive(pid: number): boolean {
  * LEGACY_TEMP_MS. A directory whose run is still alive stays, however long
  * that run lasts.
  */
-export function sweepStaleTemp(root: string, now = Date.now(), alive: (pid: number) => boolean = pidAlive): void {
+export function sweepStaleTemp(root: string, now = Date.now(), alive: (pid: number) => boolean = isPidAlive): void {
   let names: string[];
   try {
     names = fs.readdirSync(root);

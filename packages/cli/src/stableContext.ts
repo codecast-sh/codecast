@@ -25,7 +25,7 @@ import { fetchMappedProjects, teamForDirectory } from "./directoryTeam.js";
 import { orgContextBlock } from "@codecast/shared/contracts/orgWhere";
 import { formatModGuide } from "./mods/guide.js";
 import { STABLE_FEED_HOOK_FILE } from "./codecastOwned.js";
-import { defaultConfigDir } from "./config/configDir.js";
+import { defaultConfigDir, HOOK_STATE_DIR } from "./config/configDir.js";
 
 const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
 
@@ -365,7 +365,8 @@ function stableFeedHookScript(client: StableHookClient): string {
 # CodeCast Stable Mode - injects recent session history on session start (${client})
 set -uo pipefail
 
-CONFIG_FILE="$HOME/.codecast/config.json"
+${HOOK_STATE_DIR}
+CONFIG_FILE="$CC_DIR/config.json"
 
 # Ensure codecast is on PATH (hooks run non-interactively)
 export PATH="$HOME/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"

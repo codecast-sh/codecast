@@ -45,6 +45,13 @@ import { shq, sshBase, type RemoteHost } from "../remote/session-move.js";
 import { describeSyncSkipped, type SyncSkipReason } from "@codecast/shared/contracts";
 import { AGENT_CONTEXT_ROOTS, INSTRUCTION_FILE_RE, MEDIA_FILE_RE, NATIVE_BINARY_MAGICS } from "./mirror/discovery.js";
 
+/**
+ * What every command the laptop runs on a host starts with: a non-interactive
+ * ssh shell reads no profile, so bun, cast and (on a Mac host) Homebrew's
+ * tools are on PATH only if the command puts them there. Spelled once here.
+ */
+export const HOST_PATH_EXPORT = 'export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"';
+
 const execFileAsync = promisify(proc.execFile);
 
 /** Folders the host rebuilds itself: never copied unless an `always` pattern names them. */
@@ -363,7 +370,7 @@ const HOST_CHILD_PROCESS = "node:child_process";
 /** The shell command that runs the same operation on a host (bun ships with every host). */
 export function remoteSideCommand(req: SideRequest): string {
   const boot = `const F=Object.getPrototypeOf(async()=>{}).constructor;new F("require","cp","req",${JSON.stringify(SYNC_SIDE_PROGRAM)})(require,require(${JSON.stringify(HOST_CHILD_PROCESS)}),JSON.parse(process.argv[1])).then((r)=>process.stdout.write(JSON.stringify(r)),(e)=>{process.stderr.write(String(e&&e.message||e));process.exit(1)})`;
-  return `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; bun -e ${shq(boot)} -- ${shq(JSON.stringify(withConstants(req)))}`;
+  return `${HOST_PATH_EXPORT}; bun -e ${shq(boot)} -- ${shq(JSON.stringify(withConstants(req)))}`;
 }
 
 /** Run one side's operation on a host over its ssh connection. */

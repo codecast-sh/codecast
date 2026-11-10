@@ -5,7 +5,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { atomicWriteFile } from "../atomicWrite.js";
 import { spawnSync } from "../proc.js";
 import { listStates, type PersistedWorkspaceState } from "./contract.js";
-import { codecastPath } from "../codecastDir.js";
 import { defaultConfigDir } from "../config/configDir.js";
 
 export interface PortReservation {

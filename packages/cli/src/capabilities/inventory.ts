@@ -231,6 +231,15 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/** Split `name@marketplace`. The separator cannot occur inside either half —
+ *  Claude Code composes the id from a directory name and a marketplace name — so
+ *  the first `@` is the boundary. */
+export function splitPluginId(pluginId: string): { name: string; marketplace?: string } {
+  const at = pluginId.indexOf("@");
+  if (at <= 0) return { name: pluginId };
+  return { name: pluginId.slice(0, at), marketplace: pluginId.slice(at + 1) || undefined };
+}
+
 /** Frontmatter `key: value` from the head of a markdown file. Mirrors the
  *  tolerant matching `readAvailableSkills` (daemon.ts) has always used —
  *  CC's own field is hyphenated, but the underscore spelling appears in the
@@ -435,7 +444,7 @@ function readPluginsFromSettings(settingsFile: string, scope: CapabilityScope, s
   if (isRecord(enabled)) {
     for (const [id, on] of Object.entries(enabled)) {
       if (typeof on !== "boolean") continue;
-      const [name, marketplace] = id.split("@");
+      const { name, marketplace } = splitPluginId(id);
       items.push({
         kind: "plugin",
         name: id,
@@ -443,7 +452,7 @@ function readPluginsFromSettings(settingsFile: string, scope: CapabilityScope, s
         enabled: on,
         source: settingsFile,
         client: "claude",
-        meta: { plugin: name ?? id, ...(marketplace ? { marketplace } : {}) },
+        meta: { plugin: name, ...(marketplace ? { marketplace } : {}) },
       });
     }
   }
@@ -1033,7 +1042,7 @@ function inventorySteps(home: string, projectPath?: string): { steps: InventoryS
       for (const [id, pin] of Object.entries(pins)) {
         if (declared.has(id)) continue;
         if (pin.projectPath && pin.projectPath !== projectPath) continue;
-        const [name, marketplace] = id.split("@");
+        const { name, marketplace } = splitPluginId(id);
         items.push({
           kind: "plugin",
           name: id,
@@ -1043,7 +1052,7 @@ function inventorySteps(home: string, projectPath?: string): { steps: InventoryS
           source: pluginRegistry,
           client: "claude",
           meta: {
-            plugin: name ?? id,
+            plugin: name,
             ...(marketplace ? { marketplace } : {}),
             ...(pin.version ? { version: pin.version } : {}),
             ...(pin.sha ? { sha: pin.sha } : {}),

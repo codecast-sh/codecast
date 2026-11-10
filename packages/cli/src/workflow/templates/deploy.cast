@@ -11,7 +11,7 @@ digraph deploy {
   graph [kind="segment", label="Deploy", description="Wait until the deploy carrying the landed change is live on every target it touches", takes="branch", params="except"]
   start [shape=Mdiamond]
   wait [label="Wait for live", shape=parallelogram, parks=true, timeout=604800,
-    script="cd \"$(cast ws path $worktree)\" && cast flow await-deploy --branch $branch --base $default_branch --run $run_id --node $station_id --files \"$change_files\" --except \"$except\""]
+    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && cast flow await-deploy --branch $branch --base $default_branch --run $run_id --node $station_id --files \"$change_files\" --except \"$except\""]
   live   [shape=Msquare, label="Live"]
   failed [shape=Msquare, label="Deploy failed", stop="$wait.output"]
   start -> wait

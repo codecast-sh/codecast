@@ -31,7 +31,16 @@ public struct ParsedKeyChord: Equatable, Sendable {
 /// were interrupted between them.
 public enum KeyChord {
     public static func parse(_ spec: String) -> Result<ParsedKeyChord, KeyChordError> {
-        let parts = spec.split(separator: "+").map { String($0).lowercased() }
+        // "+" separates, and is also a key: alone, or last as in "Cmd++".
+        let lowered = spec.lowercased()
+        let parts: [String]
+        if lowered == "+" {
+            parts = ["+"]
+        } else if lowered.hasSuffix("++") {
+            parts = lowered.dropLast(2).split(separator: "+").map { String($0) } + ["+"]
+        } else {
+            parts = lowered.split(separator: "+").map { String($0) }
+        }
         var modifiers: [KeyModifierName] = []
         var keyName: String?
         for part in parts {
@@ -43,6 +52,10 @@ public enum KeyChord {
         }
         guard let keyName, let keyCode = codes[keyName] else {
             return .failure(KeyChordError("unsupported key '\(spec)'"))
+        }
+        // "+" is Shift on the "=" key of a US layout.
+        if keyName == "+", !modifiers.contains(.shift) {
+            modifiers.append(.shift)
         }
         return .success(ParsedKeyChord(keyCode: keyCode, modifiers: modifiers))
     }
@@ -115,5 +128,8 @@ public enum KeyChord {
         "backspace": 51, "delete": 51, "escape": 53, "esc": 53, "left": 123, "right": 124,
         "down": 125, "up": 126, "insert": 114, "home": 115, "pageup": 116, "page_up": 116,
         "forwarddelete": 117, "end": 119, "pagedown": 121, "page_down": 121,
+        "+": 24,
+        "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97, "f7": 98, "f8": 100,
+        "f9": 101, "f10": 109, "f11": 103, "f12": 111,
     ]
 }

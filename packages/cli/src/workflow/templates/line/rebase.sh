@@ -20,7 +20,8 @@ mkdir -p "$dir"
 clean() { printf '%s' "$1" | tr -d '\000-\037\\"'; }
 answer() { printf '{"rebased": %s, "landed": %s, "why": "%s"}\n' "$1" "$2" "$(clean "$3")"; }
 
-if ! cd "$(cast ws path $worktree)" 2>/dev/null; then
+wt="$(cast ws path $worktree 2>/dev/null)"
+if [ -z "$wt" ] || ! cd "$wt" 2>/dev/null; then
   answer false false "the run's worktree $worktree is not on this machine"
   exit 2
 fi

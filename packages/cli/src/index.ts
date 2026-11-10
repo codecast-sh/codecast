@@ -17,7 +17,7 @@ import { detectJsPackageManager } from "./workspace/detect.js";
 import { repoRootFor } from "./gitPlane.js";
 import { scrubAgentEnv } from "./agentEnv.js";
 import { CODECAST_HOOK_SCRIPTS, CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL } from "./codecastOwned.js";
-import { isOlderBackendRefusal, missingRouteError } from "./castApi.js";
+import { isOlderBackendRefusal } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
 import { READY_LIST_LIMIT, buildTaskClaimBody, buildTaskStartBody, foldStaleTasks, groupTasksByAssignee, readyCountLine, startedLines, taskHintBody, unclaimedLine } from "./taskClaim.js";
@@ -40,7 +40,6 @@ import { groundUpdateBody } from "@codecast/shared/contracts/goalsBrief";
 import { SOURCE_NEEDED, answerWrite, healthText, initiativeLine, initiativeShowLines, liveSeries, metricRecordLine, milestoneWrite, parseInitiativeHealth, pickRecordEntry, readDayArg, readMilestoneArg, readMomentArg, readSourceArg, recordVerb, recordWriteLines, removeWrite, saidWrite, scopeSentence, sourceFillIn, sourceWrite, unread, type Read, type RecordWrite } from "./initiativeCommand.js";
 import { INITIATIVE_RECORD_LISTS, INITIATIVE_STATUSES, metricReadings, metricTrends, parseMetricSpec, type IntentSource } from "@codecast/shared/contracts/initiative";
 import { ORG_CONTEXT_GUIDANCE, orgWhereLines } from "@codecast/shared/contracts/orgWhere";
-import { targetDayStamp } from "@codecast/shared/time";
 import {
   parseEntityUrl,
   buildEntityUrl,
@@ -100,7 +99,7 @@ import {
   TASK_PRIORITIES,
 } from "@codecast/shared/tasks";
 import { buildEventFilter, narrowingWithoutOn } from "./triggerEventFilter.js";
-import { describeDates, describeDatesFull, formatDateSmart, parseClockTime, parseDuration as parseSharedDuration, parseEndDate, parseRelativeDate, wasEdited } from "@codecast/shared/time";
+import { describeDatesFull, formatDateSmart, parseClockTime, parseDuration as parseSharedDuration, parseEndDate, parseRelativeDate, wasEdited } from "@codecast/shared/time";
 import { SESSION_QUERY_OPERATORS } from "@codecast/shared/search";
 import { describeShareSpan, formatDateRange, formatSessionCount, summarizeShareImpact, type PathShareSummary } from "@codecast/shared/team";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
@@ -135,7 +134,7 @@ import { writeThreadStatePulse } from "./threadStateStamp.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
-import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, routineLine, standingSessionLine } from "./briefLines.js";
+import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, standingSessionLine } from "./briefLines.js";
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
 import { parkedNote, planReadiness, stuckAdvice, stuckNote } from "./planReadiness.js";
 import { listedBlockers, listedReady } from "./listedReadiness.js";
@@ -148,7 +147,7 @@ import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
 import { isManagedInstall } from "./managedInstall.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion, getVaultVersion} from "./update.js";
-import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
+import { type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, REFERENCES_SECTION, installMessagingSnippet, installReferencesSnippet, installPublishSnippet, installBrowserSnippet, installChatSnippet, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isCredentialHelperFastPath, isStableContextFastPath as isStableContextFastPathArgv, isTaskContextFastPath, runFastPath } from "./fastPath.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
@@ -159,11 +158,10 @@ import { autostartDisabledByEnv, findSystemDaemonUnit, isTemplateInstance, setDa
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
 import { registerDocDraftingCommands } from "./docDraftingCommand.js";
 import { commandTree, didYouMean, listDescription, nearMatches, unknownCommandNextStep } from "./commandSuggestion.js";
-import { boundedCountOption, choiceOption, countOption, exitNotFound, idKindOf, nonNegativeCountOption, notFoundLine, stateOption, unknownActionError, wrongKindIdError, withSessionIdHint, SESSION_ID_HINT, DATE_FORMS } from "./argChecks.js";
+import { choiceOption, countOption, exitNotFound, idKindOf, nonNegativeCountOption, notFoundLine, stateOption, unknownActionError, wrongKindIdError, withSessionIdHint, SESSION_ID_HINT, DATE_FORMS } from "./argChecks.js";
 import { requireDestructiveConfirm } from "./destructiveCommands.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
-import { glob } from "glob";
-import { getPosition, setPosition } from "./positionTracker.js";
+import { setPosition } from "./positionTracker.js";
 import { isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { bearerFromStored, mintDeviceId } from "./bearerToken.js";
 import { writeStoredConfig } from "./config/storedConfig.js";
@@ -214,10 +212,11 @@ import {
   resumeShortId,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
-import Anthropic from "@anthropic-ai/sdk";
 import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRuntime, type AgentHandle } from "./agents/index.js";
-import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, resolveFidelity, buildRetroPrompt, type FidelityLevel, type TypedRetro } from "./agents/index.js";
-import { checkbox, confirm, input, select } from "@inquirer/prompts";
+import { buildImplementerPrompt as _buildImplementerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, buildRetroPrompt } from "./agents/index.js";
+// The prompt library, loaded at the first question a command asks: no
+// ordinary invocation pays for it (see the laziness rule in commandGroups.ts).
+const prompts = () => import("@inquirer/prompts");
 import { type Config, getAgentArgs, isCloudMirrorEnabled } from "./config/types.js";
 import { applyManagedPolicy, exitIfPolicyBlocks, lockedConfigKey, managedByLabel, policyRefusal, readManagedProfile, snippetPolicyRefusal, writeEffectivePolicyFile } from "./config/managedPolicy.js";
 import { removedDeviceMessage } from "@codecast/shared/contracts/managedPolicy";
@@ -262,26 +261,6 @@ function getRealCwd(): string {
 function promptGist(text: string, maxLen: number = 80): string {
   const line = text.split("\n")[0].trim();
   return line.length > maxLen ? line.slice(0, maxLen) + "…" : line;
-}
-
-function truncatePath(p: string | null, maxLen: number = 38): string {
-  if (!p) return "";
-  const home = process.env.HOME || "";
-  if (home && p.startsWith(home)) {
-    p = "~" + p.slice(home.length);
-  }
-  if (p.length > maxLen) {
-    const parts = p.split("/");
-    if (parts.length > 3) {
-      const prefix = parts[0];
-      const suffix = parts.slice(-2).join("/");
-      if ((prefix + "/.../" + suffix).length <= maxLen) {
-        return prefix + "/.../" + suffix;
-      }
-      return ".../" + suffix;
-    }
-  }
-  return p;
 }
 
 /**
@@ -1735,7 +1714,7 @@ async function runOnboarding(config: Config): Promise<void> {
 
     if (!ensureTmux()) {
       try {
-        const shouldInstall = await confirm({ message: "Install tmux now?", default: true });
+        const shouldInstall = await (await prompts()).confirm({ message: "Install tmux now?", default: true });
         if (shouldInstall) {
           tryInstallTmux();
         }
@@ -1988,7 +1967,7 @@ async function promptProjectSelection(config: Config): Promise<void> {
   console.log(fmt.muted("Syncing uploads these sessions to your private Codecast workspace. Only you can"));
   console.log(fmt.muted("open them. A team sees a project only after you share that project with it.\n"));
 
-  const syncAll = await confirm({
+  const syncAll = await (await prompts()).confirm({
     message: "Sync all projects? (recommended)",
     default: true,
   });
@@ -2010,7 +1989,7 @@ async function promptProjectSelection(config: Config): Promise<void> {
 
   console.log("\nSelect which projects to sync (use arrow keys and space to toggle):\n");
 
-  const selectedProjects = await checkbox({
+  const selectedProjects = await (await prompts()).checkbox({
     message: "Projects to sync:",
     choices,
     pageSize: 15,
@@ -2074,7 +2053,7 @@ async function promptTeamSelection(config: Config): Promise<void> {
   }
   console.log(fmt.muted("Nothing is shared yet. A project you share shows its sessions on the team feed.\n"));
 
-  const configureNow = await confirm({
+  const configureNow = await (await prompts()).confirm({
     message: "Pick projects to share with your team now?",
     default: true,
   });
@@ -2124,7 +2103,7 @@ async function promptTeamSelection(config: Config): Promise<void> {
       }),
     ];
 
-    const selectedPath = await select({
+    const selectedPath = await (await prompts()).select({
       message: "Select a project to change (or Done):",
       choices: projectChoices,
       pageSize: 12,
@@ -2185,7 +2164,7 @@ async function pickTeamForProject(projectPath: string, teams: Team[], current: s
       value: t._id,
     })),
   ];
-  return select({
+  return (await prompts()).select({
     message: `Share ${getProjectName(projectPath)} with:`,
     choices: teamChoices,
     default: current || null,
@@ -2212,7 +2191,7 @@ async function shareProjectWithTeam(
   console.log(`  ${fmt.accent(team.name)} will see ${fmt.value(name)}: ${describeShareSpan(impact, null)}`);
   let includePast = opts.includePast ?? true;
   if (opts.includePast === undefined && impact.sessions > 0 && process.stdin.isTTY) {
-    includePast = await confirm({
+    includePast = await (await prompts()).confirm({
       message: `Include the ${formatSessionCount(impact.sessions, impact.truncated)} you already have there? (No = new sessions only)`,
       default: true,
     });
@@ -2683,7 +2662,7 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     console.log("Lets your agents search and learn from past conversations.");
     console.log(`${fmt.muted("Adds cast commands to your agent config so they can recall prior work.")}\n`);
 
-    enableMemory = await confirm({
+    enableMemory = await (await prompts()).confirm({
       message: "Enable agent memory?",
       default: true,
     });
@@ -2720,7 +2699,7 @@ async function promptStableEnablement(): Promise<void> {
   console.log("so your agent starts each session aware of recent work.");
   console.log(`${fmt.muted("Adds a lightweight hook on session start. Minimal prompt overhead.")}\n`);
 
-  const enableStable = await confirm({
+  const enableStable = await (await prompts()).confirm({
     message: "Enable stable context?",
     default: false,
   });
@@ -5416,9 +5395,8 @@ program
         } else {
           row("Discrepancies", fmt.warning(String(result.discrepancies.length)), 2);
 
-          const confirm = await import("@inquirer/prompts").then(m => m.confirm);
           console.log("");
-          const shouldRepair = await confirm({
+          const shouldRepair = await (await prompts()).confirm({
             message: "Reset affected sessions for re-sync?",
             default: true,
           });
@@ -6463,7 +6441,7 @@ program
 
     let continueEditing = true;
     while (continueEditing) {
-      const action = await select({
+      const action = await (await prompts()).select({
         message: hasTeams ? "Change team sharing or sync mode:" : "Change sync settings:",
         choices: mainChoices,
         pageSize: 15,
@@ -6511,7 +6489,7 @@ program
           checked: config.sync_projects?.includes(p.path) ?? true,
         }));
 
-        const selectedProjects = await checkbox({
+        const selectedProjects = await (await prompts()).checkbox({
           message: "Select projects to sync:",
           choices,
           pageSize: 15,
@@ -6523,7 +6501,7 @@ program
         for (const removedPath of deselected) {
           const { count } = await summarizeConversationsForPath(config, removedPath);
           if (count > 0) {
-            const shouldDelete = await confirm({
+            const shouldDelete = await (await prompts()).confirm({
               message: `${getProjectName(removedPath)} has ${count} synced conversation${count !== 1 ? "s" : ""}. Delete them from the server?`,
               default: false,
             });
@@ -6559,7 +6537,7 @@ program
           if (!selectedTeam && project.teamId) {
             const { count } = await summarizeConversationsForPath(config, project.path);
             if (count > 0) {
-              const shouldDelete = await confirm({
+              const shouldDelete = await (await prompts()).confirm({
                 message: `${getProjectName(project.path)} has ${count} synced conversation${count !== 1 ? "s" : ""}. Delete them from the server?`,
                 default: false,
               });
@@ -6794,7 +6772,7 @@ program
       const absPath = path.resolve(pathArg);
       const { count } = await summarizeConversationsForPath(config, absPath);
       if (count > 0) {
-        const shouldDelete = await confirm({
+        const shouldDelete = await (await prompts()).confirm({
           message: `${getProjectName(absPath)} has ${count} synced conversation${count !== 1 ? "s" : ""}. Delete them from the server?`,
           default: false,
         });
@@ -7777,7 +7755,7 @@ async function selectAndAttachFromLiveSessions(
 
   console.log(`\n${c.dim}${sessions.length} live sessions${c.reset}\n`);
 
-  const selected = await select({
+  const selected = await (await prompts()).select({
     message: "Attach to session",
     choices,
     pageSize: Math.min(12, choices.length),
@@ -8127,6 +8105,7 @@ program
         process.exit(0);
       }
 
+      const { truncatePath } = await import("./formatter.js");
       const renderResumeCards = (current: any[], selectedIndex: number, currentOffset: number, hasMore: boolean) => {
         const lines: string[] = [];
         lines.push(`${c.dim}Found sessions matching "${query}"${c.reset}`);
@@ -8285,7 +8264,7 @@ program
 
         const targetAgent =
           options.as?.toLowerCase() ||
-          await select({
+          await (await prompts()).select({
             message: "Resume in:",
             choices: [
               { name: normalizedSource === "claude" ? "claude (current)" : "claude", value: "claude" },
@@ -11156,7 +11135,7 @@ program
       const currentStable: "solo" | "team" | "off" = (config as any).stable_mode ?? "off";
       console.log(`\n  ${c.bold}Stable${c.reset} — inject recent session history into every new conversation`);
       console.log(fmt.muted(`  Adds a SessionStart hook that feeds recent sessions into each new session.`));
-      const stableChoice = await select<"solo" | "team" | "off">({
+      const stableChoice = await (await prompts()).select<"solo" | "team" | "off">({
         message: `Enable stable mode? [${currentStable}]`,
         choices: [
           { name: "Solo — your recent sessions (last 7 days)", value: "solo" },
@@ -11206,7 +11185,7 @@ program
         console.log(fmt.muted(`  Writes to: ${s.writesTo}`));
       }
 
-      const answer = await confirm({
+      const answer = await (await prompts()).confirm({
         message: s.detail ? `Enable ${s.name}? [${status}]` : `${s.name} [${status}] — ${s.desc}`,
         default: enabled !== false,
       });
@@ -13074,6 +13053,7 @@ program
       process.exit(1);
     }
 
+    const { default: Anthropic } = await import("@anthropic-ai/sdk");
     const anthropic = new Anthropic({ apiKey });
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -20103,6 +20083,7 @@ Output valid JSON array of task objects. Nothing else.`;
     console.log(fmt.muted(`\n  Decomposing at ${options.depth} level...`));
 
     try {
+      const { default: Anthropic } = await import("@anthropic-ai/sdk");
       const anthropic = new Anthropic();
       const maxToks = options.depth === "deep" ? 16000 : 8000;
       const response = await anthropic.messages.create({
@@ -20172,7 +20153,7 @@ Output valid JSON array of task objects. Nothing else.`;
       for (const u of unknown) console.log(`  ${c.yellow}!${c.reset} ${inlineForeignText(u.step)} needs "${inlineForeignText(u.needs)}", which no task is titled: that edge is left out`);
       for (const loop of loops) console.log(`  ${c.yellow}!${c.reset} These wait on each other in a loop, so the edge that closes it is left out: ${loop.map(inlineForeignText).join(" → ")}`);
 
-      const shouldCreate = await confirm({
+      const shouldCreate = await (await prompts()).confirm({
         message: `Create ${tasks.length} tasks for plan ${planId}?`,
         default: true,
       });

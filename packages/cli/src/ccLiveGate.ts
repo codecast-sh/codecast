@@ -24,7 +24,6 @@
 // was down cannot hold the gate shut forever.
 
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { defaultConfigDir } from "./config/configDir.js";
 import { isClaudeCommand, type ProcRow } from "./processTable.js";

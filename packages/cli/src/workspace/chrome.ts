@@ -272,7 +272,10 @@ export async function stopChrome(
   if (isPidAlive(pid)) throw new ChromeStopError(pid, killTimeoutMs);
 }
 
-/** Returns true if a process with `pid` is alive. Cheap; uses signal 0. */
+/** Returns true if a process with `pid` is alive. Cheap; uses signal 0.
+ *  Stricter than pidAlive.ts on purpose: a probe that fails for a reason other
+ *  than "gone" or "not yours" is thrown, because stopChrome must not read a
+ *  failed probe as an exit, and lockFile.ts must not read one as a dead holder. */
 export function isPidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fff_ffff) return false;
   try {

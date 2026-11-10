@@ -15,6 +15,7 @@
  * codecast-owned devices the first time a machine with none acquires one.
  */
 
+import { isPidAlive } from "../pidAlive.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -70,15 +71,7 @@ export function writePool(devices: PoolDevice[], home: string = process.env.HOME
   fs.writeFileSync(file, `${JSON.stringify({ devices }, null, 2)}\n`);
 }
 
-export function pidAlive(pid: number | undefined): boolean {
-  if (!pid || !Number.isFinite(pid)) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
+export { isPidAlive as pidAlive };
 
 function psField(pid: number, field: "ppid" | "comm"): string {
   const r = spawnSync("ps", ["-o", `${field}=`, "-p", String(pid)], { encoding: "utf-8" });
@@ -146,7 +139,7 @@ export function readLock(udid: string, dir = lockDir()): Omit<PoolEntry, "index"
   const pid = readNum(path.join(p, "pid"));
   let session: string | undefined;
   try { session = fs.readFileSync(path.join(p, "session"), "utf-8").trim() || undefined; } catch {}
-  const alive = pidAlive(pid);
+  const alive = isPidAlive(pid);
   return {
     state: alive ? "held" : "stale",
     pid,

@@ -241,12 +241,18 @@ describe("ComputerClient", () => {
   });
 
   helperTest("a helper on another protocol version fails as provider_incompatible", async () => {
-    isolatedHome();
-    withEnv({ FAKE_PROTOCOL_VERSION: "7" });
+    const home = isolatedHome();
+    const log = path.join(home, "launches.log");
+    withEnv({ FAKE_PROTOCOL_VERSION: "7", FAKE_LAUNCH_LOG: log });
     const client = makeClient();
     const err = await client.capabilities().catch((e) => e);
     expect(err).toBeInstanceOf(ComputerError);
     expect((err as ComputerError).code).toBe("provider_incompatible");
+    // The mismatched helper is stopped and a fresh one tried once. Reattaching
+    // to the same live helper only repeated the answer and reset its idle timer.
+    const launches = fs.readFileSync(log, "utf-8").trim().split("\n");
+    expect(launches).toHaveLength(2);
+    expect(isAlive(Number(launches[0]))).toBe(false);
   });
 
   helperTest("a helper error keeps its code and carries the recovery", async () => {

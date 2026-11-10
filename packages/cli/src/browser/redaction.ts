@@ -21,9 +21,16 @@
  * again wherever else it appears in the file.
  */
 
-/** Field and header names whose values are credentials. */
+/**
+ * Field and header names whose values are credentials. `auth` covers
+ * authorization, authenticate and oauth but not `author` or HTTP/2's
+ * `:authority`, and `token` skips the counts an LLM API names with it
+ * (`max_tokens`, `prompt_tokens`, `totalTokens`): a name that matches here
+ * gets its value replaced everywhere in the file, so an author's name or a
+ * host would otherwise vanish from every URL and body too.
+ */
 export const SECRET_NAME =
-  /auth(?:orization)?|cookie|credential|csrf|xsrf|token|secret|session|password|passwd|pwd|passcode|passphrase|otp|(?:^|[-_.])code(?:$|[-_.])|(?:^|[-_.])pin(?:$|[-_.])|(?:api|access|refresh)[-_.]?key|(?:^|[-_.])key(?:$|[-_.])|signature|(?:^|[-_.])sig(?:$|[-_.])/i;
+  /auth(?!or(?!i[sz])|ority)|cookie|credential|csrf|xsrf|(?<!(?:max|min|total|prompt|completion|input|output|cached|reasoning|num)[-_.]?)token|secret|session|password|passwd|pwd|passcode|passphrase|otp|(?:^|[-_.])code(?:$|[-_.])|(?:^|[-_.])pin(?:$|[-_.])|(?:api|access|refresh)[-_.]?key|(?:^|[-_.])key(?:$|[-_.])|signature|(?:^|[-_.])sig(?:$|[-_.])/i;
 
 const SECRET_HEADERS = new Set([
   "authorization", "proxy-authorization", "x-api-key", "api-key", "x-csrf-token", "csrf-token", "x-xsrf-token",
@@ -321,6 +328,11 @@ export function redactHarFile(file: string, fs: { readFileSync: (p: string, e: "
 
 export const HIDDEN_VALUE = "[hidden]";
 
+/** The most of one field value the page probe sends (snapshotSettle.ts). */
+export const HIDDEN_VALUE_MAX = 2000;
+/** A printed value this long that is the start of a hidden one is that value, shortened by the tree. */
+const SHORTENED_MIN = 16;
+
 /** Roles whose own value a person typed. */
 const FIELD_LINE = /^(\s*)(?:- )?(?:textbox|searchbox|combobox|spinbutton)\b/;
 const BULLETS = /^[•●]{2,}$/;
@@ -329,15 +341,25 @@ const BULLETS = /^[•●]{2,}$/;
  * Snapshot text with the given field values taken out. Only the value of a
  * field's own line is touched: what follows its last `]: ` or `": `, a
  * `value="…"` on that line, and the StaticText lines nested under it, each
- * replaced only when it is exactly one of the values (or Chrome's bullet
- * mask, which still tells the length). Nothing else in the text is
+ * replaced only when it is one of the values (whole, or the start of one the
+ * probe or the tree cut short) or Chrome's bullet mask, which still tells the
+ * length. Nothing else in the text is
  * rewritten, so a PIN of 1234 cannot turn `[ref=e1234]` into a broken ref and
  * a value that also appears as page text leaves that text alone. Pure; the
  * values come from the snapshot's page probe (snapshotSettle.ts).
  */
 export function redactSnapshotValues(text: string, values: readonly string[]): string {
   const hidden = new Set(values.map((v) => v.trim()).filter(Boolean));
-  const secret = (v: string) => hidden.has(v.trim()) || BULLETS.test(v.trim());
+  // A value the probe cut at HIDDEN_VALUE_MAX stands for every value that starts with it.
+  const cut = values.filter((v) => v.length >= HIDDEN_VALUE_MAX).map((v) => v.trim());
+  const full = [...hidden];
+  const secret = (raw: string) => {
+    const v = raw.trim();
+    if (hidden.has(v) || BULLETS.test(v) || cut.some((c) => v.startsWith(c))) return true;
+    // The tree may print a long value shortened, with or without an ellipsis.
+    const head = v.replace(/(?:…|\.{3})$/, "");
+    return head.length >= SHORTENED_MIN && full.some((h) => h.length > head.length && h.startsWith(head));
+  };
   let under: number | null = null; // indent of the field line whose children are its value
   return text
     .split("\n")

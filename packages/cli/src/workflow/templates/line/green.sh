@@ -2,7 +2,8 @@
 # passes now. Writes proof.json, red then green, for the change card, and
 # fails the station while the reproduction still fails. Its last line is one
 # JSON result, {"green", "why"}, which the run report reads as its sentence.
-cd "$(cast ws path $worktree)" || exit 1
+wt="$(cast ws path $worktree)"
+[ -n "$wt" ] && cd "$wt" || exit 1
 dir=$run_dir
 clean() { tail -c 300 "$1" 2>/dev/null | tr -d '\000-\037\\"'; }
 # A line cause whose miss lives only on recorded runs has no check to rerun:

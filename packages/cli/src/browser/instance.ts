@@ -50,8 +50,13 @@ export interface InstanceState {
    * forward. Its presence is what turns on credential provisioning: a local
    * clone already holds this machine's cookies, so injecting there is wasted
    * work and an unnecessary Keychain prompt.
+   *
+   * `keyPath`, `remoteBaseDir` and `homeDir` are the host as `start --remote`
+   * resolved it, so `stop` reaches that same machine instead of resolving one
+   * again from a registry (remote.ts recordedRemoteHost). A state file written
+   * before they were recorded has only host and user.
    */
-  remote?: { host: string; user: string; sshPid?: number };
+  remote?: { host: string; user: string; sshPid?: number; keyPath?: string; remoteBaseDir?: string; homeDir?: string };
   /**
    * The tab each SESSION is working in, keyed by session id.
    *
@@ -175,7 +180,8 @@ export function clearState(): void {
  * is runnable, in disk wait or burning CPU, so it stays protected. A hung one
  * (its main thread blocked on a helper the OOM killer took, or on an X server
  * that died) never answers again and holds every later command hostage, so it
- * is stopped here and the verdict is the exit this probe then observed.
+ * is stopped here and the verdict is the exit this probe then observed. Only a
+ * local browser: for a remote one the pid is its idle ssh tunnel.
  */
 export async function probeLiveness(state: InstanceState | null, patienceMs = 4000): Promise<LivenessVerdict> {
   if (!state || !isPidAlive(state.pid)) return "exited";
@@ -188,8 +194,11 @@ export async function probeLiveness(state: InstanceState | null, patienceMs = 40
     if (!isPidAlive(state.pid)) return "exited";
     if (deadline - Date.now() > 0) await sleep(Math.min(400, deadline - Date.now()));
   }
-  // The process asking is never the one hung.
-  if (state.pid === process.pid || !isHung(before, processActivity(state.pid))) return "unverifiable";
+  // The process asking is never the one hung. Nor is a remote browser's pid
+  // evidence of anything: it is the `ssh -N` forward, which sleeps with no CPU
+  // whenever nothing crosses it, and stopping it would cut a working browser
+  // off and let a local one be launched over it.
+  if (state.pid === process.pid || state.remote || !isHung(before, processActivity(state.pid))) return "unverifiable";
   await stopInstance(state);
   return isPidAlive(state.pid) ? "unverifiable" : "exited";
 }
@@ -449,10 +458,17 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
     }
     await sleep(200);
   }
-  try {
-    process.kill(child.pid, "SIGTERM");
-  } catch {
-    /* ignore */
+  // Do not leave it holding the profile's singleton lock. Under `open` the
+  // child was the launcher and exited long ago (its pid may be someone
+  // else's by now): the browser is whatever holds this profile directory.
+  if (useOpen) {
+    killStrayChrome(opts.userDataDir);
+  } else {
+    try {
+      process.kill(child.pid, "SIGTERM");
+    } catch {
+      /* ignore */
+    }
   }
   throw new Error(`Chrome CDP port ${opts.port} never became reachable`);
 }
@@ -593,8 +609,7 @@ export interface PageSession {
   targetId: string;
 }
 
-// The wedge classification lives in recovery.ts so the daemon-resident driver
-// and this direct path share one implementation; re-exported for callers that
+// The wedge classification lives in recovery.ts; re-exported for callers that
 // import it from here.
 export { TabUnresponsive };
 
@@ -629,9 +644,8 @@ export async function resolveTarget(
 }
 
 /**
- * The tab-choice policy itself, over an already-fetched tab list. Pure, so the
- * daemon-resident driver (which lists tabs over its own socket) applies exactly
- * the same rules as the direct path.
+ * The tab-choice policy itself, over an already-fetched tab list. Pure, so it
+ * is tested without a browser.
  */
 export function pickTarget(
   targets: CdpTarget[],

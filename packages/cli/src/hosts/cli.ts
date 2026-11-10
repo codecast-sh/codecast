@@ -18,7 +18,7 @@
  * are all ordinary states here, not failures.
  */
 
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -31,7 +31,7 @@ import {
 } from "../browser/cloudHost.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
 import { normalizeReachFolder, reachHostRefusal, reachLine, readReachStatus, type ReachFolder, type ReachStatus } from "../cloud/reach.js";
-import { ACCOUNT_KEY_URL, cwdGitRoot, deployKeyUrl, githubRepo, grantAccountKey, grantDeployKey, hostAccessPath, repoOrigin, type HostAccessPath, type HostGitState } from "../cloud/hostGit.js";
+import { ACCOUNT_KEY_URL, cwdGitRoot, deployKeyUrl, grantAccountKey, grantDeployKey, hostAccessPath, repoOrigin, type HostAccessPath, type HostGitState } from "../cloud/hostGit.js";
 import { hostToolsDetailLines, parseHostToolsStamp, summarizeHostTools, type HostToolsReport } from "../cloud/hostTools.js";
 import { parseHostMcpOverrides } from "../cloud/hostMcpOverrides.js";
 import { deviceId } from "../remote/device.js";

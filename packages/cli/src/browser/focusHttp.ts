@@ -206,20 +206,8 @@ export const bridgeFocusEngine: FocusEngine = makeBridgeFocusEngine({
 // via the pid-addressed Apple event in raiseApp.ts. Best effort; tab
 // selection already happened if it fails.
 
-/**
- * Engines the route consults, in order. An engine adapter registers itself
- * here (e.g. at daemon boot); the defaults stay last so they remain the
- * fallback.
- */
+/** Engines the route consults, in order. */
 const engines: FocusEngine[] = [builtinFocusEngine, localChromeFocusEngine, bridgeFocusEngine];
-
-export function registerFocusEngine(engine: FocusEngine): () => void {
-  engines.unshift(engine);
-  return () => {
-    const i = engines.indexOf(engine);
-    if (i >= 0) engines.splice(i, 1);
-  };
-}
 
 export interface FocusDeps {
   engines: FocusEngine[];
@@ -410,6 +398,19 @@ export function handleBrowserFocusHttp(
     return true;
   }
 
+  // The handlers below answer later, off this call. One that throws (an
+  // engine, the body read, the reopen import) must still answer the request:
+  // unhandled, the rejection reaches the daemon and the caller waits forever.
+  const failed = (err: unknown): void => {
+    opts.log(`[BROWSER] ${url.split("?")[0]} failed: ${(err as Error)?.message ?? err}`);
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+    res.writeHead(500, headers);
+    res.end(JSON.stringify({ error: "internal" }));
+  };
+
   if (req.method === "POST" && url.startsWith("/browser/focus")) {
     const params = new URL(url, "http://localhost").searchParams;
     void focusRequestedTab(params, { ...deps, log: deps.log ?? opts.log }).then(({ tab, result }) => {
@@ -419,7 +420,7 @@ export function handleBrowserFocusHttp(
       opts.log(result.ok ? `[BROWSER] Focused tab ${label}` : `[BROWSER] Could not focus tab ${label}: ${result.reason}`);
       res.writeHead(result.ok ? 200 : 404, headers);
       res.end(JSON.stringify(result));
-    });
+    }).catch(failed);
     return true;
   }
 
@@ -430,7 +431,7 @@ export function handleBrowserFocusHttp(
     void focusRequestedTab(params, deps, probeBrowserTab).then(({ result }) => {
       res.writeHead(result.ok ? 200 : 404, headers);
       res.end(JSON.stringify(result));
-    });
+    }).catch(failed);
     return true;
   }
 
@@ -461,7 +462,7 @@ export function handleBrowserFocusHttp(
       const focused = await focusBrowserTab(result.tabId, { ...deps, log: deps.log ?? opts.log });
       res.writeHead(200, headers);
       res.end(JSON.stringify({ ok: true, tabId: result.tabId, focused: focused.ok, ...(focused.pid ? { pid: focused.pid } : {}) }));
-    })();
+    })().catch(failed);
     return true;
   }
 

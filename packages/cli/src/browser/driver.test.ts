@@ -1,33 +1,21 @@
 /**
- * Which way a command reaches the browser, and how a wedge is classified.
- *
- * The resident (daemon-hosted) path is dormant: it must be chosen only on an
- * explicit opt-in, and any failure to reach it must fall through to the
- * direct path rather than surface. The direct path must keep the three-state
- * verdict — "gone" is the only one that permits a relaunch.
+ * How a command reaches the browser, and how a wedge is classified. Opening
+ * the driver must keep the three-state verdict: "gone" is the only one that
+ * permits a relaunch.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { chooseDriver, openDriver, RESIDENT_ENV } from "./driver.js";
+import { openDriver } from "./driver.js";
 import { writeState, type InstanceState } from "./instance.js";
-import { BrowserNotLive, enablePageDomains, isTabUnresponsive, reviveError, TabUnresponsive } from "./recovery.js";
+import { BrowserNotLive, enablePageDomains, isTabUnresponsive, TabUnresponsive } from "./recovery.js";
 import { CdpTimeout, type CdpClient, type CdpEvent } from "./cdp.js";
 
-describe("chooseDriver", () => {
-  test("direct unless the resident path is opted into AND a daemon port exists", () => {
-    expect(chooseDriver({ residentOptIn: false, hookPort: 1234 })).toBe("direct");
-    expect(chooseDriver({ residentOptIn: true, hookPort: null })).toBe("direct");
-    expect(chooseDriver({ residentOptIn: true, hookPort: 1234 })).toBe("resident");
-    expect(chooseDriver({ residentOptIn: false, hookPort: null })).toBe("direct");
-  });
-});
-
-describe("openDriver fallback", () => {
+describe("openDriver verdicts", () => {
   let home: string;
-  const saved = { HOME: process.env.HOME, CODECAST_DIR: process.env.CODECAST_DIR, RESIDENT: process.env[RESIDENT_ENV] };
+  const saved = { HOME: process.env.HOME, CODECAST_DIR: process.env.CODECAST_DIR };
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "cast-driver-"));
     process.env.HOME = home;
@@ -38,26 +26,12 @@ describe("openDriver fallback", () => {
     process.env.HOME = saved.HOME;
     if (saved.CODECAST_DIR === undefined) delete process.env.CODECAST_DIR;
     else process.env.CODECAST_DIR = saved.CODECAST_DIR;
-    if (saved.RESIDENT === undefined) delete process.env[RESIDENT_ENV];
-    else process.env[RESIDENT_ENV] = saved.RESIDENT;
     fs.rmSync(home, { recursive: true, force: true });
   });
 
   test("no browser at all → BrowserNotLive('exited'), the verdict that permits a relaunch", async () => {
     await expect(openDriver()).rejects.toBeInstanceOf(BrowserNotLive);
     await expect(openDriver()).rejects.toMatchObject({ liveness: "exited" });
-  });
-
-  test("an unreachable daemon port under opt-in falls through to the direct verdict", async () => {
-    // A hook-port file naming a port nobody listens on: the resident connect
-    // fails, and that must NOT be what the agent hears — the direct path's
-    // honest "no managed browser is running" is.
-    process.env[RESIDENT_ENV] = "1";
-    fs.writeFileSync(path.join(process.env.CODECAST_DIR!, "hook-port"), "1");
-    const err = await openDriver().catch((e) => e);
-    expect(err).toBeInstanceOf(BrowserNotLive);
-    expect(err.liveness).toBe("exited");
-    expect(err.problem.message).toMatch(/no managed browser is running/);
   });
 
   test("a recorded browser whose process is gone is 'exited' without any network wait", async () => {
@@ -123,11 +97,10 @@ describe("wedge classification (recovery.ts)", () => {
     expect(conn.calls.filter((c) => c.startsWith("S2:")).length).toBe(5);
   });
 
-  test("the classification survives a trip through the wire", () => {
-    const wire = { name: "TabUnresponsive", message: new TabUnresponsive("ABCDEFGH", "x").message };
-    const revived = reviveError(wire);
-    expect(revived).not.toBeInstanceOf(TabUnresponsive);
-    expect(isTabUnresponsive(revived)).toBe(true);
+  test("the classification goes by name as well as by class", () => {
+    const copy = new Error(new TabUnresponsive("ABCDEFGH", "x").message);
+    copy.name = "TabUnresponsive";
+    expect(isTabUnresponsive(copy)).toBe(true);
     expect(isTabUnresponsive(new Error("nope"))).toBe(false);
   });
 });

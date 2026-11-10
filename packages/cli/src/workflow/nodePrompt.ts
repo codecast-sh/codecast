@@ -17,11 +17,6 @@ export function expandPromptVars(template: string, graph: WorkflowGraph, context
   });
 }
 
-// One $name as both expanders read it. `$human_message` is the gate note,
-// empty when there is none, so a script can test it without tripping on an
-// unset `$human.message` (which the shell would read as `$human`). A node's
-// `$<id>.output` reads empty for the same reason when the node left none (a
-// hand that never spawned).
 /** The base presenting brief codecast ships (presenter.md): what a decision put to a person is, on any line. */
 export const PRESENTER_BASE = presenterBase.trim();
 

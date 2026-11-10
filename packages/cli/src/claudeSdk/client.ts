@@ -4,6 +4,7 @@
 // hiccup) is reopened; a host that is gone is reported once, so the daemon can
 // resume the saved Claude session on the next delivery.
 
+import { isPidAlive } from "../pidAlive.js";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -32,23 +33,14 @@ export interface SdkHostClientEvents {
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
-/** Is this pid a live process? */
-export function pidAlive(pid: number | undefined | null): boolean {
-  if (!pid || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
+export { isPidAlive as pidAlive };
 
 /**
  * Is this pid a live SDK host? A pid recorded before a reboot can belong to
  * any process now, so the command line has to name the host entry too.
  */
 export async function hostProcessAlive(pid: number | undefined | null): Promise<boolean> {
-  if (!pidAlive(pid)) return false;
+  if (!isPidAlive(pid)) return false;
   // Async: the daemon's loop must not wait on ps, which takes seconds on a loaded machine.
   let stdout: string;
   try {

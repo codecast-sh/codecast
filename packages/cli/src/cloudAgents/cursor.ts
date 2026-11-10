@@ -114,14 +114,8 @@ export class CursorCloudApi extends KeyedCloudApi {
       return { items: data.items ?? [], next: data.nextCursor };
     });
   }
-  getRun(agentId: string, runId: string): Promise<CursorCloudRun> {
-    return this.request("GET", `/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}`);
-  }
   cancelRun(agentId: string, runId: string): Promise<unknown> {
     return this.request("POST", `/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}/cancel`);
-  }
-  archive(agentId: string): Promise<unknown> {
-    return this.request("POST", `/v1/agents/${encodeURIComponent(agentId)}/archive`);
   }
   /** Every prompt and reply as text. v0: the v1 surface has no conversation read. */
   async conversation(agentId: string): Promise<CursorConversationMessage[]> {

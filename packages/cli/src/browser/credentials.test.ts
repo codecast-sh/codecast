@@ -123,6 +123,11 @@ describe("the Chrome key lives in the macOS Keychain only", () => {
       ["find-generic-password", "-w", "-s", "Chrome Safe Storage", "-a", "Chrome"],
       { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 45_000 },
     ]]);
+    // Chromium keeps its own entry; Canary shares Chrome's.
+    calls.length = 0;
+    expect(chromeEncryptionKey({ platform: "darwin", exec, channel: "chromium" })).toBeNull();
+    expect(chromeEncryptionKey({ platform: "darwin", exec, channel: "canary" })).toBeNull();
+    expect(calls.map((c) => (c[1] as string[]).slice(2))).toEqual([["-s", "Chromium Safe Storage", "-a", "Chromium"], ["-s", "Chrome Safe Storage", "-a", "Chrome"]]);
   });
 });
 

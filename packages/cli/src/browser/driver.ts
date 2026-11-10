@@ -1,17 +1,8 @@
 /**
- * How a `cast browser` command reaches the built-in browser.
- *
- * Two ways, one interface. The DIRECT driver is the working model: this
- * process opens its own socket to Chrome and does the tab setup itself, as
- * cheaply as a fresh process can (see `openDirect`). The RESIDENT driver talks
- * to a daemon-hosted connection instead (resident/host.ts); it is written but
- * NOT mounted in the daemon — a session-scoped resident engine (agent-browser)
- * is going underneath `cast browser`, so hosting a second one here would
- * duplicate it. It stays behind an explicit opt-in so the code can be revived
- * without an archaeology dig, and `cast browser` never depends on it.
- *
- * Callers never choose; `openDriver()` does, and every verb runs the same code
- * against whichever it got.
+ * How a `cast browser` command reaches the built-in browser: this process
+ * opens its own socket to Chrome and does the tab setup itself, as cheaply as
+ * a fresh process can (see `openDriver`). Every verb of the built-in driver
+ * runs against the one interface below.
  */
 
 import { CdpConnection, listTargetsVia, type CdpClient, type CdpTarget } from "./cdp.js";
@@ -21,13 +12,9 @@ import {
 import { armRecorder } from "./observe.js";
 import { setViewport } from "./actions.js";
 import { BrowserNotLive, isReachable } from "./recovery.js";
-import { readHookPort, ResidentClient } from "./resident/client.js";
 import { mark } from "./timing.js";
 
-export type DriverKind = "resident" | "direct";
-
 export interface BrowserDriver {
-  kind: DriverKind;
   conn: CdpClient;
   /** Instance state as of opening the driver. */
   state: InstanceState;
@@ -40,68 +27,15 @@ export interface BrowserDriver {
   close(): void;
 }
 
-/**
- * Which path to take. Pure, so the choice is testable without a daemon: the
- * resident path needs BOTH the explicit opt-in and a daemon port; anything
- * else, including any connect failure later, means direct.
- */
-export function chooseDriver(input: { residentOptIn: boolean; hookPort: number | null }): DriverKind {
-  return input.residentOptIn && input.hookPort ? "resident" : "direct";
-}
-
 export interface OpenDriverOptions {
   /** How long to wait for a busy browser to answer before calling it unresponsive. */
   patienceMs?: number;
 }
 
-/** Opt-in for the dormant daemon-resident path. */
-export const RESIDENT_ENV = "CAST_BROWSER_RESIDENT";
-
 /**
- * Open a driver to the live managed browser. Throws `BrowserNotLive` when
- * there is no usable browser, with the verdict the caller should relay.
- */
-export async function openDriver(opts: OpenDriverOptions = {}): Promise<BrowserDriver> {
-  const kind = chooseDriver({ residentOptIn: process.env[RESIDENT_ENV] === "1", hookPort: readHookPort() });
-  if (kind === "resident") {
-    try {
-      return await openResident();
-    } catch (err) {
-      // The daemon answered and said the browser is not there: that verdict
-      // stands. Anything else (no daemon, old daemon, slow daemon) means direct.
-      if (err instanceof BrowserNotLive) throw err;
-    }
-  }
-  return openDirect(opts);
-}
-
-async function openResident(): Promise<BrowserDriver> {
-  const port = readHookPort();
-  if (!port) throw new Error("no daemon port");
-  const client = await ResidentClient.connect(port);
-  const { liveness, state } = client.hello;
-  if (!isReachable(liveness) || !state) {
-    client.close();
-    throw new BrowserNotLive(liveness, state);
-  }
-  return {
-    kind: "resident",
-    conn: client,
-    state,
-    targets: () => client.targets(),
-    attach: async (targetId) => {
-      const { sessionId } = await client.attach(targetId);
-      return { conn: client, sessionId, targetId };
-    },
-    detach: async (targetId) => {
-      await client.detach(targetId).catch(() => {});
-    },
-    close: () => client.close(),
-  };
-}
-
-/**
- * The direct path, trimmed to what a fresh process must do.
+ * Open a driver to the live managed browser, trimmed to what a fresh process
+ * must do. Throws `BrowserNotLive` when there is no usable browser, with the
+ * verdict the caller should relay.
  *
  * It used to be: probe /json/version (liveness), fetch /json/version again
  * (socket discovery), open the socket, fetch /json/list (tabs), attach, five
@@ -112,7 +46,7 @@ async function openResident(): Promise<BrowserDriver> {
  * (recovery.ts / observe.ts). The HTTP probe is kept only for the failure
  * path, where "gone" vs "not answering" is the whole question.
  */
-async function openDirect(opts: OpenDriverOptions): Promise<BrowserDriver> {
+export async function openDriver(opts: OpenDriverOptions = {}): Promise<BrowserDriver> {
   const state = readState();
   if (!state) throw new BrowserNotLive("exited", state);
   let conn: CdpConnection;
@@ -129,7 +63,6 @@ async function openDirect(opts: OpenDriverOptions): Promise<BrowserDriver> {
   }
   mark("connect");
   return {
-    kind: "direct",
     conn,
     state,
     targets: () => listTargetsVia(conn).finally(() => mark("targets")),

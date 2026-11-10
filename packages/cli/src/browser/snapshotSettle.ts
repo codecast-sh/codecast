@@ -32,6 +32,13 @@
  * in the page.
  */
 
+import { HIDDEN_VALUE_MAX } from "./redaction.js";
+
+/** How many secret fields one probe reports, how many documents and shadow
+ *  roots it walks for them, and how much of one value it sends. */
+const HIDDEN_FIELDS_MAX = 500;
+const HIDDEN_ROOTS_MAX = 200;
+
 /** Installs the mutation clock once per document. Runs as part of the init
  *  script at document start, and again from the probe for a page that loaded
  *  before the script was registered. `last` is when anything changed. `gone`
@@ -75,6 +82,13 @@ export const MUTATION_CLOCK_SOURCE = `(() => {
  * autocomplete; every text field's value when the agent asks for
  * `--redact-values`. Read in the page because the accessibility tree does not
  * say which textbox is a password field.
+ *
+ * The accessibility tree the snapshot prints includes same-origin frames and
+ * open shadow roots, so the walk does too: a login form in an iframe or a web
+ * component is still a login form. A cross-origin frame's document cannot be
+ * read from here; its password fields still print as Chrome's bullet mask,
+ * which redactSnapshotValues hides by shape. A value longer than
+ * HIDDEN_VALUE_MAX is sent cut to that length and matched as a prefix.
  */
 const HIDDEN_VALUES_SOURCE = (all: boolean) => `(() => {
   const all = ${all ? "true" : "false"};
@@ -87,14 +101,26 @@ const HIDDEN_VALUES_SOURCE = (all: boolean) => `(() => {
   const words = (s) => String(s || "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   const skip = ["checkbox", "radio", "submit", "button", "hidden", "file", "image", "reset", "range", "color"];
   const out = [];
-  for (const el of document.querySelectorAll("input, textarea")) {
-    const v = el.value;
-    if (!v || out.length >= 50) continue;
-    const t = (el.type || "").toLowerCase();
-    if (skip.includes(t)) continue;
-    const auto = String(el.autocomplete || "").toLowerCase().split(/\\s+/);
-    const named = [...words(el.name), ...words(el.id)].some((w) => secretWord.test(w));
-    if (all || t === "password" || auto.some((a) => secretAuto.test(a)) || named) out.push(String(v).slice(0, 200));
+  const roots = [document];
+  for (let i = 0; i < roots.length && i < ${HIDDEN_ROOTS_MAX}; i++) {
+    const root = roots[i];
+    for (const el of root.querySelectorAll("input, textarea")) {
+      const v = el.value;
+      if (!v || out.length >= ${HIDDEN_FIELDS_MAX}) continue;
+      const t = (el.type || "").toLowerCase();
+      if (skip.includes(t)) continue;
+      const auto = String(el.autocomplete || "").toLowerCase().split(/\\s+/);
+      const named = [...words(el.name), ...words(el.id)].some((w) => secretWord.test(w));
+      if (all || t === "password" || auto.some((a) => secretAuto.test(a)) || named) out.push(String(v).slice(0, ${HIDDEN_VALUE_MAX}));
+    }
+    try {
+      for (const f of root.querySelectorAll("iframe, frame")) {
+        let d = null;
+        try { d = f.contentDocument; } catch {}
+        if (d && !roots.includes(d)) roots.push(d);
+      }
+      for (const el of root.querySelectorAll("*")) if (el.shadowRoot && !roots.includes(el.shadowRoot)) roots.push(el.shadowRoot);
+    } catch {}
   }
   return out;
 })()`;

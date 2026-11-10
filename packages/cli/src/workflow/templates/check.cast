@@ -4,7 +4,7 @@ digraph check {
   graph [kind="segment", label="Check", description="The project's check command on the change", takes="branch"]
   start [shape=Mdiamond]
   verify [label="Verify", shape=parallelogram, timeout=3600,
-    script="cd \"$(cast ws path $worktree)\" && bash -c $line.commands.check"]
+    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && bash -c $line.commands.check"]
   passed [shape=Msquare, label="Passed"]
   failed [shape=Msquare, label="Checks failed", stop="The project's check failed on the change: $verify.output"]
   start -> verify

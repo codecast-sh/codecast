@@ -91,8 +91,9 @@ export async function collectCapabilityInventoryAsync(home = os.homedir(), proje
   const started = Date.now();
   const inventory = await readInventoryAsync(home, projectPath);
   if (inventory.unreadable.length) throw new Error("capability inventory unavailable");
-  // The worker path strips bodies so pages stay small. Fill them from
-  // `source` here, one file per loop turn.
+  // The scan reads each markdown file for its frontmatter but returns no
+  // body (neither the worker pages nor the in-process reader carry one), so
+  // every body is read again from `source` here, one file per loop turn.
   await attachMissingBodies(inventory.items);
   return payloadFrom(inventory, started);
 }
@@ -277,6 +278,11 @@ export type CapabilitiesMode = "off" | "dry" | "on";
 let lastMode: CapabilitiesMode = "dry";
 let desiredRevision = 0;
 let appliedRevision = 0;
+/** The newest revision a DRY pass planned cleanly. Dry mode never applies, so
+ *  it never advances `appliedRevision`; without this the full reconcile (a
+ *  fetch, two git spawns, the lock) reran on every beat for as long as the
+ *  mode stayed dry. Never reported as applied. */
+let dryPlannedRevision = 0;
 
 /** Called by the daemon with each heartbeat response. Cheap by design: the
  *  common case (nothing changed, mode unchanged) is two field writes. */
@@ -299,7 +305,15 @@ export function recordConvergenceSignals(payload: { capabilities_mode?: unknown;
  */
 export function reconcileNeeded(): { mode: CapabilitiesMode; behind: boolean } {
   if (lastMode === "off") return { mode: "off", behind: false };
-  return { mode: lastMode, behind: appliedRevision < desiredRevision };
+  const done = lastMode === "dry" ? Math.max(appliedRevision, dryPlannedRevision) : appliedRevision;
+  return { mode: lastMode, behind: done < desiredRevision };
+}
+
+/** A dry pass planned this revision with nothing left to retry: the next dry
+ *  beat is free until the revision moves. Switching the mode to `on` ignores
+ *  this, so the first `on` beat still applies. */
+export function markRevisionPlanned(revision: number): void {
+  if (revision > dryPlannedRevision) dryPlannedRevision = revision;
 }
 
 /** The reconciler reports back after a successful plan+apply pass. */
@@ -316,4 +330,5 @@ export function resetConvergenceState(): void {
   lastMode = "dry";
   desiredRevision = 0;
   appliedRevision = 0;
+  dryPlannedRevision = 0;
 }

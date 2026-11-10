@@ -12,7 +12,7 @@
 // install-or-refresh; a slug with no entry is left exactly as it is (the user
 // may have installed it by hand and never bound it — not ours to touch).
 
-import { SNIPPET_CATALOG, snippetBySlug } from "@codecast/shared/contracts";
+import { snippetBySlug } from "@codecast/shared/contracts";
 import { cutOwnedSections, getSnippetTargets, installSectionToTargets, writeOwnedSection } from "../snippets.js";
 import * as fs from "fs";
 import type { DesiredState } from "@codecast/shared/contracts";
@@ -74,10 +74,4 @@ export function applyBuiltins(state: DesiredState, dryRun = false): BuiltinApply
     }
   }
   return out;
-}
-
-/** Every builtin slug the catalog knows — for callers that want to sanity
- *  check a resolved set before applying. */
-export function knownBuiltinSlugs(): string[] {
-  return SNIPPET_CATALOG.filter((s) => s.section).map((s) => s.slug);
 }

@@ -1,4 +1,5 @@
 import { STATUSLINE_HOOK_SCRIPT } from "./codecastOwned.js";
+import { HOOK_STATE_DIR } from "./config/configDir.js";
 // Claude Code's statusLine command -> codecast daemon, for LIVE account usage,
 // and the one line the terminal gets back for it.
 //
@@ -60,7 +61,7 @@ export const STATUSLINE_HOOK_FILE: string = STATUSLINE_HOOK_SCRIPT;
 /** The daemon route the script posts to. */
 export const STATUSLINE_HOOK_PATH = "/hook/statusline";
 
-/** Where the per-session stamps live, under ~/.codecast. The script writes them
+/** Where the per-session stamps live, under the state directory. The script writes them
  *  and the daemon sweeps the stale ones — nothing else deletes them, and a
  *  shared /tmp is not an option for a file naming the user's account. */
 export const STATUSLINE_STAMP_DIR = "statusline";
@@ -79,6 +80,7 @@ export const CODECAST_STATUSLINE_HOOK = `#!/bin/sh
 # and its usage. Set once, with a builtin, so the file is 0600 the moment it is
 # created — a chmod afterwards would leave a window and cost a process.
 umask 077
+${HOOK_STATE_DIR}
 
 payload=
 while IFS= read -r cc_line || [ -n "$cc_line" ]; do
@@ -113,7 +115,7 @@ esac
 # A symlink at our path is somebody else's file, so it is neither read (it would
 # print a stranger's bytes to the terminal) nor written (it would clobber
 # whatever it points at). The tick just goes without a cache.
-cc_dir="$HOME/.codecast/${STATUSLINE_STAMP_DIR}"
+cc_dir="$CC_DIR/${STATUSLINE_STAMP_DIR}"
 cc_stamp="$cc_dir/$cc_sid"
 cc_cache=1
 [ -L "$cc_stamp" ] && cc_cache=
@@ -267,11 +269,11 @@ fi
 cc_port=
 cc_token=
 if [ -n "$cc_post" ]; then
-  [ -f "$HOME/.codecast/hook-port" ] && IFS= read -r cc_port <"$HOME/.codecast/hook-port" 2>/dev/null
+  [ -f "$CC_DIR/hook-port" ] && IFS= read -r cc_port <"$CC_DIR/hook-port" 2>/dev/null
   # CODECAST_HOOK_TOKEN: proves this post came from a statusline this user
   # installed. The daemon greps this marker to tell an upgraded script from one
   # written before the route needed a token (hookAdmission.ts).
-  [ -f "$HOME/.codecast/hook-token" ] && IFS= read -r cc_token <"$HOME/.codecast/hook-token" 2>/dev/null
+  [ -f "$CC_DIR/hook-token" ] && IFS= read -r cc_token <"$CC_DIR/hook-token" 2>/dev/null
   case "$cc_port" in
     [1-9]|[1-9][0-9]*) ;;
     # Stamped only once a post is certain, so a tick skipped for a missing

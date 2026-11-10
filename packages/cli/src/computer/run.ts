@@ -145,6 +145,8 @@ export interface ComputerPermissionApi {
   getPermissionStatus: typeof import("./permissions.js").getPermissionStatus;
   readPermissionStatus: typeof import("./permissions.js").readPermissionStatus;
   openPermissionSettings: typeof import("./permissions.js").openPermissionSettings;
+  /** Optional so a fake that opens no real window need not close one. */
+  closePermissionSettings?: typeof import("./permissions.js").closePermissionSettings;
   resetPermissions: typeof import("./permissions.js").resetPermissions;
   formatPermissionsReport: typeof import("./permissions.js").formatPermissionsReport;
 }
