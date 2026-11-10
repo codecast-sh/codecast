@@ -14,9 +14,7 @@ export type InboxGroupBy = "area" | "kind" | "who" | "none";
 export type InboxWho = "all" | "me" | "none" | string;
 
 export const INBOX_ORDERS: readonly InboxOrder[] = ["impact", "severity", "age", "findings", "kind", "area", "assignee"];
-export const INBOX_ORDER_LABEL: Record<InboxOrder, string> = { impact: "Most impact", severity: "Most severe", age: "Oldest", findings: "Most findings", kind: "Kind", area: "Area", assignee: "Assignee" };
 export const INBOX_GROUPS: readonly InboxGroupBy[] = ["area", "kind", "who", "none"];
-export const INBOX_GROUP_LABEL: Record<InboxGroupBy, string> = { area: "By area", kind: "By kind", who: "By assignee", none: "No groups" };
 
 export type InboxView = { who: InboxWho; kind: DecisionChange | null; area: string | null; order: InboxOrder; group: InboxGroupBy };
 

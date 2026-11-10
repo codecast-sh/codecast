@@ -98,39 +98,6 @@ export function useProjectStations(projectId: string) {
   return { slug, repo, inRepo, fork, customized, rows, hostedHere, onFork, nodes, edges, diffs, customize, patchStation, resetOne, resetAll, stopCustomizing, setRoleLine };
 }
 
-/** One station's prompt, script and timeout, read and edited in place: the
- *  Definition of a station's panel on the map (line-map.md LX3, LX5). */
-export function StationDefinition({ projectId, stationId }: { projectId: string; stationId: string }) {
-  const m = useProjectStations(projectId);
-  const node = m.nodes.find((n) => n.id === stationId);
-  if (!node) return <p className="lset-empty">This station is not in this project's steps.</p>;
-  const { repo } = m;
-  return (
-    <div className="space-y-2" data-station-definition={stationId}>
-      <StationPanel
-        node={node}
-        projectId={projectId}
-        line={m.inRepo && repo.source.kind === "repo" ? repo.source.line : SHIPPED_LINE}
-        editable={m.inRepo ? repo.writable : m.customized}
-        runsIt={m.inRepo || m.onFork.length > 0}
-        changed={m.diffs[node.id] ?? []}
-        onPatch={(patch) => m.patchStation(node.id, patch)}
-        onReset={() => m.resetOne(node.id)}
-        {...(m.inRepo ? {
-          status: <EditStatus s={repo.stateOf(node.id)} device={repo.gate.device ?? "the machine"} now={repo.now} onDismiss={() => repo.clear(node.id)} />,
-          pending: isTravelling(repo.stateOf(node.id)),
-        } : {})}
-      />
-      <p className="text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-station-home>
-        {m.inRepo
-          ? (repo.gate.writable ? `Edits are written to the repo on ${repo.gate.device}, checked, and republished. Each run records the version it ran.` : repo.gate.reason)
-          : m.customized
-            ? (m.onFork.length ? "Edits save to this project's customized copy, which a role runs." : "Edits save to this project's customized copy. No role runs it yet.")
-            : <>This project runs the shipped line, read only here. <button type="button" className="underline underline-offset-2" onClick={m.customize} data-customize-line>Customize steps</button> to edit its stations.</>}
-      </p>
-    </div>
-  );
-}
 
 /** focusStation (a link in, ?station=) opens that station's panel, opens the
  *  graph around it, and scrolls the panel into view. */

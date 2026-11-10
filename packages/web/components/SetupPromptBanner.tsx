@@ -6,6 +6,7 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { X, Terminal, ArrowRight } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { setupPromptMessage } from "../lib/setupPrompt";
 
 const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000;
 
@@ -27,16 +28,8 @@ export function SetupPromptBanner() {
   if (!mounted || isDismissed) return null;
   if (user === undefined || conversationsResult === undefined) return null;
 
-  const hasCliInstalled = !!user?.cli_version;
-  const hasSessions = conversationsResult?.conversations && conversationsResult.conversations.length > 0;
-
-  if (hasCliInstalled && hasSessions) return null;
-  // If no personal sessions, the empty state handles onboarding -- don't double-prompt
-  if (!hasSessions) return null;
-
-  const message = !hasCliInstalled
-    ? "Install the CLI to start syncing your Claude Code sessions"
-    : "Start the daemon to sync your first session";
+  const message = setupPromptMessage(!!user?.cli_version, (conversationsResult?.conversations?.length ?? 0) > 0);
+  if (!message) return null;
 
   return (
     <div data-cc-banner className="bg-gradient-to-r from-sol-yellow/10 via-sol-orange/10 to-sol-yellow/10 border-b border-sol-yellow/30">

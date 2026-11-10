@@ -53,9 +53,6 @@ let last: TriageStep | null = null;
 /** A problem task's status change from the Fix card, taken back by the same z. */
 let lastTask: { label: string; undo: () => void } | null = null;
 
-export function lastTriage(): TriageStep | null {
-  return last;
-}
 
 export function triage(rows: OpsGroup[], status: GroupStatus): TriageStep | null {
   const step = triageStep(rows, status);

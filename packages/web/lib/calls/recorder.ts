@@ -41,6 +41,7 @@ import { createScribeEngine, type ConvexHandle } from "./scribeEngine";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 import { isDesktop } from "../desktop";
 import { readJoinPrefs } from "./joinPrefs";
+import { recorderMime } from "./walkieMessage";
 
 const api = _api as any;
 
@@ -161,17 +162,6 @@ function setPhase(next: RecorderPhase, err: string | null = null) {
   phase = next;
   error = err;
   publish();
-}
-
-/** What the browser will actually record, container first. Same ladder the
- *  walkie's voice notes use. */
-function recorderMime(): string {
-  for (const mime of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]) {
-    try {
-      if (MediaRecorder.isTypeSupported?.(mime)) return mime;
-    } catch {}
-  }
-  return "";
 }
 
 function me(): { id: string; name: string } {

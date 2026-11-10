@@ -431,15 +431,6 @@ export function decisionsByCase(decisions: ReadonlyArray<StepDecision>): CaseDec
   return [...by.values()];
 }
 
-/** Each run whose close the problem came back after, with what came back: the same closes a decision's `closed` reads, by run. */
-export function cameBackByRun(issues: ReadonlyArray<Pick<LineIssue, "history">>): Map<string, DecisionClose> {
-  const out = new Map<string, DecisionClose>();
-  for (const { history: h } of issues) {
-    const total = cameBackCount(h);
-    for (const c of h.closes) if (c.back) out.set(c.runId, closeOf(c, total));
-  }
-  return out;
-}
 
 /** A record's own id after the noun it names ("cluster c2cb5312", "run 3f9a1c0e"): the noun reads alone, the id is
  *  noise to a person. A commit keeps its hash, since that is how a person finds it. */

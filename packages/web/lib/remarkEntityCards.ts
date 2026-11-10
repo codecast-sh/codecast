@@ -34,7 +34,8 @@ function cardEligible(payload: string, types?: readonly EntityType[]): boolean {
  *  holds no row for it (see EntityIdPill `certain`). */
 export const REF_CERTAIN_ATTR = "data-ref-certain";
 
-function mdastText(node: any): string {
+/** The plain text under an mdast node. */
+export function mdastText(node: any): string {
   if (!node) return "";
   if (node.type === "text") return node.value ?? "";
   if (Array.isArray(node.children)) return node.children.map(mdastText).join("");

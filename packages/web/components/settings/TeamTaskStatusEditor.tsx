@@ -31,7 +31,7 @@ import {
 } from "@codecast/shared/tasks";
 import { STATUS_COLOR_CLASSES, statusVisual, taskStatusKey } from "../../lib/taskStatuses";
 import { useInboxStore } from "../../store/inboxStore";
-import { filterToWorkspace } from "../../lib/workspaceScope";
+import { filterByWorkspace } from "../../lib/workspaceScope";
 import { SettingsSection } from "./ui";
 
 const mintId = () => `st_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -87,7 +87,7 @@ export function TeamTaskStatusEditor({
   const tasks = useInboxStore((s) => s.tasks);
   const counts = useMemo(() => {
     const out = new Map<string, number>();
-    for (const t of filterToWorkspace(Object.values(tasks) as any[], String(teamId))) {
+    for (const t of filterByWorkspace(Object.values(tasks) as any[], `team:${String(teamId)}`)) {
       if (!isActiveTask(t)) continue;
       const key = taskStatusKey(t, saved);
       out.set(key, (out.get(key) ?? 0) + 1);

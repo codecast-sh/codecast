@@ -36,8 +36,6 @@ export function StartSessionButton({ children, what, start, className = "lw-act"
   );
 }
 
-/** What "Set up judging" does, said before it runs. */
-export const SETUP_JUDGING_WHAT = "A session drafts what to judge, tries it on recent data, and brings you one card. Nothing turns on until you answer it.";
 
 /** What "Improve this judge" does, said before it runs. */
 export function improveJudgeWhat(judge: string, wrong: number): string {

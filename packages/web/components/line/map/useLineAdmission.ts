@@ -75,12 +75,6 @@ export function admissionOf(role: OrgRole | null, queue?: LineQueue | null): Lin
   };
 }
 
-/** Turns a role's line on or off (lineSwitchFields), read from the org tree at the moment of the click. */
-export function setLineOn(roleId: string, on: boolean) {
-  const st = useInboxStore.getState();
-  const role = st.orgTree?.roles.find((r) => r._id === roleId);
-  if (role) st.updateOrgRole(role._id, lineSwitchFields(role, on));
-}
 
 /** `projectId`: a project's id, NO_PROJECT for work filed under none (which
  *  nothing admits), or null when the line shown is no one line. */

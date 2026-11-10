@@ -44,16 +44,3 @@ export const WAKE_TABLE: { event: string; wakes: boolean; note: string }[] = [
   { event: "The branch merges cleanly again", wakes: false, note: "recorded" },
   { event: "Anything from a bot, or from the PR's own author", wakes: false, note: "ignored" },
 ];
-
-/** Shepherd states, with the phrase and accent the PR header uses (lib/externalEvents.ts). */
-export const SHEPHERD_STATES: { key: string; phrase: string; color: string }[] = [
-  { key: "ci_pending", phrase: "waiting on checks", color: "#b58900" },
-  { key: "ci_red", phrase: "fixing failed checks", color: "#dc322f" },
-  { key: "review_pending", phrase: "waiting for a review", color: "#b58900" },
-  { key: "changes_requested", phrase: "has changes to make", color: "#cb4b16" },
-  { key: "behind", phrase: "branch is behind its base", color: "#cb4b16" },
-  { key: "conflicts", phrase: "has merge conflicts to resolve", color: "#dc322f" },
-  { key: "approved", phrase: "approved", color: "#859900" },
-  { key: "ready", phrase: "ready to merge", color: "#859900" },
-  { key: "merged", phrase: "merged", color: "#6c71c4" },
-];

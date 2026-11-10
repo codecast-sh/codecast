@@ -32,14 +32,3 @@ export function useScrollEdges(ref: RefObject<HTMLElement | null>, remount: unkn
   }, [ref, remount]);
   return edges;
 }
-
-/** Edge-fade attributes for a scroller: spread onto the element that scrolls. */
-export const edgeAttrs = (e: ScrollEdges) => ({ "data-edge-left": e.left ? "true" : undefined, "data-edge-right": e.right ? "true" : undefined });
-
-/** Scroll a sideways row so `el` sits at its center, clear of both faded
- *  edges. Rects and scrollTo, not scrollIntoView, so the page never scrolls. */
-export function centerInRow(row: HTMLElement, el: HTMLElement, behavior: ScrollBehavior = "auto") {
-  const box = row.getBoundingClientRect();
-  const r = el.getBoundingClientRect();
-  row.scrollTo({ left: row.scrollLeft + (r.left + r.width / 2) - (box.left + box.width / 2), behavior });
-}

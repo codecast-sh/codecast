@@ -116,17 +116,6 @@ export function graphPickOrder<G extends { key: string; title: string }>(graphs:
   return [...graphs].sort((a, b) => Number(isCodecastLine(b.key)) - Number(isCodecastLine(a.key)) || a.title.localeCompare(b.title));
 }
 
-/**
- * A graph's name where a person picks between a project's graphs: by place
- * and job, since every graph a project runs fixes problems and what tells them
- * apart is where the graph lives (learning-loop.md LL1, LL6). Codecast's own
- * line is "Fixes here"; a graph the product publishes is "Fixes in <product>".
- * Finding problems is the Find band's, so no tab claims it.
- */
-export function graphPlaceTitle(key: string, product?: string | null): string {
-  if (isCodecastLine(key)) return key.startsWith(`${CODECAST_LINE}-`) ? "Fixes here, customized" : "Fixes here";
-  return `Fixes in ${product?.trim() || graphTitle(key)}`;
-}
 
 export type ProjectGraph = {
   key: string;

@@ -24,8 +24,6 @@ export { CONVEX_URL };
 
 const localAuth = createLocalAuth(CONVEX_URL);
 
-export const AUTH_STORAGE_NAMESPACE = localAuth.namespace;
-export const namespacedAuthStorageKey = localAuth.namespacedKey;
 
 // Mirrors @convex-dev/auth's useNamespacedStorage key layout:
 // `${key}_${namespace}` with non-alphanumerics stripped from the namespace,
@@ -33,8 +31,6 @@ export const namespacedAuthStorageKey = localAuth.namespacedKey;
 // if a package upgrade changes this layout, offline boot silently breaks.
 export const AUTH_JWT_STORAGE_KEY = localAuth.jwtKey;
 export const AUTH_REFRESH_TOKEN_STORAGE_KEY = localAuth.refreshTokenKey;
-export const AUTH_OAUTH_VERIFIER_STORAGE_KEY = localAuth.oauthVerifierKey;
-export const AUTH_SERVER_STATE_STORAGE_KEY = localAuth.serverStateKey;
 
 /** All four keys, the set an explicit logout must purge. */
 export const AUTH_STORAGE_KEYS = localAuth.keys;

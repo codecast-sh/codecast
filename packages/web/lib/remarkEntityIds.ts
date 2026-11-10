@@ -3,6 +3,7 @@ import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
 import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseModPaneUrl, parseClaudeArtifactUrl, parseLinkPreviewUrl, parseMessageRefUrl, messageRefPayload, contextualPrRefRegex, contextualPrRefPayload, splitContextualPrRefs } from "./entityLinks";
 import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
+import { mdastText } from "./remarkEntityCards";
 import { filesHref } from "./vault/vaultHref";
 import { isObjectRef, objectRefScanRegex } from "./mods/objects";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
@@ -36,13 +37,6 @@ const VIEW_REF_RE = viewRefScanRegex();
 
 function isEmbedLink(node: any): boolean {
   return node?.type === "link" && typeof node.url === "string" && node.url.startsWith("embed://");
-}
-
-function mdastText(node: any): string {
-  if (!node) return "";
-  if (node.type === "text") return node.value ?? "";
-  if (Array.isArray(node.children)) return node.children.map(mdastText).join("");
-  return "";
 }
 
 function isUrlLabel(text: string, href: string): boolean {

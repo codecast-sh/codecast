@@ -346,7 +346,6 @@ export const CHROME_BUTTON_W = 68;
 export function chromeWidth(buttons: number): number {
   return CHROME_BUTTON_W * buttons + 4 * (buttons - 1) + 3 * 2;
 }
-export const CHROME_WIDTH = chromeWidth(4);
 export const CALL_CHROME_WIDTH = chromeWidth(5);
 export const CHROME_HEIGHT = CHROME_BUTTON + 3 * 2;
 /** Two lines: the name and its activity, and the gesture under them. The

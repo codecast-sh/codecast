@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { ArrowUpRight, ArrowUp, CornerDownRight } from "lucide-react";
+import { ArrowUp, CornerDownRight } from "lucide-react";
 import { useTrackedStore, getProjectName, type SessionDecisionItem } from "../../store/inboxStore";
 import { resolveAssigneeInfo } from "../../lib/liveEntities";
 import { Avatar } from "../tasks/TaskCommentStream";
@@ -173,14 +173,6 @@ export function CategoryNote({
   );
 }
 
-/** The link out to the whole decision, for a card that shows a slice of it. */
-export function OpenDecisionLink({ href, label = "open", className = "" }: { href: string; label?: string; className?: string }) {
-  return (
-    <Link href={href} className={`inline-flex items-center gap-1 font-mono text-sol-text-dim hover:text-sol-text ${className}`}>
-      {label}<ArrowUpRight className="w-3 h-3" />
-    </Link>
-  );
-}
 
 /** Why it reached its owner, in the sender's words: a pass with a note, or an
  *  escalation (always with one). Only while it is open; a settled card says its verdict. */

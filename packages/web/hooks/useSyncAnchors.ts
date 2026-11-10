@@ -156,19 +156,6 @@ export function deriveAnchorStatus(a: Partial<AnchorRow> | null | undefined, now
   return { label: "dormant · wakes on an event", dot: "bg-sol-text-dim/60", text: "text-sol-text-dim", tone: "dormant" };
 }
 
-/** Which anchor the slide-over shows when none was chosen: the active team's,
- *  else the personal one, else the first — with none at all, "new:user" (the
- *  panel's personal-onboarding key). */
-export function defaultAnchorKey(anchors: AnchorRow[], activeTeamId: string | null | undefined): string {
-  if (activeTeamId) {
-    const team = anchors.find((a) => a.scope_type === "team" && a.team_id === activeTeamId);
-    if (team) return team._id;
-  }
-  const personal = anchors.find((a) => a.scope_type === "user");
-  if (personal) return personal._id;
-  if (anchors[0]) return anchors[0]._id;
-  return "new:user";
-}
 
 /** The label a person reads to know WHICH workspace's agent: "Personal" or the team's name. */
 export function anchorScopeLabel(a: Pick<AnchorRow, "scope_type" | "team_name"> | null | undefined): string {

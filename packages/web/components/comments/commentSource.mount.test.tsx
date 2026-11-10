@@ -37,7 +37,6 @@ const { conversationComments } = await import("@codecast/convex/convex/commentTw
 const { listConversationComments } = await import("@codecast/convex/convex/commentStore");
 const { CommentThread } = await import("./CommentThread");
 const { groupComments } = await import("../../lib/commentThread");
-const { buildConversationMessageMetadata } = await import("../../hooks/useConversationMessageMetadata");
 const { useConversationCommentSummary } = await import("../../hooks/useConversationCommentsSync");
 const { useThreadUnreadSync } = await import("../../hooks/useThreadsSync");
 const { useInboxStore } = await import("../../store/inboxStore");
@@ -166,10 +165,6 @@ describe("flag on: the same rows render identically from review_comments", () =>
       expect(htmlComments).toContain("Fixed: it breaks on EOF.");
       expect(htmlComments).toContain("reply to a deleted note");
       expect(htmlTwins).toBe(htmlComments);
-
-      // The per-message counts the conversation and the phone draw.
-      expect(buildConversationMessageMetadata({ commentSummary: fromTwins }))
-        .toEqual(buildConversationMessageMetadata({ commentSummary: fromComments }));
     }
   });
 });

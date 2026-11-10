@@ -963,15 +963,6 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["sessionIndex.page"],
   },
-  // The viewer's chat with a project's line (convex lineChat.thread): who
-  // answers it and each ask with its reply, one row per project, keyed by
-  // the project id. Delta: each workspace feeds its own project's row.
-  lineChats: {
-    persistence: { kind: "collection", key: "lineChats" },
-    hydration: { phase: "deferred" },
-    sync: { isDelta: true, deepFields: ["turns", "owner"] },
-    feeds: ["lineChat.thread"],
-  },
   // Try (line-workspace.md LW4): one row per case of a try, a step's edited
   // prompt run on a past case on the graph's machine. tryStep paints the
   // cases queued under their natural key (try:run), which the server rows
@@ -1653,9 +1644,6 @@ export const CLIENT_SYNC_REGISTRY = {
   collapsedSections: {
     persistence: { kind: "meta", key: "collapsedSections" },
   },
-  sidebarNavExpanded: {
-    persistence: { kind: "meta", key: "sidebarNavExpanded" },
-  },
   // localFirst on a list or singleton: an action's change to a row's field
   // (or a list's membership) is locked until the server echoes it, and lifted
   // with its value restored if the server refuses. The engine diffs the slice
@@ -1758,9 +1746,6 @@ export const META_STORE_KEYS = registryEntries
   .filter(([, entry]) => entry.persistence?.kind === "meta")
   .map(([key]) => key) as ClientSyncMetaStoreKey[];
 
-export const PROTECTED_COLLECTION_KEYS = registryEntries
-  .filter(([, entry]) => entry.localFirst)
-  .map(([key]) => key);
 
 // Boot-hydration apply lists, derived so a persisted key can never silently
 // skip hydration (the bug class of ct-34920 and the buckets label pop-in):
@@ -2012,7 +1997,6 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   lineTimeline: "shared",
   sessionIndex: "shared",
   lineCards: "shared",
-  lineChats: "shared",
   lineTries: "shared",
   lineGraphVersions: "shared",
   lineGraphEditability: "shared",
@@ -2108,7 +2092,6 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   recentProjects: "local",
   recentProjectsByDevice: "local",
   collapsedSections: "local",
-  sidebarNavExpanded: "local",
   feedConversations: "local",
   feedHasMore: "local",
   feedCursors: "local",

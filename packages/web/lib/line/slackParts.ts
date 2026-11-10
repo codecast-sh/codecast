@@ -23,6 +23,3 @@ export function slackParts(text: string): SlackPart[] {
   // Adjacent strings join, so a text with a lone `#channel` is still one string.
   return out.reduce<SlackPart[]>((acc, p) => (typeof p === "string" && typeof acc.at(-1) === "string" ? (acc[acc.length - 1] = (acc.at(-1) as string) + p, acc) : (acc.push(p), acc)), []);
 }
-
-/** Whether a text carries any Slack token worth splitting. */
-export const hasSlackMarkup = (text: string): boolean => { TOKEN.lastIndex = 0; return TOKEN.test(text); };

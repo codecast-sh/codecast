@@ -13,11 +13,3 @@ export const rise = (i: number) => ({ ["--i" as any]: Math.min(i, 10) });
  * follows", not a word boundary.
  */
 export const glueUnits = (t: string) => t.replace(/(\d) (ms|s|MB|GB|KB|x|%|min|h|seconds|minutes)(?!\w)/g, "$1\u00a0$2");
-
-/**
- * The head of a day or week where nothing landed: "Nothing landed on main on
- * Fri 2 Oct yet." `when` is "on Fri 2 Oct" or "this week". With every branch
- * shown the view is not of main, and "on main" goes.
- */
-export const nothingLanded = (branches: string | undefined, when: string, yet: boolean) =>
-  `Nothing landed ${branches === "all" ? "" : "on main "}${when}${yet ? " yet" : ""}.`;

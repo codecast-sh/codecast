@@ -30,16 +30,6 @@ export function useInitiatives(): InitiativeRow[] {
   return useWorkspaceCollection<InitiativeRow>("initiatives", initiativeSig);
 }
 
-/** One initiative by whatever names it: its id, its `in-N`, or the key of a
- *  stub the server has not numbered yet. */
-export function useInitiative(ref: string): { initiative: InitiativeRow | null; all: InitiativeRow[] } {
-  const all = useInitiatives();
-  const initiative = useMemo(() => {
-    const short = ref.toLowerCase();
-    return all.find((r) => r._id === ref || r.short_id === short || r.client_key === ref) ?? null;
-  }, [all, ref]);
-  return { initiative, all };
-}
 
 /** A progress bar reads where a task sits, whether it is done and whether
  *  the board would show it, nothing else: a retitle or a comment on any task

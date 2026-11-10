@@ -6,7 +6,6 @@
 // leaves out: the session and its size, the script's printed output, tokens,
 // cost, how the run failed.
 import { toolCallGist } from "../toolCallGist";
-import { signalQuotes } from "@codecast/shared/contracts/causeHistory";
 import type { LineModel, LineRunModel, LineVisit, StepKind } from "./lineModel";
 import { closedGate, LANDING_STATIONS, stationEnd, stepFailWords, type ReportRun, type StepState } from "./runReport";
 import { headFields, isAnswerKey, jsonObject, visitOutput, visitOutputWords, type VisitOutput } from "./visitOutput";
@@ -14,143 +13,6 @@ import { evalsOwed, isPathValue, reviewWords, scriptChecks, scriptErrors, type R
 
 // ── where the problem came from ──────────────────────────────────────────────
 
-/** The fields of a finding (a signals row) the source block reads. */
-export type TraceSignal = {
-  _id: string;
-  short_id?: string;
-  source: string;
-  title: string;
-  detail_md?: string;
-  evidence_url?: string;
-  judge?: string;
-  severity?: number;
-  /** A codecast judge's finding: the moment it read (mo-N) and the expectation it cites. */
-  moment?: string;
-  subject?: string;
-  observed_at: number;
-  created_at: number;
-  task_id: string;
-};
-
-export type RunSource = {
-  /** Findings the problem held when the run started (loaded here). */
-  count: number;
-  /** Findings loaded here that came in after the run started. */
-  later: number;
-  /** Each source and how many findings it gave by the start, most first. */
-  sources: Array<{ source: string; count: number }>;
-  /** Every finding the problem held at the start, newest first: the set its steps were given. */
-  findings: Array<{ id: string; ref: string | null; source: string; judge: string | null; title: string; at: number; line: string }>;
-  /** The finding the run started on: the newest by its start, then the most severe. */
-  lead: {
-    id: string;
-    ref: string | null;
-    source: string;
-    judge: string | null;
-    severity: number | null;
-    title: string;
-    /** The finder's own bold line, when it differs from the title. */
-    headline: string | null;
-    /** The first thing the finding quotes (the customer's or the agent's words). */
-    quote: string | null;
-    evidenceUrl: string | null;
-    /** The moment a codecast judge read for it, and the expectation it cites. */
-    moment: string | null;
-    expectation: string | null;
-    at: number;
-  } | null;
-};
-
-/** A finding's own line in a list: its title, unless other findings share it (an expectation's name, "Not met: …"),
- *  then what sets it apart: the words it quotes, else its bold head, else the first line of its detail that is not
- *  the title. */
-function findingLine(s: TraceSignal, repeated: ReadonlySet<string>): string {
-  if (!repeated.has(s.title)) return s.title;
-  const own = signalQuotes(s.detail_md)[0] ?? boldHead(s.detail_md)
-    ?? (s.detail_md ?? "").split("\n").map((l) => l.replace(/^[#>*\-\s]+/, "").trim()).find((l) => l && l !== s.title && !s.title.startsWith(l));
-  return own || s.title;
-}
-
-/** What a run's diagnosis re-targeted the problem to: the cause code its Investigate named, its statement, and what
- *  Refine kept and evicted of the findings (with its own word: "refined", "wrong_cause"). Null when neither said. */
-export type RunRetarget = { cause: string | null; statement: string | null; refine: string | null; kept: number | null; evicted: number | null; evidence: string | null };
-
-export function runRetarget(raw: Pick<TraceRun, "node_statuses"> | null | undefined): RunRetarget | null {
-  let cause: string | null = null;
-  let statement: string | null = null;
-  let refine: string | null = null;
-  let kept: number | null = null;
-  let evicted: number | null = null;
-  let evidence: string | null = null;
-  for (const n of raw?.node_statuses ?? []) {
-    const j = jsonOf(n.result_preview || n.session?.result || n.session?.state) as Record<string, unknown> | undefined;
-    if (!j || typeof j !== "object") continue;
-    if (typeof j.cause === "string" && /^C\d+$/i.test(j.cause.trim())) {
-      cause = j.cause.trim();
-      statement = typeof j.statement === "string" ? j.statement : statement;
-    }
-    if (n.node_id === "refine" || typeof j.kept === "number" || typeof j.evicted === "number") {
-      if (typeof j.outcome === "string") refine = j.outcome;
-      if (typeof j.kept === "number") kept = j.kept;
-      if (typeof j.evicted === "number") evicted = j.evicted;
-      if (typeof j.evidence === "string" && j.evidence.trim()) evidence = j.evidence.trim();
-    }
-  }
-  return cause || kept != null || evicted != null ? { cause, statement, refine, kept, evicted, evidence } : null;
-}
-
-/** The bold line a finder opens its detail with ("**Contact declined …** (severity 9/10)"). */
-function boldHead(detail: string | undefined): string | null {
-  const m = detail?.match(/^\s*\*\*(.+?)\*\*/);
-  return m ? m[1].trim() : null;
-}
-
-/** The severity a finder wrote into its detail ("(severity 9/10, …)") when the row carries none. */
-function severityIn(detail: string | undefined): number | null {
-  const m = detail?.match(/\bseverity\s+(\d+(?:\.\d+)?)\s*\/\s*10\b/i);
-  return m ? Number(m[1]) : null;
-}
-
-/**
- * Where a run came from: the problem's findings as they stood when the run started (observed at or before
- * `startedAt`), by source, led by the newest of them, the one the run was started on. Findings that came in
- * after the run started are `later`, never its source. Without `startedAt`, every finding counts.
- */
-export function runSource(signals: ReadonlyArray<TraceSignal>, caseId: string | null, startedAt?: number | null): RunSource {
-  const seen = new Set<string>();
-  const all = caseId ? signals.filter((s) => s.task_id === caseId && !seen.has(s._id) && !!seen.add(s._id)) : [];
-  const at = (s: TraceSignal) => s.observed_at || s.created_at;
-  const mine = startedAt == null ? all : all.filter((s) => at(s) <= startedAt);
-  const by = new Map<string, number>();
-  for (const s of mine) by.set(s.source, (by.get(s.source) ?? 0) + 1);
-  const sources = [...by].map(([source, count]) => ({ source, count })).sort((a, b) => b.count - a.count || a.source.localeCompare(b.source));
-  const sev = (s: TraceSignal) => s.severity ?? severityIn(s.detail_md);
-  const top = [...mine].sort((a, b) => at(b) - at(a) || (sev(b) ?? -1) - (sev(a) ?? -1))[0];
-  const head = top ? boldHead(top.detail_md) : null;
-  const titles = new Map<string, number>();
-  for (const x of mine) titles.set(x.title, (titles.get(x.title) ?? 0) + 1);
-  const repeated = new Set([...titles].filter(([, n]) => n > 1).map(([t]) => t));
-  return {
-    count: mine.length,
-    later: all.length - mine.length,
-    sources,
-    findings: [...mine].sort((a, b) => at(b) - at(a)).map((s) => ({ id: s._id, ref: s.short_id ?? null, source: s.source, judge: s.judge ?? null, title: s.title, at: at(s), line: findingLine(s, repeated) })),
-    lead: top ? {
-      id: top._id,
-      ref: top.short_id ?? null,
-      source: top.source,
-      judge: top.judge ?? null,
-      severity: sev(top),
-      title: top.title,
-      headline: head && head !== top.title ? head : null,
-      quote: signalQuotes(top.detail_md)[0] ?? null,
-      evidenceUrl: top.evidence_url ?? null,
-      moment: top.moment ?? null,
-      expectation: top.moment ? top.subject ?? null : null,
-      at: at(top),
-    } : null,
-  };
-}
 
 // ── the steps ────────────────────────────────────────────────────────────────
 
@@ -351,16 +213,6 @@ export function runTrace(model: Pick<LineModel, "steps">, run: Pick<LineRunModel
   });
 }
 
-/** A run's totals across its steps: how many of each kind, tokens and cost where recorded. */
-export function traceTotals(steps: ReadonlyArray<TraceStep>): { agent: number; script: number; person: number; tokens: number; costUsd: number } {
-  const t = { agent: 0, script: 0, person: 0, tokens: 0, costUsd: 0 };
-  for (const s of steps) {
-    if (s.kind === "agent" || s.kind === "script" || s.kind === "person") t[s.kind]++;
-    t.tokens += s.tokens ?? 0;
-    t.costUsd += s.costUsd ?? 0;
-  }
-  return t;
-}
 
 // ── what a command was run with ──────────────────────────────────────────────
 
@@ -463,53 +315,6 @@ export function expandCommand(template: string, resolve: (name: string) => strin
   }, []);
 }
 
-/** The fields later steps read from a step (`$<id>.json.<field>`, `$<id>.output`), each with the steps that read it. */
-export function readsOf(model: Pick<LineModel, "steps" | "order">, stepId: string): Array<{ name: string; field: string; by: string[]; byIds: string[] }> {
-  const out = new Map<string, { name: string; field: string; by: string[]; byIds: string[] }>();
-  for (const id of model.order) {
-    const st = model.steps[id];
-    if (!st?.prompt || id === stepId) continue;
-    for (const n of namedInputs(st.prompt.text)) {
-      const [owner, kind, ...path] = n.split(".");
-      if (owner !== stepId || !kind) continue;
-      const row = out.get(n) ?? { name: n, field: kind === "json" ? path.join(".") : kind, by: [], byIds: [] };
-      if (!row.by.includes(st.label)) { row.by.push(st.label); row.byIds.push(id); }
-      out.set(n, row);
-    }
-  }
-  return [...out.values()];
-}
-
-/**
- * A `$name`'s value as it was put into a prompt: the template's own text on either side of `$name` found in the prompt
- * the session was handed, and what sits between. Recovers what a script wrote when the run kept no copy, from the
- * step that read it. Null when the template's text around it is too short to anchor on or is not in the prompt.
- */
-export function valueFromRendered(template: string, rendered: string, name: string): string | null {
-  const token = `$${name}`;
-  const NAME = /\$[a-zA-Z_][\w.]*/;
-  for (let i = template.indexOf(token); i >= 0; i = template.indexOf(token, i + 1)) {
-    // `$a.b` must not match inside `$a.bc`.
-    if (/[\w]/.test(template[i + token.length] ?? "") || (template[i + token.length] === "." && /\w/.test(template[i + token.length + 1] ?? ""))) continue;
-    const before = template.slice(Math.max(0, i - 80), i).split(NAME).pop()!.replace(/^\s+/, "");
-    const after = template.slice(i + token.length).split(NAME)[0].slice(0, 40);
-    if (before.trim().length < 4) continue;
-    const at = rendered.indexOf(before);
-    if (at < 0) continue;
-    const start = at + before.length;
-    const end = after.trim() ? rendered.indexOf(after.replace(/\s+$/, "") || after, start) : rendered.indexOf("\n", start);
-    const value = (end >= start ? rendered.slice(start, end) : rendered.slice(start)).trim();
-    if (value) return value;
-  }
-  return null;
-}
-
-/** The `$names` a command or prompt reads, in order, once each. */
-export function namedInputs(text: string | null | undefined): string[] {
-  const out: string[] = [];
-  for (const m of (text ?? "").matchAll(/\$([a-zA-Z_][\w.]*)/g)) if (!out.includes(m[1])) out.push(m[1]);
-  return out;
-}
 
 /** A long text's head for reading in place: the first `lines` lines (and at most `chars`), and how many lines are left. */
 export function textHead(text: string, lines = 14, chars = 1600): { head: string; more: number; total: number } {
@@ -565,10 +370,6 @@ export function toolLog(messages: ReadonlyArray<TraceMessage>): ToolLogRow[] {
  *  to be reading ("[the gate] Done: ..."), which names a routing hop, never anything the person reads. */
 const stripTags = (t: string) => t.replace(/<(system-reminder|thinking)>[\s\S]*?<\/\1>/g, "").trim().replace(/^\[(?:to )?[a-z][a-z' -]{2,30}\]\s+/i, "");
 
-/** Money as the trace says it: "$0.41", "<$0.01". */
-export const usdWords = (n: number) => (n <= 0 ? "" : n < 0.01 ? "<$0.01" : `$${n.toFixed(2)}`);
-/** Tokens as the trace says them: "812", "12.3k", "1.2M". */
-export const tokenWords = (n: number) => (n <= 0 ? "" : n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`);
 
 /** What a step's row says it decided: its outcome in words, else its state; nothing when it only handed on. */
 export function outcomeLabel(s: Pick<TraceStep, "outcome" | "status" | "inferred"> & { unanswered?: boolean }): string {

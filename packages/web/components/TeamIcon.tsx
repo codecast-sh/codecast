@@ -96,17 +96,6 @@ export const colorBgClassMap: Record<TeamColorName, string> = {
   orange: "bg-sol-orange",
 };
 
-export function getSessionIconDefaults(id: string): { icon: TeamIconName; color: TeamColorName } {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = ((hash << 5) - hash) + id.charCodeAt(i);
-    hash |= 0;
-  }
-  return {
-    icon: TEAM_ICONS[Math.abs(hash) % TEAM_ICONS.length],
-    color: TEAM_COLORS[Math.abs(hash >> 8) % TEAM_COLORS.length],
-  };
-}
 
 interface TeamIconProps {
   icon?: string | null;

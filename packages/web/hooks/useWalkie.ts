@@ -83,9 +83,6 @@ subscribeWalkie(() => {
   }
 });
 
-export function lastWalkieTarget(): WalkieTarget | null {
-  return lastTarget;
-}
 
 /** Calls are available at all: the deployment has LiveKit and the ACTIVE team
  *  has the feature on. Read from the store rather than the hook so the two

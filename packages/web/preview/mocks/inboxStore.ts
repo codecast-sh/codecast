@@ -48,7 +48,6 @@ export const SESSIONS_PRESERVE_FIELDS: any = () => null;
 export const SESSIONS_STRIP_FIELDS: any = () => null;
 export const PER_DEVICE_UI_KEYS: any = () => null;
 export const isStampedUiKey: any = () => null;
-export const STAMPED_UI_KEYS: any = () => null;
 export const SessionCreatePendingError: any = () => null;
 export const TRIAGE_STAMP_KEYS: any = () => null;
 export const __resetHeldOverlayFactsForTests: any = () => null;

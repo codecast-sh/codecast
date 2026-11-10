@@ -103,12 +103,3 @@ export async function saveVaultBookmarks(vaultId: string, bookmarks: BookmarkIte
     await db.vault_prefs.put({ vaultId, bookmarks });
   } catch {}
 }
-
-/** Drop everything for a vault (unregistered or root moved). */
-export async function purgeVault(vaultId: string): Promise<void> {
-  try {
-    await db.vault_meta.delete(vaultId);
-    await db.vault_bodies.where("vaultId").equals(vaultId).delete();
-    await db.vault_prefs.delete(vaultId);
-  } catch {}
-}

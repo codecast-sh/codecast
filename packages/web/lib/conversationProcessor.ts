@@ -1,16 +1,4 @@
-export type ProcessedMessage = {
-  role: "user" | "assistant" | "system";
-  content: string;
-  cleanContent: string;
-  isCommand: boolean;
-  commandType?: string;
-  timestamp?: number;
-};
 
-export type MessageAlternate = {
-  role: "user" | "assistant";
-  content: string;
-};
 
 import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
 import { classifyApiErrorBanner, isAgentContextMessage, isCompactionSummaryMessage, isAgentSwitchNotice, isMachineSwitchNotice, parseSlashCommand, stripMentionContext } from "@codecast/shared/contracts";
@@ -186,46 +174,6 @@ export function cleanContent(content: string): string {
     .trim();
 }
 
-export function processMessage(msg: { role: string; content?: string; timestamp?: number }): ProcessedMessage {
-  const content = msg.content || "";
-  const isCmd = isCommandMessage(content);
-
-  return {
-    role: msg.role as "user" | "assistant" | "system",
-    content,
-    cleanContent: cleanContent(content),
-    isCommand: isCmd,
-    commandType: isCmd ? getCommandType(content) : undefined,
-    timestamp: msg.timestamp,
-  };
-}
-
-export function processMessageAlternates(alternates: MessageAlternate[] | undefined): ProcessedMessage[] {
-  if (!alternates) return [];
-
-  return alternates
-    .map(m => processMessage(m))
-    .filter(m => !m.isCommand && m.cleanContent.length > 0);
-}
-
-export function getConversationPreview(
-  alternates: MessageAlternate[] | undefined,
-  title: string,
-  maxMessages: number = 4
-): ProcessedMessage[] {
-  const titleNorm = title?.toLowerCase().trim().slice(0, 80) || "";
-  const limit = maxMessages < 0 ? Infinity : Math.trunc(maxMessages);
-  const result: ProcessedMessage[] = [];
-  for (const alternate of alternates ?? []) {
-    if (result.length >= limit) break;
-    const m = processMessage(alternate);
-    if (m.isCommand || !m.cleanContent.length) continue;
-    if (isSystemMessage(m.cleanContent) || isContextOnlyUserMessage(m.content)) continue;
-    if (m.role === "user" && m.cleanContent.toLowerCase().trim().slice(0, 80) === titleNorm) continue;
-    result.push(m);
-  }
-  return result.slice(0, maxMessages);
-}
 
 export function cleanTitle(title: string): string {
   // `!` bash-mode input: show it as the user typed it.

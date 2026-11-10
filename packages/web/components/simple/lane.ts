@@ -613,8 +613,8 @@ export const LANE_COPY = {
     /** The note while connecting is not open yet, in the future tense its
      *  "Coming soon" pill promises. */
     whiskNoteComing: "Your mail and calendar will come in through Whisk, our mail app. Whisk works on its own today.",
-    /** The quiet way to mail while connecting is closed (MailConnectChip,
-     *  WhiskCard): Whisk itself. */
+    /** The quiet way to mail while connecting is closed (MailConnectChip):
+     *  Whisk itself. */
     useWhiskNow: "Use Whisk for mail now",
   },
   plan: {

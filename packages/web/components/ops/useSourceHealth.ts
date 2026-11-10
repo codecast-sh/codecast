@@ -2,7 +2,7 @@
 // sources, their groups, replays and watches, the workspace's connections and
 // its flow map. Readers only: the surface that mounts this feeds the lists
 // (OpsShell does; Settings mounts the feeders itself).
-import { createElement, Fragment, useMemo, type ReactNode } from "react";
+import { createElement, Fragment, useMemo } from "react";
 import type { AppConnectionsResult } from "@codecast/shared/contracts";
 import { parseAppManifest, watchKey, type AppManifest, type AppWatch } from "@codecast/shared/contracts/appConnector";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
@@ -12,7 +12,6 @@ import { OPS_LIST_LIMIT, useOpsGroups, useOpsReplays, useOpsSources, useOpsWatch
 import { useSettingsData } from "../../hooks/useSyncSettings";
 import { CONNECTION_PROVIDERS, sourceActivity, sourceHealth, type AppFailure, type SourceHealth } from "./sourceHealth";
 import { liveFailures } from "./appsModel";
-import { SourceHealthContext } from "./parts";
 import type { OpsApp, OpsAppCall, OpsSource, OpsWatch } from "./opsTypes";
 import "./sourceView.css";
 
@@ -133,10 +132,4 @@ function AppFeeder({ id }: { id: string }) {
 export function AppHealthFeeders() {
   const sources = useOpsSources();
   return createElement(Fragment, null, ...sources.filter((s) => s.provider === "app").map((s) => createElement(AppFeeder, { key: s._id, id: s._id })));
-}
-
-/** Every source's health for the chips under it (parts SourceChip). */
-export function SourceHealthProvider({ children }: { children: ReactNode }) {
-  const map = useSourceHealthMap();
-  return createElement(SourceHealthContext.Provider, { value: map }, children);
 }

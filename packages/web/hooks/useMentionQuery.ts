@@ -9,7 +9,7 @@ import { agentStatusAt, sessionAwakeAt } from "../lib/liveness";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import type { ChatChannelRow, ChatRailRow } from "../store/chatSlice";
 import { useDebounce } from "./useDebounce";
-import { inActiveWorkspace } from "../lib/workspaceScope";
+import { inWorkspace } from "../lib/workspaceScope";
 import { teamIdForPath } from "../lib/vault/scopeModel";
 import { matchScore, mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
 import { mergeEntityRows } from "../lib/universalSearch";
@@ -28,10 +28,12 @@ export type MentionScope =
 const RECENT_LIMIT_PER_TYPE = 6;
 const SEARCH_LIMIT_PER_TYPE = 12;
 
-function inScope(item: { team_id?: string | null; user_id?: string | null }, scope: MentionScope): boolean {
+function inScope(item: { workspace?: string | null; team_id?: string | null; user_id?: string | null }, scope: MentionScope): boolean {
   if (scope.kind === "any") return true;
-  if (scope.kind === "team") return inActiveWorkspace(item, scope.teamId);
-  return inActiveWorkspace(item, null) && (item.user_id ? String(item.user_id) === scope.userId : true);
+  if (scope.kind === "team") return inWorkspace(item, `team:${scope.teamId}`);
+  // Personal is the viewer's own key. A row with no stored key (a session, a
+  // legacy row) passes on "no team", so its owner is checked here.
+  return inWorkspace(item, `user:${scope.userId}`) && (item.user_id ? String(item.user_id) === scope.userId : true);
 }
 
 const EMPTY_SERVER_ITEMS: MentionItem[] = [];

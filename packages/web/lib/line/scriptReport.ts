@@ -137,8 +137,6 @@ const CLOSE_OUTCOME: Record<string, string> = {
   already_fixed: "already fixed", fixed: "already fixed", judge_defect: "judge wrong", historical: "historical",
   known_cause: "duplicate", duplicate: "duplicate", in_flight: "in flight elsewhere", not_reproducible: "not reproducible",
 };
-/** A close's outcome key as its status word ("judge_defect" reads "judge wrong"), one word per outcome on every row. */
-export const closeOutcomeWord = (key: string): string => CLOSE_OUTCOME[key.trim().replace(/\s+/g, "_")] ?? key.replace(/_/g, " ");
 
 export function closeOutcome(visits: ReadonlyArray<{ inferred?: boolean; decided: { result: Record<string, unknown> | null } }>): { word: string; into: string | null } | null {
   for (let i = visits.length - 1; i >= 0; i--) {

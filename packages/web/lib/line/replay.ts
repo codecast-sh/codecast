@@ -3,7 +3,6 @@
 // could have decided, and where a run's visit is for a step. The trace itself
 // is runTrace.ts; everything else is lineModel's.
 import type { LineModel, LineRunModel, LineStep, LineVisit } from "./lineModel";
-import { closeOutcome } from "./scriptReport";
 
 // ── how a run ended ──────────────────────────────────────────────────────────
 
@@ -38,14 +37,6 @@ export function runEndTone(word: string): RunEndTone {
   return "none";
 }
 
-/** Why a parked run waits, in a few words, from its outcome sentence: "Build finished", "Build looped three times". */
-export function parkedWhy(text: string): string | null {
-  const m = /^Stopped(?: at [^:]+)?:\s*([^;.]+)/.exec(text.trim());
-  return m ? m[1].trim().slice(0, 40) : null;
-}
-
-/** A run is a re-run after a close when the attempt before it on the problem closed it without a change: the line paid twice. */
-export const reranAfterClose = (prev: (Pick<LineRunModel, "live" | "outcome" | "superseded" | "visits"> & { verdict?: LineRunModel["verdict"] }) | undefined): boolean => !!prev && !prev.live && (runEndWords(prev) === "dissolved" || !!closeOutcome(prev.visits));
 
 /** The groups a list of runs splits into, in reading order, each with its heading. */
 export const RUN_END_GROUPS: ReadonlyArray<[string, string]> = [

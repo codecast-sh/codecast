@@ -545,26 +545,3 @@ function groupDecision(s: LoopSignal, problemRef: (id: string) => string | null,
     ...labelled(s._id, "group"),
   };
 }
-
-/** The judges that found each problem, by problem id, as the Find band names them ("Match judge"): what tells two
- *  problems with the same title apart, when the same expectation broke under two judges (two product issues). */
-export function problemJudges(loop: LoopSteps | null): Map<string, string[]> {
-  const found = new Map<string, Array<{ label: string; bare: boolean }>>();
-  if (!loop) return new Map();
-  for (const id of loop.order) {
-    const s = loop.steps[id];
-    if (s.stage !== "judge" || (s.kind !== "product" && s.kind !== "call")) continue;
-    // A product's own step ("AgentWatch", product:agentwatch) holds the findings that name no judge; a named judge says more.
-    const bare = s.kind === "product" && !s.id.includes("/");
-    for (const d of s.decisions) for (const p of d.problemIds) {
-      const was = found.get(p) ?? [];
-      if (!was.some((j) => j.label === s.label)) found.set(p, [...was, { label: s.label, bare }]);
-    }
-  }
-  const out = new Map<string, string[]>();
-  for (const [p, js] of found) {
-    const named = js.filter((j) => !j.bare);
-    out.set(p, (named.length ? named : js).map((j) => j.label));
-  }
-  return out;
-}

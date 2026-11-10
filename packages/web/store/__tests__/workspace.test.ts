@@ -6,7 +6,6 @@ import {
   togglePane,
   autoAllowed,
   setPresentation,
-  findPane,
   isVisible,
   samePane,
   surfaceForPath,
@@ -30,7 +29,6 @@ describe("the cap", () => {
     ws = showPane(ws, "secondary", convo("a"));
     ws = showPane(ws, "secondary", convo("b"));
     expect(ws.secondary.pane).toEqual(convo("b"));
-    expect(findPane(ws, convo("a"))).toBeNull();
   });
 
   // The session list and the comment rail both wanted the right edge and could

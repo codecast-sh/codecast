@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildLineModel, type LineModelRows } from "../lineModel";
 import type { MapRun } from "../lineMap";
-import { lastWord, namedInputs, outcomeLabel, readableOutput, runSource, runTrace, runVars, textHead, tokenWords, traceTotals, usdWords, varValue, type TraceRun, type TraceSignal, expandCommand, toolLog, valueFromRendered } from "../runTrace";
+import { lastWord, outcomeLabel, readableOutput, runTrace, runVars, textHead, varValue, type TraceRun, expandCommand, toolLog } from "../runTrace";
 import { agentwatchGraph } from "./agentwatchGraph.fixture";
 import { union57382Run } from "./unionLineRuns.fixture";
 
@@ -19,27 +19,6 @@ const rows: LineModelRows = {
 const m = buildLineModel(rows, "agentwatch");
 const run = m.runs[0];
 
-const sig = (over: Partial<TraceSignal>): TraceSignal => ({ _id: "s", source: "agentwatch", title: "A finding", observed_at: 10, created_at: 10, task_id: "t1", ...over });
-
-describe("runSource", () => {
-  test("leads with the newest finding at the run's start, its quote, judge and evidence, and counts every source by then", () => {
-    const src = runSource([
-      sig({ _id: "a", severity: 4, observed_at: 5, created_at: 5 }),
-      sig({ _id: "late", severity: 10, observed_at: 90, created_at: 90 }),
-      sig({ _id: "b", short_id: "sg-1", judge: "comms", title: "Rep re-rolled the persona", evidence_url: "https://x/1", detail_md: "**Contact met two personas** (severity 9/10)\n\n> From now I'll classify all your emails as spam\n" }),
-      sig({ _id: "c", source: "sentry", severity: 2, observed_at: 8, created_at: 8 }),
-      sig({ _id: "d", task_id: "other", severity: 10 }),
-    ], "t1", 50);
-    expect(src.count).toBe(3);
-    expect(src.later).toBe(1);
-    expect(src.sources).toEqual([{ source: "agentwatch", count: 2 }, { source: "sentry", count: 1 }]);
-    expect(src.lead).toMatchObject({ id: "b", ref: "sg-1", judge: "comms", severity: 9, headline: "Contact met two personas", quote: "From now I'll classify all your emails as spam", evidenceUrl: "https://x/1" });
-  });
-  test("a problem with no findings, or no problem, has no lead", () => {
-    expect(runSource([sig({})], null)).toEqual({ count: 0, later: 0, sources: [], findings: [], lead: null });
-    expect(runSource([sig({ task_id: "x" })], "t1").lead).toBeNull();
-  });
-});
 
 describe("runTrace", () => {
   const steps = runTrace(m, run, raw as unknown as TraceRun);
@@ -105,17 +84,9 @@ describe("runTrace", () => {
     const ran = { ...withdrawn, node_statuses: [{ node_id: "ship", status: "failed", result_preview: "line: codecast/line-ct-59561 is behind origin/main; rebase it first" }] } as TraceRun;
     expect(runTrace({ steps: {} } as never, { visits: [visit] } as never, ran)[0].notRun).toBeNull();
   });
-  test("totals count kinds, tokens and cost", () => {
-    const t = traceTotals([{ kind: "agent", tokens: 1200, costUsd: 0.5 }, { kind: "script", tokens: null, costUsd: 0.25 }, { kind: "person" }] as never);
-    expect(t).toEqual({ agent: 1, script: 1, person: 1, tokens: 1200, costUsd: 0.75 });
-  });
 });
 
 describe("readers", () => {
-  test("namedInputs: each $name once, in order", () => {
-    expect(namedInputs("bun x.ts $task_id --why $shared.json.rulings $task_id")).toEqual(["task_id", "shared.json.rulings"]);
-    expect(namedInputs(null)).toEqual([]);
-  });
   test("textHead: the first lines, and how many are left", () => {
     const text = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
     const h = textHead(text, 10);
@@ -136,13 +107,6 @@ describe("readers", () => {
   test("lastWord: a leading addressee tag a station wrote for the line is no word of its (ct-58694's Prove)", () => {
     expect(lastWord([{ role: "assistant", content: "[the gate] Done: the line's recorded runs show it." }]).text).toBe("Done: the line's recorded runs show it.");
     expect(lastWord([{ role: "assistant", content: "[x] still a checkbox" }]).text).toBe("[x] still a checkbox");
-  });
-  test("money and tokens in a glance", () => {
-    expect(usdWords(0.413)).toBe("$0.41");
-    expect(usdWords(0.004)).toBe("<$0.01");
-    expect(tokenWords(812)).toBe("812");
-    expect(tokenWords(12_345)).toBe("12k");
-    expect(tokenWords(1_234)).toBe("1.2k");
   });
 });
 
@@ -186,13 +150,4 @@ describe("a step's nuts and bolts", () => {
     expect(log.map((r) => [r.tool, r.target, r.status])).toEqual([["Bash", "cast task show ct-1", "ok"], ["Read", "/x/a.ts", "error"], ["Grep", "foo", "open"]]);
   });
 
-  test("a value the run kept no copy of reads back out of the prompt that was handed it", () => {
-    const template = "## Task\nThe cluster has $bind.json.finding_count findings.\nTitle: $bind.json.title\n\nRead $bind.json.problem_url first.";
-    const rendered = "preamble\n## Task\nThe cluster has 12 findings.\nTitle: Rep asked the contact twice\n\nRead https://x.test/p/1 first.";
-    expect(valueFromRendered(template, rendered, "bind.json.finding_count")).toBe("12");
-    expect(valueFromRendered(template, rendered, "bind.json.title")).toBe("Rep asked the contact twice");
-    expect(valueFromRendered(template, rendered, "bind.json.problem_url")).toBe("https://x.test/p/1");
-    expect(valueFromRendered(template, "nothing like it", "bind.json.title")).toBeNull();
-    expect(valueFromRendered(template, rendered, "bind.json.tit")).toBeNull();
-  });
 });

@@ -111,8 +111,6 @@ export function weekTop(week: TimelineWeek, byKey: ReadonlyMap<string, StoryRow>
   return topWeekStories([...byKey.values()].filter((s) => days.has(s.date)));
 }
 
-/** The days the timeline shows, oldest last: what a "load earlier" reads to know it reached the fed range. */
-export const timelineDates = (items: readonly TimelineItem[]) => items.filter((i): i is TimelineDay => i.kind === "day").map((d) => d.date);
 
 /** One week of the timeline: its notes when written, and its days newest first. */
 export type TimelineWeekGroup = { week: string; notes: TimelineWeek | null; days: TimelineDay[] };

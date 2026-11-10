@@ -42,7 +42,6 @@ const ALLOWED = new Set<string>([
   "components/AgentTypeIcon.tsx",
   "components/BranchSelector.tsx",
   "components/BrowserHandoffToast.tsx",
-  "components/CodeBlock.tsx",
   "components/CollapsibleBody.tsx",
   "components/CreateChannelModal.tsx",
   "components/DeviceBadge.tsx",

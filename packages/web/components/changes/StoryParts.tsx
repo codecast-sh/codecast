@@ -88,27 +88,6 @@ export function RiskSrText({ story }: { story: Pick<StoryRow, "risks" | "risk_li
   return <span className="sr-only">Risk: {riskText(story)}</span>;
 }
 
-/**
- * The story's left edge: the area rail, or the risk hatch in its place. On a
- * card it runs the card's height. A `compact` row wears it as a tick beside
- * its headline's first line, so two flagged rows in a row read as two ticks,
- * not one dashed rule. Screen readers hear the risk from RiskSrText.
- */
-export function StoryEdge({ story, width = 2, compact = false }: { story: Pick<StoryRow, "area" | "risks" | "risk_lines">; width?: number; compact?: boolean }) {
-  const colors = useAreaColors();
-  const place = compact ? "top-[6px] h-[12px] rounded-[1px]" : "inset-y-0 rounded-l-[inherit]";
-  if (!story.risks.length) {
-    return <span aria-hidden className={`absolute left-0 ${place}`} style={{ width, background: areaColor(story.area, colors) }} />;
-  }
-  // The hatch is 3px; the tooltip answers on a 10px strip over it.
-  return (
-    <Tip text={<span className="whitespace-pre-line">{riskText(story)}</span>} side="left">
-      <span aria-hidden className={`absolute left-0 z-[1] w-2.5 cursor-help ${place}`}>
-        <span className={`absolute left-0 ${compact ? "inset-y-0 rounded-[1px]" : "inset-y-0 rounded-l-[inherit]"}`} style={{ width: 3, background: RISK_HATCH }} />
-      </span>
-    </Tip>
-  );
-}
 
 /** A stored risk line cut short ends in an ellipsis; on the page it reads as a closed sentence. */
 const closeLine = (line: string) => line.replace(/\s*(?:…|\.\.\.)$/, ".");

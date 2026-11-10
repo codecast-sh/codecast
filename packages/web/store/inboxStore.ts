@@ -1077,8 +1077,6 @@ export type PaginationState = {
   oldestTimestamp: number | null;
   hasMoreAbove: boolean;
   hasMoreBelow: boolean;
-  loadOlderTimestamp?: number;
-  loadNewerTimestamp?: number;
   isLoadingOlder: boolean;
   isLoadingNewer: boolean;
   jumpMode: "start" | "end" | null;
@@ -1860,11 +1858,10 @@ export type ClientUI = {
   // to come online (components/onboarding/usePendingAgentFeatures).
   agent_features_pending?: { slugs: string[]; at: number } | null;
   active_team_id?: string;
-  active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
   // The inbox triage bar (components/triage/TriageBar) hidden to a corner
   // button that takes no layout height. A per-user preference, stamped LWW
-  // (STAMPED_UI_KEYS) like the other view prefs.
+  // (isStampedUiKey) like the other view prefs.
   triage_bar_compact?: boolean;
   // The master sound switch: off silences every cue the app can make.
   sounds_enabled?: boolean;
@@ -1874,7 +1871,7 @@ export type ClientUI = {
   chat_sounds_enabled?: boolean;
   // Per-category gates under the master switch (lib/sounds.ts maps each cue to
   // one of these). Absent = on. Stamped LWW like sounds_enabled
-  // (STAMPED_UI_KEYS): a mute is a per-user preference, so the newest toggle
+  // (isStampedUiKey): a mute is a per-user preference, so the newest toggle
   // on any device wins on every device — including a localhost dev origin,
   // which is otherwise just another device with its own local bag.
   session_sounds_enabled?: boolean; // a session arriving, finishing, going idle
@@ -1927,7 +1924,7 @@ export type ClientUI = {
   // show_old_sessions key, whose blanket-local_wins sync made one browse click
   // a permanent all-clients cruft mode (the OFF could never propagate, and a
   // stale server `true` was unkillable). This key is stamped LWW (see
-  // STAMPED_UI_KEYS): the newest toggle on ANY device wins everywhere —
+  // isStampedUiKey): the newest toggle on ANY device wins everywhere —
   // including off — so sticky can't decay into stuck. The legacy key still
   // lingers in server docs; nothing may ever read it (resolveShowOld).
   inbox_show_old?: boolean;
@@ -2121,7 +2118,7 @@ export type ClientUI = {
   // Sidebar subsection rows pinned to the top of the rail (lib/sidebarPins).
   // Structural shape rather than the SidebarPin import: sidebarPins.ts imports
   // this store, and a type import back the other way invites a require cycle.
-  // Stamped (STAMPED_UI_KEYS): a per-user shortcut list, so a pin made on one
+  // Stamped (isStampedUiKey): a per-user shortcut list, so a pin made on one
   // device stays pinned on the others. Unstamped, local_wins let an empty
   // array on a second client clobber the pin (ct-51761).
   sidebar_pins?: Array<{ kind: "project" | "view" | "channel"; id: string; label: string }>;
@@ -2134,7 +2131,7 @@ export type ClientUI = {
   // person who unpinned everything. Stamped (per user, every device).
   header_pins?: Array<{ kind: "role" | "session"; id: string }>;
   // The Threads page's "include agent sessions" toggle. Off unless exactly
-  // true. Stamped (STAMPED_UI_KEYS): a per-user view preference.
+  // true. Stamped (isStampedUiKey): a per-user view preference.
   threads_include_sessions?: boolean;
   // The workspace arrangement (see store/workspace.ts): which slots are open,
   // peek vs split, and their sizes. Subject-bearing panes are deliberately NOT
@@ -4925,14 +4922,6 @@ export function resolveCloudStartFrom(ui: { cloud_start_from?: "checkout" | "ori
 // Resolve what the inbox opens on when no conversation is selected: the fleet
 // board (default) or the chronological feed. Shared by the boot adoption below
 // and the inbox stage so they can't land on different surfaces.
-/** Asking for the inbox from inside it shows its home (the board) with
- *  nothing open. */
-export function showInboxHome(): void {
-  const st = useInboxStore.getState();
-  st.setShowMySessions(true);
-  st.clearSelection();
-}
-
 export function resolveInboxHome(ui: { inbox_home?: "board" | "feed" } | undefined): "board" | "feed" {
   return ui?.inbox_home ?? "board";
 }
@@ -5510,7 +5499,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // recordCurrentConversationPointer for why it exists alongside the per-user
   // synced pointer.
   lastFocusedConversationId: string | null;
-  showDismissed: boolean;
   collapsedSections: Record<string, boolean>;
   // "recent" view only: a frozen snapshot of the row order, set while the user is
   // navigating with Ctrl+J/K and cleared after a short idle. Recent sorts by
@@ -5653,7 +5641,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // reloads and follows the user across devices. It was ephemeral for a while:
   // the ORIGINAL synced flag merged local_wins, so one browse click became a
   // permanent all-clients cruft mode (the OFF could never propagate). The key
-  // is now stamped per-key LWW (STAMPED_UI_KEYS + mergeStampedBagLww), so
+  // is now stamped per-key LWW (isStampedUiKey + mergeStampedBagLww), so
   // turning it off anywhere turns it off everywhere — sticky without stuck.
   setShowOldSessions: (show: boolean) => void;
   // MRU "entered at" per session — bumped only when you switch INTO a session.
@@ -5725,7 +5713,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   commentRailWidth: Record<string, number>;   // reserved width (px) per conversation; published by the rail, read by the layout
   setCommentRailOpen: (open: boolean | null) => void;
   openCommentThread: (messageId?: string | null) => void;
-  closeCommentRail: () => void;
   setCommentRailWidth: (conversationId: string, w: number) => void;
 
   // ── Threads page: per-card open state (ephemeral UI, raw set — the same
@@ -6089,7 +6076,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   preloadForkSessions: (forks: ForkChild[], forkedFrom?: string) => void;
   updateSessionProject: (id: string, projectPath: string) => void;
   setSessionTargetDevice: (id: string, deviceId: string | null) => void;
-  patchSession: (id: string, fields: Partial<InboxSession>) => void;
   setConversationAgent: (id: string, agentType: string) => void;
   /** Blank session: the definition it launches as (compose "as" pill). */
   setConversationAgentDefinition: (id: string, name: string | null) => void;
@@ -6464,12 +6450,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   inboxViewMode: () => InboxViewMode;
   setInboxViewMode: (mode: InboxViewMode) => void;
   cycleInboxViewMode: () => void;
-  // Drag-to-reorder in the "time" view: pin `id` at `key` (epoch-ms space).
-  setSessionManualOrder: (id: string, key: number) => void;
-  /** Several cards' sort keys in one write: one drag, one undo entry. */
+  /** Drag-to-reorder in the "time" view: pin each id at its key (epoch-ms
+   *  space). Several cards' sort keys in one write: one drag, one undo entry. */
   setSessionManualOrders: (keys: Record<string, number>) => void;
-  // Forget all manual pins — the "time" view returns to pure creation order.
-  clearManualOrder: () => void;
 
   // -- Recently visited (sessions, chip views, pages) — newest first --
   recentVisits: RecentVisit[];
@@ -6534,9 +6517,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   editCodeComment: (commentId: string, content: string) => void;
   deleteCodeComment: (commentId: string) => void;
 
-  // -- Sidebar nav expanded sections --
-  sidebarNavExpanded: Record<string, boolean>;
-  toggleSidebarNav: (section: string) => void;
   // Mark a live subscription's cold-open first-load (see `liveLoading`).
   setLiveLoading: (scope: string, loading: boolean) => void;
   // Sync-log catch-up distance per scope: head position minus applied cursor,
@@ -6594,12 +6574,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
     plans: Record<string, MentionPlanItem>;
   };
   taskFilter: { status: string };
-  docFilter: { type: string; query: string; project: string; scope: string };
-  planFilter: { status: string };
 
   setTaskFilter: (filter: Partial<{ status: string }>) => void;
-  setDocFilter: (filter: Partial<{ type: string; query: string; project: string; scope: string }>) => void;
-  setPlanFilter: (filter: Partial<{ status: string }>) => void;
 
   // -- Message queue --
   sessionsWithQueuedMessages: Set<string>;
@@ -6647,7 +6623,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // for as long as it takes to hold one face. Ephemeral (a modal toggle, never
   // persisted): which window you are in is not a preference.
   peopleWallOpen: boolean;
-  openPeopleWall: () => void;
   // -- The wide leaf (components/org/OrgPage, components/stage) --
   // The stage leaf that takes its tab's width while it is mounted: its
   // sibling panes and the session rail fold to a thin rail, and come back when
@@ -7317,9 +7292,6 @@ export const PER_DEVICE_UI_KEYS = new Set([
 export function isStampedUiKey(key: string): boolean {
   return !key.endsWith(":ts") && !PER_DEVICE_UI_KEYS.has(key);
 }
-
-/** @deprecated Use isStampedUiKey. New keys stamp by default; this is not a list. */
-export const STAMPED_UI_KEYS = { has: isStampedUiKey };
 
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
   if (typeof spec === "function") return spec(local, server, initialized);
@@ -9139,7 +9111,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   lastDispatchFailure: null,
   currentSessionId: null,
   lastFocusedConversationId: null,
-  showDismissed: false,
   collapsedSections: {},
   scheduleNavSets: null,
   inboxViewModesShown: null,
@@ -9405,7 +9376,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
     set((s: any) => ({ commentRailAnchor: messageId, commentRailNonce: s.commentRailNonce + 1 })),
   threadsCursor: { id: null },
   setThreadsCursor: (cursor: ThreadsCursor) => set({ threadsCursor: cursor }),
-  closeCommentRail: () => get().setCommentRailOpen(false),
   setCommentRailWidth: (conversationId: string, w: number) =>
     set((s: any) => {
       if ((s.commentRailWidth[conversationId] ?? 0) === w) return {};
@@ -10190,14 +10160,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!cycle?.length) return;
     state.setInboxViewMode(cycle[(cycle.indexOf(state.inboxViewMode()) + 1) % cycle.length]);
   },
-  setSessionManualOrder: (id: string, key: number) => get().setSessionManualOrders({ [id]: key }),
   setSessionManualOrders: (keys: Record<string, number>) => {
     const current = get().clientState.ui?.inbox_manual_order ?? {};
     get().updateClientUI({ inbox_manual_order: { ...current, ...keys } });
-  },
-  clearManualOrder: () => {
-    if (!get().clientState.ui?.inbox_manual_order) return;
-    get().updateClientUI({ inbox_manual_order: {} });
   },
 
   recentVisits: [],
@@ -12466,11 +12431,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.conversations[id].git_root = projectPath;
   }),
 
-  patchSession: sync(function (this: Draft, id: string, fields: Partial<InboxSession>) {
-    if (!this.sessions[id]) return;
-    Object.assign(this.sessions[id], fields);
-  }),
-
   // The machine row's stamp. Local-only (`sync`): the conversations table has no
   // such column — the value's only job is to survive on the stub row until
   // createSessionFromStub reads it. Null clears a pick the user reverted.
@@ -13273,10 +13233,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // TASK / DOC STATE
   // =====================
 
-  sidebarNavExpanded: {},
-  toggleSidebarNav: (section: string) => set((s: any) => ({
-    sidebarNavExpanded: { ...s.sidebarNavExpanded, [section]: !s.sidebarNavExpanded[section] },
-  })),
   setSyncLogLag: (scope: string, lag: number) => {
     const cur = useInboxStore.getState().syncLogLag;
     if (scope in cur && cur[scope] === lag) return;
@@ -13320,26 +13276,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   notifications: {},
   docDetails: {},
   taskFilter: { status: "" },
-  docFilter: { type: "", query: "", project: "", scope: "" },
-  planFilter: { status: "" },
   docProjectPaths: [],
 
 
   setTaskFilter: (filter: Partial<{ status: string }>) => {
     set((s: InboxStoreState) => ({
       taskFilter: { ...s.taskFilter, ...filter },
-    }));
-  },
-
-  setDocFilter: (filter: Partial<{ type: string; query: string }>) => {
-    set((s: InboxStoreState) => ({
-      docFilter: { ...s.docFilter, ...filter },
-    }));
-  },
-
-  setPlanFilter: (filter: Partial<{ status: string }>) => {
-    set((s: InboxStoreState) => ({
-      planFilter: { ...s.planFilter, ...filter },
     }));
   },
 
@@ -14481,7 +14423,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   closeSettingsModal: () => set({ settingsModalSection: null }),
 
   peopleWallOpen: false,
-  openPeopleWall: () => set({ peopleWallOpen: true }),
   stageWide: null,
   setStageWide: (wide: { tabId: string; leafId: string | null } | null) => set({ stageWide: wide }),
   profileSignIn: null,

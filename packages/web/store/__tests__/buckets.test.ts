@@ -777,7 +777,7 @@ describe("visualOrder follows the active view mode", () => {
     expect(order).toEqual(["old", "fresh", "mid"]);
   });
 
-  it("setSessionManualOrder pins a row and persists the key in the synced ui bag", () => {
+  it("setSessionManualOrders pins a row and persists the key in the synced ui bag", () => {
     useInboxStore.setState({
       sessions: {
         a: session("a", { started_at: 100, updated_at: 1 }),
@@ -785,7 +785,7 @@ describe("visualOrder follows the active view mode", () => {
       },
       clientState: { ui: { inbox_view_mode: "time" } },
     });
-    useInboxStore.getState().setSessionManualOrder("a", 999_999);
+    useInboxStore.getState().setSessionManualOrders({ a: 999_999 });
     expect(useInboxStore.getState().clientState.ui?.inbox_manual_order).toEqual({ a: 999_999 });
     const order = useInboxStore.getState().visualOrder().map((s) => s._id);
     expect(order).toEqual(["a", "b"]); // a's pin now outranks b's later creation

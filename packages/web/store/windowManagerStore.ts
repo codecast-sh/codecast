@@ -37,7 +37,6 @@ interface WindowManagerState {
   minimizeWindow: (id: string) => void;
   maximizeWindow: (id: string, viewport: { width: number; height: number }) => void;
   restoreWindow: (id: string) => void;
-  toggleMinimize: (id: string) => void;
   bringToFront: (id: string) => void;
   updatePosition: (id: string, x: number, y: number) => void;
   updateSize: (id: string, width: number, height: number) => void;
@@ -244,16 +243,6 @@ export const useWindowManager = create<WindowManagerState>((set, get) => ({
       nextZIndex: get().nextZIndex + 1,
       focusedWindowId: id,
     });
-  },
-
-  toggleMinimize(id) {
-    const win = get().windows[id];
-    if (!win) return;
-    if (win.visualState === "minimized") {
-      get().restoreWindow(id);
-    } else {
-      get().minimizeWindow(id);
-    }
   },
 
   bringToFront(id) {

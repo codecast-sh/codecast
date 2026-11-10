@@ -34,8 +34,6 @@ export function laneGutter(sources: readonly string[]): number {
 
 /** Rows painted before the next screenful is asked for. */
 export const PAGE_ROWS = 100;
-/** A mark's pill is this wide; marks nearer merge. */
-export const PILL_PX = 22;
 
 const STATUS_WORD: Record<string, string> = {
   new: "new",

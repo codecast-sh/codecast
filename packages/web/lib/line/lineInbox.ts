@@ -194,10 +194,6 @@ export const answersAtGate = (c: Pick<TrialInboxCard, "decision" | "run_status" 
 /** Why a waiting card cannot take an answer, in a chip's two words. */
 export const reaskWhy = (c: Pick<TrialInboxCard, "decision" | "stale_gate">): string => (c.stale_gate ? "step removed" : "no session");
 
-/** Why the pipeline would rather a waiting trial card wait, in a chip's few words; null when nothing holds it. */
-export function trialHoldWords(c: TrialCardRow): string | null {
-  return trialHoldChip(c)?.words ?? null;
-}
 
 /** A hold's fixed label, by what holds it: the chip reads at a glance, its words go in the tooltip. */
 const HOLD_LABEL: Record<string, string> = {

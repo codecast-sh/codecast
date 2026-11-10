@@ -80,22 +80,3 @@ export function AnchorScopePill({ anchor, quiet = false, className = "" }: {
     </span>
   );
 }
-
-/** Face + name + workspace pill in one line. `size` scales the face; the
- *  pill and name stay legible at every size. */
-export function AnchorIdentityLine({
-  anchor, size = 28, subtitle, className = "",
-}: { anchor: Identity | null | undefined; size?: number; subtitle?: React.ReactNode; className?: string }) {
-  return (
-    <div className={`flex items-center gap-2.5 min-w-0 ${className}`}>
-      <AnchorAvatar anchor={anchor} size={size} />
-      <div className="min-w-0">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="font-semibold truncate">{agentName(anchor)}</span>
-          <AnchorScopePill anchor={anchor} />
-        </div>
-        {subtitle && <div className="text-xs text-sol-text-muted truncate">{subtitle}</div>}
-      </div>
-    </div>
-  );
-}

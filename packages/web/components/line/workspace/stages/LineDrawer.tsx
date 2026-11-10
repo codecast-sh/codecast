@@ -10,6 +10,7 @@ import { KeyCap } from "../../../KeyCap";
 import { LINE_STAGES, type LineStage } from "../../../../lib/line/lineWorkspaceUrl";
 import type { LineModel } from "../../../../lib/line/lineModel";
 import type { LineViewProps } from "../views/types";
+import { useSyncLineStages } from "../../../../hooks/useLineStages";
 import { MomentsStage } from "./MomentsStage";
 import { ExpectationsStage } from "./ExpectationsStage";
 import { JudgesStage } from "./JudgesStage";
@@ -45,6 +46,8 @@ const showInStrip = (el: HTMLElement | null) => {
 /** A stage's drawer: the stages in flow order across its head, the open one its page below. */
 export function StageDrawer(props: LineViewProps & { stage: LineStage; projectId: string | null }) {
   const { stage, select, href } = props;
+  // The one feeder for the stages Moments, Judges and Grouping read (useLineStages).
+  useSyncLineStages(props.projectId);
   const nav = (
     <nav className="sd-flow" aria-label="Stages">
       {LINE_STAGES.map((s, i) => (

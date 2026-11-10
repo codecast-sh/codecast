@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { JUDGES_GROUP, sourceIn, buildSources, homeJudges, findingBreak, findingFacts, readableDetail, evidenceHost, findingsOf, flatSources, heldSince, severityOf, sourceKind, sourceName, sparkDays, type SourceFinder, type SourceSignal } from "../sourcesView";
+import { JUDGES_GROUP, sourceIn, buildSources, homeJudges, findingFacts, findingsOf, flatSources, heldSince, severityOf, sourceKind, sourceName, sparkDays, type SourceFinder, type SourceSignal } from "../sourcesView";
 
 const NOW = 1_790_000_000_000;
 const H = 3_600_000;
@@ -64,15 +64,6 @@ describe("sources", () => {
   });
 });
 
-describe("a finding's row leads with what broke", () => {
-  test("the judge's closing tag, else the first sentence of its note; never the setup its title repeats", () => {
-    const md = "Reut said the Intensity and Eris matches were not the right fit. Quinn replied that he wouldn't push them but did not ask who else she would want to meet.\n\n> Given your read, I wouldn't push either introduction.\n\nno referral ask after non-fit";
-    const { notes } = findingFacts(md, "Reut said the Intensity and Eris matches were not the right fit.");
-    expect(findingBreak(notes)).toBe("No referral ask after non-fit");
-    expect(findingBreak(["Quinn did not ask who else. Later emails do not either."])).toBe("Quinn did not ask who else.");
-    expect(findingBreak([])).toBeNull();
-  });
-});
 
 describe("a source's words", () => {
   test("kinds and names", () => {
@@ -105,11 +96,8 @@ describe("a source's words", () => {
     expect(facts.map((f) => [f.k, f.v])).toEqual([[null, "1 in 7d"], ["ask", "Fix the record"], ["escalation", "broker · proactive"]]);
     expect(said).toBe("If you add a number, the next review will see it.\nAnd the one after.");
     expect(notes).toEqual([]);
-    expect(readableDetail("This one: a escalation from a one-off agent", 0)).toBe("This one: an escalation from a one-off agent");
   });
-  test("evidence host and the held window", () => {
-    expect(evidenceHost("https://www.admin.example.com/a?b")).toBe("admin.example.com");
-    expect(evidenceHost("not a url")).toBeNull();
+  test("the held window", () => {
     expect(heldSince(NOW - 5 * D, 1000, 1000)).toBe(NOW - 5 * D);
     expect(heldSince(NOW - 5 * D, 400, 1000)).toBeNull();
   });

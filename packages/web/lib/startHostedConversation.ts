@@ -9,7 +9,6 @@
 // queues it in the same transaction and the two reconcile. The compose popup
 // reaches the same create through its own stub (ComposeView).
 // Relative imports only: mobile reaches this file.
-import { useCallback } from "react";
 import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { useInboxStore } from "../store/inboxStore";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
@@ -49,10 +48,6 @@ export function startHostedConversation(text: string, resumeStubId?: string): st
   return stubId;
 }
 
-/** The "start a conversation with the assistant" gesture. */
-export function useStartHostedConversation(): (text: string) => string {
-  return useCallback((text: string) => startHostedConversation(text), []);
-}
 
 /** Tries a failed start again: the failed bubble goes, the stub is reused.
  *  The store's retry rule (retryPendingSend) calls this for a hosted

@@ -30,14 +30,6 @@ export function useForeignItemWorkspace(view: OpsView): string | null {
   return row.workspace === active ? null : row.workspace;
 }
 
-/**
- * The workspace a source named in the URL belongs to, when this workspace has
- * no such source and another one the device holds does: a source link shared
- * from another workspace says whose it is, as an item link does.
- */
-export function useForeignSourceWorkspace(ref: string | null): string | null {
-  return useForeignSourceLookup(ref).workspace;
-}
 
 /**
  * The workspace a source link means, and whether the server is still asked:

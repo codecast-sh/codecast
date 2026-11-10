@@ -301,13 +301,6 @@ export function closeAll(): void {
   for (const id of [...reg.order]) closeTab(id);
 }
 
-/** Re-key helpers for the panel: is any tab open for this tmux session? */
-export function findTabBySession(sessionName: string): string | null {
-  for (const [id, inst] of instances) {
-    if (inst.state.sessionName === sessionName) return id;
-  }
-  return null;
-}
 
 // Dev console access, mirroring window.__inboxStore: inspect tab states and
 // the hello each socket sent when debugging connect issues.

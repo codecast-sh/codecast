@@ -25,9 +25,6 @@ export type MentionContext = {
   people: Map<string, number>;
 };
 
-export const EMPTY_MENTION_CONTEXT: MentionContext = {
-  tokens: new Map(), handles: new Map(), channels: new Map(), people: new Map(),
-};
 
 const TOKEN_RE = /[a-z0-9][a-z0-9_:-]*/g;
 const HANDLE_RE = /(?:^|[^\w/])@([a-z0-9][a-z0-9_-]{0,38})/g;

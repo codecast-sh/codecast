@@ -775,14 +775,3 @@ export function useRepoFileIndex(
 }
 
 // ── May this viewer browse through Convex at all? ──
-
-/**
- * Null until the answer is known, and null for good when nobody is signed in.
- *
- * The standalone shell asks this to choose its transport, and "not signed in"
- * is not a "no" it should ever render: there is simply no viewer to have an
- * installation, so the public route is the only question left to ask.
- */
-export function useRepoCanBrowse(repository: string | undefined): boolean | null {
-  return useRepoAccess(repository).allowed;
-}

@@ -370,11 +370,5 @@ export const TONE_VAR: Record<HealthTone, string> = {
   off: "var(--sol-text-dim)",
 };
 
-/** The hours of a source's groups for the last `hours`, oldest first: its raw occurrences, not only its transitions. */
-export function hourlyVolume(groups: readonly Pick<OpsGroup, "buckets">[], now: number, hours: number): number[] {
-  const out = new Array<number>(hours).fill(0);
-  for (const g of groups) bucketSeries(g.buckets, now, hours).forEach((n, i) => (out[i] += n));
-  return out;
-}
 
 export { HOUR as HEALTH_HOUR };

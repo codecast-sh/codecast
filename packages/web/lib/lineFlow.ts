@@ -297,8 +297,6 @@ export const startableCause = (t: LineCauseTask) => t.status === "open" && !t.wo
  *  waiting causes the sweep will not start. */
 export type NotReadyKey = "review" | "not_open" | "earlier_run" | "context" | "ungrounded" | "nothing" | "assigned" | "goal" | "other";
 
-/** The reasons that wait on a person: a review to read, a question to answer. The overview counts these as waiting on you. */
-export const PERSON_REASONS: ReadonlySet<NotReadyKey> = new Set(["review", "context"]);
 
 export function notReadyReasons(tasks: ReadonlyArray<LineCauseTask>): Array<{ key: NotReadyKey; count: number; words: string }> {
   const reasons: Array<[NotReadyKey, (t: LineCauseTask) => boolean, string, string]> = [

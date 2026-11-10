@@ -3,12 +3,13 @@
 import { test, expect } from "bun:test";
 import { FIXTURE_INITIATIVES as ROWS, FIXTURE_NOW, FIXTURE_PROJECTS, FIXTURE_TASKS } from "../../components/initiatives/initiativeFixture";
 import { projectTaskCounts } from "@codecast/shared/tasks";
-import { ORG_FIXTURE } from "../../components/org/orgFixture";
-import type { OrgTree } from "../../components/org/orgTypes";
-import { goalScopeInitiativeIds, goalScopeProjectIds, groupInitiativesByStatus, initiativeProgress, initiativeSig, initiativesOfProject, ownerId, ownerSeat, progressPercent, projectInitiativeIndex, projectTrouble, subInitiatives, topLevelInitiatives } from "../initiatives";
-
+import { goalScopeInitiativeIds, goalScopeProjectIds, initiativeProgress, initiativeSig, initiativesOfProject, ownerId, progressPercent, projectInitiativeIndex, projectTrouble, subInitiatives, topLevelInitiatives } from "../initiatives";
 
 const row = (short: string) => ROWS.find((r) => r.short_id === short)!;
+
+test("an initiative lists the rows filed under it", () => {
+  expect(subInitiatives(ROWS, "init-org").map((r) => r.short_id)).toEqual(["in-2"]);
+});
 
 test("progress counts the tasks the projects' boards would show, dropped left out", () => {
   // proj-org: 2 done of 4 (one dropped is not counted); proj-inbox: 1 done of 2.
@@ -36,12 +37,6 @@ test("a project says its own trouble: past its target, or risks in its charter",
   expect(trouble("proj-org")).toBeNull();
 });
 
-test("the list groups top level rows by status, active first", () => {
-  const groups = groupInitiativesByStatus(ROWS);
-  expect(groups.map((g) => g.status)).toEqual(["active", "planned", "proposed", "completed"]);
-  expect(groups[0].rows.map((r) => r.short_id)).toEqual(["in-1"]);
-  expect(subInitiatives(ROWS, "init-org").map((r) => r.short_id)).toEqual(["in-2"]);
-});
 
 test("a sub initiative whose parent the viewer cannot see stands at the top", () => {
   const withoutParent = ROWS.filter((r) => r._id !== "init-org");
@@ -81,15 +76,4 @@ test("a goal's activity covers its own projects and its sub goals', each once, a
   expect(goalScopeInitiativeIds(top, ROWS)).toEqual(["init-org", "init-org-sub"]);
   // A stub the server has not numbered has no row to ask about.
   expect(goalScopeInitiativeIds({ _id: "in_stub", short_id: "" }, ROWS)).toEqual([]);
-});
-
-test("the conversation an initiative opens beside: a role's seat, a person's own anchor, the root seat they host", () => {
-  const tree = ORG_FIXTURE as unknown as OrgTree;
-  expect(ownerSeat(tree, { kind: "role", role_id: "fixture-role-growth" })).toMatchObject({ conversationId: "fixture-growth-conv", speaker: ORG_FIXTURE.roles[0].name });
-  expect(ownerSeat(tree, { kind: "user", user_id: "fixture-user-me" })).toMatchObject({ role: null, conversationId: "fixture-anchor-conv" });
-  // On a workspace whose only anchor is the head of people's seat, the person who hosts it opens on that seat.
-  const headSeat: OrgTree = { ...tree, roles: [{ ...tree.roles[0], handle: "head-of-people", anchor_id: "fixture-anchor" }], anchors: [{ ...tree.anchors[0], org_role_id: "fixture-role-growth" }] };
-  expect(ownerSeat(headSeat, { kind: "user", user_id: "fixture-user-me" }).conversationId).toBe("fixture-anchor-conv");
-  expect(ownerSeat(headSeat, { kind: "user", user_id: "fixture-user-sam" }).conversationId).toBeNull();
-  expect(ownerSeat(tree, undefined).conversationId).toBeNull();
 });

@@ -216,10 +216,6 @@ export function soundRoomKnock(key?: string) {
   announce("calls", `sound:knock:${key ?? "arrival"}`, () => playCue(DOOR_KNOCK), { ttl: key ? 60_000 : 1_000, preferDesktop: false });
 }
 
-// Older name for soundChatMessage. useChatToasts still imports it on main;
-// the rename to soundChatMessage lands with the chat toast rework. Alias, not
-// a copy, so the two can never drift into different sounds.
-export const soundChatMention = soundChatMessage;
 
 // One ring cycle for an incoming huddle: a held vibraphone chord (CALL_RING),
 // unmistakably a "someone wants you", distinct from every notification chirp

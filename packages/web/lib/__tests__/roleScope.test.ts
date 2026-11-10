@@ -1,7 +1,7 @@
 // The role scope model (lib/roleScope; org-roles-run-work.md R3): what the
 // hover card and the role page's Scope tab both paint from.
 import { describe, expect, test } from "bun:test";
-import { buildRoleScope, charterLead, dailyLimitLine, groupsLine, planStateLine, projectStateLine, sessionsLine, sourceFromCard, sourceFromTree } from "../roleScope";
+import { buildRoleScope, charterLead, dailyLimitLine, groupsLine, sessionsLine, sourceFromCard, sourceFromTree } from "../roleScope";
 import { ORG_FIXTURE } from "../../components/org/orgFixture";
 import type { OrgRole, OrgTree } from "../../components/org/orgTypes";
 
@@ -47,7 +47,6 @@ describe("buildRoleScope", () => {
     expect(model.projects).toHaveLength(1);
     const p = model.projects[0];
     expect(p).toMatchObject({ title: "Growth", ref: "pr-4", open: 2, done: 1, leads: true, partial: false });
-    expect(projectStateLine(p)).toBe("2 open tasks · 1 done");
     // Plans live inside their project, never beside it.
     expect(p.plans.map((pl) => pl.ref)).toEqual(["pl-90", "pl-88"]);
     expect(model.loosePlans).toEqual([]);
@@ -58,12 +57,10 @@ describe("buildRoleScope", () => {
   test("a plan carries live progress; dropped tasks leave the total", () => {
     const named = model.projects[0].plans.find((p) => p.ref === "pl-88")!;
     expect(named).toMatchObject({ done: 1, total: 3 });
-    expect(planStateLine(named)).toBe("1 of 3 done");
   });
 
   test("an open plan of a project in scope is in scope; a finished one is not pulled in", () => {
     expect(model.projects[0].plans.map((p) => p.ref)).not.toContain("pl-12");
-    expect(planStateLine(model.projects[0].plans.find((p) => p.ref === "pl-90")!)).toBe("0 of 1 done");
   });
 
   test("a plan in no project goes in the last group, and filing it moves it into the project's card", () => {
@@ -171,7 +168,4 @@ describe("words", () => {
     expect(dailyLimitLine({ ...caps, hands_per_day: 0 }, null, TODAY)).toBe("woke 0 of 40 times today · may not start sessions");
   });
 
-  test("a quiet or paused project says so", () => {
-    expect(projectStateLine({ status: "paused", open: 0, done: 0 })).toBe("paused · nothing open");
-  });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "bun:test";
 import { formatResetLocal, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../limitReset";
 
 // 2026-08-20 14:30 America/New_York = 18:30Z

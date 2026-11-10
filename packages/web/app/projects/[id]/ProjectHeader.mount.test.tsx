@@ -117,8 +117,6 @@ async function verifyProjectHeader() {
   mock.module("../../../components/ShareControl", () => ({ ShareControl: (props: any) => React.createElement("span", { "data-share": props.path, "data-share-token": props.publicShare?.token ?? "" }) }));
   mock.module("../../../components/ProjectUpdates", () => ({ ProjectUpdates: mark("project-updates") }));
   mock.module("../../../components/ProjectTimeline", () => ({ ProjectTimeline: (props: any) => React.createElement("div", { "data-project-timeline": props.projectId }) }));
-  mock.module("../../../components/ProgressChart", () => ({ ProgressChart: () => null }));
-  mock.module("../../../components/BurndownChart", () => ({ BurndownChart: () => null }));
   mock.module("../../../components/DocDates", () => ({ DocDates: () => null }));
   mock.module("../../../components/line/ProjectLineTab", () => ({ ProjectLineTab: mark("project-line") }));
   mock.module("../../../components/charter/CharterBlock", () => ({ CharterBlock: (props: any) => React.createElement("div", { "data-charter": props.title, "data-charter-goal": props.charter?.goal ?? "" }) }));
