@@ -52,7 +52,7 @@ export function GlobalCloseGuardDialog() {
         <div className="max-h-40 overflow-y-auto mb-4 space-y-2">
           {parents.map((p) => (
             <div key={p.shortId} className="space-y-1">
-              {many && <ShortId id={p.shortId} className="text-meta text-sol-text-muted" />}
+              {many && <ShortId id={p.shortId} className="text-[11px] text-sol-text-muted" />}
               {p.open.map((t: TaskItem) => (
                 <div key={t._id} className={`flex items-center gap-2 text-xs ${many ? "pl-3" : ""}`}>
                   <ShortId id={t.short_id} className="text-sol-text-dim" />

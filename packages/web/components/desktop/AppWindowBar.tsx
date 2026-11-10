@@ -48,7 +48,7 @@ function ChatBadge() {
   if (mentions > 0) {
     return (
       <span
-        className="min-w-[18px] rounded-full bg-sol-red px-1 text-center text-mark font-semibold leading-[18px] text-white"
+        className="min-w-[16px] rounded-full bg-sol-red px-1 text-center text-[10px] font-semibold leading-4 text-white"
         aria-label={`${mentions} mentions`}
       >
         {mentions > 99 ? "99+" : mentions}

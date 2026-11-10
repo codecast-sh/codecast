@@ -85,7 +85,7 @@ export function PeopleWallModal() {
             <h2 className="text-[13px] font-medium text-sol-text">The team</h2>
             {/* The gesture, said once, because a circle cannot say it. The
                 composer's key gets a coach mark for the same reason. */}
-            <p className="text-meta text-sol-text-dim">
+            <p className="text-[11px] text-sol-text-dim">
               Hold a face to talk. Click one to open the conversation.
             </p>
           </div>

@@ -10,28 +10,8 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { snippetAvailableForTeams, snippetBySlug, type SnippetDescriptor } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
-import { deviceDisplayName, useDevices, type Device } from "../DeviceBadge";
+import { useDevices, type Device } from "../DeviceBadge";
 import { snippetEnabledOn, snippetIntroKey } from "../../lib/newSnippets";
-import { featuresAllLedger } from "../consequential/ledgers";
-import type { SwitchLedger } from "../consequential/ConsequentialSwitch";
-
-/** One feature turned on for one or more machines: the review a single "Turn on" or switch opens. The same review the
- *  new-features banner opens (NewSnippetsBanner turnOnLedger), so a feature reads the same wherever it is turned on. */
-export function featureOnLedger(s: SnippetDescriptor, machineNames: string[]): SwitchLedger {
-  const one = machineNames.length === 1;
-  const machines = one ? machineNames[0]! : `${machineNames.length} machines`;
-  return {
-    ...featuresAllLedger({ group: s.name, machine: machines, names: [s.name] }),
-    name: s.name,
-    rows: [
-      one ? { k: "Machine", v: machines } : { k: "Machines", v: machines, list: machineNames },
-      { k: "Writes", v: s.writesTo },
-      { k: "Applies to", v: "New sessions" },
-    ],
-    stop: "Its switch in Agent features",
-    confirm: `Turn on ${s.name}`,
-  };
-}
 
 /**
  * Turn a feature on for each machine. Sends the pre-rename slug when one
@@ -72,8 +52,6 @@ export interface FeatureOffer {
   offer: boolean;
   /** Machines a "Turn on" reaches right now. */
   onlineCount: number;
-  /** Their names, for the review a "Turn on" opens. */
-  onlineNames: string[];
   busy: boolean;
   /** Set once this offer turned the feature on, so the place that offered it
    *  can say so before the roster catches up and the offer goes away. */
@@ -100,9 +78,6 @@ export function useFeatureOffer(slug: string): FeatureOffer {
     feature,
     offer,
     onlineCount: online.length,
-    // A roster row can arrive before its label: name it without the lookup,
-    // which reads the label unguarded.
-    onlineNames: online.map((d) => (d?.label ? deviceDisplayName(d) : "Unknown device")),
     busy,
     turnedOn,
     dismiss: stamp,

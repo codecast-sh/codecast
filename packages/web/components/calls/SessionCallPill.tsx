@@ -29,7 +29,7 @@ import {
 } from "../ui/dropdown-menu";
 
 const PILL =
-  "inline-flex min-w-0 max-w-[180px] flex-shrink items-center gap-1 rounded-full bg-sol-bg-highlight px-2 py-0.5 text-meta leading-4 text-sol-text-muted hover:text-sol-text";
+  "inline-flex min-w-0 max-w-[180px] flex-shrink items-center gap-1 rounded-full bg-sol-bg-highlight px-2 py-0.5 text-[10.5px] leading-4 text-sol-text-muted hover:text-sol-text";
 
 const NO_CALLS: any[] = [];
 
@@ -80,7 +80,7 @@ export function SessionCallPill({ conversationId }: { conversationId: string }) 
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-w-[320px]">
-        <DropdownMenuLabel className="text-meta font-normal text-sol-text-dim">
+        <DropdownMenuLabel className="text-[11px] font-normal text-sol-text-dim">
           This session heard {calls.length === 1 ? "one call" : `${calls.length} calls`}
         </DropdownMenuLabel>
         {calls.map((c: any, i: number) => (
@@ -91,7 +91,7 @@ export function SessionCallPill({ conversationId }: { conversationId: string }) 
                 <CallGlyph call={c} live={isCallLive(c)} className={`h-3 w-3 ${isCallLive(c) ? "" : "text-sol-text-dim"}`} />
                 <span className="truncate">{callName(c)}</span>
               </span>
-              <span className="pl-[18px] text-meta text-sol-text-dim">
+              <span className="pl-[18px] text-[11px] text-sol-text-dim">
                 {fmtClock(c.started_at)} · {callLinkHow(c)}
               </span>
             </DropdownMenuItem>
@@ -99,7 +99,7 @@ export function SessionCallPill({ conversationId }: { conversationId: string }) 
               <DropdownMenuItem
                 key={`${e.from_seq}-${e.to_seq}-${e.at}`}
                 onSelect={() => router.push(callExcerptHref(String(c._id), e))}
-                className="pl-[26px] text-meta text-sol-text-muted"
+                className="pl-[26px] text-[11.5px] text-sol-text-muted"
               >
                 {excerptLabel(e)}
                 <span className="ml-auto text-sol-text-dim">sent {fmtClock(e.at)}</span>

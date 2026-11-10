@@ -41,7 +41,7 @@ export function ComputerPermissionRows() {
   return (
     <>
       <div className="px-4 pt-3 pb-1 sm:px-5">
-        <div className="text-mark font-medium uppercase tracking-wide text-sol-text-dim">Agent computer use</div>
+        <div className="text-[11px] font-medium uppercase tracking-wide text-sol-text-dim">Agent computer use</div>
         <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-sol-text-muted">
           These two belong to codecast computer, a small helper app installed with Codecast, so Codecast itself
           never holds them.

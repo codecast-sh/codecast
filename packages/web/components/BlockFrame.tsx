@@ -131,7 +131,7 @@ export function BlockFrame({
           {overflowing && (
             <button
               onClick={() => setExpanded((v) => !v)}
-              className="flex w-full items-center justify-center gap-1 border-t border-sol-border/40 py-1 text-meta text-sol-text-dim hover:bg-sol-bg-highlight/40 hover:text-sol-text-secondary transition-colors"
+              className="flex w-full items-center justify-center gap-1 border-t border-sol-border/40 py-1 text-[11px] text-sol-text-dim hover:bg-sol-bg-highlight/40 hover:text-sol-text-secondary transition-colors"
             >
               {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
               {expanded ? "Collapse" : "Show all"}

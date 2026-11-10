@@ -56,11 +56,9 @@ const usd = (n: number | null) => (n == null ? "" : n >= 10 ? `$${n.toFixed(0)}`
 function Versions({ versions }: { versions: LineVersion[] }) {
   return (
     <ReportSection title="Versions of codecast's steps" aside="each time its steps changed, what changed and what the runs after it delivered, newest first">
-      {/* Ten columns: a narrow pane scrolls them sideways rather than pushing Billed and List price past the page. */}
-      <div className="overflow-x-auto">
         <table className="cast-table w-full text-[12.5px] tabular-nums" data-line-versions>
           <thead>
-            <tr className="text-left text-meta text-sol-text-dim">
+            <tr className="text-left text-[11px] text-sol-text-dim">
               <th className="font-normal py-1 pr-3">Version</th>
               <th className="font-normal py-1 pr-3">Ran</th>
               <th className="font-normal py-1 pr-3 text-right">Runs</th>
@@ -77,9 +75,9 @@ function Versions({ versions }: { versions: LineVersion[] }) {
             {versions.map((v, i) => (
               <tr key={v.hash} data-line-version={v.hash}>
                 <td className="py-1.5 pr-3 text-sol-text">
-                  {/* The graph hash is data for whoever needs it: kept in the change's tooltip, never a label on every row. */}
-                  <span className={v.hash === "unrecorded" ? "text-sol-text-dim" : undefined} title={v.hash !== "unrecorded" ? `Graph ${v.hash}` : undefined}>{v.change}</span>
-                  {i === 0 && v.hash !== "unrecorded" && <span className="ml-2 text-meta text-sol-text-dim">latest</span>}
+                  <span className={v.hash === "unrecorded" ? "text-sol-text-dim" : undefined}>{v.change}</span>
+                  {v.hash !== "unrecorded" && <span className="ml-2 font-mono text-[10.5px] text-sol-text-dim" title={`Graph ${v.hash}`}>{v.hash.slice(0, 8)}</span>}
+                  {i === 0 && v.hash !== "unrecorded" && <span className="ml-2 text-[10.5px] text-sol-text-dim">latest</span>}
                 </td>
                 <td className="py-1.5 pr-3 text-sol-text-muted">{shortDay(v.first)}{v.last - v.first > 86_400_000 ? ` to ${shortDay(v.last)}` : ""}</td>
                 <td className="py-1.5 pr-3 text-right text-sol-text">{v.runs}{v.live ? <span className="text-sol-cyan"> ({v.live} live)</span> : null}</td>
@@ -94,7 +92,6 @@ function Versions({ versions }: { versions: LineVersion[] }) {
             ))}
           </tbody>
         </table>
-      </div>
     </ReportSection>
   );
 }

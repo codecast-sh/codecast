@@ -48,7 +48,7 @@ export function FeedChip({
   const label = (given ?? (agent && !row && fallback ? fallback : routeLabel(st, route))).slice(0, 26);
   return (
     <span
-      className="flex items-center gap-1.5 rounded-full bg-sol-bg-highlight px-2 py-0.5 font-mono text-meta leading-4 text-sol-text-muted"
+      className="flex items-center gap-1.5 rounded-full bg-sol-bg-highlight px-2 py-0.5 font-mono text-[10.5px] leading-4 text-sol-text-muted"
       title={title}
     >
       {agent ? (
@@ -71,11 +71,8 @@ export function FeedChip({
         <button
           type="button"
           onClick={() => onRemove?.()}
-          // A 20px target round a 10px mark, pulled back into the chip's
-          // padding so the chip keeps its size.
-          className="fc-remove -my-1 -mr-1.5 rounded-full p-[5px] text-sol-text-muted hover:text-sol-red"
+          className="fc-remove text-sol-text-muted hover:text-sol-red"
           title={agent ? `Remove ${label} from the room` : "Stop this feed"}
-          aria-label={agent ? `Remove ${label} from the room` : "Stop this feed"}
         >
           <X className="h-2.5 w-2.5" />
         </button>

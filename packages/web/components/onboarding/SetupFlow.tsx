@@ -354,7 +354,7 @@ export function SetupFlow({ mode }: { mode: SetupFlowMode }) {
         heading="Everything your team gets"
         description="Each one works for people and agents alike."
         onSkip={features.allOn ? undefined : () => go(indexOf("agents"))}
-        skipLabel={`Continue with ${features.onCount} ${features.onCount === 1 ? "feature" : "features"}`}
+        skipLabel={`Continue with ${features.onCount}`}
         onContinue={() => { features.turnAllOn(); go(indexOf("agents")); }}
         continueLabel={features.allOn ? "Continue" : `Turn on all ${features.total}`}
         enterAdvances
@@ -372,7 +372,7 @@ export function SetupFlow({ mode }: { mode: SetupFlowMode }) {
         heading="Connect your agents"
         description={solo ? "Sessions from this computer sync, and your agents learn to use Codecast." : "Sessions from this computer sync, and agents learn to use everything you just turned on."}
         onSkip={agents.allChosen ? undefined : () => leaveAgents()}
-        skipLabel={`Continue with ${agents.chosen.size} agent ${agents.chosen.size === 1 ? "feature" : "features"}`}
+        skipLabel={`Continue with ${agents.chosen.size}`}
         onContinue={() => leaveAgents(true)}
         continueLabel={agents.allChosen ? (solo ? "Finish" : "Continue") : `Turn on all ${agents.total}`}
         enterAdvances

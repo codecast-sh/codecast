@@ -73,7 +73,7 @@ export function OrgHistoryView({ entries, now, state = "ready", limit, onMore, r
     <div data-org-history>
       {shown.map((g) => (
         <section key={g.day} className="mb-5 last:mb-0" data-org-history-day={g.label}>
-          <h3 className="flex items-center gap-2.5 mb-2 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>
+          <h3 className="flex items-center gap-2.5 mb-2 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>
             {g.label}
             <span className="flex-1 h-px" style={{ background: hairline }} />
           </h3>
@@ -94,7 +94,7 @@ export function OrgHistoryView({ entries, now, state = "ready", limit, onMore, r
         </section>
       ))}
       {hidden > 0 && onMore && (
-        <button type="button" onClick={onMore} className="ml-[34px] text-meta text-sol-violet hover:underline underline-offset-2" data-org-history-more={hidden}>
+        <button type="button" onClick={onMore} className="ml-[34px] text-[11.5px] text-sol-violet hover:underline underline-offset-2" data-org-history-more={hidden}>
           {hidden} earlier {hidden === 1 ? "change" : "changes"}
         </button>
       )}
@@ -130,11 +130,11 @@ function Entry({ entry, foldOpen, onFold, asking, onAsk, rows, preview }: {
       <p className={cn("text-[13px] leading-snug", undone && HISTORY_STRUCK)} style={{ color: undone ? "var(--sol-text-dim)" : "var(--sol-text)" }} data-org-history-line>
         {orgLogEntryLine(entry)}
       </p>
-      <p className="mt-0.5 text-meta" style={{ color: "var(--sol-text-dim)" }} data-org-history-meta>
+      <p className="mt-0.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-org-history-meta>
         {entry.actor.name} · {orgLogClock(entry.at)} · {orgLogDoorWords(entry)}
       </p>
       {undone && (
-        <p className="mt-0.5 text-meta" style={{ color: "var(--sol-text-muted)" }} data-org-history-undone-by>
+        <p className="mt-0.5 text-[11.5px]" style={{ color: "var(--sol-text-muted)" }} data-org-history-undone-by>
           Taken back by {undone.name}, {orgLogClock(undone.at)}
         </p>
       )}
@@ -166,7 +166,7 @@ function RowLine({ row, struck }: { row: OrgLogRow; struck?: boolean }) {
     <li className="text-[12px] leading-snug" data-org-history-row={row._id}>
       <span className={cn(struck && HISTORY_STRUCK)} style={{ color: struck ? "var(--sol-text-dim)" : "var(--sol-text-secondary, var(--sol-text-muted))" }}>{orgLogLine(row)}</span>
       {effects.map((line) => (
-        <span key={line} className="block pl-3 text-meta" style={{ color: "var(--sol-text-dim)" }} data-org-history-effect>{line.charAt(0).toUpperCase() + line.slice(1)}</span>
+        <span key={line} className="block pl-3 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-org-history-effect>{line.charAt(0).toUpperCase() + line.slice(1)}</span>
       ))}
     </li>
   );
@@ -186,11 +186,11 @@ export function OrgLogRows({ entry, rows }: { entry: OrgLogEntry; rows: OrgLogRo
         {shown.map((r) => <RowLine key={r._id} row={r} />)}
       </ul>
       {!all && have.length > shown.length && (
-        <button type="button" onClick={() => setAll(true)} className="mt-2 text-meta text-sol-violet hover:underline underline-offset-2" data-org-history-rows-all>
+        <button type="button" onClick={() => setAll(true)} className="mt-2 text-[11.5px] text-sol-violet hover:underline underline-offset-2" data-org-history-rows-all>
           Show all {have.length}
         </button>
       )}
-      {waiting > 0 && rows === undefined && <p className="mt-2 text-meta" style={{ color: "var(--sol-text-dim)" }} data-org-history-rows-waiting>Reading the other {waiting}</p>}
+      {waiting > 0 && rows === undefined && <p className="mt-2 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-org-history-rows-waiting>Reading the other {waiting}</p>}
     </div>
   );
 }
@@ -198,7 +198,7 @@ export function OrgLogRows({ entry, rows }: { entry: OrgLogEntry; rows: OrgLogRo
 function PreviewPart({ name, title, tone, children }: { name: string; title: string; tone?: string; children: ReactNode }) {
   return (
     <section className="border-t pt-2.5 mt-2.5 first:border-t-0 first:pt-0 first:mt-0" style={{ borderColor: hairline }} data-undo-part={name}>
-      <h4 className="mb-1 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: tone ?? "var(--sol-text-dim)" }}>{title}</h4>
+      <h4 className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: tone ?? "var(--sol-text-dim)" }}>{title}</h4>
       {children}
     </section>
   );
@@ -238,7 +238,7 @@ export function OrgUndoPreviewCard({ entry, redo, preview, onConfirm, onCancel }
               <>
                 <ul className="space-y-1.5">{shown.map((r) => <RowLine key={r._id} row={r} />)}</ul>
                 {!all && will.length > shown.length && (
-                  <button type="button" onClick={() => setAll(true)} className="mt-1.5 text-meta text-sol-violet hover:underline underline-offset-2" data-undo-will-all>Show all {will.length}</button>
+                  <button type="button" onClick={() => setAll(true)} className="mt-1.5 text-[11.5px] text-sol-violet hover:underline underline-offset-2" data-undo-will-all>Show all {will.length}</button>
                 )}
               </>
             )}
@@ -248,7 +248,7 @@ export function OrgUndoPreviewCard({ entry, redo, preview, onConfirm, onCancel }
               <p className="text-[12px] leading-snug" style={{ color: "var(--sol-text-muted)" }} data-undo-left-line>{sentence(leftAloneLine(left.length, entry.row_count))}.</p>
               <ul className="mt-1.5 space-y-1">
                 {left.slice(0, 3).map(({ row, changed_by }) => (
-                  <li key={row._id} className="text-meta leading-snug" style={{ color: "var(--sol-text-dim)" }}>
+                  <li key={row._id} className="text-[11.5px] leading-snug" style={{ color: "var(--sol-text-dim)" }}>
                     {row.subject.short_id ?? row.subject.label}: {row.skipped ?? "changed after this"}{changed_by ? `, by ${changed_by.name}` : ""}
                   </li>
                 ))}

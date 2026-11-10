@@ -107,7 +107,7 @@ export function SheetFrame({ kind, idRef, idLabel, sub, onRenameSub, linkRef, gl
           <div className="min-w-0 grow basis-56">
             <SheetTitle title={title} onRename={onRename} />
           </div>
-          {sub ? <SheetSub sub={sub} onRename={onRenameSub} /> : (idLabel ?? idRef) && <span className="org-sheet-id mt-[6px] shrink-0 whitespace-nowrap font-mono text-meta" style={{ color: DIM }} data-sheet-id>{idLabel ?? idRef}</span>}
+          {sub ? <SheetSub sub={sub} onRename={onRenameSub} /> : (idLabel ?? idRef) && <span className="org-sheet-id mt-[6px] shrink-0 whitespace-nowrap font-mono text-[11px]" style={{ color: DIM }} data-sheet-id>{idLabel ?? idRef}</span>}
           <span className="flex shrink-0 items-center gap-1.5" data-sheet-actions>
             {actions}
             {link && <ShareControl label={SHARE_LABEL[kind]} path={link} />}
@@ -253,9 +253,9 @@ export function SheetFold({ title, hint, children, defaultOpen = false }: { titl
   return (
     <div className="border-t" style={{ borderColor: RULE }} data-sheet-fold={title} data-open={open ? "" : undefined}>
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full items-center gap-2 px-1 py-2.5 text-left text-[12.5px] hover:text-[var(--sol-text)]" style={{ color: "var(--sol-text-muted)" }}>
-        <span aria-hidden className={cn("inline-block w-3 text-meta transition-transform", open && "rotate-90")}>▸</span>
+        <span aria-hidden className={cn("inline-block w-3 text-[10px] transition-transform", open && "rotate-90")}>▸</span>
         <span className="shrink-0 whitespace-nowrap">{title}</span>
-        {hint && <span className="ml-auto min-w-0 truncate text-meta" style={{ color: DIM }}>{hint}</span>}
+        {hint && <span className="ml-auto min-w-0 truncate text-[11.5px]" style={{ color: DIM }}>{hint}</span>}
       </button>
       {open && <div className="pb-3">{children}</div>}
     </div>

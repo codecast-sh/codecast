@@ -42,15 +42,9 @@ export const DecisionListRow = memo(function DecisionListRow({ d, state, ctx }: 
       </span>
       {d.short_id && !ctx.compact && <ShortId id={d.short_id} className="text-xs text-sol-text-dim w-14 flex-shrink-0 cq-hide-compact" />}
       <span className={`flex-1 text-sm truncate ${open ? "text-sol-text" : "text-sol-text-muted"}`}>{d.question}</span>
-      <span className="flex items-center gap-2 flex-shrink-0 text-meta text-sol-text-dim">
+      <span className="flex items-center gap-2 flex-shrink-0 text-[11px] text-sol-text-dim">
         <DecisionThreadUnread decisionId={d._id} />
-        {!open && (() => {
-          // The answer can be a sentence: capped and truncated, whole in the
-          // tooltip; a compact row says only that it was answered.
-          const answer = d.status === "dismissed" ? "Dismissed" : d.answer_text ?? (d.answer_index != null ? d.options[d.answer_index]?.label : "Answered") ?? "Answered";
-          const shown = ctx.compact && d.status !== "dismissed" ? "Answered" : answer;
-          return <span className="text-sol-green max-w-[14rem] truncate" title={answer} data-decision-answer>{shown}</span>;
-        })()}
+        {!open && <span className="text-sol-green">{d.status === "dismissed" ? "Dismissed" : d.answer_text ?? (d.answer_index != null ? d.options[d.answer_index]?.label : "Answered")}</span>}
         {!!d.problem_reach && <span className="flex items-center gap-0.5 tabular-nums" title={`${d.problem_reach} ${d.problem_reach === 1 ? "person" : "people"} reached`} data-decision-reach><Users className="w-3 h-3" aria-hidden />{d.problem_reach}</span>}
         {!!d.problem_findings && <span className="flex items-center gap-0.5 tabular-nums" title={`${d.problem_findings} ${d.problem_findings === 1 ? "finding" : "findings"}`} data-decision-findings><SquareStack className="w-3 h-3" aria-hidden />{d.problem_findings}</span>}
         {band && <span className={`tabular-nums ${SEV_CLASS[band] ?? ""}`} title={`Worst finding: severity ${d.problem_severity} of 10`}>{d.problem_severity}</span>}

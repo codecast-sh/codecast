@@ -36,7 +36,7 @@ export function DistributionCard({ watch, history, named, loading = false, provi
     <div className="ops-card" data-watch-distribution data-provisional={provisional ? "" : undefined} aria-busy={provisional || undefined}>
       <div className="ops-card-head">
         <span>Distribution</span>
-        <span className="ops-dim ops-num font-normal text-meta" title={d ? `${d.n} points drawn${reads > d.n ? `, ${reads} reads folded into them` : ""}${d.uneven ? "; each counts for as long as it stood" : ""}` : undefined}>{d ? `${reads.toLocaleString()} ${reads === 1 ? "read" : "reads"} · ${named.short}${d.uneven ? " · time-weighted" : ""}` : ""}</span>
+        <span className="ops-dim ops-num font-normal text-[11.5px]" title={d ? `${d.n} points drawn${reads > d.n ? `, ${reads} reads folded into them` : ""}${d.uneven ? "; each counts for as long as it stood" : ""}` : undefined}>{d ? `${reads.toLocaleString()} ${reads === 1 ? "read" : "reads"} · ${named.short}${d.uneven ? " · time-weighted" : ""}` : ""}</span>
       </div>
       {loading ? (
         <div className="ops-card-body" aria-busy="true" data-dist-loading>

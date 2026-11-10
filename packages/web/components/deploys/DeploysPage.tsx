@@ -65,12 +65,10 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy }: { ini
       {teams.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}
     </select>
   ) : null;
-  // `dpp-frame` is the page's own width (deploys.css): a narrow pane stacks the targets above the target.
-  if (!ready && allTargets.length === 0) return <div className="dpp-frame"><div className="dpp" aria-busy><nav className="dpp-rail"><div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div></nav><div className="dpp-main dpp-cold" /></div></div>;
-  if (allTargets.length === 0) return <div className="dpp-frame"><div className="dpp" data-deploys-none><nav className="dpp-rail"><div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div></nav><div className="dpp-empty">No deploys yet</div></div></div>;
+  if (!ready && allTargets.length === 0) return <div className="dpp" aria-busy><nav className="dpp-rail"><div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div></nav><div className="dpp-main dpp-cold" /></div>;
+  if (allTargets.length === 0) return <div className="dpp" data-deploys-none><nav className="dpp-rail"><div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div></nav><div className="dpp-empty">No deploys yet</div></div>;
 
   return (
-    <div className="dpp-frame">
     <div className="dpp" data-deploys-page>
       <nav className="dpp-rail" aria-label="Deploy targets">
         <div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div>
@@ -94,7 +92,6 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy }: { ini
       </nav>
       {picked ? <TargetPane key={picked._id} target={picked} deploys={deploys} now={now} onPress={press.open} openDeploy={initialDeploy ?? null} /> : null}
       {press.review}
-    </div>
     </div>
   );
 }

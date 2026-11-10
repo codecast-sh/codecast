@@ -93,7 +93,7 @@ function WakeLine({ w }: { w: HostWake }) {
           Couldn't start
         </span>
         <span className="whitespace-nowrap text-sol-text-dim">{w.host}</span>
-        <span className="line-clamp-2 basis-full break-words pl-3 font-mono text-meta text-sol-text-dim" title={w.error}>{w.error}</span>
+        <span className="line-clamp-2 basis-full break-words pl-3 font-mono text-[11px] text-sol-text-dim" title={w.error}>{w.error}</span>
       </>
     );
   }
@@ -111,7 +111,7 @@ function WakeLine({ w }: { w: HostWake }) {
   return (
     <>
       <WakeSteps w={w} />
-      {isWaking(w) && <span className="font-mono text-meta tabular-nums text-sol-text-dim">{elapsed(w)}</span>}
+      {isWaking(w) && <span className="font-mono text-[11px] tabular-nums text-sol-text-dim">{elapsed(w)}</span>}
       <span className="whitespace-nowrap text-sol-text-dim">{w.host}</span>
     </>
   );
@@ -133,7 +133,7 @@ export function HostWakeNote({ wake, onCancel, cancelling }: { wake: HostWake; o
           onClick={(e) => { e.stopPropagation(); onCancel(); }}
           disabled={cancelling}
           data-testid="pending-message-cancel"
-          className="text-meta text-sol-text-dim/70 underline underline-offset-2 transition-colors hover:text-sol-orange disabled:opacity-60"
+          className="text-[11px] text-sol-text-dim/70 underline underline-offset-2 transition-colors hover:text-sol-orange disabled:opacity-60"
         >
           {cancelling ? "Cancelling…" : "Cancel"}
         </button>
@@ -167,7 +167,7 @@ export function SessionHostWakeChip({ wake }: { wake: HostWake }) {
           <div className="text-xs text-sol-text-muted">Wakes on your next message</div>
         ) : wake.stage === "failed" ? (
           <div className="flex items-start gap-2">
-            <code className="min-w-0 flex-1 break-words font-mono text-meta text-sol-red/90">{wake.error}</code>
+            <code className="min-w-0 flex-1 break-words font-mono text-[11px] text-sol-red/90">{wake.error}</code>
             <WakeAgainButton w={wake} />
           </div>
         ) : (

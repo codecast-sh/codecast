@@ -185,7 +185,7 @@ export function TrialCardBody({ card: c, now, answer }: { card: TrialCardRow; no
     .map(({ s, quote }): SeenCase => ({ key: s._id, title: s.title, quote, at: s.observed_at }))[0] : undefined;
   const leftOut = uncovered ? (
     <section className="cc-section" data-card-uncovered>
-      <div className="cc-label-row"><h3 className="cc-label">Not covered by this fix</h3><span className="text-meta text-sol-text-dim">{live} {live === 1 ? "conversation" : "conversations"} still open</span></div>
+      <div className="cc-label-row"><h3 className="cc-label">Not covered by this fix</h3><span className="text-[11px] text-sol-text-dim">{live} {live === 1 ? "conversation" : "conversations"} still open</span></div>
       <ul className="ccd-seen"><SeenQuote c={uncovered} /></ul>
     </section>
   ) : null;

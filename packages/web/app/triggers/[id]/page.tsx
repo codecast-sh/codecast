@@ -41,10 +41,6 @@ import {
 } from "../../../components/triggerCadence";
 import { ARMED_STATUSES, isTriggerTerminal, taskDisplayTitle, type TaskRow } from "../../../components/triggerTasks";
 import { isTriggerEditable } from "../../../lib/triggerEditable";
-import { SwitchReview } from "../../../components/consequential/ConsequentialSwitch";
-import { useRunCost } from "../../../components/consequential/useRunCost";
-import { triggerArmLedger, triggerRunNowLedger } from "../../../components/work/startLedgers";
-import { TriggerForm } from "../page";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -73,33 +69,33 @@ function StatusChip({ task, now }: { task: TaskRow; now: number }) {
   switch (task.status) {
     case "running":
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-green/40 bg-sol-green/10 text-sol-green text-meta font-medium">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-green/40 bg-sol-green/10 text-sol-green text-[11px] font-medium">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
           running
         </span>
       );
     case "scheduled":
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-orange/40 bg-sol-orange/10 text-sol-orange text-meta font-medium tabular-nums">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-orange/40 bg-sol-orange/10 text-sol-orange text-[11px] font-medium tabular-nums">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" />
           {taskStateLabel(task, now)}
         </span>
       );
     case "paused":
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-border bg-sol-bg-alt/60 text-sol-text-dim text-meta font-medium">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-border bg-sol-bg-alt/60 text-sol-text-dim text-[11px] font-medium">
           <Pause className="w-3 h-3" /> paused
         </span>
       );
     case "failed":
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-red/40 bg-sol-red/10 text-sol-red text-meta font-medium">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-red/40 bg-sol-red/10 text-sol-red text-[11px] font-medium">
           <XCircle className="w-3 h-3" /> failed
         </span>
       );
     default:
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-border bg-sol-bg-alt/60 text-sol-text-dim text-meta font-medium">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-border bg-sol-bg-alt/60 text-sol-text-dim text-[11px] font-medium">
           <Check className="w-3 h-3" /> done
         </span>
       );
@@ -117,11 +113,11 @@ function StatCell({
 }) {
   return (
     <div className="min-w-0 rounded-lg border border-sol-border/40 bg-sol-bg-alt/30 px-3.5 py-3">
-      <div className="text-mark font-semibold uppercase tracking-[0.14em] text-sol-text-dim/70">
+      <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim/70">
         {label}
       </div>
       <div className="mt-1 text-sm text-sol-text truncate">{children}</div>
-      {sub && <div className="mt-0.5 text-meta text-sol-text-dim truncate">{sub}</div>}
+      {sub && <div className="mt-0.5 text-[10px] text-sol-text-dim truncate">{sub}</div>}
     </div>
   );
 }
@@ -132,7 +128,7 @@ function SessionLink({ label, id, title }: { label: string; id?: string; title?:
   return (
     <Link
       href={`/conversation/${id}`}
-      className="group flex items-center gap-2 py-1 text-meta no-underline"
+      className="group flex items-center gap-2 py-1 text-[11px] no-underline"
     >
       <MessageSquare className="w-3 h-3 flex-shrink-0 text-sol-cyan/70" />
       <span className="text-sol-text-dim flex-shrink-0">{label}</span>
@@ -185,12 +181,6 @@ export default function TriggerDetailPage() {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [idCopied, setIdCopied] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
-  // A start (run now, resume, reactivate) spends an agent run: it opens the
-  // shared review, and only the review's confirm acts. Pause and cancel stay
-  // one press.
-  const [reviewing, setReviewing] = useState<null | "runNow" | "resume" | "reactivate">(null);
-  const [editing, setEditing] = useState(false);
-  const runCost = useRunCost(null);
 
   const taskId = trigger?._id;
   const runs = useTriggerRuns(taskId ?? null);
@@ -265,22 +255,6 @@ export default function TriggerDetailPage() {
     setConfirmingCancel(false);
   };
 
-  const ledgerFacts = {
-    title,
-    cadence: describeTaskCadence(t),
-    schedule: t.schedule_type,
-    intervalMs: t.interval_ms ?? null,
-    agent: t.agent_type ?? null,
-    project: projectName ?? null,
-    applies: t.mode === "apply",
-    hosted: t.hosted_home === true,
-  };
-  const reviewLedger =
-    reviewing === "runNow" ? triggerRunNowLedger(ledgerFacts, runCost)
-    : reviewing === "resume" ? triggerArmLedger(ledgerFacts, "Paused", null, runCost)
-    : reviewing === "reactivate" ? triggerArmLedger(ledgerFacts, "Finished", t.schedule_type === "recurring" && t.interval_ms ? now + t.interval_ms : null, runCost)
-    : null;
-
   const copyId = () => {
     copyToClipboard(t.short_id ?? t._id).then(() => {
       setIdCopied(true);
@@ -296,7 +270,7 @@ export default function TriggerDetailPage() {
             <Link
               href="/triggers"
               data-page-head
-              className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline"
+              className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors no-underline"
             >
               <ArrowLeft className="w-3 h-3" /> All triggers
             </Link>
@@ -314,7 +288,7 @@ export default function TriggerDetailPage() {
                     <ShortcutTooltip label={idCopied ? "Copied" : "Copy id"}>
                       <button
                         onClick={copyId}
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-border/50 font-mono text-meta text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-border/50 font-mono text-[10px] text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
                       >
                         {t.short_id ?? "id"}
                         {idCopied ? (
@@ -326,7 +300,7 @@ export default function TriggerDetailPage() {
                     </ShortcutTooltip>
                   )}
                 </div>
-                <div className="mt-1.5 flex items-center gap-2 flex-wrap text-meta">
+                <div className="mt-1.5 flex items-center gap-2 flex-wrap text-[11px]">
                   <StatusChip task={t} now={now} />
                   <span className="text-sol-text-dim">{describeTaskCadence(t)}</span>
                   {t.mode !== "apply" && (
@@ -360,8 +334,7 @@ export default function TriggerDetailPage() {
                   <>
                     <ShortcutTooltip label="Queue a run immediately — doesn't shift the regular cadence">
                       <button
-                        onClick={() => setReviewing("runNow")}
-                        aria-haspopup="dialog"
+                        onClick={() => act("runNow")}
                         className={`${verbBtn} border-sol-cyan/40 text-sol-cyan bg-sol-cyan/10 hover:bg-sol-cyan/20`}
                       >
                         <Play className="w-3.5 h-3.5" /> Run now
@@ -370,8 +343,7 @@ export default function TriggerDetailPage() {
                     {t.status === "paused" ? (
                       <ShortcutTooltip label="Re-arm the trigger — fires resume from now">
                         <button
-                          onClick={() => setReviewing("resume")}
-                          aria-haspopup="dialog"
+                          onClick={() => act("resume")}
                           className={`${verbBtn} border-sol-orange/40 text-sol-orange hover:bg-sol-orange/10`}
                         >
                           <Play className="w-3.5 h-3.5" /> Resume
@@ -409,8 +381,7 @@ export default function TriggerDetailPage() {
                 {isTerminal && (
                   <ShortcutTooltip label="Re-arm this trigger — the next fire is one cycle from now">
                     <button
-                      onClick={() => setReviewing("reactivate")}
-                      aria-haspopup="dialog"
+                      onClick={() => act("reactivate")}
                       className={`${verbBtn} border-sol-orange/40 text-sol-orange hover:bg-sol-orange/10`}
                     >
                       <RotateCcw className="w-3.5 h-3.5" /> Reactivate
@@ -418,32 +389,16 @@ export default function TriggerDetailPage() {
                   </ShortcutTooltip>
                 )}
                 {isEditable && (
-                  <ShortcutTooltip label="Edit the prompt or cadence">
-                    <button
-                      onClick={() => setEditing((v) => !v)}
-                      aria-expanded={editing}
-                      className={`${verbBtn} border-sol-border/50 text-sol-text-dim hover:bg-sol-bg-alt/60 ${editing ? "bg-sol-bg-alt/60 text-sol-text" : ""}`}
+                  <ShortcutTooltip label="Edit the prompt or cadence on the triggers page">
+                    <Link
+                      href={`/triggers?task=${t._id}&edit=1`}
+                      className={`${verbBtn} border-sol-border/50 text-sol-text-dim hover:bg-sol-bg-alt/60 no-underline`}
                     >
                       <Pencil className="w-3.5 h-3.5" /> Edit
-                    </button>
+                    </Link>
                   </ShortcutTooltip>
                 )}
               </div>
-            )}
-
-            {/* The edit form, here on the trigger's own page. */}
-            {editing && isEditable && (
-              <div className="mt-4">
-                <TriggerForm editTask={t} onClose={() => setEditing(false)} />
-              </div>
-            )}
-
-            {reviewing && reviewLedger && (
-              <SwitchReview
-                ledger={reviewLedger}
-                onClose={() => setReviewing(null)}
-                onConfirm={() => { const verb = reviewing; setReviewing(null); act(verb); }}
-              />
             )}
 
             {/* ── Attention banner: the latest run's flag, with its summary ── */}
@@ -455,7 +410,7 @@ export default function TriggerDetailPage() {
                     : "border-sol-orange/30 border-l-sol-orange/70 bg-sol-orange/5"
                 }`}
               >
-                <div className="flex items-center gap-1.5 text-meta font-medium">
+                <div className="flex items-center gap-1.5 text-[11px] font-medium">
                   <outcome.Icon className={`w-3.5 h-3.5 ${outcome.tone}`} />
                   <span className={outcome.tone}>Last run {outcome.word}</span>
                   {t.last_run_at && (
@@ -465,7 +420,7 @@ export default function TriggerDetailPage() {
                   )}
                 </div>
                 {t.last_run_summary && (
-                  <p className="mt-1 text-meta leading-relaxed text-sol-text-muted">
+                  <p className="mt-1 text-[11px] leading-relaxed text-sol-text-muted">
                     {t.last_run_summary}
                   </p>
                 )}
@@ -481,7 +436,7 @@ export default function TriggerDetailPage() {
                 data-testid="trigger-precheck"
                 className="mt-4 rounded-lg border border-sol-border/40 bg-sol-bg-alt/20 px-3.5 py-2.5"
               >
-                <div className="flex items-center gap-1.5 text-mark font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
+                <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
                   <ShieldCheck className="w-3.5 h-3.5" /> Precheck
                   {t.schedule_type === "event" && (
                     <span className="font-normal normal-case tracking-normal text-sol-text-dim/80">
@@ -489,20 +444,20 @@ export default function TriggerDetailPage() {
                     </span>
                   )}
                 </div>
-                <p className="mt-1.5 font-mono text-meta leading-relaxed text-sol-text break-all">
+                <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-sol-text break-all">
                   {t.precheck}
                 </p>
-                {/* What the gate does, as label and value rows. */}
-                <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-meta">
-                  <dt className="text-sol-text-dim">Exit 0</dt><dd className="text-sol-text-muted">Runs the trigger</dd>
-                  <dt className="text-sol-text-dim">Other exit</dt><dd className="text-sol-text-muted">Skipped run</dd>
-                  <dt className="text-sol-text-dim">Manual, event</dt><dd className="text-sol-text-muted">Not checked</dd>
-                  {t.last_run_source === "manual" && (
-                    <><dt className="text-sol-text-dim">Last run</dt><dd className="text-sol-text-muted">Manual, not checked</dd></>
-                  )}
-                </dl>
+                <p className="mt-1 text-[10px] text-sol-text-dim">
+                  Runs before scheduled and recurring firings. Exit 0 runs the trigger;
+                  anything else records a skipped run. Manual and event runs bypass it.
+                </p>
+                {t.last_run_source === "manual" && (
+                  <p className="mt-1.5 text-[11px] text-sol-text-dim">
+                    The last run was manual, so the precheck did not run.
+                  </p>
+                )}
                 {t.last_precheck_skip_at && (
-                  <p className="mt-1.5 text-meta text-sol-yellow">
+                  <p className="mt-1.5 text-[11px] text-sol-yellow">
                     Last skipped {fmtDuration(Math.max(0, now - t.last_precheck_skip_at))} ago
                     {t.last_precheck_skip_reason ? ` — ${t.last_precheck_skip_reason}` : ""}
                   </p>
@@ -594,20 +549,20 @@ export default function TriggerDetailPage() {
             <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               <div className="lg:col-span-5 min-w-0">
                 <div className="flex items-baseline gap-2">
-                  <h2 className="text-mark font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
+                  <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
                     Run history
                   </h2>
                   {runs && runs.length > 0 && (
-                    <span className="text-meta text-sol-text-dim/70 tabular-nums">
+                    <span className="text-[10px] text-sol-text-dim/70 tabular-nums">
                       {runs.length} recorded
                     </span>
                   )}
                 </div>
                 <div className="mt-2 rounded-lg border border-sol-border/40 bg-sol-bg-alt/20 px-3 py-2.5">
                   {runs === undefined ? (
-                    <div className="py-3 text-meta text-sol-text-dim">Loading runs…</div>
+                    <div className="py-3 text-[11px] text-sol-text-dim">Loading runs…</div>
                   ) : runs.length === 0 ? (
-                    <div className="py-3 text-meta text-sol-text-dim">
+                    <div className="py-3 text-[11px] text-sol-text-dim">
                       No runs yet
                       {t.status === "scheduled" && msUntil !== undefined && msUntil > 0
                         ? ` — the first fires in ${fmtDuration(msUntil)}.`
@@ -622,7 +577,7 @@ export default function TriggerDetailPage() {
               <div className="lg:col-span-7 min-w-0 space-y-5">
                 <div>
                   <div className="flex items-baseline justify-between gap-2">
-                    <h2 className="text-mark font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
+                    <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
                       Briefing
                     </h2>
                     {!brief && (
@@ -632,7 +587,7 @@ export default function TriggerDetailPage() {
                           setSummarizing(true);
                           regenerateSummary({ task_id: t._id }).catch(() => setSummarizing(false));
                         }}
-                        className="text-meta text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
+                        className="text-[10px] text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
                       >
                         {summarizing ? "Summarizing…" : "Summarize"}
                       </button>
@@ -647,7 +602,7 @@ export default function TriggerDetailPage() {
 
                 {(t.created_by_conversation_id || t.originating_conversation_id || t.last_run_conversation_id) && (
                   <div>
-                    <h2 className="text-mark font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
+                    <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
                       Sessions
                     </h2>
                     <div className="mt-1.5 rounded-lg border border-sol-border/40 bg-sol-bg-alt/20 px-3.5 py-2">
@@ -674,7 +629,7 @@ export default function TriggerDetailPage() {
                   </div>
                 )}
 
-                <div className="text-meta text-sol-text-dim flex items-center gap-3 flex-wrap">
+                <div className="text-[10px] text-sol-text-dim flex items-center gap-3 flex-wrap">
                   <span>created {new Date(t.created_at).toLocaleString()}</span>
                   {t.max_runtime_ms !== undefined && <span>max runtime {fmtDuration(t.max_runtime_ms)}</span>}
                   {t.project_path && (

@@ -60,7 +60,7 @@ export function SegmentedToggle({
             onClick={() => { if (!it.disabled) onChange(it.key); }}
             aria-pressed={selected}
             aria-disabled={it.disabled || undefined}
-            className={`h-full flex items-center justify-center gap-1.5 ${sm ? "text-meta" : "text-xs"} transition-colors ${it.disabled ? "opacity-40 cursor-default" : ""} ${
+            className={`h-full flex items-center justify-center gap-1.5 ${sm ? "text-[11px]" : "text-xs"} transition-colors ${it.disabled ? "opacity-40 cursor-default" : ""} ${
               fullWidth ? "flex-1" : ""
             } ${
               bare
@@ -75,7 +75,7 @@ export function SegmentedToggle({
             {Icon && <Icon className="w-3.5 h-3.5" />}
             {it.label && <span>{it.label}</span>}
             {it.count != null && it.count > 0 && (
-              <span className="text-meta tabular-nums text-sol-cyan">{it.count}</span>
+              <span className="text-[10px] tabular-nums text-sol-cyan">{it.count}</span>
             )}
           </button>
         );
@@ -152,7 +152,7 @@ function SegmentedDropdown({
                 {Icon && <Icon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
                 <span className="flex-1">{it.label || it.title}</span>
                 {it.count != null && it.count > 0 && (
-                  <span className="text-meta tabular-nums text-sol-cyan">{it.count}</span>
+                  <span className="text-[10px] tabular-nums text-sol-cyan">{it.count}</span>
                 )}
                 {it.key === value && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
               </button>

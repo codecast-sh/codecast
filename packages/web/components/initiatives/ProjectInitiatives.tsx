@@ -34,7 +34,7 @@ export function ProjectInitiatives({ projectId, size = "sm", label, except, metr
   const rows = useMemo(() => initiativesOfProject(all, projectId).filter((r) => r._id !== except), [all, projectId, except]);
   if (rows.length === 0) return null;
   return (
-    <span className={cn("inline-flex items-center gap-x-1.5 gap-y-1 flex-wrap min-w-0", size === "xs" ? "text-meta" : "text-[12.5px]", className)} data-project-initiatives={projectId}>
+    <span className={cn("inline-flex items-center gap-x-1.5 gap-y-1 flex-wrap min-w-0", size === "xs" ? "text-[11px]" : "text-[12.5px]", className)} data-project-initiatives={projectId}>
       {label && <span style={{ color: "var(--sol-text-dim)" }}>{label}</span>}
       {rows.map((r) => {
         const reading = metrics ? metricReadings(r, lookup)[0] : undefined;

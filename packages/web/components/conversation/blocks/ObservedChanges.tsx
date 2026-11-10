@@ -27,7 +27,7 @@ export function ObservedChanges({ toolId }: { toolId: string }) {
     st.selectFile(filePath);
   };
   return (
-    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-1.5 sm:px-2 py-1 border-t border-sol-border/20 text-meta font-mono text-sol-text-dim">
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-1.5 sm:px-2 py-1 border-t border-sol-border/20 text-[11px] font-mono text-sol-text-dim">
       <span>changed</span>
       {files.map((f) => (
         <button

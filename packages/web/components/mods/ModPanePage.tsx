@@ -3,7 +3,7 @@
 // $.ui.open reach the render as e.props, with the URL's query as `query`.
 
 import { useMemo, useState } from "react";
-import { DynamicIcon } from "./ModIcon";
+import { DynamicIcon } from "lucide-react/dynamic";
 import type { ModSurface } from "@codecast/shared/contracts/mods";
 import { ModSurfaceView } from "./ModSurface";
 import { ModLogList } from "./ModLogList";
@@ -48,22 +48,22 @@ export function ModPanePage({ mod, pane }: { mod: string; pane?: string }) {
             <span className="truncate text-[14px] font-semibold text-sol-text">{row.title ?? row.name}</span>
             <span className="size-1.5 rounded-full" style={{ background: statusTone }} title={!row.enabled ? "off" : runtime?.status ?? "starting"} />
           </div>
-          <div className="text-meta text-sol-text-dim">{row.version ? `v${row.version}` : "dev"} · rev {row.rev}{row.owner_name && !row.is_mine ? ` · by ${row.owner_name}` : ""}</div>
+          <div className="text-[11px] text-sol-text-dim">{row.version ? `v${row.version}` : "dev"} · rev {row.rev}{row.owner_name && !row.is_mine ? ` · by ${row.owner_name}` : ""}</div>
         </div>
         {panes.length > 1 ? (
-          <nav className="ml-4 flex min-w-0 gap-1 overflow-x-auto">
+          <nav className="ml-4 flex gap-1">
             {panes.map((p) => (
               <button
                 key={p.id}
                 onClick={() => modNavigate(`/m/${mod}/${p.id}`)}
-                className={`shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-[12.5px] transition-colors ${p.id === active ? "bg-[color-mix(in_srgb,var(--sol-text)_8%,transparent)] text-sol-text" : "text-sol-text-muted hover:text-sol-text"}`}
+                className={`rounded-md px-2.5 py-1 text-[12.5px] transition-colors ${p.id === active ? "bg-[color-mix(in_srgb,var(--sol-text)_8%,transparent)] text-sol-text" : "text-sol-text-muted hover:text-sol-text"}`}
               >
                 {p.title}
               </button>
             ))}
           </nav>
         ) : null}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => setShowLogs((v) => !v)}
             className={`rounded-md px-2 py-1 text-[12px] ${showLogs ? "text-sol-text" : "text-sol-text-muted hover:text-sol-text"}`}
@@ -87,7 +87,7 @@ export function ModPanePage({ mod, pane }: { mod: string; pane?: string }) {
           </div>
         </main>
         {showLogs ? (
-          <aside className="w-[min(380px,45%)] shrink-0 overflow-auto border-l border-sol-border bg-sol-bg-alt/40 px-3 py-3">
+          <aside className="w-[380px] shrink-0 overflow-auto border-l border-sol-border bg-sol-bg-alt/40 px-3 py-3">
             <ModLogList runtime={runtime} />
           </aside>
         ) : null}

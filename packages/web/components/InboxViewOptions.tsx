@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 
-import { resolveCardBars, type CardBarsMode } from "../lib/uiPrefDefaults";
+import type { CardBarsMode } from "../lib/uiPrefDefaults";
 export type { CardBarsMode };
 
 const CARD_BARS: { value: CardBarsMode; label: string }[] = [
@@ -50,8 +50,7 @@ export function InboxViewOptions(props: {
     (p.showTeam && p.teamScope) ||
     (p.subagentCount > 0 && p.showSubagents) ||
     (p.oldCount > 0 && p.showOld) ||
-    // Against the one default rule (resolveCardBars), not a literal.
-    (p.showCardBars && p.cardBars !== resolveCardBars({}));
+    (p.showCardBars && p.cardBars !== "strip");
   return (
     <DropdownMenu>
       <ShortcutTooltip label="View options" side="bottom">
@@ -68,7 +67,7 @@ export function InboxViewOptions(props: {
         </DropdownMenuTrigger>
       </ShortcutTooltip>
       <DropdownMenuContent align="end" className="w-52 text-xs">
-        {hasList && <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Show</DropdownMenuLabel>}
+        {hasList && <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Show</DropdownMenuLabel>}
         {p.showTeam && (
           <DropdownMenuCheckboxItem checked={p.teamScope} onCheckedChange={(on) => p.onTeamScope(!!on)} onSelect={(e) => e.preventDefault()}>
             Team's sessions
@@ -89,7 +88,7 @@ export function InboxViewOptions(props: {
         {p.showCardBars && (
           <>
             {hasList && <DropdownMenuSeparator />}
-            <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Triggers and tasks on cards</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Triggers and tasks on cards</DropdownMenuLabel>
             <DropdownMenuRadioGroup value={p.cardBars} onValueChange={(v) => p.onCardBars(v as CardBarsMode)}>
               {CARD_BARS.map((option) => (
                 <DropdownMenuRadioItem key={option.value} value={option.value} onSelect={(e) => e.preventDefault()}>

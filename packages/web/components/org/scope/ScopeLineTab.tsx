@@ -58,7 +58,7 @@ export function ScopeLineTab({ ids, teamId }: { ids: ScopeIds; teamId?: string }
     return (
       <div className="py-14 text-center">
         <p className="text-[13px]" style={{ color: "var(--sol-text-muted)" }}>No tasks here yet.</p>
-        <p className="mt-1 text-meta" style={{ color: "var(--sol-text-dim)" }}>Tasks in its area show here by status.</p>
+        <p className="mt-1 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Tasks in its area show here by status.</p>
       </div>
     );
   }
@@ -77,12 +77,12 @@ export function ScopeLineTab({ ids, teamId }: { ids: ScopeIds; teamId?: string }
           >
             <header className="flex items-center gap-1.5 px-2.5 h-9 border-b" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 20%, transparent)" }}>
               <Icon className={cn("w-3.5 h-3.5 shrink-0", vis.color)} />
-              <span className="text-mark font-semibold uppercase tracking-[0.06em] truncate" style={{ color: "var(--sol-text-muted)" }}>{status.name}</span>
-              <span className="ml-auto text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{colTasks.length}</span>
+              <span className="text-[11px] font-semibold uppercase tracking-[0.06em] truncate" style={{ color: "var(--sol-text-muted)" }}>{status.name}</span>
+              <span className="ml-auto text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{colTasks.length}</span>
             </header>
             <div className="flex-1 min-h-[96px] p-1.5 space-y-1.5">
               {colTasks.length === 0 ? (
-                <p className="px-1.5 py-3 text-meta italic" style={{ color: "var(--sol-text-dim)" }}>Nothing here.</p>
+                <p className="px-1.5 py-3 text-[11px] italic" style={{ color: "var(--sol-text-dim)" }}>Nothing here.</p>
               ) : colTasks.map((t) => (
                 <LineCard
                   key={t._id}
@@ -125,7 +125,7 @@ function LineCard({ task, run, held, evidence }: { task: TaskItem; run: LineRun 
     <div data-line-card={task.short_id} className="relative rounded-lg border transition-colors hover:bg-sol-bg-highlight/60" style={{ borderColor: held ? "color-mix(in srgb, var(--sol-yellow) 45%, transparent)" : "color-mix(in srgb, var(--sol-border) 32%, transparent)", background: "var(--sol-card)" }}>
       <Link href={`/tasks/${task.short_id}`} className="block px-2.5 pt-2 pb-2">
         <span className="block text-[12.5px] font-medium leading-snug line-clamp-2" style={{ color: "var(--sol-text)" }}>{task.title}</span>
-        <span className="mt-1 flex items-center gap-1.5 text-meta min-w-0" style={{ color: "var(--sol-text-dim)" }}>
+        <span className="mt-1 flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--sol-text-dim)" }}>
           <ShortId id={task.short_id} />
           {assignee && (
             <span className="inline-flex items-center gap-1 min-w-0 truncate" title={assignee.name}>
@@ -136,11 +136,11 @@ function LineCard({ task, run, held, evidence }: { task: TaskItem; run: LineRun 
           {evidenceLine && <span className="ml-auto shrink-0 tabular-nums">{evidenceLine}</span>}
         </span>
         {node && (
-          <span data-line-node className="mt-1.5 flex items-center gap-1.5 text-meta min-w-0 pl-1.5" style={{ borderLeft: `3px solid ${handMeta?.color ?? "color-mix(in srgb, var(--sol-border) 60%, transparent)"}`, color: "var(--sol-text-muted)" }}>
+          <span data-line-node className="mt-1.5 flex items-center gap-1.5 text-[11px] min-w-0 pl-1.5" style={{ borderLeft: `3px solid ${handMeta?.color ?? "color-mix(in srgb, var(--sol-border) 60%, transparent)"}`, color: "var(--sol-text-muted)" }}>
             <Workflow className="w-3 h-3 shrink-0" style={{ color: "var(--sol-green)" }} />
             <span className="truncate">{node}</span>
-            {handMeta && <span className="shrink-0 text-meta" style={{ color: handMeta.color }}>{handMeta.label}</span>}
-            {run?.status === "paused" && !handMeta && <span className="shrink-0 text-meta" style={{ color: "var(--sol-yellow)" }}>paused</span>}
+            {handMeta && <span className="shrink-0 text-[10px]" style={{ color: handMeta.color }}>{handMeta.label}</span>}
+            {run?.status === "paused" && !handMeta && <span className="shrink-0 text-[10px]" style={{ color: "var(--sol-yellow)" }}>paused</span>}
           </span>
         )}
       </Link>
@@ -148,7 +148,7 @@ function LineCard({ task, run, held, evidence }: { task: TaskItem; run: LineRun 
         <Link
           href={decisionHref(held)}
           data-line-held
-          className="absolute top-1.5 right-1.5 inline-flex items-center gap-1 h-[18px] px-1.5 rounded-md text-meta font-medium"
+          className="absolute top-1.5 right-1.5 inline-flex items-center gap-1 h-[18px] px-1.5 rounded-md text-[10px] font-medium"
           style={{ background: "color-mix(in srgb, var(--sol-yellow) 16%, transparent)", color: "var(--sol-yellow)" }}
           title={`Held here by ${held.short_id ?? "a decision"}: ${held.question ?? ""}`}
         >

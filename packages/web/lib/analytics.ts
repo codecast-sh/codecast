@@ -182,10 +182,7 @@ export function setRegulatedData(on: boolean) {
     try { posthog.opt_out_capturing(); } catch {}
     replayRecorder?.stop();
     replayRecorder = undefined;
-    // Destructured, not `(sentry) => sentry.close()`: Rollup keeps every export
-    // of a namespace handed to a callback, which put Sentry's Replay and
-    // Feedback (never enabled) into the boot graph.
-    void import("@sentry/react").then(({ close }) => close()).catch(() => {});
+    void import("@sentry/react").then((sentry) => sentry.close()).catch(() => {});
   } else {
     releaseRegulatedOptOut(runtime);
   }

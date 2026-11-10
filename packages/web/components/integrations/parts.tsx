@@ -28,7 +28,7 @@ const TEXT_COLOR: Record<DotTone, string> = {
 /** A state in one glance: a filled dot and the word for it. */
 export function StatusDot({ tone, children, className }: { tone: DotTone; children?: React.ReactNode; className?: string }) {
   return (
-    <span className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-meta", TEXT_COLOR[tone], className)}>
+    <span className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px]", TEXT_COLOR[tone], className)}>
       <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT_COLOR[tone])} />
       {children}
     </span>
@@ -44,7 +44,7 @@ export function LedgerLine({ parts, className }: { parts: Array<React.ReactNode>
   const kept = parts.filter(Boolean);
   if (kept.length === 0) return null;
   return (
-    <div data-cc-ledger className={cn("truncate font-mono text-meta leading-relaxed text-sol-text-dim", className)}>
+    <div data-cc-ledger className={cn("truncate font-mono text-[10.5px] leading-relaxed text-sol-text-dim", className)}>
       {kept.map((p, i) => (
         <span key={i}>
           {i > 0 && <span className="px-1 opacity-50">·</span>}
@@ -80,7 +80,7 @@ export function ConfirmButton({
   const [armed, setArmed] = useState(false);
   if (busy) {
     return (
-      <span className="inline-flex items-center gap-1.5 text-meta text-sol-text-muted">
+      <span className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-muted">
         <Loader2 className="h-3 w-3 animate-spin" />
         {busyLabel ?? "Working"}
       </span>
@@ -91,7 +91,7 @@ export function ConfirmButton({
       <button
         type="button"
         onClick={() => setArmed(true)}
-        className={cn("text-meta text-sol-red hover:underline", className)}
+        className={cn("text-[11px] text-sol-red hover:underline", className)}
       >
         {label}
       </button>
@@ -99,21 +99,21 @@ export function ConfirmButton({
   }
   return (
     <span className="inline-flex items-center gap-2">
-      {question && <span className="text-meta text-sol-text-dim">{question}</span>}
+      {question && <span className="text-[11px] text-sol-text-dim">{question}</span>}
       <button
         type="button"
         onClick={() => {
           setArmed(false);
           onConfirm();
         }}
-        className="rounded bg-sol-red/15 px-2 py-0.5 text-meta font-medium text-sol-red hover:bg-sol-red/25"
+        className="rounded bg-sol-red/15 px-2 py-0.5 text-[11px] font-medium text-sol-red hover:bg-sol-red/25"
       >
         {confirmLabel ?? label}
       </button>
       <button
         type="button"
         onClick={() => setArmed(false)}
-        className="text-meta text-sol-text-muted hover:text-sol-text"
+        className="text-[11px] text-sol-text-muted hover:text-sol-text"
       >
         Cancel
       </button>

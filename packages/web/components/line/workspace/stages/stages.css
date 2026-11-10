@@ -29,7 +29,7 @@
 }
 .sd-flow a:hover { background: var(--lw-paper-2); color: var(--lw-ink); }
 .sd-flow a[aria-current="page"] { background: var(--lw-card); color: var(--lw-ink); box-shadow: 0 1px 2px color-mix(in srgb, var(--sol-text) 14%, transparent); }
-.sd-flow-i { width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; font-size: var(--fs-mark); font-weight: 700; background: var(--lw-paper-2); color: var(--lw-ink-3); }
+.sd-flow-i { width: 16px; height: 16px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 10px; font-weight: 700; background: var(--lw-paper-2); color: var(--lw-ink-3); }
 .sd-flow a[aria-current="page"] .sd-flow-i { background: var(--lw-ink); color: var(--lw-paper); }
 .sd-flow-key { margin-left: 6px; opacity: .7; }
 
@@ -78,9 +78,9 @@
 .sd-facts dt { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); font-weight: 600; }
 .sd-facts dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.sd-ver { display: inline-flex; align-items: center; height: 19px; padding: 0 6px; border-radius: 5px; font-family: var(--lw-mono); font-size: var(--fs-meta); background: var(--lw-paper-2); color: var(--lw-ink-2); border: 1px solid var(--lw-rule-2); }
+.sd-ver { display: inline-flex; align-items: center; height: 19px; padding: 0 6px; border-radius: 5px; font-family: var(--lw-mono); font-size: 11px; background: var(--lw-paper-2); color: var(--lw-ink-2); border: 1px solid var(--lw-rule-2); }
 .sd-ver[data-current] { background: var(--lw-ok-soft); color: var(--lw-ok); border-color: color-mix(in srgb, var(--lw-ok) 30%, transparent); }
-.sd-pill { display: inline-flex; align-items: center; height: 19px; padding: 0 7px; border-radius: 999px; font-size: var(--fs-meta); font-weight: 600; white-space: nowrap; background: var(--lw-paper-2); color: var(--lw-ink-2); }
+.sd-pill { display: inline-flex; align-items: center; height: 19px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; background: var(--lw-paper-2); color: var(--lw-ink-2); }
 .sd-pill[data-tone="live"] { background: var(--lw-live-soft); color: var(--lw-live); }
 .sd-pill[data-tone="ok"] { background: var(--lw-ok-soft); color: var(--lw-ok); }
 .sd-pill[data-tone="warn"] { background: var(--lw-warn-soft); color: var(--lw-warn); }
@@ -138,7 +138,7 @@ a.sd-row:hover { background: var(--lw-paper-2); }
   counter-increment: rung; display: grid; grid-template-columns: 22px minmax(0, 1.1fr) minmax(0, 1fr) 54px; align-items: center; gap: 10px;
   padding: 7px 10px; border-radius: var(--lw-r); background: var(--lw-card); border: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-sm);
 }
-.sd-ladder li::before { content: counter(rung); width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: var(--fs-meta); font-weight: 700; background: var(--lw-paper-2); color: var(--lw-ink-3); }
+.sd-ladder li::before { content: counter(rung); width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; background: var(--lw-paper-2); color: var(--lw-ink-3); }
 .sd-ladder-when { font-weight: 650; }
 .sd-ladder-then { color: var(--lw-ink-2); }
 .sd-ladder b { text-align: right; font-size: var(--lw-fs-md); }
@@ -192,7 +192,7 @@ a.sd-row:hover { background: var(--lw-paper-2); }
 .sd, .lw-drawer-body { min-width: 0; overflow-x: hidden; }
 .sd-table th, .sd-table td { white-space: nowrap; }
 .sd-moment .sd-row-t b { font-weight: 600; }
-.sd-id { flex: none; font-size: var(--fs-meta); color: var(--lw-ink-3); opacity: .7; }
+.sd-id { flex: none; font-size: 11px; color: var(--lw-ink-3); opacity: .7; }
 /* A moment's kind mark, and its verdict: clean recedes, a break stands out, and whether the line took it reads beside it. */
 .sd-kind { flex: none; width: 14px; height: 14px; color: var(--lw-ink-3); }
 .sd-verdict { flex: none; display: inline-flex; align-items: baseline; gap: 6px; font-size: var(--lw-fs-xs); white-space: nowrap; }
@@ -207,11 +207,11 @@ a.sd-row:hover { background: var(--lw-paper-2); }
 .sd-moment > .sd-verdict, .sd-moment > .sd-pill { min-width: 150px; }
 
 /* An agent review's transcript (AgentReviews.tsx): what the agent wrote reads as text; what it ran, read and thought folds to one line. */
-.lw-rt-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.lw-rt-text { white-space: pre-wrap; font-size: var(--lw-fs-sm); line-height: 1.5; color: var(--lw-ink); padding: 8px 10px; background: var(--lw-card); border: 1px solid var(--lw-rule-2); border-radius: var(--lw-r); }
-.lw-rt-fold summary { display: flex; gap: 8px; align-items: baseline; cursor: pointer; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); padding: 2px 10px; min-width: 0; }
-.lw-rt-fold summary b { flex: none; font-weight: 600; color: var(--lw-ink-2); }
-.lw-rt-fold summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lw-rt-fold[data-kind="tool_use"] summary b { color: var(--lw-plum); }
-.lw-rt-fold[data-error] summary b { color: var(--lw-bad); }
-.lw-rt-fold pre { margin: 4px 10px 6px; padding: 8px 10px; max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: var(--lw-fs-2xs); background: var(--lw-card-2); border: 1px solid var(--lw-rule-2); border-radius: var(--lw-r); }
+.rt-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rt-text { white-space: pre-wrap; font-size: var(--lw-fs-sm); line-height: 1.5; color: var(--lw-ink); padding: 8px 10px; background: var(--lw-card); border: 1px solid var(--lw-rule-2); border-radius: var(--lw-r); }
+.rt-fold summary { display: flex; gap: 8px; align-items: baseline; cursor: pointer; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); padding: 2px 10px; min-width: 0; }
+.rt-fold summary b { flex: none; font-weight: 600; color: var(--lw-ink-2); }
+.rt-fold summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rt-fold[data-kind="tool_use"] summary b { color: var(--lw-plum); }
+.rt-fold[data-error] summary b { color: var(--lw-bad); }
+.rt-fold pre { margin: 4px 10px 6px; padding: 8px 10px; max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: var(--lw-fs-2xs); background: var(--lw-card-2); border: 1px solid var(--lw-rule-2); border-radius: var(--lw-r); }

@@ -69,29 +69,6 @@ function scrollerOf(el: HTMLElement | null): HTMLElement | null {
   return s;
 }
 
-type CommentRows = Record<string, { conversation_id?: string; message_id?: string }>;
-
-// Comment counts by message, built once per comments collection (the store
-// hands back a new object only when a comment changes) and shared by every
-// row. Each row's selector runs on every store write, so it must not walk
-// every comment there.
-const COMMENT_COUNTS = new WeakMap<object, Map<string, number>>();
-
-function teamCommentCount(comments: CommentRows | undefined, conversationId: string, messageId: string): number {
-  if (!comments) return 0;
-  let counts = COMMENT_COUNTS.get(comments);
-  if (!counts) {
-    counts = new Map();
-    for (const id in comments) {
-      const c = comments[id];
-      const key = `${c.conversation_id}\u0000${c.message_id}`;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    COMMENT_COUNTS.set(comments, counts);
-  }
-  return counts.get(`${conversationId}\u0000${messageId}`) ?? 0;
-}
-
 type Props = {
   conversationId: string;
   messageId: string;
@@ -177,7 +154,15 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
   // Persisted teammate comments on THIS message drive the right rail. A primitive
   // count keeps the selector cheap (re-renders only when it changes); the anchor
   // lets the gutter handle open the rail on a message that has none yet.
-  const teamCount = useInboxStore((s) => teamCommentCount(s.comments as CommentRows, conversationId, messageId));
+  const teamCount = useInboxStore((s) => {
+    const cs = s.comments as Record<string, { conversation_id?: string; message_id?: string }>;
+    let n = 0;
+    for (const id in cs) {
+      const c = cs[id];
+      if (c.conversation_id === conversationId && c.message_id === messageId) n++;
+    }
+    return n;
+  });
   const teamAnchor = useInboxStore((s) => s.commentRailAnchor === messageId);
   const rightActive = teamCount > 0 || teamAnchor;
 

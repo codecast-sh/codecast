@@ -44,7 +44,7 @@ export function RailDetail({ children, ...attrs }: { children: ReactNode } & Rec
 // strip: everything marked data-rail-full, hidden while it shares the row
 // (globals.css). Outside a rail the full fields always show.
 const chipBase =
-  "flex items-center gap-1.5 h-6 min-w-[7.5rem] max-w-[15rem] flex-[0_1_auto] px-2 rounded-md border text-meta whitespace-nowrap transition-colors";
+  "flex items-center gap-1.5 h-6 min-w-[7.5rem] max-w-[15rem] flex-[0_1_auto] px-2 rounded-md border text-[11px] whitespace-nowrap transition-colors";
 
 export function railChipClass(open: boolean, extra = "") {
   return `${chipBase} ${extra} ${open ? "border-sol-border bg-sol-bg-alt text-sol-text" : "border-sol-border/40 text-sol-text-muted hover:border-sol-border/80 hover:bg-sol-bg-alt/60"}`;

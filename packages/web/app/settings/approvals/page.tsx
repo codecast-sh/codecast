@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { permissionRuleLabel } from "@codecast/shared/contracts/permissionRules";
 import { BadgeCheck, X } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
-import { SettingsBadge, SettingsSection } from "../../../components/settings/ui";
+import { SettingsSection } from "../../../components/settings/ui";
 import { usePermissionRules, type PermissionRuleRow } from "../../../hooks/usePermissionRules";
 import { formatRelativeTime } from "../../../lib/conversationFormat";
 
@@ -63,7 +63,7 @@ export default function ApprovalsPage() {
           key={`${g.project}|${g.scope}`}
           title={projectLabel(g.project)}
           icon={BadgeCheck}
-          actions={<span className="rounded px-1.5 text-meta bg-sol-bg-alt text-sol-text-muted" data-approval-scope>{scopeLabel(g.scope)}</span>}
+          actions={<span className="rounded px-1.5 text-[11px] bg-sol-bg-alt text-sol-text-muted" data-approval-scope>{scopeLabel(g.scope)}</span>}
         >
           {g.rules.map((r) => <RuleRow key={r._id} rule={r} />)}
           <NeverRow project={g.project} scope={g.scope} />
@@ -77,11 +77,11 @@ function RuleRow({ rule }: { rule: PermissionRuleRow }) {
   const deny = rule.action === "deny";
   return (
     <div data-approval-rule className="group flex items-center gap-3 px-4 py-2">
-      <SettingsBadge tone={deny ? "red" : "green"} className="py-0 text-meta font-medium">
+      <span className={`shrink-0 rounded px-1.5 text-[11px] font-medium ${deny ? "bg-sol-red/12 text-sol-red" : "bg-sol-green/12 text-sol-green"}`}>
         {deny ? "Never" : "Allow"}
-      </SettingsBadge>
+      </span>
       <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-sol-text" title={rule.label}>{rule.label}</span>
-      <span className="shrink-0 text-meta text-sol-text-dim">{formatRelativeTime(rule.created_at)}</span>
+      <span className="shrink-0 text-[11px] text-sol-text-dim">{formatRelativeTime(rule.created_at)}</span>
       <button
         type="button"
         aria-label={`Remove ${rule.label}`}
@@ -106,7 +106,7 @@ function NeverRow({ project, scope }: { project: string; scope: string }) {
   };
   return (
     <form data-approval-never className="flex items-center gap-3 px-4 py-2" onSubmit={(e) => { e.preventDefault(); add(); }}>
-      <span className="shrink-0 rounded px-1.5 text-meta font-medium bg-sol-red/12 text-sol-red">Never</span>
+      <span className="shrink-0 rounded px-1.5 text-[11px] font-medium bg-sol-red/12 text-sol-red">Never</span>
       <input
         value={pattern}
         onChange={(e) => setPattern(e.target.value)}
@@ -114,7 +114,7 @@ function NeverRow({ project, scope }: { project: string; scope: string }) {
         aria-label="Command this project's agents may never run"
         className="min-w-0 flex-1 bg-transparent font-mono text-[13px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
       />
-      <button type="submit" disabled={!pattern.trim()} className="shrink-0 rounded border border-sol-border px-2 py-0.5 text-meta text-sol-text-muted hover:text-sol-text disabled:opacity-40">Add</button>
+      <button type="submit" disabled={!pattern.trim()} className="shrink-0 rounded border border-sol-border px-2 py-0.5 text-[11px] text-sol-text-muted hover:text-sol-text disabled:opacity-40">Add</button>
     </form>
   );
 }

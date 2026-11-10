@@ -206,7 +206,7 @@ export function ProblemSummary({ task }: { task: ProblemTask }) {
             : <Stat label="Found this week" value={String(week)} sub={trendWord(week, lastWeek)} title="Conversations judges filed a finding on in the last 7 days, against the 7 before. Findings only: it says when a judge read them, not how often it happens now." />}
         {priced && <Stat label="Billed" value={usd(priced.billed_usd!)} sub={`list ${usd(priced.run_list_usd)}, unbilled`} title={`Billed: judging the conversations behind it ${usd(priced.judge_usd)}, its fix runs ${usd(priced.run_billed_usd)} (call nodes, sessions on API keys). Not billed: ${priced.runs} fix ${priced.runs === 1 ? "run" : "runs"} over ${priced.sessions} subscription sessions, ${usd(priced.run_list_usd)} at API list price${priced.unpriced_tokens ? ` (plus ${Math.round(priced.unpriced_tokens / 1000)}k tokens on unpriced models)` : ""}`} />}
         <div className="bg-sol-bg px-4 py-2.5 min-w-0">
-          <div className="flex items-baseline justify-between gap-2 text-meta text-sol-text-dim">
+          <div className="flex items-baseline justify-between gap-2 text-[11px] text-sol-text-dim">
             <span>Conversations per day</span>
 
           </div>
@@ -218,7 +218,7 @@ export function ProblemSummary({ task }: { task: ProblemTask }) {
       <div className="mt-3 flex items-center gap-3 rounded-lg border border-sol-border/30 px-4 py-2.5" data-problem-state>
         <span className={cn("h-2 w-2 shrink-0 rounded-full", STATE_DOT[state.tone] ?? "bg-sol-text-dim")} aria-hidden />
         <span className={cn("min-w-0 flex-1 text-[13px]", STATE_TONE[state.tone])} data-cause-where>{state.text}</span>
-        <Link href={lineRefHref(task.short_id)} className="shrink-0 text-meta text-sol-text-dim hover:text-sol-blue" title="Every report, every attempt to fix it, ships and what came back">{task.status === "done" || task.status === "dropped" ? "See why" : "Timeline"}</Link>
+        <Link href={lineRefHref(task.short_id)} className="shrink-0 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="Every report, every attempt to fix it, ships and what came back">{task.status === "done" || task.status === "dropped" ? "See why" : "Timeline"}</Link>
         {control && (() => {
           const cls = cn("shrink-0 inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors", control.primary ? "bg-sol-yellow/15 text-sol-yellow ring-1 ring-sol-yellow/40 hover:bg-sol-yellow/25" : "text-sol-cyan ring-1 ring-sol-cyan/30 hover:bg-sol-cyan/10");
           return control.href
@@ -265,10 +265,10 @@ function Withdrawn({ gone }: { gone: TrialWithdrawn[] }) {
             <li key={g.short_id} className="space-y-1.5 px-3 py-2" data-problem-withdrawn-row={g.short_id}>
               <div className="flex items-baseline gap-2.5">
                 <span className="min-w-0 flex-1 text-[12.5px] leading-snug text-sol-text-muted">{g.title}</span>
-                <span className={cn("shrink-0 text-meta", g.to ? "text-sol-blue" : "text-sol-text-dim")}>
+                <span className={cn("shrink-0 text-[11px]", g.to ? "text-sol-blue" : "text-sol-text-dim")}>
                   {g.to ? <Link href={`/tasks/${g.to}`} className="hover:underline">{fateWords(g)}</Link> : fateWords(g)}
                 </span>
-                <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">{day(g.at)}</span>
+                <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim">{day(g.at)}</span>
               </div>
               {g.quote && <blockquote className="border-l-2 border-sol-border pl-3 text-[12.5px] leading-relaxed text-sol-text-muted">{g.quote}</blockquote>}
             </li>
@@ -282,9 +282,9 @@ function Withdrawn({ gone }: { gone: TrialWithdrawn[] }) {
 function Stat({ label, value, sub, valueClass, title }: { label: string; value: string; sub?: string; valueClass?: string; title?: string }) {
   return (
     <div className="bg-sol-bg px-4 py-2.5 min-w-[7.5rem] max-w-[13rem]" title={title}>
-      <div className="text-meta text-sol-text-dim">{label}</div>
+      <div className="text-[11px] text-sol-text-dim">{label}</div>
       <div className={cn("text-[22px] font-semibold leading-tight tabular-nums text-sol-text", valueClass)}>{value}</div>
-      {sub && <div className="truncate text-meta text-sol-text-dim">{sub}</div>}
+      {sub && <div className="truncate text-[11px] text-sol-text-dim">{sub}</div>}
     </div>
   );
 }
@@ -318,7 +318,7 @@ function Trend({ signals, now, closedAt }: { signals: LineSignal[]; now: number;
         />
       ))}
     </div>
-    <div className="mt-0.5 flex justify-between text-meta tabular-nums text-sol-text-dim" aria-hidden>
+    <div className="mt-0.5 flex justify-between text-[10px] tabular-nums text-sol-text-dim" aria-hidden>
       <span>{day(days[0].at)}</span><span>{day(days[Math.floor(TREND_DAYS / 2)].at)}</span><span>today</span>
     </div>
     </>
@@ -346,7 +346,7 @@ function Findings({ signals, ruleText }: { signals: LineSignal[]; ruleText: stri
         {[["All", convCount(signals)] as const, ...groups.map(([p, xs]) => [p, convCount(xs)] as const)].map(([p, n]) => {
           const on = (p === "All" && !place) || p === place;
           return (
-            <button key={p} type="button" onClick={() => { setPlace(p === "All" ? null : p); setAll(false); }} aria-pressed={on} className={cn("rounded-full px-2.5 py-0.5 text-meta tabular-nums transition-colors", on ? "bg-sol-bg-alt text-sol-text ring-1 ring-sol-border" : "text-sol-text-dim hover:text-sol-text")} data-problem-place={p}>
+            <button key={p} type="button" onClick={() => { setPlace(p === "All" ? null : p); setAll(false); }} aria-pressed={on} className={cn("rounded-full px-2.5 py-0.5 text-[11.5px] tabular-nums transition-colors", on ? "bg-sol-bg-alt text-sol-text ring-1 ring-sol-border" : "text-sol-text-dim hover:text-sol-text")} data-problem-place={p}>
               {p} <span className="opacity-60">{n}</span>
             </button>
           );
@@ -356,7 +356,7 @@ function Findings({ signals, ruleText }: { signals: LineSignal[]; ruleText: stri
         {rows.map((g) => <FindingRow key={g[0]._id} rows={g} />)}
       </ul>
       {shown.length > SHOWN && (
-        <button type="button" onClick={() => setAll((a) => !a)} className="mt-1.5 inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text" data-problem-more>
+        <button type="button" onClick={() => setAll((a) => !a)} className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] text-sol-text-dim hover:text-sol-text" data-problem-more>
           {all ? "Fewer" : `All ${shown.length}`}<ChevronRight className={cn("h-3 w-3 transition-transform", all ? "-rotate-90" : "rotate-90")} />
         </button>
       )}
@@ -374,9 +374,9 @@ function FindingRow({ rows }: { rows: LineSignal[] }) {
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full items-baseline gap-2.5 px-3 py-2 text-left hover:bg-sol-bg-alt/40">
         <span className={cn("mt-[5px] h-1.5 w-1.5 shrink-0 self-start rounded-full", sev >= 7 ? severityBg(sev) : "bg-sol-border")} title={sev ? `Severity ${sev} of 10: ${severityWord(sev)}` : undefined} />
         <span className={cn("min-w-0 flex-1 text-[12.5px] leading-snug text-sol-text", !open && "line-clamp-2")}>{whatHappened(s)}</span>
-        {convs > 1 && <span className="shrink-0 rounded bg-sol-bg-alt px-1.5 text-meta tabular-nums text-sol-text-muted" title={`The same miss in ${convs} conversations`}>{convs} conversations</span>}
-        {rows.some((r) => r.reopened) && <span className="shrink-0 text-meta text-sol-red">reopened it</span>}
-        <span className="shrink-0 text-meta tabular-nums text-sol-text-dim" title={new Date(s.observed_at).toLocaleString()}>{day(s.observed_at)}</span>
+        {convs > 1 && <span className="shrink-0 rounded bg-sol-bg-alt px-1.5 text-[11px] tabular-nums text-sol-text-muted" title={`The same miss in ${convs} conversations`}>{convs} conversations</span>}
+        {rows.some((r) => r.reopened) && <span className="shrink-0 text-[11px] text-sol-red">reopened it</span>}
+        <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim" title={new Date(s.observed_at).toLocaleString()}>{day(s.observed_at)}</span>
       </button>
       {open && (
         <div className="space-y-3 pb-3 pl-[1.6rem] pr-3" data-problem-finding-open>
@@ -414,7 +414,7 @@ function ClusterWords({ rows }: { rows: LineSignal[] }) {
     <>
       {shown.map((r, i) => <FindingWords key={r._id} s={r} titled={i > 0} />)}
       {rows.length > 1 && (
-        <button type="button" onClick={() => setMore((m) => !m)} className="text-meta text-sol-text-dim hover:text-sol-text">
+        <button type="button" onClick={() => setMore((m) => !m)} className="text-[11.5px] text-sol-text-dim hover:text-sol-text">
           {more ? "Show one" : `${rows.length - 1} more like this`}
         </button>
       )}
@@ -448,14 +448,14 @@ function FindingWords({ s, titled }: { s: LineSignal; titled: boolean }) {
         </blockquote>
       )}
       {also.length > 0 && (
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-meta" data-problem-also>
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[11.5px]" data-problem-also>
           <span className="shrink-0 text-sol-text-dim">{placeOf(s) === "Calls" ? "Same call" : "Same conversation"}</span>
           {also.map((a) => (
             <Link key={a.href} href={a.href} title={a.what} className="max-w-full truncate rounded bg-sol-bg-alt px-1.5 py-px text-sol-text-muted hover:text-sol-blue">{a.label}</Link>
           ))}
         </div>
       )}
-      <div className="absolute right-0 top-0 flex items-center gap-3 rounded bg-sol-bg/90 pl-2 text-meta text-sol-text-dim opacity-0 transition-opacity group-hover/finding:opacity-100 focus-within:opacity-100">
+      <div className="absolute right-0 top-0 flex items-center gap-3 rounded bg-sol-bg/90 pl-2 text-[11px] text-sol-text-dim opacity-0 transition-opacity group-hover/finding:opacity-100 focus-within:opacity-100">
         {s.evidence_url && <a href={s.evidence_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 hover:text-sol-blue">Source<ArrowUpRight className="h-3 w-3" /></a>}
         {judge && !s.case_of && <WrongControl s={s} judge={judge} />}
       </div>

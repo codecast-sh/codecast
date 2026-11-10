@@ -70,15 +70,12 @@ export function ListRowShell({ state, isActive = false, dragging = false, combin
       )}
       <button
         onClick={(e) => { e.stopPropagation(); state.onSelect(); }}
-        role="checkbox"
-        aria-checked={isSelected}
-        aria-label={isSelected ? "Remove from selection" : "Add to selection"}
         className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors cq-hide-compact ${
           isSelected
             ? "bg-sol-cyan border-sol-cyan"
             : isFocused
-              ? "border-sol-text-dim/50"
-              : "border-sol-border/60 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              ? "border-gray-500/50"
+              : "border-sol-border/60 opacity-0 group-hover:opacity-100"
         }`}
       >
         {isSelected && <Check className="w-3 h-3 text-sol-bg" />}

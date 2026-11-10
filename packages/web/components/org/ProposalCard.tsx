@@ -39,7 +39,7 @@ export function ProposalMeta({ proposal, changes }: { proposal: OrgProposalListR
   const words = proposal.status === "withdrawn" ? "withdrawn" : authorAppliedWords(proposal, entries.work, proposalProgressWords(entries.cards, entries.records ? changes : undefined)) || (total ? `${total} ${total === 1 ? "change" : "changes"}` : "proposal");
   const [count, decided] = words.split(" · ");
   return (
-    <div className={cn("not-prose mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta leading-snug text-[color:var(--ink-quiet)]", LEDGER_INKS)} data-proposal-meta={words}>
+    <div className={cn("not-prose mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-snug text-[color:var(--ink-quiet)]", LEDGER_INKS)} data-proposal-meta={words}>
       <span className="whitespace-nowrap text-[color:var(--sol-text-muted)]"><ProgressWords words={count} /></span>
       {decided && (
         <>

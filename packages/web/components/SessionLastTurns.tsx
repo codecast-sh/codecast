@@ -32,8 +32,8 @@ export function SessionLastTurns({ conversationId, className = "" }: { conversat
               user ? "self-end bg-sol-blue/15 text-sol-text" : "self-start bg-sol-bg-alt text-sol-text-muted"
             }`}
           >
-            {t.from && <div className="text-meta font-medium text-sol-blue mb-0.5 truncate">{t.from}</div>}
-            <p className="text-meta leading-snug line-clamp-4 break-words">{t.text}</p>
+            {t.from && <div className="text-[10px] font-medium text-sol-blue mb-0.5 truncate">{t.from}</div>}
+            <p className="text-[11px] leading-snug line-clamp-4 break-words">{t.text}</p>
           </div>
         );
       })}

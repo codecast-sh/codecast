@@ -57,7 +57,7 @@ export const ObjectHit = memo(function ObjectHit({ hit, highlight, selected = fa
       <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center"><Mark hit={hit} /></span>
       <span className={`min-w-0 truncate text-[14px] ${done ? "text-sol-text-muted" : "text-sol-text"}`}>{highlightMatch(hit.title.length > TITLE_WINDOW ? getSnippet(hit.title, highlight, TITLE_WINDOW) : hit.title, highlight)}</span>
       {why && <span className="min-w-0 flex-shrink-[3] truncate text-[12px] text-sol-text-dim">{highlightMatch(why, highlight)}</span>}
-      {handle && <span className="flex-shrink-0 font-mono text-meta text-sol-text-dim">{highlightMatch(handle, highlight)}</span>}
+      {handle && <span className="flex-shrink-0 font-mono text-[11px] text-sol-text-dim">{highlightMatch(handle, highlight)}</span>}
       <span className="flex-1" />
       {/* The card's facts line, kept to the row: what state it is in. */}
       {hit.type && WITH_META.has(hit.kind) && hit.entity && (
@@ -66,8 +66,8 @@ export const ObjectHit = memo(function ObjectHit({ hit, highlight, selected = fa
           <CardMetaLine type={hit.type} entity={hit.kind === "doc" ? { ...hit.entity, created_at: undefined } : hit.entity} />
         </span>
       )}
-      <ShortId id={shortId} className="text-meta text-sol-text-dim" />
-      {hit.at ? <span className="flex-shrink-0 whitespace-nowrap text-meta tabular-nums text-sol-text-dim">{formatSearchTimestamp(hit.at)}</span> : null}
+      <ShortId id={shortId} className="text-[10px] text-sol-text-dim" />
+      {hit.at ? <span className="flex-shrink-0 whitespace-nowrap text-[11px] tabular-nums text-sol-text-dim">{formatSearchTimestamp(hit.at)}</span> : null}
     </Link>
   );
 });

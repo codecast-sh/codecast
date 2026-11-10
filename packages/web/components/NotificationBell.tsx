@@ -7,21 +7,12 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRouter } from "next/navigation";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
-import { useCollectionRows } from "../hooks/useCollectionRows";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import { notificationHref, notificationRoute } from "../lib/notificationTypes";
 import { NotificationList } from "./notifications/NotificationList";
 import { ArrowUpRight, Bell, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
-
-// The rows the list shows, newest first, woken by a signature of what a row
-// draws (whether it is read, when it came) rather than the collection's ref.
-// Module level: the hook keys its signature on these functions.
-const NOTIFICATION_ROWS = {
-  sig: (n: any) => `${n.read ? 1 : 0}${n.created_at ?? 0}`,
-  sort: (a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0),
-};
 
 /** The bell in the top bar, with the unread count on its shoulder. */
 export const NotificationBellButton = forwardRef<
@@ -37,7 +28,7 @@ export const NotificationBellButton = forwardRef<
       >
         <Bell />
         {unreadCount !== undefined && unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-1 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-sol-cyan px-[3px] text-mark font-semibold leading-none tabular-nums text-white ring-2 ring-sol-bg">
+          <span className="absolute -top-0.5 -right-1 inline-flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-sol-cyan px-[3px] text-[9px] font-semibold leading-none tabular-nums text-white ring-2 ring-sol-bg">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -56,13 +47,14 @@ export function NotificationBell() {
   // `read` is field-protected against the next list sync).
   const notifsList = useQueryNoThrow(api.notifications.list, {}).data;
   useConvexSync(notifsList, useCallback((d: any) => useInboxStore.getState().syncTable("notifications", d), []));
-  // A signature of what the rows show, not the collection: the bell is in
-  // the top bar of every page, and the collection's ref turns over on any
-  // write to any notification.
-  const sortedNotifications = useCollectionRows<any>("notifications", NOTIFICATION_ROWS);
+  const notifications = useInboxStore((s) => s.notifications);
   const markAsRead = useInboxStore((s) => s.markNotificationRead);
   const markAllAsRead = useInboxStore((s) => s.markAllNotificationsRead);
 
+  const sortedNotifications = useMemo(
+    () => (Object.values(notifications) as any[]).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)),
+    [notifications]
+  );
   const unreadCount = useMemo(() => sortedNotifications.filter((n) => !n.read).length, [sortedNotifications]);
 
   useEventListener("mousedown", useCallback((event: MouseEvent) => {
@@ -71,27 +63,11 @@ export function NotificationBell() {
     }
   }, []), isOpen ? document : null);
 
-  // What was unread when the panel opened is marked read when it closes, not
-  // as it opens: the rows keep their unread look (and the header its count)
-  // while the person reads them. A line that arrives with the panel open is
-  // not in the snapshot, so it stays unread for the next look.
-  const seenOnOpenRef = useRef<string[] | null>(null);
   useWatchEffect(() => {
-    if (isOpen) {
-      seenOnOpenRef.current = sortedNotifications.filter((n) => !n.read).map((n) => String(n._id));
-      return;
+    if (isOpen && unreadCount > 0) {
+      markAllAsRead();
     }
-    const seen = seenOnOpenRef.current;
-    seenOnOpenRef.current = null;
-    if (!seen || seen.length === 0) return;
-    const seenSet = new Set(seen);
-    const unreadNow = (Object.values(useInboxStore.getState().notifications) as any[]).filter((n) => !n.read);
-    // One write for the usual case; one per line only when something new
-    // came in while the panel was open.
-    if (unreadNow.every((n) => seenSet.has(String(n._id)))) markAllAsRead();
-    else for (const id of seen) markAsRead(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the snapshot is taken at the open itself
-  }, [isOpen]);
+  }, [isOpen, markAllAsRead, unreadCount]);
 
   const handleNotificationClick = async (
     notificationId: Id<"notifications">,

@@ -519,7 +519,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: var(--fs-meta);
+  font-size: 10px;
   white-space: nowrap;
   color: var(--sol-text-dim);
   user-select: none;
@@ -557,7 +557,7 @@
   border-radius: 9px;
   background: var(--sol-bg-alt);
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.26);
-  font-size: var(--fs-meta);
+  font-size: 11.5px;
   line-height: 1.3;
   color: var(--sol-text);
   cursor: pointer;

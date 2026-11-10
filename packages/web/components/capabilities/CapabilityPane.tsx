@@ -59,7 +59,7 @@ export function CapabilityPane({
       <div className="px-4 pt-3 pb-3 border-b border-sol-border">
         <div className="flex items-center gap-2">
           <span className="font-mono text-sm text-sol-text truncate">{name}</span>
-          <span className="text-meta text-sol-text-dim">{meta?.label ?? kind}</span>
+          <span className="text-[11px] text-sol-text-dim">{meta?.label ?? kind}</span>
           <div className="flex-1" />
           <button type="button" onClick={onClose} className="text-sol-text-dim hover:text-sol-text" aria-label="Close">
             <X className="h-4 w-4" />
@@ -124,7 +124,7 @@ function KitAction({
         disabled={!!item.publishing}
         onChange={(next) => setKitReach(item, next, ws, r)}
       />
-      <span className="text-meta text-sol-text-dim tabular-nums">
+      <span className="text-[11px] text-sol-text-dim tabular-nums">
         {item.publishing ? "Uploading from its machine" : `v${item.current_version ?? 1}`}
       </span>
       <div className="flex-1" />
@@ -135,7 +135,7 @@ function KitAction({
           onTurnOn={() => remove(item._id)}
           onTurnOff={() => undefined}
           trigger={(p) => (
-            <button type="button" onClick={p.press} className="text-meta text-sol-text-dim hover:text-sol-red">
+            <button type="button" onClick={p.press} className="text-[11px] text-sol-text-dim hover:text-sol-red">
               Remove from kit
             </button>
           )}
@@ -145,7 +145,7 @@ function KitAction({
     {clashing.map((c) => {
       const d = devices.find((x) => x.deviceId === c.device_id);
       return (
-        <div key={`c|${c.device_id}|${c.hash}`} className="flex items-center gap-2 text-meta">
+        <div key={`c|${c.device_id}|${c.hash}`} className="flex items-center gap-2 text-[11px]">
           <span className="h-1.5 w-1.5 rounded-full bg-sol-yellow" />
           <span className="text-sol-text">{d?.name ?? "A machine"}</span>
           <span className="text-sol-text-dim truncate" title={c.detail}>has its own copy</span>
@@ -178,7 +178,7 @@ function KitAction({
     {waiting.map((p) => {
       const d = devices.find((x) => x.deviceId === p.device_id);
       return (
-        <div key={`${p.device_id}|${p.hash}`} className="flex items-center gap-2 text-meta">
+        <div key={`${p.device_id}|${p.hash}`} className="flex items-center gap-2 text-[11px]">
           <span className="h-1.5 w-1.5 rounded-full bg-sol-orange" />
           <span className="text-sol-text">{d?.name ?? "A machine"}</span>
           <span className="text-sol-text-dim">waiting: it runs code</span>
@@ -267,7 +267,7 @@ function Machines({ row, devices }: { row: FleetGridRow | undefined; devices: Ca
     { key: "unknown", label: "Not reported by", tone: "text-sol-text-dim", list: groups.unknown },
   ].filter((l) => l.list.length > 0);
   return (
-    <div className="px-4 py-3 border-b border-sol-border space-y-1.5 text-meta">
+    <div className="px-4 py-3 border-b border-sol-border space-y-1.5 text-[11px]">
       <div className="text-sol-text-muted tabular-nums">
         {groups.on.length === devices.length
           ? `On all ${devices.length} machines`
@@ -297,16 +297,16 @@ function Body({ markdown, footer }: { markdown: string; footer?: string }) {
       <button
         type="button"
         onClick={() => setRaw((r) => !r)}
-        className="absolute right-3 top-2 text-meta text-sol-text-dim hover:text-sol-text"
+        className="absolute right-3 top-2 text-[11px] text-sol-text-dim hover:text-sol-text"
       >
         {raw ? "Rendered" : "Source"}
       </button>
       {raw ? (
-        <pre className="text-meta font-mono text-sol-text whitespace-pre-wrap break-words">{markdown}</pre>
+        <pre className="text-[11px] font-mono text-sol-text whitespace-pre-wrap break-words">{markdown}</pre>
       ) : (
         <MarkdownRenderer content={withoutFrontmatter(markdown)} className="!text-[13px]" />
       )}
-      {footer && <p className="mt-3 text-meta text-sol-text-dim">{footer}</p>}
+      {footer && <p className="mt-3 text-[11px] text-sol-text-dim">{footer}</p>}
     </div>
   );
 }
@@ -351,7 +351,7 @@ function KitBody({ item }: { item: KitItem }) {
             type="button"
             onClick={() => setPicked(v.version)}
             title={v.note}
-            className={`h-6 px-2 rounded text-meta tabular-nums ${
+            className={`h-6 px-2 rounded text-[11px] tabular-nums ${
               v.version === shown.version ? "bg-sol-bg-alt text-sol-text" : "text-sol-text-dim hover:text-sol-text"
             }`}
           >
@@ -362,13 +362,13 @@ function KitBody({ item }: { item: KitItem }) {
           <button
             type="button"
             onClick={() => setChanges((c) => !c)}
-            className={`ml-2 h-6 px-2 rounded text-meta ${changes ? "bg-sol-bg-alt text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+            className={`ml-2 h-6 px-2 rounded text-[11px] ${changes ? "bg-sol-bg-alt text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
           >
             Changes from v{previous.version}
           </button>
         )}
         <div className="flex-1" />
-        <span className="text-meta text-sol-text-dim tabular-nums">
+        <span className="text-[11px] text-sol-text-dim tabular-nums">
           {shown.files?.length ?? 0} files
           {runsCode && <span className="ml-2 text-sol-orange">runs code</span>}
         </span>
@@ -391,7 +391,7 @@ function Facts({ row }: { row: FleetGridRow }) {
   return (
     <div className="px-4 py-3 space-y-1">
       {facts.map((f) => (
-        <pre key={f} className="text-meta font-mono text-sol-text-muted whitespace-pre-wrap break-all">
+        <pre key={f} className="text-[11px] font-mono text-sol-text-muted whitespace-pre-wrap break-all">
           {f}
         </pre>
       ))}

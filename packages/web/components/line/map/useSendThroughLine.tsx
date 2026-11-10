@@ -30,7 +30,7 @@ function CauseRow({ cause, onStart }: { cause: LineCauseRow; onStart: (taskId: s
         {cause.shortId
           ? <Link href={lineRefHref(cause.shortId)} className="block line-clamp-2 hover:underline" data-change-trace>{title}</Link>
           : <span className="block line-clamp-2">{title}</span>}
-        <div className="text-meta" style={{ color: "var(--sol-text-dim)" }}>
+        <div className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>
           <code style={{ color: "var(--sol-violet)" }}>{cause.shortId ?? "ct-…"}</code>{" "}
           {filing ? "filing" : STATUS_WORDS[cause.status] ?? cause.status.replace(/_/g, " ")}
         </div>
@@ -56,7 +56,7 @@ export function useSendThroughLine(projectId: string | null, node: { id: string;
   };
   const sent = (causes.length > 0 || actions.error) ? (
     <div className="flex flex-col gap-1" data-station-sent>
-      {actions.error && <p className="text-meta" style={{ color: "var(--sol-red)" }} role="alert">{actions.error}</p>}
+      {actions.error && <p className="text-[11.5px]" style={{ color: "var(--sol-red)" }} role="alert">{actions.error}</p>}
       {causes.length > 0 && (
         <ul className="flex flex-col gap-1 m-0 p-0 list-none">
           {causes.map((c) => <CauseRow key={c.key} cause={c} onStart={actions.start} />)}

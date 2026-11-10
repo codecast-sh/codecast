@@ -25,7 +25,7 @@ export function CommentRows({ comments }: { comments: any[] }) {
         <div key={c._id ?? i} className="space-y-1 text-[12px] leading-relaxed">
           <div className="flex flex-wrap items-baseline gap-x-2 text-sol-text-muted">
             <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{roleAuthor({ userId: c.author_user_id, session: c.session_info })?.name || c.session_info?.title || c.author}</span>
-            {c.created_at && <span className="text-meta text-sol-text-dim">{relativeTime(c.created_at)}</span>}
+            {c.created_at && <span className="text-[11px] text-sol-text-dim">{relativeTime(c.created_at)}</span>}
           </div>
           <CardMarkdown content={c.text || ""} />
         </div>
@@ -47,7 +47,7 @@ export function PlanTaskRows({ tasks }: { tasks: any[] }) {
               {t.title}
             </span>
             {t.assignee_info?.name && (
-              <span className="ml-auto flex-shrink-0 text-meta text-sol-text-dim">{t.assignee_info.name}</span>
+              <span className="ml-auto flex-shrink-0 text-[10px] text-sol-text-dim">{t.assignee_info.name}</span>
             )}
           </div>
         );

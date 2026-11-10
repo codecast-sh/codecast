@@ -18,11 +18,9 @@ const KEYCAP_TONES = {
 } as const;
 
 export function KeyCap({ children, size = "sm", tone = "default" }: { children: React.ReactNode; size?: "sm" | "xs"; tone?: keyof typeof KEYCAP_TONES }) {
-  // A legend is a glyph, so it takes the scale's mark step (11px) at both
-  // sizes; the small cap is 18px so that step fits with a hair of air.
   const cls = size === "xs"
-    ? "inline-flex items-center justify-center min-w-[18px] h-[18px] px-[4px] text-mark"
-    : "inline-flex items-center justify-center min-w-[20px] h-[20px] px-[5px] text-mark";
+    ? "inline-flex items-center justify-center min-w-[16px] h-[16px] px-[4px] text-[9px]"
+    : "inline-flex items-center justify-center min-w-[20px] h-[20px] px-[5px] text-[10px]";
   const look = KEYCAP_TONES[tone];
   return (
     <kbd

@@ -44,7 +44,7 @@ function repoBase(root: string): string {
 function RepoPlaneRow({ r }: { r: RepoPlane }) {
   const tone = repoTone(r);
   return (
-    <li className="flex items-center gap-2 text-meta min-w-0">
+    <li className="flex items-center gap-2 text-[11px] min-w-0">
       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tone.dot}`} />
       <span className="font-mono text-sol-text-secondary truncate">{repoBase(r.root)}</span>
       {r.branch && <span className="text-sol-text-dim truncate">{r.branch}</span>}
@@ -73,12 +73,12 @@ function GrantAccessCard({ d, blocked }: { d: Device; blocked: RepoPlane[] }) {
   const repoNames = blocked.map((r) => repoBase(r.root)).join(", ");
   return (
     <div className="mt-2 rounded-md bg-sol-yellow/[0.07] p-3 space-y-2">
-      <div className="text-meta text-sol-yellow font-medium">
+      <div className="text-[11px] text-sol-yellow font-medium">
         This machine needs access to {repoNames}
       </div>
       {d.git_pubkey ? (
         <>
-          <p className="text-meta text-sol-text-muted">
+          <p className="text-[11px] text-sol-text-muted">
             Recommended: add its key as the repo&apos;s <strong>deploy key with write access</strong>{" "}
             (GitHub&apos;s default is read-only, which fetches but cannot push) — that grants just
             that repo. The alternative is your account&apos;s{" "}
@@ -90,14 +90,14 @@ function GrantAccessCard({ d, blocked }: { d: Device; blocked: RepoPlane[] }) {
             nothing else to run.
           </p>
           <div className="flex items-start gap-2">
-            <code className="flex-1 text-meta font-mono text-sol-text-secondary bg-sol-bg-alt rounded px-2 py-1.5 break-all select-all">
+            <code className="flex-1 text-[10px] font-mono text-sol-text-secondary bg-sol-bg-alt rounded px-2 py-1.5 break-all select-all">
               {d.git_pubkey}
             </code>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="shrink-0 h-7 px-2 text-meta"
+              className="shrink-0 h-7 px-2 text-[11px]"
               onClick={() => {
                 void copyToClipboard(d.git_pubkey!);
                 setCopied(true);
@@ -109,7 +109,7 @@ function GrantAccessCard({ d, blocked }: { d: Device; blocked: RepoPlane[] }) {
           </div>
         </>
       ) : (
-        <p className="text-meta text-sol-text-muted">
+        <p className="text-[11px] text-sol-text-muted">
           Its remotes need credentials this machine doesn&apos;t have (an https remote wants a
           token, or the machine can&apos;t mint an SSH key). Sign in to git on that machine, or
           switch the repo&apos;s origin to an SSH URL so a device key can be granted here.
@@ -193,7 +193,7 @@ function SshHostField({
 
   return (
     <div className="mt-3">
-      <label className="block text-meta text-sol-text-muted" htmlFor={`ssh-${d.device_id}`}>
+      <label className="block text-[11px] text-sol-text-muted" htmlFor={`ssh-${d.device_id}`}>
         SSH host
       </label>
       <div className="mt-1 flex items-center gap-2">
@@ -211,7 +211,7 @@ function SshHostField({
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
-          className="h-7 flex-1 min-w-0 px-2 font-mono text-meta bg-transparent border-sol-border"
+          className="h-7 flex-1 min-w-0 px-2 font-mono text-[11px] bg-transparent border-sol-border"
         />
         {dirty && (
           <Button
@@ -224,7 +224,7 @@ function SshHostField({
           </Button>
         )}
       </div>
-      <p className="mt-1 text-meta text-sol-text-dim">
+      <p className="mt-1 text-[11px] text-sol-text-dim">
         {committed ? (
           <>
             A session on this machine copies{" "}
@@ -245,7 +245,7 @@ function DeviceFreezeLine({ d }: { d: Device }) {
   const freeze = describeDeviceFreeze(d);
   if (!freeze) return null;
   return (
-    <div className="mt-1 text-meta font-mono truncate" style={{ color: `var(${freeze.colorVar})` }}>
+    <div className="mt-1 text-[11px] font-mono truncate" style={{ color: `var(${freeze.colorVar})` }}>
       {freeze.text}
     </div>
   );
@@ -305,7 +305,7 @@ function InactiveDeviceRow({ d }: { d: Device }) {
             <ChevronRight className={`h-3 w-3 shrink-0 text-sol-text-dim transition-transform ${open ? "rotate-90" : ""}`} />
             <ManagedDevicePill d={d} />
           </div>
-          <div className="truncate font-mono text-meta text-sol-text-dim">
+          <div className="truncate font-mono text-[11px] text-sol-text-dim">
             {deviceKindLabel(d)} · last seen {relativeSeen(d.last_seen)}{sharedWith ? ` · ${sharedWith}` : ""} · {d.device_id.slice(0, 8)}
           </div>
         </button>
@@ -321,15 +321,13 @@ function InactiveDeviceRow({ d }: { d: Device }) {
   );
 }
 
-const CHECKOUTS_SHOWN = 30;
-
 /** Everything a machine reports plus what a person set on it. Shared by the
  *  full card and by an inactive row once it is opened. */
 function DeviceDetails({ d }: { d: Device }) {
   return (
     <>
-      <div className="mt-1 text-meta text-sol-text-dim font-mono truncate">{d.label}</div>
-      <div className="mt-2 flex items-center gap-4 text-meta text-sol-text-dim">
+      <div className="mt-1 text-[11px] text-sol-text-dim font-mono truncate">{d.label}</div>
+      <div className="mt-2 flex items-center gap-4 text-[11px] text-sol-text-dim">
         <span>{d.platform}</span>
         <span>
           {d.local_project_roots.length} project root{d.local_project_roots.length === 1 ? "" : "s"}
@@ -348,20 +346,15 @@ function DeviceDetails({ d }: { d: Device }) {
       <GrantAccessCard d={d} blocked={(d.git_plane ?? []).filter((r) => r.needs_access)} />
       {d.local_project_roots.length > 0 && (
         <details className="mt-2 group">
-          <summary className="cursor-pointer text-meta text-sol-text-muted hover:text-sol-text select-none">
+          <summary className="cursor-pointer text-[11px] text-sol-text-muted hover:text-sol-text select-none">
             Show checkouts
           </summary>
           <ul className="mt-1 space-y-0.5">
-            {/* A checkout's path drops its beginning, not its end: the repo's
-                folder is what tells two apart. */}
-            {d.local_project_roots.slice(0, CHECKOUTS_SHOWN).map((r) => (
-              <li key={r} className="truncate text-left font-mono text-meta text-sol-text-muted [direction:rtl]" title={r}>
-                <bdi dir="ltr">{r}</bdi>
+            {d.local_project_roots.slice(0, 30).map((r) => (
+              <li key={r} className="text-[11px] text-sol-text-muted font-mono truncate">
+                {r}
               </li>
             ))}
-            {d.local_project_roots.length > CHECKOUTS_SHOWN && (
-              <li className="text-meta text-sol-text-dim">+{d.local_project_roots.length - CHECKOUTS_SHOWN} more</li>
-            )}
           </ul>
         </details>
       )}
@@ -427,13 +420,13 @@ function TeamMachineRow({ box }: { box: TeamMachine }) {
             <span className="truncate">{deviceDisplayName(box as any)}</span>
             <DeviceDot online={box.online} />
           </div>
-          <div className="mt-1 text-meta text-sol-text-dim font-mono truncate">
+          <div className="mt-1 text-[11px] text-sol-text-dim font-mono truncate">
             {person
               ? `${box.runner_name ?? "A teammate"}'s machine · sessions you start here run as them`
               : `${box.label} · runs as ${box.bot_name ?? "a bot"}`}
           </div>
           {person ? (
-            <p className="mt-2 text-meta text-sol-text-dim">
+            <p className="mt-2 text-[11px] text-sol-text-dim">
               Pick it in the composer&apos;s machine row, or{" "}
               <code className="font-mono text-sol-text-muted">cast spawn --device &quot;{box.label}&quot;</code>.
             </p>
@@ -441,7 +434,7 @@ function TeamMachineRow({ box }: { box: TeamMachine }) {
             <>
               <SshHostField d={box} ownerUserId={box.owner_user_id} readOnly={!box.can_edit} />
               {!box.can_edit && (
-                <p className="mt-1 text-meta text-sol-text-dim">Only an admin of the bot's team can change this.</p>
+                <p className="mt-1 text-[11px] text-sol-text-dim">Only an admin of the bot's team can change this.</p>
               )}
             </>
           )}
@@ -503,7 +496,7 @@ export default function DevicesSettingsPage() {
         }
         actions={
           sorted.length > 0 ? (
-            <span className="text-meta text-sol-text-muted">
+            <span className="text-[11px] text-sol-text-muted">
               {onlineCount} of {sorted.length} online
               {sharedCount > 0 && <span className="text-sol-cyan"> · {sharedCount} shared</span>}
             </span>

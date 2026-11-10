@@ -32,7 +32,7 @@ import { teamHasFeature } from "../lib/teamFeatures";
 import { PRESENCE_BUCKET_MS } from "@codecast/convex/convex/presenceState";
 import { describeRoom } from "../lib/calls/roomLabels";
 import { memberDisplayName } from "../lib/liveEntities";
-import { useShortcutAction, useShortcutContext } from "../shortcuts/ShortcutProvider";
+import { useShortcutAction, useShortcutContext } from "../shortcuts";
 import { useNowWhen } from "./useCoarseNow";
 import { usePagePresence } from "./usePagePresence";
 import { useDesktopWindowRole } from "./useDesktopWindowRole";

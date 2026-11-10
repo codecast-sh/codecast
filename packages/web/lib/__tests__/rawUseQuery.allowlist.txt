@@ -16,6 +16,7 @@ app/settings/team/join/page.tsx 1
 app/share/[token]/SharedConversationClient.tsx 1
 app/share/message/[token]/SharedMessageClient.tsx 1
 app/team/[username]/page.tsx 7
+app/team/activity/page.tsx 1
 app/team/charts/page.tsx 2
 app/u/[username]/page.tsx 4
 components/CommandPalette.tsx 1

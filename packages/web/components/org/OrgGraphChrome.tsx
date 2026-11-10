@@ -55,7 +55,7 @@ export function EdgeCue({ side, hidden, onPan, offset }: { side: "left" | "right
         type="button"
         data-edge-cue={side}
         onClick={() => onPan(hidden[0], side)}
-        className="absolute z-10 inline-flex items-center gap-1 h-7 pl-2.5 pr-2 rounded-full border text-meta font-medium transition-colors hover:bg-sol-bg-highlight backdrop-blur"
+        className="absolute z-10 inline-flex items-center gap-1 h-7 pl-2.5 pr-2 rounded-full border text-[11.5px] font-medium transition-colors hover:bg-sol-bg-highlight backdrop-blur"
         style={{
           [side]: side === "left" ? offset + PANEL_MARGIN + CONTROLS_W + 8 : offset + PANEL_MARGIN,
           bottom: PANEL_MARGIN,

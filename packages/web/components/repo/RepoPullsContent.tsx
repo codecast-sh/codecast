@@ -101,10 +101,10 @@ export function RepoPullsContent({ repository, family }: { repository: string; f
             {/* GitHub keeps draft:true on a pull request that was merged from
                 draft, and shows no badge for it — once merged, draft is moot and a
                 row saying both reads as a contradiction. */}
-            {pull.draft && pull.state === "open" && <span className="text-meta border border-sol-border rounded-full px-2 text-sol-text-dim">draft</span>}
+            {pull.draft && pull.state === "open" && <span className="text-[10px] border border-sol-border rounded-full px-2 text-sol-text-dim">draft</span>}
             {pull.labels.map((label) => <span
               key={label.name}
-              className="text-meta rounded-full px-2 border"
+              className="text-[10px] rounded-full px-2 border"
               style={{ borderColor: `#${label.color}`, color: `#${label.color}` }}
             >{label.name}</span>)}
           </div>

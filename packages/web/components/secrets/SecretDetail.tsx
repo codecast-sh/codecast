@@ -50,10 +50,9 @@ function ChipEditor({ items, implied, onChange, problemOf, placeholder, mono = t
     <div>
       <div className="flex cursor-text flex-wrap items-center gap-1" onClick={() => inputRef.current?.focus()}>
         {items.map((x) => (
-          <span key={x} className={`inline-flex min-w-0 max-w-full items-center gap-1 rounded border border-sol-border bg-sol-bg-alt/60 py-[1px] pl-1.5 pr-0.5 text-meta text-sol-text ${mono ? "font-mono" : ""}`}>
-            {/* A long site or variable ends in "…" inside the panel instead of pushing it sideways. */}
-            <span className="min-w-0 truncate" title={x}>{x}</span>
-            <button type="button" onClick={() => onChange(items.filter((y) => y !== x))} aria-label={`Remove ${x}`} className="shrink-0 rounded p-0.5 text-sol-text-dim hover:text-sol-red">
+          <span key={x} className={`inline-flex items-center gap-1 rounded border border-sol-border bg-sol-bg-alt/60 py-[1px] pl-1.5 pr-0.5 text-[11px] text-sol-text ${mono ? "font-mono" : ""}`}>
+            {x}
+            <button type="button" onClick={() => onChange(items.filter((y) => y !== x))} aria-label={`Remove ${x}`} className="rounded p-0.5 text-sol-text-dim hover:text-sol-red">
               <X size={11} />
             </button>
           </span>
@@ -61,7 +60,7 @@ function ChipEditor({ items, implied, onChange, problemOf, placeholder, mono = t
         {/* The vars injected while none is set: dashed, as the list draws them, since they come from the name. */}
         {showImplied &&
           implied?.map((x) => (
-            <span key={x} className="max-w-full truncate rounded border border-dashed border-sol-border/70 px-1.5 py-[1px] font-mono text-meta text-sol-text-muted" title={x} data-vault-env-default>
+            <span key={x} className="rounded border border-dashed border-sol-border/70 px-1.5 py-[1px] font-mono text-[11px] text-sol-text-muted" data-vault-env-default>
               {x}
             </span>
           ))}
@@ -147,7 +146,7 @@ function NotLoaded({ retry, as: Tag = "div" }: { retry: () => void; as?: "div" |
 /** In a line's time slot while what it says waits on the server. */
 function Saving() {
   return (
-    <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-meta text-sol-text-dim" data-vault-saving>
+    <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[11.5px] text-sol-text-dim" data-vault-saving>
       <Loader2 size={11} className="animate-spin motion-reduce:animate-none" />
       saving
     </span>
@@ -205,7 +204,7 @@ function Activity({ row }: { row: SecretMeta }) {
                   {isStaged(e) ? <Saving /> : <span className="ml-auto shrink-0 tabular-nums text-sol-text-dim" title={formatFullTimestamp(e.at)}>{formatRelativeTime(e.at)}</span>}
                 </div>
                 {detail ? (
-                  <div className="flex min-w-0 items-center gap-2 pl-3.5 text-meta text-sol-text-dim" data-vault-event-detail>
+                  <div className="flex min-w-0 items-center gap-2 pl-3.5 text-[11.5px] text-sol-text-dim" data-vault-event-detail>
                     {purpose ? <span className="min-w-0 truncate">{purpose}</span> : null}
                     {e.conversation_id ? (
                       <span className="min-w-0 truncate">
@@ -270,13 +269,13 @@ function Versions({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
                     <Saving />
                   ) : (
                     // One swap at a time: a second press while one is saving would undo the first.
-                    <button type="button" onClick={() => (setError(null), setRestoring(v))} disabled={saving} className="h-6 shrink-0 rounded-md border border-sol-border px-2 text-meta text-sol-text-muted hover:text-sol-text disabled:cursor-default disabled:opacity-40 disabled:hover:text-sol-text-muted" data-vault-restore>
+                    <button type="button" onClick={() => (setError(null), setRestoring(v))} disabled={saving} className="h-6 shrink-0 rounded-md border border-sol-border px-2 text-[11.5px] text-sol-text-muted hover:text-sol-text disabled:cursor-default disabled:opacity-40 disabled:hover:text-sol-text-muted" data-vault-restore>
                       Restore
                     </button>
                   )}
                 </span>
                 {/* The name gives way; when it was replaced and when it goes stay whole. */}
-                <span className="flex min-w-0 gap-1 whitespace-nowrap text-meta text-sol-text-dim">
+                <span className="flex min-w-0 gap-1 whitespace-nowrap text-[11.5px] text-sol-text-dim">
                   <span className="shrink-0" title={formatFullTimestamp(v.rotated_at)}>replaced {formatRelativeTime(v.rotated_at, now)}</span>
                   <span className="min-w-0 truncate">by {v.rotated_by_name ?? "someone"}</span>
                   <span className="shrink-0" title={formatFullTimestamp(v.expires_at)}>· gone {formatIn(v.expires_at, now)}</span>
@@ -284,7 +283,7 @@ function Versions({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
               </li>
             ))
           )}
-          {error ? <li className="py-1 text-meta text-sol-red">{error}</li> : null}
+          {error ? <li className="py-1 text-[11.5px] text-sol-red">{error}</li> : null}
         </ol>
       )}
       {restoring && (
@@ -417,7 +416,7 @@ function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
   return (
     <>
       {body}
-      {error ? <div className="py-1 text-meta text-sol-red">{error}</div> : null}
+      {error ? <div className="py-1 text-[11.5px] text-sol-red">{error}</div> : null}
     </>
   );
 }
@@ -425,13 +424,13 @@ function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
 /** The secret's short id, dim; a press copies it, and it goes green, or red when the clipboard refused. */
 function ShortIdButton({ id }: { id: string | undefined }) {
   const { state, copy } = useCopy();
-  if (!id) return <span className="font-mono text-meta text-sol-text-dim">saving</span>;
+  if (!id) return <span className="font-mono text-[11px] text-sol-text-dim">saving</span>;
   return (
     <button
       type="button"
       onClick={() => void copy(() => id)}
       title={state === "copied" ? "Copied" : state === "failed" ? "Not copied" : "Copy id"}
-      className={`rounded px-1 py-0.5 font-mono text-meta transition-colors ${state === "copied" ? "text-sol-green" : state === "failed" ? "text-sol-red" : "text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"}`}
+      className={`rounded px-1 py-0.5 font-mono text-[11px] transition-colors ${state === "copied" ? "text-sol-green" : state === "failed" ? "text-sol-red" : "text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"}`}
       data-vault-short-id
     >
       {id}
@@ -474,10 +473,10 @@ export function SecretDetail({ row, rows, team, over, onClose }: { row: SecretMe
             className="-ml-1 px-1 font-mono text-[15px] font-semibold text-sol-text"
           />
           {/* One line: the short kind label, the scope, the health. The team name gives way first. A sign-in's expiry is its own row below, so it is not said here too. */}
-          <div className="mt-0.5 flex min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden whitespace-nowrap text-meta text-sol-text-muted" data-vault-detail-meta>
+          <div className="mt-0.5 flex min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden whitespace-nowrap text-[11.5px] text-sol-text-muted" data-vault-detail-meta>
             <span className="shrink-0">{KIND[row.kind].short}</span>
             <span className="shrink-0 text-sol-text-dim">·</span>
-            <ScopeMark row={row} teamName={ledgerTeam?.name} className="min-w-0 truncate text-meta" />
+            <ScopeMark row={row} teamName={ledgerTeam?.name} className="min-w-0 truncate text-[11.5px]" />
             {health && !(row.kind === "signin" && (health === "expired" || health === "expiring")) ? (
               <>
                 <span className="shrink-0 text-sol-text-dim">·</span>

@@ -37,7 +37,7 @@ export function RetireRoleConfirm({ role, lead, onRetire, onCancel }: {
               style={{ borderColor: choice === value ? "var(--sol-red)" : "color-mix(in srgb, var(--sol-border) 40%, transparent)", background: choice === value ? "color-mix(in srgb, var(--sol-red) 8%, transparent)" : undefined }}
             >
               <span className="text-[12px] font-semibold" style={{ color: "var(--sol-text)" }}>{label}</span>
-              <span className="block text-meta mt-0.5" style={{ color: "var(--sol-text-muted)" }}>{sub}</span>
+              <span className="block text-[11px] mt-0.5" style={{ color: "var(--sol-text-muted)" }}>{sub}</span>
             </button>
           ))}
         </div>

@@ -111,7 +111,7 @@ function assigneeOfKey(key: string, sample: TaskItem | undefined, ctx: TaskGroup
     ?? resolveAssigneeInfo(key, undefined, ctx.teamMembers, ctx.currentUser as any, ctx.roles);
 }
 
-const HEADER_LINK = "text-meta text-sol-cyan hover:underline flex-shrink-0";
+const HEADER_LINK = "text-[10px] text-sol-cyan hover:underline flex-shrink-0";
 
 const initiativeOfTask = (t: TaskItem | undefined, ctx: TaskGroupContext): InitiativeRow | undefined =>
   ctx.initiativeOfProject?.get((t as any)?.project_id ?? "");
@@ -223,7 +223,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
         icon: <ListChecks className="w-3.5 h-3.5 text-sol-cyan" />,
         badge: (
           <span
-            className={`text-meta px-1.5 py-0 rounded border ${
+            className={`text-[10px] px-1.5 py-0 rounded border ${
               plan.status === "active" ? "border-sol-green/30 text-sol-green" : "border-sol-border/30 text-sol-text-dim"
             }`}
           >
@@ -360,7 +360,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       return {
         label: call?.title || "Call",
         icon: <Phone className="w-3.5 h-3.5 text-sol-magenta" />,
-        badge: day ? <span className="text-meta text-sol-text-dim normal-case tracking-normal">{day}</span> : undefined,
+        badge: day ? <span className="text-[10px] text-sol-text-dim normal-case tracking-normal">{day}</span> : undefined,
         extra: (
           <Link href={`/calls/${call?.short_id || b.key}`} onClick={(e) => e.stopPropagation()} className={HEADER_LINK}>
             {call?.short_id ? `Open ${call.short_id}` : "Open call"}
@@ -553,7 +553,7 @@ export function buildTaskGroups({
         <span className="flex items-center gap-1 flex-shrink-0">{icons.map((p, i) => <span key={i} className="flex">{p.icon}</span>)}</span>
       ) : undefined,
       badge: bucket.chainTotal !== undefined ? (
-        <span className="text-meta text-sol-text-dim normal-case tracking-normal">{bucket.chainTotal} in chain</span>
+        <span className="text-[10px] text-sol-text-dim normal-case tracking-normal">{bucket.chainTotal} in chain</span>
       ) : parts.find((p) => p.badge)?.badge,
       depth: bucket.depth,
       extra: extras.length ? (

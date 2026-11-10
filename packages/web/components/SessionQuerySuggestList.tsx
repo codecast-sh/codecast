@@ -19,7 +19,7 @@ export function SessionQuerySuggestionRow({ s }: { s: QuerySuggestion }) {
           </span>
         )}
       </span>
-      {s.hint && <span className="pl-3 text-meta text-sol-text-dim truncate min-w-0 flex-1">{s.hint}</span>}
+      {s.hint && <span className="pl-3 text-[11px] text-sol-text-dim truncate min-w-0 flex-1">{s.hint}</span>}
     </>
   );
 }
@@ -61,7 +61,7 @@ export function SessionQuerySuggestList({
           <SessionQuerySuggestionRow s={s} />
         </button>
       ))}
-      <div className="px-4 pt-1.5 pb-1 mt-1 border-t border-sol-border/40 flex items-center gap-1.5 text-meta text-sol-text-dim">
+      <div className="px-4 pt-1.5 pb-1 mt-1 border-t border-sol-border/40 flex items-center gap-1.5 text-[10px] text-sol-text-dim">
         <KeyCap size="xs">Tab</KeyCap> complete
         <KeyCap size="xs">↑</KeyCap>
         <KeyCap size="xs">↓</KeyCap> choose

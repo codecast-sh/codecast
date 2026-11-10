@@ -1,5 +1,4 @@
-import { forwardRef, useCallback, useRef, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
-import { useMountEffect } from "../hooks/useMountEffect";
+import { forwardRef, type InputHTMLAttributes, type ReactNode } from "react";
 import { ChevronDown, X } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -53,52 +52,17 @@ export function CreateDialog({
   const submit = () => {
     if (canSubmit) onSubmit();
   };
-  const panelRef = useRef<HTMLDivElement>(null);
-  // Focus goes back where it was when the dialog closes.
-  useMountEffect(() => {
-    const prev = document.activeElement as HTMLElement | null;
-    return () => { if (prev?.isConnected) prev.focus?.(); };
-  });
-  // Tab stays inside the dialog: it wraps at the first and last control
-  // (the same rule as the settings modal).
-  const trapFocus = useCallback((e: KeyboardEvent) => {
-    const panel = panelRef.current;
-    if (!panel) return;
-    const focusables = Array.from(
-      panel.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
-      ),
-    ).filter((el) => el.offsetParent !== null);
-    if (focusables.length === 0) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    const active = document.activeElement;
-    if (e.shiftKey) {
-      if (active === first || active === panel) {
-        e.preventDefault();
-        last.focus();
-      }
-    } else if (active === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  }, []);
 
   return (
-    // The overlay scrolls: on a short window a tall dialog (a plan with its
-    // workflow config open) and the menus its chips open stay reachable.
     <div
-      className="fixed inset-0 z-[10001] flex items-start justify-center overflow-y-auto overscroll-contain bg-black/55 backdrop-blur-[3px] pt-[12vh] pb-[6vh] px-4 animate-in fade-in duration-150"
+      className="fixed inset-0 z-[10001] flex items-start justify-center bg-black/55 backdrop-blur-[3px] pt-[12vh] px-4 animate-in fade-in duration-150"
       onMouseDown={(e) => {
         // mousedown, not click: a text selection dragged out of a field and
-        // released over the backdrop must not throw the draft away. A press
-        // on the overlay's own scrollbar is not a press on the backdrop.
-        if (e.target === e.currentTarget && e.clientX < e.currentTarget.clientWidth) onClose();
+        // released over the backdrop must not throw the draft away.
+        if (e.target === e.currentTarget) onClose();
       }}
       onKeyDown={(e) => {
-        if (e.key === "Tab") {
-          trapFocus(e);
-        } else if (e.key === "Escape") {
+        if (e.key === "Escape") {
           e.stopPropagation();
           onClose();
         } else if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey || submitOnEnter)) {
@@ -113,11 +77,10 @@ export function CreateDialog({
       }}
     >
       <div
-        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={`New ${noun}`}
-        className={`w-full flex-shrink-0 ${width === "lg" ? "max-w-[640px]" : "max-w-[500px]"} rounded-xl border border-sol-border/70 bg-sol-bg shadow-[0_24px_64px_-12px_rgba(0,0,0,0.55),0_2px_6px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.04)] animate-in fade-in zoom-in-[0.98] slide-in-from-top-2 duration-200`}
+        className={`w-full ${width === "lg" ? "max-w-[640px]" : "max-w-[500px]"} rounded-xl border border-sol-border/70 bg-sol-bg shadow-[0_24px_64px_-12px_rgba(0,0,0,0.55),0_2px_6px_rgba(0,0,0,0.25),inset_0_1px_0_rgba(255,255,255,0.04)] animate-in fade-in zoom-in-[0.98] slide-in-from-top-2 duration-200`}
       >
         <div className="flex items-center gap-2 pl-5 pr-3 pt-3.5 text-xs text-sol-text-dim">
           <span className="flex h-5 w-5 items-center justify-center rounded-md bg-sol-bg-alt">{icon}</span>
@@ -229,4 +192,4 @@ export const CREATE_MENU_SEARCH_CLASS =
 
 /** A section heading inside a menu ("People", "Agents"). */
 export const CREATE_MENU_SECTION_CLASS =
-  "px-2 pb-1 pt-2 text-mark font-medium uppercase tracking-wide text-sol-text-dim/80";
+  "px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-sol-text-dim/80";

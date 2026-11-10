@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   AlignLeft,
   Captions,
@@ -120,9 +120,7 @@ function echoKey(text: string, attachments?: { storage_id: string }[] | null): s
   return `${text}\0${(attachments ?? []).map((a) => a.storage_id).join(",")}`;
 }
 
-// Memoized: the stage and the call page redraw for their own state, and the
-// thread redraws only when what it is handed changes.
-export const RoomThread = memo(function RoomThread({
+export function RoomThread({
   roomKey,
   call,
   rows,
@@ -414,15 +412,11 @@ export const RoomThread = memo(function RoomThread({
     });
   };
 
-  // Stable, so the memoized rows that take it do not redraw with the thread.
-  const openSession = useCallback(
-    (id: string) => {
-      if (panel) return void navigateMainWindow(`/conversation/${id}`);
-      useInboxStore.getState().openSidePanel(id);
-      onOpenedSession?.();
-    },
-    [panel, onOpenedSession],
-  );
+  const openSession = (id: string) => {
+    if (panel) return void navigateMainWindow(`/conversation/${id}`);
+    useInboxStore.getState().openSidePanel(id);
+    onOpenedSession?.();
+  };
 
   const composer = !recording;
   // The stage's box holds about 27 characters a line at the 272px rail (less
@@ -458,10 +452,6 @@ export const RoomThread = memo(function RoomThread({
     if (opening && p.index !== newestIndex) stuckRef.current = false;
     setOverrides((o) => ({ ...o, [p.index]: opening }));
   };
-  // One stable function for every passage, reading the latest fold state.
-  const toggleRef = useRef(toggle);
-  toggleRef.current = toggle;
-  const onTogglePassage = useCallback((p: Passage) => toggleRef.current(p), []);
 
   // A link into the call: open what holds the place (its passages, or the
   // recap through RecapCard's focus), then bring it into view once, and
@@ -598,11 +588,10 @@ export const RoomThread = memo(function RoomThread({
                   <button
                     type="button"
                     onClick={() => openSession(agent.id)}
-                    className="rounded p-1 text-sol-text-dim transition-colors hover:text-sol-text"
+                    className="rounded p-0.5 text-sol-text-dim transition-colors hover:text-sol-text"
                     title="Open the agent's session"
-                    aria-label="Open the agent's session"
                   >
-                    <ExternalLink className="h-3.5 w-3.5" />
+                    <ExternalLink className="h-3 w-3" />
                   </button>
                 )}
               </span>
@@ -835,7 +824,7 @@ export const RoomThread = memo(function RoomThread({
                   fresh={item.at > mountedAt.current}
                   recording={recording}
                   dayOf={anchorAt}
-                  onToggle={onTogglePassage}
+                  onToggle={() => toggle(item)}
                   selection={selection}
                   callId={call ? callPathRef(call) : undefined}
                 />
@@ -929,7 +918,7 @@ export const RoomThread = memo(function RoomThread({
       </div>
     </div>
   );
-});
+}
 
 // ── Spoken words ───────────────────────────────────────────────────────────
 
@@ -1031,11 +1020,10 @@ function AgentFaceToggle({ on, name, onChange }: { on: boolean; name: string; on
       type="button"
       aria-pressed={on}
       onClick={() => onChange(!on)}
-      className={`rounded p-1 transition-colors hover:text-sol-text ${on ? "text-sol-violet" : "text-sol-text-dim"}`}
+      className={`rounded p-0.5 transition-colors hover:text-sol-text ${on ? "text-sol-violet" : "text-sol-text-dim"}`}
       title={on ? `Turn off ${name}'s video avatar` : `Bring ${name} in on video`}
-      aria-label={on ? `Turn off ${name}'s video avatar` : `Bring ${name} in on video`}
     >
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className="h-3 w-3" />
     </button>
   );
 }

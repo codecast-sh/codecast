@@ -533,7 +533,7 @@ export function DesktopProvider() {
               showStalled ? "bg-sol-orange" : "animate-pulse bg-sol-cyan"
             }`}
           />
-          <span className="text-meta text-sol-text-dim">
+          <span className="text-[11px] text-sol-text-dim">
             {ready
               ? `v${latest} ready`
               : downloading && ipc?.percent != null
@@ -571,7 +571,7 @@ export function DesktopProvider() {
             ) : showStalled && belowFloor ? (
               <>
                 <p className="text-xs text-sol-text">Codecast could not update on its own</p>
-                <p className="mt-0.5 text-meta text-sol-text-dim">
+                <p className="mt-0.5 text-[11px] text-sol-text-dim">
                   v{current} no longer works with this version of Codecast. Run{" "}
                   <code className="rounded bg-sol-bg px-1 text-sol-text">cast desktop-update --force</code> in a
                   terminal, or{" "}
@@ -586,7 +586,7 @@ export function DesktopProvider() {
                 <p className="text-xs text-sol-text">
                   {errored ? "Update failed" : "Update is taking longer than usual"}
                 </p>
-                <p className="mt-0.5 text-meta text-sol-text-dim">
+                <p className="mt-0.5 text-[11px] text-sol-text-dim">
                   {errored
                     ? "The download didn't complete — check your connection and try again."
                     : "If Codecast doesn’t restart shortly, quit and reopen it."}
@@ -598,7 +598,7 @@ export function DesktopProvider() {
                   {downloading ? `Downloading v${latest}` : `Updating to v${latest}`}
                   {downloading && ipc?.percent != null ? ` — ${ipc.percent}%` : "…"}
                 </p>
-                <p className="mt-0.5 text-meta text-sol-text-dim">
+                <p className="mt-0.5 text-[11px] text-sol-text-dim">
                   {downloading
                     ? "Keep working — we’ll prompt you to restart when it’s ready."
                     : "Downloading in the background — Codecast will restart on its own."}
@@ -632,7 +632,7 @@ export function DesktopProvider() {
                 {!belowFloor && (
                   <button
                     onClick={() => setDismissedVersion(latest)}
-                    className="text-meta text-sol-text-dim transition-colors hover:text-sol-text"
+                    className="text-[11px] text-sol-text-dim transition-colors hover:text-sol-text"
                   >
                     Later
                   </button>

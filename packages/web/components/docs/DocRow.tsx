@@ -43,7 +43,7 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
         <Link
           href={`/plans/${doc.plan_short_id}`}
           onClick={(e) => e.stopPropagation()}
-          className="text-meta px-1.5 py-0.5 rounded border border-sol-border/30 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/30 transition-colors flex-shrink-0 cq-hide-compact"
+          className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border/30 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/30 transition-colors flex-shrink-0 cq-hide-compact"
         >
           {doc.plan_short_id}
         </Link>
@@ -53,7 +53,7 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
           {doc.labels.slice(0, 2).map((l) => {
             const lc = getLabelColor(l);
             return (
-              <span key={l} className={`inline-flex items-center gap-1 text-meta px-1.5 py-0 rounded-full border whitespace-nowrap ${lc.bg} ${lc.border} ${lc.text}`}>
+              <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0 rounded-full border whitespace-nowrap ${lc.bg} ${lc.border} ${lc.text}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
                 {l}
               </span>
@@ -67,8 +67,8 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
           })}
         </div>
       )}
-      <span className="text-meta text-sol-text-dim flex-shrink-0 tabular-nums cq-hide-minimal">{docTypeLabel(doc.doc_type)}</span>
-      <DocDates doc={doc} className="text-xs text-sol-text-dim flex-shrink-0 cq-hide-minimal" />
+      <span className="text-[10px] text-gray-500 flex-shrink-0 tabular-nums cq-hide-minimal">{docTypeLabel(doc.doc_type)}</span>
+      <DocDates doc={doc} className="text-xs text-gray-500 flex-shrink-0 cq-hide-minimal" />
     </>
   );
 }

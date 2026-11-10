@@ -9,7 +9,6 @@ import { AGENT_HOOKS, FUNCTIONAL_HOOKS, deviceHookInstalled, hookFeatureName } f
 import { Switch } from "../../../components/ui/switch";
 import { Button } from "../../../components/ui/button";
 import {
-  SettingsBadge,
   SettingsCallout,
   SettingsOptionGroup,
   SettingsRow,
@@ -208,8 +207,16 @@ function HookRow({ hook: h, installed, owner, control }: { hook: HarnessHook; in
       label={
         <span className="flex flex-wrap items-center gap-2">
           {h.name}
-          <SettingsBadge tone={installed ? "green" : "muted"}>{installed ? "Installed" : "Off"}</SettingsBadge>
-          {owner && <span className="text-meta font-normal text-sol-text-muted">part of {owner}</span>}
+          <span
+            className={`text-[10px] px-1.5 py-px rounded-full border ${
+              installed
+                ? "bg-sol-green/10 text-sol-green border-sol-green/30"
+                : "bg-sol-bg-alt text-sol-text-muted border-sol-border"
+            }`}
+          >
+            {installed ? "Installed" : "Off"}
+          </span>
+          {owner && <span className="text-[11px] font-normal text-sol-text-muted">part of {owner}</span>}
         </span>
       }
       description={
@@ -219,7 +226,7 @@ function HookRow({ hook: h, installed, owner, control }: { hook: HarnessHook; in
             <span className="text-sol-text-muted">Without it: </span>
             {h.withoutIt}
           </span>
-          <span className="mt-1.5 block font-mono text-meta text-sol-text-dim">
+          <span className="mt-1.5 block font-mono text-[11px] text-sol-text-dim">
             ~/.claude/hooks/{h.file}
             {h.events.length > 0 ? ` on ${h.events.join(", ")}` : h.kind === "statusLine" ? " as the statusLine command" : " (runs inside the prompt hook)"}
           </span>
@@ -281,24 +288,30 @@ function HistorySection({ d }: { d: Device }) {
           {shown.map((c) => (
             <li key={c._id} className="flex gap-3 px-4 py-2.5 sm:px-5">
               <span
-                className="w-16 shrink-0 pt-px text-meta tabular-nums text-sol-text-dim"
+                className="w-16 shrink-0 pt-px text-[11px] tabular-nums text-sol-text-dim"
                 title={new Date(c.at).toLocaleString()}
               >
                 {relativeSeen(c.at)}
               </span>
               <div className="min-w-0 flex-1">
                 <p className="text-xs text-sol-text">
-                  {ACTION_VERB[c.action]} <code className="font-mono text-meta text-sol-text">{c.file}</code>
+                  {ACTION_VERB[c.action]} <code className="font-mono text-[11px] text-sol-text">{c.file}</code>
                   <span className="text-sol-text-muted"> · {whatLabel(c.what)}</span>
                 </p>
-                <p className="mt-0.5 text-meta text-sol-text-muted">
+                <p className="mt-0.5 text-[11px] text-sol-text-muted">
                   {c.why}
                   <span className="text-sol-text-dim"> · v{c.version}</span>
                 </p>
               </div>
-              <SettingsBadge tone={c.automatic ? "yellow" : "muted"} className="h-fit">
+              <span
+                className={`h-fit shrink-0 text-[10px] px-1.5 py-px rounded-full border ${
+                  c.automatic
+                    ? "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/30"
+                    : "bg-sol-bg-alt text-sol-text-muted border-sol-border"
+                }`}
+              >
                 {c.automatic ? "Automatic" : "Requested"}
-              </SettingsBadge>
+              </span>
             </li>
           ))}
         </ol>

@@ -53,7 +53,7 @@ export function MentionMenu({
       <div ref={listRef} role="listbox" aria-label="Suggestions" className="min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain max-h-[min(440px,52vh)] pb-1">
         {groups.map((group) => (
           <div key={group.key} role="group" aria-label={group.title}>
-            <div className="sticky top-0 z-[1] px-3 pt-2 pb-1 bg-sol-bg/95 backdrop-blur-sm flex items-center gap-2 text-meta font-medium text-sol-text-dim">
+            <div className="sticky top-0 z-[1] px-3 pt-2 pb-1 bg-sol-bg/95 backdrop-blur-sm flex items-center gap-2 text-[11px] font-medium text-sol-text-dim">
               <span>{group.title}</span>
               <span className="h-px flex-1 bg-sol-border/40" />
             </div>
@@ -86,7 +86,7 @@ export function MentionMenu({
           <MentionDetail item={selected} />
         </div>
       )}
-      <div className="border-t border-sol-border/40 px-3 h-7 flex items-center gap-3 text-meta text-sol-text-dim">
+      <div className="border-t border-sol-border/40 px-3 h-7 flex items-center gap-3 text-[10px] text-sol-text-dim">
         <span className="flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> move</span>
         <span className="flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> insert</span>
         <span className="flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> close</span>

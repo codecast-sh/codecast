@@ -38,18 +38,18 @@ function InlineNav({ tab, files, notes, pr, pastHeader }: Case) {
           <Icon className="pr-tab-icon w-3.5 h-3.5" />
           {label}
           {key === "files" && files.length > 0 && (
-            <span className="text-meta text-sol-text-dim">{files.length}</span>
+            <span className="text-[11px] text-sol-text-dim">{files.length}</span>
           )}
           {key === "files" && notes.length > 0 && (
-            <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-meta text-sol-yellow" title="Notes in your review, not sent yet">
+            <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-[10px] text-sol-yellow" title="Notes in your review, not sent yet">
               {notes.length}
             </span>
           )}
           {key === "commits" && (pr.commits_count ?? pr.commits?.length ?? 0) > 0 && (
-            <span className="text-meta text-sol-text-dim">{pr.commits_count ?? pr.commits.length}</span>
+            <span className="text-[11px] text-sol-text-dim">{pr.commits_count ?? pr.commits.length}</span>
           )}
           {key === "checks" && (pr.checks?.length ?? 0) > 0 && (
-            <span className="text-meta text-sol-text-dim">{pr.checks.length}</span>
+            <span className="text-[11px] text-sol-text-dim">{pr.checks.length}</span>
           )}
           <span className="pr-tab-key opacity-0 group-hover:opacity-100 transition-opacity">
             <KeyCap size="xs">{digit}</KeyCap>

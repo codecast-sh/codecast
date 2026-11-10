@@ -38,7 +38,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../../components/ui/dialog";
-import { SettingsBadge, SettingsCallout, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
+import { SettingsCallout, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import {
   DeviceDot,
   DeviceIcon,
@@ -127,7 +127,7 @@ function DestinationCard({ d, selected, count, onPick }: { d: Device; selected: 
         <span className={cn("truncate text-sm font-medium", selected ? "text-sol-cyan" : "text-sol-text")}>{deviceDisplayName(d)}</span>
         <DeviceDot online={d.online} className="ml-auto" />
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-meta text-sol-text-muted">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] text-sol-text-muted">
         <span>{d.is_remote ? "cloud host" : "laptop"} · {state}</span>
         <span className="shrink-0">{count} session{count === 1 ? "" : "s"} here</span>
       </div>
@@ -170,10 +170,10 @@ function CandidateRow({
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2 min-w-0">
           <span className="truncate text-sm text-sol-text">{shortName(c)}</span>
-          <ShortId id={c.short_id} className="text-meta text-sol-text-dim" />
-          {c.has_pending_messages && <SettingsBadge tone="yellow" className="px-1 py-0 text-meta">message waiting</SettingsBadge>}
+          <ShortId id={c.short_id} className="text-[10px] text-sol-text-dim" />
+          {c.has_pending_messages && <span className="shrink-0 rounded bg-sol-yellow/15 px-1 text-[9px] text-sol-yellow">message waiting</span>}
         </span>
-        <span className="flex items-center gap-2 text-meta text-sol-text-muted min-w-0">
+        <span className="flex items-center gap-2 text-[11px] text-sol-text-muted min-w-0">
           {device ? (
             <span className="inline-flex items-center gap-1 shrink-0">
               <DeviceIcon d={device} className="h-2.5 w-2.5" />
@@ -182,12 +182,12 @@ function CandidateRow({
           ) : (
             <span className="shrink-0">unplaced</span>
           )}
-          {c.worktree_name && <span className="truncate font-mono text-meta text-sol-cyan">{c.worktree_name}</span>}
-          {!c.worktree_name && c.project_path && <span className="truncate font-mono text-meta">{c.project_path.split("/").filter(Boolean).pop()}</span>}
+          {c.worktree_name && <span className="truncate font-mono text-[10px] text-sol-cyan">{c.worktree_name}</span>}
+          {!c.worktree_name && c.project_path && <span className="truncate font-mono text-[10px]">{c.project_path.split("/").filter(Boolean).pop()}</span>}
           <span className="ml-auto shrink-0">{relativeSeen(c.updated_at)}</span>
         </span>
       </span>
-      {!eligible && reason && <span className="shrink-0 max-w-[40%] truncate text-meta text-sol-text-dim" title={reason}>{reason}</span>}
+      {!eligible && reason && <span className="shrink-0 max-w-[40%] truncate text-[11px] text-sol-text-dim" title={reason}>{reason}</span>}
     </button>
   );
 }
@@ -245,8 +245,8 @@ function BatchCard({ b, devices, now, expandedDefault }: { b: Batch; devices: Ma
           <span className="truncate text-sm text-sol-text">
             {b.total} session{b.total === 1 ? "" : "s"} → {toName}
           </span>
-          <span className={cn("shrink-0 text-meta font-medium", stateTone)}>{stateLabel}</span>
-          <span className="ml-auto shrink-0 font-mono text-meta text-sol-text-dim">{b.batch_id} · {relativeSeen(b.created_at)}</span>
+          <span className={cn("shrink-0 text-[11px] font-medium", stateTone)}>{stateLabel}</span>
+          <span className="ml-auto shrink-0 font-mono text-[10px] text-sol-text-dim">{b.batch_id} · {relativeSeen(b.created_at)}</span>
         </button>
         {running && b.queued > 0 && (
           <Button
@@ -279,7 +279,7 @@ function BatchCard({ b, devices, now, expandedDefault }: { b: Batch; devices: Ma
             <div className="h-full bg-sol-text-dim/40 transition-all" style={{ width: `${b.total ? (b.cancelled / b.total) * 100 : 0}%` }} />
           </div>
         </div>
-        <span className="shrink-0 text-meta text-sol-text-muted">
+        <span className="shrink-0 text-[11px] text-sol-text-muted">
           {b.done} moved{b.failed ? ` · ${b.failed} failed` : ""}{b.cancelled ? ` · ${b.cancelled} cancelled` : ""}{b.active ? ` · ${b.active} in progress` : ""}{b.queued ? ` · ${b.queued} queued` : ""} · {pct}%
         </span>
       </div>
@@ -300,22 +300,22 @@ function BatchCard({ b, devices, now, expandedDefault }: { b: Batch; devices: Ma
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="truncate text-sm text-sol-text">{shortName(r)}</span>
-                    <ShortId id={r.short_id} className="text-meta text-sol-text-dim" />
-                    <span className="ml-auto shrink-0 text-meta text-sol-text-dim">
+                    <ShortId id={r.short_id} className="text-[10px] text-sol-text-dim" />
+                    <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim">
                       {duration(r.started_at, isRowTerminal(r.status) ? r.finished_at : null, now)}
                     </span>
                   </div>
-                  <div className="text-meta text-sol-text-muted truncate">
+                  <div className="text-[11px] text-sol-text-muted truncate">
                     {from ? deviceDisplayName(from) : "unplaced"} → {dest ? deviceDisplayName(dest) : r.to_device_id.slice(0, 8)}
                     {r.attempt > 1 && ` · attempt ${r.attempt}`}
                   </div>
                   {r.error ? (
-                    <div className="mt-0.5 text-meta leading-relaxed text-sol-red break-words">{r.error}</div>
+                    <div className="mt-0.5 text-[11px] leading-relaxed text-sol-red break-words">{r.error}</div>
                   ) : r.stage ? (
-                    <div className={cn("mt-0.5 text-meta leading-relaxed", isRowActive(r.status) ? "text-sol-text" : "text-sol-text-muted")}>{r.stage}</div>
+                    <div className={cn("mt-0.5 text-[11px] leading-relaxed", isRowActive(r.status) ? "text-sol-text" : "text-sol-text-muted")}>{r.stage}</div>
                   ) : null}
                   {r.status === "done" && r.verification && (
-                    <div className="mt-0.5 text-meta text-sol-text-dim break-words">{r.verification}</div>
+                    <div className="mt-0.5 text-[10px] text-sol-text-dim break-words">{r.verification}</div>
                   )}
                 </div>
               </li>
@@ -465,7 +465,7 @@ export default function MigratePanel() {
 
   return (
     <SettingsPanel>
-      <p className="px-1 pb-2 text-meta text-sol-text-muted">
+      <p className="px-1 pb-2 text-[11px] text-sol-text-muted">
         To see which sessions are using a laptop's CPU and memory, and get suggestions when it is under load, open <Link href="/resources" className="text-sol-cyan hover:underline">Resources</Link>.
       </p>
       <SettingsSection

@@ -190,7 +190,7 @@ export function ComposeRolePicker({ picked, onPick, onDone, page, className = ""
           <RoleLine r={picked} handle />
           <StandingDot r={picked} withLabel />
         </button>
-        <span className="hidden sm:inline-flex items-center gap-1 text-meta text-sol-text-dim/70 shrink-0">
+        <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-sol-text-dim/70 shrink-0">
           <KeyCap size="xs">{ALT_CAP}</KeyCap><KeyCap size="xs">R</KeyCap> change
         </span>
         <button type="button" onClick={() => { onPick(null); onDone(); }} className="p-1 rounded text-sol-text-dim/70 hover:text-sol-red hover:bg-sol-red/10 transition-colors shrink-0" aria-label="Start a fresh session instead">
@@ -227,7 +227,7 @@ export function ComposeRolePicker({ picked, onPick, onDone, page, className = ""
           return (
             <li key={r.role._id} role="option" aria-selected={isHi} aria-disabled={dead || undefined} className="contents">
               {i === firstOther && (
-                <div className={`px-2.5 pb-1 text-meta text-sol-text-dim/60 ${i > 0 ? "mt-1 pt-1.5 border-t border-sol-border/30" : ""}`}>Other people&rsquo;s roles</div>
+                <div className={`px-2.5 pb-1 text-[10px] text-sol-text-dim/60 ${i > 0 ? "mt-1 pt-1.5 border-t border-sol-border/30" : ""}`}>Other people&rsquo;s roles</div>
               )}
               <button
                 type="button"
@@ -243,14 +243,14 @@ export function ComposeRolePicker({ picked, onPick, onDone, page, className = ""
                 <RoleFace role={r.role} size={20} />
                 <RoleLine r={r} handle={byHandle} />
                 {!dead && r.role.status !== "paused" && <StandingDot r={r} withLabel />}
-                {r.role.status === "paused" && <span className="shrink-0 text-meta text-sol-yellow/80">paused</span>}
-                {dead && <span className="shrink-0 text-meta text-sol-text-dim">no agent yet</span>}
+                {r.role.status === "paused" && <span className="shrink-0 text-[10px] text-sol-yellow/80">paused</span>}
+                {dead && <span className="shrink-0 text-[10px] text-sol-text-dim">no agent yet</span>}
               </button>
             </li>
           );
         })}
       </ul>
-      <div className="flex items-center gap-3 px-2.5 py-1.5 border-t border-sol-border/40 text-meta text-sol-text-dim/70">
+      <div className="flex items-center gap-3 px-2.5 py-1.5 border-t border-sol-border/40 text-[10px] text-sol-text-dim/70">
         <Hint keys={["↑", "↓"]} label="move" />
         <Hint keys={["↵"]} label="pick" />
         <Hint keys={["Esc"]} label="back" />
@@ -279,7 +279,7 @@ function StandingDot({ r, withLabel }: { r: RoleRecipient; withLabel?: boolean }
   const line = standingLineOf(r.role.standing);
   if (!line) return null;
   return (
-    <span className="inline-flex items-center gap-1 shrink-0 text-meta" style={{ color: line.color }} title={line.text ?? line.label}>
+    <span className="inline-flex items-center gap-1 shrink-0 text-[10px]" style={{ color: line.color }} title={line.text ?? line.label}>
       <span aria-hidden className="w-1.5 h-1.5 rounded-full" style={{ background: line.color }} />
       {withLabel && line.label}
     </span>

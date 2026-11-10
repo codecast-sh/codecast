@@ -168,7 +168,7 @@
   gap: 6px;
   padding: 3px 10px;
   border-radius: 999px;
-  font-size: var(--fs-meta);
+  font-size: 11px;
   font-weight: 600;
   color: var(--tone, var(--ink-muted));
   background: color-mix(in srgb, var(--tone, var(--ink-muted)) 12%, transparent);
@@ -191,7 +191,7 @@
 .share-callout > span {
   display: block;
   margin-bottom: 8px;
-  font-size: var(--fs-meta);
+  font-size: 11px;
   font-weight: 600;
   color: var(--tone, var(--accent));
 }
@@ -243,7 +243,7 @@
 .share-row-lead { flex-shrink: 0; width: 18px; color: var(--tone, var(--ink-dim)); }
 .share-row-main { min-width: 0; flex: 1; color: var(--ink); }
 .share-row-main p { margin: 4px 0 0; color: var(--ink-muted); font-size: 12px; }
-.share-row-trail { flex-shrink: 0; color: var(--ink-dim); font-size: var(--fs-meta); }
+.share-row-trail { flex-shrink: 0; color: var(--ink-dim); font-size: 11px; }
 
 /* Bullets: criteria, action items, metrics. */
 .share-bullets { list-style: none; margin: 0; padding: 0; }

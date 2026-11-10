@@ -21,7 +21,7 @@ export const CompactTurnCard = memo(function CompactTurnCard({ preview, messageC
     >
       <LogoIcon size={15} className="shrink-0 opacity-80" />
       <span className="flex-1 min-w-0 truncate text-[13px] text-sol-text-secondary">{preview || "Worked on the task"}</span>
-      {bits.length > 0 && <span className="shrink-0 text-meta text-sol-text-dim/70 tabular-nums">{bits.join(" · ")}</span>}
+      {bits.length > 0 && <span className="shrink-0 text-[10.5px] text-sol-text-dim/70 tabular-nums">{bits.join(" · ")}</span>}
       <ChevronDown className="w-3.5 h-3.5 shrink-0 text-sol-text-dim/60 group-hover/turn:text-sol-cyan transition-colors" />
     </button>
   );

@@ -72,7 +72,7 @@ export function PermissionRecordLine({ question, outcome, output, className }: {
         )}
       </div>
       {why && open && (
-        <pre className="m-0 ml-[34px] mt-1 max-w-[42rem] max-h-56 overflow-auto rounded-[var(--radius,8px)] border border-sol-border/70 bg-sol-bg-alt px-3 py-2 font-mono text-meta leading-relaxed text-sol-text-muted whitespace-pre-wrap break-words">{output!.trim()}</pre>
+        <pre className="m-0 ml-[34px] mt-1 max-w-[42rem] max-h-56 overflow-auto rounded-[var(--radius,8px)] border border-sol-border/70 bg-sol-bg-alt px-3 py-2 font-mono text-[11px] leading-relaxed text-sol-text-muted whitespace-pre-wrap break-words">{output!.trim()}</pre>
       )}
     </div>
   );

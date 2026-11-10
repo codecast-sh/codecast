@@ -5,10 +5,8 @@
 // run, and each answer lands beside the old one as it settles. Nothing ships
 // from a try. A case the problem came back after is picked first and its
 // result says whether the step still closes it the same way: the change that
-// does is the fix already tried. Each case is an agent replay on a machine,
-// so the press opens the shared review first (components/consequential).
+// does is the fix already tried.
 import { useMemo, useState } from "react";
-import { SwitchReview, type SwitchLedger } from "../../../consequential/ConsequentialSwitch";
 import type { LineStep } from "../../../../lib/line/lineModel";
 import { cameBackTryResult, cameBackTryWords, caseChanged, decisionAnswer, defaultTryPick, drawnWorkflowId, oncePerCase, triedCameBack, triesOf, tryCandidates, tryCaseWords, type LineTry } from "../../../../lib/line/lineActions";
 import { closeBackWords, decisionKey } from "../../../../lib/line/lineModel";
@@ -42,7 +40,6 @@ export function TryPanel({ model, step, draft, runs }: TrySlotProps) {
   const text = draft ?? step.prompt?.text ?? "";
   const diff = useMemo(() => (draft && step.prompt ? promptDiff(step.prompt.text, draft) : null), [draft, step.prompt]);
   const [error, setError] = useState<string | null>(null);
-  const [review, setReview] = useState(false);
 
   const toggle = (runId: string) => setPicked((p) => {
     const cur = p ?? chosen;
@@ -58,31 +55,6 @@ export function TryPanel({ model, step, draft, runs }: TrySlotProps) {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  };
-
-  // A price from this step's own past tests (what they cost per case), else none: a full line run's price would overstate one replay.
-  const perCase = (() => {
-    let usd = 0, n = 0;
-    for (const t of tries) if (t.cost > 0 && t.cases.length) { usd += t.cost; n += t.cases.length; }
-    return n ? usd / n : null;
-  })();
-  const ledger: SwitchLedger = {
-    name: draft ? "Test this edit" : "Run again",
-    subject: step.label,
-    shift: null,
-    figures: [
-      { value: String(chosen.length), label: chosen.length === 1 ? "agent replay starts" : "agent replays start", tone: "warn" },
-      perCase != null ? { value: `~${money(perCase * chosen.length)}`, label: "billed, from past tests", tone: "warn" } : { value: "$?", label: "not priced", tone: "warn" },
-    ],
-    rows: [
-      { k: "Runs on", v: (can && can.editable ? can.home?.machine : null) ?? "The machine the steps were pushed from" },
-      { k: "Instructions", v: draft ? "Your edit, unsaved" : "As they stand" },
-      { k: "Cases", v: `${chosen.length}`, list: candidates.filter((d) => chosen.includes(d.runId)).map((d) => d.caseRef ? `${d.caseRef} ${d.caseTitle}` : d.caseTitle) },
-      { k: "Writes", v: "Every one refused", tone: "ok" },
-      { k: "Ships", v: "Nothing", tone: "ok" },
-    ],
-    confirm: `${draft ? "Test" : "Run"} on ${chosen.length} ${chosen.length === 1 ? "case" : "cases"}`,
-    keep: "Not now",
   };
 
   if (!step.prompt) return <div className="lw-empty"><b>Nothing to test</b>The flow names this step without its instructions.</div>;
@@ -130,10 +102,9 @@ export function TryPanel({ model, step, draft, runs }: TrySlotProps) {
             })}
           </div>
           <div className="lw-try-go">
-            <button type="button" className="lw-act" data-hot="" aria-haspopup="dialog" onClick={() => setReview(true)} disabled={!!blocked} aria-busy={can === undefined || undefined} data-line-try-run>
+            <button type="button" className="lw-act" data-hot="" onClick={start} disabled={!!blocked} aria-busy={can === undefined || undefined} data-line-try-run>
               {can === undefined && workflowId ? <span className="lw-spin" aria-hidden /> : null}{draft ? "Test this edit" : "Run again"} on {chosen.length} {chosen.length === 1 ? "case" : "cases"}
             </button>
-            {review && <SwitchReview ledger={ledger} onClose={() => setReview(false)} onConfirm={() => { setReview(false); void start(); }} />}
             <span className="lw-try-fine" data-line-try-blocked={blocked ? "" : undefined}>{blocked ?? "Each case runs as the step would, where the steps are saved. Every write it attempts is refused; nothing ships."}</span>
           </div>
           {error && <div className="lw-save-note" data-tone="bad">{error}</div>}

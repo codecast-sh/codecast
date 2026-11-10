@@ -47,7 +47,7 @@ export function MetricsEditor({ metrics, watches, onSave, onCancel }: { metrics:
               type="button"
               aria-pressed={m.guardrail}
               onClick={() => set(i, { guardrail: !m.guardrail })}
-              className="h-7 rounded-md border px-1.5 text-meta transition-colors"
+              className="h-7 rounded-md border px-1.5 text-[11.5px] transition-colors"
               style={{ borderColor: m.guardrail ? "var(--sol-text-muted)" : HAIRLINE, color: m.guardrail ? "var(--sol-text)" : DIM }}
               title="A number the work must not make worse"
               data-metric-guardrail-toggle
@@ -63,7 +63,7 @@ export function MetricsEditor({ metrics, watches, onSave, onCancel }: { metrics:
         <span className="flex-1" />
         <FormButtons submit="Save" onCancel={onCancel} onSubmit={save} />
       </div>
-      <p className="text-meta" style={{ color: DIM }}>Write "under 5%" for a number to stay below.</p>
+      <p className="text-[11px]" style={{ color: DIM }}>Write "under 5%" for a number to stay below.</p>
     </div>
   );
 }

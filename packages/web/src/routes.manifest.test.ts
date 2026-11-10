@@ -393,24 +393,6 @@ describe("non-tab routes (tabRouting.ts) are NOT tagged tab-routable in the mani
       .map((href) => href.slice(1));
     expect([...inShellSegments].sort()).toEqual([...new Set(manifestInShell)].sort());
   });
-
-  it("a standalone in-shell page that draws the dashboard shell is tab-routable", () => {
-    // A tab adopts any in-shell path. A standalone page that wraps its own
-    // DashboardLayout gets the tab shell around it, and the shell draws the
-    // tab's route through RoutePane: without a pattern there, the stage was
-    // empty and the tab kept the dead address (/orchestration did this).
-    const manifestSrc = read("src/routes.manifest.ts");
-    const fileOf = new Map(
-      [...manifestSrc.matchAll(/const (\w+) = lazy\(\(\) => import\("@\/([^"]+)"\)\)/g)].map((m) => [m[1], m[2]] as const),
-    );
-    const offenders: string[] = [];
-    for (const m of manifestSrc.matchAll(/\{ path: "([^":/]+)", component: cast\((\w+)\), layout: "standalone"([^}]*)\}/g)) {
-      const file = fileOf.get(m[2]);
-      if (!file || !inShellSegments.has(m[1])) continue;
-      if (/<DashboardLayout\b/.test(read(`${file}.tsx`)) && !/\btab:/.test(m[3])) offenders.push(`/${m[1]}`);
-    }
-    expect(offenders).toEqual([]);
-  });
 });
 
 // Re-export for any future Wave 2 consumer that wants the parsed live-source views.

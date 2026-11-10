@@ -9,8 +9,7 @@ import { ScreenCursors } from "./ScreenCursors";
 import { Avatar } from "./Avatar";
 import { firstName } from "./speakers";
 import { ParticipantTag, PersonName } from "./GuestTag";
-import { isMuted, noFollowLeader, SPEAKING_RING, stageLattice, useIsSpeaking, useStageHost } from "./stageHost";
-import "./callSurface.css";
+import { isMuted, noFollowLeader, SPEAKING_RING, useStageHost } from "./stageHost";
 
 // THE STAGE'S PICTURE, apart from the app.
 //
@@ -81,8 +80,7 @@ export function AutoStage({
   roster: any[];
   cameras: ParticipantTile[];
   screens: ParticipantTile[];
-  /** Who is speaking, for a host with no reactive read of its own (useIsSpeaking). */
-  speaking?: ReadonlySet<string>;
+  speaking: Set<string>;
   phase: string;
   ringing?: StageGhost[];
   settledLine?: string | null;
@@ -91,20 +89,16 @@ export function AutoStage({
   const hero = (heroKey && screens.find((t) => t.key === heroKey)) || screens[0] || null;
   if (hero) {
     return (
-      // The faces file into a strip beside the share, or under it once the
-      // view itself is narrow (callSurface.css, .stage-fit): a phone, the
-      // call window with the thread open, a rail dragged wide.
-      <div className="stage-fit flex min-h-0 min-w-0 flex-1">
-      <div className="stage-split flex min-h-0 min-w-0 flex-1 gap-2">
-        <div className="relative min-h-0 min-w-0 flex-1">
-          <StageVideo tile={hero} speaking={speaking} contain />
+      <>
+        <div className="relative min-w-0 flex-1">
+          <StageVideo tile={hero} speaking={speaking.has(hero.identity)} contain />
           {screens.length > 1 && (
             <div className="absolute left-3 top-3 flex gap-1">
               {screens.map((t) => (
                 <button
                   key={t.key}
                   onClick={() => setHeroKey(t.key)}
-                  className={`rounded-full px-2.5 py-0.5 font-mono text-meta backdrop-blur transition-colors ${
+                  className={`rounded-full px-2.5 py-0.5 font-mono text-[11px] backdrop-blur transition-colors ${
                     t.key === hero.key
                       ? "bg-sol-violet/30 text-white"
                       : "bg-black/45 text-white/70 hover:text-white"
@@ -120,12 +114,14 @@ export function AutoStage({
           )}
         </div>
         {(cameras.length > 0 || roster.length > 0) && (
-          <div className="stage-strip flex w-[clamp(120px,22%,200px)] shrink-0 flex-col gap-2 overflow-y-auto">
+          // On a phone the strip runs under the share instead of beside it:
+          // a 200px column would leave the share a third of the screen.
+          <div className="ml-2 flex w-[200px] shrink-0 flex-col gap-2 overflow-y-auto max-sm:ml-0 max-sm:mt-2 max-sm:w-full max-sm:flex-row max-sm:items-center max-sm:overflow-x-auto max-sm:overflow-y-hidden">
             {cameras.map((t) => (
               <StageVideo
                 key={t.key}
                 tile={t}
-                speaking={speaking}
+                speaking={speaking.has(t.identity)}
                 muted={isMuted(roster, t.identity)}
                 small
               />
@@ -133,20 +129,26 @@ export function AutoStage({
             <VoiceRows roster={roster} cameras={cameras} speaking={speaking} small />
           </div>
         )}
-      </div>
-      </div>
+      </>
     );
   }
   if (cameras.length > 0) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-        {/* Every camera gets a cell: as many equal rows as the count needs. */}
-        <div className="grid min-h-0 flex-1 gap-2" style={stageLattice(cameras.length)}>
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div
+          className={`grid min-h-0 flex-1 gap-2 ${
+            cameras.length === 1
+              ? "grid-cols-1"
+              : cameras.length === 2
+                ? "grid-cols-2"
+                : "grid-cols-2 grid-rows-2"
+          }`}
+        >
           {cameras.map((t) => (
             <StageVideo
               key={t.key}
               tile={t}
-              speaking={speaking}
+              speaking={speaking.has(t.identity)}
               muted={isMuted(roster, t.identity)}
             />
           ))}
@@ -180,8 +182,7 @@ export function SpeakerStage({
   roster: any[];
   cameras: ParticipantTile[];
   screens: ParticipantTile[];
-  /** Who is speaking, for a host with no reactive read of its own (useIsSpeaking). */
-  speaking?: ReadonlySet<string>;
+  speaking: Set<string>;
   focusId: string | null;
   pinned: string | null;
   onPin: (id: string) => void;
@@ -196,25 +197,28 @@ export function SpeakerStage({
     roster.find((m) => String(m.user_id) === focusMemberId) ?? roster[0];
   const others = [...screens, ...cameras].filter((t) => t.key !== focus?.key);
   const onCamera = new Set(cameras.map((c) => c.identity));
-  const stripVoices = roster.filter(
-    (m) => !onCamera.has(String(m.user_id)) && String(m.user_id) !== String(focusMember?.user_id ?? ""),
-  );
 
   return (
-    // The strip sits beside the focus, or under it once the view is narrow
-    // (callSurface.css, .stage-fit).
-    <div className="stage-fit flex min-h-0 min-w-0 flex-1">
-    <div className="stage-split flex min-h-0 min-w-0 flex-1 gap-2">
+    <div className="flex min-h-0 min-w-0 flex-1 gap-2">
       <div className="relative min-h-0 min-w-0 flex-1">
         {focus ? (
           <StageVideo
             tile={focus}
-            speaking={speaking}
+            speaking={speaking.has(focus.identity)}
             muted={isMuted(roster, focus.identity)}
             contain={focus.kind === "screen"}
           />
         ) : focusMember ? (
-          <FocusFace m={focusMember} speaking={speaking} />
+          <div
+            className={`flex h-full w-full flex-col items-center justify-center gap-4 rounded-xl bg-white/[0.05] transition-shadow ${
+              speaking.has(String(focusMember.user_id)) ? SPEAKING_RING : ""
+            }`}
+          >
+            <Avatar m={focusMember} size={120} />
+            <span className="flex items-center gap-2 font-mono text-[15px] text-sol-text">
+              <PersonName identity={String(focusMember.user_id)} name={focusMember.user_name} />
+            </span>
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center font-mono text-[13px] text-sol-text-muted">
             just you so far
@@ -223,74 +227,52 @@ export function SpeakerStage({
         {pinned && (
           <button
             onClick={() => onPin(pinned)}
-            className="absolute left-3 top-3 rounded-full bg-black/45 px-2.5 py-0.5 font-mono text-meta text-sol-yellow backdrop-blur transition-colors hover:text-white"
+            className="absolute left-3 top-3 rounded-full bg-black/45 px-2.5 py-0.5 font-mono text-[11px] text-sol-yellow backdrop-blur transition-colors hover:text-white"
             title="Unpin: follow the active speaker again"
           >
             pinned · unpin
           </button>
         )}
       </div>
-      {(others.length > 0 || stripVoices.length > 0) && (
-        <div className="stage-strip flex w-[clamp(120px,22%,200px)] shrink-0 flex-col gap-2 overflow-y-auto">
-          {others.map((t) => (
+      <div className="flex w-[200px] shrink-0 flex-col gap-2 overflow-y-auto">
+        {others.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => onPin(t.identity)}
+            title="Pin this tile"
+            className="rounded-lg text-left transition-opacity hover:opacity-85"
+          >
+            <StageVideo
+              tile={t}
+              speaking={speaking.has(t.identity)}
+              muted={isMuted(roster, t.identity)}
+              small
+            />
+          </button>
+        ))}
+        {roster
+          .filter(
+            (m) =>
+              !onCamera.has(String(m.user_id)) &&
+              String(m.user_id) !== String(focusMember?.user_id ?? ""),
+          )
+          .map((m) => (
+            <PersonMenuArea key={m.user_id} identity={String(m.user_id)} name={m.user_name}>
             <button
-              key={t.key}
-              onClick={() => onPin(t.identity)}
-              title="Pin this tile"
-              className="shrink-0 rounded-lg text-left transition-opacity hover:opacity-85"
+              onClick={() => onPin(String(m.user_id))}
+              className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
+                speaking.has(String(m.user_id)) ? "bg-sol-cyan/10" : ""
+              }`}
+              title="Pin this person"
             >
-              <StageVideo
-                tile={t}
-                speaking={speaking}
-                muted={isMuted(roster, t.identity)}
-                small
-              />
+              <Avatar m={m} size={24} />
+              <PersonName identity={String(m.user_id)} name={m.user_name} className="font-mono text-[12px] text-sol-text" />
+              {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
             </button>
+            </PersonMenuArea>
           ))}
-          {stripVoices.map((m) => (
-            <StripVoiceRow key={m.user_id} m={m} speaking={speaking} onPin={onPin} />
-          ))}
-        </div>
-      )}
+      </div>
     </div>
-    </div>
-  );
-}
-
-/** The face that holds the stage in Speaker view when nobody is on camera. */
-function FocusFace({ m, speaking }: { m: any; speaking?: ReadonlySet<string> }) {
-  const on = useIsSpeaking(String(m.user_id), speaking);
-  return (
-    <div
-      className={`flex h-full w-full flex-col items-center justify-center gap-4 rounded-xl bg-white/[0.05] transition-shadow ${
-        on ? SPEAKING_RING : ""
-      }`}
-    >
-      <Avatar m={m} size={120} />
-      <span className="flex items-center gap-2 font-mono text-[15px] text-sol-text">
-        <PersonName identity={String(m.user_id)} name={m.user_name} />
-      </span>
-    </div>
-  );
-}
-
-/** A voice-only person in Speaker view's strip: a press pins them. */
-function StripVoiceRow({ m, speaking, onPin }: { m: any; speaking?: ReadonlySet<string>; onPin: (id: string) => void }) {
-  const on = useIsSpeaking(String(m.user_id), speaking);
-  return (
-    <PersonMenuArea identity={String(m.user_id)} name={m.user_name} className="shrink-0">
-      <button
-        onClick={() => onPin(String(m.user_id))}
-        className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
-          on ? "bg-sol-cyan/10" : ""
-        }`}
-        title="Pin this person"
-      >
-        <Avatar m={m} size={24} />
-        <PersonName identity={String(m.user_id)} name={m.user_name} className="font-mono text-[12px] text-sol-text" />
-        {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
-      </button>
-    </PersonMenuArea>
   );
 }
 
@@ -304,27 +286,44 @@ export function GridStage({
   roster: any[];
   cameras: ParticipantTile[];
   screens: ParticipantTile[];
-  /** Who is speaking, for a host with no reactive read of its own (useIsSpeaking). */
-  speaking?: ReadonlySet<string>;
+  speaking: Set<string>;
 }) {
   const onCamera = new Set(cameras.map((c) => c.identity));
   const voices = roster.filter((m) => !onCamera.has(String(m.user_id)));
   const n = screens.length + cameras.length + voices.length;
+  const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
   return (
-    <div className="grid min-h-0 min-w-0 flex-1 gap-2" style={stageLattice(n)}>
+    <div
+      className="grid min-h-0 min-w-0 flex-1 gap-2"
+      style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+    >
       {screens.map((t) => (
-        <StageVideo key={t.key} tile={t} speaking={speaking} contain />
+        <StageVideo key={t.key} tile={t} speaking={speaking.has(t.identity)} contain />
       ))}
       {cameras.map((t) => (
         <StageVideo
           key={t.key}
           tile={t}
-          speaking={speaking}
+          speaking={speaking.has(t.identity)}
           muted={isMuted(roster, t.identity)}
         />
       ))}
       {voices.map((m) => (
-        <GridVoiceTile key={m.user_id} m={m} speaking={speaking} />
+        <PersonMenuArea
+          key={m.user_id}
+          identity={String(m.user_id)}
+          name={m.user_name}
+          className={`group flex flex-col items-center justify-center gap-2.5 rounded-xl bg-white/[0.05] transition-shadow ${
+            speaking.has(String(m.user_id)) ? SPEAKING_RING : ""
+          }`}
+        >
+          <Avatar m={m} size={64} />
+          <div className="relative flex max-w-full items-center gap-1.5 px-2">
+            <PersonName identity={String(m.user_id)} name={m.user_name} className="font-mono text-[12.5px] text-sol-text" />
+            {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
+            <SideActions identity={String(m.user_id)} name={m.user_name} />
+          </div>
+        </PersonMenuArea>
       ))}
       {n === 0 && (
         <div className="flex items-center justify-center font-mono text-[13px] text-sol-text-muted">
@@ -335,35 +334,12 @@ export function GridStage({
   );
 }
 
-/** A voice-only person's cell in the grid. */
-function GridVoiceTile({ m, speaking }: { m: any; speaking?: ReadonlySet<string> }) {
-  const on = useIsSpeaking(String(m.user_id), speaking);
-  return (
-    <PersonMenuArea
-      identity={String(m.user_id)}
-      name={m.user_name}
-      className={`group flex min-h-0 flex-col items-center justify-center gap-2.5 rounded-xl bg-white/[0.05] transition-shadow ${
-        on ? SPEAKING_RING : ""
-      }`}
-    >
-      <Avatar m={m} size={64} />
-      <div className="relative flex max-w-full items-center gap-1.5 px-2">
-        <PersonName identity={String(m.user_id)} name={m.user_name} className="font-mono text-[12.5px] text-sol-text" />
-        {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
-        <SideActions identity={String(m.user_id)} name={m.user_name} />
-      </div>
-    </PersonMenuArea>
-  );
-}
-
 // One video surface. `contain` letterboxes (screen shares must not crop);
 // cameras cover. The name chip is fixed black-on-white so it reads over any
 // video in any theme (the mini window renders these in the app's theme).
-// The tile reads its own speaking state (useIsSpeaking), so a change of who
-// is talking redraws the tiles it changes and nothing else.
 type StageVideoProps = {
   tile: ParticipantTile;
-  speaking?: ReadonlySet<string>;
+  speaking: boolean;
   muted?: boolean;
   small?: boolean;
   contain?: boolean;
@@ -381,12 +357,12 @@ function OwnScreenTile({ tile, small }: { tile: ParticipantTile; small?: boolean
     <div
       data-own-screen
       className={`relative flex flex-col items-center justify-center gap-2 overflow-hidden border border-sol-green/25 bg-sol-green/[0.06] ${
-        small ? "stage-tile-small aspect-video w-full shrink-0 rounded-lg" : "h-full w-full rounded-xl"
+        small ? "aspect-video w-full rounded-lg max-sm:w-36 max-sm:shrink-0" : "h-full w-full rounded-xl"
       }`}
     >
       <MonitorUp className={`text-sol-green ${small ? "h-5 w-5" : "h-9 w-9"}`} />
       {!small && <span className="font-mono text-[13px] text-sol-text">your screen is live</span>}
-      <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-full bg-black/45 px-2 py-px font-mono text-meta text-white/90 backdrop-blur">
+      <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-full bg-black/45 px-2 py-px font-mono text-[11px] text-white/90 backdrop-blur">
         <span className="h-1.5 w-1.5 rounded-full bg-sol-green" />
         <PersonName identity={tile.identity} name={tile.name} you />
         <span className="shrink-0">· screen</span>
@@ -395,9 +371,8 @@ function OwnScreenTile({ tile, small }: { tile: ParticipantTile; small?: boolean
   );
 }
 
-function TrackVideo({ tile, speaking: speakingSet, muted, small, contain }: StageVideoProps) {
+function TrackVideo({ tile, speaking, muted, small, contain }: StageVideoProps) {
   const host = useStageHost();
-  const speaking = useIsSpeaking(tile.identity, speakingSet);
   const ref = useRef<HTMLVideoElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   useWatchEffect(() => {
@@ -435,7 +410,7 @@ function TrackVideo({ tile, speaking: speakingSet, muted, small, contain }: Stag
       onDoubleClick={zoom.canFullscreen ? zoom.toggleFullscreen : undefined}
       className={`group relative overflow-hidden bg-black/60 transition-shadow duration-300 ${
         speaking ? SPEAKING_RING : ""
-      } ${small ? "stage-tile-small aspect-video w-full shrink-0 rounded-lg" : "h-full w-full rounded-xl"}`}
+      } ${small ? "aspect-video w-full rounded-lg max-sm:w-36 max-sm:shrink-0" : "h-full w-full rounded-xl"}`}
     >
       <div
         ref={scrollRef}
@@ -462,7 +437,7 @@ function TrackVideo({ tile, speaking: speakingSet, muted, small, contain }: Stag
       <span className="absolute bottom-2 left-2 flex items-center gap-1.5">
         <span
           className={`flex items-center gap-1.5 rounded-full bg-black/45 font-mono text-white/90 backdrop-blur ${
-            small ? "px-2 py-px text-meta" : "px-2.5 py-0.5 text-[12px]"
+            small ? "px-2 py-px text-[11px]" : "px-2.5 py-0.5 text-[12px]"
           }`}
         >
           <PersonName identity={tile.identity} name={tile.name} you={tile.isLocal} />
@@ -480,7 +455,7 @@ function TrackVideo({ tile, speaking: speakingSet, muted, small, contain }: Stag
       {zoomable && (
         <span
           onDoubleClick={(e) => e.stopPropagation()}
-          className={`absolute bottom-2 right-2 flex items-center gap-0.5 rounded-full bg-black/45 p-0.5 font-mono text-meta text-white/85 backdrop-blur transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100 ${
+          className={`absolute bottom-2 right-2 flex items-center gap-0.5 rounded-full bg-black/45 p-0.5 font-mono text-[11.5px] text-white/85 backdrop-blur transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100 ${
             zoom.actual || zoom.fullscreen ? "opacity-100" : "opacity-0"
           }`}
         >
@@ -519,7 +494,7 @@ export function VoiceRows({
 }: {
   roster: any[];
   cameras: ParticipantTile[];
-  speaking?: ReadonlySet<string>;
+  speaking: Set<string>;
   small?: boolean;
 }) {
   const onCamera = new Set(cameras.map((c) => c.identity));
@@ -528,48 +503,33 @@ export function VoiceRows({
   const followLeaderId = (host.useFollowLeader ?? noFollowLeader)();
   if (voices.length === 0) return null;
   return (
-    // In the strip a column of rows, or one row of them once the strip runs
-    // under the share (callSurface.css, .stage-voices).
-    <div className={small ? "stage-voices flex shrink-0 flex-col gap-1" : "flex flex-wrap gap-2"}>
+    <div className={small ? "space-y-1 max-sm:flex max-sm:shrink-0 max-sm:gap-1 max-sm:space-y-0" : "flex flex-wrap gap-2"}>
       {/* A row wraps rather than squeeze: in the 200px side column a guest's
           remove, once pressed, asks "remove Pat?" and offers the link too,
           and on one line that crushed the face and the name it is asking
           about. Its actions take their own line instead. */}
       {voices.map((m) => (
-        <VoiceRow key={m.user_id} m={m} speaking={speaking} followed={followLeaderId === String(m.user_id)} />
+        <PersonMenuArea
+          key={m.user_id}
+          identity={String(m.user_id)}
+          name={m.user_name}
+          className={`group flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-2 py-1.5 transition-colors ${
+            speaking.has(String(m.user_id)) ? "bg-sol-cyan/10" : ""
+          }`}
+        >
+          <Avatar m={m} size={22} followed={followLeaderId === String(m.user_id)} />
+          <PersonName identity={String(m.user_id)} name={m.user_name} className="font-mono text-[12px] text-sol-text" />
+          {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            <PersonActions identity={String(m.user_id)} name={m.user_name} variant="row" />
+            {host.FollowChip && callParticipantKind(String(m.user_id)) === "person" && (
+              <host.FollowChip identity={String(m.user_id)} name={m.user_name} variant="row" />
+            )}
+          </span>
+        </PersonMenuArea>
       ))}
     </div>
   );
-}
-
-function VoiceRow({ m, speaking, followed }: { m: any; speaking?: ReadonlySet<string>; followed: boolean }) {
-  const host = useStageHost();
-  const on = useIsSpeaking(String(m.user_id), speaking);
-  return (
-    <PersonMenuArea
-      identity={String(m.user_id)}
-      name={m.user_name}
-      className={`group flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-2 py-1.5 transition-colors ${
-        on ? "bg-sol-cyan/10" : ""
-      }`}
-    >
-      <Avatar m={m} size={22} followed={followed} />
-      <PersonName identity={String(m.user_id)} name={m.user_name} className="font-mono text-[12px] text-sol-text" />
-      {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
-      <span className="ml-auto flex shrink-0 items-center gap-1">
-        <PersonActions identity={String(m.user_id)} name={m.user_name} variant="row" />
-        {host.FollowChip && callParticipantKind(String(m.user_id)) === "person" && (
-          <host.FollowChip identity={String(m.user_id)} name={m.user_name} variant="row" />
-        )}
-      </span>
-    </PersonMenuArea>
-  );
-}
-
-/** The voice-only stage's face size and spacing by how many faces it holds:
- *  a dozen 88px faces overflow a call window, so a big room steps down. */
-function audioFaceScale(n: number): { size: number; gap: string } {
-  return n > 9 ? { size: 48, gap: "gap-4" } : n > 6 ? { size: 64, gap: "gap-6" } : { size: 88, gap: "gap-10" };
 }
 
 // Nobody on camera: large avatars breathing on the stage, speaking ring live.
@@ -581,7 +541,7 @@ export function AudioOnlyStage({
   settledLine,
 }: {
   roster: any[];
-  speaking?: ReadonlySet<string>;
+  speaking: Set<string>;
   phase: string;
   ringing?: StageGhost[];
   settledLine?: string | null;
@@ -592,13 +552,9 @@ export function AudioOnlyStage({
   // "these three are on their way" rather than "just you so far". A guest
   // who was let in and is still on the way in sits the same way.
   const ghosts = ringing.filter((r) => !inRoom.has(r.user_id));
-  const scale = audioFaceScale(roster.length + ghosts.length);
   return (
-    // Centred while the faces fit, scrolled once they do not: the auto
-    // margins collapse instead of pushing the first row up under the header.
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center overflow-y-auto">
-      <div className="my-auto flex w-full flex-col items-center gap-6 py-2">
-      <div className={`flex flex-wrap items-center justify-center ${scale.gap}`}>
+    <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-6">
+      <div className="flex flex-wrap items-center justify-center gap-10">
         {roster.length === 0 && ghosts.length === 0 && (
           <span className="font-mono text-[13px] text-sol-text-muted">
             {phase === "connecting" ? "connecting…" : phase === "ringing_out" ? "ringing…" : "just you so far"}
@@ -607,7 +563,7 @@ export function AudioOnlyStage({
         {ghosts.map((r) => (
           <div key={`ring:${r.user_id}`} className="flex flex-col items-center gap-3 opacity-60">
             <div className="animate-pulse rounded-full ring-2 ring-sol-violet/40 ring-offset-4 ring-offset-sol-base03">
-              <Avatar m={r} size={scale.size} />
+              <Avatar m={r} size={88} />
             </div>
             <span className="flex items-center gap-1.5 font-mono text-[12.5px] text-sol-text-muted">
               {firstName(r.user_name)}
@@ -617,7 +573,23 @@ export function AudioOnlyStage({
           </div>
         ))}
         {roster.map((m) => (
-          <AudioFace key={m.user_id} m={m} size={scale.size} speaking={speaking} />
+          <PersonMenuArea key={m.user_id} identity={String(m.user_id)} name={m.user_name} className="group flex flex-col items-center gap-3">
+            <div
+              className={`rounded-full transition-all duration-300 ${
+                speaking.has(String(m.user_id))
+                  ? "ring-2 ring-sol-cyan/80 ring-offset-4 ring-offset-sol-base03 shadow-[0_0_0_8px_rgba(42,161,152,0.14)]"
+                  : ""
+              }`}
+            >
+              <Avatar m={m} size={88} />
+            </div>
+            <div className="relative flex max-w-[160px] items-center gap-1.5">
+              <PersonName identity={String(m.user_id)} name={m.user_name} className="font-mono text-[13px] text-sol-text" />
+              {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
+              {m.sharing && <MonitorUp className="h-3 w-3 shrink-0 text-sol-violet" />}
+              <SideActions identity={String(m.user_id)} name={m.user_name} />
+            </div>
+          </PersonMenuArea>
         ))}
       </div>
       {settledLine && (
@@ -625,29 +597,7 @@ export function AudioOnlyStage({
           {settledLine.toLowerCase()}
         </span>
       )}
-      </div>
     </div>
-  );
-}
-
-function AudioFace({ m, size, speaking }: { m: any; size: number; speaking?: ReadonlySet<string> }) {
-  const on = useIsSpeaking(String(m.user_id), speaking);
-  return (
-    <PersonMenuArea identity={String(m.user_id)} name={m.user_name} className="group flex flex-col items-center gap-3">
-      <div
-        className={`rounded-full transition-all duration-300 ${
-          on ? "ring-2 ring-sol-cyan/80 ring-offset-4 ring-offset-sol-base03 shadow-[0_0_0_8px_rgba(42,161,152,0.14)]" : ""
-        }`}
-      >
-        <Avatar m={m} size={size} />
-      </div>
-      <div className="relative flex max-w-[160px] items-center gap-1.5">
-        <PersonName identity={String(m.user_id)} name={m.user_name} className="font-mono text-[13px] text-sol-text" />
-        {m.muted && <MicOff className="h-3 w-3 shrink-0 text-sol-text-muted" />}
-        {m.sharing && <MonitorUp className="h-3 w-3 shrink-0 text-sol-violet" />}
-        <SideActions identity={String(m.user_id)} name={m.user_name} />
-      </div>
-    </PersonMenuArea>
   );
 }
 

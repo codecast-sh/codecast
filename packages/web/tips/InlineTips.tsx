@@ -53,8 +53,7 @@ export function InlineTips() {
         )}
         <button
           onClick={() => dismiss(tip.id)}
-          className="p-0.5 text-sol-text-dim/0 group-hover/tip:text-sol-text-dim focus-visible:text-sol-text-dim hover:!text-sol-text transition-colors flex-shrink-0"
-          aria-label="Dismiss tip"
+          className="p-0.5 text-sol-text-dim/0 group-hover/tip:text-sol-text-dim hover:!text-sol-text transition-colors flex-shrink-0"
         >
           <X className="w-3 h-3" />
         </button>

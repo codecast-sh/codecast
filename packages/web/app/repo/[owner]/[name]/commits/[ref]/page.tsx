@@ -50,8 +50,8 @@ function HistoryRail({ repository, branch }: { repository: string; branch: strin
   return (
     <aside className="repo-rail w-[320px] shrink-0 self-stretch border-l border-sol-border/50 bg-sol-bg-alt/20">
       <div className="px-4 py-3 border-b border-sol-border/30">
-        <h2 className="text-mark uppercase tracking-wider text-sol-text-dim">Recent activity</h2>
-        <p className="mt-0.5 text-meta text-sol-text-dim">{branch}</p>
+        <h2 className="text-[10px] uppercase tracking-wider text-sol-text-dim">Recent activity</h2>
+        <p className="mt-0.5 text-[11px] text-sol-text-dim">{branch}</p>
       </div>
       <div className="px-2 py-2 space-y-0.5">
         {events.map((event: any) => (
@@ -199,7 +199,7 @@ function CommitsContent({
                       {commit.subject || commit.sha.slice(0, 7)}
                     </Link>
                   </div>
-                  <div className="mt-1 flex items-center gap-2 flex-wrap text-meta text-sol-text-dim">
+                  <div className="mt-1 flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim">
                     <Link
                       href={commitPageHref(repository, commit.sha, family)}
                       className="font-mono hover:text-sol-text transition-colors"
@@ -239,14 +239,14 @@ function CommitsContent({
                 <div className="repo-row-actions flex items-center gap-1 shrink-0">
                   <Link
                     href={commitPageHref(repository, commit.sha, family)}
-                    className="flex items-center gap-1 h-6 rounded border border-sol-border/50 px-1.5 text-meta text-sol-text-muted hover:text-sol-text"
+                    className="flex items-center gap-1 h-6 rounded border border-sol-border/50 px-1.5 text-[10px] text-sol-text-muted hover:text-sol-text"
                   >
                     <GitCommitHorizontal className="w-3 h-3" />
                     Open commit
                   </Link>
                   <Link
                     href={repoTreeHref(repository, commit.sha, undefined, family)}
-                    className="flex items-center gap-1 h-6 rounded border border-sol-border/50 px-1.5 text-meta text-sol-text-muted hover:text-sol-text"
+                    className="flex items-center gap-1 h-6 rounded border border-sol-border/50 px-1.5 text-[10px] text-sol-text-muted hover:text-sol-text"
                   >
                     <FileCode2 className="w-3 h-3" />
                     Browse tree
@@ -259,7 +259,7 @@ function CommitsContent({
           {log.commits.length > 0 && (
             <div className="flex justify-center py-6">
               {log.exhausted ? (
-                <span className="text-meta text-sol-text-dim">That is the whole history we can read.</span>
+                <span className="text-[11px] text-sol-text-dim">That is the whole history we can read.</span>
               ) : (
                 <Button variant="outline" size="sm" onClick={log.loadOlder} disabled={log.loadingMore}>
                   {log.loadingMore ? "Reading" : "Load older"}

@@ -75,7 +75,7 @@ export function IntentHeader({ accent = INITIATIVE_ACCENT, back, glyph, title, o
 
 /** The id beside a title, as the sheet shows it: quiet, in the mono face. */
 export function IntentIdChip({ id }: { id: string }) {
-  return <span className="shrink-0 whitespace-nowrap font-mono text-meta" style={{ color: "var(--sol-text-dim)" }} data-intent-id>{id}</span>;
+  return <span className="shrink-0 whitespace-nowrap font-mono text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-intent-id>{id}</span>;
 }
 
 function IntentTitle({ title, onRename, label = "Title", accent, phone, data }: { title: string; onRename?: (next: string) => void; label?: string; accent: string; phone?: boolean; data?: DataAttrs }) {
@@ -186,7 +186,7 @@ export function IntentTargetChip({ day, onCommit, onClear, label, emptyLabel, ac
     return (
       <button type="button" onClick={() => { open.current = true; setEditing(true); }} className="inline-flex items-center gap-1.5 -mx-1 px-1 h-6 rounded-md transition-colors hover:bg-sol-bg-highlight/70" title={label} data-intent-target={day ?? ""} {...data}>
         <CalendarDays className="w-3.5 h-3.5" style={{ color: "var(--sol-text-dim)" }} />
-        {children ?? <span className="text-meta" style={{ color: "var(--sol-text-dim)" }}>{emptyLabel}</span>}
+        {children ?? <span className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>{emptyLabel}</span>}
       </button>
     );
   }
@@ -196,7 +196,7 @@ export function IntentTargetChip({ day, onCommit, onClear, label, emptyLabel, ac
         type="date"
         autoFocus
         defaultValue={day ?? ""}
-        className="text-meta bg-transparent outline-none tabular-nums border-b"
+        className="text-[11.5px] bg-transparent outline-none tabular-nums border-b"
         style={{ color: "var(--sol-text)", borderColor: accent }}
         onBlur={(e) => close(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter") close(e.currentTarget.value); if (e.key === "Escape") close(); }}
@@ -204,7 +204,7 @@ export function IntentTargetChip({ day, onCommit, onClear, label, emptyLabel, ac
       />
       {day && (
         // mousedown would blur the field and write the day it holds before the click lands
-        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { close(); onClear(); }} className="text-meta transition-colors hover:text-sol-red" style={{ color: "var(--sol-text-dim)" }} data-intent-target-clear>
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { close(); onClear(); }} className="text-[10.5px] transition-colors hover:text-sol-red" style={{ color: "var(--sol-text-dim)" }} data-intent-target-clear>
           Clear
         </button>
       )}

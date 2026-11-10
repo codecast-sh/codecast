@@ -9,7 +9,7 @@
 .mx-states { display: flex; gap: 4px; flex-wrap: wrap; }
 .mx-state {
   display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 12px;
-  font-size: var(--fs-meta); color: var(--sol-text-muted); border: 1px solid var(--osx-line); background: transparent;
+  font-size: 11.5px; color: var(--sol-text-muted); border: 1px solid var(--osx-line); background: transparent;
   white-space: nowrap;
 }
 .mx-state b { font-weight: 600; color: var(--sol-text); font-variant-numeric: tabular-nums; }
@@ -18,13 +18,13 @@
 .mx-state[aria-pressed="true"] { color: var(--sol-text); border-color: transparent; background: color-mix(in srgb, var(--ink) 14%, transparent); }
 .mx-state[data-zero] { opacity: 0.45; }
 .mx-seg { display: inline-flex; flex-shrink: 0; border: 1px solid var(--osx-line); border-radius: 7px; overflow: hidden; background: transparent; }
-.mx-seg button { height: 24px; padding: 0 8px; font-size: var(--fs-meta); color: var(--sol-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mx-seg button { height: 24px; padding: 0 8px; font-size: 11.5px; color: var(--sol-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mx-seg button:disabled { opacity: 0.4; cursor: default; }
 .mx-seg button + button { border-left: 1px solid var(--osx-line); }
 .mx-seg button:hover { color: var(--sol-text); }
 .mx-seg button[aria-pressed="true"] { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 9%, transparent); }
 .mx-select, .mx-search, .mx-input {
-  height: 24px; padding: 0 8px; border-radius: 7px; font-size: var(--fs-meta);
+  height: 24px; padding: 0 8px; border-radius: 7px; font-size: 11.5px;
   border: 1px solid var(--osx-line); background: var(--sol-card); color: var(--sol-text);
 }
 .mx-search { width: 160px; }
@@ -47,22 +47,22 @@
 .mx-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sol-text); font-weight: 500; }
 .mx-value-row { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 4px; min-width: 0; flex-wrap: wrap; }
 .mx-value { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--sol-text); }
-.mx-delta { font-size: var(--fs-meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mx-delta { font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mx-delta[data-tone="bad"] { color: var(--sol-red); }
 .mx-delta[data-tone="good"] { color: var(--sol-green); }
 .mx-delta[data-tone="flat"] { color: var(--sol-text-dim); }
-.mx-line-tag { font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.mx-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: var(--fs-meta); color: var(--sol-text-dim); min-width: 0; }
+.mx-line-tag { font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mx-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; color: var(--sol-text-dim); min-width: 0; }
 .mx-foot > * { white-space: nowrap; }
 .mx-foot .mx-src { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
-.mx-health { display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 7px; border-radius: 9px; font-size: var(--fs-meta); font-weight: 500; white-space: nowrap; color: var(--ink); background: color-mix(in srgb, var(--ink) 13%, transparent); }
+.mx-health { display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 7px; border-radius: 9px; font-size: 10.5px; font-weight: 500; white-space: nowrap; color: var(--ink); background: color-mix(in srgb, var(--ink) 13%, transparent); }
 .mx-health svg { width: 11px; height: 11px; }
 .mx-health[data-muted] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 40%, transparent); }
 
 /* The table mode. */
 .mx-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.mx-table th { text-align: left; font-weight: 500; font-size: var(--fs-meta); color: var(--sol-text-dim); padding: 6px 8px; border-bottom: 1px solid var(--osx-line); white-space: nowrap; }
+.mx-table th { text-align: left; font-weight: 500; font-size: 11px; color: var(--sol-text-dim); padding: 6px 8px; border-bottom: 1px solid var(--osx-line); white-space: nowrap; }
 .mx-table th button { color: inherit; }
 .mx-table th button:hover, .mx-table th[aria-sort] button { color: var(--sol-text); }
 .mx-table td { padding: 5px 8px; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent); vertical-align: middle; white-space: nowrap; }
@@ -81,7 +81,7 @@
 /* The state pill already says how long an alert has run: the Alerting column goes first when even the core columns are tight. */
 @container (max-width: 520px) { .mx-table .mx-col-0 { display: none; } }
 @container (max-width: 600px) { .mx-table .mx-name { max-width: 150px; } .mx-table th, .mx-table td { padding-left: 5px; padding-right: 5px; } }
-.mx-keys { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.mx-keys { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-text-dim); }
 
 .mx-empty-state { max-width: 460px; margin: 56px auto; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .mx-empty-state h2 { font-size: 13.5px; font-weight: 600; }
@@ -92,7 +92,7 @@
 .mx-kv { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px 10px; font-size: 12px; align-items: baseline; }
 .mx-kv dt { color: var(--sol-text-dim); }
 .mx-kv dd { min-width: 0; overflow-wrap: anywhere; }
-.mx-code { margin: 0; padding: 10px 12px; font-size: var(--fs-meta); line-height: 1.55; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; font-family: var(--font-mono, ui-monospace, monospace); background: var(--sol-bg); border-top: 1px solid var(--osx-line); }
+.mx-code { margin: 0; padding: 10px 12px; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; font-family: var(--font-mono, ui-monospace, monospace); background: var(--sol-bg); border-top: 1px solid var(--osx-line); }
 .mx-code .k { color: var(--sol-magenta); }
 .mx-code .s { color: var(--sol-green); }
 .mx-code .n { color: var(--sol-orange); }
@@ -107,7 +107,7 @@
 .mx-form label { color: var(--sol-text-dim); }
 .mx-form .mx-input { width: 100%; }
 .mx-form-row { display: flex; gap: 6px; align-items: center; min-width: 0; }
-.mx-problem { grid-column: 1 / -1; font-size: var(--fs-meta); color: var(--sol-red); }
+.mx-problem { grid-column: 1 / -1; font-size: 11.5px; color: var(--sol-red); }
 .mx-error { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--sol-orange); padding: 9px 12px; border-radius: 8px; margin-top: 12px; border: 1px solid color-mix(in srgb, var(--sol-orange) 45%, var(--sol-border)); background: color-mix(in srgb, var(--sol-orange) 7%, var(--sol-bg)); }
 .mx-error svg { flex-shrink: 0; margin-top: 1px; }
 
@@ -125,8 +125,8 @@
 /* Pickers in the create sheet: a reader with typed arguments, an insight from the project. */
 .mx-picker { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .mx-picker > .mx-select { width: 100%; }
-.mx-picker-desc { font-size: var(--fs-meta); color: var(--sol-text-dim); }
-.mx-arg { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; align-items: center; font-size: var(--fs-meta); color: var(--sol-text-muted); }
+.mx-picker-desc { font-size: 11.5px; color: var(--sol-text-dim); }
+.mx-arg { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 11.5px; color: var(--sol-text-muted); }
 .mx-arg .mx-input, .mx-arg .mx-select { width: 100%; }
 .mx-insights { display: flex; flex-direction: column; max-height: 200px; overflow: auto; border: 1px solid var(--osx-line); border-radius: 6px; background: var(--sol-bg); }
 .mx-insights button { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12px; text-align: left; min-width: 0; }
@@ -137,14 +137,14 @@
 .mx-trans tbody tr:hover, .mx-trans tbody tr:focus-visible { background: color-mix(in srgb, var(--sol-text) 4%, transparent); outline: none; }
 
 /* The page header's mute. */
-.mx-muted { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--sol-text-muted); }
+.mx-muted { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--sol-text-muted); }
 
 /* Transitions read off the values and never announced. */
 .mx-trans tr[data-inferred] td { opacity: 0.55; }
-.mx-inferred { margin-left: 6px; font-size: var(--fs-meta); padding: 0 5px; border-radius: 7px; color: var(--sol-text-dim); border: 1px dashed var(--osx-line); }
+.mx-inferred { margin-left: 6px; font-size: 10px; padding: 0 5px; border-radius: 7px; color: var(--sol-text-dim); border: 1px dashed var(--osx-line); }
 
 /* A typed line or warning level, before it is saved. */
-.mx-draft { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; font-size: var(--fs-meta); color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-violet) 8%, transparent); border: 1px solid color-mix(in srgb, var(--sol-violet) 30%, var(--sol-border)); }
+.mx-draft { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; font-size: 11.5px; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-violet) 8%, transparent); border: 1px solid color-mix(in srgb, var(--sol-violet) 30%, var(--sol-border)); }
 .mx-draft b { color: var(--sol-text); }
 
 /* The query editor under the chart. */
@@ -171,25 +171,25 @@
 .mx-steps li[data-state="now"] i { border-color: var(--sol-violet); box-shadow: inset 0 0 0 3px var(--sol-violet); }
 .mx-steps li[data-state="todo"] .mx-step-label { color: var(--sol-text-dim); }
 .mx-step-label { color: var(--sol-text-muted); }
-.mx-step-sub { font-size: var(--fs-meta); text-align: right; }
+.mx-step-sub { font-size: 11px; text-align: right; }
 
 /* A failing read: on a card, in a table row, and rolled up per source. */
-.mx-card-error { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: var(--fs-meta); color: var(--sol-orange); min-width: 0; }
+.mx-card-error { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--sol-orange); min-width: 0; }
 .mx-card-error > svg { width: 12px; height: 12px; flex-shrink: 0; }
 .mx-card-error[data-health]:not([data-health="error"]) { color: var(--sol-text-dim); }
-.mx-card-error-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); }
+.mx-card-error-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; }
 .mx-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; color: var(--sol-text-muted); border: 1px solid var(--osx-line); background: var(--sol-bg); flex-shrink: 0; }
 .mx-icon-btn svg { width: 11px; height: 11px; }
 .mx-icon-btn:hover { color: var(--sol-text); }
 .mx-icon-btn:disabled { opacity: 0.6; }
-.mx-row-error { display: block; max-width: 320px; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-meta); color: var(--sol-orange); font-family: var(--font-mono, ui-monospace, monospace); }
+.mx-row-error { display: block; max-width: 320px; overflow: hidden; text-overflow: ellipsis; font-size: 10.5px; color: var(--sol-orange); font-family: var(--font-mono, ui-monospace, monospace); }
 .mx-row-error:not([data-health="error"]) { color: var(--sol-text-dim); }
 .mx-rollups { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .mx-rollup { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 10px; border-radius: 8px; font-size: 12px; color: var(--sol-text-muted); border: 1px solid color-mix(in srgb, var(--sol-orange) 45%, var(--sol-border)); background: color-mix(in srgb, var(--sol-orange) 7%, var(--sol-bg)); }
 .mx-rollup > svg { width: 14px; height: 14px; color: var(--sol-orange); flex-shrink: 0; }
 .mx-rollup b { color: var(--sol-orange); font-weight: 600; }
-.mx-rollup-err { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); color: var(--sol-text); min-width: 0; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mx-rollup-ids { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; font-size: var(--fs-meta); min-width: 0; }
+.mx-rollup-err { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--sol-text); min-width: 0; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mx-rollup-ids { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; font-size: 11px; min-width: 0; }
 
 /* The first watches from a connected PostHog project. */
 .mx-starter { max-width: 640px; margin: 40px auto; border-radius: 14px; background: var(--sol-card); box-shadow: var(--osx-shadow); overflow: hidden; }
@@ -200,10 +200,10 @@
 .mx-starter-list label { display: grid; grid-template-columns: 16px 150px minmax(0, 1fr) 80px; align-items: center; gap: 10px; padding: 9px 14px; font-size: 12px; cursor: pointer; }
 .mx-starter-list li:not([data-on]) label { color: var(--sol-text-dim); }
 .mx-starter-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mx-starter-q { font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-starter-q { font-size: 10.5px; color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mx-starter-v { text-align: right; font-size: 15px; font-weight: 600; display: flex; justify-content: flex-end; white-space: nowrap; }
 a.mx-starter-v { text-decoration: underline dotted color-mix(in srgb, var(--sol-text-muted) 60%, transparent); text-underline-offset: 3px; }
-.mx-starter-v[data-state="error"] { font-size: var(--fs-meta); font-weight: 400; color: var(--sol-text-dim); }
+.mx-starter-v[data-state="error"] { font-size: 11px; font-weight: 400; color: var(--sol-text-dim); }
 .mx-starter-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--osx-line); }
 
 @media (max-width: 640px) {
@@ -228,7 +228,7 @@ a.mx-starter-v { text-decoration: underline dotted color-mix(in srgb, var(--sol-
 
 /* Where the watch holds no values (All reaching back to its first alert): hatched, named, with the backfill on it. */
 .mx-gap { fill: color-mix(in srgb, var(--sol-text-dim) 7%, transparent); }
-.mx-gap-label { position: absolute; top: 8px; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--sol-text-dim); pointer-events: none; z-index: 2; }
+.mx-gap-label { position: absolute; top: 8px; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11px; color: var(--sol-text-dim); pointer-events: none; z-index: 2; }
 .mx-gap-label > * { pointer-events: auto; }
 .mx-gap-label > span { pointer-events: none; }
 /* A card's alert stretches read as the alert's, not as grey. */
@@ -244,7 +244,7 @@ a.mx-starter-v { text-decoration: underline dotted color-mix(in srgb, var(--sol-
 .mx-table tr:hover .mx-noline, .mx-noline:focus-visible { opacity: 1; }
 .mx-table tr:hover .mx-noline span:first-child, .mx-noline:focus-visible span:first-child { display: none; }
 .mx-table tr:hover .mx-noline span + span, .mx-noline:focus-visible span + span { display: inline; }
-button.mx-noline { border: 0; cursor: pointer; font: inherit; font-size: var(--fs-meta); font-weight: 500; }
+button.mx-noline { border: 0; cursor: pointer; font: inherit; font-size: 10.5px; font-weight: 500; }
 button.mx-noline:hover { opacity: 1; }
 button.mx-noline:hover span:first-child { display: none; }
 button.mx-noline:hover span + span { display: inline; }
@@ -257,18 +257,18 @@ button.mx-noline:hover span + span { display: inline; }
 .mx-volume-pick b { text-align: right; white-space: nowrap; }
 .mx-suggest-chips { flex-wrap: wrap; gap: 6px; }
 @media (max-width: 640px) { .mx-volume-list li { grid-template-columns: minmax(0, 1fr) 56px auto; } .mx-volume-list .mx-volume-spark { display: none; } }
-.mx-link-btn { all: unset; cursor: pointer; font-size: var(--fs-meta); color: var(--sol-text-dim); margin-left: 8px; }
+.mx-link-btn { all: unset; cursor: pointer; font-size: 11.5px; color: var(--sol-text-dim); margin-left: 8px; }
 .mx-link-btn:hover { color: var(--sol-text); text-decoration: underline; }
 /* A person, role or channel an alert tells: a chip with its face and a remove press. */
 .mx-form-row[data-watch-tell] .mx-link-btn { margin-left: 0; }
-.mx-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 22px; padding: 0 3px 0 6px; border-radius: 11px; border: 1px solid var(--osx-line); background: var(--sol-bg); font-size: var(--fs-meta); color: var(--sol-text); min-width: 0; }
+.mx-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 22px; padding: 0 3px 0 6px; border-radius: 11px; border: 1px solid var(--osx-line); background: var(--sol-bg); font-size: 11.5px; color: var(--sol-text); min-width: 0; }
 .mx-chip[data-gone] { color: var(--sol-text-dim); text-decoration: line-through; }
 .mx-chip button { display: inline-flex; padding: 2px; border-radius: 50%; color: var(--sol-text-dim); }
 .mx-chip button:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 10%, transparent); }
 .mx-state:disabled { opacity: 0.45; cursor: default; }
 /* What an alert did, under its transition: who it told, the channel line, the fix it started, and what could not go out. */
 .mx-trans tr.mx-sent td { padding-top: 0; border-top: 0; }
-.mx-sent-list { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.mx-sent-list { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--sol-text-dim); }
 .mx-sent-list [data-ok="false"] { color: var(--sol-orange); }
 .mx-sent-list a:hover { color: var(--sol-text); text-decoration: underline; }
 
@@ -276,9 +276,9 @@ button.mx-noline:hover span + span { display: inline; }
 .mx-ship { position: absolute; bottom: 0; width: 0; z-index: 2; --mk: var(--sol-text-dim); }
 .mx-ship-head {
   position: absolute; bottom: -3px; left: -1px; width: 2px; height: 9px; border-radius: 1px; background: var(--mk); cursor: pointer; display: block;
-  font-size: var(--fs-mark); line-height: 15px; font-weight: 600; text-align: center; color: var(--sol-bg); font-variant-numeric: tabular-nums;
+  font-size: 9px; line-height: 12px; font-weight: 600; text-align: center; color: var(--sol-bg); font-variant-numeric: tabular-nums;
 }
-.mx-ship-head:not(:empty) { width: auto; min-width: 16px; height: 15px; left: 0; transform: translateX(-50%); padding: 0 3px; border-radius: 6px; bottom: -6px; }
+.mx-ship-head:not(:empty) { width: auto; min-width: 14px; height: 12px; left: 0; transform: translateX(-50%); padding: 0 3px; border-radius: 6px; bottom: -6px; }
 .mx-ship:hover, .mx-ship:focus-within, .mx-ship[data-hot] { --mk: var(--sol-text-muted); z-index: 3; }
 .mx-ship .mx-mark-card { top: auto; bottom: 12px; }
 .mx-ship .mx-mark-card::before { top: auto; bottom: -14px; }
@@ -290,7 +290,7 @@ button.mx-noline:hover span + span { display: inline; }
 .mx-ship-line { stroke: color-mix(in srgb, var(--sol-text-muted) 55%, transparent); stroke-width: 1; stroke-dasharray: 3 3; }
 
 /* Distribution: percentiles, a histogram, and the lines a plain series' history suggests. */
-.mx-dist-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; font-size: var(--fs-meta); }
+.mx-dist-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; font-size: 11px; }
 .mx-dist-stats > div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .mx-dist-stats span { color: var(--sol-text-dim); }
 .mx-dist-stats b { font-size: 13px; font-weight: 600; color: var(--sol-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -300,7 +300,7 @@ button.mx-noline:hover span + span { display: inline; }
 /* The alert line and the median as ticks across the histogram, at their place on its value axis. */
 .mx-hist-mark { position: absolute; top: -4px; bottom: -5px; width: 0; border-left: 1.5px solid var(--sol-red); pointer-events: none; }
 .mx-hist-mark[data-mark="p50"] { top: 0; bottom: -3px; border-left: 1px dashed color-mix(in srgb, var(--sol-text-muted) 70%, transparent); }
-.mx-hist-axis { display: flex; justify-content: space-between; font-size: var(--fs-meta); color: var(--sol-text-dim); margin-top: 3px; }
+.mx-hist-axis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--sol-text-dim); margin-top: 3px; }
 .mx-suggest { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--osx-line); }
 .mx-suggest-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 600; color: var(--sol-text); }
 .mx-suggest ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -309,7 +309,7 @@ button.mx-noline:hover span + span { display: inline; }
 .mx-suggest li [data-tone="bad"] { color: var(--sol-red); }
 .mx-issue-cell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .mx-static { font-size: 12px; color: var(--sol-text); align-self: center; }
-.mx-table td.mx-tells { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-meta); }
+.mx-table td.mx-tells { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
 /* Each listed transition at the value that caused it: filled when announced, hollow when read off the values. */
 .mx-turn { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; z-index: 2; pointer-events: auto; --tk: var(--sol-red); background: var(--tk); box-shadow: 0 0 0 1.5px var(--sol-bg); }
 .mx-turn[data-kind="recovered"] { --tk: var(--sol-green); }
@@ -322,13 +322,13 @@ button.mx-noline:hover span + span { display: inline; }
 .mx-skel { display: block; border-radius: 5px; background: color-mix(in srgb, var(--sol-text-muted) 12%, transparent); }
 .mx-skel-card { display: flex; flex-direction: column; gap: 8px; padding: 11px 13px; border-radius: 8px; border: 1px solid var(--osx-line); background: var(--sol-bg); height: 148px; }
 .mx-skel-card > .mx-skel:last-child { flex: 1; opacity: .6; }
-.mx-step-action { display: inline-flex; align-items: center; gap: 4px; justify-self: start; padding: 1px 7px; border-radius: 5px; border: 1px solid color-mix(in srgb, var(--sol-violet) 55%, var(--sol-border)); color: var(--sol-violet); font-size: var(--fs-meta); background: color-mix(in srgb, var(--sol-violet) 10%, transparent); }
+.mx-step-action { display: inline-flex; align-items: center; gap: 4px; justify-self: start; padding: 1px 7px; border-radius: 5px; border: 1px solid color-mix(in srgb, var(--sol-violet) 55%, var(--sol-border)); color: var(--sol-violet); font-size: 11.5px; background: color-mix(in srgb, var(--sol-violet) 10%, transparent); }
 .mx-step-action:hover { background: color-mix(in srgb, var(--sol-violet) 18%, transparent); }
 /* No keyboard on a phone or a touch screen: key hints come off the buttons and the footer. */
 @media (pointer: coarse), (max-width: 640px) {
   .mxp-actions kbd, [data-metrics-overview] .mx-bar kbd, .mx-keys { display: none !important; }
 }
-.mx-form-sub { grid-column: 1 / -1; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--osx-line); font-size: var(--fs-mark); font-weight: 600; color: var(--sol-text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.mx-form-sub { grid-column: 1 / -1; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--osx-line); font-size: 11px; font-weight: 600; color: var(--sol-text-muted); text-transform: uppercase; letter-spacing: .04em; }
 .mx-form-sub:first-of-type { margin-top: 2px; }
 /* The Transitions head: the title never breaks, the toggles wrap under it on a narrow card. */
 .mx-trans-head { flex-wrap: wrap; row-gap: 6px; }
@@ -353,7 +353,7 @@ button.mx-noline:hover span + span { display: inline; }
   .mx-trans tr:first-child, .mx-trans tr.mx-sent { border-top: 0; }
   .mx-trans td { border-top: 0; padding: 4px 12px 0; min-width: 0; }
   .mx-trans td:nth-child(2) { text-align: right; }
-  .mx-trans td:nth-child(3), .mx-trans td:nth-child(4) { padding: 1px 12px 5px; font-size: var(--fs-meta); }
+  .mx-trans td:nth-child(3), .mx-trans td:nth-child(4) { padding: 1px 12px 5px; font-size: 11.5px; }
   .mx-trans td:first-child { overflow: hidden; text-overflow: ellipsis; }
   .mx-trans tr.mx-sent td { grid-column: 1 / -1; padding-top: 0; }
 }
@@ -364,4 +364,4 @@ button.mx-noline:hover span + span { display: inline; }
 
 /* An erroring watch's last value is old: dimmed with its change, its age beside it. */
 .mx-card[data-health="error"] .mx-value, .mx-card[data-health="error"] .mx-delta { opacity: 0.5; }
-.mx-value-age { font-size: var(--fs-meta); color: var(--sol-text-dim); font-variant-numeric: tabular-nums; }
+.mx-value-age { font-size: 11px; color: var(--sol-text-dim); font-variant-numeric: tabular-nums; }

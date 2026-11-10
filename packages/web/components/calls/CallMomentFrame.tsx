@@ -62,7 +62,7 @@ export function CallMomentFrame({
 
   if (served && !entity) {
     return (
-      <div className="my-1 w-fit max-w-full rounded-lg border border-sol-border/40 px-3 py-2 text-meta text-sol-text-dim">
+      <div className="my-1 w-fit max-w-full rounded-lg border border-sol-border/40 px-3 py-2 text-[11.5px] text-sol-text-dim">
         <span className="font-mono">{rawId}</span> · not available to you
       </div>
     );
@@ -88,7 +88,7 @@ export function CallMomentFrame({
             <span className="min-w-0 flex-1 truncate text-sol-text">{line.text}</span>
             <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-colors group-hover:text-sol-text" />
           </div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-meta text-sol-text-dim">
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10.5px] text-sol-text-dim">
             <Film className="h-3 w-3 shrink-0" />
             <span className="min-w-0 truncate">{title}</span>
             {saidBefore && <span className="shrink-0">· last said at {formatCallTime(line.t0)}</span>}
@@ -102,7 +102,7 @@ export function CallMomentFrame({
               filmed now. */}
           <Film className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
           <span className="min-w-0 flex-1 truncate text-[12px] text-sol-text">{title}</span>
-          <span className="shrink-0 font-mono text-meta text-sol-text-dim">{rawId}</span>
+          <span className="shrink-0 font-mono text-[10.5px] text-sol-text-dim">{rawId}</span>
           <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-colors group-hover:text-sol-text" />
         </div>
       )}
@@ -198,7 +198,7 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-6 text-center">
           <Phone className="h-4 w-4 text-sol-text-dim" />
-          <span className="text-meta leading-snug text-sol-text-muted">
+          <span className="text-[11.5px] leading-snug text-sol-text-muted">
             {undrawn
               ? `Open the call at ${time} to watch this moment`
               : dead
@@ -207,11 +207,11 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
           </span>
         </div>
       )}
-      <span className="absolute bottom-2 left-2 rounded bg-black/70 px-1.5 py-0.5 font-mono text-meta tabular-nums text-white">
+      <span className="absolute bottom-2 left-2 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-white">
         {time}
       </span>
       {located?.ok && (kept || (!dead && !undrawn)) && located.file.kind === "screen" && (
-        <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 font-mono text-meta text-white/85">
+        <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10.5px] text-white/85">
           <MonitorUp className="h-3 w-3" /> {recordingSubject(located.file, "label")}
           <ParticipantTag identity={located.file.participant_identity} />
         </span>

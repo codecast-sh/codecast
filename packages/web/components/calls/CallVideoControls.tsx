@@ -387,7 +387,7 @@ export function CallVideoControls({
               />
             </span>
           )}
-          <span className="ml-2 select-none whitespace-nowrap font-mono text-meta tabular-nums text-white/90">
+          <span className="ml-2 select-none whitespace-nowrap font-mono text-[11.5px] tabular-nums text-white/90">
             {formatCallTime(toCallMs(second))}
             <span className="text-white/45"> / {formatCallTime(toCallMs(duration))}</span>
           </span>

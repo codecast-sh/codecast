@@ -87,7 +87,7 @@ function ReviewItem({
             href={review.html_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="ml-auto text-meta text-sol-text-dim hover:text-sol-cyan transition-colors"
+            className="ml-auto text-[11px] text-sol-text-dim hover:text-sol-cyan transition-colors"
           >
             on GitHub
           </a>
@@ -108,9 +108,9 @@ function ReviewItem({
                 onClick={() => onJump?.(note)}
                 title="Open this thread in Files"
               >
-                <span className="font-mono text-meta text-sol-cyan shrink-0">{notePlace(note)}</span>
+                <span className="font-mono text-[11px] text-sol-cyan shrink-0">{notePlace(note)}</span>
                 <span className="text-[12px] text-sol-text-muted truncate">{note.content}</span>
-                {note.resolved && <span className="ml-auto shrink-0 text-meta text-sol-green">resolved</span>}
+                {note.resolved && <span className="ml-auto shrink-0 text-[10px] text-sol-green">resolved</span>}
               </button>
             </li>
           ))}
@@ -166,7 +166,7 @@ export function PRTimeline({
             <CommentAvatar name={pr.author_github_username ?? "?"} image={pr.author_avatar_url} size={18} />
             <span className="text-sol-text">{pr.author_github_username}</span>
             <span className="text-sol-text-dim">opened this</span>
-            {openedAt ? <span className="ml-auto text-meta text-sol-text-dim" title={new Date(openedAt).toLocaleString()}><StampTime ts={openedAt} format={relTimeShort} /></span> : null}
+            {openedAt ? <span className="ml-auto text-[11px] text-sol-text-dim" title={new Date(openedAt).toLocaleString()}><StampTime ts={openedAt} format={relTimeShort} /></span> : null}
           </div>
           <div className="px-4 py-3">
             <MarkdownRenderer content={pr.body} />
@@ -186,13 +186,13 @@ export function PRTimeline({
               {item.key === firstNew && (
                 <div className="pr-since -mx-1 mb-2 mt-4 flex items-center gap-3 py-1">
                   <span className="h-px flex-1 bg-sol-cyan/50" />
-                  <span className="text-mark uppercase tracking-wider text-sol-cyan">Since you last looked</span>
+                  <span className="text-[10px] uppercase tracking-wider text-sol-cyan">Since you last looked</span>
                   <span className="h-px flex-1 bg-sol-cyan/50" />
                 </div>
               )}
               {divider && (
                 <div className="pr-day -mx-1 mb-2 mt-4 flex items-center gap-3 bg-sol-bg/80 py-1 first:mt-0">
-                  <span className="text-mark uppercase tracking-wider text-sol-text-dim">{divider}</span>
+                  <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">{divider}</span>
                   <span className="h-px flex-1 bg-sol-border/40" />
                 </div>
               )}

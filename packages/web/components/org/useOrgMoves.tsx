@@ -214,7 +214,7 @@ export function MoveConfirm({ req, onConfirm, onCancel }: { req: OrgReparentRequ
         <div className="text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>
           Move <b className="font-semibold">{req.subject.title}</b>{req.also?.length ? <> and {req.also.length} more</> : null} under <b className="font-semibold">{req.targetTitle}</b>?
         </div>
-        <div className="mt-1 text-meta" style={{ color: "var(--sol-text-dim)" }}>
+        <div className="mt-1 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>
           {req.subject.kind === "session"
             // A drop on a person ADDS them as an owner and hands them the
             // reporting line (performReparentSession defaults a bare user target to `add`).
@@ -257,10 +257,10 @@ function MovePicker({ subjects, current, targets, onPick, onClose }: { subjects:
             const isCurrent = current !== undefined && sameTarget(current, t.ref);
             return (
               <button key={t.id} type="button" disabled={isCurrent} onClick={() => onPick(t)} className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors hover:bg-sol-bg-highlight/70 disabled:opacity-50 disabled:cursor-default">
-                {t.kind === "person" ? <Avatar name={t.title} image={t.image} /> : t.kind === "top" ? <ArrowUpToLine className="w-4 h-4" style={{ color: "var(--sol-text-dim)" }} /> : <span className="w-5 h-5 rounded-md inline-flex items-center justify-center text-meta font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@</span>}
+                {t.kind === "person" ? <Avatar name={t.title} image={t.image} /> : t.kind === "top" ? <ArrowUpToLine className="w-4 h-4" style={{ color: "var(--sol-text-dim)" }} /> : <span className="w-5 h-5 rounded-md inline-flex items-center justify-center text-[9px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@</span>}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{t.title}</span>
-                  <span className="block truncate text-meta" style={{ color: "var(--sol-text-dim)" }}>{t.sub}{isCurrent ? " · current" : ""}</span>
+                  <span className="block truncate text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>{t.sub}{isCurrent ? " · current" : ""}</span>
                 </span>
                 {!isCurrent && <ArrowRightLeft className="w-3.5 h-3.5" style={{ color: "var(--sol-text-dim)" }} />}
               </button>

@@ -75,7 +75,7 @@ export function PeopleStrip({
         data.rooms.map((row) => (
           <LiveRoomAction key={row.roomKey} row={row} className="shrink-0" />
         ))}
-      <div className="people-strip-words min-w-0 flex-1 overflow-hidden text-meta">
+      <div className="people-strip-words min-w-0 flex-1 overflow-hidden text-[11px]">
         {desc ? (
           <div className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap leading-none">
             <span className="shrink-0 font-medium text-sol-text">{desc.name}</span>
@@ -116,7 +116,7 @@ const StripFaces = memo(function StripFaces({
   const [showGone, setShowGone] = useState(false);
   const goneNames = wall.gone.map((f) => f.member?.name || f.member?.email || "?").join(", ");
   if (emptyText) {
-    return <span className="truncate text-meta text-sol-text-dim">{emptyText}</span>;
+    return <span className="truncate text-[11px] text-sol-text-dim">{emptyText}</span>;
   }
   return (
     <div className="people-strip-faces flex min-w-0 shrink items-center gap-2">

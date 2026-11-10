@@ -32,17 +32,11 @@ export function useDecisionThreadFeed(decisionId: string, enabled = true): { rea
   return { ready: data !== undefined };
 }
 
-// One `where` per decision, so the slice signature is shared, not rebuilt per
-// render. The most recently read decisions only: an evicted one gets a fresh
-// predicate (one rebuilt signature) the next time it is read.
-const MAX_WHERES = 64;
+// One `where` per decision, so the slice signature is shared, not rebuilt per render.
 const wheres = new Map<string, (row: DecisionCommentRow) => boolean>();
 const whereFor = (decisionId: string) => {
   let fn = wheres.get(decisionId);
-  if (fn) wheres.delete(decisionId);
-  else fn = (row) => row.decision_id === decisionId;
-  wheres.set(decisionId, fn);
-  if (wheres.size > MAX_WHERES) wheres.delete(wheres.keys().next().value!);
+  if (!fn) wheres.set(decisionId, (fn = (row) => row.decision_id === decisionId));
   return fn;
 };
 const commentSig = (r: DecisionCommentRow) => `${r.content.length}|${r.updated_at ?? 0}|${r.agent_status ?? ""}|${r.resolved_at ?? 0}|${r.author_name}`;

@@ -153,8 +153,8 @@ export function ReplayPage({ id, t: asked, tAlt }: { id: string; t: number | nul
         <div className="ops-card">
           <div className="ops-card-head">
             <span>Timeline</span>
-            {loaded.state === "failed" && <span className="text-meta font-normal" style={{ color: "var(--sol-orange)" }}>Could not be read: {loaded.error}</span>}
-            {vendorImport.state === "failed" && <span className="text-meta font-normal" style={{ color: "var(--sol-orange)" }}>Import failed: {vendorImport.error}</span>}
+            {loaded.state === "failed" && <span className="text-[11px] font-normal" style={{ color: "var(--sol-orange)" }}>Could not be read: {loaded.error}</span>}
+            {vendorImport.state === "failed" && <span className="text-[11px] font-normal" style={{ color: "var(--sol-orange)" }}>Import failed: {vendorImport.error}</span>}
           </div>
           <pre className="ops-outline ops-mono" style={{ maxHeight: "none" }}>{timeline?.timeline_md ?? (replay.chunks === 0 ? "Nothing recorded yet." : "No text timeline yet.")}</pre>
         </div>

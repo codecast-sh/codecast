@@ -247,11 +247,11 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
             status === "open" && !inst?.state.reconnecting ? "bg-sol-violet" : isConnecting || inst?.state.reconnecting ? "bg-sol-yellow animate-pulse" : "bg-sol-text-dim/40"
           }`}
         />
-        <span className="text-meta font-mono text-sol-text-muted truncate">{target}</span>
+        <span className="text-[10px] font-mono text-sol-text-muted truncate">{target}</span>
         {inst && status === "open" && <TerminalSeat tab={inst.state} />}
         {isRemote && (
           <span
-            className="inline-flex items-center gap-1 px-1 rounded text-meta font-mono text-sol-cyan bg-sol-cyan/10 flex-shrink-0"
+            className="inline-flex items-center gap-1 px-1 rounded text-[9px] font-mono text-sol-cyan bg-sol-cyan/10 flex-shrink-0"
             title={`Relayed from ${machineName ?? "another machine"}. Typing works, but every keystroke makes a round trip — expect a moment before it shows up.`}
           >
             <Radio className="w-2.5 h-2.5" />
@@ -259,7 +259,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
           </span>
         )}
         {stale && (
-          <span className="text-meta font-mono text-sol-yellow flex-shrink-0" title="No frames for a while — the machine may be asleep or offline.">
+          <span className="text-[9px] font-mono text-sol-yellow flex-shrink-0" title="No frames for a while — the machine may be asleep or offline.">
             paused
           </span>
         )}
@@ -280,7 +280,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
 
       <div className="relative flex-1 min-h-0">
         {failure || status === "offline" || status === "exited" || status === "error" ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-meta font-mono text-center px-6">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[11px] font-mono text-center px-6">
             <span>
               {failure ? (
                 <span className="text-sol-text-dim">{failure}</span>

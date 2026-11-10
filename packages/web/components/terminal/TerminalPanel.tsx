@@ -270,7 +270,7 @@ export function TerminalPanel() {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 onContextMenu={(e) => tabCtxMenu.open(e, tab)}
-                className={`group flex items-center gap-1.5 px-2.5 h-[22px] rounded text-meta leading-none max-w-[180px] flex-shrink-0 transition-all duration-100 ${
+                className={`group flex items-center gap-1.5 px-2.5 h-[22px] rounded text-[11px] leading-none max-w-[180px] flex-shrink-0 transition-all duration-100 ${
                   isActive
                     ? "bg-sol-bg text-sol-text shadow-sm border border-sol-border/30"
                     : "text-sol-text-dim/70 hover:text-sol-text-muted hover:bg-sol-bg/50"
@@ -379,7 +379,7 @@ export function TerminalPanel() {
               <div>{ep.reason}</div>
               <button
                 onClick={() => void resolve(true)}
-                className="px-2 py-0.5 rounded border border-sol-border/40 text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors text-meta"
+                className="px-2 py-0.5 rounded border border-sol-border/40 text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors text-[11px]"
               >
                 Retry
               </button>
@@ -390,12 +390,12 @@ export function TerminalPanel() {
           <TermContainer key={tab.id} tab={tab} active={tab.id === activeId} />
         ))}
         {activeTab?.status === "error" && (
-          <div className="absolute inset-x-0 bottom-0 px-3 py-1.5 text-meta font-mono text-sol-red bg-sol-bg/90 border-t border-sol-border/20">
+          <div className="absolute inset-x-0 bottom-0 px-3 py-1.5 text-[11px] font-mono text-sol-red bg-sol-bg/90 border-t border-sol-border/20">
             {activeTab.statusDetail ?? "terminal error"}
           </div>
         )}
         {activeTab?.status === "offline" && (
-          <div className="absolute inset-x-0 bottom-0 px-3 py-1.5 text-meta font-mono bg-sol-bg/90 border-t border-sol-yellow/30">
+          <div className="absolute inset-x-0 bottom-0 px-3 py-1.5 text-[11px] font-mono bg-sol-bg/90 border-t border-sol-yellow/30">
             <span className="text-sol-yellow">no connection</span>
             <span className="text-sol-text-dim"> — the terminal needs the daemon reachable on this machine · </span>
             <button
@@ -463,7 +463,7 @@ export function ConnectingNote({ label }: { label: string }) {
  * per-conversation split.
  */
 export function TerminalSeat({ tab }: { tab: TermTabState }) {
-  const chip = "inline-flex items-center gap-1 h-[18px] px-1.5 rounded text-meta font-mono border bg-sol-bg/80";
+  const chip = "inline-flex items-center gap-1 h-[18px] px-1.5 rounded text-[10px] font-mono border bg-sol-bg/80";
   if (tab.reconnecting) {
     return (
       <span className={`${chip} text-sol-yellow border-sol-yellow/30`}>

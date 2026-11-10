@@ -134,7 +134,7 @@ function TeamChartsContent() {
 
   if (!currentUser) return <div className="w-full py-10" />;
   if (!teamId) {
-    return <div className="text-[12px] text-sol-text-muted text-center py-16">Join a team to see team charts.</div>;
+    return <div className="text-[12px] text-sol-base01/40 text-center py-16">Join a team to see team charts.</div>;
   }
 
   return (
@@ -142,7 +142,7 @@ function TeamChartsContent() {
       <div className="flex items-center gap-2 pb-3">
         <div className="min-w-0">
           <div className="text-[13px] font-bold text-sol-text leading-tight">Team activity</div>
-          <div className="text-meta text-sol-text-muted mt-0.5">
+          <div className="text-[10px] text-sol-base01/40 mt-0.5">
             Everyone&apos;s hours, messages, and what they typed in one view
           </div>
         </div>
@@ -156,14 +156,14 @@ function TeamChartsContent() {
             <select
               value={String(teamId)}
               onChange={(e) => setPickedTeam(e.target.value)}
-              className="text-meta text-sol-text-muted bg-transparent border border-sol-border/25 rounded px-1.5 py-0.5 hover:border-sol-border/50 focus:outline-none cursor-pointer max-w-[150px]"
+              className="text-[10px] text-sol-base01/60 bg-transparent border border-sol-border/25 rounded px-1.5 py-0.5 hover:border-sol-border/50 focus:outline-none cursor-pointer max-w-[150px]"
             >
               {myTeams.filter((t): t is NonNullable<typeof t> => t !== null).map((t) => (
                 <option key={String(t._id)} value={String(t._id)}>{t.name}</option>
               ))}
             </select>
           )}
-          <Link href="/org" className="text-meta text-sol-cyan/60 hover:text-sol-cyan transition-colors">
+          <Link href="/org" className="text-[10px] text-sol-cyan/60 hover:text-sol-cyan transition-colors">
             Org
           </Link>
         </div>
@@ -190,7 +190,7 @@ function TeamChartsContent() {
         </>
       )}
       {members && members.length === 0 && (
-        <div className="text-[12px] text-sol-text-muted text-center py-16">No members in this team.</div>
+        <div className="text-[12px] text-sol-base01/40 text-center py-16">No members in this team.</div>
       )}
     </div>
   );
@@ -256,7 +256,7 @@ function MemberBreakdown({
   return (
     <div className="mt-6">
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-mark font-bold text-sol-text-dim uppercase tracking-widest">Members · {rangeLabel(range)}</span>
+        <span className="text-[9px] font-bold text-sol-base01/30 uppercase tracking-widest">Members · {rangeLabel(range)}</span>
         <div className="flex-1 h-px bg-sol-border/10" />
         <div className="scale-[0.82] origin-right">
           <SegmentedToggle
@@ -274,10 +274,7 @@ function MemberBreakdown({
         onPickRange={(a, b) => onRangeChange({ from: a, to: b })}
       />
 
-      {/* Six number columns beside the name: in a narrow pane the list
-          scrolls sideways as one, rather than crushing the names to nothing. */}
-      <div className="mt-3 overflow-x-auto">
-      <div className="min-w-[36rem] space-y-px">
+      <div className="mt-3 space-y-px">
         {ranked.map((m, i) => (
           <Link
             key={String(m._id)}
@@ -293,21 +290,20 @@ function MemberBreakdown({
               alt=""
               className="w-5 h-5 rounded-full ring-1 ring-sol-border/20"
               fallback={
-                <div className="w-5 h-5 rounded-full bg-sol-base02 flex items-center justify-center text-meta font-semibold text-sol-text-secondary">
+                <div className="w-5 h-5 rounded-full bg-sol-base02 flex items-center justify-center text-[9px] font-semibold text-sol-text/80">
                   {m.display_name[0]?.toUpperCase() || "?"}
                 </div>
               }
             />
-            <span className="min-w-[6rem] text-[12px] text-sol-text-secondary truncate flex-1 group-hover:text-sol-text transition-colors" title={m.display_name}>{m.display_name}</span>
-            <span className="text-meta tabular-nums text-sol-green/50 w-14 text-right">{m.month_hours}h</span>
-            <span className="text-meta tabular-nums text-sol-cyan/50 w-20 text-right">{fmtK(m.month_msgs)} msgs</span>
-            <span className="text-meta tabular-nums text-sol-blue/60 w-20 text-right">{fmtK(m.month_sends)} typed</span>
-            <span className="text-meta tabular-nums text-sol-violet/60 w-24 text-right">{fmtK(m.month_words)} words</span>
-            {showSpend && <span className="text-meta tabular-nums text-sol-yellow/70 w-14 text-right">{fmtUsd(m.month_spend)}</span>}
-            <span className="text-meta tabular-nums text-sol-text-dim w-[68px] text-right">{m.month_sessions} sess</span>
+            <span className="text-[12px] text-sol-text/80 truncate flex-1 group-hover:text-sol-text transition-colors">{m.display_name}</span>
+            <span className="text-[10px] tabular-nums text-sol-green/50 w-14 text-right">{m.month_hours}h</span>
+            <span className="text-[10px] tabular-nums text-sol-cyan/50 w-16 text-right">{fmtK(m.month_msgs)} msgs</span>
+            <span className="text-[10px] tabular-nums text-sol-blue/60 w-16 text-right">{fmtK(m.month_sends)} typed</span>
+            <span className="text-[10px] tabular-nums text-sol-violet/60 w-20 text-right">{fmtK(m.month_words)} words</span>
+            {showSpend && <span className="text-[10px] tabular-nums text-sol-yellow/70 w-14 text-right">{fmtUsd(m.month_spend)}</span>}
+            <span className="text-[10px] tabular-nums text-sol-base01/30 w-14 text-right">{m.month_sessions} sess</span>
           </Link>
         ))}
-      </div>
       </div>
     </div>
   );
@@ -373,11 +369,11 @@ function MemberLines({
         {[0, 0.5, 1].map((f) => (
           <g key={f}>
             <line x1={padL} x2={width - padR} y1={toY(max * f)} y2={toY(max * f)} stroke="currentColor" className="text-sol-border/8" strokeWidth={0.5} strokeDasharray={f === 0 ? "none" : "2,3"} />
-            <text x={padL - 4} y={toY(max * f) + 3} textAnchor="end" className="fill-sol-text-dim" style={{ fontSize: 11 }}>{fmt(max * f)}</text>
+            <text x={padL - 4} y={toY(max * f) + 3} textAnchor="end" className="fill-sol-base01/25" style={{ fontSize: 8 }}>{fmt(max * f)}</text>
           </g>
         ))}
         {xLabels.map((l, i) => (
-          <text key={i} x={l.x} y={h - 5} textAnchor="start" className="fill-sol-text-dim" style={{ fontSize: 11 }}>{l.label}</text>
+          <text key={i} x={l.x} y={h - 5} textAnchor="start" className="fill-sol-base01/25" style={{ fontSize: 9 }}>{l.label}</text>
         ))}
         <BrushRect drag={brush.drag} toX={toX} top={padT} height={plotH} />
         {series.map((s) => (

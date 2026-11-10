@@ -308,9 +308,9 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           {/* The role's face (S13); the root workspace has none. */}
           {role && <RoleFace role={role} size={phone ? 24 : 26} className="shrink-0" />}
           <h1 className={cn("shrink-0 max-w-[40%] font-semibold tracking-tight leading-none truncate", phone ? "text-[15px]" : "text-[17px]")} style={{ fontFamily: "var(--font-serif)" }} title={`@${handle}`}>{name}</h1>
-          {words && words.subtitle !== words.name && <span className="scope-head-wide min-w-0 shrink-[2] truncate whitespace-nowrap text-meta" style={{ color: "var(--sol-text-dim)" }} data-scope-title>{words.subtitle}</span>}
-          {!role && <span className="shrink-0 inline-flex items-center gap-1 text-meta" style={{ color: "var(--sol-text-dim)" }}><Network className="w-3 h-3" /> whole workspace</span>}
-          {paused && <span className="shrink-0 whitespace-nowrap text-meta px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
+          {words && words.subtitle !== words.name && <span className="scope-head-wide min-w-0 shrink-[2] truncate whitespace-nowrap text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-scope-title>{words.subtitle}</span>}
+          {!role && <span className="shrink-0 inline-flex items-center gap-1 text-[11px]" style={{ color: "var(--sol-text-dim)" }}><Network className="w-3 h-3" /> whole workspace</span>}
+          {paused && <span className="shrink-0 whitespace-nowrap text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
           {/* The state line: the role's pinned line, else the first line of its
               notes. A seated role's conversation pins that line above its
               composer, so its header gives the row to the role's facts. */}
@@ -436,7 +436,7 @@ function RoleHeadFacts({ role, tree, onOpen }: { role: OrgRole; tree: OrgTree; o
   ].filter((c) => c.node != null && c.node !== false);
   return (
     <div
-      className={cn("min-w-0 shrink flex items-center gap-x-2 whitespace-nowrap overflow-hidden text-meta rounded-md px-1.5 h-6", onOpen && "cursor-pointer transition-colors hover:bg-sol-bg-highlight/40")}
+      className={cn("min-w-0 shrink flex items-center gap-x-2 whitespace-nowrap overflow-hidden text-[11.5px] rounded-md px-1.5 h-6", onOpen && "cursor-pointer transition-colors hover:bg-sol-bg-highlight/40")}
       style={{ color: "var(--sol-text-muted)" }}
       onClick={onOpen}
       title={onOpen ? "Open the overview" : undefined}

@@ -41,14 +41,14 @@ span.lwt-now { display: inline-flex; align-items: center; gap: 4px; }
 
 /* the chart */
 .lwt-chart { position: relative; padding: 10px 6px 4px 16px; }
-.lwt-box { width: 100%; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+.lwt-box { width: 100%; min-width: 0; overflow: hidden; }
 .lwt-svg { display: block; max-width: none; user-select: none; touch-action: pan-y; cursor: crosshair; font-family: var(--lw-ui); }
-.lwt-lane-labels text { font-size: var(--fs-meta); font-weight: 650; fill: var(--lw-ink-2); }
-.lwt-lane-labels .lwt-lane-sub { font-size: var(--fs-meta); font-weight: 500; fill: var(--lw-ink-3); }
+.lwt-lane-labels text { font-size: 11.5px; font-weight: 650; fill: var(--lw-ink-2); }
+.lwt-lane-labels .lwt-lane-sub { font-size: 10px; font-weight: 500; fill: var(--lw-ink-3); }
 .lwt-grid line { stroke: var(--lw-grid); stroke-width: 1; stroke-dasharray: 2 4; }
 .lwt-grid line[data-major] { stroke-dasharray: none; stroke: var(--lw-rule-2); }
 .lwt-grid .lwt-base { stroke: var(--lw-rule); stroke-dasharray: none; }
-.lwt-ticks text { font-size: var(--fs-meta); fill: var(--lw-ink-3); text-anchor: middle; font-variant-numeric: tabular-nums; }
+.lwt-ticks text { font-size: 10.5px; fill: var(--lw-ink-3); text-anchor: middle; font-variant-numeric: tabular-nums; }
 .lwt-ticks text[data-major] { fill: var(--lw-ink-2); font-weight: 600; }
 .lwt-hatch-line { stroke: var(--lw-rule); stroke-width: 2; }
 .lwt-unread { opacity: .7; }
@@ -66,13 +66,13 @@ span.lwt-now { display: inline-flex; align-items: center; gap: 4px; }
 .lwt-watch rect { fill: color-mix(in srgb, var(--lwt-live) 9%, transparent); }
 .lwt-watch[data-state="quiet"] rect { fill: color-mix(in srgb, var(--lwt-live) 6%, transparent); }
 .lwt-watch[data-state="unknown"] rect { fill: color-mix(in srgb, var(--lw-ink-3) 6%, transparent); }
-.lwt-watch text { font-size: var(--fs-meta); font-weight: 650; fill: color-mix(in srgb, var(--lwt-live) 80%, var(--lw-ink)); }
+.lwt-watch text { font-size: 10px; font-weight: 650; fill: color-mix(in srgb, var(--lwt-live) 80%, var(--lw-ink)); }
 .lwt-watch[data-state="reopened"] text { fill: var(--lwt-back); }
 
 .lwt-regress { cursor: pointer; }
 .lwt-regress rect { fill: color-mix(in srgb, var(--lwt-back) 8%, transparent); transition: fill var(--lw-fast); }
 .lwt-regress:hover rect, .lwt-regress[data-picked] rect { fill: color-mix(in srgb, var(--lwt-back) 14%, transparent); }
-.lwt-regress-label { font-size: var(--fs-meta); font-weight: 750; fill: var(--lwt-back); paint-order: stroke; stroke: var(--lw-card); stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
+.lwt-regress-label { font-size: 10.5px; font-weight: 750; fill: var(--lwt-back); paint-order: stroke; stroke: var(--lw-card); stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
 
 .lwt-att { cursor: pointer; }
 .lwt-att-bar { fill: var(--lw-ink-3); opacity: .55; transition: opacity var(--lw-fast), transform var(--lw-fast) var(--lw-ease); }
@@ -84,7 +84,7 @@ span.lwt-now { display: inline-flex; align-items: center; gap: 4px; }
 .lwt-att[data-tone="live"] .lwt-att-bar { opacity: 1; }
 .lwt-att[data-superseded] .lwt-att-bar { opacity: .45; }
 .lwt-att:hover .lwt-att-bar { opacity: .85; }
-.lwt-att-t { font-size: var(--fs-meta); font-weight: 700; fill: var(--lw-on-accent); pointer-events: none; }
+.lwt-att-t { font-size: 10.5px; font-weight: 700; fill: var(--lw-on-accent); pointer-events: none; }
 .lwt-att[data-tone="none"] .lwt-att-t { fill: var(--lw-ink); }
 .lwt-att-ring { fill: none; stroke: var(--lw-ink); stroke-width: 1.5; opacity: 0; transition: opacity var(--lw-fast); }
 .lwt-att[data-selected] .lwt-att-ring { opacity: .9; }
@@ -98,7 +98,7 @@ span.lwt-now { display: inline-flex; align-items: center; gap: 4px; }
 .lwt-merge[data-unmerged] circle { fill: var(--lw-card); stroke: var(--lwt-live); stroke-width: 2.5; }
 .lwt-hitbox { fill: transparent; }
 
-.lwt-ship-missing { font-size: var(--fs-meta); font-style: italic; fill: var(--lw-ink-3); pointer-events: none; }
+.lwt-ship-missing { font-size: 10.5px; font-style: italic; fill: var(--lw-ink-3); pointer-events: none; }
 
 /* A close: a line through every lane and a flag naming the attempt, like an error tracker's "resolved in". */
 .lwt-close { cursor: pointer; }
@@ -107,7 +107,7 @@ span.lwt-now { display: inline-flex; align-items: center; gap: 4px; }
 .lwt-close[data-kind="shipped"] line { stroke: var(--lwt-live); }
 .lwt-close[data-kind="shipped"] path, .lwt-close[data-kind="shipped"] circle { fill: var(--lwt-live); }
 .lwt-close path.lwt-close-leader { fill: none; stroke: var(--lw-ink-3); stroke-width: 1; opacity: .5; }
-.lwt-close text { font-size: var(--fs-meta); font-weight: 700; fill: var(--lw-on-accent); pointer-events: none; }
+.lwt-close text { font-size: 10px; font-weight: 700; fill: var(--lw-on-accent); pointer-events: none; }
 .lwt-close:hover line { stroke-dasharray: none; }
 
 .lwt-deploy { cursor: pointer; }
@@ -116,15 +116,15 @@ span.lwt-now { display: inline-flex; align-items: center; gap: 4px; }
 .lwt-other-deploy:hover line { stroke: var(--lwt-live); stroke-width: 1.5; }
 .lwt-deploy line { stroke: var(--lwt-live); stroke-width: 1.5; stroke-dasharray: 4 3; }
 .lwt-deploy path { fill: var(--lwt-live); }
-.lwt-deploy text { font-size: var(--fs-meta); font-weight: 700; fill: var(--lw-on-accent); pointer-events: none; }
+.lwt-deploy text { font-size: 10px; font-weight: 700; fill: var(--lw-on-accent); pointer-events: none; }
 .lwt-deploy:hover line { stroke-dasharray: none; }
 
 .lwt-now line { stroke: var(--lw-ink-2); stroke-width: 1; }
-.lwt-now text { font-size: var(--fs-meta); font-weight: 700; fill: var(--lw-ink-2); text-anchor: end; }
+.lwt-now text { font-size: 10px; font-weight: 700; fill: var(--lw-ink-2); text-anchor: end; }
 
 .lwt-cross line { stroke: var(--lw-ink-2); stroke-width: 1; opacity: .5; }
 .lwt-cross rect { fill: var(--lw-ink); }
-.lwt-cross text { fill: var(--lw-paper); font-size: var(--fs-meta); font-weight: 600; text-anchor: middle; font-variant-numeric: tabular-nums; }
+.lwt-cross text { fill: var(--lw-paper); font-size: 10.5px; font-weight: 600; text-anchor: middle; font-variant-numeric: tabular-nums; }
 .lwt-cross { transition: opacity var(--lw-fast); }
 .lwt-brush { fill: color-mix(in srgb, var(--lw-person) 12%, transparent); stroke: color-mix(in srgb, var(--lw-person) 55%, transparent); stroke-width: 1; }
 
@@ -143,7 +143,7 @@ span.lwt-now { display: inline-flex; align-items: center; gap: 4px; }
 .lwt-tip[data-tone="live"] { border-left-color: var(--lw-live); }
 .lwt-tip[data-tone="person"] { border-left-color: var(--lw-person); }
 .lwt-tip b { font-size: var(--lw-fs-sm); font-weight: 700; }
-.lwt-tip span { color: color-mix(in srgb, var(--lw-paper) 80%, transparent); overflow-wrap: anywhere; }
+.lwt-tip span { color: color-mix(in srgb, var(--lw-paper) 80%, transparent); }
 .lwt-tip em { font-style: normal; color: color-mix(in srgb, var(--lw-paper) 55%, transparent); margin-top: 3px; }
 
 /* below the chart */
@@ -166,7 +166,7 @@ span.lwt-now { display: inline-flex; align-items: center; gap: 4px; }
 .lwt-tried li[data-back] small { color: color-mix(in srgb, var(--lw-bad) 80%, var(--lw-ink-3)); }
 .lwt-brief { margin-top: 12px; }
 .lwt-brief summary { cursor: pointer; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); font-weight: 600; }
-.lwt-brief pre { margin: 8px 0; padding: 10px 12px; max-height: 280px; overflow: auto; background: var(--lw-paper-2); border-radius: var(--lw-r); font-family: var(--lw-mono); font-size: var(--fs-meta); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--lw-ink-2); }
+.lwt-brief pre { margin: 8px 0; padding: 10px 12px; max-height: 280px; overflow: auto; background: var(--lw-paper-2); border-radius: var(--lw-r); font-family: var(--lw-mono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--lw-ink-2); }
 
 /* ── the problem widget (widgets/ProblemCard) ───────────────────────── */
 .lwt-card-w .lw-obj-head { gap: 8px; flex-wrap: wrap; }

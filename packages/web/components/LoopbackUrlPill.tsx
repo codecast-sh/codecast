@@ -27,7 +27,7 @@ import { openBrowserPane } from "../lib/stage";
 
 const PILL =
   "group inline-flex max-w-xs items-center gap-1 rounded-full border border-sol-border bg-sol-bg-alt " +
-  "py-px pl-1.5 pr-2 align-baseline text-meta font-mono leading-[1.4] text-sol-text-secondary no-underline " +
+  "py-px pl-1.5 pr-2 align-baseline text-[11px] font-mono leading-[1.4] text-sol-text-secondary no-underline " +
   "transition-colors hover:border-sol-cyan/50 hover:text-sol-text";
 
 export function LoopbackUrlPill({ url, label }: { url: string; label?: string }) {

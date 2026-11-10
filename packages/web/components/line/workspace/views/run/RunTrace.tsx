@@ -26,7 +26,7 @@ export const RunTrace = memo(function RunTrace({ rows, cur, onPick }: { rows: Re
     list.current?.querySelector<HTMLElement>(`[data-i="${i}"]`)?.focus();
   };
   return (
-    <ol className="lrun-trace" ref={list} aria-label="Steps of this run" data-run-trace={rows.length}
+    <ol className="rp-trace" ref={list} aria-label="Steps of this run" data-run-trace={rows.length}
       onKeyDown={(e) => {
         if (e.metaKey || e.ctrlKey || e.altKey) return;
         if (e.key === "ArrowDown") { e.preventDefault(); move(cur + 1); }
@@ -36,13 +36,13 @@ export const RunTrace = memo(function RunTrace({ rows, cur, onPick }: { rows: Re
       }}>
       {rows.map(({ step: s, mark }) => (
         <li key={s.i}>
-          <button type="button" className="lrun-row" data-i={s.i} aria-current={s.i === cur ? "step" : undefined} tabIndex={s.i === cur ? 0 : -1} data-mark={mark} data-kind={s.kind} onClick={() => onPick(s.i)} data-run-step={s.node}>
-            <span className="lrun-mark" data-mark={mark} role="img" aria-label={s.notRun ? "did not run" : MARK_WORDS[mark]} />
-            <span className="lrun-row-main">
-              <span className="lrun-row-label">{s.label}{s.rounds != null && <span className="lrun-rounds">{s.rounds} tries</span>}</span>
-              {gist(s) && <span className="lrun-row-gist">{gist(s)}</span>}
+          <button type="button" className="rp-row" data-i={s.i} aria-current={s.i === cur ? "step" : undefined} tabIndex={s.i === cur ? 0 : -1} data-mark={mark} data-kind={s.kind} onClick={() => onPick(s.i)} data-run-step={s.node}>
+            <span className="rp-mark" data-mark={mark} role="img" aria-label={s.notRun ? "did not run" : MARK_WORDS[mark]} />
+            <span className="rp-row-main">
+              <span className="rp-row-label">{s.label}{s.rounds != null && <span className="rp-rounds">{s.rounds} tries</span>}</span>
+              {gist(s) && <span className="rp-row-gist">{gist(s)}</span>}
             </span>
-            <span className="lrun-took">{mark === "live" ? <span className="lw-spin" aria-hidden /> : spanShort(s.tookMs) ?? ""}</span>
+            <span className="rp-took">{mark === "live" ? <span className="lw-spin" aria-hidden /> : spanShort(s.tookMs) ?? ""}</span>
           </button>
         </li>
       ))}

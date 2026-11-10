@@ -139,7 +139,7 @@ function PersonPill({ username }: { username: string }) {
   return (
     <Link
       href={objectHref("person", username)}
-      className="not-prose inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-meta font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline no-underline"
+      className="not-prose inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline no-underline"
     >
       @{member?.github_username || username}
     </Link>

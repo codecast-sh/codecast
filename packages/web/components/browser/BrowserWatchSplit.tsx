@@ -194,12 +194,12 @@ function SplitBody({
             live ? "bg-sol-red animate-pulse" : status.kind === "connecting" ? "bg-sol-yellow animate-pulse" : "bg-sol-text-dim/40"
           }`}
         />
-        <span className={`text-meta font-mono tracking-wider flex-shrink-0 ${live ? "text-sol-red" : "text-sol-text-dim"}`}>
+        <span className={`text-[9px] font-mono tracking-wider flex-shrink-0 ${live ? "text-sol-red" : "text-sol-text-dim"}`}>
           {statusLabel(report)}
         </span>
         {tab && (
           <>
-            <span className="text-meta font-mono text-sol-text-muted truncate">{tab.title || "untitled"}</span>
+            <span className="text-[10px] font-mono text-sol-text-muted truncate">{tab.title || "untitled"}</span>
             {tab.url && <WatchAddress url={tab.url} nav={report.nav} />}
           </>
         )}
@@ -249,7 +249,7 @@ function SplitBody({
           onReleaseControl={() => setControlOn(false)}
         />
         {failed ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-meta font-mono text-center px-6 bg-sol-bg/80">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[11px] font-mono text-center px-6 bg-sol-bg/80">
             <span className="text-sol-text-dim">{failed.message}</span>
             <div className="flex items-center gap-2">
               {reopenOffered && (
@@ -274,7 +274,7 @@ function SplitBody({
             {tabActions.state.kind === "note" && <span className="text-sol-red/80">{tabActions.state.text}</span>}
           </div>
         ) : status.kind === "connecting" && !report.hasFrame ? (
-          <div className="absolute inset-0 flex items-center justify-center text-meta font-mono text-sol-text-dim">
+          <div className="absolute inset-0 flex items-center justify-center text-[11px] font-mono text-sol-text-dim">
             Opening a live view of the agent's browser…
           </div>
         ) : null}

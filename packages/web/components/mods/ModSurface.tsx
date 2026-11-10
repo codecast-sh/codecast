@@ -7,7 +7,7 @@ import { useCallback, useId, useMemo } from "react";
 import type { ModNode, ModSurface } from "@codecast/shared/contracts/mods";
 import { CodeBlock } from "../CodeBlock";
 import { ErrorBoundary } from "../ErrorBoundary";
-import { DynamicIcon } from "./ModIcon";
+import { DynamicIcon } from "lucide-react/dynamic";
 import { BlockFrame } from "../BlockFrame";
 import { ModTree, rootCard } from "./ModTree";
 import { modHost, modNavigate, type ModRuntime } from "../../lib/mods/host";
@@ -20,7 +20,7 @@ function ErrorBox({ title, text, retry }: { title: string; text: string; retry?:
         <div className="flex-1 text-[12.5px] font-medium text-sol-red">{title}</div>
         {retry ? <button onClick={retry} className="text-[12px] text-sol-text-muted hover:text-sol-text">Try again</button> : null}
       </div>
-      <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-meta text-sol-text-muted max-h-48 overflow-auto">{text}</pre>
+      <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[11.5px] text-sol-text-muted max-h-48 overflow-auto">{text}</pre>
     </div>
   );
 }
@@ -50,7 +50,7 @@ export function ModSurfaceView({ runtime, surface, instance, fallback, frame }: 
       {state.error && state.tree === undefined ? <ErrorBox title={`${name} could not draw this`} text={state.error} retry={state.retry} /> : null}
       {state.tree === undefined && !state.error ? <div className="h-16 animate-pulse rounded-lg bg-[color-mix(in_srgb,var(--sol-text)_4%,transparent)]" /> : null}
       {tree}
-      {state.error && state.tree !== undefined ? <div className="mt-2 text-meta text-sol-red">The last redraw failed: {state.error.split("\n")[0]}</div> : null}
+      {state.error && state.tree !== undefined ? <div className="mt-2 text-[11.5px] text-sol-red">The last redraw failed: {state.error.split("\n")[0]}</div> : null}
     </div>
   );
   if (!frame) return body;

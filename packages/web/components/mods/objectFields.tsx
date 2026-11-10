@@ -13,7 +13,7 @@ export function StatusBadge({ kind, status }: { kind: Pick<ModObjectKind, "statu
   if (!status) return null;
   const t = statusTone(kind, status);
   return (
-    <span className="inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-meta font-medium whitespace-nowrap" style={{ color: t, background: `color-mix(in srgb, ${t} 14%, transparent)` }}>
+    <span className="inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-[11px] font-medium whitespace-nowrap" style={{ color: t, background: `color-mix(in srgb, ${t} 14%, transparent)` }}>
       <span className="size-1.5 rounded-full" style={{ background: t }} />
       {status.replace(/_/g, " ")}
     </span>

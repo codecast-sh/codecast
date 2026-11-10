@@ -81,7 +81,7 @@ function MacSection() {
           }
         >
           {update && (
-            <span className="rounded-md bg-sol-cyan/15 px-2 py-0.5 text-meta text-sol-cyan">Update available</span>
+            <span className="rounded-md bg-sol-cyan/15 px-2 py-0.5 text-[11px] text-sol-cyan">Update available</span>
           )}
         </SettingsRow>
       ) : (

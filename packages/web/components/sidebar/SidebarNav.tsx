@@ -57,18 +57,15 @@ export function FeedNavRowView({
   team,
   isActive,
   isNarrow,
-  onMobileClose,
 }: {
   team: { name: string; icon?: string; icon_color?: string };
   isActive: boolean;
   isNarrow: boolean;
-  onMobileClose?: () => void;
 }) {
   return (
     <Link
       href="/team/activity"
-      onClick={onMobileClose}
-      {...paneDragProps("/team/activity", "Feed")}
+      {...paneDragProps("/team/activity", "Activity")}
       className={railRowClass(isActive, isNarrow)}
       title={team.name}
     >
@@ -78,7 +75,7 @@ export function FeedNavRowView({
   );
 }
 
-/** The decision queue's row, with what waits on a person. The count hides at zero; the row stays. */
+/** The decision queue's row, with what waits on a person. The container hides it at zero. */
 export function QuestionsNavRowView({
   isActive,
   isNarrow,
@@ -306,7 +303,7 @@ export function SidebarNavView({
           icon={<Waypoints className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         {/* Ops is its own area: the running product, beside the team's own streams, above chat and calls so the live huddles' heading never sits over it. */}
-        {shown("/ops") && <NavSection
+        <NavSection
           label="Ops"
           href="/ops"
           isActive={!!active.ops}
@@ -314,7 +311,7 @@ export function SidebarNavView({
           onMobileClose={onMobileClose}
           title="Ops: what is wrong in the running product right now"
           icon={<Radar className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        />}
+        />
         {chat}
         {calls}
       </div>
@@ -393,14 +390,14 @@ export function SidebarNavView({
           onMobileClose={onMobileClose}
           icon={<FolderGit2 className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
-        {shown("/vault") && <NavSection
+        <NavSection
           label="Vault"
           href="/vault"
           isActive={!!active.vault}
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
           icon={<KeyRound className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        />}
+        />
         {shown("/pages") && <NavSection
           label="Pages"
           href="/pages"
@@ -476,7 +473,7 @@ export function SidebarNavView({
 
 /** A feature row's mark while its team has not decided on it. */
 function NewMark() {
-  return <span className="text-mark font-semibold tracking-wide px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ color: "var(--sol-cyan)", background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)" }} data-feature-new>NEW</span>;
+  return <span className="text-[10px] font-semibold tracking-wide px-1.5 h-[16px] inline-flex items-center rounded-md" style={{ color: "var(--sol-cyan)", background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)" }} data-feature-new>NEW</span>;
 }
 
 /** The block of rail rows that follow the active workspace, under the

@@ -16,7 +16,7 @@ export function SearchOrigin({ row, query, className = "" }: {
   const workers = row.workerCount ?? 0;
   if (!earlier.length && !started && !workers) return null;
   return (
-    <div className={`text-meta leading-relaxed text-sol-text-dim space-y-0.5 ${className}`}>
+    <div className={`text-[11px] leading-relaxed text-sol-text-dim space-y-0.5 ${className}`}>
       {earlier.length > 0 && (
         <p className="truncate">
           <span className="text-sol-text-muted">earlier titled </span>

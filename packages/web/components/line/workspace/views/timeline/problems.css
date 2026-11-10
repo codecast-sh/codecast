@@ -75,7 +75,7 @@ button.lwp-section svg { width: 13px; height: 13px; margin-left: auto; align-sel
 
 /* A heading inside a group: a failure cause, a project not started. It carries the group's one act. */
 .lwp-sub-h { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px var(--lw-s5); background: var(--lw-paper-2); border-bottom: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-sm); }
-.lwp-sub-h b { font-weight: 650; color: var(--lw-ink); min-width: 0; overflow-wrap: anywhere; }
+.lwp-sub-h b { font-weight: 650; color: var(--lw-ink); min-width: 0; }
 .lwp-sub-n { color: var(--lw-ink-3); white-space: nowrap; display: inline-flex; align-items: baseline; gap: 4px; }
 .lwp-sub-n i { font-style: normal; opacity: .6; margin: 0 3px; }
 .lwp-sub-n [data-ready] { color: var(--lw-ink); font-weight: 650; }
@@ -146,10 +146,6 @@ button.lwp-section svg { width: 13px; height: 13px; margin-left: auto; align-sel
   .lwp-row .lwp-c-last { grid-column: 4; grid-row: 1; }
   .lwp-section, .lwp-sub-h { padding-left: var(--lw-s3); padding-right: var(--lw-s3); }
   .lwp-sub-h { flex-wrap: wrap; }
-  /* The 52px and 40px heads keep their short words ("30d", "Last"); the whole head is the button's name. */
-  .lwp-th-long { display: none; }
-  /* A row's act takes the row's whole width here, the status having moved under the title. */
-  .lwp-row-act-c { grid-column: 1 / -1; }
 }
 @media (prefers-reduced-motion: reduce) { .lwp-chip, .lwp-row, .lwp-section { transition: none; } .lwp-chip:active { transform: none; } }
 
@@ -162,8 +158,7 @@ button.lwp-section svg { width: 13px; height: 13px; margin-left: auto; align-sel
 .lwp-row-act { padding-bottom: var(--lw-s2, 6px); margin-top: -4px; }
 .lwp-row-act-c { grid-column: 3; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .lwp-section-act { margin-left: auto; display: inline-flex; gap: 6px; text-transform: none; letter-spacing: 0; font-weight: 500; }
-/* A long act ("Ask again (new run, ~$1.20 billed)") wraps inside its cell rather than running over the next column. */
-.lwp-row-act-c .lw-act { max-width: 100%; min-width: 0; white-space: normal; text-align: left; }
+@media (max-width: 720px) { .lwp-row-act-c { grid-column: 1; } }
 
 /* A problem's folded twins: under it, indented, one rule for the pair. */
 .lwp-twins { margin-left: 18px; border-left: 2px solid var(--lw-rule-2); }

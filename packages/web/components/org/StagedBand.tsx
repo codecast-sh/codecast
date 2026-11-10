@@ -53,7 +53,7 @@ export function StagedBand({ answer, onUndo, field, you, takeover, joined, class
         <span className="min-w-0 flex-1 text-[color:var(--sol-text-secondary)]">
           <b className={cn("font-semibold", INK[answer.verdict])}>{first}</b> {rest}
         </span>
-        <LedgerWord className="-mr-2 ml-auto h-6 text-meta" onClick={onUndo} aria-label="Undo this answer" data-staged-undo>Undo</LedgerWord>
+        <LedgerWord className="-mr-2 ml-auto h-6 text-[11px]" onClick={onUndo} aria-label="Undo this answer" data-staged-undo>Undo</LedgerWord>
       </div>
       {field ? <div className="mt-1.5 min-w-0">{field}</div> : you ? <div className="mt-1 min-w-0">{you}</div> : null}
       {takeover && answer.verdict === "approve" && <TakeoverEdit className="mt-1.5" phrase={takeover.phrase} leave={takeover.leave} onLeave={takeover.onLeave} />}

@@ -25,7 +25,7 @@ export function StatusWord({ status }: { status?: string }) {
 export function RailDay({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="mb-5">
-      <div className="text-mark font-medium text-sol-text-dim uppercase tracking-wider px-1 pb-2">{label}</div>
+      <div className="text-[11px] font-medium text-sol-text-dim uppercase tracking-wider px-1 pb-2">{label}</div>
       <div className="border-l border-sol-border/25 ml-2.5 space-y-0.5">{children}</div>
     </div>
   );
@@ -59,7 +59,7 @@ export function RailRow({
         <Icon className={`w-2.5 h-2.5 ${color}`} />
       </span>
       <div className={`flex-1 min-w-0 flex items-baseline gap-2 text-xs ${card ? "" : "leading-relaxed"}`}>{children}</div>
-      <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0 pt-0.5" title={formatDateFull(ts)}>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0 pt-0.5" title={formatDateFull(ts)}>
         {clock ? new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : relTimeShort(ts)}
       </span>
     </div>

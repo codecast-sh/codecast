@@ -8,7 +8,6 @@
 // Every write goes through the store (opsSlice updateOpsWatch,
 // removeOpsWatch, createOpsWatch), so the page moves at once.
 import { useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, Pause, Pencil, Play, PlayCircle, Trash2, X } from "lucide-react";
@@ -224,7 +223,7 @@ export function QueryEditor({ watch, source, onPreview, highlight }: { watch: Op
   return (
     <div className="ops-card mt-3.5" data-watch-query data-editing={editing ? "" : undefined}>
       <div className="ops-card-head">
-        <span className="inline-flex items-center gap-2 min-w-0">{title}{reader && !editing && <span className="ops-mono ops-dim text-meta font-normal truncate">{reader[1]}</span>}</span>
+        <span className="inline-flex items-center gap-2 min-w-0">{title}{reader && !editing && <span className="ops-mono ops-dim text-[11px] font-normal truncate">{reader[1]}</span>}</span>
         <span className="inline-flex items-center gap-1.5">
           {watch.query_kind !== "insight" && (
             <button type="button" className="ops-btn" disabled={!canRun || run.state === "reading"} onClick={doRun} data-watch-query-run>
@@ -390,8 +389,7 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
     }
   };
 
-  // Through a portal, over the whole window: opened from a source's page, a size container (.sov) would hold the fixed backdrop inside it.
-  return createPortal(
+  return (
     <div className="mx-sheet-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }} onKeyDown={(e) => { if (e.key === "Escape") onClose(); }} role="presentation">
       <div className="mx-sheet" role="dialog" aria-modal="true" aria-label="New watch" data-new-watch>
         <div className="mx-sheet-head">
@@ -527,7 +525,7 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
           </div>
         </div>
         <div className="mx-sheet-foot">
-          <span className="flex-1 text-meta" style={{ color: saving && saving !== "saving" ? "var(--sol-red)" : "var(--sol-text-dim)" }} data-watch-problem>
+          <span className="flex-1 text-[11.5px]" style={{ color: saving && saving !== "saving" ? "var(--sol-red)" : "var(--sol-text-dim)" }} data-watch-problem>
             {saving && saving !== "saving" ? saving : dup ? "" : footProblem ?? ""}
           </span>
           {firesOnAdd && !dup && <FiresOnAdd />}
@@ -537,8 +535,7 @@ export function NewWatchSheet({ sources, initialSource, onClose }: { sources: Op
           </button>
         </div>
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 }
 

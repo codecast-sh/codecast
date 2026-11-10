@@ -95,13 +95,13 @@ export function GoalMeasures({ goal, all, now, editing, onEditing }: { goal: Ini
                 return (
                   <div key={r.key} className="min-w-0 flex flex-col" data-initiative-metric={r.key}>
                     <MetricTile reading={r} trend={trends[r.key]} now={now} size="tile" className="flex-1" />
-                    {source ? <SourceLink source={source} now={now} className="mt-1 pl-1" /> : r.source ? <p className="mt-1 pl-1 text-meta truncate" style={{ color: DIM }} title={r.source}>{r.source}</p> : null}
+                    {source ? <SourceLink source={source} now={now} className="mt-1 pl-1" /> : r.source ? <p className="mt-1 pl-1 text-[11px] truncate" style={{ color: DIM }} title={r.source}>{r.source}</p> : null}
                   </div>
                 );
               })}
             </div>
             {readings.every((r) => r.value === null && !r.series) && (
-              <p className="text-meta" style={{ color: DIM }} title={`An agent reports it with: cast initiative report ${goal.short_id} ${readings[0].key}=<value> --source <link>`} data-initiative-no-reading>No reading yet. Ask its owner for the first one.</p>
+              <p className="text-[11.5px]" style={{ color: DIM }} title={`An agent reports it with: cast initiative report ${goal.short_id} ${readings[0].key}=<value> --source <link>`} data-initiative-no-reading>No reading yet. Ask its owner for the first one.</p>
             )}
             {chain.length > 0 && (
               <p className="text-[12px] inline-flex items-center gap-1.5 flex-wrap" style={{ color: DIM }} data-initiative-chain>

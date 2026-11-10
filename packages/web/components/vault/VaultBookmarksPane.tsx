@@ -72,7 +72,7 @@ function TitleInput({
 
 function EmptyState() {
   return (
-    <div className="px-3 py-5 text-meta leading-5 text-sol-text-dim">
+    <div className="px-3 py-5 text-[11px] leading-5 text-sol-text-dim">
       <div className="text-sol-text-muted mb-2">Nothing bookmarked yet.</div>
       <div className="mb-1">Four things can be pinned here:</div>
       <ul className="space-y-1">

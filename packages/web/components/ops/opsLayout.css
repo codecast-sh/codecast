@@ -22,14 +22,14 @@
 
 .osx-stats { display: flex; flex-wrap: wrap; gap: 10px 34px; }
 .osx-stat { display: flex; flex-direction: column; min-width: 0; }
-.osx-stat-label { font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; }
+.osx-stat-label { font-size: 11.5px; color: var(--sol-text-dim); white-space: nowrap; }
 .osx-stat-value { margin-top: 3px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 17px; font-weight: 500; letter-spacing: -0.02em; color: var(--sol-text); white-space: nowrap; }
 .osx-stats[data-size="lg"] .osx-stat-value { font-size: 26px; font-weight: 600; letter-spacing: -0.035em; }
 .osx-stat-value[data-tone="bad"] { color: var(--sol-red); }
 .osx-stat-value[data-tone="good"] { color: var(--sol-green); }
 .osx-stat-value[data-tone="warn"] { color: var(--sol-orange); }
 .osx-stat-value[data-tone="flat"] { color: var(--sol-text-muted); }
-.osx-stat-sub { margin-top: 2px; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; }
+.osx-stat-sub { margin-top: 2px; font-size: 11.5px; color: var(--sol-text-dim); white-space: nowrap; }
 
 .osx-hero { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 14px 44px; margin: 20px 0 8px; }
 .osx-hero-main { display: flex; align-items: baseline; gap: 12px; }
@@ -49,7 +49,7 @@
 .osx-row:hover, .osx-row[data-selected] { background: var(--osx-hover); }
 .osx-row-title { min-width: 0; }
 .osx-row-title b { display: block; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.osx-row-title span { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--sol-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.osx-row-title span { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: 11.5px; color: var(--sol-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .osx-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .osx-dim { color: var(--sol-text-dim); }
 .osx-right { text-align: right; }

@@ -112,7 +112,7 @@ export function FixPanel({ group, source, stage, episodes, now }: { group: OpsGr
           <Link href={opsHref.issue(group.short_id)} className="ops-mono font-normal hover:underline">{group.short_id}</Link>
           <StatusPill status={group.status} failing={group.meta?.ok === undefined ? undefined : !group.meta.ok} />
         </span>
-        <span className="ops-num ops-dim font-normal text-meta mx-fix-sum" data-watch-episodes={all.count} title={first ? `since ${stampLabel(first)}` : undefined}>
+        <span className="ops-num ops-dim font-normal text-[11.5px] mx-fix-sum" data-watch-episodes={all.count} title={first ? `since ${stampLabel(first)}` : undefined}>
           {all.count ? `${all.count} ${all.count === 1 ? "episode" : "episodes"} · ${durationShort(all.total)} alerting` : "no episodes"}
         </span>
       </div>

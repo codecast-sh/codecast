@@ -2,8 +2,7 @@
    reader beside it. Two columns from the first paint; the list never changes
    width, and each side scrolls on its own. */
 .lw-stage-in:has(> .fy) { height: 100%; }
-/* The list takes a third of the stage (not the window), 300 to 460px, so the reader beside it keeps the rest. */
-.fy { display: grid; grid-template-columns: clamp(300px, 34%, 460px) minmax(0, 1fr); height: 100%; min-height: 0; }
+.fy { display: grid; grid-template-columns: 460px minmax(0, 1fr); height: 100%; min-height: 0; }
 
 /* Nothing open: the list is a table across the whole page. */
 .fy[data-mode="table"] { grid-template-columns: minmax(0, 1fr); }
@@ -181,6 +180,7 @@ a.fy-head:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person)
 .fy-figure:hover { background: var(--lw-paper-2); }
 .fy-figure b { font-size: var(--lw-fs-2xl); font-weight: 650; color: var(--lw-ink); line-height: 1.1; }
 
+@media (max-width: 1100px) { .fy { grid-template-columns: 380px minmax(0, 1fr); } }
 @media (max-width: 760px) {
   .fy { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(200px, 45%) minmax(0, 1fr); }
   .fy[data-mode="table"] { grid-template-rows: minmax(0, 1fr); }

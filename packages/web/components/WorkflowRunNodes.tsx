@@ -69,7 +69,7 @@ function StepMeta({ row, now }: { row: RunNodeRow; now: number }) {
 
 function NodeLabelChip({ label }: { label: string }) {
   return (
-    <span className="flex-shrink-0 max-w-[10rem] truncate text-meta font-mono px-1 py-px rounded bg-sol-bg-alt text-sol-text-muted border border-sol-border/40">
+    <span className="flex-shrink-0 max-w-[10rem] truncate text-[9px] font-mono px-1 py-px rounded bg-sol-bg-alt text-sol-text-muted border border-sol-border/40">
       {label}
     </span>
   );
@@ -118,8 +118,8 @@ function StepRow({ row, now }: { row: RunNodeRow; now: number }) {
         } ${row.current ? "font-medium" : ""}`}>
           {row.label}
         </div>
-        {line && <p className="mt-0.5 text-meta text-sol-text-muted truncate leading-snug">{line}</p>}
-        <div className="mt-0.5 flex items-center gap-1.5 text-meta text-sol-text-dim/70 min-w-0 empty:hidden">
+        {line && <p className="mt-0.5 text-[11px] text-sol-text-muted truncate leading-snug">{line}</p>}
+        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-sol-text-dim/70 min-w-0 empty:hidden">
           <StepMeta row={row} now={now} />
         </div>
       </div>
@@ -158,16 +158,16 @@ export function WorkflowRunNodes({ run, workflow, className, headings = "panel" 
         <section key={g.title ?? `group-${i}`} className="space-y-0.5" data-run-phase={g.title ?? ""}>
           {g.title && (headings === "page" ? (
             <div className="flex items-baseline gap-3 px-2 pb-1.5">
-              <h2 className="text-mark font-semibold uppercase tracking-wider text-sol-text-dim flex-shrink-0">{g.title}</h2>
-              {g.detail && <span className="min-w-0 truncate text-meta text-sol-text-dim/80" title={g.detail}>{g.detail}</span>}
-              <span className="ml-auto flex items-center gap-1.5 self-center text-meta">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-sol-text-dim flex-shrink-0">{g.title}</h2>
+              {g.detail && <span className="min-w-0 truncate text-[11.5px] text-sol-text-dim/80" title={g.detail}>{g.detail}</span>}
+              <span className="ml-auto flex items-center gap-1.5 self-center text-[11px]">
                 <RailProgress done={g.rows.filter((r) => r.status === "completed").length} total={g.rows.length} bar={g.rows.some((r) => r.status === "failed") ? "bg-sol-red" : "bg-sol-violet"} />
               </span>
             </div>
           ) : (
             <div className="flex items-center gap-1.5 px-2 pt-1" title={g.detail}>
-              <span className="text-mark uppercase tracking-wider text-sol-cyan/70 font-semibold">{g.title}</span>
-              <span className="text-meta text-sol-text-dim/60 tabular-nums">{g.rows.length}</span>
+              <span className="text-[9px] uppercase tracking-wider text-sol-cyan/70 font-semibold">{g.title}</span>
+              <span className="text-[9px] text-sol-text-dim/60 tabular-nums">{g.rows.length}</span>
             </div>
           ))}
           {g.rows.map((row) =>

@@ -178,7 +178,7 @@ export function DecisionCompactCardView({
   ] : [];
 
   const openLink = (
-    <Link href={decisionHref(decision)} className="group/open flex items-center gap-1 font-mono text-meta text-sol-text-dim hover:text-sol-text focus-visible:text-sol-text" title={decision.card ? `Open ${decision.short_id ?? "the decision"}` : undefined} aria-label={decision.card ? "Open the decision" : undefined}>
+    <Link href={decisionHref(decision)} className="group/open flex items-center gap-1 font-mono text-[11px] text-sol-text-dim hover:text-sol-text focus-visible:text-sol-text" title={decision.card ? `Open ${decision.short_id ?? "the decision"}` : undefined} aria-label={decision.card ? "Open the decision" : undefined}>
       {/* A card's change is its link and its task chip names it, so its own
           id stays on hover. */}
       {!decision.card && (decision.short_id ?? "open")}
@@ -201,7 +201,7 @@ export function DecisionCompactCardView({
             own dot says whether it is live; only a blocking ask adds one. */}
         {!decision.card && <div className="flex items-start gap-2">
           <SepRow
-          className="flex-1 min-w-0 text-meta text-sol-text-dim"
+          className="flex-1 min-w-0 text-[11px] text-sol-text-dim"
           items={[
             {
               key: "who",
@@ -212,7 +212,7 @@ export function DecisionCompactCardView({
                   {onToggleSelect && (
                     <input type="checkbox" checked={!!selected} onChange={onToggleSelect} className="accent-[var(--sol-violet)]" aria-label="Select for a stack" />
                   )}
-                  {decision.blocking && <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-sol-yellow" title="Blocking: the session is parked" aria-label="blocking" />}
+                  {decision.blocking && <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-sol-yellow animate-pulse" title="Blocking: the session is parked" aria-label="blocking" />}
                   <AskingSessionView decision={decision} session={session} onJumpToAsk={onJumpToAsk} className="max-w-[22rem]" />
                 </>
               ),

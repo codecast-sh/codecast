@@ -238,7 +238,7 @@ export function AddSourceForm({ initial, vendors, onCancel, onCreated, kindPicke
       }}
     >
       <div className="flex items-end gap-3 flex-wrap">
-        <label className="flex flex-col gap-1 text-meta text-sol-text-muted flex-1 min-w-[200px]">
+        <label className="flex flex-col gap-1 text-[11.5px] text-sol-text-muted flex-1 min-w-[200px]">
           Name
           <input
             autoFocus
@@ -255,7 +255,7 @@ export function AddSourceForm({ initial, vendors, onCancel, onCreated, kindPicke
           ))}
         </div>}
         {provider === "app" && (
-          <label className="flex flex-col gap-1 text-meta text-sol-text-muted min-w-[260px] flex-1">
+          <label className="flex flex-col gap-1 text-[11.5px] text-sol-text-muted min-w-[260px] flex-1">
             Base URL
             <input
               value={baseUrl}
@@ -266,7 +266,7 @@ export function AddSourceForm({ initial, vendors, onCancel, onCreated, kindPicke
           </label>
         )}
         {provider === "posthog" && takenProjects && listError && (
-          <label className="flex flex-col gap-1 text-meta text-sol-text-muted min-w-[160px]">
+          <label className="flex flex-col gap-1 text-[11.5px] text-sol-text-muted min-w-[160px]">
             Project id
             <input
               value={projectId}
@@ -280,7 +280,7 @@ export function AddSourceForm({ initial, vendors, onCancel, onCreated, kindPicke
           </label>
         )}
         {provider === "sentry" && listError && (
-          <label className="flex flex-col gap-1 text-meta text-sol-text-muted min-w-[200px]">
+          <label className="flex flex-col gap-1 text-[11.5px] text-sol-text-muted min-w-[200px]">
             Projects
             <input
               value={projects}
@@ -347,7 +347,7 @@ export function KeyReveal({ reveal, onDone }: { reveal: Reveal & { key: string }
         <button type="button" className="ops-btn" onClick={() => void copyText(snippets[tab], "Snippet copied")}><Copy className="w-3.5 h-3.5" /> Copy snippet</button>
       </div>
       <pre className="ops-code ops-mono">{snippets[tab]}</pre>
-      <div className="flex items-center gap-3 text-meta text-sol-text-dim">
+      <div className="flex items-center gap-3 text-[11.5px] text-sol-text-dim">
         <span>Send one event, then watch it land on <Link href={opsHref.tab("timeline", { source: reveal.name })} className="text-sol-link hover:underline">the Ops timeline</Link>.</span>
         <div className="flex-1" />
         <button type="button" className="ops-btn" onClick={onDone}>I saved it</button>
@@ -377,7 +377,7 @@ export function AppReveal({ reveal, onDone }: { reveal: Reveal; onDone: () => vo
         <button type="button" className="ops-btn" onClick={() => void copyText(snippets[tab], "Snippet copied")}><Copy className="w-3.5 h-3.5" /> Copy</button>
       </div>
       <pre className="ops-code ops-mono">{snippets[tab]}</pre>
-      <div className="flex items-center gap-3 text-meta text-sol-text-dim">
+      <div className="flex items-center gap-3 text-[11.5px] text-sol-text-dim">
         <span>Once the app is deployed with it, its readers list on <Link href={opsHref.tab("apps", { app: source.id })} className="text-sol-link hover:underline">Ops, Apps</Link>, where a person grants its actions.</span>
         <div className="flex-1" />
         <button type="button" className="ops-btn" onClick={onDone}>Done</button>
@@ -442,7 +442,7 @@ function SourceEventNames({ source, now }: { source: OpsSource; now: number }) {
   if (!rows.length) return null;
   const shown = rows.slice(0, 3).filter((r) => r.day > 0);
   return (
-    <span className="text-sol-text-dim text-meta ops-num truncate min-w-0" title={rows.map((r) => `${r.name}: ${r.day} in 24h`).join("\n")}>
+    <span className="text-sol-text-dim text-[11px] ops-num truncate min-w-0" title={rows.map((r) => `${r.name}: ${r.day} in 24h`).join("\n")}>
       {shown.length ? shown.map((r) => `${r.name} ${r.day}`).join(", ") : `${rows.length} event name${rows.length === 1 ? "" : "s"}, none in 24h`}
       {rows.length > shown.length && shown.length ? `, +${rows.length - shown.length}` : ""}
     </span>

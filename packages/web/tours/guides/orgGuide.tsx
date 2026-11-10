@@ -62,7 +62,7 @@ function TooMany({ beat }: SceneProps) {
         <Show key={k} on={grouped} pop at={{ x: 668, y: LANE_Y[k] - 26 }} style={{ transitionDelay: `${150 + i * 120}ms` }}>
           <div className="flex flex-col items-center gap-1 w-[92px]">
             <Face avatar={ROLES[k].avatar} size={40} />
-            <span className="text-meta font-semibold text-center leading-tight">{ROLES[k].name}</span>
+            <span className="text-[11px] font-semibold text-center leading-tight">{ROLES[k].name}</span>
           </div>
         </Show>
       ))}
@@ -71,7 +71,7 @@ function TooMany({ beat }: SceneProps) {
           <Person name="You" you size={64} color={YOU_COLOR} />
         </span>
         <span className="text-[13px] font-semibold">You</span>
-        <span className="text-meta text-center leading-tight" style={{ color: beat === 1 ? "var(--sol-orange)" : "var(--sol-text-muted)" }}>
+        <span className="text-[11.5px] text-center leading-tight" style={{ color: beat === 1 ? "var(--sol-orange)" : "var(--sol-text-muted)" }}>
           <Count value={beat === 0 ? 9 : beat === 1 ? 41 : 2} /> waiting on you
         </span>
       </div>
@@ -118,7 +118,7 @@ function ARole({ beat }: SceneProps) {
               <div key={when} className="flex items-center gap-3 h-[38px] px-3 rounded-lg" style={{ background: "var(--sol-bg)", border: "1px solid color-mix(in srgb, var(--sol-border) 60%, transparent)", animation: beat === 3 ? `guide-breathe 1.6s ${i * 0.4}s ease-in-out 2` : undefined }}>
                 <span className="text-[12px] font-semibold w-[178px] shrink-0">{when}</span>
                 <span className="text-[12px] gs-muted flex-1 truncate">{what}</span>
-                <span className="text-meta gs-dim">{next}</span>
+                <span className="text-[11px] gs-dim">{next}</span>
               </div>
             ))}
           </div>
@@ -181,7 +181,7 @@ function Chart({ beat, act, waiting }: SceneProps) {
       {[{ x: 414, name: "You", you: true, sub: "Founder", color: YOU_COLOR }, { x: 920, name: "Leo", you: false, sub: "Engineer", color: "var(--sol-magenta)" }].map((p) => (
         <div key={p.name} className="gs-card absolute flex items-center gap-2.5" style={{ left: p.x - 80, top: 112, width: 160, padding: "9px 11px", animation: "guide-say-in 500ms both" }}>
           <Person name={p.name} you={p.you} size={32} color={p.color} />
-          <div><div className="text-[13px] font-semibold leading-tight">{p.you ? "You" : p.name}</div><div className="text-meta gs-dim">{p.sub}</div></div>
+          <div><div className="text-[13px] font-semibold leading-tight">{p.you ? "You" : p.name}</div><div className="text-[11px] gs-dim">{p.sub}</div></div>
         </div>
       ))}
       {CHART.map((c, i) => {
@@ -191,7 +191,7 @@ function Chart({ beat, act, waiting }: SceneProps) {
           <div key={c.key} className="absolute" style={{ left: p.cx - ROLE_W / 2, top: p.y, width: ROLE_W, zIndex: c.key === "growth" ? 2 : undefined, transition: c.key === "growth" && drag.live ? "none" : "left 900ms cubic-bezier(.3,.7,.2,1), top 900ms cubic-bezier(.3,.7,.2,1), transform 600ms cubic-bezier(.3,.7,.2,1)", transform: c.key === "growth" ? drag.transform : undefined, animation: `guide-say-in 500ms ${300 + i * 90}ms both` }}>
             <RoleCard role={c.key} spot={waits} line={c.key === "people" ? "weekly review" : `${c.dots.length} sessions`} state={c.dots.includes("needs_input") ? "needs_input" : "working"}>
               <div className="overflow-hidden transition-all duration-500" style={{ maxHeight: lens === "Everything" && c.goal ? 30 : 0, opacity: lens === "Everything" && c.goal ? 1 : 0 }}>
-                <div className="mt-2 pt-2 text-meta truncate" style={{ color: "var(--sol-yellow)", borderTop: "1px solid color-mix(in srgb, var(--sol-border) 55%, transparent)" }}>◎ {c.goal}</div>
+                <div className="mt-2 pt-2 text-[11px] truncate" style={{ color: "var(--sol-yellow)", borderTop: "1px solid color-mix(in srgb, var(--sol-border) 55%, transparent)" }}>◎ {c.goal}</div>
               </div>
             </RoleCard>
             {waits && (
@@ -204,7 +204,7 @@ function Chart({ beat, act, waiting }: SceneProps) {
         );
       })}
       <Show on={beat === 1} at={{ x: 60, y: 540 }}>
-        <div className="flex items-center gap-4 text-meta gs-muted">
+        <div className="flex items-center gap-4 text-[11.5px] gs-muted">
           {(["working", "needs_input", "done", "dormant"] as WorkState[]).map((s) => <span key={s} className="flex items-center gap-1.5"><Dot state={s} /> {s === "needs_input" ? "Waiting on someone" : s === "working" ? "Working" : s === "done" ? "Done, yours to read" : "Asleep until its trigger"}</span>)}
         </div>
       </Show>
@@ -240,9 +240,9 @@ function Hiring({ beat, act, waiting }: SceneProps) {
             <div key={t.name} className={`gs-card p-3.5 ${t.hire && waiting ? "gs-spot" : ""}`} style={{ height: 198, animation: `guide-say-in 450ms ${i * 80}ms both`, opacity: hired && !t.hire ? 0.45 : 1, transition: "opacity 500ms" }}>
               <div className="flex -space-x-2">{t.faces.map((f) => <span key={f} className="rounded-full" style={{ boxShadow: "0 0 0 2px var(--sol-card)" }}><Face avatar={f} size={34} /></span>)}</div>
               <div className="mt-3 text-[14px] font-semibold">{t.name}</div>
-              <div className="text-meta gs-muted mt-1 leading-snug h-[34px]">{t.roles}</div>
+              <div className="text-[11.5px] gs-muted mt-1 leading-snug h-[34px]">{t.roles}</div>
               <div className="mt-2.5 flex items-center gap-2">
-                <span className="text-meta gs-dim">{t.faces.length} {t.faces.length === 1 ? "role" : "roles"}</span>
+                <span className="text-[11px] gs-dim">{t.faces.length} {t.faces.length === 1 ? "role" : "roles"}</span>
                 <span className="ml-auto">
                   {t.hire && hired ? <span className="gs-pill" style={{ color: ACCENT, background: "color-mix(in srgb, var(--sol-violet) 14%, transparent)" }}><Check className="w-3 h-3" /> HIRED</span>
                     : <StageButton primary={t.hire} wait={t.hire && waiting} onPress={act}>Hire</StageButton>}
@@ -263,7 +263,7 @@ function Hiring({ beat, act, waiting }: SceneProps) {
           {HIRED.map((k, i) => (
             <div key={k} className={`gs-card flex flex-col items-center text-center gap-1.5 py-3 px-1 transition-all duration-500 ${hired ? "" : "gs-ghost"}`} style={{ opacity: hired ? 1 : 0.5, transitionDelay: `${i * 160}ms` }}>
               <span style={{ filter: hired ? "none" : "grayscale(1)", transition: `filter 500ms ${i * 160}ms` }}><Face avatar={ROLES[k].avatar} size={38} /></span>
-              <span className="text-meta font-semibold leading-tight">{ROLES[k].name}</span>
+              <span className="text-[11px] font-semibold leading-tight">{ROLES[k].name}</span>
             </div>
           ))}
         </div>
@@ -394,14 +394,14 @@ function Ladder({ beat, act, waiting }: SceneProps) {
       {/* The second question: climbs, each rung adding what it knows. */}
       <Show on={second && !answered} at={{ x: LADDER_X + 132, y: 452, w: 226 }}><div className="gs-note" style={{ position: "relative" }}>Ship the refund fix to every customer today?</div></Show>
       <Show on={second} at={{ x: LADDER_X + 132, y: 326, w: 226 }} style={{ transitionDelay: "500ms" }}>
-        <div className="text-meta gs-muted leading-snug">"Touches every customer, so it's not mine to call."</div>
+        <div className="text-[11.5px] gs-muted leading-snug">"Touches every customer, so it's not mine to call."</div>
       </Show>
       <Show on={second} at={{ x: LADDER_X + 132, y: 200, w: 226 }} style={{ transitionDelay: "1100ms" }}>
-        <div className="text-meta leading-snug"><b>Recommends:</b> <span className="gs-muted">ship to 10% first and watch refunds for a day.</span></div>
+        <div className="text-[11.5px] leading-snug"><b>Recommends:</b> <span className="gs-muted">ship to 10% first and watch refunds for a day.</span></div>
       </Show>
       <Show on={beat >= 3} at={{ x: 620, y: 70, w: 390 }}>
         <div className="gs-card p-4" style={{ borderColor: "color-mix(in srgb, var(--guide-accent) 45%, transparent)" }}>
-          <div className="flex items-center gap-2"><StatePill state="needs_input" /><span className="text-meta gs-dim">from Fix refund retries</span></div>
+          <div className="flex items-center gap-2"><StatePill state="needs_input" /><span className="text-[11px] gs-dim">from Fix refund retries</span></div>
           <div className="mt-2 text-[14.5px] font-semibold leading-snug">Ship the refund fix to every customer today?</div>
           <div className="mt-3 flex items-start gap-2 text-[12px] leading-snug rounded-lg p-2.5" style={{ background: "var(--sol-bg)" }}>
             <Face avatar="hedgehog" size={20} /><span><b>QA Lead recommends</b> shipping to 10% first and watching refunds for a day.</span>
@@ -413,7 +413,7 @@ function Ladder({ beat, act, waiting }: SceneProps) {
                 <button key={k as string} type="button" onClick={rec && waiting ? act : undefined} data-wait={rec && waiting ? "" : undefined} data-guide-stage-act={rec && waiting ? "" : undefined}
                   className={`flex items-center gap-2.5 h-[36px] px-3 rounded-lg text-left text-[12.5px] ${rec && waiting ? "gs-live cursor-pointer" : "pointer-events-none"}`}
                   style={{ border: `1px solid ${chosen ? "var(--guide-accent)" : "color-mix(in srgb, var(--sol-border) 70%, transparent)"}`, background: chosen ? "color-mix(in srgb, var(--guide-accent) 12%, transparent)" : "var(--sol-bg)", opacity: answered && !rec ? 0.45 : 1 }}>
-                  <span className="text-meta gs-dim w-3">{k as string}</span><span className="flex-1">{label as string}</span>{rec && <span className="text-meta" style={{ color: ACCENT }}>recommended</span>}{chosen && <Check className="w-4 h-4" style={{ color: ACCENT }} />}
+                  <span className="text-[10.5px] gs-dim w-3">{k as string}</span><span className="flex-1">{label as string}</span>{rec && <span className="text-[10.5px]" style={{ color: ACCENT }}>recommended</span>}{chosen && <Check className="w-4 h-4" style={{ color: ACCENT }} />}
                 </button>
               );
             })}
@@ -449,7 +449,7 @@ function RolePage({ beat }: SceneProps) {
         <Show on={menu} pop at={{ x: 712, y: 66, w: 240 }} style={{ zIndex: 3, transformOrigin: "top right" }}>
           <div className="gs-card p-1.5 flex flex-col text-[12.5px]" style={{ background: "var(--sol-card)", boxShadow: "0 24px 60px -20px rgba(0,0,0,.65)" }}>
             {[[Pause, "Pause", "stops it, keeps everything"], [X, "Retire", "its sessions report to you"]].map(([Icon, label, sub]: any) => (
-              <div key={label} className="flex items-start gap-2 px-2 py-1.5 rounded-md"><Icon className="w-3.5 h-3.5 mt-0.5" /><span><span className="font-semibold">{label}</span><br /><span className="text-meta gs-dim">{sub}</span></span></div>
+              <div key={label} className="flex items-start gap-2 px-2 py-1.5 rounded-md"><Icon className="w-3.5 h-3.5 mt-0.5" /><span><span className="font-semibold">{label}</span><br /><span className="text-[11px] gs-dim">{sub}</span></span></div>
             ))}
           </div>
         </Show>
@@ -460,7 +460,7 @@ function RolePage({ beat }: SceneProps) {
         </div>
         <div className="absolute right-0 top-[74px] bottom-0 left-[470px] p-4">
           <div className="flex gap-0.5">
-            {TABS.map((t) => <span key={t} className="px-2 h-[26px] inline-flex items-center rounded-md text-meta transition-colors duration-300" style={{ background: t === tab ? "var(--sol-bg-alt)" : "transparent", color: t === tab ? "var(--sol-text)" : "var(--sol-text-dim)", fontWeight: t === tab ? 600 : 400 }}>{t}</span>)}
+            {TABS.map((t) => <span key={t} className="px-2 h-[26px] inline-flex items-center rounded-md text-[11.5px] transition-colors duration-300" style={{ background: t === tab ? "var(--sol-bg-alt)" : "transparent", color: t === tab ? "var(--sol-text)" : "var(--sol-text-dim)", fontWeight: t === tab ? 600 : 400 }}>{t}</span>)}
           </div>
           <div key={tab} className="mt-4 flex flex-col gap-2" style={{ animation: "guide-say-in 380ms ease-out" }}>
             {tab === "Overview" && (
@@ -476,8 +476,8 @@ function RolePage({ beat }: SceneProps) {
             ))}
             {tab === "Triggers" && [["Every 4 hours", "Review open work", "in 1h 12m", true], ["When a session needs input", "Answer it or bring it to you", "armed", true], ["Mondays 9am", "Write the week's QA plan", "paused", false]].map(([w, d, n, on]) => (
               <div key={w as string} className="gs-card flex items-center gap-3 px-3 h-[48px]">
-                <div className="flex-1 min-w-0"><div className="text-[12.5px] font-semibold">{w as string}</div><div className="text-meta gs-dim truncate">{d as string}</div></div>
-                <span className="text-meta gs-dim">{n as string}</span>
+                <div className="flex-1 min-w-0"><div className="text-[12.5px] font-semibold">{w as string}</div><div className="text-[11px] gs-dim truncate">{d as string}</div></div>
+                <span className="text-[11px] gs-dim">{n as string}</span>
                 <Play className="w-3.5 h-3.5 gs-dim" />
                 <Switch checked={on as boolean} onCheckedChange={() => {}} aria-label={w as string} />
               </div>
@@ -486,7 +486,7 @@ function RolePage({ beat }: SceneProps) {
               <>
                 {[["Works on its own", "Starts sessions for its projects without asking", true], ["Hires its own help", "May propose new roles under it", false]].map(([k, d, on]) => (
                   <div key={k as string} className="gs-card flex items-center gap-3 px-3 h-[52px]">
-                    <div className="flex-1"><div className="text-[12.5px] font-semibold">{k as string}</div><div className="text-meta gs-dim">{d as string}</div></div>
+                    <div className="flex-1"><div className="text-[12.5px] font-semibold">{k as string}</div><div className="text-[11px] gs-dim">{d as string}</div></div>
                     <Switch checked={on as boolean} onCheckedChange={() => {}} aria-label={k as string} />
                   </div>
                 ))}

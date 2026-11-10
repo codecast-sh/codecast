@@ -7,7 +7,7 @@
 // its steps numbered, and the run bar steps to the run before or after.
 // Pan, zoom and fit by pointer or key; ? lists every key. Clicking a step
 // opens the shared step drawer through the selection, so the URL holds it.
-import { useCallback, useId, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useCallback, useId, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { stepCameBack, type LineRunModel } from "../../../../lib/line/lineModel";
 import { RUN_END_GROUPS, runEndTone, runEndWords } from "../../../../lib/line/replay";
 import { useTabActive } from "../../../../hooks/usePagePresence";
@@ -35,19 +35,7 @@ const readMode = (): GraphMode => {
   try { return localStorage.getItem(MODE_KEY) === "all" ? "all" : "essence"; } catch { return "essence"; }
 };
 
-/** A hover tip, placed in the map's own box: `.lwg` is a size container, so it (not the window) holds a fixed or
- *  absolute box inside it, and the pointer's window coordinates are read against its corner. */
-type Tip = { x: number; y: number; w: number; h: number; title: string; body: string };
-const TIP_W = 300; // .lwg-tip's max-width
-function tipAt(root: HTMLElement | null, ev: ReactMouseEvent): Pick<Tip, "x" | "y" | "w" | "h"> {
-  const r = root?.getBoundingClientRect();
-  return r ? { x: ev.clientX - r.left, y: ev.clientY - r.top, w: r.width, h: r.height } : { x: ev.clientX, y: ev.clientY, w: Infinity, h: Infinity };
-}
-/** Right of and below the pointer, kept inside the map; low on the map it opens above the pointer instead. */
-function tipStyle(t: Tip): CSSProperties {
-  const left = Math.max(8, Math.min(t.x + 14, t.w - TIP_W - 8));
-  return t.y > t.h * 0.6 ? { left, bottom: t.h - t.y + 12 } : { left, top: t.y + 16 };
-}
+type Tip = { x: number; y: number; title: string; body: string };
 const KIND_TIP = { agent: "agent, one prompt", person: "you decide", script: "script, code", end: "ends the run" } as const;
 
 /** A run's end as a tag: the same word and color every surface uses (replay runEndWords). */
@@ -120,6 +108,7 @@ const KEYS: Array<[string[], string]> = [
   [["M"], "Essence or All steps"],
   [["F"], "fit the graph"],
   [["+", "−"], "zoom in or out"],
+  [["1", "5"], "switch view"],
   [["Esc"], "close"],
 ];
 
@@ -135,7 +124,7 @@ function KeySheet({ onClose }: { onClose: () => void }) {
               <span>{what}</span>
             </span>
           ))}
-          <span><KeyCap>{isMac ? "⌘" : "Ctrl"}</KeyCap><span style={{ alignSelf: "center", fontSize: 12 }}>+ scroll</span></span><span>zoom at the pointer; scroll alone pans</span>
+          <span><KeyCap>{isMac ? "⌘" : "Ctrl"}</KeyCap><span style={{ alignSelf: "center", fontSize: 11 }}>+ scroll</span></span><span>zoom at the pointer; scroll alone pans</span>
         </div>
       </div>
     </div>
@@ -365,7 +354,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
     const reached = node.runs ? ` Reached in ${node.runs} of ${model.runs.length} runs${fails ? `, ${fails} failed` : ""}.` : model.runs.length ? " No run has reached it yet." : "";
     const n = stepCameBack(step);
     const cameBack = n ? ` ${n === 1 ? "One close" : `${n} closes`} it made came back after it; its Decisions mark each.` : "";
-    setTip({ ...tipAt(rootRef.current, ev), title: `${step.label} · ${KIND_TIP[step.kind]}`, body: `${step.purpose}${reached}${cameBack}` });
+    setTip({ x: ev.clientX, y: ev.clientY, title: `${step.label} · ${KIND_TIP[step.kind]}`, body: `${step.purpose}${reached}${cameBack}` });
   }, [model, failed]);
   const onEdgeHover = useCallback((e: GEdge, ev: ReactMouseEvent | null) => {
     if (!ev) { setTip(null); return; }
@@ -373,7 +362,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
     const to = model.steps[e.to]?.label ?? e.to;
     const edge = model.graph.edges.find((x) => x.id === e.id);
     const why = edge?.does ?? (edge?.condition ? `When ${edge.condition}.` : "");
-    setTip({ ...tipAt(rootRef.current, ev), title: `${from} → ${to}`, body: [why, e.count ? `Taken ${e.count} ${e.count === 1 ? "time" : "times"}.` : "Never taken yet."].filter(Boolean).join(" ") });
+    setTip({ x: ev.clientX, y: ev.clientY, title: `${from} → ${to}`, body: [why, e.count ? `Taken ${e.count} ${e.count === 1 ? "time" : "times"}.` : "Never taken yet."].filter(Boolean).join(" ") });
   }, [model]);
 
   const moveFocus = useCallback((dir: 1 | -1, actorsOnly: boolean) => {
@@ -497,7 +486,7 @@ export function GraphView({ model, workspace, selection, select, href, lead, tra
         <button type="button" onClick={() => pz.zoomBy(1.25)} aria-label="Zoom in" title="Zoom in (+)">+</button>
         <button type="button" onClick={() => pz.zoomBy(0.8)} aria-label="Zoom out" title="Zoom out (−)">−</button>
       </div>
-      {tip && <div className="lwg-tip" style={tipStyle(tip)}><b>{tip.title}</b>{tip.body}</div>}
+      {tip && <div className="lwg-tip" style={{ left: Math.min(tip.x + 14, (typeof window !== "undefined" ? window.innerWidth : 1600) - 320), top: tip.y + 16 }}><b>{tip.title}</b>{tip.body}</div>}
       {help && <KeySheet onClose={() => setHelp(false)} />}
     </div>
     </div>

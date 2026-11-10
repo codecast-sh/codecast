@@ -140,7 +140,7 @@ export function ScopePanel(p: ScopePanelProps) {
       {tab === "work" && (
         <div className="shrink-0 flex items-center gap-1 px-3 pt-2.5 pb-1.5" role="tablist" aria-label="Work" data-work-views>
           {SCOPE_WORK_VIEWS.map((v) => (
-            <button key={v.key} type="button" role="tab" aria-selected={workView === v.key} onClick={() => setWorkView(v.key)} data-work-view={v.key} className={cn("h-6 px-2.5 rounded-full text-meta transition-colors", workView === v.key ? "font-semibold" : "hover:bg-sol-bg-highlight/60")} style={workView === v.key ? { background: "var(--sol-bg-highlight)", color: "var(--sol-text)" } : { color: "var(--sol-text-muted)" }}>
+            <button key={v.key} type="button" role="tab" aria-selected={workView === v.key} onClick={() => setWorkView(v.key)} data-work-view={v.key} className={cn("h-6 px-2.5 rounded-full text-[11.5px] transition-colors", workView === v.key ? "font-semibold" : "hover:bg-sol-bg-highlight/60")} style={workView === v.key ? { background: "var(--sol-bg-highlight)", color: "var(--sol-text)" } : { color: "var(--sol-text-muted)" }}>
               {v.label}
             </button>
           ))}
@@ -204,7 +204,7 @@ function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
         <h3 className={cn(BLOCK_LABEL, "flex items-center gap-2")} style={{ color: "var(--sol-text-dim)" }}>
           What it is for
           {p.canEdit && (
-            <button type="button" onClick={() => setEditingCharter((v) => !v)} className="inline-flex items-center gap-1 font-normal normal-case tracking-normal text-meta hover:underline" style={{ color: "var(--sol-violet)" }} data-charter-edit>
+            <button type="button" onClick={() => setEditingCharter((v) => !v)} className="inline-flex items-center gap-1 font-normal normal-case tracking-normal text-[11px] hover:underline" style={{ color: "var(--sol-violet)" }} data-charter-edit>
               {editingCharter ? "Done" : <><Pencil className="w-3 h-3" /> Edit</>}
             </button>
           )}
@@ -250,7 +250,7 @@ function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
   );
 }
 
-const BLOCK_LABEL = "px-2.5 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]";
+const BLOCK_LABEL = "px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]";
 
 /** What the role has learned and how it wakes (org-staffing.md S38), under
  *  the briefing: the playbook from the brief's own sections, the wake from
@@ -337,7 +337,7 @@ function StandsLine({ line, now }: { line: StandingLine; now: number }) {
         {line.text}
       </p>
       {(days !== null || clipped || open) && (
-        <div className="flex items-center gap-1.5 text-meta" style={{ color: "var(--sol-text-dim)" }}>
+        <div className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>
           {days !== null && <span style={stale ? { color: "var(--sol-yellow)" } : undefined} title={line.written_on ? `Written ${line.written_on}` : undefined} data-scope-stands-age={days}>{days === 0 ? "today" : stale ? `written ${days} days ago` : `${days}d ago`}</span>}
           {(clipped || open) && (
             <>

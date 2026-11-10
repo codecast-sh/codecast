@@ -424,7 +424,7 @@ export const VaultExplorer = memo(function VaultExplorer({
                     <span className="flex-shrink-0 opacity-70">{rowIcon(node, isExpanded)}</span>
                     <span className="truncate">{node.dir ? node.name : noteDisplayName(node.name)}</span>
                     {node.dir && node.noteCount > 0 && (
-                      <span className="ml-auto pr-1 text-meta text-sol-text-dim tabular-nums">{node.noteCount}</span>
+                      <span className="ml-auto pr-1 text-[10px] text-sol-text-dim tabular-nums">{node.noteCount}</span>
                     )}
                   </button>
                 )}
