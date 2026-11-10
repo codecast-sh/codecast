@@ -4,7 +4,7 @@ import { FAILED_PUSH_RETRY_MS, Gate, QUIET_MS, STALE_RETRY_MS, bundledSources, s
 // The pusher's contract, driven with fakes: a push happens only for a quiet,
 // fresh, green tree, and a tree that moved under the push goes around again.
 
-function harness(over: Partial<{ fresh: boolean; check: CheckResult; pushCode: number }> = {}) {
+function harness(over: Partial<{ fresh: boolean; check: CheckResult; pushCode: number; base: string }> = {}) {
   let now = 1_000_000;
   let sig = "a";
   const log: string[] = [];
@@ -13,6 +13,7 @@ function harness(over: Partial<{ fresh: boolean; check: CheckResult; pushCode: n
   const gate = new Gate({
     now: () => now,
     treeIsFresh: async () => state.fresh,
+    base: over.base,
     signature: async () => sig,
     typecheck: async () => { calls.typecheck += 1; return state.check; },
     push: async () => {
@@ -72,6 +73,12 @@ describe("gated convex push", () => {
     h.advance(1);
     expect(await h.gate.tick()).toBe("pushed");
     expect(h.log.some((l) => l.includes("BEHIND origin/main"))).toBe(true);
+  });
+
+  test("the refusal names the remote freshness is judged against, so a fork clone says upstream", async () => {
+    const h = harness({ fresh: false, base: "upstream/main" });
+    expect(await h.gate.tick()).toBe("stale");
+    expect(h.log.some((l) => l.includes("BEHIND upstream/main") && l.includes("git pull --rebase upstream main"))).toBe(true);
   });
 
   test("files that moved under the push make it dirty again, even when the push succeeded", async () => {

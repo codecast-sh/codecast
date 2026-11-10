@@ -134,10 +134,13 @@ check_rapid_restarts() {
 # Never start it from a stale tree; it re-checks freshness before every push
 # too, and only pushes a tree that has been quiet and typechecks whole (a raw
 # `convex dev` shipped a half-saved edit on 2026-09-21). Offline (fetch fails),
-# judge by the last-known origin/main rather than blocking local dev.
+# judge by the last-known <remote>/main rather than blocking local dev.
+# The remote is codecast-sh/codecast's, not a fork's origin (see
+# scripts/convex-base-remote.sh).
+CONVEX_BASE_REMOTE="$("$ROOT_DIR/scripts/convex-base-remote.sh")"
 convex_tree_is_fresh() {
-    git -C "$ROOT_DIR" fetch origin --quiet 2>/dev/null || true
-    git -C "$ROOT_DIR" merge-base --is-ancestor origin/main HEAD 2>/dev/null
+    git -C "$ROOT_DIR" fetch "$CONVEX_BASE_REMOTE" --quiet 2>/dev/null || true
+    git -C "$ROOT_DIR" merge-base --is-ancestor "$CONVEX_BASE_REMOTE/main" HEAD 2>/dev/null
 }
 
 start_convex() {
@@ -145,11 +148,11 @@ start_convex() {
 
     if ! convex_tree_is_fresh; then
         if [ "$CONVEX_BLOCKED" != "1" ]; then
-            log_err "REFUSING to start the convex watcher: this tree is BEHIND origin/main."
-            git -C "$ROOT_DIR" log --oneline HEAD..origin/main 2>/dev/null | head -5 | while read -r c; do
+            log_err "REFUSING to start the convex watcher: this tree is BEHIND $CONVEX_BASE_REMOTE/main."
+            git -C "$ROOT_DIR" log --oneline "HEAD..$CONVEX_BASE_REMOTE/main" 2>/dev/null | head -5 | while read -r c; do
                 log_err "  missing: $c"
             done
-            log_err "Run: git pull — web keeps running; the watcher starts automatically after the pull."
+            log_err "Run: git pull --rebase $CONVEX_BASE_REMOTE main — web keeps running; the watcher starts automatically after the pull."
         fi
         CONVEX_BLOCKED=1
         CONVEX_PID=""

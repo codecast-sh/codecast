@@ -42,15 +42,18 @@ echo $$ > "$LOCK/pid"
 release_lock() { rm -rf "$LOCK"; }
 trap release_lock EXIT
 
-if ! git fetch origin --quiet; then
-    echo "REFUSING to deploy: 'git fetch origin' failed, so freshness against origin/main cannot be verified." >&2
+# Freshness is judged against codecast-sh/codecast's main, not a fork's
+# origin (see scripts/convex-base-remote.sh).
+BASE_REMOTE="$("$ROOT/scripts/convex-base-remote.sh")"
+if ! git fetch "$BASE_REMOTE" --quiet; then
+    echo "REFUSING to deploy: 'git fetch $BASE_REMOTE' failed, so freshness against $BASE_REMOTE/main cannot be verified." >&2
     exit 1
 fi
-if ! git merge-base --is-ancestor origin/main HEAD; then
-    echo "REFUSING to deploy: this tree is BEHIND origin/main." >&2
+if ! git merge-base --is-ancestor "$BASE_REMOTE/main" HEAD; then
+    echo "REFUSING to deploy: this tree is BEHIND $BASE_REMOTE/main." >&2
     echo "Commits it is missing:" >&2
-    git log --oneline HEAD..origin/main >&2
-    echo "Pull or rebase onto origin/main, then retry." >&2
+    git log --oneline "HEAD..$BASE_REMOTE/main" >&2
+    echo "Pull or rebase onto $BASE_REMOTE/main, then retry." >&2
     exit 1
 fi
 
