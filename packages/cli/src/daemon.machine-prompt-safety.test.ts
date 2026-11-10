@@ -281,7 +281,7 @@ function fixture(transport = "tmux", cached = true) {
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "transcriptEchoes", "injectViaTmux", "injectViaTmuxInner",
-      "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption",
+      "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption", "isClaudeIdleResumeDialog", "isIdleResumeOptionRow",
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
       "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "injectViaGhostty", "herdrKey", "injectViaHerdr", "noteUnreachableAgent", "injectThroughPane", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
@@ -291,7 +291,7 @@ function fixture(transport = "tmux", cached = true) {
     const constants = [
       "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "PANE_REBUILD_THRESHOLD", "PANE_REBUILD_WINDOW_MS", "PANE_REBUILD_MIN_GAP_MS", "unresolvablePanes", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
-      "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME", "STARTED_FATAL_CONFIRM_MS", "fatalPaneSince",
+      "ANSI_ESCAPE_RE", "MACHINE_WAKE_IDLE_RESUME_CHOICE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME", "STARTED_FATAL_CONFIRM_MS", "fatalPaneSince",
     ].map(name => {
       const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
       if (!line) throw new Error(`Missing constant ${name}`);
@@ -846,6 +846,50 @@ describe("machine prompt delivery safety", () => {
     f.state.history = menu;
     await expect(f.resumeReadiness(session("context"))).resolves.toBe(true);
     await expect(f.resumeReadiness("human prose")).resolves.toBe(true);
+  });
+
+  // Claude Code's idle-resume dialog (the 2026-11-08 Head of People wake): a
+  // machine wake answers Resume itself; a person's resume still gets asked.
+  const idleResume = (cursorOn: "Resume" | "Start a new conversation") => [
+    "Resume this conversation?",
+    "This conversation has been inactive for 33d 16h 10m and is 354.6k tokens long. Resuming it will use about 6% of your 5-hour usage limit.",
+    `${cursorOn === "Resume" ? "❯" : " "} 1. Resume`,
+    `${cursorOn === "Resume" ? " " : "❯"} 2. Start a new conversation   Claude can look this one up if you refer to it later`,
+    "Enter to select · Esc to cancel",
+  ].join("\n");
+
+  test("a machine wake answers Claude's idle-resume dialog with Resume, then comes up ready", async () => {
+    const f = fixture();
+    f.state.menu = idleResume("Resume");
+    // The fixture's 100ms poll budget ends inside the answer's settle wait, so
+    // the answer is checked first, then a fresh poll finds the agent ready.
+    await f.resumeReadiness(session("wake: weekly review"));
+    expect(f.events).toEqual(["Enter"]);
+    expect(f.state.menu).toBeNull();
+    await expect(f.resumeReadiness(session("wake: weekly review"))).resolves.toBe(true);
+  });
+
+  test("a machine wake walks the highlight onto Resume before confirming", async () => {
+    const f = fixture();
+    f.state.menu = idleResume("Start a new conversation");
+    f.hooks.input = (event: string) => { if (event === "Up" && f.state.menu) f.state.menu = idleResume("Resume"); };
+    await f.resumeReadiness(session("wake: weekly review"));
+    expect(f.events).toEqual(["Up", "Enter"]);
+    expect(f.state.menu).toBeNull();
+  });
+
+  test("a machine wake presses nothing when the highlight cannot be placed, and the dialog is held", async () => {
+    const f = fixture();
+    f.state.menu = idleResume("Start a new conversation");
+    await expect(f.resumeReadiness(session("wake: weekly review"))).rejects.toThrow("human answer");
+    expect(f.events).not.toContain("Enter");
+  });
+
+  test("a person's resume still holds Claude's idle-resume dialog for them", async () => {
+    const f = fixture();
+    f.state.menu = idleResume("Resume");
+    await expect(f.resumeReadiness("human prose")).rejects.toThrow("human answer");
+    expect(f.events).toEqual([]);
   });
 
   test("startup warning Escape checks fresh menu evidence and propagates a hold", async () => {

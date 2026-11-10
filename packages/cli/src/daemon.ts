@@ -405,7 +405,7 @@ import { setBackgroundSessions, setGovernorBackground } from "./backgroundPriori
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
+import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isIdleResumeOptionRow, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -25753,6 +25753,19 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
           const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
           if (isCodexUpdateDialog(paneContent)) {
             await tmuxExec(["send-keys", "-t", tmuxSession, "Escape"]);
+            continue;
+          }
+          // A wake codecast delivers (a trigger, a role's turn, another
+          // session's message) has nobody at the terminal: parking it on Claude
+          // Code's idle-resume dialog hands the choice to whoever opens the
+          // inbox, who may not even be allowed to answer, and the wake never
+          // runs. It takes the resume it was launched for
+          // (MACHINE_WAKE_IDLE_RESUME_CHOICE). A person's own resume still
+          // reaches them as a question. If the highlight can't be placed, the
+          // dialog is held for a human as before.
+          if (agentType === "claude" && isMachineDeliveredMessage(content) && isClaudeIdleResumeDialog(paneContent)
+            && await selectHighlightedOption(tmuxSession, (line) => isIdleResumeOptionRow(line), "the idle-resume dialog")) {
+            logDelivery(`Auto-resume ${shortId}: answered Claude's idle-resume dialog for a machine wake`);
             continue;
           }
           if (!parsePollMessage(content) && parseInteractivePrompt(paneContent, true)) {
