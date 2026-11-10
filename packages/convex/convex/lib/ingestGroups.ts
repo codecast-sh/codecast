@@ -27,6 +27,7 @@ import {
   sdkErrorFingerprint,
 } from "@codecast/shared/contracts/signalFingerprint";
 import type { ReplayIssue } from "@codecast/shared/replay";
+import { utcDayKey } from "@codecast/shared/contracts/flowMap";
 
 export const HOUR_MS = 3600_000;
 const TRAILING_HOURS = 24;
@@ -41,9 +42,7 @@ export function hourStart(at: number): number {
 }
 
 /** The UTC day (yyyy-mm-dd) a source's *_today counters count. */
-export function utcDay(at: number): string {
-  return new Date(at).toISOString().slice(0, 10);
-}
+export const utcDay: (at: number) => string = utcDayKey;
 
 /** The oldest hour the window still holds, relative to now. */
 function oldestHour(now: number): number {

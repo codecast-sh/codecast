@@ -111,13 +111,13 @@ export async function performSeatRootRoles(ctx: any, dryRun: boolean, only?: Rea
 }
 
 // Read only: which workspaces the run would touch, and why the rest are left.
-// `npx convex run orgRootSeat:rootSeatPlan` (through packages/convex/deploy.sh's env).
+// `packages/convex/run.sh orgRootSeat:rootSeatPlan` (through packages/convex/deploy.sh's env).
 export const rootSeatPlan = internalQuery({
   args: {},
   handler: async (ctx) => planRootSeats(ctx),
 });
 
-// Run once: `npx convex run orgRootSeat:seatRootRoles '{"dry_run":true}'`, then
+// Run once: `packages/convex/run.sh orgRootSeat:seatRootRoles '{"dry_run":true}'`, then
 // without. `anchor_ids` seats only those rows (from the plan's `anchor_id`).
 export const seatRootRoles = internalMutation({
   args: { dry_run: v.optional(v.boolean()), anchor_ids: v.optional(v.array(v.string())) },

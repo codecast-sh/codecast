@@ -15,9 +15,9 @@ import { DAILY_CAP_KEYS, type RoleDailyCaps } from "@codecast/shared/contracts/o
 // and a run that flips only the rows it is told to (`role_ids`), or all of
 // the plan's `turn_on` rows when no list is given, and is a no op as a dry run.
 //
-//   npx convex run orgAutonomyDefault:autonomyDefaultPlan
-//   npx convex run orgAutonomyDefault:turnOnExistingRoles '{"dry_run":true}'
-//   npx convex run orgAutonomyDefault:turnOnExistingRoles '{"role_ids":["…"]}'
+//   packages/convex/run.sh orgAutonomyDefault:autonomyDefaultPlan
+//   packages/convex/run.sh orgAutonomyDefault:turnOnExistingRoles '{"dry_run":true}'
+//   packages/convex/run.sh orgAutonomyDefault:turnOnExistingRoles '{"role_ids":["…"]}'
 //
 // (through packages/convex/deploy.sh's env; never a raw convex CLI against a
 // tree behind origin/main). A row's `decide` already reads as on and is left

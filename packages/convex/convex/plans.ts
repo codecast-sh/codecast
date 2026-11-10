@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { claimShareToken } from "./publicShare";
 import { charterPatch, planCharterArgs } from "./lib/orgCharter";
 import { resolveActor } from "./lib/actor";
-import { mutation, query, internalMutation } from "./functions";
+import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -1095,25 +1095,22 @@ export const list = query({
           .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
           .collect();
       }
-    } else if (args.status) {
-      plans = await ctx.db
-        .query("plans")
-        .withIndex("by_user_status", (q) => q.eq("user_id", auth.userId).eq("status", args.status as any))
-        .collect();
+      // by_team_id is the ROUTING index: a plan routed to the team can still
+      // be private to its owner (workspace user:<owner>).
+      needsAccessFilter = true;
     } else {
+      // The same workspace scope with and without --status.
       plans = await db.query("plans").collect();
+      if (args.status) plans = plans.filter((p: any) => p.status === args.status);
     }
 
     if (needsAccessFilter) {
-      const memberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
-        .collect();
-      const memberTeamIds = new Set(memberships.map((m: any) => String(m.team_id)));
-      plans = plans.filter((p: any) =>
-        String(p.user_id) === String(auth.userId) ||
-        (p.team_id && memberTeamIds.has(String(p.team_id)))
-      );
+      // The plan's own workspace decides; team_id is routing, never access.
+      const readable: typeof plans = [];
+      for (const p of plans) {
+        if (await canAccessPlan(ctx, auth.userId, p)) readable.push(p);
+      }
+      plans = readable;
     }
 
     if (!args.status && !args.include_all) {
@@ -1721,8 +1718,15 @@ export const webMentionList = query({
       }
     }
 
+    // by_team_id is the ROUTING index: drop plans routed to a team but private
+    // to someone else (workspace user:<owner>).
+    const readable: any[] = [];
+    for (const p of plans) {
+      if (await canAccessPlan(ctx, userId, p)) readable.push(p);
+    }
+
     return {
-      items: plans.map((p: any) => ({
+      items: readable.map((p: any) => ({
         _id: String(p._id),
         title: p.title,
         short_id: p.short_id,
@@ -1935,42 +1939,3 @@ export const getShared = query({
   },
 });
 
-// Restamp for plans the CLI filed as "human" when it only failed to detect a
-// session (found 2026-09-11: `cast plan create` fell back to an explicit
-// "human" stamp on a miss, so agent plans from the Mac mini landed on the
-// human shelf and the plans board's human filter). A plan the CLI created
-// carries `project_path` (stamped from the create's working directory); a
-// plan a person made in the web UI has none. Every CLI-born "human" plan is
-// therefore either a missed session or a person at a terminal, and plans
-// here are overwhelmingly agent-created, so the plan and its body doc flip
-// to "agent"; the star (docs.pinned) is the rescue for one a person wants
-// on the shelf. Web-made plans are untouched. New writes stamp by evidence
-// (workOriginStamp in the CLI). Paged — call repeatedly with the returned
-// cursor until isDone. Does not bump updated_at: clients re-read rows fresh.
-export const restampCliPlanOrigins = internalMutation({
-  args: {
-    cursor: v.optional(v.string()),
-    numItems: v.optional(v.number()),
-    dryRun: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const page = await ctx.db
-      .query("plans")
-      .paginate({ numItems: args.numItems ?? 100, cursor: args.cursor ?? null });
-    let scanned = 0;
-    let plansRestamped = 0;
-    let docsRestamped = 0;
-    for (const p of page.page) {
-      scanned++;
-      if (p.source !== "human" || !p.project_path) continue;
-      plansRestamped++;
-      if (!args.dryRun) await ctx.db.patch(p._id, { source: "agent" });
-      const doc = p.doc_id ? await ctx.db.get(p.doc_id) : null;
-      if (doc && doc.source === "human") {
-        docsRestamped++;
-        if (!args.dryRun) await ctx.db.patch(doc._id, { source: "agent" });
-      }
-    }
-    return { scanned, plansRestamped, docsRestamped, isDone: page.isDone, continueCursor: page.continueCursor };
-  },
-});

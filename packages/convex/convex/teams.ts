@@ -1193,6 +1193,9 @@ export const isTeamAdminInternal = internalQuery({
   },
 });
 
+/** Pages of 100 org members one sync reads: 2,000 people, far past any seat plan. */
+const GITHUB_ORG_MEMBER_PAGES_MAX = 20;
+
 export const syncGithubOrg = action({
   args: {
     requesting_user_id: v.id("users"),
@@ -1230,23 +1233,31 @@ export const syncGithubOrg = action({
       throw new Error("GitHub account not connected");
     }
 
-    const membersResponse = await fetch(
-      `https://api.github.com/orgs/${args.org_name}/members`,
-      {
-        headers: {
-          Authorization: `Bearer ${requestingUser.github_access_token}`,
-          Accept: "application/vnd.github+json",
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
+    // GitHub pages this list (30 a page by default): read every page, or an
+    // organization larger than one page syncs only its first members.
+    const members: any[] = [];
+    for (let page = 1; page <= GITHUB_ORG_MEMBER_PAGES_MAX; page++) {
+      const membersResponse = await fetch(
+        `https://api.github.com/orgs/${args.org_name}/members?per_page=100&page=${page}`,
+        {
+          headers: {
+            Authorization: `Bearer ${requestingUser.github_access_token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+        }
+      );
+
+      if (!membersResponse.ok) {
+        const errorText = await membersResponse.text();
+        throw new Error(`Failed to fetch GitHub org members: ${errorText}`);
       }
-    );
 
-    if (!membersResponse.ok) {
-      const errorText = await membersResponse.text();
-      throw new Error(`Failed to fetch GitHub org members: ${errorText}`);
+      const pageRows = await membersResponse.json();
+      if (!Array.isArray(pageRows)) break;
+      members.push(...pageRows);
+      if (pageRows.length < 100) break;
     }
-
-    const members = await membersResponse.json();
     const imported = [];
     const skipped = [];
 
@@ -1420,84 +1431,6 @@ export const createUserFromGithub = internalMutation({
     });
     await scheduleSeatSync(ctx, args.team_id, "member_joined");
     return { user_id: userId, blocked: null };
-  },
-});
-
-// internal: removes throwaway teams created by agent test runs. Guarded by a
-// name check so a wrong id cannot delete a real team. Same retirement as the
-// admin delete, so a test team leaves the same tombstone and nothing dangles.
-export const cleanupTestTeams = internalMutation({
-  args: { team_ids: v.array(v.id("teams")) },
-  handler: async (ctx, args) => {
-    const deleted: string[] = [];
-    const skipped: string[] = [];
-    for (const teamId of args.team_ids) {
-      const team = await ctx.db.get(teamId);
-      if (!team || team.deleted_at) continue;
-      if (!/^(flow test|critique round)/i.test(team.name)) {
-        skipped.push(team.name);
-        continue;
-      }
-      await retireTeam(ctx, team, undefined);
-      deleted.push(team.name);
-    }
-    return { deleted, skipped };
-  },
-});
-
-export const migrateToMultiTeam = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const users = await ctx.db.query("users").collect();
-    let migratedCount = 0;
-    let skippedCount = 0;
-
-    for (const user of users) {
-      if (user.team_id) {
-        const existingMembership = await ctx.db
-          .query("team_memberships")
-          .withIndex("by_user_team", (q) => q.eq("user_id", user._id).eq("team_id", user.team_id!))
-          .unique();
-
-        if (!existingMembership) {
-          await ctx.db.insert("team_memberships", {
-            user_id: user._id,
-            team_id: user.team_id,
-            role: user.role || "member",
-            joined_at: user.created_at || Date.now(),
-          });
-          migratedCount++;
-        } else {
-          skippedCount++;
-        }
-
-        if (!user.active_team_id) {
-          await ctx.db.patch(user._id, { active_team_id: user.team_id });
-        }
-
-        if (user.team_share_paths && user.team_share_paths.length > 0) {
-          for (const path of user.team_share_paths) {
-            const existingMapping = await ctx.db
-              .query("directory_team_mappings")
-              .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
-              .filter((q) => q.eq(q.field("path_prefix"), path))
-              .first();
-
-            if (!existingMapping) {
-              await ctx.db.insert("directory_team_mappings", {
-                user_id: user._id,
-                path_prefix: path,
-                team_id: user.team_id,
-                auto_share: true,
-                created_at: Date.now(),
-              });
-            }
-          }
-        }
-      }
-    }
-
-    return { migratedCount, skippedCount };
   },
 });
 

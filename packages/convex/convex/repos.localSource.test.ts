@@ -121,7 +121,7 @@ describe("repos.ingestLocal", () => {
 describe("browsing through a published checkout", () => {
   const published = {
     repo_sources: [{ _id: "s", user_id: "publisher", team_id: "team", repository: "acme/demo", root: "/home/p/src/demo", enabled: true, last_synced_at: 1, created_at: 1, updated_at: 1 }],
-    repo_cache: [{ _id: "b", team_id: "team", repository: "acme/demo", kind: "branches", ref: "-", path: "", content: rows[0].content, fetched_at: Date.now() }],
+    repo_cache: [{ _id: "b", team_id: "team", repository: "acme/demo", kind: "branches", ref: "-", path: "", content: rows[0].content, fetched_at: Date.now(), local_workspace: "team:team" }],
   };
 
   test("a teammate may browse and reads the pushed rows with no installation at all", async () => {
@@ -138,5 +138,54 @@ describe("browsing through a published checkout", () => {
     const off = { ...published, repo_sources: [{ ...published.repo_sources[0], enabled: false }] };
     expect(await (canBrowse as any)._handler(context("reader", off), { repository: "acme/demo" })).toBe(false);
     expect(await (listRepositories as any)._handler(context("reader", off), {})).toEqual([]);
+  });
+});
+
+// The repository name on a checkout's rows is the publisher's own claim, so a
+// row is read and replaced only inside the workspace it was published to.
+describe("a checkout's rows stay in the workspace that published them", () => {
+  const theirs = JSON.stringify({ default_branch: "main", truncated: false, branches: [{ name: "secret-branch", sha, protected: false }] });
+  const victim = {
+    repo_sources: [{ _id: "s", user_id: "publisher", team_id: "team", repository: "acme/demo", root: "/home/p/src/demo", enabled: true, last_synced_at: 1, created_at: 1, updated_at: 1 }],
+    repo_cache: [{ _id: "b", team_id: "team", repository: "acme/demo", kind: "branches", ref: "-", path: "", content: theirs, fetched_at: Date.now(), local_workspace: "team:team" }],
+    directory_team_mappings: [
+      { _id: "map", user_id: "publisher", path_prefix: "/home/p/src", team_id: "team", auto_share: true, created_at: 1 },
+      { _id: "map2", user_id: "outsider", path_prefix: "/home/o", team_id: "other-team", auto_share: true, created_at: 1 },
+    ],
+  };
+
+  test("naming another team's repository from your own checkout neither reads nor overwrites their rows", async () => {
+    const ctx = context("outsider", victim);
+    const out = await (ingestLocal as any)._handler(ctx, { root: "/home/o/fake", repository: "acme/demo", rows });
+    expect(out).toMatchObject({ published: true });
+    // The other team's row is untouched; the outsider's publish is a second row in its own workspace.
+    expect((await ctx.db.get("b")).content).toBe(theirs);
+    const mine = ctx.db._tables.repo_cache.filter((r: any) => r.local_workspace === "team:other-team");
+    expect(mine).toHaveLength(1);
+    // The outsider now reads what the outsider published, never the other team's row.
+    const branches = await (getBranches as any)._handler(ctx, { repository: "acme/demo" });
+    expect(branches.branches.map((b: any) => b.name)).toEqual(["main"]);
+    // And the publishing team still reads its own.
+    const reader = { ...context("reader"), db: ctx.db };
+    expect((await (getBranches as any)._handler(reader, { repository: "acme/demo" })).branches[0].name).toBe("secret-branch");
+  });
+
+  test("a row from before the stamp, or one GitHub fetched, is not readable through a checkout alone", async () => {
+    const legacy = { ...victim, repo_cache: [{ ...victim.repo_cache[0], local_workspace: undefined }] };
+    expect(await (getBranches as any)._handler(context("reader", legacy), { repository: "acme/demo" })).toBeNull();
+    // With the team's installation covering the repository it is.
+    const installed = { ...legacy, github_app_installations: [{ _id: "i", team_id: "team", installation_id: 1, account_login: "acme", account_type: "Organization", repository_selection: "all" }] };
+    expect((await (getBranches as any)._handler(context("reader", installed), { repository: "acme/demo" })).branches[0].name).toBe("secret-branch");
+  });
+
+  test("a commit of the same sha in another repository is not patched by a checkout's publish", async () => {
+    const ctx = context("publisher", { commits: [{ _id: "c_other", sha, repository: "elsewhere/fork", team_id: "other-team", message: "m", author_name: "a", author_email: "e", timestamp: 1, files_changed: 0, insertions: 0, deletions: 0 }] });
+    const out = await (ingestLocal as any)._handler(ctx, {
+      root: "/home/p/src/demo", repository: "acme/demo", rows: [],
+      commits: [{ sha, message: "first", author_name: "P", author_email: "p@x", timestamp: 1, files_changed: 1, insertions: 1, deletions: 0, branch: "main", files: [{ filename: "a.ts", additions: 1, deletions: 0 }] }],
+    });
+    expect(out.commits_created).toBe(1);
+    expect((await ctx.db.get("c_other")).files).toBeUndefined();
+    expect(ctx.db._tables.commits.find((c: any) => c.repository === "acme/demo")).toMatchObject({ team_id: "team" });
   });
 });

@@ -145,3 +145,22 @@ describe("leader view", () => {
     expect(await h(viewOf)(ctxFor(rows, BOB), { leader_id: ANN })).toMatchObject({ path: `/conversation/${SHARED}`, conversation_id: SHARED, withheld: false });
   });
 });
+
+describe("follow is between teammates", () => {
+  const EVE = "ue";
+
+  test("a user with no shared team cannot follow, and a lease they hold reads nothing", async () => {
+    const rows = tables();
+    rows.users.push({ _id: EVE, name: "Eve" });
+    rows.team_memberships.push({ _id: "m9", user_id: EVE, team_id: "t-other", visibility: "full" });
+    await expect(h(follow)(ctxFor(rows, EVE), { leader_id: ANN, fresh: true })).rejects.toThrow();
+    expect(rows.view_follows.length).toBe(0);
+    // A lease that predates the rule (or outlived a membership) opens nothing.
+    rows.view_follows.push({ _id: "f-old", follower_id: EVE, leader_id: ANN, updated_at: Date.now() });
+    rows.view_states.push({ _id: "s1", user_id: ANN, path: "/inbox", updated_at: 5 });
+    expect(await h(viewOf)(ctxFor(rows, EVE), { leader_id: ANN })).toBeNull();
+    // A teammate still follows and reads.
+    await h(follow)(ctxFor(rows, BOB), { leader_id: ANN });
+    expect(await h(viewOf)(ctxFor(rows, BOB), { leader_id: ANN })).toMatchObject({ path: "/inbox", withheld: false });
+  });
+});

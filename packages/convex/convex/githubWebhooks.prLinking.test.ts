@@ -46,7 +46,9 @@ describe("pull request session linking", () => {
     const f = setup([strangerPrivate("main")]);
     const result = await f.open("main");
     expect(result.matched_conversation_id).toBeNull();
-    expect(result.github_access_token).toBeNull();
+    // With no session linked, the token falls back to a member of the pull
+    // request's own team (team_memberships), never the stranger's.
+    expect(result.github_access_token).toBe("tok_author");
     expect(f.pr().linked_session_ids).toEqual([]);
     expect(f.pr().team_id).toBe("team_1");
   });

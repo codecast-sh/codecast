@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { canAccessConversation } from "./lib/access";
+import { heldKeysFor } from "./lib/accessKeys";
 import { FOLLOW_LEASE_MS, clampFollowView } from "@codecast/shared/contracts/follow";
 import { followViewValidator } from "./lib/followView";
 
@@ -38,6 +39,18 @@ async function myFollowRow(ctx: any, followerId: Id<"users">) {
     .first()) as { _id: Id<"view_follows">; leader_id: Id<"users">; updated_at: number; dropped_at?: number } | null;
 }
 
+/** Following is between teammates: the two must share a team membership.
+ *  Without this any signed-in user could lease any user id and read where
+ *  that person is in the app. */
+async function sharesTeam(ctx: any, a: Id<"users">, b: Id<"users">): Promise<boolean> {
+  const mine = await heldKeysFor(ctx, a);
+  const theirs = await heldKeysFor(ctx, b);
+  for (const key of mine) {
+    if (key.startsWith("team:") && theirs.has(key)) return true;
+  }
+  return false;
+}
+
 /** Start (`fresh`) or renew following `leader_id`. One leader per follower:
  *  a new leader replaces the old lease. Following yourself is a no op. A
  *  renewal of a lease the leader dropped is refused; only a fresh start, the
@@ -47,6 +60,7 @@ export const follow = mutation({
   handler: async (ctx, args) => {
     const me = await requireAuth(ctx);
     if (args.leader_id === me) return;
+    if (!(await sharesTeam(ctx, me, args.leader_id))) throw new Error("Not found");
     const now = Date.now();
     const existing = await myFollowRow(ctx, me);
     if (existing) {
@@ -162,6 +176,9 @@ export const viewOf = query({
     const me = await requireAuth(ctx);
     const lease = await myFollowRow(ctx, me);
     if (!lease || lease.leader_id !== args.leader_id || lease.updated_at <= Date.now() - FOLLOW_LEASE_MS) return null;
+    // A lease written before the teammate rule, or one outlived by a
+    // membership, reads as no lease.
+    if (!(await sharesTeam(ctx, me, args.leader_id))) return null;
     if (lease.dropped_at) return { path: "", updated_at: lease.dropped_at, withheld: false, ended: true };
     const state = await ctx.db.query("view_states").withIndex("by_user", (q: any) => q.eq("user_id", args.leader_id)).first();
     if (!state) return null;

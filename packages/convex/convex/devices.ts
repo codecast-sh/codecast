@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation, internalQuery } from "./functions";
+import { mutation, query, internalQuery } from "./functions";
 import { selfUpdateBlocked } from "./lib/deviceUpdate";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -17,7 +17,6 @@ import {
   pickOwnerDevice,
   type RoutableDevice,
 } from "./deviceRouting";
-import { normalizeProjectPath } from "./projectPaths";
 import { activeTokenProfile } from "./ccAccountsShared";
 import { bucketTs } from "./presenceState";
 import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
@@ -50,6 +49,23 @@ async function getAuthenticatedUserId(
     if (result) return result.userId;
   }
   return null;
+}
+
+// The caller behind a PRESENTED api token, plus the device that token is bound
+// to (api_tokens.device_id; absent on tokens minted before bindings existed).
+// A browser session is not a machine, so functions that speak for a device
+// (registerDevice, claimDeviceAccount) take a token and nothing else.
+// verifyApiToken has already refused a bound token presented from another
+// device, so `boundDeviceId` is the device this call arrived from.
+async function deviceTokenCaller(
+  ctx: { db: any },
+  apiToken?: string,
+): Promise<{ userId: Id<"users">; boundDeviceId?: string } | null> {
+  if (!apiToken) return null;
+  const result = await verifyApiToken(ctx, apiToken);
+  if (!result) return null;
+  const row = await ctx.db.get(result.tokenId);
+  return { userId: result.userId, boundDeviceId: row?.device_id ?? undefined };
 }
 
 /**
@@ -351,8 +367,14 @@ export const registerDevice = mutation({
     local_project_roots: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) throw new Error("Authentication required");
+    // A device row is written by the machine itself: a token, never a browser
+    // session, and a token bound to a device registers only that device.
+    const caller = await deviceTokenCaller(ctx, args.api_token);
+    if (!caller) throw new Error("Authentication required");
+    if (caller.boundDeviceId && caller.boundDeviceId !== args.device_id) {
+      throw new Error("This token is bound to a different machine");
+    }
+    const userId = caller.userId;
 
     const now = Date.now();
     const existing = await ctx.db
@@ -464,13 +486,6 @@ export const resolveConversationBySession = query({
   },
 });
 
-/**
- * Server side of `cast remote move`: flip a conversation's owner to the target
- * device, repoint its project_path to the remote worktree, and enqueue a
- * resume_session command (which only the owner device will execute, per the
- * daemon's single-owner guard). One mutation = atomic handoff of ownership.
- */
-/**
 /**
  * Transcript divider for a box switch, inserted the moment the picker fires —
  * same shape as switchSessionAgent's agent-switch notice. Blank sessions skip
@@ -670,72 +685,6 @@ export const moveToRemote = mutation({
     const from = devices.find((d: any) => d.device_id === source) ?? null;
     await insertMachineSwitchDivider(ctx, conv, { to: dest, from });
     return { command_id: commandId, source, dest: dest.device_id };
-  },
-});
-
-/**
- * One-time self-heal for the auto-claim deadlock: clear `owner_device_id` on any
- * conversation a REMOTE device owns but cannot legitimately serve, so routing
- * re-resolves it to the local machine. A conversation is reclaimed when EITHER:
- *
- *   (a) its `project_path` is under some LOCAL device's `local_project_roots`
- *       (it demonstrably belongs to a laptop/desktop), OR
- *   (b) its `project_path` is junk — `normalizeProjectPath` returns null (a bare
- *       home dir like /Users/m1, or a temp dir). A real move always points at a
- *       worktree under the remote's home (/Users/m1/work/<repo>), never bare home,
- *       so a bare-home owner is always the resume-$HOME-fallback mislabel.
- *
- * Legitimately moved sessions (project_path = a real path under the remote's home)
- * match neither rule and are left untouched.
- *
- * Run: npx convex run devices:reclaimAutoClaimedRemoteSessions '{"user_id":"<id>"}'
- */
-export const reclaimAutoClaimedRemoteSessions = internalMutation({
-  args: { dry_run: v.optional(v.boolean()), user_id: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const scopeUser = args.user_id ? ctx.db.normalizeId("users", args.user_id) : null;
-    const devices = await ctx.db.query("devices").collect();
-    // Per-user union of local (non-remote) project roots, and the remote devices.
-    const localRoots = new Map<string, string[]>(); // userId -> roots
-    const remotes: any[] = [];
-    for (const d of devices) {
-      if (scopeUser && d.user_id.toString() !== scopeUser.toString()) continue;
-      const uid = d.user_id.toString();
-      if (d.is_remote) {
-        remotes.push(d);
-      } else {
-        const cur = localRoots.get(uid) ?? [];
-        for (const r of d.local_project_roots ?? []) cur.push(r);
-        localRoots.set(uid, cur);
-      }
-    }
-
-    const cleared: Array<{ conversation: string; from_device: string; project_path: string | null; rule: string }> = [];
-    for (const remote of remotes) {
-      const roots = localRoots.get(remote.user_id.toString()) ?? [];
-      const owned = await ctx.db
-        .query("conversations")
-        .withIndex("by_owner_device", (q: any) =>
-          q.eq("user_id", remote.user_id).eq("owner_device_id", remote.device_id),
-        )
-        .collect();
-      for (const conv of owned) {
-        const p = conv.project_path as string | undefined;
-        const belongsLocal = !!p && roots.some((r) => pathUnderRoot(p, r));
-        const junkPath = !p || normalizeProjectPath(p) === null;
-        if (!belongsLocal && !junkPath) continue;
-        cleared.push({
-          conversation: conv.short_id ?? conv._id,
-          from_device: remote.device_id.slice(0, 8),
-          project_path: p ?? null,
-          rule: belongsLocal ? "belongs-local" : "junk-path",
-        });
-        if (!args.dry_run) {
-          await ctx.db.patch(conv._id, { owner_device_id: undefined, session_error: undefined });
-        }
-      }
-    }
-    return { cleared_count: cleared.length, dry_run: !!args.dry_run, cleared };
   },
 });
 
@@ -1098,6 +1047,10 @@ export const reparentSessionToDevice = mutation({
 // How many sessions one claim moves. A machine that signed into a different
 // account can own more than this; the caller repeats until `more` is false.
 const CLAIM_ACCOUNT_PAGE = 100;
+// How many of the previous account's sessions on the device one claim reads to
+// find that page. Sessions the caller may not take stay put and are re-read by
+// every call, so the read is wider than the page.
+const CLAIM_ACCOUNT_SCAN = 500;
 
 export type ClaimDeviceAccountResult = {
   moved: number;
@@ -1106,6 +1059,9 @@ export type ClaimDeviceAccountResult = {
   // goes quiet. Nothing was moved.
   pending?: boolean;
   error?: string;
+  // Sessions left with the previous account because the caller could not have
+  // pulled them (private to that account).
+  skipped?: number;
 };
 
 /**
@@ -1116,6 +1072,12 @@ export type ClaimDeviceAccountResult = {
  * The previous account's row for this device must be offline, so a second
  * daemon still signed in as that account is not robbed. The two accounts
  * must share a team. Anything else is refused and nothing is written.
+ *
+ * Only sessions the caller could already pull move (findPullableConversation's
+ * rule: ones they own, or, for a human, ones visible to their team). A device
+ * id is not a secret and a device row is self-registered, so "same device id"
+ * proves nothing about holding the machine; without this rule a teammate who
+ * learned the id could take the previous account's private sessions.
  */
 export async function performClaimDeviceAccount(
   ctx: { db: any },
@@ -1158,8 +1120,15 @@ export async function performClaimDeviceAccount(
     .withIndex("by_owner_device", (q: any) =>
       q.eq("user_id", args.previousUserId).eq("owner_device_id", args.deviceId),
     )
-    .take(CLAIM_ACCOUNT_PAGE + 1);
-  const page = rows.slice(0, CLAIM_ACCOUNT_PAGE);
+    .take(CLAIM_ACCOUNT_SCAN);
+  const caller = await ctx.db.get(callerId);
+  const movable: any[] = [];
+  for (const conv of rows) {
+    const access = await checkConversationAccess(ctx, callerId, conv);
+    if (access === "owner" || (access === "team" && !!caller && !caller.is_bot)) movable.push(conv);
+  }
+  const skipped = rows.length - movable.length;
+  const page = movable.slice(0, CLAIM_ACCOUNT_PAGE);
   for (const conv of page) {
     if (!conv.author_user_id) {
       await ctx.db.patch(conv._id, { user_id: callerId, author_user_id: conv.user_id });
@@ -1177,7 +1146,11 @@ export async function performClaimDeviceAccount(
       }
     }
   }
-  return { moved: page.length, more: rows.length > CLAIM_ACCOUNT_PAGE };
+  return {
+    moved: page.length,
+    more: movable.length > CLAIM_ACCOUNT_PAGE,
+    ...(skipped > 0 ? { skipped } : {}),
+  };
 }
 
 export const claimDeviceAccount = mutation({
@@ -1187,8 +1160,14 @@ export const claimDeviceAccount = mutation({
     device_id: v.string(),
   },
   handler: async (ctx, args): Promise<ClaimDeviceAccountResult> => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) throw new Error("Authentication required");
+    // The daemon on the machine is the only caller: a token, never a browser
+    // session, and a token bound to a device claims only for that device.
+    const caller = await deviceTokenCaller(ctx, args.api_token);
+    if (!caller) throw new Error("Authentication required");
+    if (caller.boundDeviceId && caller.boundDeviceId !== args.device_id) {
+      return { moved: 0, more: false, error: "this token is bound to a different machine" };
+    }
+    const userId = caller.userId;
     return performClaimDeviceAccount(ctx, userId, {
       previousUserId: args.previous_user_id,
       deviceId: args.device_id,

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { reportInventory, reportAppliedOps, sweepCapabilityState, DEVICE_RETENTION_MS } from "./capabilities";
+import { reportInventory, reportAppliedOps, sweepCapabilityState, DEVICE_RETENTION_MS, SWEEP_DEVICE_PAGE } from "./capabilities";
 
 // Retention has two halves and two different owners. Scope rows are retired by
 // the INGEST, because only the daemon knows what still exists — and it takes
@@ -127,6 +127,27 @@ describe("dead-device sweep", () => {
     const res = await (sweepCapabilityState as any)._handler(ctx(t), {});
     expect(res.deleted).toBe(2);
     expect(t.capability_state.map((r: any) => r.device_id)).toEqual(["dev_live"]);
+  });
+
+  test("devices past the first page are reached: each run schedules the next from its cursor", async () => {
+    const now = Date.now();
+    const total = SWEEP_DEVICE_PAGE * 2 + 5;
+    const devices = Array.from({ length: total }, (_, i) => ({
+      _id: `d${String(i).padStart(5, "0")}`, _creationTime: i + 1, user_id: OWNER, device_id: `dev_${i}`, last_seen: now - DEVICE_RETENTION_MS - 86_400_000,
+    }));
+    const t = await tables({ devices, capability_state: [stateRow(`dev_${total - 1}`), stateRow("dev_0")] });
+    const scheduled: any[] = [];
+    const c = { db: makeFakeDb(t), scheduler: { runAfter: async (_ms: number, _fn: unknown, args: any) => { scheduled.push(args); return null; } } } as any;
+    let res = await (sweepCapabilityState as any)._handler(c, {});
+    expect(res.done).toBe(false);
+    let runs = 1;
+    while (scheduled.length) {
+      res = await (sweepCapabilityState as any)._handler(c, scheduled.shift());
+      runs++;
+    }
+    expect(runs).toBe(3);
+    expect(res.done).toBe(true);
+    expect(t.capability_state).toHaveLength(0);
   });
 
   test("a device just inside the window keeps everything", async () => {

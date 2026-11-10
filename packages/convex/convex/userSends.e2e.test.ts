@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
-import { dayStartUtc, maybeRecordUserSend, scheduleUserSend } from "./lib/userSend";
+import { dayStartUtc, maybeRecordUserSend, resolveCounterTeam, scheduleUserSend } from "./lib/userSend";
 import { makeFakeDb } from "./testDb";
 import { record } from "./userSends";
 
@@ -27,7 +27,7 @@ test("transcript sends do not read or write the shared daily counter", async () 
 
 test("deferred counting preserves sender and team attribution and excludes machine turns", async () => {
   const conversation = { _id: "conversations_a", user_id: "users_owner" } as any;
-  const db = makeFakeDb({ users: [{ _id: "users_owner", active_team_id: "teams_active" }], conversations: [conversation], user_send_daily: [] });
+  const db = makeFakeDb({ users: [{ _id: "users_owner", active_team_id: "teams_active" }], team_memberships: [{ _id: "team_memberships_1", user_id: "users_owner", team_id: "teams_active" }], conversations: [conversation], user_send_daily: [] });
   const scheduled: any[] = [];
   const ctx = { db, scheduler: { async runAfter(_delay: number, _fn: any, args: any) { scheduled.push(args); } } };
   expect(await scheduleUserSend(ctx, conversation, { role: "assistant", content: "hello" }, 1)).toBe(false);
@@ -177,4 +177,9 @@ test("the team day shows the viewer's own sends and a teammate's only from team-
   expect(answer.rows.map((r: any) => r.text).sort()).toEqual(["my own prompt", "shared prompt"]);
   expect(answer.rows.find((r: any) => r.text === "shared prompt")).toMatchObject({ _id: "ps:messages_b", session_title: "Shared", date: "2026-10-29" });
   expect(await (teamDay as any)._handler(authCtx("users_stranger"), { team_id: "teams_t", date: "2026-10-29" })).toBeNull();
+});
+
+test("a pointer at a team the owner has left attributes the send to no team", async () => {
+  const db = makeFakeDb({ users: [{ _id: "users_owner", active_team_id: "teams_left" }], team_memberships: [] });
+  expect(await resolveCounterTeam({ db }, { _id: "conversations_1", user_id: "users_owner" } as any)).toBeUndefined();
 });

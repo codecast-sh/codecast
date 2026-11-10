@@ -28,7 +28,6 @@
 // reported a fresh snapshot in BOTH readings removes most of the rest.
 
 import { internalMutation, internalQuery, query } from "./functions";
-import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { weightedTokens, type UsageCalibration } from "@codecast/shared/contracts";
 

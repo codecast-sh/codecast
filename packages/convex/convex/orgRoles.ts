@@ -1595,7 +1595,7 @@ export const hireAssistant = mutation({
 // every such seat up to the shipped behaviour: keep the current title in
 // seat_previous, retitle after the role, and post the seating note from the
 // role's host. Idempotent: a thread that carries seat_previous is skipped.
-// Run once on prod: `npx convex run orgRoles:backfillSeatedHeads '{"dry_run":true}'`, then without.
+// Run once on prod: `packages/convex/run.sh orgRoles:backfillSeatedHeads '{"dry_run":true}'`, then without.
 export async function performBackfillSeatedHeads(ctx: any, dryRun: boolean): Promise<{ dry_run: boolean; updated: Array<{ role: string; conversation: string | null; previous_title: string | null; title: string; workspace: string }>; skipped: number }> {
   const roles: any[] = await ctx.db.query("org_roles").collect();
   const updated: Array<{ role: string; conversation: string | null; previous_title: string | null; title: string; workspace: string }> = [];

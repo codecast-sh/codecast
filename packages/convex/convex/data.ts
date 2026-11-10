@@ -251,7 +251,17 @@ export function scopeByProject<T extends Record<string, any>>(
   projectPath?: string | null
 ): T[] {
   if (!projectPath) return items;
-  return items.filter(item => !item.project_path || item.project_path.startsWith(projectPath) || (item.git_root && item.git_root.startsWith(projectPath)));
+  return items.filter(item => !item.project_path || pathIsWithin(item.project_path, projectPath) || (item.git_root && pathIsWithin(item.git_root, projectPath)));
+}
+
+/**
+ * Whether `candidate` is `root` or a path under it. The separator boundary
+ * matters: a bare prefix test made /repo/codecast match /repo/codecast-web.
+ */
+export function pathIsWithin(candidate: string, root: string): boolean {
+  const base = root.length > 1 ? root.replace(/\/+$/, "") : root;
+  if (!base) return true;
+  return candidate === base || candidate.startsWith(base.endsWith("/") ? base : base + "/");
 }
 
 /**
@@ -321,11 +331,7 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
 
     query(table: string) {
       const applyProjectScope = SCOPED_TABLES.has(table) && projectPath;
-      if (!SCOPED_TABLES.has(table)) {
-        return applyProjectScope
-          ? wrapProjectQuery(ctx.db.query(table), projectPath)
-          : ctx.db.query(table);
-      }
+      if (!SCOPED_TABLES.has(table)) return ctx.db.query(table);
       // by_workspace is the chokepoint index. Legacy rows (no stored key yet)
       // ride the old routing index for the team space / owner index for the
       // personal space, filtered by their computed key — same answer, one
@@ -501,7 +507,7 @@ function wrapWorkspaceQuery(
 }
 
 function wrapProjectQuery(inner: any, projectPath: string): any {
-  const matchesProject = (d: any) => !d.project_path || d.project_path.startsWith(projectPath) || (d.git_root && d.git_root.startsWith(projectPath));
+  const matchesProject = (d: any) => !d.project_path || pathIsWithin(d.project_path, projectPath) || (d.git_root && pathIsWithin(d.git_root, projectPath));
   const wrap = (q: any) => ({
     filter: (fn: any) => wrap(q.filter(fn)),
     order: (dir: any) => wrap(q.order(dir)),

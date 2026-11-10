@@ -464,7 +464,7 @@ export const holdFromCli = mutation({
  */
 export async function createLiveFlowCore(ctx: Ctx, args: { team_id: Id<"teams">; workflow_id: Id<"workflows">; by: Id<"users">; sources?: string[]; watcher_role_id?: Id<"org_roles">; client_key?: string }, now = Date.now()) {
   if (await liveFlowFor(ctx, args.team_id)) throw new ConvexError("the team already has a live flow");
-  const roles: any[] = await ctx.db.query("org_roles").collect();
+  const roles: any[] = await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", args.team_id)).collect();
   const linesOn = flowRoles({ team_id: args.team_id }, roles).filter((r) => r.status === "active" && lineStartsOn(r)).map((r) => r.handle as string).sort();
   const id = await ctx.db.insert("live_flows", {
     workspace: `team:${args.team_id}`,

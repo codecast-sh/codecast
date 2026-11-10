@@ -579,3 +579,24 @@ describe("performListOwnerCandidates", () => {
     expect(result?.team_members.length).toBeLessThanOrEqual(OWNER_CANDIDATE_CAP);
   });
 });
+
+describe("the sender a move names (from_session)", () => {
+  const lines = (db: any) => (db._tables.pending_messages ?? []) as any[];
+
+  test("a session the caller cannot see is never quoted or stamped as the sender", async () => {
+    const db = fixtures();
+    // jx2abcd is Mr Bot's private session: Ashot cannot see it.
+    await performSetSessionOwners({ db }, ASHOT as any, { session_id: "jx1abcd", owners: ["jason@union.ai"], from_session: "jx2abcd" });
+    expect(lines(db).length).toBeGreaterThan(0);
+    for (const row of lines(db)) {
+      expect(String(row.content)).not.toContain("jx2abcd");
+      expect(row.from_conversation_id).toBeUndefined();
+    }
+  });
+
+  test("the caller's own session is still named as the sender", async () => {
+    const db = fixtures();
+    await performSetSessionOwners({ db }, ASHOT as any, { session_id: "jx1abcd", owners: ["jason@union.ai"], from_session: "jx3abcd" });
+    expect(lines(db).some((row) => String(row.content).includes("jx3abcd"))).toBe(true);
+  });
+});

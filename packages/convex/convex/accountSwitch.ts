@@ -2260,22 +2260,6 @@ export const autoSwitchCheck = internalMutation({
   },
 });
 
-// Repair for rows pinned by the machine before `cc_account_auto` existed:
-// mark the named rows' pins automatic, so their next resume follows the
-// machine's account. Owner only; run with packages/convex/run.sh.
-export const markAccountPinsAuto = internalMutation({
-  args: { conversation_ids: v.array(v.id("conversations")) },
-  handler: async (ctx, args) => {
-    let marked = 0;
-    for (const id of args.conversation_ids) {
-      const conv = await ctx.db.get(id);
-      if (!conv?.cc_account || conv.cc_account_auto === true) continue;
-      await ctx.db.patch(id, { cc_account_auto: true });
-      marked++;
-    }
-    return { marked };
-  },
-});
 
 // The pin a daemon sources when it resumes a conversation. The daemon used
 // to read the row's `cc_account` raw, so a session parked on a limit while
@@ -2302,7 +2286,10 @@ export const pinForResume = mutation({
       .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
       .first();
     const pin = resumePinFor(conv, device ?? undefined, Date.now());
-    if ((conv.cc_account ?? undefined) !== pin) {
+    // Only the session's runner corrects the stored pin: the pin names an
+    // account on the runner's machines, and a teammate who can merely read the
+    // session gets the answer for their own device without rewriting it.
+    if ((conv.cc_account ?? undefined) !== pin && String(conv.user_id) === String(userId)) {
       await ctx.db.patch(conv._id, { cc_account: pin, cc_account_auto: true });
       console.log(
         `pinForResume: ${conv._id} parked (${conv.pending_api_error_kind}) on pin "${conv.cc_account}" — resuming under ${pin ? `"${pin}"` : "the keychain login"}`,
@@ -2444,7 +2431,7 @@ export const sweepStaleApiErrorFlags = internalMutation({
 // conversation and stamp the ones the upgraded classifier now recognizes, so
 // they join the blocked set (badge + banner + revive) without waiting for a
 // fresh banner. Run via:
-//   npx convex run accountSwitch:restampApiErrorFlags '{"user_id":"..."}'
+//   packages/convex/run.sh accountSwitch:restampApiErrorFlags '{"user_id":"..."}'
 export const restampApiErrorFlags = internalMutation({
   args: { user_id: v.id("users") },
   handler: async (ctx, args) => {
@@ -2525,8 +2512,8 @@ const RECLASSIFY_BATCH_MAX = 500;
 //   human deliberately put down.
 //
 // Run via:
-//   npx convex run accountSwitch:reclassifyParkedApiErrorFlags '{}'
-//   npx convex run accountSwitch:reclassifyParkedApiErrorFlags '{"dry_run":false}'
+//   packages/convex/run.sh accountSwitch:reclassifyParkedApiErrorFlags '{}'
+//   packages/convex/run.sh accountSwitch:reclassifyParkedApiErrorFlags '{"dry_run":false}'
 export const reclassifyParkedApiErrorFlags = internalMutation({
   args: {
     cursor: v.optional(v.string()),
@@ -2582,31 +2569,6 @@ export const reclassifyParkedApiErrorFlags = internalMutation({
   },
 });
 
-// Operator escape hatch: void every still-pending switch_account command. A
-// daemon that dies mid-execution leaves its command unacked, and a restarted
-// daemon re-polls pending commands — for a mass revive that replay is exactly
-// the stampede the dry-run guard exists to prevent. Run via:
-//   npx convex run accountSwitch:clearPendingSwitchCommands
-export const clearPendingSwitchCommands = internalMutation({
-  args: { user_id: v.id("users") },
-  handler: async (ctx, args) => {
-    // by_user_pending bounds the read to this user's unexecuted commands — a
-    // bare .filter() over daemon_commands scans the full history and times out.
-    const pending = await ctx.db
-      .query("daemon_commands")
-      .withIndex("by_user_pending", (q) =>
-        q.eq("user_id", args.user_id).eq("executed_at", undefined),
-      )
-      .collect();
-    let cleared = 0;
-    for (const cmd of pending) {
-      if (cmd.command !== "switch_account") continue;
-      await ctx.db.patch(cmd._id, { executed_at: Date.now(), result: "cancelled_by_operator" });
-      cleared++;
-    }
-    return { cleared };
-  },
-});
 
 // The web switcher's data: per device, the active account and saved profile
 // names the daemon reported on its heartbeat. Online devices are the live set;

@@ -387,6 +387,18 @@ describe("applyRemote on an existing task", () => {
     expect(db._patched.filter((p: any) => p._id === "task_1").length).toBe(1);
   });
 
+  test("a personal source's event is scoped to its workspace key, never sent unscoped to every user's trigger", async () => {
+    const personal = { ...SOURCE, team_id: undefined, workspace: "user:user_owner" };
+    const { ctx, scheduled } = engineCtx({
+      tasks: [structuredClone(TASK)], issue_sync_sources: [personal], users: [ADA], task_history: [], task_comments: [],
+      agent_tasks: armedTriggerRows("issues"),
+    });
+    await apply(ctx, { source_id: "src_1", issue: sameIssue({ title: "Renamed" }), event_kind: "issue_edited" });
+    const trigger = scheduled.find((s) => s.args?.event_type);
+    expect(trigger?.args.workspace).toBe("user:user_owner");
+    expect(trigger?.args.team_id).toBeUndefined();
+  });
+
   test("a webhook kind wins over the derived one", async () => {
     const { ctx, scheduled } = engineCtx({
       tasks: [structuredClone(TASK)], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],

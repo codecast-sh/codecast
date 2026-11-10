@@ -4,6 +4,7 @@ import { hashToken } from "./apiTokens";
 import { publish, recordLiveRead, recordShipPass, reportMainCommits, request, view } from "./deployTargets";
 import { checkSuiteCi, recordCommitCi, recordGithubDeployStatus, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
 import { recordDeployMarker } from "./deploys";
+import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
 
 // A repository's deploy targets (docs/architecture/deploys.md DP10 to DP14):
 // published from the checkout, live from whichever path recorded it, the
@@ -301,5 +302,42 @@ describe("a repository GitHub does not report", () => {
     await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(1), repository: REPO, source: "m", at: NOW });
     const [backend] = await viewOf(ctx, "backend");
     expect(backend.queue).toMatchObject({ known: true, commits: 1, untouched: 1 });
+  });
+});
+
+describe("a json live reader's url (pollLiveReaders)", () => {
+  test("only http(s) to a public host is fetched", () => {
+    for (const url of [
+      "file:///etc/passwd",
+      "ftp://dl.acme.dev/latest.json",
+      "not a url",
+      "http://localhost:3210/latest.json",
+      "http://127.0.0.1/latest.json",
+      "http://2130706433/latest.json",
+      "http://0.0.0.0/",
+      "http://10.1.2.3/latest.json",
+      "http://172.16.0.9/x",
+      "http://192.168.1.1/x",
+      "http://100.64.0.1/x",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://[::1]/x",
+      "http://[fd00::1]/x",
+      "http://[fe80::1]/x",
+      "http://[::ffff:10.0.0.1]/x",
+      "http://convex-backend:3210/x",
+      "http://db.internal/x",
+      "http://printer.local/x",
+      "https://user:pw@dl.acme.dev/latest.json",
+    ]) expect([url, liveReaderUrlRefusal(url) !== null]).toEqual([url, true]);
+  });
+
+  test("a public release document is still read", () => {
+    for (const url of [
+      "https://dl.acme.dev/latest.json",
+      "http://dl.acme.dev:8080/latest.json",
+      "https://8.8.8.8/latest.json",
+      "https://172.32.0.1/x",
+      "https://[2606:4700::1111]/x",
+    ]) expect([url, liveReaderUrlRefusal(url)]).toEqual([url, null]);
   });
 });

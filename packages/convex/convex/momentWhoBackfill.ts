@@ -3,7 +3,7 @@
 // R2 and its row takes the name. A body kept on the host, or past its 30
 // days, has nothing to read, and its row stays unnamed. One page per run;
 // each run schedules the next until the table is walked.
-//   npx convex run momentWhoBackfill:run
+//   packages/convex/run.sh momentWhoBackfill:run
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";

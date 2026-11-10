@@ -465,12 +465,11 @@ async function projectPerson(ctx: Ctx, project: Doc<"projects">): Promise<Id<"us
   return answererOf(role, await allRolesInBoundary(ctx, role)) as Id<"users">;
 }
 
-/** A person in the project's workspace: a member of its team, or its owner when it has none. */
+/** A person in the project's workspace: whoever its access key admits (team_id is routing, never access). */
 async function inProjectWorkspace(ctx: Ctx, project: Doc<"projects">, userId: string): Promise<boolean> {
   const id = ctx.db.normalizeId("users", userId);
   if (!id) return false;
-  if (!project.team_id) return id === project.user_id;
-  return !!(await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", id).eq("team_id", project.team_id)).first());
+  return canAccessProject(ctx, id, project);
 }
 
 /** The longest run of one speaker's segments a quote is matched across. */

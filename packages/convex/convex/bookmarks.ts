@@ -94,6 +94,17 @@ async function validateBookmarkTarget(
   return { ok: true, value: { conversation, message, existing } };
 }
 
+/**
+ * Where a listed bookmark opens. /share/* resolves by share token only, so a
+ * session id there is a dead link: a conversation with no share link opens at
+ * its own page, which its owner (the only one who can list it) can read.
+ */
+export function bookmarkUrl(conversation: { _id: unknown; share_token?: string }, messageIndex: number): string {
+  return conversation.share_token
+    ? `https://codecast.sh/share/${conversation.share_token}#msg-${messageIndex}`
+    : `https://codecast.sh/conversation/${String(conversation._id)}#msg-${messageIndex}`;
+}
+
 export const createFromCLI = mutation({
   args: {
     api_token: v.string(),
@@ -245,8 +256,6 @@ export const listFromCLI = mutation({
       const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
       const messageIndex = sortedMessages.findIndex((m) => m._id.toString() === message._id.toString()) + 1;
 
-      const shareToken = conversation.share_token || conversation.session_id;
-
       enrichedResults.push({
         id: bookmark._id,
         name: bookmark.name,
@@ -258,7 +267,7 @@ export const listFromCLI = mutation({
         message_preview: message.content?.slice(0, 100) || "",
         message_role: message.role,
         project_path: conversation.project_path,
-        url: `https://codecast.sh/share/${shareToken}#msg-${messageIndex}`,
+        url: bookmarkUrl(conversation, messageIndex),
         created_at: new Date(bookmark.created_at).toISOString(),
       });
     }

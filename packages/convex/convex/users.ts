@@ -23,10 +23,10 @@ import { normalizeTimezone } from "./lib/teamDay";
 import { startedBefore } from "./pathStats";
 import { isStaff } from "./lib/staff";
 import { verifyApiToken } from "./apiTokens";
-import { findSessionCommandByRequest, hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
+import { findSessionCommandByRequest, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { DAEMON_COMMAND_TTL_MS, repositoryKeyOfRemote } from "@codecast/shared/contracts";
-import { canAccessTask, canAccessDoc, patchConversationVisibility, workspaceGrantsAccess } from "./lib/access";
+import { activeTeamMembershipFor, canAccessTask, canAccessDoc, patchConversationVisibility, workspaceGrantsAccess } from "./lib/access";
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
 import { stripMessageTags, isUserMessageNoise, fetchUserSendDays } from "./lib/userSend";
 import { bucketActivityDays, loadUserActivity } from "./lib/profileActivity";
@@ -147,24 +147,6 @@ export const getCurrentUserProbe = query({
   },
 });
 
-// internal: had zero callers and was a public, unauthenticated mutation that
-// inserted a user row for any supplied email. Convex Auth owns real user
-// creation; nothing legitimate needs this from a client.
-export const createUser = internalMutation({
-  args: {
-    email: v.string(),
-    name: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const userId = await ctx.db.insert("users", {
-      email: args.email,
-      name: args.name,
-      created_at: Date.now(),
-      role: "member",
-    });
-    return userId;
-  },
-});
 
 // internal: was a public query that returned the ENTIRE users table (including
 // every email) to any caller — the id/email directory an attacker needed to
@@ -305,14 +287,6 @@ export const removeAlternateEmail = mutation({
   },
 });
 
-export const updateUserActivity = internalMutation({
-  args: {
-    userId: v.id("users"),
-    daemonSeen: v.optional(v.boolean()),
-    messageTimestamp: v.optional(v.number()),
-  },
-  handler: async () => {},
-});
 
 // internal: had zero callers and was a public mutation that let anyone stamp
 // any user's daemon_last_seen. The real daemon-liveness write is daemonHeartbeat
@@ -816,7 +790,8 @@ export const daemonHeartbeat = mutation({
       // Older daemons still gate token minting on this wire field. Always true
       // now that per-session account tokens are the default behavior.
       cc_session_tokens: true,
-      team_id: user?.active_team_id ?? user?.team_id ?? undefined,
+      // Membership-verified: the pointer outlives a lapsed membership.
+      team_id: (await activeTeamMembershipFor(ctx, auth.userId))?.teamId,
       min_cli_version: minVersionConfig?.value ?? undefined,
       agent_permission_modes: user?.agent_permission_modes ?? undefined,
       // The backend new Claude sessions start on; null = the shipped default.
@@ -1132,66 +1107,6 @@ export const sendDaemonCommandToAll = mutation({
   },
 });
 
-// Admin-only internal mutation for CLI use with admin key
-export const internalSendCommand = internalMutation({
-  args: {
-    email: v.string(),
-    command: v.string(),
-    args_json: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const users = await ctx.db.query("users").collect();
-    const user = users.find(u => u.email === args.email);
-    if (!user) throw new Error(`User not found: ${args.email}`);
-
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: user._id,
-      command: args.command as any,
-      args: args.args_json,
-      created_at: Date.now(),
-    });
-    return { command_id: commandId, user_id: user._id };
-  },
-});
-
-export const internalExpireCommands = internalMutation({
-  args: { email: v.string() },
-  handler: async (ctx, args) => {
-    const users = await ctx.db.query("users").collect();
-    const user = users.find(u => u.email === args.email);
-    if (!user) throw new Error(`User not found: ${args.email}`);
-    const pending = await ctx.db.query("daemon_commands")
-      .withIndex("by_user_pending", q => q.eq("user_id", user._id).eq("executed_at", undefined))
-      .collect();
-    for (const cmd of pending) {
-      await ctx.db.patch(cmd._id, {
-        executed_at: Date.now(),
-        error: "expired_manual",
-        ...(cmd.command === "set_provider_key" ? { args: undefined } : {}),
-      });
-    }
-    return { expired: pending.length, commands: pending.map(c => c.command) };
-  },
-});
-
-export const internalGetCommand = internalMutation({
-  args: { command_id: v.id("daemon_commands") },
-  handler: async (ctx, args) => {
-    const cmd = await ctx.db.get(args.command_id);
-    return cmd ? { command: cmd.command, result: cmd.result, error: cmd.error, executed_at: cmd.executed_at } : null;
-  },
-});
-
-export const internalListUsers = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const users = await ctx.db.query("users").collect();
-    return users
-      .filter(u => u.last_heartbeat)
-      .map(u => ({ email: u.email, _id: u._id, cli_version: u.cli_version, last_heartbeat: u.last_heartbeat }))
-      .sort((a, b) => (b.last_heartbeat ?? 0) - (a.last_heartbeat ?? 0));
-  },
-});
 
 export const resumeSession = mutation({
   args: {
@@ -1285,6 +1200,20 @@ export const storeVoipPushToken = mutation({
   },
 });
 
+/** Sign-out on a phone: drop the caller's push token, only while it is still
+ *  this phone's (another device may have registered since). */
+export const clearPushToken = mutation({
+  args: { push_token: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const user = await ctx.db.get(userId);
+    if (!user || user.push_token !== args.push_token) return { cleared: false };
+    await ctx.db.patch(userId, { push_token: undefined });
+    return { cleared: true };
+  },
+});
+
 export const storePushToken = mutation({
   args: {
     push_token: v.string(),
@@ -1295,6 +1224,16 @@ export const storePushToken = mutation({
       throw new Error("Not authenticated");
     }
     const user = await ctx.db.get(userId);
+    // One phone, one account: a token another account still holds (it signed
+    // out without clearing, or the phone changed hands) would keep pushing
+    // that account's notifications to this phone.
+    const holders = await ctx.db
+      .query("users")
+      .withIndex("by_push_token", (q) => q.eq("push_token", args.push_token))
+      .take(20);
+    for (const holder of holders) {
+      if (holder._id !== userId) await ctx.db.patch(holder._id, { push_token: undefined });
+    }
     // Token registration runs on every app launch — seed notification defaults
     // only for first-time registration, never overwrite saved preferences.
     await ctx.db.patch(userId, {
@@ -2843,31 +2782,6 @@ export const backfillDirectoryTeamMappingConversations = internalMutation({
   },
 });
 
-export const backfillAutoShareConversations = internalMutation({
-  args: {
-    userId: v.optional(v.id("users")),
-  },
-  handler: async (ctx, args) => {
-    let mappings;
-    if (args.userId) {
-      mappings = await ctx.db
-        .query("directory_team_mappings")
-        .withIndex("by_user_id", (q) => q.eq("user_id", args.userId!))
-        .collect();
-    } else {
-      mappings = await ctx.db.query("directory_team_mappings").take(50);
-    }
-    // Re-resolve conversations under every mapping — not just auto_share ones.
-    // The shared backfill reads current mappings and applies the right
-    // is_private/auto_shared values per conversation.
-    for (const mapping of mappings) {
-      await queueRetroactiveResolveConversations(
-        ctx, mapping.user_id, mapping.path_prefix, mapping.repository
-      );
-    }
-    return { totalUpdated: 0, mappingsProcessed: mappings.length };
-  },
-});
 
 // The one write behind every "share this directory with a team" control
 // (web settings, the team setup flows, `cast teams map`). A mapping shares
@@ -3008,11 +2922,6 @@ export async function upsertDirectoryMapping(
   return { success: true, action: existingMapping ? "updated" : "created", share_since: shareSince ?? null };
 }
 
-/** Operator path: repoint one user's folder rule, with the same backfill. */
-export const updateDirectoryMappingForUser = internalMutation({
-  args: { user_id: v.id("users"), path_prefix: v.string(), team_id: v.id("teams") },
-  handler: async (ctx, args) => upsertDirectoryMapping(ctx, args.user_id, { path_prefix: args.path_prefix, team_id: args.team_id }),
-});
 
 export const updateDirectoryTeamMapping = mutation({
   args: {
@@ -3418,7 +3327,7 @@ export const getSuggestedTeamProjects = query({
       return null;
     }
 
-    const teamId = args.team_id || user.active_team_id || user.team_id;
+    const teamId = args.team_id || (await activeTeamMembershipFor(ctx, userId))?.teamId;
     if (!teamId) {
       return null;
     }
@@ -3686,35 +3595,6 @@ export async function performGetRecentProjectPaths(
   }
 }
 
-export const adminSetTeamMemberVisibility = internalMutation({
-  args: {
-    email: v.string(),
-    visibility: v.union(
-      v.literal("hidden"),
-      v.literal("activity"),
-      v.literal("summary"),
-      v.literal("detailed"),
-      v.literal("full")
-    ),
-    clearHideActivity: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", args.email))
-      .unique();
-    if (!user) throw new Error("User not found");
-
-    const updates: Record<string, unknown> = {
-      activity_visibility: args.visibility,
-    };
-    if (args.clearHideActivity) {
-      updates.hide_activity = false;
-    }
-    await ctx.db.patch(user._id, updates as any);
-    return { success: true, user: user.name || user.email };
-  },
-});
 
 export const deleteAccount = mutation({
   args: {},

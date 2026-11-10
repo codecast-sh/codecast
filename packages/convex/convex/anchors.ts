@@ -2,7 +2,7 @@ import { internalMutation, mutation, query } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { buildShareUpdate, isConversationTeamVisible, resolveCreationPrivacy } from "./privacy";
-import { patchConversationVisibility } from "./lib/access";
+import { activeTeamMembershipFor, patchConversationVisibility } from "./lib/access";
 import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { killConversation } from "./conversations";
@@ -256,8 +256,7 @@ export async function provisionStandingAgent(
     // Resolve the team: explicit team_id, else the host's active team.
     let resolved = args.team_id;
     if (!resolved) {
-      const host = await ctx.db.get(hostUserId);
-      resolved = host?.active_team_id ?? host?.team_id ?? undefined;
+      resolved = (await activeTeamMembershipFor(ctx, hostUserId))?.teamId;
     }
     if (!resolved) {
       throw new Error("No team to anchor: pass --team <id> or set an active team");
@@ -572,7 +571,7 @@ async function rebriefLiveAnchor(ctx: any, anchor: any, rail: string, args: Rebr
 
 // One sweep: send every live role its current opening, so a role started
 // under earlier instructions works from the ones that ship now.
-// `npx convex run anchors:rebriefRoles '{"dry_run":true}'`.
+// `packages/convex/run.sh anchors:rebriefRoles '{"dry_run":true}'`.
 export async function performRebriefRoles(ctx: any, args: RebriefArgs): Promise<{ dry_run: boolean; sent: Array<{ role: string; handle: string; conversation: string | null }>; skipped: number }> {
   const sent: Array<{ role: string; handle: string; conversation: string | null }> = [];
   let skipped = 0;
@@ -596,7 +595,7 @@ export const rebriefRoles = internalMutation({
 // The same sweep for the workspace agents that hold no role seat: a change to
 // bootstrapMessage reaches a running workspace agent only through a rebrief.
 // `only` takes anchor ids.
-// `npx convex run anchors:rebriefWorkspaceAgents '{"dry_run":true}'`.
+// `packages/convex/run.sh anchors:rebriefWorkspaceAgents '{"dry_run":true}'`.
 export async function performRebriefWorkspaceAgents(ctx: any, args: RebriefArgs): Promise<{ dry_run: boolean; sent: Array<{ anchor: string; name: string; conversation: string | null }>; skipped: number }> {
   const sent: Array<{ anchor: string; name: string; conversation: string | null }> = [];
   let skipped = 0;
@@ -629,8 +628,7 @@ export const resolveAnchorForScope = query({
     const scopeUserId = args.scope_type === "user" ? userId : undefined;
     let teamId = args.team_id;
     if (args.scope_type === "team" && !teamId) {
-      const host = await ctx.db.get(userId);
-      teamId = host?.active_team_id ?? host?.team_id ?? undefined;
+      teamId = (await activeTeamMembershipFor(ctx, userId))?.teamId;
     }
     // Authorize team scope: only a member may resolve a team's anchor (team_id is
     // not a secret, so without this any user could fetch another team's anchor id).
@@ -803,8 +801,7 @@ export const getAnchorSpace = query({
     const scopeUserId = args.scope_type === "user" ? userId : undefined;
     let teamId = args.team_id;
     if (args.scope_type === "team" && !teamId) {
-      const host = await ctx.db.get(userId);
-      teamId = host?.active_team_id ?? host?.team_id ?? undefined;
+      teamId = (await activeTeamMembershipFor(ctx, userId))?.teamId;
     }
     if (args.scope_type === "team") {
       if (!teamId) return { scope_type: args.scope_type, anchor: null, no_team: true };

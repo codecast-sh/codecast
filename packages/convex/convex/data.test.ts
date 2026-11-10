@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createDataContext } from "./data";
+import { createDataContext, pathIsWithin, scopeByProject } from "./data";
 
 // Regression for the work-item privacy leak (ct-38419): resolveWorkspace used
 // to fall back to the caller's active_team_id when no directory mapping
@@ -165,6 +165,51 @@ describe("createDataContext — work items follow directory→team privacy", () 
       project_path: "/repo",
     });
 
+    const result = await dc.query("tasks").paginate({ numItems: 10, cursor: null });
+    expect(result.page.map((row: any) => row._id)).toEqual(["mine"]);
+  });
+});
+
+describe("project scoping stops at a path boundary", () => {
+  test("a sibling directory sharing the prefix is another project", () => {
+    expect(pathIsWithin("/repo/codecast-web", "/repo/codecast")).toBe(false);
+    expect(pathIsWithin("/repo/codecast", "/repo/codecast")).toBe(true);
+    expect(pathIsWithin("/repo/codecast/packages/web", "/repo/codecast")).toBe(true);
+    // A worktree lives under its repository, and a trailing slash names the same directory.
+    expect(pathIsWithin("/repo/codecast/.codecast/worktrees/fix", "/repo/codecast/")).toBe(true);
+    expect(pathIsWithin("/repo/codecast-web", "/repo/codecast/")).toBe(false);
+    expect(pathIsWithin("/anything", "/")).toBe(true);
+  });
+
+  test("scopeByProject keeps the project, its subdirectories and unplaced rows only", () => {
+    const rows = [
+      { _id: "same", project_path: "/repo/codecast" },
+      { _id: "child", project_path: "/repo/codecast/packages/cli" },
+      { _id: "sibling", project_path: "/repo/codecast-web" },
+      { _id: "by-root", project_path: "/elsewhere", git_root: "/repo/codecast" },
+      { _id: "sibling-root", project_path: "/elsewhere", git_root: "/repo/codecast-web" },
+      { _id: "unplaced" },
+    ];
+    expect(scopeByProject(rows, "/repo/codecast").map((r) => r._id)).toEqual(["same", "child", "by-root", "unplaced"]);
+  });
+
+  test("a scoped query applies the same boundary", async () => {
+    const rows = [
+      { _id: "mine", user_id: "u1", project_path: "/repo/app" },
+      { _id: "sibling", user_id: "u1", project_path: "/repo/app-old" },
+    ];
+    const builder: any = {
+      withIndex: () => builder,
+      filter: () => builder,
+      order: () => builder,
+      paginate: async () => ({ page: rows, isDone: true, continueCursor: "" }),
+      collect: async () => rows,
+    };
+    const dc = await createDataContext({ db: { query: () => builder } } as any, {
+      userId: "u1" as any,
+      workspace: "personal",
+      project_path: "/repo/app",
+    });
     const result = await dc.query("tasks").paginate({ numItems: 10, cursor: null });
     expect(result.page.map((row: any) => row._id)).toEqual(["mine"]);
   });

@@ -17,7 +17,8 @@ import { internalMutation, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
-import { resolveSessionConversation } from "./lib/access";
+import { heldKeysFor, parseWorkspaceKey, resolveSessionConversation } from "./lib/access";
+import { liveRoleByHandle } from "./lib/orgAccess";
 import { canAccessComment, setThreadResolved } from "./codeComments";
 import { createDataContext } from "./data";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
@@ -86,7 +87,6 @@ export const add = mutation({
     const userId = await requireUserOrToken(ctx, args.api_token);
     const content = args.content.trim();
     if (!content) throw new Error("A review note needs a body");
-    const promise = await resolvePromise(ctx, args);
     const conversation = args.conversation_id
       ? await resolveSessionConversation(ctx, userId, args.conversation_id)
       : null;
@@ -99,6 +99,7 @@ export const add = mutation({
       workspace: args.workspace,
       team_id: args.team_id,
     });
+    const promise = await resolvePromise(ctx, userId, data.workspaceKey, args);
 
     const now = Date.now();
     const id = await ctx.db.insert("review_comments", {
@@ -157,18 +158,35 @@ export function promiseFields(fields: DispositionFields, owner: { user_id?: Id<"
   return out;
 }
 
-async function resolvePromise(ctx: any, fields: DispositionFields) {
+/**
+ * A named owner is looked up only inside the finding's own workspace (or, for
+ * a row with no key, the workspaces the caller holds): a handle or a name is
+ * unique per workspace, never across the deployment.
+ */
+async function resolvePromise(ctx: any, userId: Id<"users">, workspace: string | undefined, fields: DispositionFields) {
   let user_id = fields.owner_user_id;
   let role_id = fields.owner_role_id;
   const name = fields.owner?.trim();
   if (name && !user_id && !role_id) {
     const handle = name.replace(/^@/, "").toLowerCase();
-    const role = (await ctx.db.query("org_roles").collect()).find((r: any) => (r.handle ?? "").toLowerCase() === handle);
-    if (role) role_id = role._id;
-    else {
-      const user = (await ctx.db.query("users").collect()).find((u: any) => [u.github_username, u.email, u.name].some((x: string | undefined) => x && x.toLowerCase() === handle));
-      if (user) user_id = user._id;
-      else throw new Error(`No role or user named ${name}`);
+    const keys = workspace ? [workspace] : [...(await heldKeysFor(ctx, userId))];
+    const boundaries = keys.map((k) => parseWorkspaceKey(k)).filter((b): b is NonNullable<typeof b> => !!b);
+    for (const b of boundaries) {
+      const role = await liveRoleByHandle(ctx, b.type === "team" ? { team_id: b.teamId } : { scope_user_id: b.userId }, handle);
+      if (role) { role_id = role._id; break; }
+    }
+    if (!role_id) {
+      const candidates = new Set<string>();
+      for (const b of boundaries) {
+        if (b.type === "personal") { candidates.add(String(b.userId)); continue; }
+        const members = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", b.teamId)).collect();
+        for (const m of members) candidates.add(String(m.user_id));
+      }
+      for (const id of candidates) {
+        const u: any = await ctx.db.get(id as Id<"users">);
+        if (u && [u.github_username, u.email, u.name].some((x: string | undefined) => x && x.toLowerCase() === handle)) { user_id = u._id; break; }
+      }
+      if (!user_id) throw new Error(`No role or user named ${name}`);
     }
   }
   return promiseFields(fields, { user_id, role_id });
@@ -180,7 +198,7 @@ export const setDisposition = mutation({
     const userId = await requireUserOrToken(ctx, args.api_token);
     const row = await ctx.db.get(args.comment_id);
     if (!row || !(await canAccessComment(ctx, userId, row))) throw new Error("Finding not found");
-    const fields = await resolvePromise(ctx, args);
+    const fields = await resolvePromise(ctx, userId, typeof row.workspace === "string" && row.workspace ? row.workspace : undefined, args);
     const now = Date.now();
     await ctx.db.patch(args.comment_id, { ...fields, updated_at: now, ...(args.disposition === "fixed" || args.disposition === "rejected" ? { resolved: true, resolved_at: now, resolved_by: userId } : {}) });
     return { id: args.comment_id, ...fields };

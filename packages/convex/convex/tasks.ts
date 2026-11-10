@@ -39,7 +39,7 @@ import {
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { briefGoalRefs, LINE_CATEGORIES, LINE_READINESS, LINE_RISKS } from "@codecast/shared/contracts/goalsBrief";
 import { causeBrief } from "./goals";
-import { Doc, Id } from "./_generated/dataModel";
+import { Id } from "./_generated/dataModel";
 import type { SubscriptionVia } from "./notificationRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, createWorkContext, scopeByProject, explicitWorkspace } from "./data";
@@ -86,6 +86,7 @@ import {
   workspaceForResource,
   workspacesMatch,
   visibleInTeamList,
+  activeTeamMembershipFor,
 } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
 import { boundSessionsOf, claimTaskOwnership, isSessionWorking, type TaskOwnerRef } from "./lib/taskOwner";
@@ -1831,8 +1832,7 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
 
   let teamIdForScope: Id<"teams"> | undefined;
   if (args.team) {
-    const user = await ctx.db.get(auth.userId);
-    teamIdForScope = user?.active_team_id || user?.team_id;
+    teamIdForScope = (await activeTeamMembershipFor(ctx, auth.userId))?.teamId;
   }
   const db = await createDataContext(ctx, {
     userId: auth.userId,
@@ -4442,8 +4442,7 @@ export const webTeamList = query({
 
     let teamId = args.team_id;
     if (!teamId) {
-      const user = await ctx.db.get(userId);
-      teamId = user?.active_team_id || user?.team_id;
+      teamId = (await activeTeamMembershipFor(ctx, userId))?.teamId;
     }
     if (!teamId) return [];
     const db = await createDataContext(ctx, { userId, workspace: "team", team_id: teamId });
@@ -4578,52 +4577,6 @@ export const updateExecutionStatus = mutation({
   },
 });
 
-
-export const backfillTriageStatus = internalMutation({
-  args: {
-    api_token: v.string(),
-    cursor: v.optional(v.string()),
-    batch_size: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token);
-    if (!auth) throw new Error("Unauthorized");
-
-    const batchSize = args.batch_size || 100;
-    let query = ctx.db.query("tasks");
-    const tasks = await query.collect();
-
-    let updated = 0;
-    let skipped = 0;
-    for (const t of tasks) {
-      if ((t as any).triage_status) { skipped++; continue; }
-      const status = (t.source === "human" || t.promoted) ? "active" : "suggested";
-      await ctx.db.patch(t._id, { triage_status: status as any });
-      updated++;
-      if (updated >= batchSize) break;
-    }
-
-    return { updated, skipped, total: tasks.length, done: updated < batchSize };
-  },
-});
-
-// Backfill: reset all insight-sourced tasks to triage_status "suggested"
-// so they appear in the triage lightbulb, not the main "All" list.
-export const backfillInsightTriageStatus = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const tasks = await ctx.db.query("tasks").collect();
-    let updated = 0;
-    for (const t of tasks) {
-      if (t.source !== "insight") continue;
-      if ((t as any).triage_status === "suggested") continue;
-      if ((t as any).triage_status === "dismissed") continue;
-      await ctx.db.patch(t._id, { triage_status: "suggested" as any, promoted: false });
-      updated++;
-    }
-    return { updated, total: tasks.length };
-  },
-});
 
 export const batchUpdateStatus = mutation({
   args: {

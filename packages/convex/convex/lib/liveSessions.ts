@@ -35,10 +35,8 @@ export async function listLiveManagedSessions(
 // status row (managed_sessions.hosted) is not one: its heartbeat proves a
 // running turn, so daemon-only reads (user-wide daemon liveness, the reaper,
 // the process monitor) skip it, while per-conversation liveness keeps it.
-// A daemon row leaves `hosted` unset, and this reads it the same way
-// conversations.buildNamedSessionMaps does through the by_user_hosted_heartbeat
-// index (`eq("hosted", undefined)`), so a row stamped `hosted: false` counts as
-// a daemon on neither path.
+// A daemon row leaves `hosted` unset, so a row stamped `hosted: false` does
+// not count as a daemon.
 export function isDaemonManagedRow(row: { hosted?: boolean }): boolean {
   return row.hosted === undefined;
 }

@@ -17,6 +17,7 @@ const modules = {
   "./conversations.ts": () => import("./conversations"),
   "./teams.ts": () => import("./teams"),
   "./syncOutbox.ts": () => import("./syncOutbox"),
+  "./authorityEvents.ts": () => import("./authorityEvents"),
 };
 
 async function setup() {
@@ -112,5 +113,26 @@ describe("chokepoints write their audit row in the same transaction", () => {
     const row = (await events()).find((r) => r.kind === "team_member_added");
     expect(row?.actor_user_id).toBe(ids.other);
     expect(row?.detail.after).toEqual({ role: "admin", how: "Created the team" });
+  });
+});
+
+describe("authorityEvents.list --kind", () => {
+  test("returns the newest rows of that kind even when newer rows of other kinds outnumber the limit", async () => {
+    const { t, ids } = await setup();
+    const { api } = await import("./_generated/api");
+    await t.run(async (ctx) => {
+      const base = { actor_user_id: ids.owner, team_id: ids.team, detail: {}, workspace: `team:${ids.team}` };
+      await ctx.db.insert("authority_events", { ...base, kind: "team_member_added", target_user_id: ids.other, created_at: 10 } as any);
+      for (let i = 0; i < 8; i++) await ctx.db.insert("authority_events", { ...base, kind: "team_member_role_changed", target_user_id: ids.other, created_at: 100 + i } as any);
+    });
+    const asOwner = t.withIdentity({ subject: `${ids.owner}|x` } as any);
+    const found = await asOwner.query(api.authorityEvents.list, { kind: "team_member_added", limit: 3 });
+    expect(found.map((r: any) => r.kind)).toEqual(["team_member_added"]);
+    // Without a kind the cut is still the newest rows of any kind.
+    const newest = await asOwner.query(api.authorityEvents.list, { limit: 3 });
+    expect(newest.map((r: any) => r.created_at)).toEqual([107, 106, 105]);
+    // Someone outside the team reads none of it.
+    const asOther = t.withIdentity({ subject: `${ids.other}|x` } as any);
+    expect(await asOther.query(api.authorityEvents.list, { kind: "team_member_added", limit: 3 })).toEqual([]);
   });
 });

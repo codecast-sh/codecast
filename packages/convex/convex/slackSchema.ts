@@ -58,8 +58,7 @@ export const slackTables = {
     created_at: v.number(),
     updated_at: v.number(),
   })
-    .index("by_installation_user", ["installation_id", "user_id"])
-    .index("by_user", ["user_id"]),
+    .index("by_installation_user", ["installation_id", "user_id"]),
 
   // Idempotency for inbound Slack events: Slack retries on slow/failed acks, and
   // a double-wake would make the anchor answer the same mention twice (Aivery's

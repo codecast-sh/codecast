@@ -17,7 +17,7 @@ const turn = (id: string, timestamp: number, model = "claude-opus-5-5") => ({
 });
 
 function setup(conversations: any[]) {
-  const db = makeFakeDb({ users: [{ _id: "users_owner", active_team_id: "teams_t" }], conversations, usage_pending: [], user_usage_daily: [] });
+  const db = makeFakeDb({ users: [{ _id: "users_owner", active_team_id: "teams_t" }], team_memberships: [{ _id: "team_memberships_1", user_id: "users_owner", team_id: "teams_t" }], conversations, usage_pending: [], user_usage_daily: [] });
   const scheduled: any[] = [];
   const ctx = { db, scheduler: { async runAfter(delay: number, fn: any, args: any) { scheduled.push({ delay, fn, args }); } } };
   return { db, ctx, scheduled };

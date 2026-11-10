@@ -84,6 +84,5 @@ export const issueSyncTables = {
     processed: v.boolean(),
     created_at: v.number(),
   })
-    .index("by_delivery_id", ["delivery_id"])
-    .index("by_processed", ["processed"]),
+    .index("by_delivery_id", ["delivery_id"]),
 };

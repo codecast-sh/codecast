@@ -29,6 +29,7 @@ import {
   requireAccessibleTask,
   requireTeamMembership,
   workspaceGrantsAccess,
+  activeTeamMembershipFor,
 } from "./lib/access";
 
 const DEFAULT_LIMIT = 200;
@@ -246,8 +247,7 @@ export const listForTeam = query({
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
-    const user = await ctx.db.get(userId);
-    const teamId = args.team_id ?? user?.active_team_id ?? user?.team_id;
+    const teamId = args.team_id ?? (await activeTeamMembershipFor(ctx, userId))?.teamId;
     if (!teamId) return [];
     await requireTeamMembership(ctx, userId, teamId);
 
@@ -343,8 +343,7 @@ export const listForPlan = query({
     const userId = await requireUser(ctx);
     const plan = await ctx.db.get(args.plan_id);
     if (!plan || !(await canAccessPlan(ctx, userId, plan))) return [];
-    const user = await ctx.db.get(userId);
-    const teamId = plan.team_id ?? user?.active_team_id ?? user?.team_id;
+    const teamId = plan.team_id ?? (await activeTeamMembershipFor(ctx, userId))?.teamId;
 
     return await listForContainer(
       ctx,
@@ -365,8 +364,7 @@ export const listForProject = query({
     const userId = await requireUser(ctx);
     const project = await ctx.db.get(args.project_id);
     if (!project || !(await canAccessProject(ctx, userId, project))) return [];
-    const user = await ctx.db.get(userId);
-    const teamId = project.team_id ?? user?.active_team_id ?? user?.team_id;
+    const teamId = project.team_id ?? (await activeTeamMembershipFor(ctx, userId))?.teamId;
 
     return await listForContainer(
       ctx,

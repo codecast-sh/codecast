@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import { create, listForPR, pendingReview, discardPendingReview, recordSubmittedReview } from "./codeComments";
-import { submitPending, getCommentsForPR, deliverSubmittedReview, handPendingToSession } from "./reviews";
+import { submitPending, getCommentsForPR, deliverSubmittedReview, handPendingToSession, reviewerFor } from "./reviews";
 import { threads, findComment } from "./prCli";
 
 const USER = "user_1" as any;
@@ -109,6 +109,27 @@ describe("recording a submitted review", () => {
     expect(byId.n2).toMatchObject({ github_comment_id: 71 });
     const review = ctx.db._inserted.find((i: any) => i.table === "reviews")!.doc;
     expect(review).toMatchObject({ state: "changes_requested", github_review_id: 900, reviewer_user_id: USER, author_github_username: "ashot" });
+  });
+});
+
+describe("who may submit", () => {
+  test("a member of the pull request's team resolves as its reviewer; an outsider finds no pull request", async () => {
+    const OUTSIDER = "user_3" as any;
+    const ctx = context(USER, { users: [{ _id: USER, name: "Ashot", github_username: "ashot", github_access_token: "tok_a" }, { _id: OUTSIDER, name: "Eve", github_access_token: "tok_e" }] });
+    const mine = await (reviewerFor as any)._handler(ctx, { user_id: USER, pull_request_id: PR });
+    expect(mine).toMatchObject({ github_token: "tok_a", pr: { repository: "codecast-sh/codecast", number: 12 } });
+    expect(await (reviewerFor as any)._handler(ctx, { user_id: OUTSIDER, pull_request_id: PR })).toBeNull();
+  });
+
+  test("submitPending answers not found, and calls GitHub for nothing, when the reviewer lookup refuses", async () => {
+    const calls: string[] = [];
+    const ctx = {
+      async runQuery(ref: any) { const name = getFunctionName(ref); if (name.includes("callerId")) return "user_3"; if (name.includes("reviewerFor")) return null; throw new Error("unexpected query " + name); },
+      async runAction(ref: any) { calls.push(getFunctionName(ref)); },
+      async runMutation(ref: any) { calls.push(getFunctionName(ref)); },
+    } as any;
+    expect(await (submitPending as any)._handler(ctx, { pull_request_id: PR, event: "APPROVE" })).toEqual({ error: "Pull request not found" });
+    expect(calls).toEqual([]);
   });
 });
 

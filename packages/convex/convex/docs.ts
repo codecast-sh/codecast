@@ -4,13 +4,13 @@ import type { RegisteredQuery } from "convex/server";
 import { resolveActor } from "./lib/actor";
 import { afterRoleDocWrite } from "./orgRoles";
 import { v, type ObjectType } from "convex/values";
-import { mutation, query, internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "./functions";
+import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
 import { Id, type Doc } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, resolveEffectiveTeam, stampEffectiveTeam } from "./data";
-import { resolveTeamForPath, isTeamMember, createTeamFeedFilter, teamVisibleConvTeam } from "./privacy";
+import { isTeamMember, createTeamFeedFilter, teamVisibleConvTeam } from "./privacy";
 import {
   webDocsNeedsUserDoc,
   resolveWebDocsTeamId,
@@ -1396,20 +1396,6 @@ export async function updateDocAs(ctx: MutationCtx, userId: Id<"users">, args: O
   return { success: true };
 }
 
-export const deleteBySource = internalMutation({
-  args: {
-    source: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const docs = await ctx.db.query("docs").collect();
-    const toDelete = docs.filter((d) => d.source === args.source);
-    for (const doc of toDelete) {
-      await ctx.db.delete(doc._id);
-    }
-    return { deleted: toDelete.length };
-  },
-});
-
 
 // Once, after extraction from session transcripts was retired: archives the
 // docs it made (Markdown files a session wrote, long assistant replies), so they
@@ -1429,114 +1415,6 @@ export const archiveExtractedDocs = internalMutation({
   },
 });
 
-export const debugList = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const docs = await ctx.db.query("docs").collect();
-    const bySource: Record<string, number> = {};
-    const byType: Record<string, number> = {};
-    const byTeam: Record<string, number> = {};
-    const samples: Array<{ title: string; source: string; doc_type: string }> = [];
-    for (const d of docs) {
-      bySource[d.source] = (bySource[d.source] || 0) + 1;
-      byType[d.doc_type] = (byType[d.doc_type] || 0) + 1;
-      byTeam[d.team_id ? String(d.team_id) : "none"] = (byTeam[d.team_id ? String(d.team_id) : "none"] || 0) + 1;
-      if (d.source === "inline_extract" && samples.length < 10) {
-        let title = d.title;
-        if (d.content) {
-          const m = d.content.match(/^#\s+(.+)/m);
-          if (m) title = m[1].trim();
-        }
-        samples.push({ title: title.slice(0, 80), source: d.source, doc_type: d.doc_type });
-      }
-    }
-    return { total: docs.length, bySource, byType, byTeam, inlineSamples: samples };
-  },
-});
-
-export const fixDocTeamsByProject = internalMutation({
-  args: {
-    teamPatterns: v.array(v.object({
-      team_id: v.string(),
-      patterns: v.array(v.string()),
-    })),
-  },
-  handler: async (ctx, args) => {
-    const docs = await ctx.db.query("docs").collect();
-    let updated = 0;
-    for (const doc of docs) {
-      if (!doc.project_path) continue;
-      let matchedTeam: string | undefined;
-      for (const { team_id, patterns } of args.teamPatterns) {
-        if (patterns.some((p) => doc.project_path!.includes(p))) {
-          matchedTeam = team_id;
-          break;
-        }
-      }
-      if (matchedTeam && doc.team_id !== matchedTeam) {
-        await ctx.db.patch(doc._id, { team_id: matchedTeam as any });
-        updated++;
-      } else if (!matchedTeam && doc.team_id) {
-        await ctx.db.patch(doc._id, { team_id: undefined });
-        updated++;
-      }
-    }
-    return { updated, total: docs.length };
-  },
-});
-
-export const backfillPlanDocs = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const docs = await ctx.db
-      .query("docs")
-      .collect();
-    const planDocs = docs.filter(d => d.source === "plan_mode" && !d.plan_id);
-    let created = 0;
-    for (const doc of planDocs) {
-      await syncDocToPlanEntity(ctx, doc._id, doc.content, doc.user_id, doc.team_id, doc.project_id, doc.conversation_id);
-      created++;
-    }
-    return { created, total: planDocs.length };
-  },
-});
-
-export const fixDocTeams = internalMutation({
-  args: { team_id: v.optional(v.string()), limit: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const batchSize = args.limit || 500;
-    let docs;
-    if (args.team_id) {
-      docs = await ctx.db
-        .query("docs")
-        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id as any))
-        .take(batchSize);
-    } else {
-      docs = await ctx.db.query("docs").take(batchSize);
-    }
-    let updated = 0;
-    const mappingsCache = new Map<string, any[]>();
-    for (const doc of docs) {
-      const path = doc.project_path;
-      if (!path) continue;
-
-      const uid = String(doc.user_id);
-      if (!mappingsCache.has(uid)) {
-        mappingsCache.set(uid, await ctx.db
-          .query("directory_team_mappings")
-          .withIndex("by_user_id", (q: any) => q.eq("user_id", doc.user_id))
-          .collect());
-      }
-      const { teamId: resolvedTeamId } = resolveTeamForPath(mappingsCache.get(uid)!, path, undefined);
-
-      if (String(doc.team_id || "") !== String(resolvedTeamId || "")) {
-        await ctx.db.patch(doc._id, { team_id: resolvedTeamId || undefined });
-        updated++;
-      }
-    }
-    return { updated, total: docs.length };
-  },
-});
 
 export const webPatch = mutation({
   args: {
@@ -1550,7 +1428,8 @@ export const webPatch = mutation({
 
     const doc = await ctx.db.get(args.id);
     if (!doc) throw new Error("Doc not found");
-    if (doc.user_id !== userId) throw new Error("Not authorized");
+    // The same rule as webUpdate and the CLI patch: the doc's workspace.
+    if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Not authorized");
 
     const idx = doc.content.indexOf(args.old_string);
     if (idx === -1) throw new Error("old_string not found in document");
@@ -2007,7 +1886,7 @@ export const expandMentions = query({
       try {
         if (mention.type === "task" && mention.shortId) {
           const task = await ctx.db.query("tasks")
-            .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
+            .withIndex("by_short_id", (q: any) => q.eq("short_id", mention.shortId))
             .first();
           if (task && (await canAccessTask(ctx, userId, task))) {
             const comments = await ctx.db.query("task_comments")
@@ -2062,7 +1941,7 @@ export const expandMentions = query({
 
         } else if (mention.type === "plan" && mention.shortId) {
           const plan = await ctx.db.query("plans")
-            .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
+            .withIndex("by_short_id", (q: any) => q.eq("short_id", mention.shortId))
             .first();
           if (plan && (await canAccessPlan(ctx, userId, plan))) {
             let md = `### Plan: ${inlineForeignText((plan as any).title)}\n`;
@@ -2157,7 +2036,7 @@ export const expandMentions = query({
 
         } else if (mention.type === "session" && mention.shortId) {
           const sess = await ctx.db.query("conversations")
-            .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
+            .withIndex("by_short_id", (q: any) => q.eq("short_id", mention.shortId))
             .first();
           if (sess && (await canAccessConversation(ctx, userId, sess))) {
             let md = `\n\n---\n### Session: ${sess.title || "Untitled"}\n`;
@@ -2505,74 +2384,6 @@ export const webDocTree: RegisteredQuery<"public", Record<string, never>, Promis
   },
 });
 
-export const linkPlanToSessions = internalMutation({
-  args: {
-    mappings: v.array(v.object({
-      plan_name: v.string(),
-      session_ids: v.array(v.string()),
-    })),
-  },
-  handler: async (ctx, args) => {
-    let updated = 0;
-    for (const { plan_name, session_ids } of args.mappings) {
-      const sourceFile = `/Users/ashot/.claude/plans/${plan_name}.md`;
-      const doc = await ctx.db
-        .query("docs")
-        .withIndex("by_source_file", (q) => q.eq("source_file", sourceFile))
-        .first();
-      if (!doc) continue;
-
-      const convIds = [];
-      let firstConv: any = null;
-      for (const sid of session_ids) {
-        const conv = await ctx.db
-          .query("conversations")
-          .withIndex("by_session_id", (q) => q.eq("session_id", sid))
-          .first();
-        if (conv) {
-          convIds.push(conv._id);
-          if (!firstConv) firstConv = conv;
-        }
-      }
-      if (convIds.length === 0) continue;
-
-      const patch: any = {
-        related_conversation_ids: convIds,
-        updated_at: Date.now(),
-      };
-      if (!doc.conversation_id) {
-        patch.conversation_id = convIds[0];
-      }
-      if (!doc.project_path && firstConv?.project_path) {
-        patch.project_path = firstConv.project_path;
-      }
-      await ctx.db.patch(doc._id, patch);
-      updated++;
-
-      // Propagate session links to plan entity and set active_plan_id on conversations
-      if (doc.plan_id) {
-        const plan = await ctx.db.get(doc.plan_id);
-        if (plan) {
-          const existingIds = new Set((plan.session_ids || []).map((id: any) => String(id)));
-          const newIds = convIds.filter((id: any) => !existingIds.has(String(id)));
-          if (newIds.length > 0) {
-            await ctx.db.patch(plan._id, {
-              session_ids: [...(plan.session_ids || []), ...newIds],
-              updated_at: Date.now(),
-            });
-          }
-          for (const cid of convIds) {
-            const conv = await ctx.db.get(cid);
-            if (conv && !conv.active_plan_id) {
-              await ctx.db.patch(cid, { active_plan_id: plan._id });
-            }
-          }
-        }
-      }
-    }
-    return { updated };
-  },
-});
 
 export const webPromoteToPlan = mutation({
   args: { doc_id: v.id("docs") },

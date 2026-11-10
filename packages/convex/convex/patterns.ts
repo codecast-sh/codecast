@@ -2,7 +2,7 @@ import { mutation } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { teamVisibleConvTeam } from "./privacy";
-import { computeWorkspaceKey } from "./lib/access";
+import { activeTeamMembershipFor, canAccessConversation, computeWorkspaceKey } from "./lib/access";
 
 export const create = mutation({
   args: {
@@ -42,13 +42,17 @@ export const create = mutation({
         .query("conversations")
         .withIndex("by_session_id", (q) => q.eq("session_id", args.source_session_id!))
         .first();
-      if (conv) {
+      // A session the caller cannot read donates nothing: neither a link nor
+      // its team (session ids are not secrets).
+      if (conv && (await canAccessConversation(ctx, result.userId, conv))) {
         conversationId = conv._id;
       }
     }
 
     const sourceConv = conversationId ? await ctx.db.get(conversationId) : null;
-    let teamId = user.team_id;
+    // The team the caller works in and still belongs to; the bare pointer
+    // outlives a lapsed membership.
+    let teamId = (await activeTeamMembershipFor(ctx, result.userId))?.teamId;
     if (sourceConv) {
       // Only a team-VISIBLE source session donates its team; a private session's
       // routing team_id must not become a team-readable pattern grant.

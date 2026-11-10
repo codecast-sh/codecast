@@ -27,6 +27,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId, tellRole } from "./pendingMessages";
 import { canOwnerOrTeamAccess, isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
+import { activeTeamMembershipFor } from "./lib/access";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
 import { canAccessChannel, canReadChannelAnonymously, channelAgentRows, channelMemberIds, isChannelMember, isCommunity, isRestricted } from "./chatAccess";
 import {
@@ -3466,8 +3467,7 @@ async function anchorSpokenFor(
     const scopeType = args.scope_type ?? "user";
     let teamId = args.team_id;
     if (scopeType === "team" && !teamId) {
-      const me = await ctx.db.get(userId);
-      teamId = (me?.active_team_id ?? me?.team_id) as Id<"teams"> | undefined;
+      teamId = (await activeTeamMembershipFor(ctx as any, userId))?.teamId;
     }
     const rows = scopeType === "team" && teamId
       ? await ctx.db.query("anchors").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect()

@@ -2199,6 +2199,16 @@ function generateShareToken(): string {
   return crypto.randomUUID();
 }
 
+// A message share is a window onto ONE conversation: the anchor's. These
+// bound what a share can name, at write and again at read (rows written
+// before the bounds existed are read through them too).
+const MESSAGE_SHARE_MAX_CONTEXT = 50;
+const MESSAGE_SHARE_MAX_IDS = 500;
+function clampShareContext(n: number | undefined): number {
+  if (typeof n !== "number" || !Number.isFinite(n)) return 0;
+  return Math.min(MESSAGE_SHARE_MAX_CONTEXT, Math.max(0, Math.floor(n)));
+}
+
 export const generateMessageShareLink = mutation({
   args: {
     message_id: v.id("messages"),
@@ -2246,14 +2256,29 @@ export const generateMessageShareLink = mutation({
       }
     }
 
+    // Every listed message must belong to the anchor's conversation, the one
+    // the caller was just admitted to. Without this a share could publish any
+    // message id from any tenant.
+    if (args.message_ids) {
+      if (args.message_ids.length > MESSAGE_SHARE_MAX_IDS) {
+        throw new Error(`A share holds at most ${MESSAGE_SHARE_MAX_IDS} messages`);
+      }
+      for (const id of args.message_ids) {
+        const listed = await ctx.db.get(id);
+        if (!listed || listed.conversation_id !== message.conversation_id) {
+          throw new Error("Unauthorized: shared messages must come from one conversation");
+        }
+      }
+    }
+
     const shareToken = generateShareToken();
     await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf("conversations", conversation) }, "public_sharing_disabled");
     await ctx.db.insert("message_shares", {
       share_token: shareToken,
       message_id: args.message_id,
       user_id: authUserId,
-      context_before: args.context_before,
-      context_after: args.context_after,
+      context_before: args.context_before === undefined ? undefined : clampShareContext(args.context_before),
+      context_after: args.context_after === undefined ? undefined : clampShareContext(args.context_after),
       message_ids: args.message_ids,
       note: args.note,
       include_conversation_link: includeConversationLink || undefined,
@@ -2441,8 +2466,12 @@ export const getSharedMessage = query({
     let sharedMessages: typeof message[] = [];
 
     if (share.message_ids && share.message_ids.length > 0) {
-      const msgs = await Promise.all(share.message_ids.map(id => ctx.db.get(id)));
-      sharedMessages = msgs.filter((m): m is NonNullable<typeof m> => m !== null);
+      const msgs = await Promise.all(share.message_ids.slice(0, MESSAGE_SHARE_MAX_IDS).map(id => ctx.db.get(id)));
+      // Only the anchor conversation's messages: a share row written before
+      // generateMessageShareLink checked this may list foreign ids.
+      sharedMessages = msgs.filter(
+        (m): m is NonNullable<typeof m> => m !== null && m.conversation_id === message.conversation_id,
+      );
       sharedMessages.sort((a, b) => a.timestamp - b.timestamp);
     } else if (share.context_before || share.context_after) {
       const allMessages = await ctx.db
@@ -2456,8 +2485,8 @@ export const getSharedMessage = query({
       const targetIndex = sorted.findIndex((m) => m._id === message._id);
 
       if (targetIndex !== -1) {
-        const startIdx = Math.max(0, targetIndex - (share.context_before || 0));
-        const endIdx = Math.min(sorted.length, targetIndex + (share.context_after || 0) + 1);
+        const startIdx = Math.max(0, targetIndex - clampShareContext(share.context_before));
+        const endIdx = Math.min(sorted.length, targetIndex + clampShareContext(share.context_after) + 1);
         sharedMessages = sorted.slice(startIdx, endIdx);
       }
     }

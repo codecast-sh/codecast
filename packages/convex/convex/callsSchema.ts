@@ -105,7 +105,6 @@ export const callTables = {
   })
     .index("by_transcript", ["transcript_id", "requested_at"])
     .index("by_room_status", ["room_key", "status"])
-    .index("by_egress", ["egress_id"])
     // The reconciler's worklist: every row LiveKit is still working on.
     .index("by_status", ["status"])
     // The newest press anywhere: the sweep asks LiveKit for untracked

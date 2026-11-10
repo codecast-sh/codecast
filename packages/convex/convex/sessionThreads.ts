@@ -12,10 +12,11 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { resolveConversationRef } from "./conversations";
 import { checkConversationAccess } from "./privacy";
+import { stripInjectionNoise } from "@codecast/shared/contracts";
 
-// Mirror of packages/web/components/sessionMessage.ts — kept tiny and dependency
-// free so it runs on the Convex side. Pulls the sender short_id and the human body
-// out of the wire wrapper, tolerating the injection noise the daemon can prepend.
+// Pulls the sender short_id and the human body out of the wire wrapper,
+// tolerating the injection noise the daemon can prepend (the shared
+// stripInjectionNoise, so this accepts exactly the rows the clients do).
 const SESSION_MESSAGE_RE =
   /<session-message\s+from="([^"]*)"[^>]*>([\s\S]*)<\/session-message>/;
 
@@ -29,13 +30,6 @@ function removeTrailingFramingNewline(body: string): string {
   if (body.endsWith("\r\n")) return body.slice(0, -2);
   if (body.endsWith("\n")) return body.slice(0, -1);
   return body;
-}
-
-function stripInjectionNoise(text: string): string {
-  return text
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
-    .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
-    .replace(/^[\x00-\x1f\s]+/, "");
 }
 
 export function parseSessionThreadMessage(

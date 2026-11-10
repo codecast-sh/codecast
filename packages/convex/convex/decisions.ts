@@ -2,7 +2,7 @@ import { mutation } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { teamVisibleConvTeam } from "./privacy";
-import { computeWorkspaceKey } from "./lib/access";
+import { computeWorkspaceKey, resolveSessionConversation } from "./lib/access";
 import { heldKeysFor } from "./lib/accessKeys";
 import type { Doc, Id } from "./_generated/dataModel";
 
@@ -25,10 +25,9 @@ export const create = mutation({
 
     let sourceConv = null;
     if (args.session_id) {
-      sourceConv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id!))
-        .first();
+      // Only a session the caller can read places the decision: another
+      // person's session must never donate its team (and so its workspace).
+      sourceConv = await resolveSessionConversation(ctx, result.userId, args.session_id);
     }
     const id = await insertDecision(ctx, result.userId, {
       title: args.title,
@@ -193,10 +192,8 @@ export const get = mutation({
       return { error: "Unauthorized" };
     }
 
-    const decision = await ctx.db
-      .query("decisions")
-      .filter((q) => q.eq(q.field("_id"), args.decision_id as any))
-      .first();
+    const decisionId = ctx.db.normalizeId("decisions", args.decision_id);
+    const decision = decisionId ? await ctx.db.get(decisionId) : null;
 
     if (!decision || decision.user_id.toString() !== result.userId.toString()) {
       return { error: "Decision not found" };

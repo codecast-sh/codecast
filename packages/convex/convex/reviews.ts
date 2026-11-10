@@ -3,7 +3,7 @@ import { mutation, query, action, internalQuery, internalMutation } from "./func
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireUser, requireUserOrToken } from "./lib/auth";
-import { requireAccessiblePullRequest } from "./lib/access";
+import { canAccessPullRequest, requireAccessiblePullRequest } from "./lib/access";
 import type { Doc } from "./_generated/dataModel";
 import { githubSentence } from "./prCli";
 import { pendingRowsFor, withoutOthersPending } from "./codeComments";
@@ -322,6 +322,8 @@ export const reviewerFor = internalQuery({
     const user: any = await ctx.db.get(args.user_id);
     const pr = await ctx.db.get(args.pull_request_id);
     if (!user || !pr) return null;
+    // Every caller submits as this user: a pull request they cannot read is not found.
+    if (!(await canAccessPullRequest(ctx, args.user_id, pr))) return null;
     return {
       github_token: user.github_access_token ?? null,
       github_username: user.github_username ?? null,

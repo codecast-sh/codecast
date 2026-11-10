@@ -118,6 +118,9 @@ export const startForCli = mutation({
 
 // ── 2. Claim ──
 
+/** Queued reviews one lease call reads while looking for its own person's. */
+export const LEASE_SCAN_MAX = 500;
+
 /** The machine's lease on up to `n` queued reviews of judges its person published, oldest first; leases nobody renewed go back first. */
 export const lease = internalMutation({
   args: { api_token: v.string(), device_id: v.string(), n: v.number() },
@@ -135,17 +138,24 @@ export const lease = internalMutation({
     const out: Array<{ review: Doc<"agent_reviews">; judge: Doc<"judges">; moment: Doc<"moments"> }> = [];
     if (!n) return out;
     const judges = new Map<string, Doc<"judges"> | null>();
-    const queued: Doc<"agent_reviews">[] = await ctx.db.query("agent_reviews").withIndex("by_status_created", (q: any) => q.eq("status", "queued")).take(n * 4);
+    // The queue is every publisher's, oldest first, and a machine runs only its
+    // own person's judges: walk past the others' reviews (bounded) instead of
+    // reading a fixed head, which other publishers' reviews could fill.
+    const queued: Doc<"agent_reviews">[] = await ctx.db.query("agent_reviews").withIndex("by_status_created", (q: any) => q.eq("status", "queued")).take(LEASE_SCAN_MAX);
     for (const r of queued) {
       if (out.length >= n) break;
       if (!judges.has(String(r.judge_id))) judges.set(String(r.judge_id), await ctx.db.get(r.judge_id));
       const judge = judges.get(String(r.judge_id));
-      const moment = await ctx.db.get(r.moment_id);
-      if (!judge || judge.removed_at || !judge.agent || !moment) {
-        await ctx.db.patch(r._id, { status: "cancelled", error: !moment ? "its moment is gone" : "its judge was removed or is no longer an agent judge", updated_at: now });
+      if (!judge || judge.removed_at || !judge.agent) {
+        await ctx.db.patch(r._id, { status: "cancelled", error: "its judge was removed or is no longer an agent judge", updated_at: now });
         continue;
       }
       if (judge.publisher_user_id !== auth.userId) continue;
+      const moment = await ctx.db.get(r.moment_id);
+      if (!moment) {
+        await ctx.db.patch(r._id, { status: "cancelled", error: "its moment is gone", updated_at: now });
+        continue;
+      }
       const patch = { status: "running" as const, claim_device: args.device_id, attempts: r.attempts + 1, lease_until: now + LEASE_MS, started_at: now, error: undefined, updated_at: now };
       await ctx.db.patch(r._id, patch);
       out.push({ review: { ...r, ...patch }, judge, moment });

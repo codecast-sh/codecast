@@ -1,4 +1,4 @@
-import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
+import { action, internalMutation, internalQuery, mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { api, internal } from "./_generated/api";
@@ -343,6 +343,10 @@ export const recordSuggestionOutcome = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return;
+    // Pills are shown to the session's owner only (getComposerSuggestions), so
+    // only the owner can report what became of one.
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || String(conv.user_id) !== String(userId)) return;
     await ctx.db.insert("suggestion_outcomes", {
       user_id: userId,
       conversation_id: args.conversation_id,
@@ -845,82 +849,6 @@ async function refreshProfile(ctx: any, userId: Id<"users">, now: number): Promi
   });
   return profile;
 }
-
-// Force a profile rebuild ahead of the TTL — after a miner change, or to
-// inspect what the miner learns for one user. Returns the stored profile.
-export const refreshSuggestionProfile = internalAction({
-  args: { user_id: v.id("users") },
-  handler: async (ctx, args): Promise<StoredProfile> => {
-    return await refreshProfile(ctx, args.user_id, Date.now());
-  },
-});
-
-// The exact miner prompt one user's corpus renders to right now — what the
-// profile refresh would send. Read-only; for inspecting what the miner sees.
-export const previewMinerPrompt = internalAction({
-  args: { user_id: v.id("users") },
-  handler: async (ctx, args): Promise<{ prompt: string; inputs: number }> => {
-    const inputs: Array<{ text: string }> = await ctx.runQuery(
-      internal.composerSuggestions.getRecentUserInputs,
-      { user_id: args.user_id },
-    );
-    return { prompt: buildMinerPrompt(inputs.map((r) => r.text)), inputs: inputs.length };
-  },
-});
-
-// Side-by-side provider comparison over real conversations — the evidence
-// behind the SUGGESTIONS_PROVIDER choice. Internal-only; run via
-// `npx convex run` with a user id and conversation ids. Makes no writes.
-// `prompt_only` returns the rendered prompt per conversation and calls no
-// provider — the exact context the suggester would be sent.
-export const bakeoffSuggestions = internalAction({
-  args: {
-    user_id: v.id("users"),
-    conversation_ids: v.array(v.id("conversations")),
-    prompt_only: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args): Promise<any> => {
-    const profile = await ctx.runQuery(internal.composerSuggestions.getSuggestionProfile, {
-      user_id: args.user_id,
-    });
-    if (!profile) return { error: "no profile" };
-    const tok = (u: any) => ({
-      in: u?.input_tokens ?? u?.prompt_tokens,
-      out: u?.output_tokens ?? u?.completion_tokens,
-      reasoning: u?.completion_tokens_details?.reasoning_tokens,
-    });
-    const results: any[] = [];
-    for (const cid of args.conversation_ids) {
-      const context = await ctx.runQuery(internal.composerSuggestions.getSuggestionContext, {
-        conversation_id: cid,
-      });
-      if (!context || context.tail_role !== "assistant") {
-        results.push({ cid, skipped: "no assistant tail" });
-        continue;
-      }
-      const prompt = buildPrompt(context, profileForPrompt(profile));
-      if (args.prompt_only) {
-        results.push({ cid, title: context.conversation.title, anchor: context.anchor, prompt });
-        continue;
-      }
-      const t0 = Date.now();
-      const gate = { ctx, scope: { conversationId: cid } };
-      const haiku = await llmComplete({ provider: "anthropic", prompt, maxTokens: SUGGEST_MAX_TOKENS, gate });
-      const t1 = Date.now();
-      const luna = await llmComplete({ provider: "openai", prompt, maxTokens: SUGGEST_MAX_TOKENS, gate });
-      const t2 = Date.now();
-      const tailMsg = [...context.turns].reverse().find((t) => t.role === "assistant");
-      results.push({
-        cid,
-        title: context.conversation.title,
-        tail: (tailMsg?.content ?? "").slice(-180),
-        haiku: { ms: t1 - t0, text: haiku?.text ?? null, tokens: tok(haiku?.usage) },
-        luna: { ms: t2 - t1, text: luna?.text ?? null, tokens: tok(luna?.usage) },
-      });
-    }
-    return results;
-  },
-});
 
 // The suggestion request for one moment on the Anthropic branch: the prompt
 // predictSuggestions renders, at its token cap.

@@ -834,25 +834,6 @@ export const createTask = mutation({
   },
 });
 
-// Admin repair: stamp created_by_conversation_id on a trigger that predates the
-// field (or whose creator link failed to resolve at creation). Attribution
-// only — routing (originating_conversation_id) is deliberately untouchable
-// here; recreating with --for stays the repair path for a broken binding.
-export const adminSetCreatedByConversation = internalMutation({
-  args: {
-    task_id: v.id("agent_tasks"),
-    conversation_id: v.id("conversations"),
-  },
-  handler: async (ctx, args) => {
-    const task = await ctx.db.get(args.task_id);
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!task || !conv) return false;
-    if (task.user_id !== conv.user_id) return false;
-    await ctx.db.patch(args.task_id, { created_by_conversation_id: args.conversation_id });
-    return true;
-  },
-});
-
 // Repair for the rows the clipped-comm bug left orphaned (no creator, no
 // inject binding): the creator's own transcript holds the proof. `cast trigger
 // add` prints "Trigger tr-NNN …" into the Bash tool result of the session that
@@ -1291,14 +1272,16 @@ export const getDueTasks = query({
     if (!auth) throw new Error("Unauthorized");
 
     const now = Date.now();
+    // This caller's tasks due by now, in run_at order (the order the status
+    // index gave), without reading every other user's schedule on each poll.
     const tasks = await ctx.db
       .query("agent_tasks")
-      .withIndex("by_status_run_at", (q) => q.eq("status", "scheduled"))
+      .withIndex("by_user_run_at", (q) => q.eq("user_id", auth.userId).lte("run_at", now))
       .collect();
 
     const dueTasks = [];
     for (const task of tasks) {
-      if (task.user_id !== auth.userId || task.run_at === undefined || !(task.run_at <= now)) continue;
+      if (task.status !== "scheduled" || task.user_id !== auth.userId || task.run_at === undefined || !(task.run_at <= now)) continue;
       if (await cloudTriggerConversation(ctx, task)) continue;
       if (await roleTriggerHeld(ctx, task)) continue;
       dueTasks.push(task);
@@ -2196,34 +2179,6 @@ export const backfillShortIds = internalMutation({
       await ctx.db.patch(task._id, { short_id: await nextShortId(ctx.db, "tr") });
     }
     return { filled: batch.length, more: missing.length > limit };
-  },
-});
-
-// One-shot backfill for conversations.armed_trigger_kind: every home of a
-// currently armed inject trigger gets its kind stamped. Bounded by the number of
-// armed triggers, not conversations; homes with no armed trigger stay unset,
-// which reads as "none". Idempotent — re-running writes nothing new.
-export const backfillArmedTriggerKind = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const homes = new Set<string>();
-    for (const status of ["scheduled", "running", "paused"] as const) {
-      const tasks = await ctx.db
-        .query("agent_tasks")
-        .withIndex("by_status_run_at", (q) => q.eq("status", status))
-        .collect();
-      for (const task of tasks) {
-        if (task.originating_conversation_id) homes.add(task.originating_conversation_id.toString());
-      }
-    }
-    let stamped = 0;
-    for (const id of homes) {
-      const before = await ctx.db.get(id as Id<"conversations">);
-      await refreshArmedTriggerKind(ctx, id as Id<"conversations">);
-      const after = await ctx.db.get(id as Id<"conversations">);
-      if (before && after && (before.armed_trigger_kind ?? "none") !== (after.armed_trigger_kind ?? "none")) stamped++;
-    }
-    return { homes: homes.size, stamped };
   },
 });
 
@@ -3192,31 +3147,6 @@ export const generateDisplaySummary = internalAction({
     } catch (error) {
       console.error("Failed to generate task summary:", error);
     }
-  },
-});
-
-// One-shot sweep for schedules created before display summaries existed: every
-// task without one gets a generation scheduled — history included, so the
-// /schedules finished section reads as names too. Safe to re-run.
-export const backfillDisplaySummaries = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    let scheduled = 0;
-    for (const status of ["scheduled", "running", "paused", "completed", "failed"] as const) {
-      const tasks = await ctx.db
-        .query("agent_tasks")
-        .withIndex("by_status_run_at", (q) => q.eq("status", status))
-        .collect();
-      for (const task of tasks) {
-        if (task.display_summary) continue;
-        // Stagger to stay clear of API rate limits on large backfills.
-        await ctx.scheduler.runAfter(scheduled * 500, internal.agentTasks.generateDisplaySummary, {
-          task_id: task._id,
-        });
-        scheduled++;
-      }
-    }
-    return { scheduled };
   },
 });
 

@@ -2,7 +2,7 @@ import { describe, expect, setSystemTime, test } from "bun:test";
 import { sha256Hex } from "./lib/hash";
 import { HOUR_MS, hourStart } from "./lib/ingestGroups";
 import { isIngestKey } from "@codecast/shared/contracts/ingest";
-import { applyBatch, backfillGroupUsers, createSource, dailyUpkeep, endOldKey, flushGroupTally, getGroup, purgeSourceRows, removeSource, getSource, listEvents, listGroups, listSources, linkSignal, promoteDue, promotionInputs, OLD_KEY_GRACE_MS, rotateKey, setGroupFix, setGroupStatus, setGroupTask, groupTransitions, sourceForKey, updateSource } from "./ingest";
+import { applyBatch, backfillGroupUsers, createSource, dailyUpkeep, endOldKey, flushGroupTally, getGroup, purgeSourceRows, removeSource, getSource, listEvents, listGroups, listSources, linkSignal, promoteDue, PROMOTE_DUE_BATCH, promotionInputs, OLD_KEY_GRACE_MS, rotateKey, setGroupFix, setGroupStatus, setGroupTask, groupTransitions, sourceForKey, updateSource } from "./ingest";
 import { OVERFLOW_FP, SOURCE_CAPS } from "./lib/groupWrite";
 import { PROMOTE_RETRY_MS, PROMOTE_SPACING_MS, PROMOTE_TRIES, queuePromotions, settlePromotion } from "./ingestPromotions";
 import { promotionSignal } from "./lib/ingestPayloads";
@@ -425,6 +425,27 @@ describe("what one source can cost (review fixes)", () => {
     }
     expect(names(w).filter((n) => n === "ingest:promote")).toHaveLength(SOURCE_CAPS.promotions_per_hour + 3);
     expect(held()).toHaveLength(0);
+  });
+
+  test("a paused source holding a full batch of promotions does not starve another source", async () => {
+    const w = await armedWorld();
+    const { source: paused } = await teamSource(w, { name: "paused" });
+    const { source: other } = await teamSource(w, { name: "other" });
+    await w.db.patch(paused._id, { status: "paused" });
+    for (let i = 0; i < PROMOTE_DUE_BATCH + 5; i++) {
+      await w.db.insert("event_groups", { source_id: paused._id, promotion_due: { transition: "new", fingerprint: `held${i}`, at: NOW - 100_000 + i } });
+    }
+    const waiting = await w.db.insert("event_groups", { source_id: other._id, promotion_due: { transition: "new", fingerprint: "waiting", at: NOW } });
+    // The first pass reads only the paused source's rows and sends them to the back.
+    expect(await h(promoteDue)(w.internalCtx, {})).toEqual({ due: PROMOTE_DUE_BATCH, filed: 0 });
+    let filedOther = false;
+    for (let pass = 0; pass < 3 && !filedOther; pass++) {
+      await h(promoteDue)(w.internalCtx, {});
+      filedOther = (await w.db.get(waiting)).promotion_due?.scheduled_at !== undefined;
+    }
+    expect(filedOther).toBe(true);
+    // The paused source's promotions are kept for when it resumes.
+    expect(w.db._tables.event_groups.filter((g: any) => g.source_id === paused._id && g.promotion_due)).toHaveLength(PROMOTE_DUE_BATCH + 5);
   });
 
   test("a promotion whose run never settles is scheduled again, and let go after its tries", async () => {

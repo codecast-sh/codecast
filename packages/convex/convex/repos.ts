@@ -286,20 +286,20 @@ export const getCacheRow = internalQuery({
     kind: v.string(),
     ref: v.string(),
     path: v.string(),
+    // The caller's resolved access (CacheScope). Omitted: installation rows only.
+    installation: v.optional(v.boolean()),
+    local_team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
-    return await cacheRowByKey(ctx, args.repository, args.kind, args.ref, args.path);
+    return await cacheRowByKey(ctx, args.repository, args.kind, args.ref, args.path, {
+      installation: args.installation ?? true,
+      ...(args.local_team_id ? { local_team_id: args.local_team_id } : {}),
+    });
   },
 });
 
-/** The one cache lookup: the key's repository is the canonical spelling. */
-export async function cacheRowByKey(ctx: { db: any }, repository: string, kind: string, ref: string, path: string) {
-  return await ctx.db
-    .query("repo_cache")
-    .withIndex("by_key", (q: any) =>
-      q.eq("repository", normalizeRepository(repository)).eq("kind", kind).eq("ref", ref).eq("path", path))
-    .first();
-}
+import { INSTALLATION_ONLY, cacheRowByKey, fitCacheContent, isLocalMeta, localWorkspaceOf, scopeOf, type CacheScope } from "./lib/repoCacheScope";
+export { cacheRowByKey, fitCacheContent, type CacheScope };
 
 export const upsertCache = internalMutation({
   args: {
@@ -324,37 +324,19 @@ async function metaFromGitHub(ctx: { db: any }, repository: string): Promise<boo
   return !!row && !isLocalMeta(row);
 }
 
-/** A meta row a checkout published: the counts are placeholders and `private` is a guess. */
-function isLocalMeta(row: { kind: string; content: string } | null): boolean {
-  if (!row || row.kind !== "meta") return false;
-  try {
-    return JSON.parse(row.content)?.source === "local";
-  } catch {
-    return false;
-  }
-}
-
-// Convex refuses a document over 1 MiB. Blobs are admitted up to 1 MiB of raw
-// bytes, then stored JSON-encoded (escapes, and an image's base64 beside its
-// text), so a file near the cap became a 1.3 MiB row that failed to write on
-// every view. A payload over this budget is stored as a truncated answer,
-// which every reader already shows as "too large to display".
-const CACHE_CONTENT_MAX_BYTES = 900 * 1024;
-
-export function fitCacheContent(content: string, size?: number): { content: string; truncated?: boolean } {
-  if (new TextEncoder().encode(content).length <= CACHE_CONTENT_MAX_BYTES) return { content };
-  let sha: string | undefined;
-  try { sha = JSON.parse(content)?.sha; } catch {}
-  return { content: JSON.stringify({ content: "", size, truncated: true, ...(sha ? { sha } : {}) }), truncated: true };
-}
-
 /** The one cache write: a row is replaced whole under its key, stamped now. */
 async function writeCacheRow(
   ctx: { db: any },
-  args: { team_id: Id<"teams">; repository: string; kind: string; ref: string; path: string; sha?: string; content: string; size?: number; truncated?: boolean },
+  args: { team_id: Id<"teams">; repository: string; kind: string; ref: string; path: string; sha?: string; content: string; size?: number; truncated?: boolean; local_workspace?: string },
 ) {
   args = { ...args, ...fitCacheContent(args.content, args.size) };
-  const existing = await cacheRowByKey(ctx, args.repository, args.kind, args.ref, args.path);
+  // A checkout replaces only its own workspace's row; GitHub replaces only GitHub's.
+  const sameKey: any[] = await ctx.db
+    .query("repo_cache")
+    .withIndex("by_key", (q: any) =>
+      q.eq("repository", normalizeRepository(args.repository)).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
+    .collect();
+  const existing = sameKey.find((r) => (r.local_workspace ?? undefined) === args.local_workspace) ?? null;
 
   const row = {
     team_id: args.team_id,
@@ -367,6 +349,7 @@ async function writeCacheRow(
     size: args.size,
     truncated: args.truncated,
     fetched_at: Date.now(),
+    ...(args.local_workspace ? { local_workspace: args.local_workspace } : {}),
   };
 
   if (existing) {
@@ -402,8 +385,8 @@ const LOCAL_KINDS = new Set(["meta", "branches", "branchdetails", "tags", "readm
  * each other. A publish that did not look for running sessions keeps the ones
  * the row already holds.
  */
-async function worktreesRowFor(ctx: { db: any }, userId: Id<"users">, repository: string, root: string, content: string) {
-  const existing = await cacheRowByKey(ctx, repository, WORKTREES_KIND, userId, root);
+async function worktreesRowFor(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">, repository: string, root: string, content: string) {
+  const existing = await cacheRowByKey(ctx, repository, WORKTREES_KIND, userId, root, { installation: false, local_team_id: teamId });
   const previous = existing ? JSON.parse(existing.content) as WorktreesPayload : null;
   return { kind: WORKTREES_KIND, ref: userId as string, path: root, content: JSON.stringify(mergeWorktreesPayload(JSON.parse(content), previous)) };
 }
@@ -427,12 +410,13 @@ const commitFiles = v.object({
 /** How long the checkouts get before GitHub is asked instead, when it can be. */
 export const LOCAL_READ_GRACE_MS = 10 * 1000;
 
-async function readRequestByKey(ctx: { db: any }, args: { repository: string; kind: string; ref: string; path: string }) {
+/** Every open or failed request for one cache key: at most one per team whose checkouts were asked. */
+async function readRequestsByKey(ctx: { db: any }, args: { repository: string; kind: string; ref: string; path: string }): Promise<any[]> {
   const repository = normalizeRepository(args.repository);
   return await ctx.db
     .query("repo_read_requests")
     .withIndex("by_key", (q: any) => q.eq("repository", repository).eq("kind", args.kind).eq("ref", args.ref).eq("path", args.path))
-    .first();
+    .collect();
 }
 
 /**
@@ -457,7 +441,10 @@ export const requestLocalRead = internalMutation({
   handler: async (ctx, args): Promise<{ failed: boolean; error?: string; request_id?: Id<"repo_read_requests"> }> => {
     const repository = normalizeRepository(args.repository);
     const now = Date.now();
-    const existing = await readRequestByKey(ctx, args);
+    // One row per key AND team: a second team asking the same key gets its own
+    // request, answered by its own checkouts, instead of re-opening the first
+    // team's row (which only that team's publishers ever see).
+    const existing = (await readRequestsByKey(ctx, args)).find((r) => String(r.team_id) === String(args.team_id));
     if (existing?.status === "failed" && now - existing.updated_at < LOCAL_READ_RETRY_MS) {
       return { failed: true, error: existing.error ?? "No checkout could answer this read" };
     }
@@ -591,6 +578,7 @@ export const answerLocalRead = mutation({
       content: args.row.content,
       size: args.row.size,
       truncated: args.row.truncated,
+      local_workspace: localWorkspaceOf(request.team_id),
     });
     await ctx.db.delete(request._id);
     return { ok: true };
@@ -679,8 +667,8 @@ export const ingestLocal = mutation({
       // answer stands: the public route opens on it, and the About block reads
       // it, and a checkout's placeholder must not take either away.
       if (row.kind === "meta" && await metaFromGitHub(ctx, repository)) continue;
-      const keyed = row.kind === WORKTREES_KIND ? await worktreesRowFor(ctx, userId, repository, args.root, row.content) : row;
-      await writeCacheRow(ctx, { team_id: teamId, repository, ...keyed });
+      const keyed = row.kind === WORKTREES_KIND ? await worktreesRowFor(ctx, userId, teamId, repository, args.root, row.content) : row;
+      await writeCacheRow(ctx, { team_id: teamId, repository, ...keyed, local_workspace: localWorkspaceOf(teamId) });
     }
 
     let created = 0;
@@ -731,10 +719,14 @@ export async function upsertLocalCommit(
   // numstat carries no status; the commits row wants GitHub's file shape.
   const { files: numstat, ...commit } = args.commit;
   const files = numstat?.map((f) => ({ ...f, status: "modified", changes: f.additions + f.deletions }));
-  const dup = await ctx.db
+  // The same sha can stand in another repository (a fork, or a row someone
+  // else's checkout named): only this repository's row, or one that never
+  // learned a repository, is this commit.
+  const sameSha: any[] = await ctx.db
     .query("commits")
     .withIndex("by_sha", (q: any) => q.eq("sha", args.commit.sha))
-    .first();
+    .collect();
+  const dup = sameSha.find((c) => !c.repository || normalizeRepository(c.repository) === repository) ?? null;
   const scratch = isHarnessScratch({ branch: args.commit.branch, root: args.root });
   const fromTrailer = scratch ? undefined : await conversationFromSessionTrailer(ctx, args.commit.message, {
     userId: args.userId,
@@ -1107,6 +1099,7 @@ async function fillCache(
     kind: spec.kind,
     ref: spec.ref,
     path: spec.path,
+    ...scopeOf(access),
   });
   // A checkout's meta is a placeholder (private, no counts); when GitHub can
   // answer, it is asked however fresh that placeholder is, and only GitHub is.
@@ -1275,9 +1268,10 @@ export const readRequestStatus = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     const { repository, kind, ...params } = args;
-    const request = await readRequestByKey(ctx, { repository, kind, ...cacheKeyFor(kind, params) });
-    if (!request || !(await isTeamMember(ctx, userId, request.team_id))) return null;
-    return { status: request.status, error: request.error };
+    for (const request of await readRequestsByKey(ctx, { repository, kind, ...cacheKeyFor(kind, params) })) {
+      if (await isTeamMember(ctx, userId, request.team_id)) return { status: request.status, error: request.error };
+    }
+    return null;
   },
 });
 
@@ -1285,9 +1279,10 @@ export const readRequestStatus = query({
 
 async function readCache(ctx: any, repository: string, kind: string, ref: string, path: string) {
   const userId = await requireUser(ctx);
-  if (!(await browseAccessForUser(ctx, userId, repository))) return null;
+  const access = await browseAccessForUser(ctx, userId, repository);
+  if (!access) return null;
 
-  const row = await cacheRowByKey(ctx, repository, kind, ref, path);
+  const row = await cacheRowByKey(ctx, repository, kind, ref, path, scopeOf(access));
   if (!row) return null;
 
   return {
@@ -1406,7 +1401,8 @@ export const getBlameSessions = query({
     const userId = await requireUser(ctx);
     // The conversation cache rides along for the public projection only; a Map
     // is not a query result.
-    const { conversations: _conversations, ...resolution } = await blameSessionsFor(ctx, userId, args.repository, ref, path, blame);
+    const access = await browseAccessForUser(ctx, userId, args.repository);
+    const { conversations: _conversations, ...resolution } = await blameSessionsFor(ctx, userId, args.repository, ref, path, blame, access ? scopeOf(access) : INSTALLATION_ONLY);
     return resolution;
   },
 });
@@ -1424,6 +1420,7 @@ export async function blameSessionsFor(
   ref: string,
   path: string,
   blame: { ranges?: { start_line: number; end_line: number; sha: string; message?: string; committed_at?: number; session?: string }[] },
+  scope: CacheScope = INSTALLATION_ONLY,
 ) {
   const caches = newResolveCaches();
   const ranges = blame.ranges ?? [];
@@ -1435,7 +1432,7 @@ export async function blameSessionsFor(
   }
   const resolved = await resolveCommitSessions(ctx, viewer, [...bySha.values()], caches);
 
-  const blobRow = await cacheRowByKey(ctx, repository, "blob", ref, path);
+  const blobRow = await cacheRowByKey(ctx, repository, "blob", ref, path, scope);
   const blob = blobRow ? JSON.parse(blobRow.content) : null;
   const lines: string[] = typeof blob?.content === "string" && !blob.truncated ? blob.content.split("\n") : [];
   const blamed = ranges.flatMap((r) =>

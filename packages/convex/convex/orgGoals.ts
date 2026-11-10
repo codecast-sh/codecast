@@ -14,6 +14,7 @@ import { internalMutation } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { goalSectionMatchesPerson, parseGoalSections, type GoalPriority } from "@codecast/shared/contracts/roleGoals";
 import { capacity } from "@codecast/shared/contracts/orgCapacity";
+import { utcDay } from "./lib/orgCaps";
 import { threadStateHeadline } from "@codecast/shared/contracts";
 import { canAccessConversation, canAccessPlan, canAccessTask } from "./lib/access";
 import { findPlanByRef, findTaskByRef } from "./taskEvidence";
@@ -161,7 +162,6 @@ export function stallNoticeLine(roleHandle: string, goals: BriefGoal[], now: num
     : `@${roleHandle}: ${goals.length} of your high-priority focus items have not moved: ${named.join(", ")}.`;
 }
 
-const utcDay = (t: number) => new Date(t).toISOString().slice(0, 10);
 
 /** Tell each reporting person about their stalled high goals, once per UTC
  *  day (org_roles.goal_notices). The notice is a notification from the

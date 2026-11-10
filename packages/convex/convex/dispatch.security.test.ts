@@ -132,3 +132,28 @@ describe("signed-out dispatch", () => {
     expect(error?.data).toMatchObject({ code: "UNAUTHENTICATED", retryable: true });
   });
 });
+
+// archiveDoc used to compare doc.team_id with the caller's team pointer.
+// team_id is routing: a doc routed to the team but private to its owner
+// (workspace user:<owner>) must not be archivable by a teammate.
+describe("archiveDoc follows the doc's workspace, not its routing team", () => {
+  const TEAM = "teams_1";
+  const seed = (workspace: string) => makeFakeDb({
+    users: [{ _id: USER, active_team_id: TEAM, team_id: TEAM }, { _id: "users_owner", team_id: TEAM }],
+    team_memberships: [{ _id: "team_memberships_1", user_id: USER, team_id: TEAM, role: "member" }],
+    docs: [{ _id: "docs_1", user_id: "users_owner", team_id: TEAM, workspace, title: "d" }],
+  });
+  const archive = (db: any) => (dispatch as any)._handler({ db, auth }, { action: "archiveDoc", args: ["docs_1"] });
+
+  test("a teammate cannot archive a doc private to its owner", async () => {
+    const db = seed("user:users_owner");
+    await expect(archive(db)).rejects.toThrow("Not authorized");
+    expect(db._tables.docs[0].archived_at).toBeUndefined();
+  });
+
+  test("a member archives a doc in the team's workspace", async () => {
+    const db = seed(`team:${TEAM}`);
+    await archive(db);
+    expect(typeof db._tables.docs[0].archived_at).toBe("number");
+  });
+});

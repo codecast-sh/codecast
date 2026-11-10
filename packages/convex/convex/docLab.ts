@@ -1,6 +1,9 @@
 import { v } from "convex/values";
-import { action } from "./functions";
-import { api } from "./_generated/api";
+import { action, internalMutation } from "./functions";
+import { api, internal } from "./_generated/api";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { canAccessDoc } from "./lib/access";
+import { checkRateLimit } from "./rateLimit";
 import { callModel, parseJsonBlock } from "./lib/anthropic";
 import { requireVendorAllowed, type VendorGate } from "./lib/vendorGuard";
 import {
@@ -159,6 +162,23 @@ async function runLab(gate: VendorGate, req: LabRequest, text: string): Promise<
   return result;
 }
 
+/** Lab runs one person may start a minute. */
+export const LAB_RUNS_PER_MINUTE = 20;
+
+/** Admits one web Lab run: a signed in caller, a doc they can read, inside the per person limit. Returns the doc's id. */
+export const admitRun = internalMutation({
+  args: { doc_id: v.string() },
+  handler: async (ctx, args): Promise<string> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const docId = ctx.db.normalizeId("docs", args.doc_id);
+    const doc = docId ? await ctx.db.get(docId) : null;
+    if (!doc || !(await canAccessDoc(ctx, userId, doc))) throw new Error("Doc not found");
+    await checkRateLimit(ctx, userId, "docLab.run", LAB_RUNS_PER_MINUTE);
+    return String(doc._id);
+  },
+});
+
 /**
  * The web editor's Lab. The editor sends its own current text (it is ahead of
  * the stored markdown while the writer types) and lands the result itself.
@@ -166,9 +186,12 @@ async function runLab(gate: VendorGate, req: LabRequest, text: string): Promise<
 export const run = action({
   args: { ...requestArgs, text: v.string(), doc_id: v.string() },
   handler: async (ctx, args): Promise<LabResult> => {
-    if (!(await ctx.auth.getUserIdentity())) throw new Error("Unauthorized");
+    // The caller must be able to read the doc they name: the vendor gate below
+    // is keyed on it, so a doc of someone else's would decide where this text
+    // may be sent. The same step meters the model call per person.
+    const docId: string = await ctx.runMutation(internal.docLab.admitRun, { doc_id: args.doc_id });
     // The doc the editor's text comes from decides where it may be sent.
-    return runLab({ ctx, scope: { row: { table: "docs", id: args.doc_id } } }, toRequest(args), args.text);
+    return runLab({ ctx, scope: { row: { table: "docs", id: docId } } }, toRequest(args), args.text);
   },
 });
 

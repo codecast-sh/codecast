@@ -1424,23 +1424,6 @@ export const acceptAll = mutation({
   handler: async (ctx, { api_token, ...args }) => performAcceptAll(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 
-/** A one-off stamp for proposals posted before supersession existed (the
- *  analyzer's op-6 replacing op-4 on 2026-09-16): the same two pointers
- *  create writes, with the same workspace check and none of the author
- *  check, because it runs only from `npx convex run` by an operator. */
-export const backfillSupersession = internalMutation({
-  args: { proposal: v.string(), supersedes: v.string() },
-  handler: async (ctx, args) => {
-    const newer = await findProposal(ctx, args.proposal);
-    const older = await findProposal(ctx, args.supersedes);
-    if (!newer || !older) throw new Error("proposal not found");
-    if (String(newer.team_id ?? "") !== String(older.team_id ?? "") || String(newer.scope_user_id ?? "") !== String(older.scope_user_id ?? "")) throw new Error("not the same workspace");
-    const now = Date.now();
-    await ctx.db.patch(newer._id, { supersedes: older._id, updated_at: now });
-    await ctx.db.patch(older._id, { superseded_by: newer._id, updated_at: now });
-    return { newer: newer.short_id, older: older.short_id };
-  },
-});
 
 /** One sweep: settle the open proposals a revise emptied before a revise
  *  settled them (op-90, op-98, op-101 and op-114 sat open on "Nothing to
@@ -1497,23 +1480,6 @@ export const reply = mutation({
   handler: async (ctx, { api_token, ...args }) => performReply(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 
-/** One sweep for S24: withdraw the queue cards proposals filed before
- *  proposals stopped filing them. Idempotent; a settled card is left. */
-export const clearProposalQueueCards = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const now = Date.now();
-    let cleared = 0;
-    for (const p of await ctx.db.query("org_proposals").collect()) {
-      if (!p.decision_id) continue;
-      const d = await ctx.db.get(p.decision_id);
-      if (d?.status !== "pending") continue;
-      await clearDecision(ctx as any, p as any, now);
-      cleared++;
-    }
-    return { cleared };
-  },
-});
 
 /** An org reset (org-staffing.md S27): every proposal of the workspace leaves
  *  every list, and an open one is withdrawn first so no card stays behind.
@@ -1538,7 +1504,3 @@ export async function performArchiveAll(ctx: { db: any }, boundary: { team_id?: 
   return { archived };
 }
 
-export const archiveAll = internalMutation({
-  args: { team_id: v.optional(v.id("teams")), scope_user_id: v.optional(v.id("users")) },
-  handler: async (ctx, args) => performArchiveAll(ctx, args),
-});

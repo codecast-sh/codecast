@@ -715,7 +715,7 @@ export const sourceForKey = internalQuery({
 
 
 // Held-back promotions filed per cron pass (promoteDue).
-const PROMOTE_DUE_BATCH = 100;
+export const PROMOTE_DUE_BATCH = 100;
 
 
 /** How many of `wanted` new groups the source may open now (SOURCE_CAPS); the rest fold into overflow. */
@@ -759,7 +759,7 @@ const GROUP_USERS_READ = 1000;
  * kept samples show under several stored keys counts once. The missing
  * aliases are stored so the next occurrence matches. One page per run; it
  * schedules itself until every group has been read:
- * `npx convex run ingest:recountGroupUsers '{}'` through packages/convex/run.sh.
+ * `packages/convex/run.sh ingest:recountGroupUsers '{}'`.
  */
 export const recountGroupUsers = internalMutation({
   args: { cursor: v.optional(v.union(v.string(), v.null())) },
@@ -799,7 +799,7 @@ const BACKFILL_USERS_SAMPLES = 100;
  * since when (users_since, the oldest sample counted). A group with a tally
  * waiting to flush is left to its next batch. One page per run; it schedules
  * itself until every group has been read. Run once after a deploy:
- * `npx convex run ingest:backfillGroupUsers '{}'` through packages/convex/run.sh.
+ * `packages/convex/run.sh ingest:backfillGroupUsers '{}'`.
  */
 export const backfillGroupUsers = internalMutation({
   args: { cursor: v.optional(v.union(v.string(), v.null())) },
@@ -1114,6 +1114,14 @@ export const promoteDue = internalMutation({
   handler: async (ctx) => {
     const due = await ctx.db.query("event_groups").withIndex("by_promotion_due", (q: any) => q.gt("promotion_due.at", 0)).take(PROMOTE_DUE_BATCH);
     let filed = 0;
+    // A promotion this pass cannot file (its source is paused, or its hourly
+    // window is full) goes to the back of the queue when the batch was full:
+    // otherwise one such source holding a batch's worth would be all any pass
+    // ever reads, and every other source's promotions would wait behind it.
+    const full = due.length >= PROMOTE_DUE_BATCH;
+    const sendToBack = async (group: Doc<"event_groups">) => {
+      if (full) await ctx.db.patch(group._id, { promotion_due: { ...group.promotion_due!, at: Date.now() } });
+    };
     for (const group of due) {
       const d = group.promotion_due!;
       const step = promotionStep(d, Date.now());
@@ -1123,9 +1131,9 @@ export const promoteDue = internalMutation({
         await ctx.db.patch(group._id, { promotion_due: undefined });
         continue;
       }
-      if (source.status !== "active") continue;
+      if (source.status !== "active") { await sendToBack(group); continue; }
       const { granted } = await takeFromWindow(ctx.db, `ingest-promote:${source._id}`, SOURCE_CAPS.promotions_per_hour, HOUR_MS, 1);
-      if (!granted) continue;
+      if (!granted) { await sendToBack(group); continue; }
       await schedulePromotion(ctx, group._id, d, filed * PROMOTE_SPACING_MS);
       filed++;
     }

@@ -11,6 +11,9 @@ import { AUTHORITY_EVENT_KINDS } from "./lib/authorityEvents";
 
 const kindValidator = v.union(...AUTHORITY_EVENT_KINDS.map((k) => v.literal(k)));
 
+/** Rows one index walk reads while looking for a kind. */
+export const KIND_SCAN_MAX = 4000;
+
 export const list = query({
   args: {
     api_token: v.optional(v.string()),
@@ -26,8 +29,22 @@ export const list = query({
     const limit = Math.min(Math.max(args.limit ?? 100, 1), 500);
     const since = args.since ?? 0;
     const range = (q: any) => q.gte("created_at", since);
-    const take = (idx: string, key: string, value: any) =>
-      ctx.db.query("authority_events").withIndex(idx as any, (q: any) => range(q.eq(key, value))).order("desc").take(limit);
+    // A kind is matched while the index is walked, newest first, so the
+    // newest `limit` rows OF that kind come back; cutting to `limit` first and
+    // matching after returned nothing whenever newer rows of other kinds
+    // filled the cut. The walk is bounded so a rare kind cannot read a whole
+    // audit log.
+    const take = async (idx: string, key: string, value: any): Promise<any[]> => {
+      const walk = ctx.db.query("authority_events").withIndex(idx as any, (q: any) => range(q.eq(key, value))).order("desc");
+      if (!args.kind) return await walk.take(limit);
+      const out: any[] = [];
+      let read = 0;
+      for await (const row of walk) {
+        if (row.kind === args.kind) out.push(row);
+        if (out.length >= limit || ++read >= KIND_SCAN_MAX) break;
+      }
+      return out;
+    };
 
     let rows: any[];
     if (args.session) {

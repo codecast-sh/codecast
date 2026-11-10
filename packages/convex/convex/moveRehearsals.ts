@@ -67,6 +67,9 @@ export const forRunner = query({
   },
 });
 
+/** The longest result one rehearsal row keeps. */
+export const REHEARSAL_RESULT_MAX = 64_000;
+
 export const report = mutation({
   args: { api_token: v.optional(v.string()), rehearsal_id: v.id("move_rehearsals"), result: v.optional(v.string()), error: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -78,10 +81,15 @@ export const report = mutation({
       const parsed = JSON.parse(args.result) as MoveRehearsal;
       if (parsed.session_id !== row.session_id || parsed.destination_id !== row.destination_id) throw new Error("Rehearsal does not match its row");
     }
+    // A result is JSON: cut short it cannot be read back, so one over the
+    // limit is recorded as a failure that says why instead of half a document.
+    const tooLarge = !!args.result && args.result.length > REHEARSAL_RESULT_MAX;
+    const result = tooLarge ? undefined : args.result;
+    const error = tooLarge ? `The rehearsal's result was too large to keep (${args.result!.length} characters)` : args.error;
     await ctx.db.patch(row._id, {
-      status: args.result ? "done" : "failed",
-      ...(args.result ? { result: args.result.slice(0, 64_000) } : {}),
-      ...(args.error ? { error: args.error.slice(0, 1000) } : {}),
+      status: result ? "done" : "failed",
+      ...(result ? { result } : {}),
+      ...(error ? { error: error.slice(0, 1000) } : {}),
       finished_at: Date.now(),
     });
   },

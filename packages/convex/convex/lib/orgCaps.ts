@@ -4,10 +4,10 @@
 
 import { DEFAULT_LINE_CARDS_CAP, type RoleDailyCaps } from "@codecast/shared/contracts/orgCapacity";
 import { autonomyOn, defaultTrustFor } from "@codecast/shared/contracts/roleAutonomy";
+import { utcDayKey } from "@codecast/shared/contracts/flowMap";
 
-export function utcDay(now: number): string {
-  return new Date(now).toISOString().slice(0, 10);
-}
+/** The UTC day (yyyy-mm-dd) today's counters count: the shared utcDayKey. */
+export const utcDay: (now: number) => string = utcDayKey;
 
 // `merges` (the-line.md L12) and `deploys` (deploys.md DP4) are counted only
 // once a line merges or deploys, so a row written before has none and reads as zero.

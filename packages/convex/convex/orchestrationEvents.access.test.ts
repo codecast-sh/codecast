@@ -107,4 +107,23 @@ describe("orchestration/progress events plan access", () => {
     const owned = await (webListByPlan as any)._handler(ctx(await tables(), OWNER), { plan_id: PLAN });
     expect(owned.length).toBe(1);
   });
+  test("events cannot be pre-seeded under a short id whose plan does not exist yet", async () => {
+    const t = await tables();
+    await expect(
+      (emit as any)._handler(ctx(t), {
+        api_token: STRANGER_TOKEN, plan_short_id: "pl-future", event_type: "planted",
+      }),
+    ).rejects.toThrow();
+    expect(t.orchestration_events.length).toBe(1);
+    // A row already planted under that short id is never served, even once a
+    // plan takes the id: reads go by the resolved plan id.
+    t.orchestration_events.push({ _id: "oe-planted", user_id: STRANGER, plan_short_id: "pl-future", event_type: "planted", created_at: 2 });
+    expect(await (listByPlan as any)._handler(ctx(t), { api_token: OWNER_TOKEN, plan_short_id: "pl-future" })).toEqual([]);
+    t.plans.push({ _id: "plan_2", short_id: "pl-future", user_id: OWNER, title: "Later plan" });
+    expect(await (listByPlan as any)._handler(ctx(t), { api_token: OWNER_TOKEN, plan_short_id: "pl-future" })).toEqual([]);
+    // The owner still emits to, and reads, their own plan.
+    await (emit as any)._handler(ctx(t), { api_token: OWNER_TOKEN, plan_short_id: SHORT, event_type: "task_started" });
+    const owned = await (listByPlan as any)._handler(ctx(t), { api_token: OWNER_TOKEN, plan_short_id: SHORT });
+    expect(owned.map((e: any) => e.event_type)).toEqual(["started", "task_started"]);
+  });
 });

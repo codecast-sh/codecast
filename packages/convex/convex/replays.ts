@@ -370,7 +370,7 @@ export const saveShape = internalMutation({
  * Give every stored recording its list shape (activity strip, failure marks,
  * rage clicks, active time) by reading its own chunks from R2: the vendor is
  * never asked. A page at a time, each page scheduling the next. Run once
- * after deploying the shape: `npx convex run replays:shapeBackfill '{}'`.
+ * after deploying the shape: `packages/convex/run.sh replays:shapeBackfill '{}'`.
  */
 export const shapeBackfill = internalAction({
   args: { cursor: v.optional(v.union(v.string(), v.null())) },

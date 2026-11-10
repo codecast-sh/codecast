@@ -73,7 +73,7 @@ import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId, stopAndSendForUser, insertEscapeCommand } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, localAgentTypeOf, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, THREAD_STATE_RESULT_MAX_CHARS, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, isHostedAgentType, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isOrphanOrSubagent, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, sessionOwnerRow } from "./sessionOwners";
@@ -89,6 +89,7 @@ import {
   resolveTeamForPath,
   resolveCreationPrivacy,
   inheritedChildPrivacy,
+  isConversationOwner,
   resolveVisibilityMode,
   buildShareUpdate,
   buildPathRestampUpdate,
@@ -96,7 +97,8 @@ import {
   matchDirectoryMapping,
 } from "./privacy";
 import { effectiveMembershipVisibility } from "./teamVisibility";
-import { canAccessConversation, patchConversationVisibility } from "./lib/access";
+import { activeTeamMembershipFor, canAccessConversation, patchConversationVisibility } from "./lib/access";
+import { isStaff } from "./lib/staff";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
 import { mergeUserMessageFeed, type FeedCandidate } from "./messageFeed";
 import { assignConversationToBucketForUser, resolveLabelConvIds, matchBucketByName } from "./buckets";
@@ -609,8 +611,6 @@ async function resolveFirstMessageTitles(ctx: QueryCtx, convs: Doc<"conversation
   return firstMsgByConv;
 }
 
-const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
-
 // Hard cap on per-field diff size stored on conversation rows. Daemon already
 // truncates at 100KB before send, but the server defends against any future
 // client that bypasses that. Oversized diffs blow the Convex isolate's 96 MiB
@@ -1060,7 +1060,7 @@ async function findChildConversations(
   }));
 
   const children = allChildren
-    .filter((conv: any) => !NOISE_TITLE_PREFIXES.some((p) => (conv.title || "").startsWith(p)))
+    .filter((conv: any) => !isNoiseTitle(conv.title))
     .map((conv: any) => ({
       _id: conv._id,
       title: conv.title || "New Session",
@@ -1182,6 +1182,27 @@ export function daemonForkFields(
   };
 }
 
+// The parent a caller may link a conversation under: one they own (runner,
+// primary owner, or an assigned owner), else none. Takes the raw string a
+// client sent; an id of another table or a malformed one resolves to none.
+async function ownedParentConversationId(
+  ctx: { db: any },
+  userId: Id<"users">,
+  parentRef: string | undefined,
+): Promise<Id<"conversations"> | undefined> {
+  if (!parentRef) return undefined;
+  const parentId = ctx.db.normalizeId ? ctx.db.normalizeId("conversations", parentRef) : (parentRef as Id<"conversations">);
+  if (!parentId) return undefined;
+  let parent: any = null;
+  try {
+    parent = await ctx.db.get(parentId);
+  } catch {
+    return undefined;
+  }
+  if (!parent || !(await isConversationOwner(ctx, userId, parent))) return undefined;
+  return parent._id;
+}
+
 export const createConversation = mutation({
   args: {
     user_id: v.id("users"),
@@ -1275,6 +1296,12 @@ export const createConversation = mutation({
     if (args.fork && forkOrigin?.user_id !== args.user_id) {
       throw new Error("Unauthorized: can only fork your own conversations");
     }
+    // A named parent is honoured only when the caller owns it. The id is a
+    // caller-typed string: unchecked, it nested this row under anyone's
+    // conversation, inherited that conversation's sharing, and (as a plan
+    // handoff) dismissed and completed it. A parent that is not the caller's
+    // is dropped and the transcript still syncs, unlinked.
+    const explicitParentId = await ownedParentConversationId(ctx, args.user_id, args.parent_conversation_id);
 
     const existing = await ctx.db
       .query("conversations")
@@ -1293,9 +1320,9 @@ export const createConversation = mutation({
 
     if (existing) {
       const patch: Record<string, any> = {};
-      if (args.parent_conversation_id) {
+      if (explicitParentId) {
         if (!existing.parent_conversation_id) {
-          patch.parent_conversation_id = args.parent_conversation_id as Id<"conversations">;
+          patch.parent_conversation_id = explicitParentId;
         }
         if (args.parent_message_uuid && !existing.parent_message_uuid) {
           patch.parent_message_uuid = args.parent_message_uuid;
@@ -1345,15 +1372,18 @@ export const createConversation = mutation({
     // that predates a repo's share start stays private (privacy.ts
     // mappingCoversStart), so a share made today never exposes yesterday.
     let parentConversationId: Id<"conversations"> | undefined;
-    if (args.parent_conversation_id) {
-      parentConversationId = args.parent_conversation_id as Id<"conversations">;
-    } else if (args.parent_message_uuid) {
+    if (explicitParentId) {
+      parentConversationId = explicitParentId;
+    } else if (args.parent_message_uuid && !args.parent_conversation_id) {
       const parentMsg = await ctx.db
         .query("messages")
         .withIndex("by_message_uuid", (q) => q.eq("message_uuid", args.parent_message_uuid!))
         .first();
-      if (parentMsg) {
-        parentConversationId = parentMsg.conversation_id;
+      // A message uuid is the caller's claim too: link only to a conversation
+      // the caller can open.
+      const uuidParent = parentMsg ? await ctx.db.get(parentMsg.conversation_id) : null;
+      if (uuidParent && (await canAccessConversation(ctx, args.user_id, uuidParent))) {
+        parentConversationId = uuidParent._id;
       }
     }
 
@@ -1431,7 +1461,8 @@ export const createConversation = mutation({
     // Auto-dismiss parent only for plan handoffs (clear context -> implementation session)
     if (parentConversationId && args.parent_message_uuid === "plan-handoff") {
       const parent = await ctx.db.get(parentConversationId);
-      if (parent && !parent.inbox_dismissed_at) {
+      // Only the caller's own session is dismissed by their handoff.
+      if (parent && !parent.inbox_dismissed_at && (await isConversationOwner(ctx, args.user_id, parent))) {
         await ctx.db.patch(parentConversationId, {
           inbox_dismissed_at: Date.now(),
           status: "completed",
@@ -3956,29 +3987,6 @@ export const makeAllPrivate = mutation({
   },
 });
 
-export const makeAllPrivateAdmin = internalMutation({
-  args: {
-    user_id: v.id("users"),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const batchSize = args.limit ?? 100;
-    const conversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_private", (q) =>
-        q.eq("user_id", args.user_id).eq("is_private", false)
-      )
-      .take(batchSize);
-
-    let updated = 0;
-    for (const conv of conversations) {
-      await patchConversationVisibility(ctx, conv, { is_private: true });
-      updated++;
-    }
-
-    return { updated, hasMore: conversations.length === batchSize };
-  },
-});
 
 export const backfillShortIds = internalMutation({
   args: {
@@ -4072,65 +4080,6 @@ export const backfillTeamIds = internalMutation({
   },
 });
 
-export const diagnoseTeamIds = internalQuery({
-  args: {
-    cursor: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    // Get users with teams (lightweight query)
-    const usersWithTeams = await ctx.db
-      .query("users")
-      .filter((q) => q.neq(q.field("team_id"), undefined))
-      .collect();
-
-    const userTeamMap = new Map<string, string>();
-    for (const user of usersWithTeams) {
-      if (user.team_id) {
-        userTeamMap.set(user._id.toString(), user.team_id.toString());
-      }
-    }
-
-    // Paginate through conversations
-    const result = await ctx.db
-      .query("conversations")
-      .paginate({ cursor: args.cursor ?? null, numItems: 500 });
-
-    let withTeamId = 0;
-    let withoutTeamId = 0;
-    let userHasTeamButConvDoesnt = 0;
-    let mismatch = 0;
-
-    for (const conv of result.page) {
-      const convTeamId = conv.team_id?.toString();
-      const userTeamId = userTeamMap.get(conv.user_id.toString());
-
-      if (convTeamId) {
-        withTeamId++;
-      } else {
-        withoutTeamId++;
-      }
-
-      if (userTeamId && !convTeamId) {
-        userHasTeamButConvDoesnt++;
-      }
-
-      if (userTeamId && convTeamId && userTeamId !== convTeamId) {
-        mismatch++;
-      }
-    }
-
-    return {
-      pageConversations: result.page.length,
-      withTeamId,
-      withoutTeamId,
-      userHasTeamButConvDoesnt,
-      mismatch,
-      usersWithTeams: usersWithTeams.length,
-      cursor: result.continueCursor,
-      isDone: result.isDone,
-    };
-  },
-});
 
 export const backfillUserTeamIds = internalMutation({
   args: { userId: v.string(), teamId: v.string() },
@@ -5528,8 +5477,7 @@ export const listPrivateConversations = query({
 
     const conversations = await ctx.db
       .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-      .filter((q) => q.eq(q.field("is_private"), true))
+      .withIndex("by_user_private", (q) => q.eq("user_id", authUserId).eq("is_private", true))
       .collect();
 
     const result = await Promise.all(
@@ -6367,12 +6315,17 @@ export const getConversationTree = query({
       return { error: "Access denied" };
     }
 
-    // Walk up to find root
+    // Walk up to find root. Every node of the tree is judged on its own, the
+    // way the requested one was (and getAccessibleForkChildren judges forks):
+    // a fork can be private where its origin is shared, and the other way
+    // round. The walk stops below the first ancestor the caller cannot open,
+    // and buildTree leaves out any branch they cannot open.
     let root = conv;
     const visited = new Set<string>([root._id.toString()]);
     while (root.forked_from) {
       const parent = await ctx.db.get(root.forked_from);
       if (!parent || visited.has(parent._id.toString())) break;
+      if (!(await canOwnerOrTeamAccess(ctx, userId, parent))) break;
       visited.add(parent._id.toString());
       root = parent;
     }
@@ -6445,10 +6398,14 @@ export const getConversationTree = query({
     };
 
     const buildTree = async (node: typeof root): Promise<TreeNode> => {
-      const children = await ctx.db
+      const forks = await ctx.db
         .query("conversations")
         .withIndex("by_forked_from", (q) => q.eq("forked_from", node._id))
         .collect();
+      const children: typeof forks = [];
+      for (const fork of forks) {
+        if (await canOwnerOrTeamAccess(ctx, userId, fork)) children.push(fork);
+      }
 
       const [summary, childTrees] = await Promise.all([
         summarizeBranch(node),
@@ -7694,17 +7651,6 @@ export const getTeamUnreadCount = query({
   },
 });
 
-// Admin repair primitive: server-side patches that don't bump updated_at are
-// invisible to connected clients holding a cached row (the live inbox window
-// and the reconcile crawl are both updated_at-keyed). Touching re-enters the
-// row into both channels so the change propagates.
-export const touchConversation = internalMutation({
-  args: { conversation_id: v.id("conversations") },
-  handler: async (ctx, args) => {
-    await ctx.db.patch(args.conversation_id, { updated_at: Date.now() });
-    return { touched: args.conversation_id };
-  },
-});
 
 export const markTeamConversationsSeen = mutation({
   args: {},
@@ -7722,59 +7668,6 @@ export const markTeamConversationsSeen = mutation({
   },
 });
 
-export const backfillConversationTeamIds = internalMutation({
-  args: {
-    userId: v.optional(v.id("users")),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const limit = args.limit ?? 500;
-    let updated = 0;
-
-    // Only the id is needed (mappings index). Reading the full user doc made
-    // long scans OCC-fail: users rows are hot (scheduled jobs patch them), so
-    // any mutation slow enough to overlap a heartbeat could never commit.
-    const userIds = args.userId
-      ? [args.userId]
-      : (await ctx.db.query("users").take(100)).map((u) => u._id);
-
-    for (const userId of userIds) {
-      const mappings = await ctx.db
-        .query("directory_team_mappings")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
-
-      if (mappings.length === 0) continue;
-
-      // Newest first: born-blank strays come from the (recent) pre-warm/stub
-      // flows, so a bounded repair should reach them before old history.
-      const conversations = await ctx.db
-        .query("conversations")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .order("desc")
-        .take(limit);
-
-      for (const conv of conversations) {
-        // Same guarded semantics as the live restamp paths: positive mapping
-        // matches only, explicit user choices (locked private / manual share)
-        // untouched. The old inline version cleared team_id on unmatched paths
-        // (breaking "shared must have a team") and could re-share a conv the
-        // user had locked private.
-        const patch = buildPathRestampUpdate(
-          conv,
-          mappings,
-          conv.git_root || conv.project_path
-        );
-        if (patch) {
-          await patchConversationVisibility(ctx, conv, patch);
-          updated++;
-        }
-      }
-    }
-
-    return { updated };
-  },
-});
 
 // Debug function to investigate why a conversation isn't showing in team feed
 export const debugConversationVisibility = query({
@@ -7790,6 +7683,12 @@ export const debugConversationVisibility = query({
 
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return { error: "Conversation not found" };
+    // A debugging read of someone's sharing setup (owner email, paths,
+    // mappings): the conversation's own owner, or staff. Anyone else gets the
+    // same answer as for an id that does not exist.
+    if (!isStaff(user) && !(await isConversationOwner(ctx, userId, conversation))) {
+      return { error: "Conversation not found" };
+    }
 
     const convOwner = await ctx.db.get(conversation.user_id);
 
@@ -7949,147 +7848,6 @@ export const getConversationMention = query({
   },
 });
 
-export const backfillAutoSharedConversations = internalMutation({
-  args: {
-    cursor: v.optional(v.string()),
-    dry_run: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const allMappings = await ctx.db.query("directory_team_mappings")
-      .filter((q: any) => q.eq(q.field("auto_share"), true))
-      .collect();
-
-    if (allMappings.length === 0) {
-      return { scanned: 0, fixed: 0, nextCursor: null, dry_run: !!args.dry_run };
-    }
-
-    const mappingsByKey = new Map<string, typeof allMappings>();
-    for (const m of allMappings) {
-      const key = `${m.user_id}|${m.team_id}`;
-      const arr = mappingsByKey.get(key) || [];
-      arr.push(m);
-      mappingsByKey.set(key, arr);
-    }
-
-    const result = await ctx.db.query("conversations")
-      .order("desc")
-      .paginate({ cursor: args.cursor ?? null, numItems: 20 });
-
-    let fixed = 0;
-    for (const conv of result.page) {
-      if (!conv.team_id || conv.is_private !== true || !conv.project_path) continue;
-
-      const key = `${conv.user_id}|${conv.team_id}`;
-      const userMappings = mappingsByKey.get(key);
-      if (!userMappings) continue;
-
-      const matchesMapping = userMappings.some(
-        (m) => conv.project_path === m.path_prefix || conv.project_path!.startsWith(m.path_prefix + "/")
-      );
-      if (!matchesMapping) continue;
-
-      if (!args.dry_run) {
-        await patchConversationVisibility(ctx, conv, { is_private: false });
-        // Grants teammate access without a comment write (matrix SRV-02).
-        await advanceCommentsAccessRevision(ctx, conv);
-      }
-      fixed++;
-    }
-
-    const nextCursor = !result.isDone ? result.continueCursor : null;
-    return { scanned: result.page.length, fixed, nextCursor, dry_run: !!args.dry_run };
-  },
-});
-
-// One-shot repair for conversations stuck "shared with nobody": is_private is
-// false but team_id is missing, so every teammate fails the !team_id gate and
-// the conversation reads as private. Re-resolves the team via buildShareUpdate
-// (directory mapping → owner's active/default team). User-scoped via the
-// by_user_private index so it never full-scans. unresolved = owner has no team.
-export const backfillSharedTeamlessTeamId = internalMutation({
-  args: { user_id: v.id("users"), dry_run: v.optional(v.boolean()) },
-  handler: async (ctx, args) => {
-    const shared = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_private", (q) =>
-        q.eq("user_id", args.user_id).eq("is_private", false)
-      )
-      .collect();
-    const broken = shared.filter((c) => !c.team_id);
-
-    let fixed = 0;
-    const unresolved: Array<{ _id: string; title?: string; project_path?: string }> = [];
-    for (const c of broken) {
-      const { team_id } = await buildShareUpdate(ctx, c, args.user_id);
-      if (!team_id) {
-        unresolved.push({ _id: c._id, title: c.title, project_path: c.project_path });
-        continue;
-      }
-      if (!args.dry_run) await patchConversationVisibility(ctx, c, { team_id });
-      fixed++;
-    }
-    return { broken: broken.length, fixed, unresolved, dry_run: !!args.dry_run };
-  },
-});
-
-// Move named conversations to a team their owner belongs to. Creation derives
-// the team from the working directory, so a session launched from a task page
-// while the viewer had another team's repo open was routed to that team
-// (ct-52745: three Union sessions stamped Codecast). Goes through
-// patchConversationVisibility so linked work items' access keys follow.
-export const moveConversationsToTeam = internalMutation({
-  args: {
-    conversation_ids: v.array(v.id("conversations")),
-    team_id: v.id("teams"),
-    dry_run: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const moved: Array<{ _id: string; title?: string; from?: string }> = [];
-    const refused: Array<{ _id: string; reason: string }> = [];
-    for (const id of args.conversation_ids) {
-      const conv = await ctx.db.get(id);
-      if (!conv) { refused.push({ _id: id, reason: "not found" }); continue; }
-      const member = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_team", (q) => q.eq("user_id", conv.user_id).eq("team_id", args.team_id))
-        .first();
-      if (!member) { refused.push({ _id: id, reason: "owner is not a member of the target team" }); continue; }
-      if (conv.team_id?.toString() === args.team_id.toString()) continue;
-      // A person chose this team, so the row stops reading as shared by its
-      // directory: buildPathRestampUpdate leaves a manual share where it is.
-      if (!args.dry_run) await patchConversationVisibility(ctx, conv, { team_id: args.team_id, is_private: false, auto_shared: undefined });
-      moved.push({ _id: id, title: conv.title, from: conv.team_id?.toString() });
-    }
-    return { moved, refused, dry_run: !!args.dry_run };
-  },
-});
-
-export const revertBackfilledTeamVisibility = internalMutation({
-  args: {
-    cursor: v.optional(v.string()),
-    dry_run: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const result = await ctx.db.query("conversations")
-      .order("desc")
-      .paginate({ cursor: args.cursor ?? null, numItems: 50 });
-
-    let fixed = 0;
-    for (const conv of result.page) {
-      if (conv.auto_shared && conv.team_visibility === "full" && conv.is_private === false) {
-        if (!args.dry_run) {
-          await patchConversationVisibility(ctx, conv, { team_visibility: undefined });
-          // Team visibility is an access input (matrix SRV-02).
-          await advanceCommentsAccessRevision(ctx, conv);
-        }
-        fixed++;
-      }
-    }
-
-    const nextCursor = !result.isDone ? result.continueCursor : null;
-    return { scanned: result.page.length, fixed, nextCursor, dry_run: !!args.dry_run };
-  },
-});
 
 export const setParentConversation = mutation({
   args: {
@@ -8103,6 +7861,10 @@ export const setParentConversation = mutation({
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv || conv.user_id !== userId) throw new Error("Not found");
     if (conv.parent_conversation_id) return;
+    // The parent must be the caller's too (linkSessions' rule): a link to
+    // someone else's conversation surfaces its title in the caller's lists.
+    const parent = await ctx.db.get(args.parent_conversation_id);
+    if (!parent || !(await isConversationOwner(ctx, userId, parent))) throw new Error("Not found");
     const isSubagent = !conv.parent_message_uuid;
     await ctx.db.patch(args.conversation_id, {
       parent_conversation_id: args.parent_conversation_id,
@@ -8139,40 +7901,6 @@ export const backfillIsSubagent = mutation({
   },
 });
 
-export const backfillParentConversationIds = internalMutation({
-  args: {
-    cursor: v.optional(v.string()),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const batchSize = args.limit ?? 50;
-    const result = await ctx.db.query("conversations")
-      .order("desc")
-      .paginate({ cursor: args.cursor ?? null, numItems: batchSize });
-
-    let updated = 0;
-    for (const conv of result.page) {
-      if (conv.parent_message_uuid && !conv.parent_conversation_id) {
-        const parentMsg = await ctx.db
-          .query("messages")
-          .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conv.parent_message_uuid!))
-          .first();
-        if (parentMsg) {
-          await ctx.db.patch(conv._id, {
-            parent_conversation_id: parentMsg.conversation_id,
-          });
-          updated++;
-        }
-      }
-    }
-
-    return {
-      updated,
-      nextCursor: !result.isDone ? result.continueCursor : null,
-      isDone: result.isDone,
-    };
-  },
-});
 
 export const getConversationsBySessionIds = query({
   args: {
@@ -9907,11 +9635,12 @@ async function resolveInboxTeamScope(
   userId: Id<"users">,
   activeTeamId?: Id<"teams">,
 ): Promise<Id<"teams"> | null> {
-  const user = await ctx.db.get(userId);
-  const teamId = activeTeamId ?? user?.active_team_id ?? user?.team_id;
-  if (!teamId) return null;
-  if (!(await isTeamMember(ctx, userId, teamId))) return null;
-  return teamId as Id<"teams">;
+  if (activeTeamId) {
+    return (await isTeamMember(ctx, userId, activeTeamId)) ? activeTeamId : null;
+  }
+  // No team named: the one the user is working in, through the one resolver
+  // that reads that pointer and proves the membership behind it.
+  return (await activeTeamMembershipFor(ctx, userId))?.teamId ?? null;
 }
 
 // Inbox "team mode": the same fully-enriched inbox rows as listInboxSessions, but
@@ -12931,21 +12660,6 @@ export const linkSpawnedBy = mutation({
   },
 });
 
-export const linkSessionsInternal = internalMutation({
-  args: {
-    parent_conversation_id: v.id("conversations"),
-    child_conversation_id: v.id("conversations"),
-  },
-  handler: async (ctx, args) => {
-    const child = await ctx.db.get(args.child_conversation_id);
-    if (!child) throw new Error("Child not found");
-    await ctx.db.patch(args.child_conversation_id, {
-      parent_conversation_id: args.parent_conversation_id,
-      is_subagent: true,
-      inbox_dismissed_at: Date.now(),
-    });
-  },
-});
 
 export const linkPlanHandoff = mutation({
   args: {
@@ -12964,6 +12678,9 @@ export const linkPlanHandoff = mutation({
 
     if (child.parent_message_uuid === "plan-handoff") return;
     if (args.parent_conversation_id === args.child_conversation_id) return;
+    // The parent must be the caller's too (linkSessions' rule).
+    const parent = await ctx.db.get(args.parent_conversation_id);
+    if (!parent || !(await isConversationOwner(ctx, userId, parent))) throw new Error("Parent not found");
 
     await ctx.db.patch(args.child_conversation_id, {
       parent_conversation_id: args.parent_conversation_id,
@@ -13338,119 +13055,6 @@ export const listDismissedSessions = query({
   },
 });
 
-
-export const backfillLastUserMessageAt = internalMutation({
-  args: { user_id: v.optional(v.id("users")) },
-  handler: async (ctx, args) => {
-    if (!args.user_id) return { patched: 0 };
-    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
-    const convs = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q) =>
-        q.eq("user_id", args.user_id!).gte("updated_at", cutoff)
-      )
-      .collect();
-
-    let maxUserMsgAt = 0;
-    let patched = 0;
-    for (const conv of convs) {
-      if (!conv.last_user_message_at) {
-        const lastUserMsg = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
-          .filter((q) => q.eq(q.field("role"), "user"))
-          .order("desc")
-          .first();
-        if (lastUserMsg) {
-          await ctx.db.patch(conv._id, { last_user_message_at: lastUserMsg.timestamp });
-          maxUserMsgAt = Math.max(maxUserMsgAt, lastUserMsg.timestamp);
-          patched++;
-        }
-      } else {
-        maxUserMsgAt = Math.max(maxUserMsgAt, conv.last_user_message_at);
-      }
-    }
-
-    if (maxUserMsgAt > 0) {
-      const user = await ctx.db.get(args.user_id);
-      if (user && (!user.last_message_sent_at || user.last_message_sent_at < maxUserMsgAt)) {
-        const patch: Record<string, unknown> = { last_message_sent_at: maxUserMsgAt };
-        if (user.last_message_sent_at) {
-          patch.prev_message_sent_at = user.last_message_sent_at;
-          const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
-          if (maxUserMsgAt - user.last_message_sent_at > GAP_THRESHOLD_MS) {
-            patch.work_cluster_started_at = maxUserMsgAt;
-          }
-        }
-        await ctx.db.patch(args.user_id, patch);
-      }
-    }
-
-    return { patched, maxUserMsgAt: maxUserMsgAt > 0 ? new Date(maxUserMsgAt).toISOString() : "none" };
-  },
-});
-
-export const backfillDenormalizedFields = internalMutation({
-  args: { user_id: v.optional(v.id("users")) },
-  handler: async (ctx, args) => {
-    if (!args.user_id) return { patched: 0 };
-    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
-    const convs = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q) =>
-        q.eq("user_id", args.user_id!).gte("updated_at", cutoff)
-      )
-      .collect();
-
-    let patched = 0;
-    for (const conv of convs) {
-      if (conv.last_message_role && conv.last_message_preview !== undefined) continue;
-
-      const patch: Record<string, unknown> = {};
-
-      const lastMsg = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
-        .order("desc")
-        .first();
-      if (lastMsg) {
-        patch.last_message_role = lastMsg.role;
-      }
-
-      const lastUserMsg = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
-        .order("desc")
-        .filter((q) => q.and(
-          q.eq(q.field("role"), "user"),
-          q.neq(q.field("content"), undefined),
-          q.neq(q.field("content"), ""),
-        ))
-        .first();
-      if (lastUserMsg?.content?.trim()) {
-        patch.last_message_preview = lastUserMsg.content
-          .replace(/\[Image[:\s][^\]]*\]/gi, "")
-          .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-          .trim()
-          .slice(0, 200);
-      }
-
-      const pendingMsg = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_status", (q) =>
-          q.eq("conversation_id", conv._id).eq("status", "pending")
-        )
-        .first();
-      patch.has_pending_messages = !!pendingMsg;
-
-      if (Object.keys(patch).length > 0) {
-        await ctx.db.patch(conv._id, patch);
-        patched++;
-      }
-    }
-    return { patched };
-  },
-});
 
 // requireSessionCommandTarget lives in daemonCommandUtils (shared with
 // users.resumeSession and the dispatch resume handler); re-exported for callers

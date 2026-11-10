@@ -25,6 +25,7 @@ import { encryptRefreshToken, decryptRefreshToken } from "./googleOAuth";
 import { signStateWith, verifyStateWith } from "./lib/hmac";
 import { claimRefreshOn, writeRefreshOutcomeOn, singleFlightRefresh, storedRefreshFailure } from "./lib/tokenRefresh";
 import { sha256Hex } from "./lib/hash";
+import { activeTeamMembershipFor } from "./lib/access";
 
 /* ==========================================================================
  * The provider table
@@ -171,19 +172,18 @@ export const getConnectUrl = action({
   },
 });
 
-/** The caller and the team a connector binds to. Routing fallback
- *  (active_team_id ?? team_id), the same one appConnections.listConnections
- *  uses — resolving differently here would connect one team while the card
- *  reports another. */
+/** The caller and the team a connector binds to: the team they work in and
+ *  still belong to (lib/access.activeTeamMembershipFor), the same one
+ *  appConnections.listConnections uses — resolving differently here would
+ *  connect one team while the card reports another. */
 export const resolveTeam = internalQuery({
   args: { api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
-    const user = await ctx.db.get(userId);
     return {
       user_id: userId,
-      team_id: (user as any)?.active_team_id ?? (user as any)?.team_id ?? null,
+      team_id: (await activeTeamMembershipFor(ctx, userId))?.teamId ?? null,
     };
   },
 });

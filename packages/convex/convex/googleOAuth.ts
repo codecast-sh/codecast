@@ -8,7 +8,7 @@
 //
 //   The callback lands on the CONVEX host, not the web app. Google redirects to
 //   the httpAction below (routed via http.ts under /api/webhooks/*, the one
-//   prefix the convex proxy already forwards — infra/convex-proxy/Caddyfile
+//   prefix the convex proxy already forwards — infra/convex-host/Caddyfile
 //   routes only enumerated prefixes to the HTTP-actions port). Because that
 //   request is unauthenticated, the signed state (HMAC'd with the client
 //   secret, 5-min TTL) is the only binding to the initiating user — which
@@ -57,6 +57,7 @@ import {
 import { query, action, internalAction, internalMutation, internalQuery } from "./functions";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { signStateWith, verifyStateWith } from "./lib/hmac";
+import { sha256Hex } from "./lib/hash";
 import { convexSiteUrl, webBaseUrl } from "./slack";
 import {
   PROVIDER_KEY_AES_ALGO,
@@ -331,11 +332,6 @@ export async function decryptRefreshToken(
 
 function b64url(bytes: Uint8Array): string {
   return b64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function sha256Hex(s: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 // Revoking the refresh token revokes the whole Google-side grant (all scopes).

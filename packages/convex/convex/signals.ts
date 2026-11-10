@@ -35,6 +35,7 @@ import { createDataContext, createWorkContext } from "./data";
 import { canAccessSignal, canAccessTask } from "./lib/access";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { notFound } from "./lib/auth";
+import { liveRoleByHandle } from "./lib/orgAccess";
 import { nextShortId } from "./counters";
 import { addDepCore, insertTaskComment, moveTaskStatus } from "./tasks";
 import { MOVE_TALLY_WINDOW_MS, addMove, emptyTally, formatMoveTally, parseMoveTally } from "./lib/moveTally";
@@ -600,7 +601,7 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
     // Held only because grouping could not compare it: the sweep groups it once the budget has room (findingRegroup.ts).
     ...(attach === "held" && awaitGrouping && signal.similar_text ? { awaiting_grouping: { since: now, text: signal.similar_text } } : {}),
     reopened: reopened || undefined,
-    role_id: signal.role_id ?? (await roleIdByHandle(ctx, signal.role_handle)),
+    role_id: signal.role_id ?? (await roleIdByHandle(ctx, db.workspaceKey, signal.role_handle)),
     judge: signal.judge,
     judge_version: signal.judge_version,
     severity: signal.severity,
@@ -2093,11 +2094,12 @@ export const publishProfile = mutation({
 });
 
 /** The role a finder named by handle, or nothing: a wrong handle never blocks a signal. */
-async function roleIdByHandle(ctx: { db: any }, handle: string | undefined): Promise<Id<"org_roles"> | undefined> {
+export async function roleIdByHandle(ctx: { db: any }, workspace: string, handle: string | undefined): Promise<Id<"org_roles"> | undefined> {
   if (!handle) return undefined;
-  const want = handle.replace(/^@/, "").toLowerCase();
-  const roles: any[] = await ctx.db.query("org_roles").collect();
-  return roles.find((r) => (r.handle ?? "").toLowerCase() === want)?._id;
+  // Only inside the signal's own workspace: a handle is unique per workspace, not across the deployment.
+  const ws = parseWorkspaceKey(workspace);
+  if (!ws) return undefined;
+  return (await liveRoleByHandle(ctx, ws.type === "team" ? { team_id: ws.teamId } : { scope_user_id: ws.userId }, handle))?._id;
 }
 
 // ── Placing held findings again (LE4) ──

@@ -803,35 +803,6 @@ export const backfillTeamInsights = action({
   },
 });
 
-export const backfillTeamInsightsInternal = internalAction({
-  args: {
-    team_id: v.id("teams"),
-    window_hours: v.optional(v.number()),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, args): Promise<any> => {
-    const windowHours = Math.max(1, Math.min(args.window_hours ?? 24 * 14, 24 * 30));
-    const limit = Math.max(1, Math.min(args.limit ?? 25, 100));
-    const since = Date.now() - windowHours * 60 * 60 * 1000;
-
-    const candidates = await ctx.runQuery(internal.sessionInsights.getBackfillCandidates, {
-      team_id: args.team_id,
-      since,
-      limit,
-    });
-
-    let success = 0;
-    for (const candidate of candidates) {
-      const res = await ctx.runAction(internal.sessionInsights.generateSessionInsight, {
-        conversation_id: candidate.conversation_id,
-        reason: "periodic",
-      });
-      if ((res as any)?.status === "ok") success += 1;
-    }
-
-    return { candidates: candidates.length, generated: success };
-  },
-});
 
 export const getInsightsNeedingTimeline = internalQuery({
   args: {

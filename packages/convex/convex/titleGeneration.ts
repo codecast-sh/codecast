@@ -277,7 +277,7 @@ export const fillShortTitles = internalMutation({
 // without a short name, newest first from `cursor` (a creation-time ms). Only
 // LLM-titled or custom-titled rows — a daemon placeholder title is not worth
 // naming. Loop until done:
-//   npx convex run titleGeneration:sweepMissingShortTitles '{"cursor": <ms>}'
+//   packages/convex/run.sh titleGeneration:sweepMissingShortTitles '{"cursor": <ms>}'
 export const sweepMissingShortTitles = internalMutation({
   args: {
     cursor: v.number(),
@@ -299,48 +299,6 @@ export const sweepMissingShortTitles = internalMutation({
         scheduled * (args.spread_s ?? 1) * 1000,
         internal.titleGeneration.generateShortTitle,
         { id: c._id },
-      );
-      scheduled++;
-    }
-    return {
-      scheduled,
-      scanned: rows.length,
-      cursor: rows.length ? rows[rows.length - 1]._creationTime : null,
-      done: rows.length < batch,
-    };
-  },
-});
-
-// One-shot recovery sweep: schedule generateTitle for every recent
-// conversation that never got a subtitle (untitled cards in the inbox). Live
-// conversations self-heal via maybeScheduleTitleGeneration on their next sync;
-// this catches the idle ones nothing will touch again. Walks _creationTime
-// from `cursor`; loop until done:
-//   npx convex run titleGeneration:sweepUntitled '{"cursor": <start_ms>}'
-export const sweepUntitled = internalMutation({
-  args: {
-    cursor: v.number(),
-    batch: v.optional(v.number()),
-    // Seconds between scheduled generations, so the sweep itself doesn't
-    // flood the scheduler or the Anthropic API.
-    spread_s: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const batch = args.batch ?? 200;
-    const rows = await ctx.db
-      .query("conversations")
-      .withIndex("by_creation_time", (q) => q.gte("_creationTime", args.cursor))
-      .take(batch);
-    const now = Date.now();
-    let scheduled = 0;
-    for (const c of rows) {
-      if (c.skip_title_generation || c.subtitle !== undefined) continue;
-      if ((c.message_count ?? 0) <= 2) continue;
-      await ctx.db.patch(c._id, { title_gen_scheduled_at: now });
-      await ctx.scheduler.runAfter(
-        scheduled * (args.spread_s ?? 2) * 1000,
-        internal.titleGeneration.generateTitle,
-        { conversation_id: c._id },
       );
       scheduled++;
     }

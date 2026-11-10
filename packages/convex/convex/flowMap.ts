@@ -160,7 +160,8 @@ export const problemsPage = internalQuery({
     const items: FunnelItem[] = [];
     // Whether an active role owns a problem (orgLine.lineOwnerOf, as the live queue asks): it reads only the
     // problem's project and plan, so it is resolved once per pair on the page.
-    const team = args.funnel ? flowRoles({ team_id: args.funnel.team_id }, await ctx.db.query("org_roles").collect()) : [];
+    const funnelTeam = args.funnel?.team_id;
+    const team = funnelTeam ? flowRoles({ team_id: funnelTeam }, await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", funnelTeam)).collect()) : [];
     const ownedBy = new Map<string, boolean>();
     const owned = async (t: any): Promise<boolean> => {
       const key = `${t.project_id ?? ""}|${t.plan_id ?? ""}`;
@@ -407,7 +408,9 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
   const flowTotal = zeroStep(), offTotal = zeroStep();
   const live: any[] = [];
   for (const status of LIVE_RUN_STATUSES) {
-    for (const r of (await ctx.db.query("workflow_runs").withIndex("by_status", (q: any) => q.eq("status", status)).collect()) as any[]) if (r.workspace === workspace) live.push(r);
+    // This workspace's runs only; sorted back into creation order, the order the status index gave.
+    const rows = (await ctx.db.query("workflow_runs").withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", workspace).eq("status", status)).collect()) as any[];
+    live.push(...rows.sort((a, b) => a._creationTime - b._creationTime));
   }
   const askedOf = new Set<string>();
   for (const runner of new Set(live.map((r) => String(r.user_id)))) for (const id of await runsWaitingOnAPerson(ctx, runner)) askedOf.add(id);

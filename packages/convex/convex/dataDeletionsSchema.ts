@@ -42,7 +42,6 @@ export const dataDeletionTables = {
     updated_at: v.number(),
     finished_at: v.optional(v.number()),
   })
-    .index("by_team_requested", ["team_id", "requested_at"])
     .index("by_status_updated", ["status", "updated_at"])
     .index("by_target", ["kind", "target_id"]),
 };

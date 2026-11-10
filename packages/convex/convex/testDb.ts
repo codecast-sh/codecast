@@ -1,7 +1,7 @@
 // Minimal in-memory ctx.db for bun tests, honoring the .withIndex(name, q =>
 // q.eq(field, val)) chains the convex helpers use — so mutation logic is
-// testable without the full convex harness. eq() filters apply; range ops
-// (gte/gt/lt) are no-ops. insert/patch/delete are tracked AND applied, so a
+// testable without the full convex harness. eq() filters and range bounds
+// (gte/gt/lt/lte) apply. insert/patch/delete are tracked AND applied, so a
 // test can assert both the call and the resulting row state.
 //
 // `order("desc")` and `.filter()` are REAL, because several code paths mean the

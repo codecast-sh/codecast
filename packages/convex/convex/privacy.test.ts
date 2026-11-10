@@ -61,11 +61,21 @@ describe("profileConversationVisible", () => {
 
 // Minimal ctx stub: buildShareUpdate only reads directory mappings and the
 // owner doc. The index predicate is irrelevant to the seeded data, so ignore it.
-function mockCtx(mappings: any[], owner: any) {
+// `memberOf` is the teams the owner still belongs to; by default both pointers.
+function mockCtx(mappings: any[], owner: any, memberOf: string[] = [owner?.active_team_id, owner?.team_id].filter(Boolean)) {
   return {
     db: {
-      query: (_table: string) => ({
-        withIndex: (_name: string, _fn: any) => ({ collect: async () => mappings }),
+      query: (table: string) => ({
+        withIndex: (_name: string, fn: any) => ({
+          collect: async () => mappings,
+          first: async () => {
+            if (table !== "team_memberships") return mappings[0] ?? null;
+            const eqs: Record<string, any> = {};
+            const q: any = { eq: (k: string, v: any) => ((eqs[k] = v), q) };
+            fn(q);
+            return memberOf.includes(String(eqs.team_id)) ? { team_id: eqs.team_id, user_id: eqs.user_id } : null;
+          },
+        }),
       }),
       get: async (_id: any) => owner,
     },
@@ -118,6 +128,13 @@ describe("buildShareUpdate — sharing always yields a team_id", () => {
   test("no mapping + no active team → falls back to the owner's default team", async () => {
     const updates = await share(mockCtx([], { team_id: "t_default" }), { project_path: "/x" });
     expect(updates.team_id).toBe("t_default");
+  });
+
+  test("a pointer at a team the owner has left is not a team to share into", async () => {
+    const ctx = mockCtx([], { active_team_id: "t_left", team_id: "t_left" }, []);
+    const updates = await share(ctx, { project_path: "/x" });
+    expect(updates.team_id).toBeUndefined();
+    expect(updates.is_private).toBe(false);
   });
 
   test("owner belongs to no team at all → team_id omitted (the only remaining edge)", async () => {

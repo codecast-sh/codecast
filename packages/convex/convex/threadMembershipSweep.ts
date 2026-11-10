@@ -11,8 +11,8 @@ import { patchTask } from "./lib/taskWrite";
 // every task thread_reads row whose user is not a participant under
 // taskThreadParticipants, and removes rows pointing at deleted tasks.
 //
-//   npx convex run threadMembershipSweep:sweep '{}'                 # dry run, counts only
-//   npx convex run threadMembershipSweep:sweep '{"dryRun": false}'  # stamp + delete
+//   packages/convex/run.sh threadMembershipSweep:sweep '{}'                 # dry run, counts only
+//   packages/convex/run.sh threadMembershipSweep:sweep '{"dryRun": false}'  # stamp + delete
 //
 // A third step clears the assignee an agent's `cast task start` self-claim
 // left on agent-origin tasks (ct-44870): isOnHumanBoard counts ANY assignee,
@@ -23,8 +23,8 @@ import { patchTask } from "./lib/taskWrite";
 // CLI claim leaves none). ct-44836 fixed the CLI going forward; this cleans
 // history. Run it on its own:
 //
-//   npx convex run threadMembershipSweep:sweepAssignees '{}'                 # dry run
-//   npx convex run threadMembershipSweep:sweepAssignees '{"dryRun": false}'  # clear
+//   packages/convex/run.sh threadMembershipSweep:sweepAssignees '{}'                 # dry run
+//   packages/convex/run.sh threadMembershipSweep:sweepAssignees '{"dryRun": false}'  # clear
 //
 // Idempotent: a stored via is never rewritten (the live write path already
 // stamps every new row), and a second live run finds nothing left to stamp or

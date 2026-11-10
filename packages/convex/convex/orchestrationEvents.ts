@@ -37,6 +37,9 @@ export const emit = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const plan_id = await accessiblePlanIdForShortId(ctx, auth.userId, args.plan_short_id);
+    // A short id that names no plan is refused: stored as given, the event
+    // would wait under that id for whoever later creates the plan.
+    if (args.plan_short_id && !plan_id) throw new Error("Plan not found");
 
     return await ctx.db.insert("orchestration_events", {
       user_id: auth.userId,
@@ -61,11 +64,14 @@ export const listByPlan = query({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
     // Enumerable key: prove plan access before returning its event stream.
-    await accessiblePlanIdForShortId(ctx, auth.userId, args.plan_short_id);
+    const planId = await accessiblePlanIdForShortId(ctx, auth.userId, args.plan_short_id);
+    if (!planId) return [];
 
+    // Read by the resolved plan, never by the caller-typed short id: rows
+    // stored under a short id before its plan existed belong to nobody.
     const events = await ctx.db
       .query("orchestration_events")
-      .withIndex("by_plan_short_id", (q) => q.eq("plan_short_id", args.plan_short_id))
+      .withIndex("by_plan_id", (q) => q.eq("plan_id", planId))
       .order("desc")
       .take(args.limit || 50);
 

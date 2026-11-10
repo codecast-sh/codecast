@@ -3953,13 +3953,14 @@ function cliRoute(
 // Projects
 // ── Capability library (cast cap …) ──
 //
-// /cli/cap/status is live. The phase 2 verbs are REGISTERED but answer with a
-// structured NOT_IMPLEMENTED, because the mutations behind them do not exist
-// yet: reserving the paths now means a newer CLI against an older deploy gets
-// a clean, coded error instead of a bare 404 it cannot tell from a typo'd URL.
+// status, bind and toggle are live. `resolve` and `why` (registered further
+// down) are RESERVED and answer with a structured NOT_IMPLEMENTED, because the
+// functions behind them do not exist yet: reserving the paths means a newer
+// CLI against an older deploy gets a clean, coded error instead of a bare 404
+// it cannot tell from a typo'd URL.
 //
-// RULE for whoever lands /cli/cap/bind (from the design draft, easy to lose):
-// an agent-minted capability token can NEVER create a binding above session
+// RULE for /cli/cap/bind (from the design draft, easy to lose): an
+// agent-minted capability token can NEVER create a binding above session
 // scope. The bind mutation must inspect the credential class and reject user,
 // device, project and team scopes for anything but a real api_token held by
 // the user — otherwise the consent gate is enforced only inside a CLI process
@@ -5211,6 +5212,11 @@ cliRoute("/cli/sessions/owners", async (ctx, body) => ctx.runQuery(api.sessionOw
 cliRoute("/cli/sessions/reparent", async (ctx, body) => ctx.runMutation(api.devices.reparentSessionToDevice, body), { forwardDeviceId: true });
 // This machine signed into a different account. Sessions it still owns under
 // the previous account follow it, without starting the agent again.
+// NOT REACHABLE, on purpose for now: the route is registered without
+// forwardDeviceId, so cliRoute strips the device_id the mutation requires and
+// every call fails validation. The daemon calls devices:claimDeviceAccount
+// directly. Do not add forwardDeviceId before the claim has real proof that
+// the caller holds the machine (see claimDeviceAccount).
 cliRoute("/cli/devices/claim-account", async (ctx, body) => ctx.runMutation(api.devices.claimDeviceAccount, body));
 
 // CC account switching: route the swap + blocked-session revive through the
@@ -5389,7 +5395,7 @@ http.route({ pathPrefix: "/cli/a/", method: "GET", handler: artifactServe });
 // It lives at most two windows, the ten minutes a fresh one had.
 //
 // Registered only under /cli/, the prefix the Caddy proxy in front of prod
-// forwards to HTTP actions today (infra/convex-proxy/Caddyfile): any other
+// forwards to HTTP actions today (infra/convex-host/Caddyfile): any other
 // path lands on the backend and 404s, so a second address here would be a
 // route that never answers.
 const SHARED_VIDEO_REDIRECT_WINDOW_MS = 5 * 60_000;
@@ -5411,7 +5417,7 @@ http.route({ path: SHARED_CALL_VIDEO_PATH, method: "GET", handler: sharedCallVid
 // refusal there is deliberately indistinguishable from a missing repository.
 //
 // Registered on two prefixes because the Caddy proxy in front of this
-// deployment (infra/convex-proxy/Caddyfile) forwards only a fixed set of path
+// deployment (infra/convex-host/Caddyfile) forwards only a fixed set of path
 // prefixes to HTTP actions, and /cli/ is the one that is already open. The
 // /api/public/ pair is the address this route should have, and starts working
 // as soon as the proxy carries that prefix too.

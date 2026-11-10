@@ -57,6 +57,20 @@ describe("recordCore", () => {
     expect((await ctx.db.get(row._id)).fixed_by).toEqual([{ sha: sha("b"), at: 155 * DAY, lines: 1, top: 6 }]);
   });
 
+  test("two teams tracing one repository keep separate rows: one team's fix never links onto the other's change", async () => {
+    const ctx = world();
+    const OTHER = "teams_other";
+    const repo = "union-ai/union-mobile";
+    await recordCore(ctx, "users_ashot" as any, { team_id: TEAM as any, repository: repo, changes: [{ sha: sha("a"), subject: "feat", committed_at: 150 * DAY }], fixes: [] }, NOW);
+    // The other team's trace of the same sha inserts its own row and links only there.
+    expect(await recordCore(ctx, "users_ashot" as any, { team_id: OTHER as any, repository: repo, changes: [{ sha: sha("a"), subject: "feat", committed_at: 150 * DAY }], fixes: [{ sha: sha("b"), at: 155 * DAY, introduced: [{ sha: sha("a"), lines: 3 }] }] }, NOW)).toEqual({ inserted: 1, linked: 1 });
+    const rows = await ctx.db.query("landed_changes").collect();
+    expect(rows.find((r: any) => r.workspace === WS).fixed_by).toEqual([]);
+    expect(rows.find((r: any) => r.workspace === `team:${OTHER}`).fixed_by).toHaveLength(1);
+    // A fix sent for a team with no row of its own links nothing.
+    expect(await recordCore(ctx, "users_ashot" as any, { team_id: "teams_third" as any, repository: repo, changes: [], fixes: [{ sha: sha("b"), at: 155 * DAY, introduced: [{ sha: sha("a"), lines: 3 }] }] }, NOW)).toEqual({ inserted: 0, linked: 0 });
+  });
+
   test("a Claude Code workflow run is no flow: its commit landed outside any", async () => {
     const ctx = world();
     await ctx.db.insert("workflow_runs", { workspace: WS, run_kind: "workflow", workflow_name: "desk-sweep", merge: { sha: sha("f"), branch: "b", into: "main", at: 160 * DAY } });
