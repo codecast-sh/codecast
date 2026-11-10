@@ -71,34 +71,16 @@ export function isClaudeBypassWarning(text: string): boolean {
   return /running in Bypass Permissions mode/i.test(text) && /^[^\S\n]*[❯›>]?[^\S\n]*(?:\d+[.)][^\S\n]*)?Yes,\s*I accept\b/im.test(text);
 }
 
-// Claude Code's idle-resume dialog, shown when `claude --resume` reopens a
-// conversation whose prompt cache has gone cold:
-//
-//   Resume this conversation?
-//   This conversation has been inactive for 33d 16h 10m and is 354.6k tokens
-//   long. Resuming it will use about 6% of your 5-hour usage limit.
-//   ❯ 1. Resume
-//     2. Start a new conversation   Claude can look this one up if you refer …
-//
-// Its gate reads neither CLAUDE_CODE_RESUME_* variable (buildResumeEnvPrefix
-// silences only the older "Resume from summary?" prompt with those), so a
-// resume can still stop here.
+// Claude Code's idle-resume dialog ("This conversation has been inactive for
+// … Resume / Start a new conversation"). CLAUDE_CODE_RESUME_* does not silence it.
 export function isClaudeIdleResumeDialog(text: string): boolean {
   return /has been inactive for\b/i.test(text) && /^[^\S\n]*[❯›>]?[^\S\n]*(?:\d+[.)][^\S\n]*)?Start a new conversation\b/im.test(text);
 }
 
-// The option an automated wake picks in that dialog. "Resume" continues the
-// same conversation, which is what every codecast resume asks for: the same
-// session id the conversation is mapped to, with the history a trigger's or a
-// role's prompt was written against (the CLAUDE_CODE_RESUME_* variables make
-// the same call for the older summary prompt). The cost is the runner's usage,
-// which the runner committed when it armed the wake. To change the policy,
-// change this label ("Start a new conversation" starts a fresh Claude session).
+// What a machine wake answers there. Resume keeps the session id codecast maps
+// and the history the wake was written against; the runner armed the wake.
 export const MACHINE_WAKE_IDLE_RESUME_CHOICE = "Resume";
 
-// A row of that dialog naming exactly `label`: the cursor glyph, the option
-// number and a right-hand description column are chrome around it, and
-// "Resume from summary" or the question's "Resuming it will…" never match.
 export function isIdleResumeOptionRow(line: string, label = MACHINE_WAKE_IDLE_RESUME_CHOICE): boolean {
   return line.replace(/^\s*[❯›>]?\s*/, "").replace(/^\d+[.)]\s*/, "").split(/\s{3,}/)[0].trim() === label;
 }

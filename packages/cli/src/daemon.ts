@@ -25755,14 +25755,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
             await tmuxExec(["send-keys", "-t", tmuxSession, "Escape"]);
             continue;
           }
-          // A wake codecast delivers (a trigger, a role's turn, another
-          // session's message) has nobody at the terminal: parking it on Claude
-          // Code's idle-resume dialog hands the choice to whoever opens the
-          // inbox, who may not even be allowed to answer, and the wake never
-          // runs. It takes the resume it was launched for
-          // (MACHINE_WAKE_IDLE_RESUME_CHOICE). A person's own resume still
-          // reaches them as a question. If the highlight can't be placed, the
-          // dialog is held for a human as before.
+          // A machine wake has nobody at the terminal: answer the idle-resume
+          // dialog itself. A person's resume still gets asked.
           if (agentType === "claude" && isMachineDeliveredMessage(content) && isClaudeIdleResumeDialog(paneContent)
             && await selectHighlightedOption(tmuxSession, (line) => isIdleResumeOptionRow(line), "the idle-resume dialog")) {
             logDelivery(`Auto-resume ${shortId}: answered Claude's idle-resume dialog for a machine wake`);

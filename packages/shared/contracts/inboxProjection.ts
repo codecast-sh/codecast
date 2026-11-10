@@ -909,13 +909,8 @@ export function isStashHidden(
   return !!row.inbox_stashed_at && !!row.inbox_stash_hidden;
 }
 
-// THE COMMAND RULE, in one place: who may send a session's daemon commands
-// (resume, answer, escape, model switch, …). Its runner (`user_id`, the
-// account whose daemon executes them) or its second-party owner
-// (`owner_user_id`). The server enforces it (requireSessionCommandTarget in
-// convex/daemonCommandUtils.ts); the client reads the same rule to decide
-// whose "Needs You" a waiting session files under and who is offered its
-// answer and resume controls, so the two can never disagree.
+// THE COMMAND RULE: who may send a session's daemon commands (its runner or
+// second-party owner). requireSessionCommandTarget and the inbox both read it.
 export function commandsSession(
   row: {
     user_id?: string | { toString(): string } | null;
