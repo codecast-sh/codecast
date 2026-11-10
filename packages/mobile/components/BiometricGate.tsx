@@ -41,8 +41,10 @@ export function BiometricGate() {
   const backgroundedAt = useRef<number | null>(null);
   // One automatic prompt per lock. A cancelled prompt leaves the Unlock
   // button; it must not ask again by itself, because the prompt's own
-  // dismissal is what brings the app back to "active".
-  const promptOwed = useRef(false);
+  // dismissal is what brings the app back to "active". A gate that mounts
+  // after the setting has loaded starts locked without going through lock(),
+  // so that first lock owes its prompt too.
+  const promptOwed = useRef(state === 'locked');
   const prompting = useRef(false);
 
   const prompt = useCallback(async () => {
@@ -73,12 +75,14 @@ export function BiometricGate() {
   }, [state, isBiometricSettingLoaded, isBiometricEnabled, signedOut, lock]);
 
   useEffect(() => {
+    console.log('[bgdbg] locked-effect', state, promptOwed.current, AppState.currentState);
     if (state === 'locked' && promptOwed.current && AppState.currentState === 'active') void prompt();
   }, [state, prompt]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
       const current = stateRef.current;
+      console.log('[bgdbg] appstate', next, current, promptOwed.current);
       if (next === 'background') {
         if (current === 'open' && enabledRef.current) {
           backgroundedAt.current = Date.now();

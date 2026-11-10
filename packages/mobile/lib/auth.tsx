@@ -378,6 +378,7 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: 'Unlock Codecast',
       });
+      console.log('[bgdbg] auth result', JSON.stringify(result));
       return unlockVerdict(result) !== 'stay';
     } catch {
       // The check itself could not run (no native module answer). Open, as for
