@@ -10,7 +10,6 @@ import {
   parsePiSessionFile,
   parseTranscriptFor,
   extractPiCwd,
-  extractPiSessionId,
 } from "./parser.js";
 import { classifyPiTranscriptTail, classifyTranscriptTailFor } from "./daemon.js";
 
@@ -57,9 +56,8 @@ describe("parsePiSessionFile — real linear session with a bash tool call", () 
     expect(assistant?.model).toBe("claude-opus-4-6");
   });
 
-  test("extractPiCwd / extractPiSessionId read the header", () => {
+  test("extractPiCwd reads the header", () => {
     expect(extractPiCwd(content)).toBe("/tmp/pi-demo");
-    expect(extractPiSessionId(content)).toBe("00000000-1111-2222-3333-444444444444");
   });
 });
 

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { browserJarRead, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal, withScheme } from "./siteGuard.js";
+import { auditExplicitLoads, browserJarRead, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal, withScheme } from "./siteGuard.js";
 import { SECRET_APPROVAL_TTL_MS } from "@codecast/shared/contracts/secrets";
 import type { SigninMemory } from "../secrets/signin.js";
 import { readAudit } from "./audit.js";
@@ -149,6 +149,25 @@ describe("the Vault page is a person's", () => {
     expect(urlsLoadedBy("pushstate", ["/vault"], () => "http://localhost:3200/inbox")).toEqual(["http://localhost:3200/vault"]);
     expect(urlsLoadedBy("pushstate", ["/vault"])).toEqual(["https://codecast.sh/vault"]);
     expect(urlsLoadedBy("click", ["#e4"])).toEqual([]);
+  });
+
+  test("a flag's value cannot shift the gate off the URL", () => {
+    // The first positional is the flag's value; the URL after it is still gated.
+    expect(urlsLoadedBy("open", ["--wait-until", "load", "codecast.sh/vault"])).toEqual(["load", "codecast.sh/vault"]);
+    expect(urlsLoadedBy("tab", ["new", "--label", "work", "https://codecast.sh/vault"])).toEqual(["work", "https://codecast.sh/vault"]);
+    expect(urlsLoadedBy("open", ["--url=https://codecast.sh/vault"])).toEqual(["https://codecast.sh/vault"]);
+    expect(urlsLoadedBy("read", ["--filter", "Total", "localhost:3200/inbox"])).toEqual(["Total", "localhost:3200/inbox"]);
+    expect(urlsLoadedBy("pushstate", ["--replace", "x", "https://codecast.sh/vault"], () => "http://localhost:3200/")).toEqual(["http://localhost:3200/x", "https://codecast.sh/vault"]);
+    // The refusal follows: the Vault page behind a flag value is still refused.
+    const refused = urlsLoadedBy("open", ["--wait-until", "load", "codecast.sh/vault"]).map((u) => refuseNavigation(u, "s1", "open", null));
+    expect(refused.some((r) => r?.message.includes("only a person uses the Vault page"))).toBe(true);
+  });
+
+  test("a URL loaded by a verb the landing audit skips still leaves an audit row", () => {
+    auditExplicitLoads("tab", ["new", "https://example.com/a"], "engine:s1", "s1");
+    auditExplicitLoads("read", ["https://docs.example.org/x"], "engine:s1", "s1");
+    auditExplicitLoads("open", ["https://skipped.example"], "engine:s1", "s1"); // open is audited where it lands
+    expect(readAudit().map((r) => r.origin)).toEqual(["https://example.com", "https://docs.example.org"]);
   });
 });
 

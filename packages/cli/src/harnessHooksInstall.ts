@@ -15,7 +15,6 @@ import { removeHarnessFile, writeHarnessFile } from "./harness.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { SESSION_REGISTER_HOOK } from "./sessionRegisterHook.js";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
-import { TASK_PULSE_HOOK } from "./taskPulseHook.js";
 import { TASK_CONTEXT_HOOK, TASK_CONTEXT_HOOK_FILE, installTaskContextHookCodex, removeTaskContextHookCodex } from "./taskContextHook.js";
 import { USER_PROMPT_HOOK, USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
@@ -27,7 +26,6 @@ const SCRIPTS: Record<string, string> = {
   "codecast-status.sh": CODECAST_STATUS_HOOK,
   "session-register.sh": SESSION_REGISTER_HOOK,
   "thread-state.sh": THREAD_STATE_HOOK,
-  "task-pulse.sh": TASK_PULSE_HOOK,
   [TASK_CONTEXT_HOOK_FILE]: TASK_CONTEXT_HOOK,
   [USER_PROMPT_HOOK_FILE]: USER_PROMPT_HOOK,
   [STATUSLINE_HOOK_FILE]: CODECAST_STATUSLINE_HOOK,
@@ -133,11 +131,18 @@ export function installHarnessHooks(config: HookConfig = {}, opts: { featuresOnl
       removeHook(hook, dir, settingsList);
       continue;
     }
+    // No events: a job that runs inside another hook's script (the task
+    // reminder, inside the prompt hook) and is listed for the Harness page. It
+    // has no file of its own; the one an older install wrote is removed.
+    if (hook.kind === "hook" && hook.events.length === 0) {
+      removeHook(hook, dir, settingsList);
+      continue;
+    }
     writeHarnessFile(file, SCRIPTS[hook.file], "hooks", { mode: 0o755, executable: true });
     for (const settings of settingsList) {
       if (hook.kind === "statusLine") {
         installOwnedStatusLine(file, { settingsPath: settings });
-      } else if (hook.events.length > 0) {
+      } else {
         for (const [timeout, events] of eventsByTimeout(hook.events)) {
           installOwnedHook(events, file, { timeout, settingsPath: settings });
         }

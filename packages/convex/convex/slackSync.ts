@@ -535,6 +535,22 @@ export const linkChannel = action({
     let ch = info.channel ?? {};
     if (ch.is_archived) return { ok: false, error: "That Slack channel is archived" };
     if (ch.is_im || ch.is_mpim) return { ok: false, error: "Only channels can be mirrored, not direct messages" };
+    // A private Slack channel is mirrored only by someone who is in it. The
+    // app being in the channel proves nothing about the person asking: any
+    // teammate could otherwise copy a private channel they cannot read into
+    // chat. The person's own Slack token is the proof (a private channel they
+    // are not in answers channel_not_found to it).
+    if (ch.is_private) {
+      const mine = userToken ? await slackApi(userToken, "conversations.info", { channel: args.slack_channel_id }) : null;
+      if (!mine?.ok || mine.channel?.is_member === false) {
+        return {
+          ok: false,
+          error: userToken
+            ? "That Slack channel is private and you are not in it. Someone in the channel has to set up the mirror."
+            : "That Slack channel is private. Connect your Slack account so codecast can confirm you are in it, then try again.",
+        };
+      }
+    }
     // Is the APP in it? The user token's view reports the person's membership,
     // so ask the app directly.
     const appIn = await slackApi(token, "conversations.info", { channel: args.slack_channel_id });
@@ -896,6 +912,22 @@ export const ingestEvent = internalMutation({
         .query("slack_installations")
         .withIndex("by_workspace", (q: any) => q.eq("workspace_id", args.workspace))
         .first();
+      // tokens_revoked names whose tokens died: `oauth` lists people who
+      // revoked their own token, `bot` the app's bot user. One person
+      // disconnecting is not the app leaving: their stored token goes, and the
+      // team's mirrors keep running on the bot token.
+      const revokedPeople: string[] = type === "tokens_revoked" && Array.isArray(event.tokens?.oauth) ? event.tokens.oauth : [];
+      const botRevoked = type === "tokens_revoked" && Array.isArray(event.tokens?.bot) && event.tokens.bot.length > 0;
+      if (install && (type === "app_uninstalled" || revokedPeople.length > 0)) {
+        const tokens = await ctx.db
+          .query("slack_user_tokens")
+          .withIndex("by_installation_user", (q: any) => q.eq("installation_id", install._id))
+          .collect();
+        for (const t of tokens) {
+          if (type === "app_uninstalled" || revokedPeople.includes(t.slack_user_id)) await ctx.db.delete(t._id);
+        }
+      }
+      if (type === "tokens_revoked" && !botRevoked) return { status: "tokens_revoked" as const };
       if (install) {
         const links = await ctx.db
           .query("slack_channel_links")
@@ -2667,89 +2699,6 @@ export const applyInboundReaction = internalMutation({
   },
 });
 
-// Reactions mirrored before rows carried the Slack person sit under the bridge
-// with nobody named, one row standing for every unmatched person with that
-// emoji. Slack still knows who they were: ask it for each such message, write
-// the reactions again through the live path, then drop the nameless rows. A
-// message Slack will not answer for keeps its rows.
-export const bridgeReactionsToRepair = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const out: Array<{ link_id: Id<"slack_channel_links">; ts: string; reaction_ids: Array<Id<"chat_reactions">> }> = [];
-    for (const install of await ctx.db.query("slack_installations").take(500)) {
-      if (!install.bridge_user_id || !install.team_id) continue;
-      const links = await ctx.db
-        .query("slack_channel_links")
-        .withIndex("by_team", (q: any) => q.eq("team_id", install.team_id))
-        .collect();
-      for (const link of links) {
-        const byTs = new Map<string, Array<Id<"chat_reactions">>>();
-        const rows = await ctx.db
-          .query("chat_reactions")
-          .withIndex("by_channel", (q: any) => q.eq("channel_id", link.chat_channel_id))
-          .collect();
-        for (const r of rows) {
-          if (r.slack_user || r.user_id.toString() !== install.bridge_user_id.toString()) continue;
-          const message = await ctx.db.get(r.message_id);
-          const ts = message?.external?.ts;
-          if (!ts) continue;
-          byTs.set(ts, [...(byTs.get(ts) ?? []), r._id]);
-        }
-        for (const [ts, reaction_ids] of byTs) out.push({ link_id: link._id, ts, reaction_ids });
-      }
-    }
-    return out;
-  },
-});
-
-export const dropReactions = internalMutation({
-  args: { reaction_ids: v.array(v.id("chat_reactions")) },
-  handler: async (ctx, args) => {
-    const touched = new Set<Id<"chat_messages">>();
-    for (const id of args.reaction_ids) {
-      const r = await ctx.db.get(id);
-      if (!r) continue;
-      await ctx.db.delete(id);
-      touched.add(r.message_id);
-    }
-    for (const id of touched) await patchChat(ctx, id, {});
-  },
-});
-
-export const repairBridgeReactions = internalAction({
-  args: { dry: v.optional(v.boolean()) },
-  handler: async (ctx, args): Promise<{ messages: number; rewritten: number; kept: number; people: string[] }> => {
-    const todo: Array<{ link_id: Id<"slack_channel_links">; ts: string; reaction_ids: Array<Id<"chat_reactions">> }> =
-      await ctx.runQuery(internal.slackSync.bridgeReactionsToRepair, {});
-    let rewritten = 0;
-    let kept = 0;
-    const people = new Set<string>();
-    for (const item of todo) {
-      const c = await ctx.runQuery(internal.slackSync.linkContext, { link_id: item.link_id });
-      if (!c?.install) { kept += item.reaction_ids.length; continue; }
-      const resp = await slackApi(c.install.bot_token, "reactions.get", { channel: c.link.slack_channel_id, timestamp: item.ts, full: "true" });
-      if (!resp.ok) { kept += item.reaction_ids.length; continue; }
-      for (const group of (resp.message?.reactions ?? []) as Array<{ name: string; users?: string[] }>) {
-        const emoji = shortcodeToEmoji(group.name);
-        if (!emoji) continue;
-        for (const user of group.users ?? []) {
-          if (user === c.install.bot_user_id) continue;
-          const person = await resolvePerson(ctx, c.install, user);
-          const author = inboundAuthorFields(person, c.link);
-          people.add(`${emoji} ${person.name}`);
-          if (args.dry) continue;
-          await ctx.runMutation(internal.slackSync.applyInboundReaction, {
-            link_id: c.link._id, ts: item.ts, emoji, add: true,
-            slack_user: person.slack_user_id, user_id: author.author_user_id, external_author: author.external_author,
-          });
-        }
-      }
-      if (!args.dry) await ctx.runMutation(internal.slackSync.dropReactions, { reaction_ids: item.reaction_ids });
-      rewritten += item.reaction_ids.length;
-    }
-    return { messages: todo.length, rewritten, kept, people: [...people] };
-  },
-});
 
 // ── Backfill ─────────────────────────────────────────────────────────────────
 

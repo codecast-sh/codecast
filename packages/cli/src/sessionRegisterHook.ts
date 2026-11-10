@@ -1,13 +1,13 @@
 // Claude Code SessionStart / UserPromptSubmit -> session-registry claim,
 // installed to ~/.claude/hooks/session-register.sh.
-import { HOOK_FIELDS_READ } from "./hookJson.js";
+import { HOOK_FIELDS_READ, HOOK_STATE_DIR } from "./hookJson.js";
 
 /** Body of the claim write. Returns instead of exiting so the combined
- *  UserPromptSubmit script can keep going. Assumes SESSION_ID is set. A
+ *  UserPromptSubmit script can keep going. Assumes SESSION_ID and CC_DIR. A
  *  SessionStart (HOOK_hook_event_name) always writes. */
 export const SESSION_REGISTER_JOB = `
 session_register_job() {
-REGISTRY_DIR="$HOME/.codecast/session-registry"
+REGISTRY_DIR="$CC_DIR/session-registry"
 # Fast path for UserPromptSubmit: a live claim for this session already names
 # the process. Re-walking \`ps\` four times on every prompt is what stacked
 # with python3 startup to blow the hook timeout. SessionStart skips it: a new
@@ -15,7 +15,10 @@ REGISTRY_DIR="$HOME/.codecast/session-registry"
 # the same session is still alive (a second \`cast resume\` on this machine).
 # Keeping the old claim sent every delivery to the stale copy's terminal.
 if [ "\${HOOK_hook_event_name:-}" != "SessionStart" ] && [ -f "$REGISTRY_DIR/$SESSION_ID.json" ]; then
-  CLAIM=$(cat "$REGISTRY_DIR/$SESSION_ID.json" 2>/dev/null || true)
+  # The claim is one line (the echo below), read with a builtin: this runs on
+  # every prompt.
+  CLAIM=
+  IFS= read -r CLAIM <"$REGISTRY_DIR/$SESSION_ID.json" 2>/dev/null || true
   OLD_PID=\${CLAIM#*\\"pid\\":}
   OLD_PID=\${OLD_PID%%,*}
   OLD_PID=\${OLD_PID%%\\}*}
@@ -59,6 +62,7 @@ echo "{\\"pid\\":\$CLAUDE_PID,\\"tty\\":\\"\$TTY\\",\\"ts\\":$(date +%s),\\"term
 export const SESSION_REGISTER_HOOK = `#!/bin/bash
 # Registers session-to-PID/TTY mapping for codecast daemon process discovery
 set -uo pipefail
+${HOOK_STATE_DIR}
 
 INPUT=$(dd bs=65536 count=1 2>/dev/null || true)
 [ -n "$INPUT" ] || INPUT=""
@@ -90,7 +94,7 @@ case "\${CLAUDE_CODE_ENTRYPOINT:-}:\${HOOK_source:-}" in
     case "$PARENT_CONV" in
       ""|*[!A-Za-z0-9]*) ;;
       *)
-        DECL_DIR="\${CODECAST_DIR:-$HOME/.codecast}/spawn-parents"
+        DECL_DIR="$CC_DIR/spawn-parents"
         if [ ! -f "$DECL_DIR/$SESSION_ID.json" ]; then
           mkdir -p "$DECL_DIR"
           find "$DECL_DIR" -name '*.json' -mtime +7 -delete 2>/dev/null

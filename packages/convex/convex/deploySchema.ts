@@ -64,8 +64,7 @@ export const deployTables = {
     started_at: v.number(),
     updated_at: v.number(),
   })
-    .index("by_repository_sha", ["repository", "sha"])
-    .index("by_repository_started", ["repository", "started_at"]),
+    .index("by_repository_sha", ["repository", "sha"]),
 
   // One pass of `cast ship checkout` (the /deploy path): what it committed,
   // what it held back, and each deploy step's result, so a ship is visible
@@ -97,6 +96,5 @@ export const deployTables = {
     started_at: v.number(),
     finished_at: v.number(),
   })
-    .index("by_workspace_finished", ["workspace", "finished_at"])
-    .index("by_repository_finished", ["repository", "finished_at"]),
+    .index("by_workspace_finished", ["workspace", "finished_at"]),
 };

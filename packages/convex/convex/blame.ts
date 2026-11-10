@@ -1,7 +1,6 @@
 import {
   query,
   internalMutation,
-  internalQuery,
   type MutationCtx,
 } from "./functions";
 import { v } from "convex/values";
@@ -410,23 +409,6 @@ export const resolveBlame = query({
   },
 });
 
-// Operational visibility for the blame join: how many commit rows carry a
-// resolvable hash. Run: npx convex run blame:commitRowStats
-export const commitRowStats = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const withHash = await ctx.db
-      .query("file_changes")
-      .withIndex("by_commit_hash", (q: any) => q.gt("commit_hash", ""))
-      .order("desc")
-      .take(5000);
-    return {
-      rows_with_hash: withHash.length,
-      capped: withHash.length === 5000,
-    };
-  },
-});
-
 // Process one page of messages for the historical materialization backfill:
 // for each message that carries edit/write/commit tool calls, insert the
 // file_changes rows it should have produced at ingest (and repair commit rows
@@ -499,91 +481,6 @@ async function materializeMessagePage(
   };
 }
 
-// Materialize one conversation by short id (verification before the global
-// run). Returns what it inserted. Run:
-//   npx convex run blame:materializeOneConversation '{"short_id":"jx74qbm"}'
-export const materializeOneConversation = internalMutation({
-  args: { short_id: v.string() },
-  handler: async (ctx, args) => {
-    const conv = await ctx.db
-      .query("conversations")
-      .withIndex("by_short_id", (q: any) => q.eq("short_id", args.short_id))
-      .first();
-    if (!conv) return { found: false };
-
-    const messages = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
-      .collect();
-    messages.sort((a, b) => a.timestamp - b.timestamp);
-
-    // tool_use_id -> commit hash, from every result (the hash lands on the
-    // message AFTER the git commit call).
-    const hashByToolId = new Map<string, string>();
-    for (const m of messages) {
-      for (const tr of m.tool_results ?? []) {
-        if (tr.is_error || !tr.tool_use_id) continue;
-        const h = extractCommitHashFromContent(tr.content ?? "");
-        if (h) hashByToolId.set(tr.tool_use_id, h);
-      }
-    }
-
-    let inserted = 0;
-    let repaired = 0;
-    const samples: Array<{ type: string; path: string; hash: string | null }> = [];
-    for (const m of messages) {
-      const msg = {
-        _id: m._id,
-        timestamp: m.timestamp,
-        tool_calls: m.tool_calls,
-        tool_results: m.tool_results,
-      };
-      if (!hasFileChangeToolCall(msg)) continue;
-      for (const fc of extractFileChanges([msg])) {
-        const existing = await ctx.db
-          .query("file_changes")
-          .withIndex("by_conversation_change_key", (q) =>
-            q.eq("conversation_id", conv._id).eq("change_key", fc.id),
-          )
-          .first();
-        const hash = fc.commitHash ?? (fc.toolCallId ? hashByToolId.get(fc.toolCallId) : undefined);
-        if (existing) {
-          const patch: Record<string, unknown> = {};
-          if (
-            existing.change_type === "commit" &&
-            fc.commitMessage &&
-            existing.commit_message !== fc.commitMessage
-          )
-            patch.commit_message = fc.commitMessage;
-          if (existing.change_type === "commit" && !existing.commit_hash && hash)
-            patch.commit_hash = hash;
-          if (Object.keys(patch).length) {
-            await ctx.db.patch(existing._id, patch);
-            repaired++;
-          }
-          continue;
-        }
-        await writeFileChange(ctx, null, {
-          conversation_id: conv._id,
-          change_key: fc.id,
-          message_id: m._id,
-          tool_call_id: fc.toolCallId,
-          seq: fc.sequenceIndex,
-          file_path: fc.filePath,
-          change_type: fc.changeType,
-          commit_message: fc.commitMessage,
-          commit_hash: hash,
-          timestamp: fc.timestamp,
-        }, { oldContent: fc.oldContent, newContent: fc.newContent });
-        inserted++;
-        if (samples.length < 6)
-          samples.push({ type: fc.changeType, path: fc.filePath.slice(-40), hash: hash ?? null });
-      }
-    }
-    return { found: true, messages: messages.length, inserted, repaired, samples };
-  },
-});
-
 /**
  * Historical materialization: create the file_changes rows for messages that
  * were synced before materializeFileChanges ran on ingest (or through a path
@@ -595,7 +492,7 @@ export const materializeOneConversation = internalMutation({
  * connection mid-run). Each invocation does one page then schedules the next;
  * when the messages table is exhausted it kicks off the commit-hash fill.
  * Idempotent — safe to re-run; it skips already-materialized change_keys. Run:
- *   npx convex run blame:backfillMaterialize
+ *   packages/convex/run.sh blame:backfillMaterialize
  */
 export const backfillMaterialize = internalMutation({
   args: {
@@ -638,7 +535,7 @@ export const backfillMaterialize = internalMutation({
  * row. For each hash-less commit row, scan the conversation's messages from
  * the row's timestamp forward for the matching tool_result and patch the hash.
  * Self-schedules until the table is exhausted; kick off with:
- *   npx convex run blame:backfillCommitHashes
+ *   packages/convex/run.sh blame:backfillCommitHashes
  */
 // One page of the commit-hash fill: for each hash-less commit row, scan a few
 // messages forward from its timestamp for the `git commit` result and patch in
@@ -685,7 +582,7 @@ async function commitHashPage(
  * so it survives the full file_changes table without hitting a function time
  * limit — a one-shot action driver dies with "upstream error" partway. Chained
  * automatically at the end of backfillMaterialize; also runnable directly:
- *   npx convex run blame:backfillCommitHashes
+ *   packages/convex/run.sh blame:backfillCommitHashes
  */
 export const backfillCommitHashes = internalMutation({
   args: {

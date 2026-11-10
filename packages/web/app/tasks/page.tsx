@@ -687,7 +687,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
 
   useWatchEffect(() => { setTaskFilter({ status: urlStatus }); }, [urlStatus]);
 
-  const { hasMore, loadMore } = useSyncTasks();
+  useSyncTasks();
   // The line chip on each row reads the workspace's runs from the store
   // (the-line.md L10); this is the one feeder behind it, mounted per list.
   useSyncRuns(RUNS_FEED_ARGS);
@@ -1372,8 +1372,6 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
             : "No tasks found"
           }
           onCreate={() => openCreateModal('task', projectId ? { project_id: projectId } : undefined)}
-          hasMore={hasMore}
-          onLoadMore={loadMore}
           paletteShortcuts={[
             { action: "task.status", mode: "status", label: "status" },
             { action: "task.priority", mode: "priority", label: "priority" },

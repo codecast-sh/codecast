@@ -2,6 +2,7 @@ import { refuseSeatKill } from "./lib/seatKill";
 import { noteWriteCause } from "./lifecycleEvents";
 import { internalMutation, mutation } from "./functions";
 import { v } from "convex/values";
+import { isStaff } from "./lib/staff";
 import { internal } from "./_generated/api";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./agentTasks";
@@ -30,35 +31,6 @@ import { nestParentIdOf } from "./ccAccountsShared";
 
 export const EMPTY_CONVERSATION_GRACE_MS = 24 * 60 * 60 * 1000;
 
-// Remove daemon-minted synthetic prompt cards (message_uuid "interactive-prompt-*")
-// from a conversation — the recovery tool for pane-scrape misparses that shipped a
-// fake AskUserQuestion poll (a prose answer with numbered sections used to qualify;
-// see menuFooterBelowOptions in the CLI daemon). Only synthetic rows are eligible no
-// matter what prefix is passed, so real JSONL-synced messages can never be touched.
-export const deleteSyntheticPromptMessages = internalMutation({
-  args: {
-    conversation_id: v.id("conversations"),
-    uuid_prefix: v.optional(v.string()),
-    dry_run: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const prefix = args.uuid_prefix ?? "interactive-prompt-";
-    const rows = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_uuid", (q) =>
-        q.eq("conversation_id", args.conversation_id).gte("message_uuid", prefix).lt("message_uuid", prefix + "￿"),
-      )
-      .take(50);
-    const synthetic = rows.filter((m) => m.message_uuid?.startsWith("interactive-prompt-"));
-    if (!args.dry_run) {
-      for (const m of synthetic) await ctx.db.delete(m._id);
-    }
-    return {
-      matched: synthetic.map((m) => ({ uuid: m.message_uuid, role: m.role, ts: m.timestamp })),
-      deleted: args.dry_run ? 0 : synthetic.length,
-    };
-  },
-});
 // Purge synced "[Codecast import] …" truncation notices — synthetic context-only
 // user messages minted by the CLI's jsonlGenerator on truncated imports. New CLIs
 // mark them isMeta in the JSONL (never synced) and skip them at parse time; this
@@ -69,7 +41,7 @@ export const deleteSyntheticPromptMessages = internalMutation({
 // repairs only when backend < local (repairDiscrepancies), so leaving the counter
 // alone keeps backend >= local for old AND new CLIs — no position-reset/re-sync
 // loop. The +1 display skew on a handful of imported conversations is harmless.
-// Run with: npx convex run cleanup:deleteImportNoticeMessages '{"dry_run":true}'
+// Run with: packages/convex/run.sh cleanup:deleteImportNoticeMessages '{"dry_run":true}'
 export const deleteImportNoticeMessages = internalMutation({
   args: { dry_run: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
@@ -588,197 +560,6 @@ export const gcEmptyConversations = internalMutation({
   },
 });
 
-// Scheduler-backlog recovery: cancel pending scheduled jobs whose function
-// name is in `names`, scanning _scheduled_functions in creation-time order
-// from `cursor`. Each call returns the next cursor; loop until done:
-//   npx convex run cleanup:cancelPendingJobs '{"names":[...],"cursor":<ms>}'
-// probe:true only reports the state mix at the cursor without canceling — use
-// it to bisect for the completed→pending frontier so the purge can start there
-// instead of scanning days of completed rows.
-export const cancelPendingJobs = internalMutation({
-  args: {
-    names: v.array(v.string()),
-    cursor: v.optional(v.number()),
-    batch: v.optional(v.number()),
-    probe: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const batch = args.probe ? 50 : (args.batch ?? 1000);
-    const names = new Set(args.names);
-    const q = ctx.db.system.query("_scheduled_functions");
-    const rows = await (args.cursor !== undefined
-      ? q.withIndex("by_creation_time", (x) => x.gte("_creationTime", args.cursor!))
-      : q
-    ).take(batch);
-    const states: Record<string, number> = {};
-    let canceled = 0;
-    for (const job of rows) {
-      states[job.state.kind] = (states[job.state.kind] ?? 0) + 1;
-      if (!args.probe && job.state.kind === "pending" && names.has(job.name)) {
-        await ctx.scheduler.cancel(job._id);
-        canceled++;
-      }
-    }
-    return {
-      canceled,
-      scanned: rows.length,
-      states,
-      cursor: rows.length ? rows[rows.length - 1]._creationTime : null,
-      done: rows.length < batch,
-    };
-  },
-});
-
-export const clearRateLimits = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const limits = await ctx.db.query("rate_limits").collect();
-    for (const limit of limits) {
-      await ctx.db.delete(limit._id);
-    }
-    return `Cleared ${limits.length} rate limit records`;
-  },
-});
-
-// One-time cleanup mutation to delete orphan tables
-// Run with: npx convex run cleanup:deleteOrphanTables
-export const deleteOrphanTables = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const orphanTables = [
-      "activity",
-      "activityChunk",
-      "contacts",
-      "credentials",
-      "emailDrafts",
-      "integrations",
-      "jobs",
-      "reminders",
-      "tasks",
-      "typingPresence",
-      "userCalendarPrefs",
-    ];
-
-    for (const tableName of orphanTables) {
-      try {
-        // @ts-ignore - accessing tables not in schema
-        const docs = await ctx.db.query(tableName).collect();
-        for (const doc of docs) {
-          // @ts-ignore
-          await ctx.db.delete(doc._id);
-        }
-        console.log(`Deleted ${docs.length} documents from ${tableName}`);
-      } catch (e) {
-        console.log(`Table ${tableName} doesn't exist or error: ${e}`);
-      }
-    }
-
-    return "Done";
-  },
-});
-
-// Destructive admin/migration op — run from the dashboard/CLI with the admin key,
-// never reachable as a public mutation (it took an arbitrary user_id with no auth).
-export const clearUserConversations = internalMutation({
-  args: { user_id: v.id("users") },
-  handler: async (ctx, args) => {
-    // Just get conversation IDs without loading full docs
-    const convos = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .take(50);
-
-    let deleted = 0;
-    for (const conv of convos) {
-      // Check if has messages (just get first, don't load content)
-      const hasMsg = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .first();
-
-      if (!hasMsg) {
-        await ctx.db.delete(conv._id);
-        deleted++;
-      }
-    }
-
-    const hasMore = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .first();
-
-    return { deleted, hasMore: !!hasMore };
-  },
-});
-
-export const clearUserMessages = internalMutation({
-  args: { user_id: v.id("users") },
-  handler: async (ctx, args) => {
-    // Get one conversation
-    const conv = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .first();
-
-    if (!conv) return { deleted: 0, hasMore: false };
-
-    // Get message IDs only (not full content) by using a projection-like query
-    const msgs = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-      .take(100);
-
-    for (const msg of msgs) {
-      await ctx.db.delete(msg._id);
-    }
-
-    return { deleted: msgs.length, hasMore: msgs.length > 0 };
-  },
-});
-
-// Force delete conversations without checking for messages - deletes 50 at a time
-export const forceDeleteConversations = internalMutation({
-  args: { user_id: v.id("users") },
-  handler: async (ctx, args) => {
-    const convos = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .take(50);
-
-    for (const conv of convos) {
-      await ctx.db.delete(conv._id);
-    }
-
-    const hasMore = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .first();
-
-    return { deleted: convos.length, hasMore: !!hasMore };
-  },
-});
-
-// Delete conversations by agent type
-export const deleteConversationsByType = internalMutation({
-  args: {
-    user_id: v.id("users"),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor")),
-  },
-  handler: async (ctx, args) => {
-    const convos = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .filter((q) => q.eq(q.field("agent_type"), args.agent_type))
-      .take(100);
-
-    for (const conv of convos) {
-      await ctx.db.delete(conv._id);
-    }
-
-    return { deleted: convos.length };
-  },
-});
-
 export async function deleteConversationBySessionIdCore(
   ctx: { db: any },
   args: { session_id: string; conversation_id?: string },
@@ -832,7 +613,7 @@ export const deleteConversationBySessionId = internalMutation({
   handler: async (ctx, args) => deleteConversationBySessionIdCore(ctx, args),
 });
 
-// Delete all Cursor conversations and their messages (uses auth)
+// Delete all of the caller's Cursor conversations and their messages. Staff only.
 export const deleteCursorConversationsWithMessages = mutation({
   args: {},
   handler: async (ctx) => {
@@ -844,6 +625,8 @@ export const deleteCursorConversationsWithMessages = mutation({
       .withIndex("email", (q) => q.eq("email", identity.email))
       .first();
     if (!user) throw new Error("User not found");
+    // A leftover bulk delete with no caller in the repo: operators only.
+    if (!isStaff(user)) throw new Error("Not authorized");
 
     const convos = await ctx.db
       .query("conversations")

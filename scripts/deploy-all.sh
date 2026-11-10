@@ -19,8 +19,6 @@ for arg in "$@"; do
     --skip-checks) SKIP_CLI_CHECKS=true ;;
   esac
 done
-SKIP_CHECKS_FLAG=""
-$SKIP_CLI_CHECKS && SKIP_CHECKS_FLAG="--skip-checks"
 
 echo "=== Codecast Full Deployment ==="
 if $PREVIEW_ONLY; then
@@ -46,16 +44,9 @@ echo "   Installing dependencies..."
 # silently rewrites the lock and hides that.
 bun install --frozen-lockfile
 
-# Build convex (same as Railway)
-echo "   Building Convex..."
-cd packages/convex
-bun run build 2>/dev/null || true
-cd ../..
-
-# Clean build web (same as Railway)
-echo "   Building web (clean)..."
+# Build web (same as Railway). packages/convex has no build step.
+echo "   Building web..."
 cd packages/web
-rm -rf .next
 set -o pipefail
 if ! bun run build 2>&1 | tee /tmp/web-build.log; then
   echo ""

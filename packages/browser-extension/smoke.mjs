@@ -369,7 +369,7 @@ const isPixelOf = (px, color) => {
 /**
  * What only the bridge adds on top of CDP, exercised as a raw client the way
  * the engine path will: a background create into a session group, the group
- * following the socket, the working indicator on the group title, the border
+ * following the socket, the group title holding still, the border
  * overlay (present, click-transparent, surviving navigation, gone on detach)
  * and a screenshot that never shows it.
  */
@@ -554,8 +554,7 @@ async function cliRealMode(engineBinary, ext, cdpPort, pageUrl, token, bridgePor
   const grouped = await groupTitleOf();
   check(
     "cli: the tab sits in the Cast group",
-    // The title may still wear the working frame or the checkmark from the open.
-    grouped.tabs === 1 && typeof grouped.title === "string" && grouped.title.replace(/(\.{1,3}| ✓)\s*$/, "").trim() === CAST_TAB_GROUP.title &&
+    grouped.tabs === 1 && grouped.title === CAST_TAB_GROUP.title &&
       grouped.color === CAST_TAB_GROUP.color,
     JSON.stringify(grouped),
   );

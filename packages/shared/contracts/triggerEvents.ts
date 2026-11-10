@@ -104,8 +104,6 @@ export const SESSION_NEEDS_INPUT_EVENT = "session_needs_input";
  */
 export const ORG_AREA_CHANGE_EVENT = "org_area_change";
 
-export type TriggerEventName = keyof typeof TRIGGER_EVENT_SHORTHANDS;
-
 /** Every name, in the order above, for help text and pickers. */
 export const TRIGGER_EVENT_NAMES = Object.keys(TRIGGER_EVENT_SHORTHANDS);
 

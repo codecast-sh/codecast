@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { acquireLock, releaseLock, withLock, LOCK_CEILING_MS } from "./lock.js";
+import { acquireLock, releaseLock, withLock, LOCK_CEILING_MS, UNREADABLE_LOCK_GRACE_MS } from "./lock.js";
 
 const dirs: string[] = [];
 function root(): string {
@@ -54,10 +54,37 @@ describe("acquireLock", () => {
     expect(acquireLock(r, () => {}).acquired).toBe(true);
   });
 
-  test("an unreadable lock file is stale by definition", () => {
+  test("an old unreadable lock file is stale by definition", () => {
     const r = root();
     fs.writeFileSync(lockFile(r), "{corrupt");
+    const old = new Date(Date.now() - UNREADABLE_LOCK_GRACE_MS - 1000);
+    fs.utimesSync(lockFile(r), old, old);
     expect(acquireLock(r, () => {}).acquired).toBe(true);
+  });
+
+  test("a just-created empty lock is a holder mid-write, not a stale one", () => {
+    const r = root();
+    // What a holder that creates the file and then fills it looks like to a
+    // contender arriving in between.
+    fs.writeFileSync(lockFile(r), "");
+    const lines: string[] = [];
+    expect(acquireLock(r, (l) => lines.push(l)).acquired).toBe(false);
+    expect(lines).toEqual([]);
+    expect(fs.existsSync(lockFile(r))).toBe(true);
+  });
+
+  test("the lock is complete the moment it exists, and leaves no temp files", () => {
+    const r = root();
+    expect(acquireLock(r).acquired).toBe(true);
+    expect(JSON.parse(fs.readFileSync(lockFile(r), "utf-8")).pid).toBe(process.pid);
+    expect(fs.readdirSync(r)).toEqual([".codecast-capability.lock"]);
+  });
+
+  test("reclaiming leaves no stray files behind", () => {
+    const r = root();
+    fs.writeFileSync(lockFile(r), JSON.stringify({ pid: 999999999, acquired_at: new Date().toISOString() }));
+    expect(acquireLock(r, () => {}).acquired).toBe(true);
+    expect(fs.readdirSync(r)).toEqual([".codecast-capability.lock"]);
   });
 
   test("release only removes our own lock", () => {

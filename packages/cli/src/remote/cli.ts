@@ -10,7 +10,6 @@
  * Registered via registerRemoteCommand(program) from index.ts.
  */
 
-import { execFileSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

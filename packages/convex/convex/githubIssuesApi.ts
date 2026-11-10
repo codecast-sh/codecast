@@ -43,6 +43,19 @@ export async function listIssues(
   repo: string,
   opts: { since?: number; page?: number } = {},
 ): Promise<any[]> {
+  return (await listIssuesPage(token, repo, opts)).issues;
+}
+
+/**
+ * One page of issues plus how many rows GitHub sent for it. The endpoint
+ * mixes pull requests in, so only `raw` says whether another page follows: a
+ * full page that was mostly pull requests is still a full page.
+ */
+export async function listIssuesPage(
+  token: string,
+  repo: string,
+  opts: { since?: number; page?: number } = {},
+): Promise<{ issues: any[]; raw: number }> {
   const params = new URLSearchParams({
     state: "all",
     per_page: "100",
@@ -52,7 +65,7 @@ export async function listIssues(
   });
   if (opts.since) params.set("since", new Date(opts.since).toISOString());
   const rows = await githubJson(token, `/repos/${repo}/issues?${params.toString()}`);
-  return Array.isArray(rows) ? rows.filter((r) => !isPullRequest(r)) : [];
+  return Array.isArray(rows) ? { issues: rows.filter((r) => !isPullRequest(r)), raw: rows.length } : { issues: [], raw: 0 };
 }
 
 export async function getIssue(token: string, repo: string, number: number): Promise<any | null> {

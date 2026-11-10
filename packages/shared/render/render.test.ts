@@ -26,7 +26,6 @@ import {
   structuredPayloadSummary,
   structuredPayloadKeysFromRaw,
   extractCodexExecActions,
-  summarizeCodexExecActions,
   extractNestedActions,
   summarizeNestedActions,
   splitBrowserBatchResult,
@@ -285,7 +284,7 @@ describe("Codex exec envelopes", () => {
     expect(JSON.parse(actions[0].input).cmd).toBe("git status --short");
     expect(JSON.parse(actions[1].input).path).toBe("/tmp/codecast/images/screenshot.png");
     expect(JSON.parse(actions[2].input).title).toBe("Inspect session UI");
-    expect(summarizeCodexExecActions(actions)).toBe("3 actions · Terminal · Image · Browser");
+    expect(summarizeNestedActions(actions)).toBe("3 actions · Terminal · Image · Browser");
     expect(toolSummary(outer)).toBe("3 actions · Terminal · Image · Browser");
   });
 

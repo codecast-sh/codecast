@@ -306,4 +306,40 @@ describe("ledger envelope (schema_version + MAC)", () => {
     expect(detailed.tampered).toBe(true);
     expect(detailed.entries.a).toBe(999);
   });
+
+  test("a tampered ledger is no authority for deletion: the keys it lists stay", () => {
+    const target = tmpTarget({ mine: "user value" });
+    applyOwnedJson(target, [{ keyPath: ["a"], value: 1 }]);
+    const raw = JSON.parse(fs.readFileSync(ledgerPathFor(target), "utf-8"));
+    if (raw.mac === undefined) return; // no machine key: no MAC layer to test
+    // Hand-edit the ledger to claim the user's key, without re-MACing.
+    raw.entries.mine = "user value";
+    fs.writeFileSync(ledgerPathFor(target), JSON.stringify(raw) + "\n");
+
+    const result = applyOwnedJson(target, []);
+    expect(result.ledgerTampered).toBe(true);
+    expect(result.removals).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({ mine: "user value", a: 1 });
+    // The refusal happens once: the entries are released, not laundered into a
+    // freshly MACed ledger that a later pass would trust.
+    expect(readLedger(target)).toEqual({});
+    const again = applyOwnedJson(target, []);
+    expect(again.ledgerTampered).toBeUndefined();
+    expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({ mine: "user value", a: 1 });
+  });
+
+  test("under a tampered ledger our keys still update, and a claimed key is still removed", () => {
+    const target = tmpTarget({ legacy: true });
+    applyOwnedJson(target, [{ keyPath: ["a"], value: 1 }]);
+    const raw = JSON.parse(fs.readFileSync(ledgerPathFor(target), "utf-8"));
+    if (raw.mac === undefined) return;
+    raw.mac = "0".repeat(32);
+    fs.writeFileSync(ledgerPathFor(target), JSON.stringify(raw) + "\n");
+
+    const result = applyOwnedJson(target, [{ keyPath: ["a"], value: 2 }], { claim: [["legacy"]] });
+    expect(result.ledgerTampered).toBe(true);
+    expect(result.removals).toEqual([["legacy"]]);
+    expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({ a: 2 });
+    expect(readLedgerDetailed(target).tampered).toBe(false);
+  });
 });

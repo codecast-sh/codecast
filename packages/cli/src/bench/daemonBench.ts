@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import type { Config } from "../config/types.js";
 import { buildLogReport, readSleepWindows, type LogReport, type SleepWindow } from "./logReport.js";
-import { readLoopbackIdentity, localAuthHeaders, runRouteProbes, benchClock, type ProbeIdentity, type RouteProbes } from "./probes.js";
+import { readLoopbackIdentity, localAuthHeaders, runRouteProbes, type ProbeIdentity, type RouteProbes } from "./probes.js";
 import { runLoadBench, type LoadResult, type RuntimeIdentity, type LoadIO } from "./load.js";
 import { childProcess } from "./fixture.js";
 import { porcelainEntries } from "../gitPlane.js";

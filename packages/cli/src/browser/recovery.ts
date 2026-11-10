@@ -7,8 +7,8 @@
  * different reaction from the agent, and the wrong reaction is destructive —
  * "restart it" on an overloaded shared browser kills every other agent's tabs
  * (the 2026-08-14 stampede). So the classification and the words that go with
- * it live here, and both the direct CLI path and the daemon-resident driver
- * import them rather than each phrasing its own version.
+ * it live here, and every caller imports them rather than phrasing its own
+ * version.
  */
 
 import { setTimeout as sleep } from "node:timers/promises";
@@ -32,20 +32,9 @@ export class TabUnresponsive extends Error {
   }
 }
 
-/**
- * `instanceof` does not survive a trip through the daemon: an error raised in
- * the resident host arrives at the CLI as `{name, message}` and is rebuilt as a
- * plain Error carrying the name. Callers that branch on this failure ask here.
- */
+/** Is this the wedged-tab failure? By name too, so a copy of the error that lost its class still counts. */
 export function isTabUnresponsive(err: unknown): boolean {
   return err instanceof TabUnresponsive || (err instanceof Error && err.name === "TabUnresponsive");
-}
-
-/** Rebuild an error that crossed the daemon boundary, keeping its name. */
-export function reviveError(wire: { name?: string; message: string }): Error {
-  const err = new Error(wire.message);
-  if (wire.name) err.name = wire.name;
-  return err;
 }
 
 /**

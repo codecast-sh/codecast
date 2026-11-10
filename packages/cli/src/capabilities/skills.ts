@@ -193,11 +193,7 @@ export function emitSkillFrontmatter(input: EmitSkillInput, target: AgentClientI
 
   const lines: string[] = ["---"];
   for (const [key, value] of Object.entries(out)) {
-    if (typeof value === "string" && !value.includes("\n")) {
-      lines.push(`${key}: ${JSON.stringify(value)}`);
-    } else {
-      lines.push(`${key}: ${JSON.stringify(value)}`);
-    }
+    lines.push(`${key}: ${JSON.stringify(value)}`);
   }
   lines.push("---");
   return lines.join("\n") + "\n";

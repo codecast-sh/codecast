@@ -15,8 +15,8 @@ import { computeWorkspaceKey, linkedConversationId } from "./lib/access";
 // stored key disagrees. With apply it writes the recomputed key — which is
 // also the one-time backfill for rows minted before the field existed.
 //
-//   npx convex run teamScopeSweep:sweep '{}'                 # report only
-//   npx convex run teamScopeSweep:sweep '{"apply": true}'    # backfill / repair
+//   packages/convex/run.sh teamScopeSweep:sweep '{}'                 # report only
+//   packages/convex/run.sh teamScopeSweep:sweep '{"apply": true}'    # backfill / repair
 //
 // The reconciler NEVER touches team_id: that is routing, and a mismatch
 // between team_id and workspace is the legitimate "routed to team T, readable

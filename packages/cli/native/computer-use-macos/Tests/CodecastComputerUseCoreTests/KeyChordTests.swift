@@ -16,6 +16,22 @@ final class KeyChordTests: XCTestCase {
         XCTAssertEqual(parsed.modifiers, [.command, .shift])
     }
 
+    func testPlusIsAKeyAloneAndAtTheEndOfAChord() throws {
+        let alone = try XCTUnwrap(try? KeyChord.parse("+").get())
+        XCTAssertEqual(alone.keyCode, 24)
+        XCTAssertEqual(alone.modifiers, [.shift])
+
+        let chord = try XCTUnwrap(try? KeyChord.parse("Cmd++").get())
+        XCTAssertEqual(chord.keyCode, 24)
+        XCTAssertEqual(chord.modifiers, [.command, .shift])
+    }
+
+    func testFunctionKeysParse() throws {
+        XCTAssertEqual(try XCTUnwrap(try? KeyChord.parse("F5").get()).keyCode, 96)
+        XCTAssertEqual(try XCTUnwrap(try? KeyChord.parse("shift+f12").get()).keyCode, 111)
+        XCTAssertEqual(try XCTUnwrap(try? KeyChord.parse("f").get()).keyCode, 3)
+    }
+
     func testEveryModifierSpellingMapsToTheSameKey() {
         for spelling in ["cmd", "command", "meta", "super", "win", "cmdorctrl", "commandorcontrol"] {
             XCTAssertEqual(KeyChord.modifier(spelling), .command, spelling)

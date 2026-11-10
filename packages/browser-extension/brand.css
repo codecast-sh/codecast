@@ -3,6 +3,10 @@
  * teal by night, JetBrains Mono for everything that reads like a terminal,
  * Fraunces for the one line that speaks. The coral of the play arrow is the
  * only accent; every state colour is a Solarized one.
+ *
+ * No font is fetched: the extension's pages make no request beyond the local
+ * bridge. The two faces are used when the machine has them installed, and
+ * the system monospace and serif behind them in each stack otherwise.
  */
 :root {
   color-scheme: light dark;

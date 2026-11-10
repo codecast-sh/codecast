@@ -974,7 +974,7 @@ export const comment = httpAction(async (ctx, request) => {
       m: typeof body.m === "string" ? body.m : undefined,
       author_name: String(body.author_name ?? ""),
       author_email: typeof body.author_email === "string" ? body.author_email : undefined,
-      version: typeof body.version === "number" ? body.version : 0,
+      version: typeof body.version === "number" ? body.version : undefined,
       // "Send to agent", per batch and per comment. The mutation honors it
       // only for the owner and verified teammates; anyone else's comments
       // are stored as discussion whatever the request says.

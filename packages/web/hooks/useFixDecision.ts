@@ -1,5 +1,5 @@
 import { useInboxStore } from "../store/inboxStore";
-import { decisionTask, openFixDecisionFor, openFixDecisions, type FixDecisionRow } from "../lib/line/fixDecision";
+import { decisionTask, openFixDecisionFor, type FixDecisionRow } from "../lib/line/fixDecision";
 
 type StoreRows = Record<string, FixDecisionRow> | undefined;
 
@@ -8,10 +8,6 @@ export function useOpenFixDecision(taskId: string | null | undefined): FixDecisi
   return useInboxStore((s) => openFixDecisionFor(s.sessionDecisions as unknown as StoreRows, (s as { lineCards?: StoreRows }).lineCards, taskId));
 }
 
-/** Every open fix decision by problem task id, for a list that marks each row. Stable while neither collection changes. */
-export function useOpenFixDecisions(): Map<string, FixDecisionRow> {
-  return useInboxStore((s) => openFixDecisions(s.sessionDecisions as unknown as StoreRows, (s as { lineCards?: StoreRows }).lineCards));
-}
 
 /** The problem (task id) a decision named by ref is about; undefined when the store does not hold it. */
 export function useDecisionTask(ref: string | null | undefined): string | null | undefined {

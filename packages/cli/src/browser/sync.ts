@@ -6,9 +6,10 @@
  * it is a REQUEST: the host has no Keychain, so it asks the owner's laptop
  * daemon (cloud.requestBrowserSync -> the `cloud_browser_sync` command) to
  * carry the login through an SSH port forward into this host's Chrome, then
- * polls for the outcome. The host runs the built-in CDP driver and the
- * laptop the engine driver, which is why the body lives here and each
- * driver registers the verb with its own ensure-browser.
+ * polls for the outcome. Either side may be on either driver (a host runs
+ * the built-in one until the engine is installed there, cli.ts useEngine),
+ * which is why the body lives here and each driver registers the verb with
+ * its own ensure-browser.
  *
  * Nothing here prints a cookie: the request carries the site ORIGIN and the
  * answer carries counts.

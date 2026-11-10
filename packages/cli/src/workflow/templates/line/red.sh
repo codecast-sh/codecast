@@ -1,7 +1,8 @@
 # The prove station's check (LE8): the miss shows before anyone fixes it.
 # Prints {"red", "dir", "why"} and always exits 0, so the edges route on the
 # answer. The run's files are $run_dir, never committed.
-cd "$(cast ws path $worktree)" || exit 1
+wt="$(cast ws path $worktree)"
+[ -n "$wt" ] && cd "$wt" || exit 1
 dir=$run_dir
 mkdir -p "$dir"
 clean() { tail -c 300 "$1" 2>/dev/null | tr -d '\000-\037\\"'; }
@@ -37,7 +38,7 @@ if [ $category = prompt ]; then
   # only when every miss moment fails on the base and every guard passes.
   cmd=$line.commands.prove
   if [ -z "$cmd" ]; then
-    cast task comment $task_id "This project's flow profile names no prove command, so the prove station passed without showing the miss." -t progress
+    cast task comment $task_id "This project's flow profile names no prove command, so the prove station passed without showing the miss." -t progress > /dev/null
     answer true "no prove command; passed with a note"
     exit 0
   fi

@@ -392,6 +392,8 @@ describe("CloudAgentWatcher", () => {
     w.on("unfollowed", (id) => events.push(`unfollowed ${id}`));
     w.on("error", (e) => events.push(`error ${e.message}`));
     await w.poll();
+    const held = w as unknown as { handles: Map<string, unknown>; data: Map<string, unknown> };
+    expect(held.handles.has("bc-r")).toBe(true);
     // Deleted: the list no longer shows it, and a read of it answers 404.
     adapter.listAgents = async () => ({ items: [] });
     adapter.mirror = async (c, h) => { c.calls.push(`mirror ${h.agentId} (gone)`); throw new CloudApiError(404, "not_found", "No managed agent resource found"); };
@@ -402,6 +404,8 @@ describe("CloudAgentWatcher", () => {
     expect(events).toEqual(["unfollowed bc-r"]);
     expect(logs.filter((l) => l.includes("is gone"))).toEqual(["[fake-cloud] bc-r is gone on Fake Cloud: keeping its mirror as it is", "[fake-cloud] bc-r is gone on Fake Cloud: keeping its mirror as it is"]);
     expect(fs.existsSync(w.transcriptPath("bc-r"))).toBe(true);
+    // Nothing reads it again, so nothing is kept in memory for it.
+    expect([held.handles.has("bc-r"), held.data.has("bc-r")]).toEqual([false, false]);
     await until(() => JSON.parse(fs.readFileSync(path.join(root, "state.json"), "utf8")).agents["bc-r"]?.gone === true);
   });
 

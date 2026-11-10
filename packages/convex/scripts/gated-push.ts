@@ -8,7 +8,8 @@
 // avatar bar latched "Failed to load" on the ReferenceError.
 //
 // This pusher makes a push a proof instead of a reflex:
-//   1. wait until the functions directory has been quiet for QUIET_MS;
+//   1. wait until everything the backend bundles (the functions directory,
+//      packages/shared and platform/packages) has been quiet for QUIET_MS;
 //   2. refuse while the tree is behind origin/main (a snapshot push from a
 //      stale tree deletes newer functions from prod, the 2026-07-15 outage);
 //   3. take a signature of every file that ships;
@@ -30,12 +31,14 @@ export const STALE_RETRY_MS = 60_000;
 export const FAILED_PUSH_RETRY_MS = 60_000;
 
 /** Files whose change is worth a push. Codegen output is written BY the push
- *  and must not retrigger it; tests never ship; editors leave dotfiles. */
+ *  and must not retrigger it; tests and their fixtures (`*.testkit.ts`,
+ *  `*.testing.ts`) never ship; editors leave dotfiles. `rel` is relative to
+ *  the functions directory, or repo-relative for the other bundled sources. */
 export function shipsToProd(rel: string): boolean {
   const parts = rel.split(/[\\/]/);
   if (parts.some((p) => p.startsWith(".") || p === "_generated" || p === "node_modules")) return false;
   const last = parts[parts.length - 1] ?? "";
-  if (/\.test\.[cm]?[jt]sx?$/.test(last)) return false;
+  if (/\.(test|testkit|testing)\.[cm]?[jt]sx?$/.test(last)) return false;
   return /\.[cm]?[jt]sx?$|\.json$/.test(last);
 }
 
@@ -46,6 +49,18 @@ export function signatureOf(entries: Iterable<{ rel: string; mtimeMs: number; si
     .map((e) => `${e.rel}\u0000${Math.round(e.mtimeMs)}\u0000${e.size}`)
     .sort()
     .join("\n");
+}
+
+/** Every directory the backend bundles, the same set deploy.sh reads: the
+ *  functions, the shared package they import (`@codecast/shared`) and the
+ *  vendored platform packages. `prefix` namespaces a file in the signature
+ *  and the log; functions keep their bare path. */
+export function bundledSources(root: string): { dir: string; prefix: string }[] {
+  return [
+    { dir: join(root, "packages", "convex", "convex"), prefix: "" },
+    { dir: join(root, "packages", "shared"), prefix: "packages/shared/" },
+    { dir: join(root, "platform", "packages"), prefix: "platform/packages/" },
+  ];
 }
 
 export type CheckResult = { errors: number; diagnostics: string };
@@ -137,6 +152,7 @@ export class Gate {
 const PKG = join(import.meta.dir, "..");
 const ROOT = join(PKG, "..", "..");
 const FUNCTIONS = join(PKG, "convex");
+const SOURCES = bundledSources(ROOT);
 
 function stamp(): string {
   return new Date().toTimeString().slice(0, 8);
@@ -170,13 +186,20 @@ async function treeIsFresh(): Promise<boolean> {
 
 async function signature(): Promise<string> {
   const entries: { rel: string; mtimeMs: number; size: number }[] = [];
-  for (const name of readdirSync(FUNCTIONS, { recursive: true }) as string[]) {
-    const abs = join(FUNCTIONS, name);
-    let st;
-    try { st = statSync(abs); } catch { continue; }
-    if (!st.isFile()) continue;
-    entries.push({ rel: relative(FUNCTIONS, abs).split(sep).join("/"), mtimeMs: st.mtimeMs, size: st.size });
-  }
+  // Walk by hand so dependency and dot directories are never descended into.
+  const walk = (dir: string, prefix: string): void => {
+    let names: string[];
+    try { names = readdirSync(dir); } catch { return; }
+    for (const name of names) {
+      if (name.startsWith(".") || name === "node_modules" || name === "_generated") continue;
+      const abs = join(dir, name);
+      let st;
+      try { st = statSync(abs); } catch { continue; }
+      if (st.isDirectory()) walk(abs, `${prefix}${name}/`);
+      else if (st.isFile()) entries.push({ rel: `${prefix}${name}`, mtimeMs: st.mtimeMs, size: st.size });
+    }
+  };
+  for (const source of SOURCES) walk(source.dir, source.prefix);
   // The package manifest ships too (a dependency change re-bundles).
   const pkg = statSync(join(PKG, "package.json"));
   entries.push({ rel: "package.json", mtimeMs: pkg.mtimeMs, size: pkg.size });
@@ -211,11 +234,14 @@ function tailLogs(): void {
 async function main(): Promise<void> {
   if (!existsSync(FUNCTIONS)) throw new Error(`no functions directory at ${FUNCTIONS}`);
   const gate = new Gate({ now: Date.now, treeIsFresh, signature, typecheck, push, log });
-  watch(FUNCTIONS, { recursive: true }, (_event, filename) => {
-    const rel = filename == null ? undefined : String(filename).split(sep).join("/");
-    if (rel === undefined || shipsToProd(rel)) gate.onChange(rel);
-  });
-  log(`Watching ${relative(ROOT, FUNCTIONS)}: a push waits ${QUIET_MS / 1000}s of quiet, a fresh tree and a green typecheck.`);
+  for (const source of SOURCES) {
+    if (!existsSync(source.dir)) continue;
+    watch(source.dir, { recursive: true }, (_event, filename) => {
+      const rel = filename == null ? undefined : source.prefix + String(filename).split(sep).join("/");
+      if (rel === undefined || shipsToProd(rel)) gate.onChange(rel);
+    });
+  }
+  log(`Watching ${SOURCES.map((s) => relative(ROOT, s.dir)).join(", ")}: a push waits ${QUIET_MS / 1000}s of quiet, a fresh tree and a green typecheck.`);
   tailLogs();
   for (;;) {
     await gate.tick();

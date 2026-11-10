@@ -6,7 +6,7 @@ import { sshBase, type RemoteHost } from "../../remote/session-move";
 import { mirrorForPrepare } from "../prepare";
 import { MIRROR_MAGIC, buildMirrorBundle, parseMirrorBundle, type BuiltBundle } from "./bundle";
 import {
-  MIRROR_APPLY_COMMAND, MIRROR_REFUSAL_RETRY_MS, MIRROR_RETRY_MS, MirrorSourceCache, NOT_LOGGED_IN_REASON, OLDER_HOST_REASON, buildHomeMirror, failureRetryDelayMs, hostKey, mirrorHomeToHost, pushMirrorToHostAsync, readLocalStamps, resetBuildCache, runMirrorTick,
+  BUILD_CACHE_CAP, buildCacheSize, MIRROR_APPLY_COMMAND, MIRROR_REFUSAL_RETRY_MS, MIRROR_RETRY_MS, MirrorSourceCache, NOT_LOGGED_IN_REASON, OLDER_HOST_REASON, buildHomeMirror, failureRetryDelayMs, hostKey, mirrorHomeToHost, pushMirrorToHostAsync, readLocalStamps, resetBuildCache, runMirrorTick,
   writeLocalStamps, type BuildHomeMirrorOptions, type LocalMirrorStamps, type MirrorDeps, type MirrorPushOutcome,
 } from "./push";
 
@@ -76,7 +76,7 @@ describe("pushMirrorToHostAsync", () => {
     expect(r.result?.applied).toEqual(["a"]);
     const argv = JSON.parse(fs.readFileSync(process.env.PUSH_TEST_ARGV!, "utf-8"));
     expect(argv).toEqual([...sshBase(host), "ubuntu@cloud-test.invalid", `gzip -dc | ( ${MIRROR_APPLY_COMMAND} )`]);
-    expect(MIRROR_APPLY_COMMAND).toBe('export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; cast cloud mirror-apply --stdin');
+    expect(MIRROR_APPLY_COMMAND).toBe('export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; cast cloud mirror-apply --stdin');
     expect(fs.readFileSync(process.env.PUSH_TEST_STDIN!).equals(bundle)).toBe(true);
   });
 
@@ -392,6 +392,37 @@ describe("the change ledger between ticks", () => {
     };
     return { deps, stamps, pushes, builds };
   }
+
+  test("a memory the pull just wrote is in the bundle that push carries, though the tick had already read the home", async () => {
+    const home = path.join(dir, "home");
+    const claude = path.join(home, ".claude/CLAUDE.md");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(claude, "rules v1\n");
+    const t = realDeps(home);
+    t.deps.listHosts = async () => [hostA];
+    let pulls = 0;
+    t.deps.pullMemory = async () => {
+      if (pulls++) return { written: 0, reconciled: [] } as any;
+      fs.writeFileSync(claude, "rules the host wrote\n");
+      return { written: 1, reconciled: [] } as any;
+    };
+    expect(await runMirrorTick({ reason: "periodic", verifyRemote: true }, t.deps)).toMatchObject({ pushed: ["ubuntu@a.invalid"], failed: [] });
+    expect(t.builds).toHaveLength(2);
+    const fresh = await buildHomeMirror({ ...t.builds[1]!, sources: undefined, home, deviceId: "d", gitEnv });
+    expect(t.stamps["ubuntu@a.invalid"]!.hash).toBe(fresh.hash);
+  });
+
+  test("remembered builds are capped: a host whose project set keeps changing does not grow the cache", async () => {
+    const home = path.join(dir, "home");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude/CLAUDE.md"), "rules\n");
+    const t = realDeps(home);
+    resetBuildCache();
+    for (let i = 0; i < BUILD_CACHE_CAP + 5; i++) {
+      await mirrorHomeToHost(hostA, { deps: t.deps, config: { user_id: "u", cloud_mirror_exclude: `never-${i}` } as any });
+    }
+    expect(buildCacheSize()).toBe(BUILD_CACHE_CAP);
+  });
 
   test("an unchanged home answers a tick from the last hash without a build; an edit or a new file builds and ships again", async () => {
     const home = path.join(dir, "home");

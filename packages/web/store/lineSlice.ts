@@ -17,7 +17,6 @@ import { editKey } from "../lib/lineSettings";
 import { LINE_CAUSE_CATEGORY, type LineCauseFields } from "../lib/line/lineCause";
 import { taskCreateStub, taskStubId } from "./taskStub";
 import { lineLabelKey, type LabelVerdict } from "../lib/line/lineLabels";
-import type { LineChatSend } from "../lib/line/lineChat";
 
 export type LineSliceActions = {
   editLineProfile: (requestId: string, projectId: string, edits: LineProfileEdit[]) => Promise<{ command_id: string } | null | undefined>;
@@ -56,12 +55,6 @@ export type LineSliceActions = {
   /** Save a flow a session ran into the team's library (convex flowLibrary.save): the row reads saved at once, under the
    *  slug it asks for, as a new version when that slug is saved already. */
   saveSessionFlow: (id: string, opts?: { slug?: string; label?: string; variant_of?: string }) => void;
-  // Local echoes of sendLineChat, by project id. Ephemeral: the chat's feed
-  // retires each once the server row carries its client id.
-  lineChatSends: Record<string, LineChatSend[]>;
-  /** A person's words to the session that answers a project's line. Resolves with the server's answer; a refusal comes back as { error }. */
-  sendLineChat: (projectId: string, text: string, clientId: string, graph: string | null, focus: string | null) => Promise<unknown>;
-  dropLineChatSend: (projectId: string, clientId: string) => void;
   /** Save a step's prompt of a published graph (LW4): the file the .cast names, on the machine that pushed it. */
   editLineGraph: (requestId: string, workflowId: string, input: LineGraphEditInput) => Promise<{ command_id: string; workflow_id: string } | null | undefined>;
   /** Try a step's edited prompt on past cases (LW4): each case a lineTries row, queued at once. */
@@ -295,25 +288,5 @@ export function createLineSlice(): LineSliceActions {
         cause: { signal_count: 1, first_seen: now, last_seen: now, fingerprints: [] },
       });
     }) as LineSliceActions["askLineAgent"],
-
-    lineChatSends: {},
-
-    // The line's chat (line-workspace.md LW4, convex lineChat.ts): the words
-    // paint at once as a local echo, the sendLineChat side effect delivers
-    // them to the session that answers the line (starting one when nobody
-    // leads the project), and the chat feed's row carrying the same client id
-    // retires the echo. A refusal is returned, not thrown, so the caller takes
-    // the echo back (lib/decisionDiscussion settleEchoedSend).
-    sendLineChat: asyncAction(function (this: { lineChatSends: Record<string, LineChatSend[]> }, projectId: string, text: string, clientId: string, _graph: string | null, _focus: string | null) {
-      const sends = (this.lineChatSends[projectId] ??= []);
-      if (!sends.some((x) => x.client_id === clientId)) sends.push({ client_id: clientId, text: text.trim(), at: Date.now() });
-    }) as LineSliceActions["sendLineChat"],
-    dropLineChatSend: sync(function (this: { lineChatSends: Record<string, LineChatSend[]> }, projectId: string, clientId: string) {
-      const sends = this.lineChatSends[projectId];
-      if (!sends) return;
-      const kept = sends.filter((x) => x.client_id !== clientId);
-      if (kept.length) this.lineChatSends[projectId] = kept;
-      else delete this.lineChatSends[projectId];
-    }) as LineSliceActions["dropLineChatSend"],
   };
 }

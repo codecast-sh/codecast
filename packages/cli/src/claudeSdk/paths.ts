@@ -33,15 +33,4 @@ export function sdkHostPaths(sessionId: string, dir: string = sdkHostDir()): Sdk
   };
 }
 
-/** Session ids with a state file: every host that ran here and did not clean up. */
-export function listSdkHostSessions(dir: string = sdkHostDir()): string[] {
-  let names: string[];
-  try {
-    names = fs.readdirSync(dir);
-  } catch {
-    return [];
-  }
-  return names.filter((n) => n.endsWith(".json") && !n.endsWith(".spec.json")).map((n) => n.slice(0, -5)).filter((id) => SESSION_ID_RE.test(id));
-}
-
 export { writeFileAtomic } from "../fsAtomic.js";

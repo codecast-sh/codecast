@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "bun:test";
 import { extractFileChanges } from "../fileChangeExtractor";
 import type { Doc } from "@codecast/convex/convex/_generated/dataModel";
 

@@ -72,7 +72,7 @@ describe("ci.yml job graph", () => {
   // The release workflows build with the same bun as CI; a pin of their own
   // is how the two drift apart.
   test("the release workflows set bun up through the same composite action", () => {
-    for (const file of ["cut-cli-release", "finalize-cli-release", "accelerate-cli-staging", "cut-extension-release"]) {
+    for (const file of ["cut-cli-release", "finalize-cli-release", "cut-extension-release"]) {
       const release = Bun.YAML.parse(
         readFileSync(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8"),
       ) as { jobs: Record<string, any> };
@@ -130,7 +130,7 @@ describe("code_paths", () => {
     });
     expect(diffStep.run).toContain("--no-renames");
     expect(diffStep.run).not.toContain("set -e");
-    for (const id of ["scope", "computer_scope"]) {
+    for (const id of ["scope", "computer_scope", "injection_scope"]) {
       const classify = jobs.code_paths.steps.find((step: any) => step.id === id);
       expect(classify.run, id).toContain('bun scripts/ci/changed-path-scope.ts');
       expect(classify.run, id).toContain('< "${{ steps.diff.outputs.list }}"');
@@ -203,7 +203,8 @@ describe("code_paths", () => {
 
   test("publishes every area and every job gate the classifier emits", () => {
     const expected = [...AREAS, ...GATED_JOBS.map(jobFlag)];
-    expect(Object.keys(jobs.code_paths.outputs).filter((name) => name !== "run_test_computer")).toEqual(expected);
+    const STEP_FLAGS = ["run_test_computer", "run_test_injection"];
+    expect(Object.keys(jobs.code_paths.outputs).filter((name) => !STEP_FLAGS.includes(name))).toEqual(expected);
     for (const name of expected) {
       expect(jobs.code_paths.outputs[name]).toBe(`\${{ steps.scope.outputs.${name} }}`);
     }
@@ -214,7 +215,10 @@ describe("code_paths", () => {
 // or it drifts red unnoticed (bun test strips types). A program counts when one
 // of the packages the typecheck job filters to runs it from its own script.
 describe("typecheck", () => {
-  // mobile typechecks through its own toolchain, outside this job.
+  // A known gap, not a second toolchain: packages/mobile has no `typecheck`
+  // script, so nothing in CI typechecks it. `cast check mobile` is its only
+  // check. Drop it from this list when the package gains the script and the
+  // job's filter gains the package.
   const NOT_IN_TYPECHECK_JOB = ["mobile"];
   const checkToml = Bun.TOML.parse(
     readFileSync(new URL("../../.codecast/check.toml", import.meta.url), "utf8"),
@@ -431,6 +435,41 @@ describe("darwin-only cli tests", () => {
   });
 });
 
+
+// The injection suites are a step of test-cli that runs only for a change to
+// the injection path. The flag comes from code_paths, whose diff covers every
+// commit of a push; a diff of the last commit alone skipped the suites for an
+// injection change earlier in a multi-commit push.
+describe("injection suites", () => {
+  test("gate on the classifier's flag, not on a diff of their own", () => {
+    expect(jobs.code_paths.outputs.run_test_injection).toBe("${{ steps.injection_scope.outputs.run_test_injection }}");
+    const classify = jobs.code_paths.steps.find((step: any) => step.id === "injection_scope");
+    expect(classify.run).toContain("--injection-only");
+    const steps: any[] = jobs["test-cli"].steps;
+    const suites = steps.find((step) => String(step.name ?? "").startsWith("Injection suites"));
+    expect(suites.if).toBe("needs.code_paths.outputs.run_test_injection == 'true'");
+    for (const step of steps) expect(String(step.run ?? ""), step.name).not.toContain("git diff");
+  });
+});
+
+// Tests under scripts/ and infra/ belong to no package job.
+describe("tests outside packages/", () => {
+  test("run in test-always", () => {
+    const step = (jobs["test-always"].steps as any[]).find((s) => String(s.name ?? "").startsWith("Tests outside packages/"));
+    for (const file of ["./scripts/line.test.ts", "./infra/artifact-edge/worker.test.js", "./infra/replay-player/src/clock.test.ts", "infra/call-face-worker/turns.test.mjs"]) {
+      expect(step.run, file).toContain(file);
+      expect(Bun.file(new URL(`../../${file.replace(/^\.\//, "")}`, import.meta.url)).size, file).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("workflow concurrency", () => {
+  test("a pull request's newer run cancels the older one, and a push to main keeps its own", () => {
+    const top = workflow as any;
+    expect(top.concurrency.group).toBe("ci-${{ github.event.pull_request.number || github.sha }}");
+    expect(top.concurrency["cancel-in-progress"]).toBe("${{ github.event_name == 'pull_request' }}");
+  });
+});
 
 describe("computer tests are opt-in", () => {
   test("the default CLI suite excludes computer tests and the dedicated command restores them", () => {

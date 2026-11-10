@@ -112,5 +112,8 @@ export function applyInstructionFragments(input: InstructionFragmentsInput): Ins
     fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
     atomicWriteFile(ledgerFile, JSON.stringify({ sections: outcome.ledger.sections ?? {} }, null, 2) + "\n");
   }
-  return { ops, wrote: outcome.wrote, removed: outcome.removed, conflicts };
+  // Planned conflicts are already in `conflicts`; a write that failed during
+  // the apply is new here and must reach the caller so the pass is retried.
+  const failed = outcome.conflicts.filter((c) => c.reason === "write_failed");
+  return { ops, wrote: outcome.wrote, removed: outcome.removed, conflicts: [...conflicts, ...failed] };
 }

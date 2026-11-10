@@ -263,7 +263,7 @@ describe("codecast-status.sh forwards the launch token", () => {
   function runHook(sessionId: string, env: Record<string, string>): Record<string, unknown> {
     execFileSync("bash", [hookFile], {
       input: JSON.stringify({ session_id: sessionId, hook_event_name: "Stop" }),
-      env: { ...process.env, HOME: home, ...env },
+      env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), ...env },
     });
     return JSON.parse(fs.readFileSync(path.join(home, ".codecast", "agent-status", `${sessionId}.json`), "utf-8"));
   }

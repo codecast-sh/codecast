@@ -61,13 +61,6 @@ export interface ProductViewDef {
   params: string[];
 }
 
-/** What `views.token` answers: the frame url (token included) and when the token stops opening it. */
-export interface ProductViewToken {
-  url: string;
-  token: string;
-  expires_at: string;
-}
-
 /** Frame to host. */
 export type ProductViewMessage =
   /** The frame does not know its host's origin yet; it carries nothing. A host answers with its own `hello`. */

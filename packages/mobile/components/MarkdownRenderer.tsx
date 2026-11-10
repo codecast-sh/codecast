@@ -758,14 +758,6 @@ export const mdStyles = themedStyles((Theme) => StyleSheet.create({
     width: '100%',
     height: '85%',
   },
-  linkText: {
-    color: Theme.cyan,
-    textDecorationLine: 'underline',
-  },
-  linkTextUser: {
-    color: Theme.userBubble,
-    textDecorationLine: 'underline',
-  },
   inlineCode: {
     fontFamily: 'JetBrainsMono-Regular',
     fontSize: 13,

@@ -1,5 +1,6 @@
 // A command station: a script the run's shell expands and runs, and the
 // record every node's result lands in.
+import { constants as osConstants } from "node:os";
 import { spawn } from "../proc.js";
 import { lineCommandEnv } from "../lineProfile.js";
 import { c } from "../colors.js";
@@ -7,6 +8,11 @@ import { extractJsonOutput, lookupContextVar } from "./condition";
 import { keepEnds } from "./keepEnds";
 import type { NodeOutcome, WorkflowNode } from "./types";
 
+// One $name as both expanders read it. `$human_message` is the gate note,
+// empty when there is none, so a script can test it without tripping on an
+// unset `$human.message` (which the shell would read as `$human`). A node's
+// `$<id>.output` reads empty for the same reason when the node left none (a
+// hand that never spawned).
 export function contextVar(context: Record<string, string>, key: string): string | undefined {
   if (key === "human_message") return context["human.message"] ?? "";
   if (key.endsWith(".output")) return lookupContextVar(context, key) ?? "";
@@ -96,6 +102,16 @@ export function expandScriptVars(script: string, context: Record<string, string>
   return out;
 }
 
+// The exit code an edge routes on. A script the timeout killed has no status
+// of its own, and neither has one a signal took: recording those as 0 let
+// `exit_code` edges read a timeout as a clean run. A timeout is 124, as
+// timeout(1) reports it; any other signal is 128 + its number, as a shell does.
+export function stationExitCode(result: { status: number | null; signal?: NodeJS.Signals | null; timedOut: boolean }): number {
+  if (result.timedOut) return 124;
+  if (result.status !== null) return result.status;
+  return 128 + ((result.signal && osConstants.signals[result.signal]) || 0);
+}
+
 export async function executeCommand(
   node: WorkflowNode,
   context: Record<string, string>,
@@ -109,7 +125,7 @@ export async function executeCommand(
     // minute cap on most repos; a timeout read as a failed check and burned an
     // implement visit. Per node, in seconds.
     const timeoutMs = (node.timeout ?? 120) * 1000;
-    const result = await new Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }>((resolve, reject) => {
+    const result = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }>((resolve, reject) => {
       const child = spawn("bash", ["-c", script], {
         cwd,
         // A project's line command (line-profile.md LP2) names run values
@@ -129,7 +145,7 @@ export async function executeCommand(
       child.stdout!.on("data", (d) => { stdout += d; });
       child.stderr!.on("data", (d) => { stderr += d; });
       child.on("error", (err) => { clearTimeout(timer); reject(err); });
-      child.on("close", (status) => { clearTimeout(timer); resolve({ status, stdout, stderr, timedOut }); });
+      child.on("close", (status, signal) => { clearTimeout(timer); resolve({ status, signal, stdout, stderr, timedOut }); });
     });
 
     const output = result.stdout + result.stderr + (result.timedOut ? `\ntimed out after ${timeoutMs / 1000}s` : "");
@@ -143,7 +159,7 @@ export async function executeCommand(
     // paused (sd-2511, Nov 5). A failure keeps both, since a script says why it failed on either stream.
     const ok = result.status === 0 && !result.timedOut;
     recordNodeOutput(context, node.id, ok ? result.stdout.trim() || result.stderr.trim() : output.trim(), result.stdout);
-    context[`${node.id}.exit_code`] = String(result.status ?? 0);
+    context[`${node.id}.exit_code`] = String(stationExitCode(result));
 
     if (ok) {
       console.log(`  ${c.green}✓ success${c.reset}`);

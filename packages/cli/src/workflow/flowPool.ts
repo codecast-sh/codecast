@@ -6,7 +6,7 @@
 // flows to this machine's cache.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { foldFlow, flowPathWords, type FlowStation, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
+import { foldFlow, flowPathWords, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import { graphExtends, parseWorkflowSource, validateWorkflow } from "./parser.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
@@ -14,7 +14,6 @@ import type { WorkflowGraph } from "./types.js";
 import { defaultFlowsCache, writeTeamFlowIndex } from "./teamFlowIndex.js";
 
 export type PoolWhere = "shipped" | "repo" | "pushed" | "team";
-export type PoolStation = FlowStation;
 
 export type PoolFlow = PoolFlowSummary & {
   /** The session whose draft it is, while it is one. */

@@ -74,20 +74,12 @@ export function samePane(a: Pane | null | undefined, b: Pane | null | undefined)
   return ra === rb;
 }
 
-export function paneIn(ws: WorkspaceState, slot: SlotId): Pane | null {
-  return ws[slot].pane;
-}
 
 export function isVisible(ws: WorkspaceState, slot: SlotId): boolean {
   const s = ws[slot];
   return s.pane != null && s.presentation !== "collapsed";
 }
 
-/** Which slot, if any, currently holds this pane. */
-export function findPane(ws: WorkspaceState, pane: Pane): SlotId | null {
-  for (const id of SLOT_IDS) if (samePane(ws[id].pane, pane)) return id;
-  return null;
-}
 
 function patch(ws: WorkspaceState, slot: SlotId, next: Partial<SlotState>): WorkspaceState {
   return { ...ws, [slot]: { ...ws[slot], ...next } };
@@ -178,10 +170,6 @@ export function isCommentRailOpen(ws: WorkspaceState): boolean {
   return slotShows(ws, "context", "comments");
 }
 
-/** Nav is present but folded to its hover-peek edge. */
-export function isNavCollapsed(ws: WorkspaceState): boolean {
-  return ws.nav.presentation === "collapsed";
-}
 
 // ---------------------------------------------------------------------------
 // Persistence
@@ -311,4 +299,3 @@ export function surfaceForPath(pathname: string): SurfaceKind {
   if (/^\/(tasks|docs|plans|threads)(\/|$)/.test(pathname)) return "working";
   return "plain";
 }
-

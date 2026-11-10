@@ -39,7 +39,6 @@ import {
   renderSectionBody,
   snippetByEndMarker,
   snippetBySlug,
-  snippetContentHash,
   stampSectionBody,
   stripSnippetStamp,
   LOCAL_AGENT_CLIENTS,
@@ -61,7 +60,7 @@ import {
   type TargetCandidate,
 } from "@platform/snippets";
 import { defaultConfigDir, sharedConfigFile } from "./config/sharedConfig.js";
-import { getMessagingVersion, getVersion } from "./update.js";
+import { getVersion } from "./update.js";
 
 export {
   BROWSER_SECTION,

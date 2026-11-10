@@ -399,9 +399,9 @@ crons.interval(
 crons.interval(
   // Issue sync catch-up (issue-sync.md S6). Pulls every active source for
   // issues updated since its last sync, minus a 5 minute overlap, and applies
-  // them through the same applyRemote path a webhook takes. This is both the
-  // repair for a webhook that never arrived and the only retry an outbound
-  // push gets — pushTask deliberately never retries in a loop (S5).
+  // them through the same applyRemote path a webhook takes. This is the
+  // repair for a webhook that never arrived. It only pulls: a failed outbound
+  // push is not retried here (pushTask stamps the error and never loops, S5).
   "reconcile issue sync sources",
   { minutes: 15 },
   internal.issueSync.reconcileSources,

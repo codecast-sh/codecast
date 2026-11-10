@@ -20,20 +20,20 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Option, type Command } from "commander";
-import { browserSocketUrl, CdpConnection, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
+import { CdpConnection, type CdpClient, type CdpTarget } from "./cdp.js";
 import { shortTabId, tabLine } from "./tabId.js";
 import { narrated } from "./narrate.js";
 import {
-  acquireStartLock, attachToTarget, clearState, freePort, killStrayChrome, launchManagedChrome, pickTarget,
+  attachToTarget, clearState, pickTarget,
   probeLiveness, pruneTabOwnership, readState, recordNavigation, setActiveTarget, settle, stopInstance,
-  waitForStraysGone, writeState,
+  writeState,
   type InstanceState, type PageSession,
 } from "./instance.js";
 import { describeHolders, planStop, releaseSession } from "./refcount.js";
 import { openDriver, type BrowserDriver } from "./driver.js";
 import { BrowserNotLive, explainConnectionLoss, isReachable, isTabUnresponsive } from "./recovery.js";
 import {
-  browserHome, clonePath, cloneProfile, formatBytes, keepsOwnLogin, listRealProfiles, type ChromeChannel,
+  browserHome, keepsOwnLogin, listRealProfiles, type ChromeChannel,
 } from "./profile.js";
 import { matchRefs, nearMatches, pickOrdinal, refLabel, snapshotJson, snapshotPage, splitOrdinalQuery } from "./snapshot.js";
 import {
@@ -49,8 +49,8 @@ import { ownerKey } from "./owner.js";
 import { DesktopPaneUnavailable, withDesktopPanePage } from "./desktopPane.js";
 import { registerEngineCommands } from "./cliEngine.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
-import { DEFAULT_CLONE, resolveRemote, startLocalBrowser, startManagedBrowser, waitingOnLaunch, type StartOptions } from "./managedBrowser.js";
-import { ENGINE_MIN_VERSION, ENGINE_PACKAGE, engineFitness, ensureEngine, findEngine } from "./engine.js";
+import { startLocalBrowser, startManagedBrowser, stopRemoteManagedBrowser } from "./managedBrowser.js";
+import { ENGINE_MIN_VERSION, ENGINE_PACKAGE, engineFitness, ensureEngine } from "./engine.js";
 import { sameDocument } from "./url.js";
 import { loadSitePolicy } from "./policy.js";
 import { auditLanding, refuseNavigation, signInLandingNote } from "./siteGuard.js";
@@ -63,11 +63,9 @@ import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, ta
 import {
   hostOwnsBrowser, selectHostBrowser, isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
 } from "./bridge/real.js";
-import { startRemoteBrowser, stopRemoteBrowser } from "./remote.js";
 import { runBrowserSync, DEFAULT_SYNC_WAIT_S } from "./sync.js";
 import { cloudHostSignInHint } from "../cloud/browserSync.js";
 import { isRemoteDevice } from "../remote/device.js";
-import { loadRemoteHost, type RemoteHost } from "../remote/session-move.js";
 import { buildHostsCommand } from "../hosts/cli.js";
 import { uploadOne } from "../imageCommand.js";
 import { inlineImageMarker } from "../inlineImage.js";
@@ -144,8 +142,7 @@ async function withPage<T>(
   let page: PageSession | null = null;
   try {
     const target = pickTarget(await driver.targets(), driver.state, opts.tab, sessionId);
-    // Attached, domains on, recorder armed, viewport applied — done once and
-    // remembered by the resident driver, or done here on the direct path.
+    // Attached, domains on, recorder armed, viewport applied.
     page = await driver.attach(target.targetId);
     setActiveTarget(driver.state, target.targetId, sessionId);
     return await fn(page, driver.state, driver.conn);
@@ -393,7 +390,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         for (const t of targets) console.log(`  ${describeTab(t, t.targetId === mine, others.has(t.targetId))}`);
         const holders = Object.keys(state.tabsBySession ?? {}).length;
         console.log(
-          fmt.muted(`  driver: ${driver.kind === "resident" ? "resident in the daemon" : "direct (daemon not reachable)"}  ·  ${holders} session(s) holding tabs`),
+          fmt.muted(`  ${holders} session(s) holding tabs`),
         );
       } finally {
         driver.close();
@@ -430,10 +427,11 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       const state = readState();
       if (!state) return console.log("nothing to stop");
       if (state.remote) {
-        const host = loadRemoteHost();
-        await stopRemoteBrowser(host, state.remote.sshPid);
-        clearState();
-        console.log(`${OK} remote browser stopped and its profile wiped`);
+        // The host start recorded, never whichever one a registry lists first.
+        const { wiped } = await stopRemoteManagedBrowser(state);
+        console.log(wiped
+          ? `${OK} remote browser stopped and its profile wiped`
+          : `${OK} closed the tunnel to ${state.remote.user}@${state.remote.host}; that host is no longer registered here, so its browser profile was not wiped`);
         return;
       }
       // One browser serves every agent on this machine, so "stop" is not a
@@ -604,8 +602,6 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         try {
           page = await narrated("attaching to the tab", driver.attach(targetId));
         } catch (err) {
-          // isTabUnresponsive, not instanceof: the verdict may have been
-          // raised across a process boundary and revived by name (recovery.ts).
           if (!isTabUnresponsive(err)) throw err;
           console.log(fmt.muted(`  ${tabLine(targetId, "was not responding, opening a new one")}`));
           const res = await newTab();
@@ -801,7 +797,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       const driver = await requireDriver();
       try {
         const state = driver.state;
-        const target = pickTarget(await driver.targets(), state, o.tab);
+        const target = pickTarget(await driver.targets(), state, o.tab, me());
         await driver.detach(target.targetId);
         await driver.conn.send("Target.closeTarget", { targetId: target.targetId });
         if (state.activeTargetId === target.targetId) writeState({ ...state, activeTargetId: null });

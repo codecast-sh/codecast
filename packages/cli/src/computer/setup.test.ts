@@ -92,6 +92,20 @@ describe("both grants missing", () => {
     expect(r.exit).toBe(null);
   });
 
+  test("the setup window is closed once every grant is in, and left up when the wait stops short", async () => {
+    const closes = (grants: HarnessOptions["grants"], extra: Partial<ComputerSetupDeps> = {}) => {
+      const harness = setupHarness({ isTty: true, confirm: true, grants });
+      let closed = 0;
+      const permissions = { ...harness.deps.permissions!, closePermissionSettings: () => void closed++ };
+      return runComputerSetup({}, { ...(harness.deps as ComputerSetupDeps), permissions, ...extra }).then(() => closed);
+    };
+    expect(await closes([NONE, GRANTED])).toBe(1);
+    // Nothing was opened, so there is nothing to close.
+    expect(await closes([GRANTED])).toBe(0);
+    // The wait ran out with a grant still missing: the human may yet use the window.
+    expect(await closes([NONE], { pollTimeoutMs: -1 })).toBe(0);
+  });
+
   test("says why the helper holds the permission, not just what it allows", async () => {
     // The part a human cannot look up: an app they have never heard of is
     // asking, and the answer is that macOS attaches the grant to whoever asks.

@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { cdpTunnelArgs, remoteProfileWipeCommand, withCdpTunnel } from "./remote.js";
+import { cdpTunnelArgs, recordedRemoteHost, remoteProfileWipeCommand, withCdpTunnel } from "./remote.js";
 
 const host = { address: "1.2.3.4", user: "ubuntu", keyPath: "/k/id", remoteBaseDir: "/home/ubuntu/work", homeDir: "/home/ubuntu" };
 
@@ -107,5 +107,22 @@ describe("remoteProfileWipeCommand", () => {
     const cmd = remoteProfileWipeCommand();
     expect(cmd).toContain(`"$HOME"/.codecast/[b]rowser-profile`);
     expect(cmd).toContain(`"$HOME"/~/.codecast/[b]rowser-profile`);
+  });
+});
+
+describe("recordedRemoteHost", () => {
+  const other = { address: "198.51.100.9", user: "m1", keyPath: "/k/other", remoteBaseDir: "/Users/m1/work" };
+
+  test("stop reaches the host start recorded, whatever the registries say now", () => {
+    const remote = { host: "203.0.113.7", user: "ubuntu", sshPid: 1, keyPath: "/k/aws", remoteBaseDir: "/home/ubuntu/work", homeDir: "/home/ubuntu" };
+    expect(recordedRemoteHost(remote, () => [other])).toEqual({ address: "203.0.113.7", user: "ubuntu", keyPath: "/k/aws", remoteBaseDir: "/home/ubuntu/work", homeDir: "/home/ubuntu" });
+  });
+
+  test("an older state file is matched by address and user, never to an unrelated host", () => {
+    const old = { host: "203.0.113.7", user: "ubuntu" };
+    const same = { address: "203.0.113.7", user: "ubuntu", keyPath: "/k/aws", remoteBaseDir: "/home/ubuntu/work" };
+    expect(recordedRemoteHost(old, () => [other, same])).toBe(same);
+    expect(recordedRemoteHost(old, () => [other])).toBeNull();
+    expect(recordedRemoteHost(old)).toBeNull();
   });
 });

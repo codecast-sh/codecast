@@ -17,8 +17,6 @@ export type SendOutcome =
   | { kind: "resolve_failed"; sent_ids: string[]; open_ids: string[]; reason: string; waiting?: SendWaiting }
   | { kind: "failed"; reason: string };
 
-export type SendOutcomeKind = SendOutcome["kind"];
-
 /**
  * The outcome of a send that landed. `resolve` is present only when the
  * caller asked to resolve: `open_ids` are the sent rows that stayed open.

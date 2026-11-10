@@ -193,7 +193,7 @@ A remote daemon only manages sessions it explicitly owns (safety gate in
 
 ## Setup (one-time per Mac)
 
-1. **Provision**: Scaleway M1 Mac (24h minimum, ~€2.64/day). `cast remote provision` (or manually via Scaleway console + register in `~/.codecast/scaleway/hosts.json`).
+1. **Provision**: Scaleway M1 Mac (24h minimum, ~€2.64/day). `cast hosts provision` (or manually via Scaleway console + register in `~/.codecast/scaleway/hosts.json`).
 
 2. **SSH key**: `~/.codecast/scaleway/<host-id>/id_ed25519` (generated at provision, registered with Scaleway IAM).
 

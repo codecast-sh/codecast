@@ -1,5 +1,6 @@
 import { forwardRef, useImperativeHandle, useState, useCallback } from "react";
 import { hoverFocus } from "../../shortcuts/focusSource";
+import { askImageUrl } from "../../lib/editor/askImageUrl";
 import {
   Heading1,
   Heading2,
@@ -80,10 +81,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
     title: "Image",
     description: "Insert image from URL",
     icon: Image,
-    command: (editor) => {
-      const url = window.prompt("Image URL:");
-      if (url) editor.chain().focus().setImage({ src: url }).run();
-    },
+    command: (editor) => askImageUrl(editor),
   },
 ];
 

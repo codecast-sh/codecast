@@ -8,7 +8,7 @@
 //
 // No components in this file, so the surfaces that DO render one stay Fast
 // Refresh boundaries — the same split hooks/useWalkie keeps.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import { dmRoomKey } from "@codecast/shared/contracts";
 import {
   getWalkieStatus,
@@ -21,15 +21,6 @@ import { prewarmRoom } from "../../lib/calls/roomPrewarm";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 
-/** How long the refusal hint stays up after a press that could not open a mic.
- *  Long enough to read a short sentence, short enough that it is gone before
- *  the hand comes back. */
-export const REFUSAL_MS = 2200;
-
-/** How long "joined" stays under a face after somebody steps into the burst.
- *  The founder asked for "a message like hey he joined": long enough to read
- *  across a room, short enough that it is not a badge the face now wears. */
-export const JOINED_MS = 4000;
 
 /** How long a pointer has to REST on a face before it counts as interest.
  *
@@ -190,31 +181,4 @@ export function useFaceKey({
   };
 
   return { state, sending, holding: ptt.holding, talking, blocked, roomKey, ptt, txRef, rxRef, warmProps };
-}
-
-/**
- * Somebody stepped into this room in the last JOINED_MS.
- *
- * The founder's "a message like hey he joined", on the face it happened to. The
- * engine's live room becoming a call is the moment the burst stopped being one,
- * set by
- * this client's own Join live and by the far side's stamp arriving, so both
- * sides of the upgrade land here.
- *
- * One render when it opens and one when it closes, never a clock read in a
- * render: the badge is an event, not a duration.
- */
-export function useRecentJoin(roomKey: string, joinedRoom: string): boolean {
-  const [shown, setShown] = useState(false);
-  const seen = useRef(joinedRoom);
-  // eslint-disable-next-line no-restricted-syntax -- a four-second badge keyed to an engine event; the effect owns its timer
-  useEffect(() => {
-    if (joinedRoom === seen.current) return;
-    seen.current = joinedRoom;
-    if (!roomKey || joinedRoom !== roomKey) return;
-    setShown(true);
-    const t = setTimeout(() => setShown(false), JOINED_MS);
-    return () => clearTimeout(t);
-  }, [joinedRoom, roomKey]);
-  return shown;
 }

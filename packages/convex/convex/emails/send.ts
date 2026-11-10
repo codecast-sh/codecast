@@ -13,7 +13,6 @@ import { internal } from "../_generated/api";
 import { internalAction, mutation } from "../functions";
 import { BRAND, type RenderedEmail } from "./render";
 import {
-  artifactComment,
   passkeyAdded,
   passwordChanged,
   teamInvite,
@@ -95,34 +94,6 @@ export const sendPasskeyAdded = internalAction({
       args.email,
       passkeyAdded({ email: args.email, passkeyName: args.passkey_name, addedAt: args.added_at, settingsUrl: args.settings_url }),
       "passkey-added",
-    );
-  },
-});
-
-/**
- * Available for the published-pages pipeline. Deliberately not auto-wired to
- * comment submission: comments already stream into the owner's live session,
- * and per-comment email without a notification preference would be spam.
- */
-export const sendArtifactComment = internalAction({
-  args: {
-    to: v.string(),
-    page_title: v.string(),
-    page_url: v.string(),
-    commenter_name: v.string(),
-    comment_text: v.string(),
-  },
-  handler: async (_ctx, args) => {
-    await deliver(
-      args.to,
-      artifactComment({
-        pageTitle: args.page_title,
-        pageUrl: args.page_url,
-        commenterName: args.commenter_name,
-        commentText: args.comment_text,
-        ownerEmail: args.to,
-      }),
-      "artifact-comment",
     );
   },
 });

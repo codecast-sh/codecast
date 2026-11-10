@@ -39,8 +39,6 @@ export type StoryContext = {
   focus: FocusStore;
   waiting: ReadonlySet<string>;
   dimmed: ReadonlySet<string>;
-  /** Some story matches the filters, so the dimmed ones leave the Tab order (j/k already skips them). */
-  skipDimmed?: boolean;
   /** Give a story the focus (a click on it). Stable for the life of the page. */
   pick: (storyKey: string) => void;
   /** The color each area of the repository wears on this page (areaColor.assignAreaColors). */
@@ -85,37 +83,3 @@ export function useStoryAttrs(key: string) {
   const focused = useIsFocused(key);
   return { "data-story-key": key, "data-focused": focused, onFocusCapture: () => pick(key) };
 }
-
-/** The tabIndex of a story's own control: out of the Tab order while a filter dims it and others match. */
-export function useTriggerTab(key: string): number | undefined {
-  const { dimmed, skipDimmed } = useStoryCtx();
-  return skipDimmed && dimmed.has(key) ? -1 : undefined;
-}
-
-/** The key a release and the stories it carried share. */
-export const releaseKey = (r: { surface: string; sha: string }) => `${r.surface}@${r.sha}`;
-
-export type Carried = ReadonlyMap<string, readonly StoryRow[]>;
-
-/** The page's stories by the release that carried them (their `release`), in page order: one pass, for every stamp and tile. */
-export function carriedMap(stories: readonly StoryRow[]): Carried {
-  const map = new Map<string, StoryRow[]>();
-  for (const s of stories) {
-    if (!s.release) continue;
-    const key = releaseKey(s.release);
-    const list = map.get(key);
-    if (list) list.push(s);
-    else map.set(key, [s]);
-  }
-  return map;
-}
-
-/**
- * The carried map in a context of its own, not StoryCtx: it changes with every
- * story row, and only an open release card reads it, so no story re-renders
- * when it does.
- */
-export const CarriedCtx = createContext<Carried>(new Map());
-
-/** The stories a release carried. */
-export const useCarried = (ship: { surface: string; sha: string }) => useContext(CarriedCtx).get(releaseKey(ship)) ?? [];

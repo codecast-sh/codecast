@@ -24,8 +24,10 @@
  * never a distro package: apt's node stays for novnc. The one root touch is
  * a best-effort `sudo -n ln -sf` of node/npm/npx into /usr/local/bin, the
  * only place that shadows /usr/bin/node on the daemon's PATH
- * (/usr/local/bin:/usr/bin:/bin:~/.local/bin). On a non-Linux host (the
- * Scaleway Macs) the script only checks. It prints one JSON line
+ * (/usr/local/bin:/usr/bin:/bin:~/.local/bin). On a Mac host (the
+ * Scaleway Macs) it installs only what installs there without root (the
+ * npm-packaged CLIs marked `portable`, and Homebrew formulas where brew is
+ * usable: MAC_BREW_SH) and checks the rest. It prints one JSON line
  * `{ ok, installed, missing, unsupported }` and writes it to
  * ~/.codecast/host-tools.json for `cast hosts ls`.
  */
@@ -215,7 +217,8 @@ export function settingsHookCommands(settings: unknown): string[] {
   return out;
 }
 
-const MACH_O_MAGICS = new Set(["feedface", "feedfacf", "cafebabe", "cefaedfe", "cffaedfe", "bebafeca"]);
+// Thin and fat, 32 and 64 bit, both byte orders: the same eight mirror/discovery.ts NATIVE_BINARY_MAGICS lists.
+const MACH_O_MAGICS = new Set(["feedface", "feedfacf", "cafebabe", "cafebabf", "cefaedfe", "cffaedfe", "bebafeca", "bfbafeca"]);
 
 /** Mach-O (macOS) executable, by magic bytes — it cannot run on the Linux host. */
 export function isMachO(file: string): boolean {
@@ -1011,7 +1014,7 @@ ${inst(`  ${clientInstallSnippet(client, ver)}
 ${install ? `elif [ "$INSTALL" = 1 ]${cli.portable ? ' || [ "$(uname -s)" = Darwin ]' : ""}; then\n${body}\n` : ""}else miss ${bin} "the laptop's ${bin}" "not installed"; fi`);
   }
   for (const h of helpers) {
-    const ref = (h.referenced_by ?? "").replace(/["\\\n\r]/g, "");
+    const ref = (h.referenced_by ?? "").replace(/["\\\n\r$`]/g, "");
     const pkg = helperPackage(h);
     const npm = pkg.npm && NPM_SPEC_RE.test(pkg.npm) ? `elif command -v npm >/dev/null 2>&1; then
   if err=$( { ${npmGlobal(pkg.npm, undefined)}; } 2>&1 ) && command -v ${h.tool} >/dev/null 2>&1; then add installed ${h.tool}; else miss ${h.tool} "${ref}" "$(printf '%s' "$err" | tail -c 160)"; fi

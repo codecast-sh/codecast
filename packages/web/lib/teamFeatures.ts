@@ -18,7 +18,7 @@ import { createContext, useContext } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { activeTeamIdOf } from "./activeTeam";
 import { featureVendorBlock, TEAM_FEATURES, workspaceFeatureEnabled, workspaceFeatureState, type FeatureState, type TeamFeatureKey } from "@codecast/shared/contracts";
-import { anyHolderHasFeature, defineFeatures, holderHasFeature } from "@platform/flags";
+import { defineFeatures, holderHasFeature } from "@platform/flags";
 
 /** codecast's catalog as a @platform/flags catalog. Shared with the off-feature
  *  landing (TeamFeatureOff), so the toggle, the gate and the copy agree. */
@@ -45,12 +45,6 @@ export function useTeamFeature(key: TeamFeatureKey): boolean {
   return override ? !!override[key] : live;
 }
 
-/** Is `key` on for ANY of the viewer's teams? For surfaces that span teams
- *  (the calls history page, an incoming ring), where hiding per active team
- *  would drop a teammate's ring from another team. */
-export function useAnyTeamFeature(key: TeamFeatureKey): boolean {
-  return useInboxStore((s) => anyHolderHasFeature(TEAM_FEATURE_CATALOG, (s.teams || []).filter((t: any) => !featureVendorBlock(t, key)), key));
-}
 
 /** Calls affordances (huddle buttons, occupancy chips, palette entry): the
  *  deployment must be configured AND the active team must have calls on. The

@@ -98,8 +98,6 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   askSideQuestion: never("send: the question goes to the model at once; its answer is private to the asker"),
   dropSideAnswer: LOCAL_ECHO,
   deleteDecisionComment: DELETE,
-  sendLineChat: SEND,
-  dropLineChatSend: LOCAL_ECHO,
   trialAnswer: never("send: an answered trial card resumes its paused run, which acts on it at once"),
   trialRerun: never("machine control: it starts a new run; cancelling the run is the way back"),
   trialRaiseLimits: never("machine control: the trial's dispatcher starts runs under the new limits; lowering them is the CLI's"),

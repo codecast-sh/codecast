@@ -7,7 +7,7 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { workspaceGrantsAccess } from "./lib/access";
+import { canAccessConversation, canAccessTask, workspaceGrantsAccess } from "./lib/access";
 
 export const whereIs = query({
   args: { ref: v.string() },
@@ -37,12 +37,12 @@ export const recentForTeam = query({
     const tasks = new Map<string, { short_id: string | null; title: string | null } | null>();
     const convOf = async (id: Id<"conversations">) => {
       const k = String(id);
-      if (!convs.has(k)) { const c = await ctx.db.get(id); convs.set(k, c ? { title: (c.title || c.subtitle || null) as string | null } : null); }
+      if (!convs.has(k)) { const c = await ctx.db.get(id); convs.set(k, c && (await canAccessConversation(ctx, userId, c)) ? { title: (c.title || c.subtitle || null) as string | null } : null); }
       return convs.get(k);
     };
     const taskOf = async (id: Id<"tasks">) => {
       const k = String(id);
-      if (!tasks.has(k)) { const t = await ctx.db.get(id); tasks.set(k, t ? { short_id: t.short_id ?? null, title: t.title ?? null } : null); }
+      if (!tasks.has(k)) { const t = await ctx.db.get(id); tasks.set(k, t && (await canAccessTask(ctx, userId, t)) ? { short_id: t.short_id ?? null, title: t.title ?? null } : null); }
       return tasks.get(k);
     };
     const out = [];

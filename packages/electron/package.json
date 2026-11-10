@@ -18,11 +18,10 @@
     "build": "NOTARIZE_KEYCHAIN_PROFILE=codecast electron-builder -m",
     "build:dir": "electron-builder -m --config.mac.target=dir",
     "build:local": "electron-builder -m --config.mac.target=dir --config.mac.identity=null",
-    "install:local": "npm run build:local && pkill -f Codecast.app 2>/dev/null; sleep 1 && rm -rf /Applications/Codecast.app && cp -R dist/mac-arm64/Codecast.app /Applications/Codecast.app && xattr -cr /Applications/Codecast.app && echo 'Installed to /Applications'"
+    "install:local": "npm run build:local && { pkill -f Codecast.app 2>/dev/null; sleep 1; } && rm -rf /Applications/Codecast.app && cp -R dist/mac-arm64/Codecast.app /Applications/Codecast.app && xattr -cr /Applications/Codecast.app && echo 'Installed to /Applications'"
   },
   "dependencies": {
-    "@platform/desktop": "file:../../platform/packages/desktop",
-    "electron-updater": "^6.3.0"
+    "@platform/desktop": "file:../../platform/packages/desktop"
   },
   "devDependencies": {
     "@electron/notarize": "^3.1.1",
@@ -35,6 +34,7 @@
     "files": [
       "main.js",
       "shellAuthority.js",
+      "settingsFile.js",
       "appWindows.mjs",
       "callWindowPolicy.js",
       "paletteFace.js",

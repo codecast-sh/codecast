@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { deliverToAnchor, userCanAccessAnchor, userCanAdminAnchor, visibleAnchorsForUser } from "./anchors";
 import { isTeamAdmin, isTeamMember } from "./privacy";
+import { activeTeamMembershipFor } from "./lib/access";
 import { installationForTeam } from "./lib/slackOutbound";
 import { tokenHasScope } from "./lib/slackMirror";
 import { signStateWith, verifyStateWith } from "./lib/hmac";
@@ -119,17 +120,16 @@ export function verifyState(state: string): Promise<Record<string, any> | null> 
 
 // ── Scope / installation resolution ─────────────────────────────────────────
 
-// The team a caller means when they name none: their active workspace pointer,
-// then the team they were born into. An unset pointer is the personal
-// workspace, so "no team" is a real answer, not an error.
+// The team a caller means when they name none: the team they are working in
+// and still belong to (lib/access.activeTeamMembershipFor). "No team" is a
+// real answer, not an error.
 async function callerTeam(
   ctx: { db: any },
   userId: Id<"users">,
   teamId?: Id<"teams">,
 ): Promise<Id<"teams"> | undefined> {
   if (teamId) return teamId;
-  const host = await ctx.db.get(userId);
-  return host?.active_team_id ?? host?.team_id ?? undefined;
+  return (await activeTeamMembershipFor(ctx, userId))?.teamId;
 }
 
 async function callerAnchor(

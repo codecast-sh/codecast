@@ -461,7 +461,8 @@ export async function snapshotPage(page: PageSession, opts: SnapshotOptions = {}
       const label = ref ? labelled.get(Number(ref[1])) : undefined;
       if (!label) continue;
       // The name is the first JSON string on the line; `value=` comes after.
-      const next = out[i].replace(/"(?:[^"\\]|\\.)*"/, JSON.stringify(label));
+      // A function, so a `$&` or `$1` in the label is text, not a replacement pattern.
+      const next = out[i].replace(/"(?:[^"\\]|\\.)*"/, () => JSON.stringify(label));
       if (chars + (next.length - out[i].length) > maxChars) break;
       chars += next.length - out[i].length;
       out[i] = next;

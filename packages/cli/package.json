@@ -25,15 +25,16 @@
     "@platform/auth": "file:../../platform/packages/auth",
     "@platform/cli-kit": "file:../../platform/packages/cli-kit",
     "@platform/evals": "file:../../platform/packages/evals",
-    "@platform/flags": "file:../../platform/packages/flags",
     "@platform/snippets": "file:../../platform/packages/snippets",
     "@types/ws": "^8.18.1",
     "chokidar": "^4.0.3",
     "commander": "^12.1.0",
     "convex": "1.31.2",
-    "glob": "^13.0.0",
     "open": "^11.0.0",
     "ws": "8.21.3"
+  },
+  "optionalDependencies": {
+    "e2b": "^2.24.0"
   },
   "devDependencies": {
     "@types/bun": "^1.3.3",

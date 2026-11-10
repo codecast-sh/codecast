@@ -29,7 +29,7 @@ function statusFile(sessionId: unknown): string {
 function runHookRaw(payload: Record<string, unknown>): void {
   execFileSync("bash", [hookFile], {
     input: JSON.stringify(payload),
-    env: { ...process.env, HOME: home },
+    env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast") },
   });
 }
 
@@ -187,7 +187,7 @@ describe("codecast-status hook event mapping", () => {
       tool_input: { command: "python3 - <<'EOF'\nprint(1)\nEOF" },
       permission_mode: "bypassPermissions",
     };
-    const out = execFileSync("bash", [hookFile], { input: JSON.stringify(payload), env: { ...process.env, HOME: home } }).toString();
+    const out = execFileSync("bash", [hookFile], { input: JSON.stringify(payload), env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast") } }).toString();
     expect(JSON.parse(out).hookSpecificOutput.decision).toEqual({ behavior: "allow" });
     expect(fs.existsSync(statusFile("perm-bypass"))).toBe(false);
   });
@@ -393,7 +393,7 @@ describe("UserPromptSubmit stays off python3", () => {
         hook_event_name: "UserPromptSubmit",
         prompt: "x".repeat(80_000),
       }),
-      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+      env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), PATH: `${bin}:${process.env.PATH}` },
     });
     expect(Date.now() - t0).toBeLessThan(3000);
     expect(runHook({ session_id: "ups-nopy2", hook_event_name: "UserPromptSubmit" }).status).toBe("thinking");
@@ -418,7 +418,7 @@ describe("a Claude SDK session", () => {
   // Its host reports status and answers permission prompts itself (claudeSdk/backend.ts).
   test("the hook stands down and records nothing", () => {
     const payload = { hook_event_name: "Stop", session_id: "sdk-session-0001" };
-    execFileSync("bash", [hookFile], { input: JSON.stringify(payload), env: { ...process.env, HOME: home, CODECAST_SDK_SESSION: "1" } });
+    execFileSync("bash", [hookFile], { input: JSON.stringify(payload), env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), CODECAST_SDK_SESSION: "1" } });
     expect(fs.existsSync(statusFile(payload.session_id))).toBe(false);
     expect(reported(payload)).toBe(true);
   });

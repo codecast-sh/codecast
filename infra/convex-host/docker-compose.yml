@@ -16,7 +16,7 @@ services:
   backend:
     image: ghcr.io/get-convex/convex-backend@sha256:69885bae73766f625404a5425b22702341e89b43002f1d700864f8364be0d1f8
     restart: unless-stopped
-    # 128 GB of a 247 GB box (see README.md). Postgres gets its own budget; the
+    # 128 GB of a 494 GB box (see README.md; 247 GB when this was set). Postgres gets its own budget; the
     # OS keeps the rest for page cache. Raised from 64 GB on 2026-10-01, live
     # with `docker update` and no restart, after the container reached the
     # limit 2,613 times in a day: heap 41 GB growing 2.5 GB a day plus 26 GB

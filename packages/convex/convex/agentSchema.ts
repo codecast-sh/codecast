@@ -50,14 +50,12 @@ export const agentChainFields = {
 
 export const agentTables = {
   agent_definitions: defineTable({ ...envelope, ...agentDefinitionFields })
-    .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
     .index("by_workspace", ["workspace"])
     .index("by_workspace_name", ["workspace", "name"])
     .index("by_short_id", ["short_id"])
     .index("by_client_key", ["client_key"]),
   agent_chains: defineTable({ ...envelope, ...agentChainFields })
-    .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
     .index("by_workspace", ["workspace"])
     .index("by_workspace_name", ["workspace", "name"])

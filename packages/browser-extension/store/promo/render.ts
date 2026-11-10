@@ -1,14 +1,20 @@
 /**
  * Render the Chrome Web Store promo tiles from the two HTML files beside this
  * script: small (440×280) and marquee (1400×560). Needs an unbranded Chrome
- * (Chrome for Testing) for headless rendering; the PNGs it writes still carry
- * alpha, so flatten them to 24-bit for the store:
- *   bun packages/browser-extension/store/promo/render.ts
+ * (Chrome for Testing) for headless rendering: PROMO_CHROME names its binary,
+ * and without it the playwright cache's chromium-1208 on an arm64 Mac is used
+ * (install one with `npx @puppeteer/browsers install chrome@stable`). The
+ * tiles load their two fonts from Google Fonts, so rendering needs a network.
+ * The PNGs it writes still carry alpha, so flatten them to 24-bit for the store:
+ *   PROMO_CHROME=/path/to/chrome bun packages/browser-extension/store/promo/render.ts
  *   python3 -c "from PIL import Image; [Image.open(f'packages/browser-extension/store/promo/{n}.png').convert('RGB').save(f'packages/browser-extension/store/promo/{o}') for n,o in (('small','small-promo-tile-440x280.png'),('marquee','marquee-promo-tile-1400x560.png'))]"
  */
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
-const CFT = "/Users/ashot/Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+import * as os from "node:os";
+import * as path from "node:path";
+const CFT = process.env.PROMO_CHROME || path.join(os.homedir(), "Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
+if (!fs.existsSync(CFT)) throw new Error(`no Chrome for Testing at ${CFT}; set PROMO_CHROME to an unbranded Chrome binary`);
 const dir = import.meta.dir;
 const prof = `/tmp/codecast-promo-prof-${Date.now()}`;
 const chrome = spawn(CFT, [`--user-data-dir=${prof}`, "--headless=new", "--remote-debugging-port=0", "--no-first-run", "--hide-scrollbars", "--force-device-scale-factor=1", "about:blank"], { stdio: "ignore" });

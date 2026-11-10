@@ -35,12 +35,7 @@
       "next/link": [
         "./src/compat/next-link.tsx"
       ]
-    },
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ]
+    }
   },
   "include": [
     "app/**/*.ts",
@@ -60,15 +55,10 @@
     "tips/**/*.ts",
     "tips/**/*.tsx",
     "vite-env.d.ts",
-    ".next/types/**/*.ts"
+    "server/**/*.ts"
   ],
   "exclude": [
     "node_modules",
-    // Dead Next.js API-route scaffolding. This is a Vite SPA — the real
-    // /api/health endpoint is served by `server/index.ts`. These route handlers
-    // never run here, and they pull in `next/server` (not a dependency), so keep
-    // them out of the app typecheck.
-    "app/api/**",
     // Test files run under `bun test` (which provides the `bun:test` module and
     // its types); the app typecheck has no bun types, so a full tsc would flag
     // every *.test.ts on its `bun:test` import. Tests aren't app code — keep them

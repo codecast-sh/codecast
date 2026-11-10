@@ -27,6 +27,7 @@ let statusItem: vscode.StatusBarItem;
 let resolvedCli: string | undefined;
 let warnedMissing = false;
 let out: vscode.OutputChannel;
+let extensionVersion = "unknown"; // package.json's version, read at activation
 const LOG_FILE = path.join(os.homedir(), ".codecast", "vscode-ext.log");
 
 function log(msg: string): void {
@@ -54,8 +55,8 @@ function configuredCli(): string | undefined {
 }
 
 function resolveCliSync(): string | undefined {
-  const configured = vscode.workspace.getConfiguration("codecast").get<string>("cliPath")?.trim();
-  if (configured && configured !== "cast") return existsSync(configured) ? configured : configured;
+  const configured = configuredCli();
+  if (configured) return configured;
   if (resolvedCli) return resolvedCli;
   const candidates = [
     path.join(os.homedir(), ".local/bin/cast"),
@@ -343,7 +344,7 @@ async function sessionLog(): Promise<void> {
 async function runDiagnostics(): Promise<void> {
   out.show(true);
   log("──────── codecast diagnostics ────────");
-  log(`extension version: 0.1.4`);
+  log(`extension version: ${extensionVersion}`);
   log(`homedir: ${os.homedir()}`);
   log(`process.env.PATH: ${process.env.PATH || "(empty)"}`);
   log(`process.env.SHELL: ${process.env.SHELL || "(unset)"}`);
@@ -380,7 +381,8 @@ export function activate(context: vscode.ExtensionContext): void {
   decoration = vscode.window.createTextEditorDecorationType({});
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   context.subscriptions.push(out, decoration, statusItem);
-  log("════════ codecast extension activated (v0.1.4) ════════");
+  extensionVersion = String(context.extension.packageJSON.version ?? "unknown");
+  log(`════════ codecast extension activated (v${extensionVersion}) ════════`);
   log(`config cliPath: ${vscode.workspace.getConfiguration("codecast").get("cliPath")}`);
   log(`process PATH: ${process.env.PATH || "(empty)"}`);
   log(`resolved cast: ${resolveCliSync() || "(none)"}`);

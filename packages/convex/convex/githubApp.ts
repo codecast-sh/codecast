@@ -690,45 +690,6 @@ const MOVABLE_REPOSITORY_TABLES = {
   pull_requests: "by_team_id",
 } as const;
 
-export const moveInstallationToTeam = internalMutation({
-  args: {
-    installation_id: v.number(),
-    to_team_id: v.id("teams"),
-    table: v.union(v.literal("installation"), v.literal("external_events"), v.literal("commits"), v.literal("pull_requests")),
-    cursor: v.optional(v.union(v.string(), v.null())),
-    dry: v.optional(v.boolean()),
-    /** Pull request rows carry their files and run past the memory cap at 500. */
-    page_size: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const installation = await ctx.db
-      .query("github_app_installations")
-      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
-      .first();
-    if (!installation) throw new Error(`No installation ${args.installation_id}`);
-    // The installation row is patched last (table "installation"), so the old
-    // team is still readable from it while the rows are being moved.
-    const fromTeam = installation.team_id;
-    if (!fromTeam) throw new Error("Only a team installation can be moved");
-    if (String(fromTeam) === String(args.to_team_id)) return { moved: 0, done: true, cursor: null };
-
-    if (args.table === "installation") {
-      if (!args.dry) await ctx.db.patch(installation._id, { team_id: args.to_team_id, updated_at: Date.now() });
-      return { moved: 1, done: true, cursor: null };
-    }
-
-    const page = await (ctx.db.query(args.table) as any)
-      .withIndex(MOVABLE_REPOSITORY_TABLES[args.table], (q: any) => q.eq("team_id", fromTeam))
-      .paginate({ cursor: args.cursor ?? null, numItems: args.page_size ?? 500 });
-    let moved = 0;
-    for (const row of page.page) {
-      if (!row.repository || !installationCoversRepo(installation, row.repository)) continue;
-      moved++;
-      if (!args.dry) await ctx.db.patch(row._id, { team_id: args.to_team_id });
-    }
-    return { moved, done: page.isDone, cursor: page.continueCursor };
-  },
-});
 
 /**
  * Take back what an installation routed to its team for repositories that no
@@ -1201,35 +1162,6 @@ export const fetchInstallationDetails = internalAction({
   },
 });
 
-/**
- * A repository token for `user_id`, or null when they can reach no installation
- * covering that repository. The principal is required and passed straight
- * through: minting a token is exactly as privileged as resolving the
- * installation, so both are scoped by the same check.
- */
-export const getTokenForRepository = internalAction({
-  args: {
-    repository: v.string(),
-    user_id: v.id("users"),
-    team_id: v.optional(v.id("teams")),
-  },
-  handler: async (ctx, args): Promise<{ token: string; type: "installation" | "user" } | null> => {
-    const installation = await ctx.runQuery(internal.githubApp.getInstallationForRepo, {
-      repository: args.repository,
-      user_id: args.user_id,
-      team_id: args.team_id,
-    });
-
-    if (installation) {
-      const tokenResult = await ctx.runAction(internal.githubApp.getInstallationToken, {
-        installation_id: installation.installation_id,
-      });
-      return { token: tokenResult.token, type: "installation" };
-    }
-
-    return null;
-  },
-});
 
 /**
  * GitHub's `installation_repositories` delivery: the person changed which

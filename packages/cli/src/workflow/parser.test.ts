@@ -183,6 +183,17 @@ describe("workflow/validateWorkflow", () => {
     expect(errs.some(e => e.includes("broken") && e.includes("script"))).toBe(true);
   });
 
+  test("an arrow written without spaces is still an edge, and a dash stays part of a name", () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      fix-check [prompt="fix it"]
+      exit  [shape=Msquare]
+      start->fix-check->exit
+    }`);
+    expect(g.edges.map(e => `${e.from}>${e.to}`)).toEqual(["start>fix-check", "fix-check>exit"]);
+    expect(g.nodes.has("fix-check")).toBe(true);
+  });
+
   test("errors on edge referencing unknown node", () => {
     const src = `digraph g {
       start [shape=Mdiamond]

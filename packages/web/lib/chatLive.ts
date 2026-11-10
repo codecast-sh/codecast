@@ -30,9 +30,3 @@ export function subscribeChatRailLive(fn: () => void): () => void {
     subscribers.delete(fn);
   };
 }
-
-/** Test seam: module state outlives a test file's cases. */
-export function _resetChatRailLive(): void {
-  live = false;
-  subscribers.clear();
-}

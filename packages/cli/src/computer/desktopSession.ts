@@ -51,6 +51,7 @@ export function requireDesktopSession(): void {
   if (reason) throw new ComputerError("unsupported_capability", reason);
 }
 
+/** `open`, with its refusal turned into an error that names itself. */
 export function runOpen(args: string[], what: string): void {
   const result = spawnSync("/usr/bin/open", args, { encoding: "utf8", timeout: 30_000 });
   if (result.error) throw new ComputerError("accessibility_error", `could not ${what}: ${result.error.message}`);

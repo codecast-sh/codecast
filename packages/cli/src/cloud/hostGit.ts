@@ -641,14 +641,6 @@ export const KEY_ALREADY_IN_USE_MESSAGE =
   "this key is already registered on GitHub (another repo's deploy key or an account key) — remove it there, or add it as an account key at " +
   `${ACCOUNT_KEY_URL} (broad access: every repo you can reach)`;
 
-/**
- * `gh repo deploy-key add` for the host's key, with write access, after
- * `gh auth status` says gh can act at all (its own login error names the
- * API call, not the precondition). GitHub registers a public key ONCE across
- * deploy keys and account keys, so the second repo's add fails with "key is
- * already in use" — reported as such instead of as a raw API error, with the
- * choice the human has to make.
- */
 /** Add a key to GitHub through gh from a 0600 scratch file that is removed afterwards; `argv` names the gh verb that adds it. */
 function ghAddKey(
   gh: string,
@@ -673,7 +665,14 @@ function ghAddKey(
   }
 }
 
-/** The host's key as a deploy key with write access on one repository. */
+/**
+ * The host's key as a deploy key with write access on one repository:
+ * `gh repo deploy-key add`, after `gh auth status` says gh can act at all
+ * (its own login error names the API call, not the precondition). GitHub
+ * registers a public key ONCE across deploy keys and account keys, so the
+ * second repo's add fails with "key is already in use" — reported as such
+ * instead of as a raw API error, with the choice the human has to make.
+ */
 export function grantDeployKey(
   pubkey: string,
   origin: string,

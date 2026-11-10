@@ -147,6 +147,27 @@ describe("agent reviews", () => {
     expect(status.averages).toMatchObject({ of: 1, took_ms: 300_000, notional_usd: 2.5, findings: 2 });
   }, 120_000);
 
+  test("other publishers' queued reviews ahead in the queue do not starve a machine's own", async () => {
+    const { t, scope, extract } = await setup();
+    await t.mutation(api.agentReviews.startForCli, { ...scope, source: "app", kind: "conversation", subjects: ["c_1"], batch: "b1" });
+    await extract();
+    // Older reviews of a judge someone else published fill the head of the queue.
+    await t.run(async (ctx) => {
+      const mine = (await ctx.db.query("agent_reviews").collect())[0]!;
+      const judge = (await ctx.db.get(mine.judge_id))!;
+      const stranger = await ctx.db.insert("users", { name: "Stranger" } as any);
+      const { _id: _j, _creationTime: _jc, ...judgeFields } = judge as any;
+      const theirs = await ctx.db.insert("judges", { ...judgeFields, publisher_user_id: stranger } as any);
+      const { _id, _creationTime, ...fields } = mine as any;
+      for (let i = 0; i < 12; i++) await ctx.db.insert("agent_reviews", { ...fields, judge_id: theirs, short_id: `rv-9${i}`, created_at: mine.created_at - 1000 + i } as any);
+    });
+    const claims = await t.action(api.agentReviews.claimForCli, { api_token: TOKEN, device_id: "host-1", slots: 1 });
+    expect(claims).toHaveLength(1);
+    // The other publisher's reviews stay queued for their own machine.
+    const rows = await t.run((ctx) => ctx.db.query("agent_reviews").collect());
+    expect(rows.filter((r: any) => r.status === "queued")).toHaveLength(12);
+  });
+
   test("a session cut off by a limit queues again without spending a try; one that keeps failing fails, and a lapsed lease goes back", async () => {
     const { t, scope, extract } = await setup();
     await t.mutation(api.agentReviews.startForCli, { ...scope, source: "app", kind: "conversation", subjects: ["c_1"] });

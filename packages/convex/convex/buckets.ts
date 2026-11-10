@@ -184,6 +184,15 @@ export async function findActiveBucketByExactName<
   return buckets.find((b) => !b.archived_at && b.name.toLowerCase() === needle) ?? null;
 }
 
+// The label a rename or an archive names: the exact one or an error listing
+// the labels there are. A write never takes the nearest substring match.
+export async function requireExactLabel<B extends { name: string; archived_at?: number }>(buckets: B[], name: string): Promise<B> {
+  const exact = await findActiveBucketByExactName(buckets, name);
+  if (exact) return exact;
+  const names = [...new Set(buckets.filter((b) => !b.archived_at).map((b) => b.name))].sort().join(", ");
+  throw new Error(names ? `No label named "${name}". Your labels: ${names}` : `No label named "${name}": you have no labels yet`);
+}
+
 // Resolve a label by exact name, creating it if absent. Returns the bucket id
 // plus whether it was freshly created (so callers can report "created label X").
 export async function resolveOrCreateBucket(
@@ -569,8 +578,7 @@ export const cliRenameLabel = mutation({
       .query("inbox_buckets")
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
-    const matched = matchBucketByName(buckets, args.from);
-    if ("error" in matched) throw new Error(matched.error);
+    const matched = await requireExactLabel(buckets, args.from);
     await ctx.db.patch(matched._id, { name: newName, updated_at: Date.now() });
     await advanceLocalViewRevision(ctx, userId, BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY);
     return { old: matched.name, new: newName };
@@ -587,8 +595,7 @@ export const cliArchiveLabel = mutation({
       .query("inbox_buckets")
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
-    const matched = matchBucketByName(buckets, args.name);
-    if ("error" in matched) throw new Error(matched.error);
+    const matched = await requireExactLabel(buckets, args.name);
     const assignments = await ctx.db
       .query("bucket_assignments")
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))

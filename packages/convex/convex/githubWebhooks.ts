@@ -1806,18 +1806,7 @@ export const getTokenForPR = internalQuery({
       }
     }
 
-    const teamMembers = await ctx.db
-      .query("users")
-      .filter((q) => q.eq(q.field("team_id"), pr.team_id))
-      .collect();
-
-    for (const member of teamMembers) {
-      if (member.github_access_token) {
-        return member.github_access_token;
-      }
-    }
-
-    return null;
+    return await teamMemberGithubToken(ctx, pr.team_id);
   },
 });
 
@@ -1836,33 +1825,6 @@ export const markEventProcessed = internalMutation({
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.event_id, { processed: true });
-  },
-});
-
-/**
- * Clear stored deliveries nothing will ever handle.
- *
- * Every unprocessed row is scanned by the catch-up sweep on every tick, so a
- * kind with no processor turns into permanent work. New deliveries of those
- * kinds are marked processed at insert; this drains the ones already stored.
- */
-export const markUnhandledProcessed = internalMutation({
-  args: {
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const events = await ctx.db
-      .query("github_webhook_events")
-      .withIndex("by_processed", (q) => q.eq("processed", false))
-      .take(args.limit ?? 200);
-
-    let marked = 0;
-    for (const event of events) {
-      if (HANDLED_EVENT_TYPES.has(event.event_type)) continue;
-      await ctx.db.patch(event._id, { processed: true });
-      marked++;
-    }
-    return { marked, scanned: events.length };
   },
 });
 
@@ -1939,19 +1901,7 @@ export const matchPRToConversation = internalMutation({
       }
     }
 
-    if (!githubAccessToken) {
-      const teamMembers = await ctx.db
-        .query("users")
-        .filter((q) => q.eq(q.field("team_id"), teamId))
-        .take(20);
-
-      for (const member of teamMembers) {
-        if (member.github_access_token) {
-          githubAccessToken = member.github_access_token;
-          break;
-        }
-      }
-    }
+    if (!githubAccessToken) githubAccessToken = await teamMemberGithubToken(ctx, teamId);
 
     // GitHub redelivers, and a reopened pull request arrives as `opened` again.
     const existing = await ctx.db
@@ -2333,3 +2283,22 @@ export const pruneWebhookEvents = internalMutation({
     return old.length;
   },
 });
+
+/**
+ * A GitHub token of someone who is in the team today, or null. Read from the
+ * team's membership rows: `users.team_id` is a person's home-team pointer, so
+ * filtering the users table on it scanned every user and missed members whose
+ * home is another team while admitting people who had left.
+ */
+export async function teamMemberGithubToken(ctx: { db: any }, teamId: Id<"teams"> | undefined): Promise<string | null> {
+  if (!teamId) return null;
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
+    .collect();
+  for (const membership of memberships) {
+    const member = await ctx.db.get(membership.user_id);
+    if (member?.github_access_token) return member.github_access_token;
+  }
+  return null;
+}

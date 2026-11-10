@@ -1,6 +1,6 @@
 import { spawn, spawnSync, whichBin, type ChildProcess } from "../proc.js";
 import { existsSync, writeFileSync, unlinkSync, openSync, readFileSync, readdirSync, statSync, mkdirSync, copyFileSync, renameSync, rmSync } from "fs";
-import { join, dirname } from "path";
+import { dirname } from "path";
 import { tmuxRun } from "../tmux.js";
 import { withTmuxSession } from "../tmuxRoute.js";
 import { appendModelEffortFlags, formatPrintCommand } from "../launchCommand.js";

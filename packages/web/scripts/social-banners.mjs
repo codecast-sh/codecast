@@ -1,8 +1,10 @@
 // Social banners in the site's own card style: satori + resvg, JetBrains Mono, Solarized light.
 import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import satori from "satori";
 import { initWasm, Resvg } from "@resvg/resvg-wasm";
-const WEB = "/Users/ashot/src/codecast/packages/web";
+const WEB = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const font400 = readFileSync(`${WEB}/scripts/og-fonts/JetBrainsMono-400.ttf`);
 const font700 = readFileSync(`${WEB}/scripts/og-fonts/JetBrainsMono-700.ttf`);
 const logo = `data:image/png;base64,${readFileSync(`${WEB}/public/logo-final.png`).toString("base64")}`;
@@ -31,6 +33,6 @@ function banner(W, H, { safeTop = 0, safeLeft = 0 } = {}) {
 const sizes = { x: [1500, 500, {}], linkedin: [1584, 396, { safeLeft: 180 }], bluesky: [3000, 1000, {}] };
 for (const [name, [W, H, opts]] of Object.entries(sizes)) {
   const svg = await satori(banner(W, H, opts), { width: W, height: H, fonts: [{ name: "JetBrains Mono", data: font400, weight: 400 }, { name: "JetBrains Mono", data: font700, weight: 700 }] });
-  writeFileSync(`public/brand/banner-${name}.png`, new Resvg(svg, { fitTo: { mode: "width", value: W } }).render().asPng());
+  writeFileSync(`${WEB}/public/brand/banner-${name}.png`, new Resvg(svg, { fitTo: { mode: "width", value: W } }).render().asPng());
   console.log("wrote", name, W, H);
 }

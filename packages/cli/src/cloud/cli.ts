@@ -180,10 +180,6 @@ export function registerCloudCommand(program: Command): void {
       }));
     });
 
-  // The receiving end of the home mirror (cloud/mirror): a laptop streams one
-  // bundle over ssh stdin and this merges it into THIS home under the mirror
-  // lock. `--into <dir>` is the workspace staging mode used by copyCloudFiles:
-  // verbatim writes into the inputs dir, no lock, no stamp, no refresh.
   cloud
     .command("mirror-run")
     .description("Run the local context mirror in a dedicated process")
@@ -192,6 +188,10 @@ export function registerCloudCommand(program: Command): void {
       await runStandaloneMirror();
     });
 
+  // The receiving end of the home mirror (cloud/mirror): a laptop streams one
+  // bundle over ssh stdin and this merges it into THIS home under the mirror
+  // lock. `--into <dir>` is the workspace staging mode used by copyCloudFiles:
+  // verbatim writes into the inputs dir, no lock, no stamp, no refresh.
   cloud
     .command("mirror-apply")
     .description("Apply a home-mirror bundle from stdin (run on the host by the laptop's push)")

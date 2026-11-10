@@ -329,7 +329,7 @@ codecast/
     evals/              Prompt evals against frozen moments
   scripts/              Deploy, build, and dev server scripts
   docs/                 Specs, plans, and design documents
-  infra/                Self-hosted Convex infrastructure (Railway)
+  infra/                Production host config (Convex, Postgres, backups) and edge workers
 ```
 
 ### Supported Agents
@@ -394,11 +394,11 @@ Configure your Convex instance URL in each `.env.local`. See [Getting Started](d
 ### Run dev servers
 
 ```bash
-./dev.sh          # https://local.codecast.sh
-./dev.sh 1        # https://local.1.codecast.sh (parallel instance)
+./dev.sh          # http://local.codecast.sh
+./dev.sh 1        # http://local.1.codecast.sh (parallel instance)
 ```
 
-Starts the Vite web app on port 3200 (3200 + N for instance N) and the gated Convex pusher (`packages/convex/scripts/gated-push.ts`), which pushes each quiet, typechecked change to the deployment your env names and refuses to start from a tree behind origin/main. Run `sudo ./setup-hosts.sh` once so the `local.*.codecast.sh` names resolve. The CLI daemon runs separately with `cast start`.
+Starts the Vite web app on port 3200 (3200 + N for instance N) and the gated Convex pusher (`packages/convex/scripts/gated-push.ts`), which pushes each quiet, typechecked change to the deployment your env names and refuses to start from a tree behind origin/main. Run `sudo ./setup-hosts.sh` once so the `local.*.codecast.sh` names resolve (it needs nginx installed; `nginx.dev.conf.example` shows how to add https, which the desktop app needs); without it, use `http://localhost:3200`. The CLI daemon runs separately with `cast start`.
 
 Deploy Convex only through `packages/convex/deploy.sh`, never a raw `npx convex deploy`: a deploy pushes the whole tree, so one from a stale checkout deletes newer functions from the deployment.
 
@@ -427,7 +427,7 @@ To switch back to a released build, run `setup` and `restart --wait` using the i
 ### Type check
 
 ```bash
-cast check          # cli, web and convex, through one shared tsc watcher each
+cast check          # every program in .codecast/check.toml, through one shared tsc watcher each
 cast check web      # one program
 ```
 
@@ -437,7 +437,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for code conventions and architecture det
 
 ## Documentation
 
-Start at the [docs index](docs/README.md), which lists every guide, spec and architecture note. The main guides:
+Start at the [docs index](docs/README.md), which lists the guides, the architecture notes, the proposals and the research notes. The main guides:
 
 | Guide | Description |
 |-------|-------------|

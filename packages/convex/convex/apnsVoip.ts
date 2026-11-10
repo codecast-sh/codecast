@@ -13,7 +13,7 @@ import {
   CALL_INVITE_TTL_MS,
   CALL_PUSH_TYPE_RING,
 } from "@codecast/shared/contracts";
-import { APNS_BUNDLE_ID, apnsConfigured, apnsTokenIsDead, sendApns } from "./apns";
+import { APNS_BUNDLE_ID, apnsTokenIsDead, sendApns } from "./apns";
 
 async function sendVoip(
   ctx: any,
@@ -99,20 +99,3 @@ export const clearDeadVoipToken = internalMutation({
   },
 });
 
-// Config probe: sends a VoIP push to a bogus token. APNs validates the
-// provider JWT before the token, so `BadDeviceToken` (400) proves the key,
-// team id and key id are right; `InvalidProviderToken` (403) means they are
-// not. Never touches a real device.
-export const probeApnsConfig = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    if (!apnsConfigured()) return { ok: false, reason: "APNS env not set" };
-    const bogus = "00".repeat(32);
-    const r = await sendVoip(ctx, {
-      token: bogus,
-      user_id: undefined,
-      payload: { incomingCall: { eventId: "probe", serverCallId: "probe", hasVideo: false, caller: { id: "probe", displayName: "probe" } } },
-    });
-    return { ...r, verdict: r.reason === "BadDeviceToken" ? "KEY OK (auth accepted, token rejected as expected)" : r.reason };
-  },
-});

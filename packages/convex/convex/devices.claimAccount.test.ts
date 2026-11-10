@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performClaimDeviceAccount } from "./devices";
+import { claimDeviceAccount, performClaimDeviceAccount, registerDevice } from "./devices";
+import { hashToken } from "./apiTokens";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 
 const PREV = "u".repeat(31) + "p";
@@ -30,6 +31,8 @@ function fixtures(over: { prevSeen?: number; conv?: Record<string, any> } = {}) 
         session_id: "sess-1",
         project_path: "/Users/ec2-user/.intern-data/worktrees/cs-1/outreach",
         status: "active",
+        team_id: TEAM,
+        is_private: false,
         ...(over.conv ?? {}),
       },
       {
@@ -93,5 +96,63 @@ describe("performClaimDeviceAccount", () => {
     }, NOW);
     expect(result.error).toMatch(/share a team/);
     expect(conv(db).user_id).toBe(PREV);
+  });
+
+  test("a session private to the previous account stays with it", async () => {
+    const db = fixtures({ conv: { is_private: true } });
+    const result = await performClaimDeviceAccount({ db }, NEXT as any, {
+      previousUserId: PREV as any,
+      deviceId: "mini",
+    }, NOW);
+    expect(result).toEqual({ moved: 0, more: false, skipped: 1 });
+    expect(conv(db).user_id).toBe(PREV);
+    expect(db._tables.managed_sessions[0].user_id).toBe(PREV);
+  });
+
+  test("a private session the caller owns still moves", async () => {
+    const db = fixtures({ conv: { is_private: true, owner_user_id: NEXT } });
+    const result = await performClaimDeviceAccount({ db }, NEXT as any, {
+      previousUserId: PREV as any,
+      deviceId: "mini",
+    }, NOW);
+    expect(result).toEqual({ moved: 1, more: false });
+    expect(conv(db).user_id).toBe(NEXT);
+  });
+});
+
+describe("device functions speak for a machine: token only, bound device only", () => {
+  const BOUND = "tok-bound-mini";
+  const ELSEWHERE = "tok-bound-laptop";
+  async function ctxWithTokens(authUser: string | null = null) {
+    const db = fixtures();
+    db._tables.api_tokens = [
+      { _id: "at1", user_id: NEXT, token_hash: await hashToken(BOUND), device_id: "mini", last_used_at: NOW },
+      { _id: "at2", user_id: NEXT, token_hash: await hashToken(ELSEWHERE), device_id: "laptop", last_used_at: NOW },
+    ];
+    db._tables.devices.find((d: any) => d._id === "d-next").last_seen = Date.now();
+    return { db, auth: { getUserIdentity: async () => (authUser ? { subject: `${authUser}|session` } : null) } } as any;
+  }
+
+  test("a browser session cannot claim or register a device", async () => {
+    const ctx = await ctxWithTokens(NEXT);
+    await expect((claimDeviceAccount as any)._handler(ctx, { previous_user_id: PREV, device_id: "mini" })).rejects.toThrow("Authentication required");
+    await expect((registerDevice as any)._handler(ctx, { device_id: "victim-device", label: "x", platform: "darwin" })).rejects.toThrow("Authentication required");
+    expect(conv(ctx.db).user_id).toBe(PREV);
+    expect(ctx.db._tables.devices).toHaveLength(2);
+  });
+
+  test("a token bound to another machine cannot claim or register this device id", async () => {
+    const ctx = await ctxWithTokens();
+    const claimed = await (claimDeviceAccount as any)._handler(ctx, { api_token: `${ELSEWHERE}.laptop`, previous_user_id: PREV, device_id: "mini" });
+    expect(claimed.error).toMatch(/different machine/);
+    expect(conv(ctx.db).user_id).toBe(PREV);
+    await expect((registerDevice as any)._handler(ctx, { api_token: `${ELSEWHERE}.laptop`, device_id: "mini", label: "x", platform: "darwin" })).rejects.toThrow("different machine");
+  });
+
+  test("the machine's own token claims and registers", async () => {
+    const ctx = await ctxWithTokens();
+    const claimed = await (claimDeviceAccount as any)._handler(ctx, { api_token: `${BOUND}.mini`, previous_user_id: PREV, device_id: "mini" });
+    expect(claimed).toEqual({ moved: 1, more: false });
+    expect(await (registerDevice as any)._handler(ctx, { api_token: `${BOUND}.mini`, device_id: "mini", label: "Mini", platform: "darwin" })).toEqual({ device_id: "mini", created: false });
   });
 });

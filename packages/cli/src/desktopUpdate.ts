@@ -16,7 +16,6 @@ import { compareVersions, isBelowMinimum } from "@platform/cli-kit/update";
 import { defaultConfigDir } from "./config/configDir.js";
 import { execFileAsync, execFileSync, spawnSync } from "./proc.js";
 import { isDevMode } from "./update.js";
-import { codecastDir } from "./codecastDir.js";
 
 const DESKTOP_FEED = "https://dl.codecast.sh/desktop/latest-mac.yml";
 const DESKTOP_BASE = "https://dl.codecast.sh/desktop";

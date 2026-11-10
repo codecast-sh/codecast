@@ -346,11 +346,9 @@ export function parseExtractorHeader(source: string): ExtractorHeader & { proble
 
 /** Where moment bodies live: on the extractor's host (the default, nothing leaves it to storage) or in codecast. */
 export const MOMENT_STORAGES = ["host", "codecast"] as const;
-export type MomentStorage = (typeof MOMENT_STORAGES)[number];
 
 /** How long codecast keeps a source's bodies: 30 days (the default), or for as long as the moment exists. */
 export const MOMENT_RETENTIONS = ["30d", "keep"] as const;
-export type MomentRetention = (typeof MOMENT_RETENTIONS)[number];
 
 /**
  * Where a source's judges make their model calls (learning-loop.md LL10): api
@@ -360,9 +358,6 @@ export type MomentRetention = (typeof MOMENT_RETENTIONS)[number];
  */
 export const JUDGE_BACKENDS = ["api", "subscription"] as const;
 export type JudgeBackend = (typeof JUDGE_BACKENDS)[number];
-
-export const MOMENT_STATUSES = ["waiting", "extracting", "ready", "failed"] as const;
-export type MomentStatus = (typeof MOMENT_STATUSES)[number];
 
 /** What an extractor receives on stdin: the coalesced event. */
 export interface ExtractorInput {

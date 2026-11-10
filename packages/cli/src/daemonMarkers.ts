@@ -15,7 +15,6 @@
 // Reads never throw: a missing, truncated or half-written file reads as "nothing
 // recorded". Neither file is authority for anything — they are breadcrumbs.
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   DAEMON_EXIT_STAMP_FILE,

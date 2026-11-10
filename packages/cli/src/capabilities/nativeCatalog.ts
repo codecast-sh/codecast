@@ -58,6 +58,7 @@ import { execFile } from "../proc.js";
 import { hasBin } from "../doctorClients.js";
 import {
   readKnownMarketplaces,
+  splitPluginId,
   type CapabilityScope,
   type InventoryItem,
 } from "./inventory.js";
@@ -236,14 +237,9 @@ function pluginName(value: unknown): string | undefined {
   return trimmed && isUsablePluginName(trimmed) ? trimmed : undefined;
 }
 
-/** Split `name@marketplace`. The separator cannot occur inside either half —
- *  Claude Code composes the id from a directory name and a marketplace name — so
- *  the first `@` is the boundary. */
-export function splitPluginId(pluginId: string): { name: string; marketplace?: string } {
-  const at = pluginId.indexOf("@");
-  if (at <= 0) return { name: pluginId };
-  return { name: pluginId.slice(0, at), marketplace: pluginId.slice(at + 1) || undefined };
-}
+// `splitPluginId` lives in inventory.ts (this module imports that one, so the
+// scanner could not import it from here) and is re-exported for its callers.
+export { splitPluginId };
 
 /** Parse JSON that may be preceded or followed by chatter. A CLI can print an
  *  update notice or a warning around its payload, and losing the whole catalog

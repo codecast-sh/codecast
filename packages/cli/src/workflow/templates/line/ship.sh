@@ -22,7 +22,8 @@ if [ -z "$cmd" ]; then
   fi
   exit "$code"
 fi
-cd "$(cast ws path $worktree)" || exit 1
+wt="$(cast ws path $worktree)"
+[ -n "$wt" ] && cd "$wt" || exit 1
 dir=$run_dir
 mkdir -p "$dir"
 bash -c "$cmd" > "$dir/ship.out" 2> "$dir/ship.log"

@@ -259,8 +259,6 @@ export function newestStandingFirst<L extends { written_at: number | null }>(lin
 
 // ── The change the watch tells the Head of People about (S29) ────────────────
 
-export type AreaChangeKind = "status" | "unowned_project";
-
 /** What lasted: an area that read the same pressing status at two checks in
  *  a row, or a project with work and no owner. Rides the Head of People's
  *  trigger frame as its own block (machineMessages AreaChange). */

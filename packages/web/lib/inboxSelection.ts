@@ -51,10 +51,6 @@ export function selectionIdsFor(id: string): string[] {
   return picked.includes(id) ? picked : [id];
 }
 
-/** The selection, but only the ids still present in `alive` (rows can leave the list). */
-export function selectedAlive(ids: string[], alive: (id: string) => boolean): string[] {
-  return ids.filter(alive);
-}
 
 /** Cmd/Ctrl-click toggles, Shift-click ranges, a plain click is not a selection gesture. */
 export function selectionGesture(e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): "toggle" | "range" | null {

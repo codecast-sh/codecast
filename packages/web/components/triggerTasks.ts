@@ -206,25 +206,6 @@ export function lastRunHeadline(t: Pick<TaskRow, "last_run_summary">): string | 
   return cutLine(splitResultSummary(raw.replace(/^Failed:?\s*/i, "")).headline, 200);
 }
 
-// Optimistic webList patch for schedule verbs (run now / pause / resume /
-// cancel): flip the row's fields in Convex's local query cache so the UI
-// renders the result of the click synchronously — local-first — and the server
-// echo reconciles. Shared by every surface that mutates schedules off the
-// webList subscription (rows, dock, /schedules page).
-export function patchTaskInWebList(
-  localStore: { getQuery: (q: unknown, a: unknown) => unknown; setQuery: (q: unknown, a: unknown, v: unknown) => void },
-  webListQuery: unknown,
-  taskId: string,
-  patch: Partial<TaskRow>,
-) {
-  const rows = localStore.getQuery(webListQuery, {}) as TaskRow[] | undefined;
-  if (!rows) return;
-  localStore.setQuery(
-    webListQuery,
-    {},
-    rows.map((t) => (t._id === taskId ? { ...t, ...patch } : t)),
-  );
-}
 
 // The most recent firing of a schedule that's already in the local message
 // cache — the synchronous fast path for "click the trigger row → land on its

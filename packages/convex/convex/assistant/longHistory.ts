@@ -43,6 +43,7 @@ import { isRefusalProse } from "../idleSummary";
 import { actionStore } from "../tidemark";
 import { isNoticeUuid, type WindowStart } from "./history";
 import { allOutsideToolNames } from "./tools";
+import { utcDayKey as utcDay } from "@codecast/shared/contracts/flowMap";
 
 export const SCOPE_TYPE = "conversation";
 export const AGENT_ID = "assistant";
@@ -371,7 +372,6 @@ export const conversationOwner = internalQuery({
 
 // ---------------------------------------------------------- the summaries
 
-const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 /** The spend row for everyone. */
 const EVERYONE = "all";
 

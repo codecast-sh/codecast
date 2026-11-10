@@ -112,21 +112,9 @@ interface DailySpend {
 
 const today = (): string => new Date().toISOString().slice(0, 10);
 
-/** The one-number ledger spend.jsonl replaced; what it holds for its own day still counts toward that day. */
-const legacySpend = (path: string): number => {
-  const old = join(dirname(path), 'spend.json');
-  if (!existsSync(old)) return 0;
-  try {
-    const s = JSON.parse(readFileSync(old, 'utf8')) as DailySpend;
-    return s.day === today() ? s.usd : 0;
-  } catch {
-    return 0;
-  }
-};
-
 /** Real spend recorded today (UTC) across every check: the sum of today's lines in the ledger. */
 export function spentToday(path = homePaths().spend): number {
-  let usd = legacySpend(path);
+  let usd = 0;
   if (!existsSync(path)) return usd;
   for (const line of readFileSync(path, 'utf8').split('\n')) {
     try {

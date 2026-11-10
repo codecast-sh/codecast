@@ -155,33 +155,6 @@ export function readOldestUnsyncedTimestamp(
   }
 }
 
-export function getStaleFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
-  const ledger = store().getAll();
-  const now = Date.now();
-  const stale: string[] = [];
-
-  for (const [filePath, record] of Object.entries(ledger)) {
-    if (!fs.existsSync(filePath)) continue;
-
-    try {
-      const stats = fs.statSync(filePath);
-      const fileAge = now - stats.mtimeMs;
-
-      // Skip files older than maxAge
-      if (fileAge > maxAgeMs) continue;
-
-      // File modified after last sync = needs re-sync
-      if (stats.mtimeMs > record.lastSyncedAt) {
-        stale.push(filePath);
-      }
-    } catch {
-      // Can't stat file, skip
-    }
-  }
-
-  return stale;
-}
-
 // The one decision both walkers share: does this .jsonl file have unsynced content?
 // JSONL session files are append-only, so size > lastSyncedPosition is the only real
 // signal of unsynced content. We surface those regardless of age — otherwise a sync

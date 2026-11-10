@@ -440,12 +440,6 @@ export function branchUnread(
   return Math.max(0, total - baseline);
 }
 
-// Imperative variant for shortcut handlers ([ / ] branch hop): reads the store
-// snapshot, no subscriptions, no render cost in ConversationView.
-export function getForkFamilyOrder(conversation: ForkConversationLike): FlatForkNode[] {
-  const s = useInboxStore.getState();
-  return buildForkFamily(conversation, s.sessions, null, s.messages);
-}
 
 // Stable empty map for the closed state (Object.is-stable → no re-render).
 const EMPTY_FORK_MAP: Record<string, any> = {};

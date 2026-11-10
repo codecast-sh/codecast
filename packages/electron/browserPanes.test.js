@@ -239,6 +239,32 @@ test("the renderer going away takes its views with it", () => {
   assert.ok(view.webContents.isDestroyed());
 });
 
+test("a page that reloads and opens panes again leaves one set of listeners, not one per reload", () => {
+  const r = rig();
+  r.open();
+  const count = () => ({
+    resize: r.win.listenerCount("resize"),
+    move: r.win.listenerCount("move"),
+    closed: r.win.listenerCount("closed"),
+    navigate: r.host.listenerCount("did-navigate"),
+    gone: r.host.listenerCount("render-process-gone"),
+    destroyed: r.host.listenerCount("destroyed"),
+  });
+  const first = count();
+  assert.deepEqual(first, { resize: 1, move: 1, closed: 1, navigate: 1, gone: 1, destroyed: 1 });
+  for (let i = 0; i < 5; i++) {
+    r.host.emit("did-navigate", {}, "https://codecast.sh/browser");
+    assert.equal(r.win.listenerCount("resize"), 0, "a dropped host is watching nothing");
+    r.open();
+  }
+  assert.deepEqual(count(), first);
+  // And the surviving set still does its job.
+  const view = r.views[r.views.length - 1];
+  r.win.content = { width: 400, height: 300 };
+  r.win.emit("resize");
+  assert.deepEqual(view.bounds, { x: 100, y: 40, width: 300, height: 260 });
+});
+
 test("a host that is destroyed still takes its views with it", () => {
   const r = rig();
   const view = r.open();

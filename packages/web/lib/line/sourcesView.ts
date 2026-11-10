@@ -287,22 +287,6 @@ export function findingFacts(md: string | undefined, title: string): { facts: Fi
   return { facts, said, notes };
 }
 
-/** What a finding says broke, for its row's lead: the judge's short tag when it closes with one ("no referral ask after
- *  non-fit"), else the first sentence of its note ("Quinn replied … but did not ask who else she would want to meet").
- *  Null when the finding carries only its title. */
-export function findingBreak(notes: ReadonlyArray<string>): string | null {
-  const tag = notes[notes.length - 1];
-  if (tag && tag.length <= 60 && !/[.!?]$/.test(tag)) return tag.replace(/^\w/, (c) => c.toUpperCase());
-  const first = notes[0];
-  if (!first) return null;
-  return first.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? first;
-}
-
-/** An evidence link's host, as its link text ("admin.unionmatching.com"). */
-export function evidenceHost(url: string | undefined): string | null {
-  if (!url) return null;
-  try { return new URL(url).host.replace(/^www\./, ""); } catch { return null; }
-}
 
 /** The span the line's findings cover: from the oldest held, when the window is cut short by the cap. */
 export function heldSince(oldest: number | null, held: number, capCount: number): number | null {
@@ -331,18 +315,6 @@ export function findWindowWords(w: FindWindow, now: number): string {
   return w.cut ? ageShort(now - w.from) : "7d";
 }
 
-/** A finding's detail as a person reads it: a machine timestamp ("2026-10-11T20:06:26.549Z") as its age ("3h ago"),
- *  and a dash used as a clause break as a comma. The finder's own words otherwise stay as they are. */
-export function readableDetail(md: string, now: number): string {
-  return md
-    .replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})\b/g, (iso) => {
-      const at = Date.parse(iso);
-      return Number.isFinite(at) ? (at <= now ? `${ageShort(now - at)} ago` : new Date(at).toLocaleString()) : iso;
-    })
-    .replace(/\s+[—–]\s+/g, ", ")
-    // A finder's template that wrote "a escalation": the article a reader expects.
-    .replace(/\b([Aa]) (?=[aeio](?!ne\b)[a-z])/g, "$1n ");
-}
 
 // ── the Find table and a finder's page (line-journeys.md LJ8.5, LJ8.6) ─────
 

@@ -92,14 +92,6 @@ function recordHeight(key: string, size: number) {
   HEIGHT_CACHE.set(key, size);
 }
 
-/** Exported for tests and for a caller that must invalidate a namespace. */
-export function clearBottomAnchoredHeightCache(prefix?: string) {
-  if (!prefix) {
-    HEIGHT_CACHE.clear();
-    return;
-  }
-  for (const k of [...HEIGHT_CACHE.keys()]) if (k.startsWith(prefix)) HEIGHT_CACHE.delete(k);
-}
 
 // The in-app zoom sets CSS zoom on <html>. Under it getBoundingClientRect
 // returns screen px (layout px × zoom) while scrollTop, scrollHeight and the

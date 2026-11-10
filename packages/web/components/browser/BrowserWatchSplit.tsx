@@ -54,9 +54,6 @@ function getVersion(): number {
   return version;
 }
 
-export function isBrowserWatchOpen(convKey: string): boolean {
-  return splits.has(convKey);
-}
 
 /** Reactive open-state, for affordances that toggle the split. */
 export function useBrowserWatchOpen(convKey: string | undefined): boolean {

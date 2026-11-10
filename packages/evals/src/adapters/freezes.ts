@@ -147,14 +147,17 @@ const CONVEX_ID = /\b[a-z0-9]{32}\b/;
 /**
  * What freezes.guard.test.ts enforces on packages/evals (the repo is public):
  * every committed freeze passes committedFreeze, is public and synthetic, and
- * points at a committed fixture; nothing under freezes/ or fixtures/ carries a
- * secret or a Convex document id; a freeze's judge stays under 1000
- * characters and its other strings under 300. Returns one line per problem.
+ * points at a committed fixture; nothing under freezes/, fixtures/ or
+ * org-comms/ carries a secret or a Convex document id, and org-comms/ holds
+ * no JSON (its measurements and baseline live in EVALS_HOME); a freeze's judge
+ * stays under 1000 characters and its other strings under 300. Returns one
+ * line per problem.
  */
 export function auditPublicTree(pkgRoot: string): string[] {
   const problems: string[] = [];
-  const files = (dir: string) => (existsSync(join(pkgRoot, dir)) ? [...new Bun.Glob('**/*').scanSync({ cwd: join(pkgRoot, dir), onlyFiles: true, dot: true })].filter((f) => f !== '.gitkeep').map((f) => `${dir}/${f}`) : []);
-  for (const rel of [...files('freezes'), ...files('fixtures')]) {
+  const files = (dir: string) => (existsSync(join(pkgRoot, dir)) ? [...new Bun.Glob('**/*').scanSync({ cwd: join(pkgRoot, dir), onlyFiles: true, dot: true })].filter((f) => f !== '.gitkeep' && !f.split('/').includes('__pycache__')).map((f) => `${dir}/${f}`) : []);
+  for (const rel of [...files('freezes'), ...files('fixtures'), ...files('org-comms')]) {
+    if (rel.startsWith('org-comms/') && rel.endsWith('.json')) problems.push(`${rel}: measured data belongs in EVALS_HOME/org-comms, not in git`);
     const text = readFileSync(join(pkgRoot, rel), 'utf8');
     if (containsSecrets(text)) problems.push(`${rel}: carries a secret`);
     const id = CONVEX_ID.exec(text);

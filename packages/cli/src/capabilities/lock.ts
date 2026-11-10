@@ -56,6 +56,81 @@ export interface AcquireResult {
   heldBy?: LockInfo;
 }
 
+/** An unreadable lock younger than this is a holder caught between creating
+ *  the file and filling it (a binary from before the lock was linked in whole),
+ *  not a corrupt leftover: it counts as held. */
+export const UNREADABLE_LOCK_GRACE_MS = 2_000;
+
+/** Put a complete lock file in place, or fail because one is there. The body
+ *  is written to a private temp file and hard-linked in, so no contender can
+ *  ever read a lock that exists but is still empty. */
+function placeLock(file: string, info: LockInfo): boolean {
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(info), { flag: "wx" });
+    fs.linkSync(tmp, file);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // Never created.
+    }
+  }
+}
+
+function readLockText(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+
+function parseLock(text: string | undefined): LockInfo | undefined {
+  if (text === undefined) return undefined;
+  try {
+    const doc = JSON.parse(text);
+    return doc && typeof doc === "object" && typeof doc.pid === "number" ? (doc as LockInfo) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Remove the lock at `file` only if it is still the one judged stale. The
+ *  lock is moved aside first and its bytes compared, because a plain unlink
+ *  would also delete a live lock another contender placed after reclaiming
+ *  the stale one. A lock that turns out to be someone else's is put back. */
+function removeStaleLock(file: string, staleText: string): boolean {
+  const aside = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.reclaim`;
+  try {
+    fs.renameSync(file, aside);
+  } catch {
+    return false; // already gone: someone else reclaimed it
+  }
+  if (readLockText(aside) === staleText) {
+    try {
+      fs.unlinkSync(aside);
+    } catch {
+      // Nothing to clean up.
+    }
+    return true;
+  }
+  try {
+    fs.linkSync(aside, file);
+  } catch {
+    // A third contender took the path in the gap; it holds the lock now.
+  }
+  try {
+    fs.unlinkSync(aside);
+  } catch {
+    // Nothing to clean up.
+  }
+  return false;
+}
+
 export function acquireLock(root: string, log: (line: string) => void = console.error, o: LockOptions = {}): AcquireResult {
   fs.mkdirSync(root, { recursive: true });
   const file = lockPathFor(root, o);
@@ -63,53 +138,40 @@ export function acquireLock(root: string, log: (line: string) => void = console.
   const info: LockInfo = { pid: process.pid, acquired_at: new Date().toISOString() };
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const fd = fs.openSync(file, "wx");
-      fs.writeFileSync(fd, JSON.stringify(info));
-      fs.closeSync(fd);
-      return { acquired: true };
-    } catch {
-      // Lock exists. Stale?
-      let holder: LockInfo | undefined;
-      try {
-        holder = JSON.parse(fs.readFileSync(file, "utf-8"));
-      } catch {
-        holder = undefined; // unreadable lock = stale by definition
-      }
-      const age = holder?.acquired_at ? Date.now() - Date.parse(holder.acquired_at) : Infinity;
-      const stale =
-        holder === undefined ||
-        !pidAlive(holder.pid) ||
-        !(age < ceilingMs); // NaN age (mangled timestamp) counts as stale
+    if (placeLock(file, info)) return { acquired: true };
 
-      if (!stale) return { acquired: false, heldBy: holder };
-
-      log(
-        `reclaiming stale lock at ${file} (pid ${holder?.pid ?? "?"}, acquired ${holder?.acquired_at ?? "unknown"})`,
-      );
+    // Lock exists. Stale?
+    const text = readLockText(file);
+    if (text === undefined) continue; // released between the two calls: retry
+    const holder = parseLock(text);
+    if (holder === undefined) {
+      let ageMs = Infinity;
       try {
-        fs.unlinkSync(file);
+        ageMs = Date.now() - fs.statSync(file).mtimeMs;
       } catch {
-        // Someone else reclaimed it first; the retry loop handles it.
+        continue; // gone since the read: retry
       }
-      if (holder !== undefined) {
-        return tryReclaimedAcquire(file, info, holder);
-      }
+      // Young and unreadable: a holder mid-write, not a corrupt leftover.
+      if (ageMs < UNREADABLE_LOCK_GRACE_MS) return { acquired: false };
+    }
+    const age = holder?.acquired_at ? Date.now() - Date.parse(holder.acquired_at) : Infinity;
+    const stale =
+      holder === undefined || // unreadable and old = stale by definition
+      !pidAlive(holder.pid) ||
+      !(age < ceilingMs); // NaN age (mangled timestamp) counts as stale
+
+    if (!stale) return { acquired: false, heldBy: holder };
+
+    log(
+      `reclaiming stale lock at ${file} (pid ${holder?.pid ?? "?"}, acquired ${holder?.acquired_at ?? "unknown"})`,
+    );
+    // Lost the reclaim race to another process: that is a correct outcome.
+    if (!removeStaleLock(file, text)) return { acquired: false };
+    if (holder !== undefined) {
+      return placeLock(file, info) ? { acquired: true, reclaimedFrom: holder } : { acquired: false };
     }
   }
   return { acquired: false };
-}
-
-function tryReclaimedAcquire(file: string, info: LockInfo, reclaimed: LockInfo): AcquireResult {
-  try {
-    const fd = fs.openSync(file, "wx");
-    fs.writeFileSync(fd, JSON.stringify(info));
-    fs.closeSync(fd);
-    return { acquired: true, reclaimedFrom: reclaimed };
-  } catch {
-    // Lost the reclaim race to another process — that is a correct outcome.
-    return { acquired: false };
-  }
 }
 
 export function releaseLock(root: string, o: LockOptions = {}): void {

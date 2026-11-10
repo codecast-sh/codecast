@@ -9,8 +9,8 @@ import { AGENT_TAB_EVENT, AGENT_TAB_KEY, agentTabStampSource, recorderSource } f
 // The stamp tells a codecast page that an agent drives the tab, so the
 // desktop hand-off gate neither holds it nor hands it off
 // (packages/web/lib/desktopHandoff.ts). It must run before any page script,
-// in every driver: the recorder carries it for the built-in driver and the
-// resident host, the engine gets it as an init script.
+// in every driver: the recorder carries it for the built-in driver, the
+// engine gets it as an init script.
 describe("agent-tab stamp", () => {
   test("writes the gate's key and fires its event, and survives a page with no storage", () => {
     const src = agentTabStampSource();

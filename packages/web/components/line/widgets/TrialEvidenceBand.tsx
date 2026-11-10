@@ -1,6 +1,5 @@
 "use client";
-// What a trial run built and proved, on its decision (LineDecision) or its
-// proposal (TrialCardPanel). Under a session's own words (`compact`) it is one
+// What a trial run built and proved, on its decision (LineDecision). Under a session's own words (`compact`) it is one
 // row of number chips when those words quote a conversation: the session
 // already told the case, so the band never says it twice. Words that quote
 // nothing get the card's first real message against what changes above the

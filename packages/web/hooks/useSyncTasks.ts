@@ -11,6 +11,7 @@ import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import { track } from "../lib/analytics";
 import { useWorkspaceArgs, useFeederWorkspace, type WorkspaceArgs } from "./useWorkspaceArgs";
 import { useSyncCollection } from "./useSyncCollection";
+import { useIsSyncHost } from "./useSyncRole";
 
 const api = _api as any;
 
@@ -140,8 +141,12 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
   // A resync cleared this watermark: relaunch, so the full backfill it asked
   // for runs now instead of at the next interval tick.
   const crawlReset = useInboxStore((s) => crawlResetsFor(s, metaKey));
+  // The crawl is a global feeder (it fills the whole workspace's tasks and
+  // stamps syncMeta), so only the sync host runs it, like the bootstrap floor
+  // above; a follower takes the rows from the host's replication stream.
+  const isSyncHost = useIsSyncHost();
   useEffect(() => {
-    if (!hydrated || wsArgs === "skip") return; // resume from the restored watermark, not an empty one
+    if (!hydrated || !isSyncHost || wsArgs === "skip") return; // resume from the restored watermark, not an empty one
     // Incremental top-up only AFTER a full backfill exists for this workspace.
     // Before that, `since` stays undefined so the first pass loads everything.
     const meta = useInboxStore.getState().syncMeta[metaKey];
@@ -188,9 +193,9 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
         }
       },
     });
-  }, [convex, wsKey, reconcileNonce, hydrated, crawlReset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [convex, wsKey, reconcileNonce, hydrated, isSyncHost, crawlReset]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { hasMore: false, loadMore: () => {}, ready };
+  return { ready };
 }
 
 /**
@@ -200,12 +205,6 @@ export function useSyncTasks() {
   return useSyncTasksWithArgs(useWorkspaceArgs());
 }
 
-/**
- * Cross-team mention index for tasks — pulls a minimal-field snapshot of
- * every task in every team the user belongs to, plus their personal tasks.
- * Lives in `store.mentionIndex.tasks` so it doesn't fight the active-team
- * `store.tasks` collection that page views render.
- */
 /**
  * Per-view feeder: tasks in a workspace that is not the active one, one
  * project's (a project page opened from another workspace: its Line tab reads
@@ -225,6 +224,12 @@ export function useSyncProjectTasks(projectId: string | null | undefined, worksp
 }
 const selectTaskItems = (r: any) => r?.items ?? r;
 
+/**
+ * Cross-team mention index for tasks — pulls a minimal-field snapshot of
+ * every task in every team the user belongs to, plus their personal tasks.
+ * Lives in `store.mentionIndex.tasks` so it doesn't fight the active-team
+ * `store.tasks` collection that page views render.
+ */
 export function useSyncMentionTasks() {
   const syncMentionIndex = useInboxStore((s) => s.syncMentionIndex);
   const result = useQueryNoThrow(api.tasks.webMentionList, { workspace: "all" } as any).data;

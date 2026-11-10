@@ -7,6 +7,7 @@ import {
   urlPattern,
   isMentionStart,
 } from './linkRoutes';
+import { MOBILE_SETTINGS_SECTIONS } from './settingsSections';
 
 describe('mobileRouteForUrl', () => {
   test('codecast object URLs route in the app', () => {
@@ -48,6 +49,23 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/settings/integrations')).toBe('/settings/mail');
   });
 
+  test('the tasks, notifications and settings pages open their tabs', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/tasks')).toBe('/(tabs)/tasks');
+    expect(mobileRouteForUrl('/tasks/')).toBe('/(tabs)/tasks');
+    expect(mobileRouteForUrl('https://codecast.sh/notifications')).toBe('/(tabs)/notifications');
+    expect(mobileRouteForUrl('https://codecast.sh/settings')).toBe('/(tabs)/settings');
+  });
+
+  test('a settings section the phone has opens its page', () => {
+    for (const key of MOBILE_SETTINGS_SECTIONS) {
+      // Plan and mail are reached by the web's own names for them too.
+      expect(mobileRouteForUrl(`https://codecast.sh/settings/${key}`)).toBe(`/settings/${key}`);
+    }
+    // The link the Notifications tab's own "manage devices" row opens.
+    expect(mobileRouteForUrl('https://codecast.sh/settings/devices')).toBe('/settings/devices');
+    expect(mobileRouteForUrl('/settings/notifications/')).toBe('/settings/notifications');
+  });
+
   test('the Vault and a secret open the Vault settings page', () => {
     expect(mobileRouteForUrl('https://codecast.sh/vault')).toBe('/settings/vault');
     expect(mobileRouteForUrl('/vault?s=sec-4')).toBe('/settings/vault?s=sec-4');
@@ -85,7 +103,9 @@ describe('mobileRouteForUrl', () => {
     // A published artifact is a web page, not a mobile screen — sending it to a
     // route would 404 inside the app.
     expect(mobileRouteForUrl('https://codecast.sh/a/my-report')).toBeNull();
-    expect(mobileRouteForUrl('https://codecast.sh/settings')).toBeNull();
+    // A web settings section with no phone page.
+    expect(mobileRouteForUrl('https://codecast.sh/settings/keyboard')).toBeNull();
+    expect(mobileRouteForUrl('https://codecast.sh/settings/devices/extra')).toBeNull();
   });
 
   test('other hosts are never captured', () => {
@@ -176,7 +196,7 @@ describe('redirectSystemPath (+native-intent)', () => {
 
   test('everything unrecognized passes through untouched', () => {
     expect(redirectSystemPath({ path: 'codecast://auth/callback', initial: false })).toBe('codecast://auth/callback');
-    expect(redirectSystemPath({ path: 'https://codecast.sh/settings', initial: false })).toBe('https://codecast.sh/settings');
+    expect(redirectSystemPath({ path: 'https://codecast.sh/settings/keyboard', initial: false })).toBe('https://codecast.sh/settings/keyboard');
     expect(redirectSystemPath({ path: 'exp://192.168.1.5:8081/--/session/x', initial: true })).toBe('exp://192.168.1.5:8081/--/session/x');
   });
 });

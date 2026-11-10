@@ -11,11 +11,6 @@ export function cssVar(styles: CSSStyleDeclaration, name: string, fallback: stri
   return value || fallback;
 }
 
-/** Read one --sol-* token. Prefer `cssVar` with a hoisted `getComputedStyle`
- *  when reading several at once — each call here forces its own style read. */
-export function readSolVar(name: string, fallback: string): string {
-  return cssVar(getComputedStyle(document.documentElement), name, fallback);
-}
 
 export function isDarkTheme(): boolean {
   return document.documentElement.classList.contains("dark");

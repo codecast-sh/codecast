@@ -33,11 +33,6 @@ export interface HostCastUpdate {
   restart?: { pid: string } | { refused: string };
 }
 
-/** The version an install from this source puts on a host, or null when the release cannot be read. */
-export function hostCastTarget(source: HostCastSource): string | null {
-  return source === "checkout" && hasHostBuildSource() ? cliSourceVersion() : latestReleaseVersion();
-}
-
 /** The host's cast version, or null when it has none or does not answer. */
 export function readHostCastVersion(host: RemoteHost, platform: HostCastPlatform): string | null {
   try {

@@ -63,7 +63,6 @@ export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
 // (session-only: "Set effort level to max (this session only)", no
 // settings.json write).
 export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
-export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
 
 export const CODEX_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your config.toml model" },
@@ -78,7 +77,6 @@ export const CODEX_MODEL_OPTIONS: ModelOption[] = [
 ];
 
 export const CODEX_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
-export type CodexEffortLevel = (typeof CODEX_EFFORT_LEVELS)[number];
 
 // OpenCode addresses models as `provider/model` (its `-m` launch flag and the
 // `providerID`/`modelID` pair every message stores). The picker offers "Default"
@@ -110,7 +108,6 @@ export const PI_MODEL_OPTIONS: ModelOption[] = [
 // codex's reasoning effort). "off" is a real stop, distinct from "default"
 // (= omit the flag, pi decides).
 export const PI_EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-export type PiEffortLevel = (typeof PI_EFFORT_LEVELS)[number];
 
 // Grok Build's baked-in catalog (default_models.json; `grok models` logged out
 // prints exactly these two). Keys are the exact `-m` values — bare model ids,
@@ -148,7 +145,6 @@ export const CURSOR_MODEL_OPTIONS: ModelOption[] = [
 // string at flag-parse time (validation is post-login), so xhigh on grok-4.5
 // cannot hard-error at launch.
 export const GROK_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
-export type GrokEffortLevel = (typeof GROK_EFFORT_LEVELS)[number];
 
 // Muse's `--model` takes a Meta model id for non-echo providers. The only id
 // observed live is the session log's own `run_model` record
@@ -166,7 +162,6 @@ export const MUSE_MODEL_OPTIONS: ModelOption[] = [
 // launchRailOptions. The TUI's model/effort menus are interactive-only, so
 // both are launch-time flags tracked from the transcript after (run_model).
 export const MUSE_EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
-export type MuseEffortLevel = (typeof MUSE_EFFORT_LEVELS)[number];
 
 // ---------------------------------------------------------------------------
 // Dynamic model inventory (opencode / pi)

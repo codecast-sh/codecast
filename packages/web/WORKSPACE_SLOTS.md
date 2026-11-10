@@ -39,8 +39,7 @@ re-implemented region by region:
 - Only **2 of ~10** collapsible regions have a hover-peek path.
 
 The drift this produces is already visible as dead and lying state:
-`ClientLayouts.inbox` has no reader or writer; `closeCommentRail` has no
-callers; `commentRailOpen`'s documented `null = auto` behavior was never
+`ClientLayouts.inbox` has no reader or writer; `commentRailOpen`'s documented `null = auto` behavior was never
 implemented; `pinned_surfaces["plans"]` is unreachable because the plans page
 hard-codes a `w-[300px]` column instead of using `DetailSplitLayout`;
 `TaskDetailContent variant="inline"` is unreachable; the file-tree tooltip

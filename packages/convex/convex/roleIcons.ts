@@ -361,7 +361,7 @@ export const withoutIcon = internalQuery({
  * per run so each fits an action's time and sees the icons drawn before it
  * (distinct concepts depend on that). The limit defaults to the roles
  * waiting when it starts. Run after a deploy:
- *   npx convex run roleIcons:backfill '{"scope_user_id": "<user id>"}'
+ *   packages/convex/run.sh roleIcons:backfill '{"scope_user_id": "<user id>"}'
  */
 export const backfill = internalAction({
   args: { team_id: v.optional(v.id("teams")), scope_user_id: v.optional(v.id("users")), skip: v.optional(v.array(v.string())), limit: v.optional(v.number()) },

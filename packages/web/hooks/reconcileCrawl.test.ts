@@ -444,3 +444,75 @@ describe("crawlWatermarkScope", () => {
     expect(useInboxStore.getState().syncMeta[syncMetaKey("docs", WS)]).toBeUndefined();
   });
 });
+
+describe("runReconcileCrawl — a closed fence and a truncated walk", () => {
+  beforeEach(() => {
+    useInboxStore.setState({ syncMeta: {}, syncProgress: {} });
+  });
+
+  it("a crawl cancelled while a page is in flight writes nothing and leaves loading off", async () => {
+    const namespace = `cancel-midpage-${Math.random()}`;
+    let n = 0;
+    let release: (() => void) | null = null;
+    const pages: any[][] = [];
+    runReconcileCrawl({
+      namespace,
+      wsKey: "ws",
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 10,
+      // The first page lands in the buffer (not yet flushed); the second hangs.
+      fetchPage: (cursor) => n++ === 0
+        ? Promise.resolve({ rows: [{ _id: "p1" }], isDone: false, continueCursor: "c1" })
+        : new Promise((resolve) => { release = () => resolve({ rows: [{ _id: "p2" }], isDone: true, continueCursor: null }); void cursor; }),
+      onPage: (rows) => pages.push(rows),
+      onComplete: () => {},
+    });
+    await delay(20);
+    expect(release).not.toBeNull();
+    cancelReconcileCrawl(namespace);
+    release!();
+    await delay(20);
+    expect(pages).toEqual([]);
+    expect(useInboxStore.getState().syncProgress[namespace]).toEqual({ loading: false, loaded: 0 });
+  });
+
+  it("a walk stopped at maxPages stamps no watermark, and the next run resumes at its checkpoint", async () => {
+    const namespace = `truncated-${Math.random()}`;
+    const metaKey = syncMetaKey(namespace, "ws");
+    const seen: (string | null)[] = [];
+    const completes: boolean[] = [];
+    const crawl = () => runReconcileCrawl({
+      namespace,
+      wsKey: "ws",
+      throttleMs: THROTTLE,
+      pageDelayMs: 0,
+      maxPages: 2,
+      fetchPage: async (cursor) => {
+        seen.push(cursor);
+        const i = cursor ? Number(cursor.slice(1)) : 0;
+        return { rows: [{ _id: `r${i}`, updated_at: 100 + i }], isDone: i === 2, continueCursor: i === 2 ? null : `c${i + 1}` };
+      },
+      onPage: () => {},
+      onComplete: (_all, complete) => { completes.push(complete); },
+    });
+
+    crawl();
+    await delay(40);
+    expect(seen).toEqual([null, "c1"]);
+    expect(completes).toEqual([false]);
+    const truncated = useInboxStore.getState().syncMeta[metaKey];
+    expect(truncated?.backfilledAt).toBeUndefined();
+    expect(truncated?.cursor).toBeUndefined();
+    expect(truncated?.resumeCursor).toBe("c2");
+    expect(useInboxStore.getState().syncProgress[namespace]?.loading).toBe(false);
+
+    // Not throttled: the unread tail is fetched from the checkpoint.
+    crawl();
+    await delay(40);
+    expect(seen).toEqual([null, "c1", "c2"]);
+    const done = useInboxStore.getState().syncMeta[metaKey];
+    expect(typeof done?.backfilledAt).toBe("number");
+    expect(done?.resumeCursor ?? null).toBeNull();
+  });
+});

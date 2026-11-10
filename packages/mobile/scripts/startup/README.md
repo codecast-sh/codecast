@@ -37,4 +37,4 @@ To see where one tap's time goes, run Metro with the probe on, add `TRACE=<secon
 
 - A simulator build made with signing disabled has no `__TEXT,__entitlements` section; every keychain call fails and nobody can sign in. Check with `otool -s __TEXT __entitlements Codecast.app/Codecast`.
 - Above a machine load of about 350 the simulator kills a slow launch by signal with no crash report. Wait for lower load and run again.
-- `sim-reap` shuts down a pool simulator whose lock went stale. Reacquire it after a session resume.
+- The pool shuts down a simulator whose lock went stale. Reacquire it (`cast sim acquire`) after a session resume.

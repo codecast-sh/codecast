@@ -343,11 +343,6 @@ async function loadNodeDefinition(node: WorkflowNode, options: RunOptions): Prom
   return definitionCache.get(node.definition) ?? undefined;
 }
 
-// One POST to a /cli route with the run's token; null on any failure so the
-// runner degrades instead of throwing mid-graph. Through cliFetch, so a write
-// that lost a race on every server retry (nothing applied) is sent again with
-// backoff, whatever the route: at fifty runs a station's spawn lost to other
-// stations' writes and failed its node on the first 500 (2026-10-23).
 /**
  * Waits for a place at a station that takes only so many of the team's runs at
  * once (workflow_runs.admitToStation). Eval proofs that queued for one of the
@@ -374,6 +369,11 @@ export async function waitForStationPlace(node: WorkflowNode, cap: number, optio
   }
 }
 
+// One POST to a /cli route with the run's token; null on any failure so the
+// runner degrades instead of throwing mid-graph. Through cliFetch, so a write
+// that lost a race on every server retry (nothing applied) is sent again with
+// backoff, whatever the route: at fifty runs a station's spawn lost to other
+// stations' writes and failed its node on the first 500 (2026-10-23).
 async function cliCall(options: RunOptions, route: string, body: Record<string, any>): Promise<any | null> {
   if (!options.convexSiteUrl || !options.apiToken) return null;
   try {
@@ -1359,7 +1359,6 @@ async function loadPlanContext(options: RunOptions, context: Record<string, stri
   context["open_tasks"] = String(open.length);
 }
 
-// The repo's default branch, for prompts that diff a hand's branch against it.
 // One name per graph and task: the isolated hand's worktree (and branch) and
 // the run's files directory share it, so a second visit or a later run on the
 // same task finds the same worktree and the same files.
@@ -1379,6 +1378,7 @@ export function lineRunDir(cwd: string, slug: string): string {
   return path.join(lineRunsRoot(cwd), slug);
 }
 
+// The repo's default branch, for prompts that diff a hand's branch against it.
 function detectDefaultBranch(cwd: string): string {
   try {
     const r = spawnSync("git", ["-C", cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
@@ -1937,7 +1937,7 @@ async function driveRun(
     if (requeued) console.log(requeued.text);
     if (!requeued?.queued) await returnTaskOnFailure(options, graph, state); // a refused requeue (a trial's) fails as usual
     // A run that got past a ship step's success landed its change, whatever stopped it after.
-    const landed = state.completed.some((id) => /(^|__)shipped$/.test(id));
+    const landed = state.completed.some((id) => /(^|__)(shipped|landed)$/.test(id));
     await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: true, failReason: state.failReason, landed }));
     return "failed";
   }
@@ -2157,7 +2157,8 @@ async function runNodeLoop(
     // Priority: human gate target > conditional edges > unconditional edges >
     //           retry_target on failure with no edge > abort
     // A fanout's branches already ran inside executeFanout; the run continues
-    // at the fanin they converge on, never down one branch again.
+    // at the fanin they converge on, never down one branch again, and a
+    // fanout with a failed branch does not continue at all.
     // A station that pinned blocked waits on a person: it routes only on an
     // edge for a blocked handoff (the line's ask gate), never on its json, and
     // without one the run stops here.
@@ -2182,8 +2183,11 @@ async function runNodeLoop(
         ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\boutcome\b/.test(e.condition ?? "")) }, current, state.context)
       : unanswered
         ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || (!e.label && !!e.condition)) }, current, state.context)
-      : current.type === "parallel_fanout" && outcome === "success"
-        ? findFanin(current, graph)
+      : current.type === "parallel_fanout"
+        // A fanout's own edges are its branches, which all ran: a failed one
+        // follows none of them (that reran the first branch alone and went on
+        // to the fanin). It takes its retry_target, or the run stops here.
+        ? (outcome === "success" ? findFanin(current, graph) : null)
         : resolveHumanGateTarget(current, graph, state.context)
           || resolveNextNode(graph, current, state.context);
     if (stationBlocked && next) delete state.context["station_blocked"];
@@ -2215,7 +2219,8 @@ async function runNodeLoop(
       state.failed = true;
       // A dead station says why it left no answer; a routable outcome no edge
       // takes names the fields its edges route on.
-      state.failReason = stationDead && state.context["last_error"] ? state.context["last_error"] : deadEndReason(graph, current.id, outcome, state.context);
+      const saysWhy = stationDead || (current.type === "parallel_fanout" && outcome === "failure");
+      state.failReason = saysWhy && state.context["last_error"] ? state.context["last_error"] : deadEndReason(graph, current.id, outcome, state.context);
       break;
     }
 

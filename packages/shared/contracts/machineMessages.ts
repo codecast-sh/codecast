@@ -228,10 +228,6 @@ export function parseUserMessage(rawContent: string | null | undefined): { from:
 // with the "About op-N change 3 (…):" header and closes with a reply note for
 // the agent; the transcript shows the person's own words under a quote of
 // the header, so the bubble reads as theirs and names the row.
-export function isProposalMessage(rawContent: string | null | undefined): boolean {
-  if (!rawContent) return false;
-  return /^<proposal-message\s/.test(stripInjectionNoise(rawContent));
-}
 export function parseProposalMessage(rawContent: string | null | undefined): { proposal: string; change: number | null; ask?: number; from: string; about: string | null; body: string } | null {
   if (!rawContent) return null;
   const text = stripInjectionNoise(rawContent);
@@ -264,11 +260,6 @@ export function formatTaskCommentMessage(o: { task: string; title: string; from:
   const q = (x: string) => x.replace(/"/g, "'");
   const tail = `(This is a comment on ${o.task}, the task you own. Act on it; when a reply is wanted, answer on the task with \`cast task comment ${o.task} "..."\`, which is where ${q(o.from)} reads.)`;
   return `<${TASK_COMMENT_TAG} task="${o.task}" from="${q(o.from)}">\nAbout ${o.task} ("${q(o.title)}"):\n\n${o.body}\n\n${tail}\n</${TASK_COMMENT_TAG}>`;
-}
-
-export function isTaskCommentMessage(rawContent: string | null | undefined): boolean {
-  if (!rawContent) return false;
-  return /^<task-comment\s/.test(stripInjectionNoise(rawContent));
 }
 
 export function parseTaskCommentMessage(rawContent: string | null | undefined): { task: string; from: string; about: string | null; body: string } | null {

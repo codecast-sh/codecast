@@ -41,7 +41,6 @@ import { settleAreasCard } from "./decisionAreas";
 export { syncDecisionInbox };
 import { artifactUrl } from "./artifacts";
 import { humanStarterUser, listSessionOwnerIds } from "./sessionOwners";
-import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
@@ -478,33 +477,6 @@ export const rerouteDecisionsHeldByAgents = internalMutation({
       for (const id of conversations) await reroutePendingDecisionsForConversation(ctx, id as Id<"conversations">, Date.now());
     }
     return { held, conversations: conversations.size, dry_run: !!args.dry_run };
-  },
-});
-
-// Repair path for a session that was assigned before questions followed
-// owners: recompute people and inbox rows from the current owner set.
-export const reroutePendingForConversation = internalMutation({
-  args: { conversation_id: v.string() },
-  handler: async (ctx, args) => {
-    const ref = args.conversation_id.trim();
-    if (/^sd-\d+$/.test(ref)) {
-      const d = await findDecision(ctx, ref);
-      if (!d) throw new Error(`No decision ${ref}`);
-      return reroutePendingDecisionsForConversation(ctx, d.conversation_id, Date.now());
-    }
-    // Newest short-id match that still has open questions, else the newest
-    // match. `.first()` on by_short_id is the oldest collision and is how a
-    // repair of jx76e8h moved 0 rows.
-    const withOpen = await findConversationByAnyRefWhere(ctx, ref, async (c) => {
-      const pending = await ctx.db
-        .query("session_decisions")
-        .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", c._id).eq("status", "pending"))
-        .first();
-      return !!pending;
-    });
-    const conversation = withOpen ?? await findConversationByAnyRefWhere(ctx, ref, () => true);
-    if (!conversation) throw new Error(`No session ${ref}`);
-    return reroutePendingDecisionsForConversation(ctx, conversation._id, Date.now());
   },
 });
 

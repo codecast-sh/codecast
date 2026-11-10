@@ -28,7 +28,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { PageSession } from "./instance.js";
 import { readRecording, type Recording } from "./observe.js";
@@ -208,7 +207,9 @@ export function pageSource(page: PageSession): FailureSource {
  * (newest first) matters to the block.
  */
 export function engineSource(opts: EngineOptions = {}): FailureSource {
-  const quiet = { ...opts, inherit: false };
+  // The engine runs synchronously, so the deadline around these calls cannot
+  // cut one short: each is given the ceiling as its own timeout instead.
+  const quiet = { ...opts, inherit: false, timeoutMs: CAPTURE_DEADLINE_MS };
   return {
     recording: async () => {
       const [con, err, net] = await Promise.all([

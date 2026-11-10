@@ -85,13 +85,11 @@ export type ToolRisk = (typeof TOOL_RISKS)[number];
  *  With no rule the gate asks. */
 export const RULE_DECISIONS = ["allow", "ask", "refuse"] as const;
 export type RuleDecision = (typeof RULE_DECISIONS)[number];
-export const DEFAULT_RULE_DECISION: RuleDecision = "ask";
 
 /** One wallet movement (`wallet_ledger.kind`). A `refund` takes a top-up's
  *  credit back after Stripe returned or lost the payment (a refund, a dispute);
  *  a `repay` moves allowance onto a debt such a refund left. */
 export const LEDGER_KINDS = ["reserve", "release", "charge", "grant", "topup", "period_reset", "refund", "repay"] as const;
-export type LedgerKind = (typeof LEDGER_KINDS)[number];
 
 /** How long one turn may run before it ends with reason `time`. */
 export const TURN_DEADLINE_MS = 8 * 60 * 1000;

@@ -19,7 +19,6 @@
 // it says and drops what it omits.
 
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { defaultConfigDir } from "./config/configDir.js";
 

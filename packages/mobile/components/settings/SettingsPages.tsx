@@ -24,6 +24,7 @@ import { appAlert, appPrompt, showActionSheet } from '@/lib/popups';
 import { showNotice } from '@/lib/undoBar';
 import { DevicesSection } from '@/components/DevicesSection';
 import { liveActivityNative } from '@/modules/codecast-live-activity';
+import type { MobileSettingsSection } from '@/lib/settingsSections';
 import { SettingsScroll, SettingsGroup, ToggleRow, NavRow, SettingsSwitch, settingsStyles } from './SettingsUI';
 
 export const THEME_OPTIONS = [
@@ -384,7 +385,9 @@ function SecurityPage() {
   return (
     <SettingsScroll>
       <SettingsGroup>
-        {isBiometricAvailable ? (
+        {/* Still shown once biometrics are removed from the phone, so a lock
+            that now runs on the passcode can be turned off. */}
+        {isBiometricAvailable || isBiometricEnabled ? (
           <ToggleRow label="Biometric Unlock" description="Use Face ID or Touch ID" value={isBiometricEnabled} onValueChange={handleToggleBiometric} />
         ) : (
           <RNView style={settingsStyles.row}>
@@ -547,7 +550,7 @@ export const SETTINGS_PAGES: Record<string, { title: string; Page: ComponentType
   about: { title: 'About', Page: AboutPage },
   plan: { title: 'Plan', Page: PlanPage },
   mail: { title: LANE_COPY.connections.mail, Page: MailPage },
-};
+} satisfies Record<MobileSettingsSection, { title: string; Page: ComponentType }>;
 
 const styles = themedStyles((Theme) => StyleSheet.create({
   userInfo: {

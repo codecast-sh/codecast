@@ -52,6 +52,7 @@ import {
   isWellFormedCapabilitySlug,
 } from "@codecast/shared/contracts";
 import { internalMutation, mutation, query } from "./functions";
+import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
 import {
   CATALOG_STALE_MS,
@@ -1871,38 +1872,40 @@ export const DEVICE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
  * Tuesday stopped mattering. The daemon cannot clean up a machine that no
  * longer exists; only the server can notice the silence.
  *
- * Shaped on sweepSlackEvents: bounded batches inside one run, registered on the
- * daily cron. The devices table is small (a handful per user), so a paginated
+ * Registered on the daily cron: one bounded page of devices a run, each run
+ * scheduling the next from its cursor until the table is done. The devices table is small (a handful per user), so a paginated
  * full scan is the honest cost — there is no by_last_seen index to lean on and
  * adding one for a daily sweep would tax every heartbeat write.
  */
+/** Devices one sweep run reads. */
+export const SWEEP_DEVICE_PAGE = 200;
+
 export const sweepCapabilityState = internalMutation({
-  args: {},
-  handler: async (ctx) => {
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ deleted: number; done: boolean }> => {
     const cutoff = Date.now() - DEVICE_RETENTION_MS;
     const db = capDb(ctx.db);
     let deleted = 0;
 
-    let devicePage = await ctx.db.query("devices").paginate({ cursor: null, numItems: 200 });
-    for (let hop = 0; hop < 16; hop++) {
-      for (const device of devicePage.page) {
-        if ((device.last_seen ?? 0) >= cutoff) continue;
-        const rows = await db
-          .query("capability_state")
-          .withIndex("by_user_device_client_scope", (q: any) =>
-            q.eq("user_id", device.user_id).eq("device_id", device.device_id),
-          )
-          .take(SWEEP_BATCH);
-        for (const row of rows) await db.delete(row._id);
-        deleted += rows.length;
-        // A device with more rows than one batch finishes on a later run —
-        // bounded transactions outrank a same-run guarantee here.
-      }
-      if (devicePage.isDone) break;
-      devicePage = await ctx.db
-        .query("devices")
-        .paginate({ cursor: devicePage.continueCursor, numItems: 200 });
+    // One page a run (a function may hold one paginated read), continued by
+    // its own cursor so every device is reached however many there are.
+    const devicePage = await ctx.db.query("devices").paginate({ cursor: args.cursor ?? null, numItems: SWEEP_DEVICE_PAGE });
+    for (const device of devicePage.page) {
+      if ((device.last_seen ?? 0) >= cutoff) continue;
+      const rows = await db
+        .query("capability_state")
+        .withIndex("by_user_device_client_scope", (q: any) =>
+          q.eq("user_id", device.user_id).eq("device_id", device.device_id),
+        )
+        .take(SWEEP_BATCH);
+      for (const row of rows) await db.delete(row._id);
+      deleted += rows.length;
+      // A device with more rows than one batch finishes on a later run —
+      // bounded transactions outrank a same-run guarantee here.
     }
-    return { deleted };
+    if (!devicePage.isDone) {
+      await ctx.scheduler.runAfter(0, (internal as any).capabilities.sweepCapabilityState, { cursor: devicePage.continueCursor });
+    }
+    return { deleted, done: devicePage.isDone };
   },
 });

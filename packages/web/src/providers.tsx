@@ -17,7 +17,6 @@ import { desktopMenuKeys } from "@codecast/shared/contracts/keyBindings";
 import { dispatchRefusalReason } from "@/lib/dispatchBinding";
 import { bridge } from "@/lib/desktop";
 import { TipProvider } from "@/tips/TipProvider";
-import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { identifyUser, resetUser } from "@/lib/analytics";
@@ -36,11 +35,6 @@ function KeyBindingsSync() {
     // The desktop menu bar repeats a few chords natively; it follows too.
     bridge("setMenuKeys")?.(desktopMenuKeys(bindings, shortcutCatalog.shortcuts, isMac));
   }, [bindings]);
-  return null;
-}
-
-function PrefsMigration() {
-  useLocalStorageMigration();
   return null;
 }
 
@@ -154,7 +148,6 @@ export function Providers({ children }: { children: ReactNode }) {
         <ErrorBoundary name="OpenInDesktopHandoff" level="inline">
           <OpenInDesktopHandoff />
         </ErrorBoundary>
-        <PrefsMigration />
         <KeyBindingsSync />
         <GestureBridge />
         <AnalyticsIdentify />

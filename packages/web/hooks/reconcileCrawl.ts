@@ -107,11 +107,6 @@ export function crawlThrottledAt(
 }
 
 
-/**
- * Kick off a reconcile crawl if one isn't already running / recently done for
- * this workspace. Fire-and-forget: returns immediately, runs in the background,
- * and publishes progress to `syncProgress[namespace]`.
- */
 // The watermark key lives in a leaf (./syncMetaKeys) so the store can read it.
 export { syncMetaKey };
 
@@ -141,6 +136,11 @@ export function crawlResetsFor(s: { crawlResets: Record<string, number> }, metaK
   return scope ? s.crawlResets[scope] ?? 0 : 0;
 }
 
+/**
+ * Kick off a reconcile crawl if one isn't already running / recently done for
+ * this workspace. Fire-and-forget: returns immediately, runs in the background,
+ * and publishes progress to `syncProgress[namespace]`.
+ */
 export function runReconcileCrawl(opts: CrawlOptions): void {
   const { namespace, wsKey, throttleMs, pageDelayMs, maxPages } = opts;
   if (wsKey === "skip") {
@@ -254,7 +254,10 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
           await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
         }
       }
-      if (!isCurrent() || !page) { flush(true, cursor); stop(all.length); return; } // a newer workspace crawl took over
+      // A newer crawl, a cancel or a principal switch took over while the page
+      // was in flight: the fence is closed, so the buffered rows are dropped
+      // unwritten and the progress flag is left to whoever owns the slot now.
+      if (!isCurrent() || !page) { stop(all.length); return; }
       const rows = page.rows ?? [];
       all.push(...rows);
       buffer.push(...rows);
@@ -269,8 +272,8 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       cursor = next;
       await new Promise((r) => setTimeout(r, pageDelayMs));
     }
-    if (buffer.length) flush(true, cursor); // maxPages-truncated: land the tail overlay
     if (!isCurrent()) { stop(all.length); return; }
+    if (buffer.length) flush(true, cursor); // maxPages-truncated: land the tail overlay
     // Final completeness pass: re-overlay the full set. onComplete is a DELTA
     // overlay (the big collections are isDelta in SYNC_REGISTRY) — additive, never
     // prunes — so this only fills in rows onPage may have missed. Deletions arrive
@@ -280,6 +283,11 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
     // must treat it as incomplete even though the table is cumulatively covered.
     await opts.onComplete(all, completed && !resumedMidway, isCurrent);
     if (!isCurrent()) { stop(all.length); return; }
+    // Stopped at maxPages with rows unfetched: stamp no watermark. backfilledAt
+    // would throttle the next crawl and an advanced cursor would start it past
+    // the tail this run never read, so the tail would never be revisited. The
+    // checkpoint the last flush recorded stays, and the next run resumes there.
+    if (!completed) { stop(all.length); return; }
     // Persist the watermark: backfilledAt (durable throttle — skip the crawl on
     // the next launch) and cursor = the highest updated_at we just saw (so the
     // NEXT crawl resumes incrementally from here via `since`). cursor advances

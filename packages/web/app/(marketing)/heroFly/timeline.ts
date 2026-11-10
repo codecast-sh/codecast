@@ -913,15 +913,6 @@ export type Frame = {
   texts: Record<string, string>;
 };
 
-/** Every element id the film animates, with its surface; used by the driver and the tests. */
-export const ELEMENT_IDS: string[] = [
-  ...SURFACES.flatMap((s) => [`card:${s.id}`, `shadow:${s.id}`, `mount:${s.id}`, `face:${s.id}`]),
-  ...SEAM_GHOST.surfaces.flatMap((id) => [`ghost:${id}`, `cover:${id}`]),
-  ...Object.entries(BEATS).flatMap(([sid, beats]) => [...new Set(beats.map((b) => `${sid}/${b.id}`))]),
-  ...FLYERS.map((f) => f.id),
-  ...ARCS.flatMap((a) => [a.id, `${a.id}.dot`, `${a.id}.ring`]),
-  "label3w",
-];
 
 /** Film time in [0, DURATION), to the microsecond, so a looped t renders exactly the frame of the same t (118.5 % 88.8 is not 29.7 in floats). */
 export function wrapT(t: number): number {

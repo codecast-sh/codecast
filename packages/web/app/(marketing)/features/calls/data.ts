@@ -8,7 +8,6 @@ import { SOL } from "../../blog/blogChrome";
  */
 export const CALL_ID = "cl-42";
 export const CALL_TITLE = "Webhook retry rollout";
-export const CALL_LENGTH = "6m";
 /** The digest's lead line, as formatHuddleDigest writes it. */
 export const CALL_LEAD = "6 min huddle with Maya, Theo and Priya";
 

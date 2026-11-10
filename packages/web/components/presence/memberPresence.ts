@@ -297,12 +297,6 @@ export function fleetSummariesByMember(
   return out;
 }
 
-export function fleetLine(f: FleetSummary): string {
-  const parts: string[] = [];
-  if (f.working) parts.push(`${f.working} working`);
-  if (f.needsYou) parts.push(`${f.needsYou} need${f.needsYou === 1 ? "s" : ""} input`);
-  return parts.join(" · ");
-}
 
 export interface PresenceActivityCtx {
   /** Coarse clock (useCoarseNow), never Date.now() in render. */

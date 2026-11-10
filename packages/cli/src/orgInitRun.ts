@@ -9,8 +9,17 @@ import { spawn } from "./proc.js";
 import { fmt } from "./colors.js";
 import { headOfPeoplePrompt } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import {
-  ORG_CHANGE_KINDS, describeOrgChange, extractOrgProposal, orgChangeDependencies, orgChangeError, orgReviseOpError, orderOrgChanges, parseOrgProposalSpec,
-  type OrgChange, type OrgProposalMode, type OrgReviseOp, type OrgSpecChange,
+  ORG_CHANGE_KINDS,
+  describeOrgChange,
+  extractOrgProposal,
+  orgChangeDependencies,
+  orgReviseOpError,
+  orderOrgChanges,
+  parseOrgProposalSpec,
+  type OrgChange,
+  type OrgProposalMode,
+  type OrgReviseOp,
+  type OrgSpecChange,
 } from "@codecast/shared/contracts/orgProposal";
 import { formatRelative } from "@codecast/shared/time";
 import { metricLine } from "@codecast/shared/contracts/initiative";

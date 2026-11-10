@@ -52,7 +52,6 @@ describe("change-feed write interceptor coverage", () => {
     "buckets.ts": "inbox_buckets / bucket_assignments through the revision-bound writer — untracked",
     "callChat.ts": "call room chat rows — untracked",
     "calls.ts": "call rooms and participants — untracked",
-    "debugTmpDiet.ts": "temporary conversation doc diet sweep; sheds legacy blobs nothing renders, so no delta is worth logging — deleted with debugTmp.ts",
     "oauthConnectors.ts": "oauth connector state — untracked",
     "searchMirror.ts": "search mirror rows — untracked",
     "storyMode.ts": "story mode state — untracked",
@@ -67,12 +66,10 @@ describe("change-feed write interceptor coverage", () => {
       if (!importsRawBuilder(src)) continue;
       if (!(f in RAW_BUILDER_ALLOWLIST)) offenders.push(f);
       // A raw-builder file that queries a tracked table AND patches/deletes has
-      // the bypass in reach; the reason column above says it never does. The
-      // diet sweep is exempt by name: it strips fields nothing renders and is
-      // slated for deletion, so its patches never need to reach the sync log.
+      // the bypass in reach; the reason column above says it never does.
       const readsTracked = TRACKED.some((t) => src.includes(`.query("${t}")`));
       const writes = /\.(patch|delete)\(/.test(src);
-      if (readsTracked && writes && f !== "debugTmpDiet.ts") trackedWriters.push(f);
+      if (readsTracked && writes) trackedWriters.push(f);
     }
     expect(offenders).toEqual([]);
     expect(trackedWriters).toEqual([]);
@@ -221,9 +218,8 @@ describe("comments complete-view write choke", () => {
     // regained access renders a frozen empty thread (matrix SRV-02).
     const conversations = readFileSync(join(DIR, "conversations.ts"), "utf8");
     const advanceCalls = conversations.match(/advanceCommentsAccessRevision\(/g) ?? [];
-    // setPrivacy, setTeamVisibility, setPrivacyBySessionId, reconfigureSession,
-    // and the two internal share repairs.
-    expect(advanceCalls.length).toBeGreaterThanOrEqual(6);
+    // setPrivacy, setTeamVisibility, setPrivacyBySessionId, reconfigureSession.
+    expect(advanceCalls.length).toBeGreaterThanOrEqual(4);
     const writer = readFileSync(join(DIR, "commentViewWrites.ts"), "utf8");
     expect(writer).toContain("export async function advanceCommentsAccessRevision");
   });

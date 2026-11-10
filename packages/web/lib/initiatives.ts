@@ -6,9 +6,7 @@
 // beside, and the one initiative a task or a project reads as. Pure, so a task's status change
 // moves every bar in the same tick and nothing derived is ever stored.
 import type { InitiativeOwner, InitiativeRow, InitiativeStatus } from "@codecast/shared/contracts/initiative";
-import type { OrgRole, OrgTree } from "../components/org/orgTypes";
 import { projectTaskCounts, type ProjectProgress } from "@codecast/shared/tasks";
-import { scopeSeatOf } from "./scopePage";
 
 export type Progress = ProjectProgress;
 /** What the board rule reads off a task. */
@@ -78,12 +76,6 @@ export function byListOrder(a: InitiativeRow, b: InitiativeRow): number {
     || a.created_at - b.created_at;
 }
 
-export function groupInitiativesByStatus(rows: readonly InitiativeRow[]): { status: InitiativeStatus; rows: InitiativeRow[] }[] {
-  const top = [...topLevelInitiatives(rows)].sort(byListOrder);
-  return INITIATIVE_STATUS_ORDER
-    .map((status) => ({ status, rows: top.filter((r) => r.status === status) }))
-    .filter((g) => g.rows.length > 0);
-}
 
 /** Every initiative a project belongs to, the ones still open first. */
 export const initiativesOfProject = (rows: readonly InitiativeRow[], projectId: string): InitiativeRow[] =>
@@ -113,25 +105,3 @@ const recordSig = (r: InitiativeRow): string =>
 /** The key a create or an update stub is born with, and the server row
  *  carries back: never a Convex id, so nothing mistakes the stub for a row. */
 export const newInitiativeKey = (): string => `in_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-
-/** True for a key newInitiativeKey minted: a goal's address while it is a stub. */
-export const isInitiativeKey = (ref: string): boolean => /^in_[a-z0-9]+_[a-z0-9]+$/.test(ref);
-
-/** The conversation an initiative opens beside (I1 "The page"): a role
- *  owner's standing session, or a person owner's own anchor in this workspace.
- *  Null when nobody drives it, or the person keeps no anchor here; the page
- *  then shows the initiative alone. */
-export function ownerSeat(tree: OrgTree | null, owner: InitiativeOwner | undefined): { role: OrgRole | null; conversationId: string | null; speaker: string | null } {
-  if (!tree || !owner) return { role: null, conversationId: null, speaker: null };
-  if (owner.kind === "role") {
-    const { role, anchor } = scopeSeatOf(tree, owner.role_id);
-    return { role, conversationId: role?.standing?.conversation_id ?? anchor?.conversation_id ?? null, speaker: role?.name ?? null };
-  }
-  // A person's anchor: one they host that no role holds, else the workspace's
-  // root seat when they host it (org-staffing.md S16: the root agent is the
-  // head of people once seated, and it answers to its host).
-  const own = tree.anchors.find((a) => !a.org_role_id && a.host_user_id === owner.user_id);
-  const root = own ? null : scopeSeatOf(tree, "workspace").anchor;
-  const anchor = own ?? (root && root.host_user_id === owner.user_id ? root : null);
-  return { role: null, conversationId: anchor?.conversation_id ?? null, speaker: anchor?.name ?? null };
-}

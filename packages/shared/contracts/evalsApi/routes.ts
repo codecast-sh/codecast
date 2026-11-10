@@ -45,7 +45,6 @@ export interface EvalsRoutes extends EvalsViewRoutes<RunRow, SimFailureMoved> {
 }
 
 export type EvalsRouteKey = keyof EvalsRoutes;
-export type EvalsResponse<K extends EvalsRouteKey> = EvalsRoutes[K]["response"];
 
 /** Every route key, in the order of the spec's table. Typed so a key missing here or misspelled fails to compile. */
 export const EVALS_ROUTE_KEYS = [

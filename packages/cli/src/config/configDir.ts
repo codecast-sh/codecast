@@ -25,3 +25,12 @@ import * as path from "node:path";
 export function defaultConfigDir(): string {
   return process.env.CODECAST_DIR || path.join(process.env.HOME || os.homedir(), ".codecast");
 }
+
+/**
+ * Shell (bash or sh): the one line by which a hook finds codecast's state
+ * directory, in the order defaultConfigDir above uses. Every hook script carries
+ * it once, near the top, and every path under the directory is built from
+ * $CC_DIR, so a session started under another CODECAST_DIR (a test, a
+ * worktree, a second identity) posts to and writes state for that daemon.
+ */
+export const HOOK_STATE_DIR = `CC_DIR="\${CODECAST_DIR:-$HOME/.codecast}"`;

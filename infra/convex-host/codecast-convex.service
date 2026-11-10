@@ -1,4 +1,11 @@
-# Brings the Convex stack up on boot and keeps it up.
+# DISABLED ON THE HOST, DELIBERATELY. Do not enable it as written: it runs
+# `docker compose up -d` in /srv/convex, which would start the compose `caddy`
+# service and fail, because the Caddy container that actually serves was
+# started outside compose and holds ports 80 and 443 (README.md, "How it comes
+# back after a reboot"). Docker's restart policy plus docker.service bring the
+# stack back after a reboot without it.
+#
+# What it was written to do: bring the Convex stack up on boot and keep it up.
 #
 # Docker's own restart policy (unless-stopped, set in the compose file) handles
 # a crashed CONTAINER. This unit handles the case that policy cannot: the HOST

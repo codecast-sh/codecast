@@ -29,11 +29,6 @@ export function rotation([ax, ay, az]: V3): (pt: V3) => V3 {
 /** `rotateX(ax) rotateY(ay) rotateZ(az)` applied to a point, in degrees. */
 export const rotateXYZ = (pt: V3, rot: V3): V3 => rotation(rot)(pt);
 
-/** A world point in the camera's frame: `translateZ(dist) rotate(pitch, yaw, roll) translate(-pos)`. */
-export function toCamera(p: Pose, [x, y, z]: V3): V3 {
-  const [cx, cy, cz] = rotateXYZ([x - p.x, y - p.y, z - p.z], [p.pitch, p.yaw, p.roll]);
-  return [cx, cy, cz + p.dist];
-}
 
 export type Projected = { x: number; y: number; scale: number };
 

@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CauseHistory, HistoryAttempt } from "../causeHistory";
 import {
-  DAY, HOUR, alignDown, cameBackCount, homeExpectation, offTopicComebacks, withoutOffTopic, attemptTone, bucketCounts, bucketStep, cameBackClose, closeWords, defaultRange, lowerBound, problemLine, problemRowSig, problemState, rangeDomain, regressionAt, sortProblems, sparkEnd, timeTicks,
+  DAY, HOUR, alignDown, cameBackCount, homeExpectation, offTopicComebacks, withoutOffTopic, attemptTone, bucketCounts, bucketStep, closeWords, defaultRange, lowerBound, problemLine, problemRowSig, problemState, rangeDomain, regressionAt, timeTicks,
 } from "../timeline";
 import type { LineIssue } from "../lineModel";
 
@@ -62,29 +62,6 @@ describe("problemLine", () => {
   });
 });
 
-describe("came back: the step whose close did not hold (learning-loop.md LL4)", () => {
-  const dissolvedAt = (step: string, back: boolean, over: Partial<CauseHistory> = {}) => ({
-    history: history({
-      attempts: [attempt({ ended: "dissolved", endStep: step })],
-      closes: [{ runId: `r-${step}`, n: 1, kind: "dissolved", at: NOW - 3 * DAY, step }],
-      recurrences: back ? [{ afterRunId: `r-${step}`, n: 1, kind: "dissolved", closedAt: NOW - 3 * DAY, at: NOW - DAY, count: 2, until: null, words: "" }] : [],
-      cameBack: back,
-      ...over,
-    }),
-  });
-  test("a dissolve that came back names its run and step; one that held, a fix, or a live attempt does not", () => {
-    expect(cameBackClose(dissolvedAt("dissolve", true))).toMatchObject({ runId: "r-dissolve", step: "dissolve" });
-    expect(cameBackClose(dissolvedAt("dissolve", false))).toBeNull();
-    expect(cameBackClose(dissolvedAt("dissolve", true, { attempts: [attempt({ live: true, end: null })] }))).toBeNull();
-    expect(cameBackClose({ history: history({ regressed: true, closes: [{ runId: "r1", n: 1, kind: "shipped", at: NOW - DAY, step: "watch" }] }) })).toBeNull();
-  });
-});
-
-test("sortProblems puts the graph's worked problems first, regressed and came back first among them, then the newest activity", () => {
-  const row = (id: string, state: "regressed" | "cameback" | "open", lastActivity: number, runs = ["r"]) => ({ issue: { id, runs, history: history({ lastActivity }) } as unknown as LineIssue, state });
-  const out = sortProblems([row("a", "open", 30), row("b", "regressed", 10), row("c", "open", 50), row("d", "cameback", 20), row("e", "open", 90, [])]);
-  expect(out.map((r) => r.issue.id)).toEqual(["d", "b", "c", "a", "e"]);
-});
 
 test("attemptTone follows how an attempt ended", () => {
   expect(attemptTone(attempt({ live: true }))).toBe("live");
@@ -196,11 +173,5 @@ describe("the list keeps what did not move", () => {
     // An occurrence that came back after a fix draws red: the same times, another signature.
     const regs = [{ afterRunId: "r1", at: NOW - DAY, count: 1, basis: "ship" as const, liveAt: NOW - 1.5 * DAY, until: null, words: "" }];
     expect(problemRowSig(issue({ occurrences: occ, regressions: regs }), "open")).not.toBe(base);
-  });
-  test("a sparkline's window ends on the next whole hour, or the next local midnight for day-wide bars", () => {
-    expect(sparkEnd(NOW, HOUR)).toBe(new Date(2026, 9, 9, 16, 0).getTime());
-    expect(sparkEnd(NOW, DAY)).toBe(new Date(2026, 9, 10).getTime());
-    expect(sparkEnd(NOW, 3 * DAY)).toBe(new Date(2026, 9, 10).getTime());
-    expect(sparkEnd(NOW + 10 * 60_000, HOUR)).toBe(sparkEnd(NOW, HOUR));
   });
 });

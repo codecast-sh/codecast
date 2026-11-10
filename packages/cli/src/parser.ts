@@ -595,13 +595,6 @@ export function parseLine(line: string): ClaudeMessage | null {
   }
 }
 
-export function parseLines(content: string): ClaudeMessage[] {
-  return content
-    .split("\n")
-    .map(parseLine)
-    .filter((m): m is ClaudeMessage => m !== null);
-}
-
 export interface CodexMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -617,13 +610,6 @@ export function parseCodexLine(line: string): CodexMessage | null {
     console.warn(`[parser] Line content: ${preview}`);
     return null;
   }
-}
-
-export function parseCodexLines(content: string): CodexMessage[] {
-  return content
-    .split("\n")
-    .map(parseCodexLine)
-    .filter((m): m is CodexMessage => m !== null);
 }
 
 interface CodexSessionEntry {
@@ -994,20 +980,6 @@ export function extractCodexCwd(content: string): string | undefined {
   return undefined;
 }
 
-export function extractCodexSessionId(content: string): string | undefined {
-  const lines = content.split("\n");
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === "session_meta" && entry.payload?.id) {
-        return entry.payload.id;
-      }
-    } catch {}
-  }
-  return undefined;
-}
-
 /** A Codex subagent spawned IN-PROCESS as a thread of its parent TUI. The nested
  *  `thread_spawn` object is what distinguishes it from a `codex exec` child, which
  *  is a separate OS process and writes `subagent: "review"` (a bare string). Only
@@ -1125,13 +1097,6 @@ export function extractCodexForkRoot(content: string): string | undefined {
     root = parent.get(root)!;
   }
   return root;
-}
-
-export interface CursorPrompt {
-  id: string;
-  timestamp: number;
-  text: string;
-  role: "user" | "assistant";
 }
 
 function parseTimestamp(value: unknown): number {
@@ -1451,34 +1416,6 @@ export function parseGeminiSessionFile(content: string, onEmit?: TranscriptEmiss
   }
 
   return messages;
-}
-
-export function extractGeminiSessionId(content: string): string | undefined {
-  try {
-    const session = JSON.parse(content);
-    return session.sessionId;
-  } catch {
-    return undefined;
-  }
-}
-
-export function extractGeminiProjectHash(content: string): string | undefined {
-  try {
-    const session = JSON.parse(content);
-    return session.projectHash;
-  } catch {
-    return undefined;
-  }
-}
-
-export function extractGeminiStartTime(content: string): number | undefined {
-  try {
-    const session = JSON.parse(content);
-    if (session.startTime) {
-      return new Date(session.startTime).getTime();
-    }
-  } catch {}
-  return undefined;
 }
 
 // ── OpenCode json-store parser ────────────────────────────────────────────────
@@ -1881,17 +1818,6 @@ export function extractPiCwd(content: string): string | undefined {
   return undefined;
 }
 
-export function extractPiSessionId(content: string): string | undefined {
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === "session" && entry.id) return entry.id;
-    } catch {}
-  }
-  return undefined;
-}
-
 // ── Grok Build (xai-org/grok-build) ─────────────────────────────────────────
 // Grok stores each session under ~/.grok/sessions/<url-encoded cwd>/<uuid>/. The
 // canonical transcript is updates.jsonl: an APPEND-ONLY stream of session updates
@@ -2229,21 +2155,6 @@ export function isGrokInternalSession(summaryContent: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Session id from an updates.jsonl blob (the envelope's params.sessionId; legacy
- *  lines carry it at the top level). The uuid DIRECTORY name is the on-disk
- *  identity — this is the in-band cross-check. */
-export function extractGrokSessionId(content: string): string | undefined {
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line) as GrokEnvelope;
-      const id = parsed.params?.sessionId ?? parsed.sessionId;
-      if (typeof id === "string" && id) return id;
-    } catch {}
-  }
-  return undefined;
 }
 
 // ── Muse (Meta Muse Code, `muse` CLI) ─────────────────────────────────────

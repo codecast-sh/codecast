@@ -1,5 +1,6 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
+import { isTeamMember } from "../privacy";
 import {
   AGENT_SETUP_CONTINUE_MESSAGE,
   huddleExcerptNote,
@@ -172,7 +173,10 @@ export async function resolveCounterTeam(
 ): Promise<Id<"teams"> | undefined> {
   if (conversation.team_id) return conversation.team_id;
   const owner = await ctx.db.get(conversation.user_id);
-  return owner?.active_team_id ?? owner?.team_id ?? undefined;
+  const teamId = (owner?.active_team_id ?? owner?.team_id) as Id<"teams"> | undefined;
+  // The pointer outlives a lapsed membership; a team the owner left gets no
+  // share of their counters.
+  return teamId && (await isTeamMember(ctx, conversation.user_id, teamId)) ? teamId : undefined;
 }
 
 // Launch links (parent, spawned-by) land up to a minute after a session's

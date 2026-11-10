@@ -62,6 +62,20 @@ describe("installHarnessHooks", () => {
     expect(fs.readFileSync(settingsFile(), "utf-8")).toBe(bytes);
   });
 
+  test("a hook with no events gets no file, and the one an older install wrote goes", () => {
+    const eventless = HARNESS_HOOKS.filter((h) => h.kind === "hook" && h.events.length === 0 && !h.installedElsewhere);
+    expect(eventless.map((h) => h.file)).toContain("task-pulse.sh");
+    const hooks = path.join(home, ".claude", "hooks");
+    fs.mkdirSync(hooks, { recursive: true });
+    for (const h of eventless) fs.writeFileSync(path.join(hooks, h.file), "#!/bin/bash\nexit 0\n");
+    installHarnessHooks(ALL_ON);
+    for (const h of eventless) expect(fs.existsSync(path.join(hooks, h.file))).toBe(false);
+    // Every other hook that is wanted has its script.
+    for (const h of HARNESS_HOOKS.filter((x) => !x.installedElsewhere && x.events.length > 0)) {
+      expect(fs.existsSync(path.join(hooks, h.file))).toBe(true);
+    }
+  });
+
   test("records why each write happened", () => {
     withHarnessCause({ why: "automatic update to v9.9.9", automatic: true }, () => installHarnessHooks(ALL_ON));
     const changes = readHarnessChanges(1000);

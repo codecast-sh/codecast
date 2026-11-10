@@ -8,7 +8,7 @@ const { trayIconState } = require("./trayIcon");
 function loadTray() {
   const source = fs.readFileSync(path.join(__dirname, "main.js"), "utf8");
   const traySource = source.slice(source.indexOf('const { trayIconState }'), source.indexOf("function buildAppMenu()"));
-  const badgeSource = source.slice(source.indexOf('shellIpc.handle("set-badge-count"'), source.indexOf('shellIpc.handle("get-env"'));
+  const badgeSource = source.slice(source.indexOf('shellIpc.handle("set-badge-count"'), source.indexOf("// OS-wide seconds since last user input"));
   const handlers = new Map();
   const badges = [];
   const images = [];

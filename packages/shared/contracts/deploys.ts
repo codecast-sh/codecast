@@ -178,12 +178,6 @@ export type DeployStepView = {
 /** When a deploy counts on a chart: when it went live, else when it was asked for. */
 export const deployAt = (d: Pick<DeployView, "live_at" | "created_at">) => d.live_at ?? d.created_at;
 
-/** A deploy's short label on a chart flag: its target, and the sha when known. */
-export function deployFlagLabel(d: Pick<DeployView, "target" | "sha" | "version">): string {
-  const v = d.sha ? d.sha.slice(0, 7) : d.version ? d.version.slice(0, 12) : null;
-  return v ? `${d.target} ${v}` : d.target;
-}
-
 /** One line for a deploy's state, the words every surface uses. */
 export function deployStateWords(d: Pick<DeployView, "status" | "carries">, after?: Pick<DeployAfter, "regressions" | "new_errors" | "quiet" | "open"> | null): string {
   if (d.status === "requested") return "waiting for its machine";

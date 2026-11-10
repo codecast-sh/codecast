@@ -52,8 +52,3 @@ export function useGraphEditability(workflowId: string | null | undefined): Grap
   if (row) return row;
   return ready ? null : undefined;
 }
-
-/** A save's sessionCommands row, by its request id. */
-export function useSaveRow(requestId: string | null): { executed_at?: number | null; result?: string | null; error?: string | null } | null {
-  return useInboxStore((s) => (requestId ? ((s as any).sessionCommands?.[requestId] ?? null) : null));
-}

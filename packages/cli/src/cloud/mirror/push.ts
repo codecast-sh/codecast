@@ -1,4 +1,5 @@
 import { spawn } from "../../proc.js";
+import { HOST_PATH_EXPORT } from "../syncSide.js";
 import { promisify } from "node:util";
 import { gzip } from "node:zlib";
 import * as fs from "node:fs";
@@ -25,7 +26,7 @@ import { CLOUD_START_RUN_MS } from "@codecast/shared/contracts";
 
 const gzipAsync = promisify(gzip);
 
-export const MIRROR_APPLY_COMMAND = 'export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; cast cloud mirror-apply --stdin';
+export const MIRROR_APPLY_COMMAND = `${HOST_PATH_EXPORT}; cast cloud mirror-apply --stdin`;
 export const MIRROR_PUSH_TIMEOUT_MS = 5 * 60_000;
 export const OLDER_HOST_REASON = "host cast older than this laptop — cast hosts provision";
 export const NOT_LOGGED_IN_REASON = "not logged in on this laptop — cast login";
@@ -92,6 +93,17 @@ export class MirrorSourceCache {
     let check = this.checks.get(ledger);
     if (!check) { check = ledgerUnchanged(ledger); this.checks.set(ledger, check); }
     return check;
+  }
+  /**
+   * Forget what was read: the laptop's files changed under this tick (a
+   * memory pull wrote some), so the next build reads them again. The touch
+   * ledger stays; it only ever names paths to watch.
+   */
+  invalidate(): void {
+    this.inventory = undefined;
+    this.discoveries.clear();
+    this.signed = undefined;
+    this.checks.clear();
   }
 }
 
@@ -334,10 +346,10 @@ export async function pushMirrorToHostAsync(host: RemoteHost, bundle: Buffer, op
   throw new Error(`mirror push failed (exit ${code ?? "signal"})${brief ? `: ${brief}` : ""}`);
 }
 
-/** The host stamp after verification against actual bytes and modes. */
 /** How long the stamp read may take: its reply lists every mirrored file (6.4 MB for 13,759 on 2026-10-05), and 20s ran out on a loaded laptop. */
 export const MIRROR_STAMP_TIMEOUT_MS = 120_000;
 
+/** The host stamp after verification against actual bytes and modes. */
 export async function readRemoteMirrorStamp(host: RemoteHost, timeoutMs = MIRROR_STAMP_TIMEOUT_MS, signal?: AbortSignal, command = MIRROR_APPLY_COMMAND.replace("--stdin", "--verify"), strict = false): Promise<MirrorStamp | null> {
   const response = await mirrorSsh(host, command, { timeoutMs, signal, what: "reading the host's mirror stamp" });
   if (strict && response.code !== 0) throw new Error(response.stderr.trim() || `mirror verification failed (exit ${response.code})`);
@@ -461,6 +473,21 @@ async function saveHostStamp(deps: MirrorDeps, key: string, stamp: LocalMirrorSt
  * CPU per host per minute, freezing the daemon).
  */
 const buildCache = new Map<string, { hash: string; ledger: MirrorLedger; files: Map<string, string>; warnings: Set<string> }>();
+/**
+ * The key carries the host's project set and the mirror config, so each change
+ * to either leaves the old entry (a manifest of every file) behind for the
+ * daemon's life. Past this many, the least recently built go.
+ */
+export const BUILD_CACHE_CAP = 32;
+function rememberBuild(key: string, entry: { hash: string; ledger: MirrorLedger; files: Map<string, string>; warnings: Set<string> }): void {
+  buildCache.delete(key);
+  buildCache.set(key, entry);
+  while (buildCache.size > BUILD_CACHE_CAP) buildCache.delete(buildCache.keys().next().value!);
+}
+/** For tests: how many builds are remembered. */
+export function buildCacheSize(): number {
+  return buildCache.size;
+}
 
 /** The paths whose content differs between two bundle manifests, for the log. */
 function changedPaths(before: Map<string, string>, after: Map<string, string>): string[] {
@@ -522,7 +549,7 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
         deps.log(`bundle for ${key} changed (${changed.length} file(s)): ${changed.slice(0, 6).join(", ")}${changed.length > 6 ? ", …" : ""}`);
       }
       const warnings = summary?.warnings ?? [];
-      if (ledger) buildCache.set(cacheKey, { hash: built.hash, ledger, files, warnings: new Set(warnings) }); else buildCache.delete(cacheKey);
+      if (ledger) rememberBuild(cacheKey, { hash: built.hash, ledger, files, warnings: new Set(warnings) }); else buildCache.delete(cacheKey);
       // Compatibility warnings are worth a line when they are new. Any edit in a mirrored
       // file (memory notes change all day) rebuilds the bundle, and logging every warning
       // on each rebuild wrote ~10k lines a minute (2026-10-14).
@@ -573,6 +600,8 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
         const pulled = await deps.pullMemory(host, projects, remote);
         if (pulled.written > 0 || pulled.reconciled.length) {
           buildOpts.reconciled = pulled.reconciled;
+          // The pull just wrote laptop files this tick's shared collection read earlier; a bundle from those bytes would put the old memory back over the host's.
+          opts.sources?.invalidate();
           buildCache.delete(cacheKey); built = await build(); hash = built.hash;
         }
       } catch (err) {

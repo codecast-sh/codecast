@@ -14,7 +14,6 @@ export const DAY = 24 * HOUR;
 
 export type ProblemState = "regressed" | "cameback" | "fixing" | "unapproved" | "watching" | "held" | "folded" | "open" | "closed";
 
-export const PROBLEM_STATES: ReadonlyArray<ProblemState> = ["regressed", "cameback", "fixing", "unapproved", "watching", "held", "folded", "open", "closed"];
 
 export const PROBLEM_STATE_WORDS: Record<ProblemState, string> = {
   regressed: "Regressed",
@@ -28,8 +27,6 @@ export const PROBLEM_STATE_WORDS: Record<ProblemState, string> = {
   closed: "Closed",
 };
 
-/** The states that mean a close did not hold: listed first. */
-const BACK_STATES = new Set<ProblemState>(["regressed", "cameback"]);
 
 const CLOSED = new Set(["dropped", "closed", "cancelled", "canceled", "wontfix", "done"]);
 
@@ -177,19 +174,6 @@ export function closeWords(close: HistoryClose, labelOf?: (id: string) => string
   return `${CLOSE_VERB[close.kind]}${at ? ` at ${at}` : ""} ${shortDay(close.at)}`;
 }
 
-/**
- * The close a problem came back after, when its newest close was a step
- * deciding there was nothing to fix (a dissolve, a drop) and it happened
- * again since: that step's decision on that run was wrong, the loop's
- * learning signal (learning-loop.md LL4). Null while an attempt runs, after a
- * fix (that is a regression, the fix's miss, not a step's), or when it held.
- */
-export function cameBackClose(issue: Pick<LineIssue, "history">): HistoryClose | null {
-  const h = issue.history;
-  if (!h.cameBack || h.attempts.some((a) => a.live)) return null;
-  const close = h.closes[h.closes.length - 1];
-  return close && close.kind !== "shipped" && close.step ? close : null;
-}
 
 /**
  * Everything a problem's row in the list draws, as one string: its words, its
@@ -207,22 +191,6 @@ export function problemRowSig(issue: LineIssue, state: ProblemState): string {
   ].join("|");
 }
 
-/** Where a row's sparkline window ends: the next whole hour, or the next local midnight for day-wide bars, so the bars move once a bucket rather than with the clock. */
-export function sparkEnd(now: number, step: number): number {
-  const unit = Math.min(step, DAY);
-  return alignDown(now, unit) + unit;
-}
-
-/** Whether a run on the drawn graph has taken the problem; the rest wait in a group of their own. */
-export const problemWasRun = (issue: Pick<LineIssue, "runs">) => issue.runs.length > 0;
-
-/** The problems the graph worked first (regressed and came back first among them, then the newest activity), then the ones no run has taken. */
-export function sortProblems<T extends { issue: LineIssue; state: ProblemState }>(rows: T[]): T[] {
-  return rows.sort((a, b) =>
-    Number(problemWasRun(b.issue)) - Number(problemWasRun(a.issue))
-    || Number(BACK_STATES.has(b.state)) - Number(BACK_STATES.has(a.state))
-    || b.issue.history.lastActivity - a.issue.history.lastActivity);
-}
 
 /** How an attempt reads as a mark: its tone in the workspace's palette. "closed" is a close without a change (dissolved, dropped). */
 export type MarkTone = "ok" | "bad" | "warn" | "live" | "person" | "closed" | "none";
@@ -292,10 +260,6 @@ export function attemptMarkWords(a: HistoryAttempt, labelOf?: (id: string) => st
   return `#${a.n} ${attemptEndWords(a, h)}${at ? ` at ${at}` : ""} ${shortDay(a.end ?? a.start)}`;
 }
 
-/** What each attempt mark's color means, in the order a legend lists them. */
-export const MARK_TONE_WORDS: ReadonlyArray<[MarkTone, string]> = [
-  ["ok", "shipped"], ["warn", "unapproved or stuck"], ["closed", "closed without a change"], ["bad", "failed"], ["person", "waiting on you"], ["live", "running"], ["none", "stopped"],
-];
 
 // ── occurrences ──────────────────────────────────────────────────────────────
 

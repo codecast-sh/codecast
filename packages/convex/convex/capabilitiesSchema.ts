@@ -327,7 +327,6 @@ export const capabilityTables = {
     ops_json: v.optional(v.string()),
     created_at: v.number(),
   })
-    .index("by_user_created", ["user_id", "created_at"])
     // Tenant exception, justified: the reader is requireTeamAdmin, so the
     // tenant of this index IS the team. See the invariant test's allowlist.
     .index("by_team_created", ["team_id", "created_at"])

@@ -5,7 +5,6 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { Doc, Id } from "./_generated/dataModel";
-import { resolveEffectiveTeam } from "./data";
 import { runnerDeviceOf } from "./lib/runnerDevice";
 import { boundedRuleRequest, cascadeFromAnswer, keepableFor, keptPatterns, permissionRuleLabel } from "@codecast/shared/contracts/permissionRules";
 import { permissionProjectKey, ruleRequestValidator, rulesForConversation, saveAllowRules } from "./lib/permissionRules";
@@ -447,112 +446,6 @@ export const getAllRespondedPermissions = query({
         _id: permission._id,
         session_id: permission.session_id,
       }));
-  },
-});
-
-type PermissionResourceKind = "docs" | "tasks" | "plans" | "projects" | "conversations";
-
-type ResourceAccessArgs = {
-  record: {
-    user_id?: Id<"users">;
-  } & Record<string, any>;
-  userId: Id<"users">;
-  teamMembershipIds?: readonly unknown[];
-  convMap?: Map<string, any>;
-};
-
-export function canAccessResourceForUser({
-  record,
-  userId,
-  teamMembershipIds = [],
-  convMap = new Map<string, any>(),
-}: ResourceAccessArgs): boolean {
-  if (record.user_id && String(record.user_id) === String(userId)) return true;
-
-  const effectiveTeamId = resolveEffectiveTeam(record, convMap);
-  if (!effectiveTeamId) return false;
-
-  return teamMembershipIds.some((teamId) => String(teamId) === String(effectiveTeamId));
-}
-
-export async function buildPermissionConversationMap(
-  ctx: { db: any },
-  records: Record<string, any>[],
-): Promise<Map<string, any>> {
-  const convIds = new Set<string>();
-  for (const record of records) {
-    if (record.conversation_id) convIds.add(String(record.conversation_id));
-    if (record.created_from_conversation) convIds.add(String(record.created_from_conversation));
-    for (const id of record.related_conversation_ids || []) convIds.add(String(id));
-    for (const id of record.conversation_ids || []) convIds.add(String(id));
-  }
-
-  const convMap = new Map<string, any>();
-  for (const cid of convIds) {
-    const conv = await ctx.db.get(cid as Id<"conversations">);
-    if (!conv) continue;
-    convMap.set(cid, {
-      team_id: conv.team_id,
-      is_private: conv.is_private,
-      auto_shared: conv.auto_shared,
-      team_visibility: conv.team_visibility,
-      git_root: conv.git_root,
-      started_at: conv.started_at,
-      project_path: conv.project_path,
-    });
-  }
-  return convMap;
-}
-
-export async function getUserTeamMembershipIds(
-  ctx: { db: any },
-  userId: Id<"users">,
-): Promise<unknown[]> {
-  const memberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .collect();
-  return memberships.map((membership: any) => membership.team_id);
-}
-
-export async function getAccessibleResource(
-  ctx: { db: any },
-  _kind: PermissionResourceKind,
-  id: Id<any>,
-  userId: Id<"users">,
-): Promise<any | null> {
-  const record = await ctx.db.get(id);
-  if (!record) return null;
-
-  const convMap = await buildPermissionConversationMap(ctx, [record]);
-  const teamMembershipIds = await getUserTeamMembershipIds(ctx, userId);
-  return canAccessResourceForUser({ record, userId, teamMembershipIds, convMap })
-    ? record
-    : null;
-}
-
-// One-shot: stamp owner_user_id onto rows created before the field existed, so
-// the by_owner_resolved query never misses a permission resolved right at deploy.
-// Batched and re-entrant; run until it returns done:true. Safe to delete later.
-export const backfillPermissionOwners = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    let patched = 0;
-    for (let i = 0; i < 20; i++) {
-      const batch = await ctx.db
-        .query("pending_permissions")
-        .withIndex("by_owner_resolved", (q) => q.eq("owner_user_id", undefined))
-        .take(200);
-      if (batch.length === 0) return { patched, done: true };
-      for (const p of batch) {
-        const conv = await ctx.db.get(p.conversation_id);
-        // Set to the conversation owner, or self-reference the resolver as a
-        // fallback so the row leaves the undefined bucket and isn't re-scanned.
-        await ctx.db.patch(p._id, { owner_user_id: conv?.user_id ?? p.resolved_by });
-        patched++;
-      }
-    }
-    return { patched, done: false };
   },
 });
 

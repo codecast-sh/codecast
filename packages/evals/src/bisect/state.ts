@@ -86,7 +86,6 @@ export function writePendingState(id: string, plan: BisectPlan, tmux: string | n
   writeJsonAtomic(paths.state, state);
   return state;
 }
-export const readBisectPlan = (id: string, home = evalsHome()): BisectPlan | null => readJson<BisectPlan>(bisectPaths(id, home).plan);
 
 /** The steps after `since` (a seq), in order. A torn last line (mid-append) is left for the next read. */
 export function readSteps(id: string, since = 0, home = evalsHome()): BisectStep[] {

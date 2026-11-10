@@ -158,10 +158,6 @@ export function takeWake(outage: string, now = Date.now()): Promise<boolean> {
 }
 
 /**
- * Start the human's Chrome in the background. True when a launch was
- * issued (or one was issued moments ago by another session).
- */
-/**
  * Chrome runs the renderer of a tab that is not visible at background
  * priority, which macOS starves on a busy machine: an agent's tab, opened in
  * the background on purpose so it never takes the human's screen, then
@@ -177,6 +173,10 @@ export function takeWake(outage: string, now = Date.now()): Promise<boolean> {
  */
 export const REAL_CHROME_LAUNCH_ARGS = ["--disable-renderer-backgrounding", "--silent-debugger-extension-api"];
 
+/**
+ * Start the human's Chrome in the background. True when a launch was
+ * issued (or one was issued moments ago by another session).
+ */
 export async function launchRealChrome(): Promise<boolean> {
   if (!(await takeStamp("launchedAt", LAUNCH_ONCE_MS))) return true;
   return spawnChrome([...REAL_CHROME_LAUNCH_ARGS, ...(bridgeProfileArgs() ?? [])]);

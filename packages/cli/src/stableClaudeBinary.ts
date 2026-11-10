@@ -18,7 +18,6 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { whichBin } from "./proc.js";
-import { codecastPath } from "./codecastDir.js";
 import { defaultConfigDir } from "./config/configDir.js";
 
 /** A native-installer release: `.../claude/versions/<version>` (basename is a version). */

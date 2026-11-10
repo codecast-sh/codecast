@@ -4,8 +4,8 @@ digraph autopilot {
   start [shape=Mdiamond]
   dispatch [label="Dispatch ready tasks", shape=parallelogram,
     script="cast plan orchestrate $plan_id --max 3"]
-  monitor [label="Wait for agents", shape=parallelogram,
-    script="sleep 120 && cast plan status $plan_id --json"]
+  monitor [label="Wait for agents", shape=parallelogram, timeout=300,
+    script="sleep 120 && cast plan status $plan_id"]
   review [label="Review wave results", shape=hexagon]
   check [label="More tasks?", shape=diamond]
   exit [shape=Msquare]

@@ -560,22 +560,6 @@ export const checkDeviceLoopFreeze = internalMutation({
   },
 });
 
-export const clearOfflineAlerts = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const logs = await ctx.db
-      .query("daemon_logs")
-      .order("desc")
-      .take(10000);
-
-    const offlineLogs = logs.filter((l) => l.message.startsWith("DAEMON OFFLINE"));
-    for (const log of offlineLogs) {
-      await ctx.db.delete(log._id);
-    }
-    return { deleted: offlineLogs.length };
-  },
-});
-
 // Steady-state retention only: trims a SMALL bounded batch of the oldest rows per
 // cron tick and does NOT self-reschedule. Reuses the DEFAULT (_creationTime) order
 // (rows insert in timestamp order, so oldest-by-creation == oldest-by-timestamp) so
@@ -649,7 +633,7 @@ async function advanceLogPrune(ctx: MutationCtx, batchArg?: number, seedCursor?:
 
 export const pruneOldLogs = internalMutation({
   args: {
-    // Maintenance-window override: `npx convex run daemonLogs:pruneOldLogs
+    // Maintenance-window override: `packages/convex/run.sh daemonLogs:pruneOldLogs
     // '{"batch":N}'` from a PACED external loop (sleep between calls, watch
     // latency). The cron always runs the gentle default.
     batch: v.optional(v.number()),
@@ -662,7 +646,7 @@ export const pruneOldLogs = internalMutation({
 // are inside the retention window. The pause IS the safety mechanism: the May
 // incident (see pruneOldLogs NOTE) came from a drain that rescheduled with no
 // gap and monopolized the worker pool. Kick off manually:
-//   npx convex run daemonLogs:drainLogBacklog '{"batch":1000,"pauseMs":45000}'
+//   packages/convex/run.sh daemonLogs:drainLogBacklog '{"batch":1000,"pauseMs":45000}'
 // Stop it by letting it hit caughtUp, or deploy with this function body
 // short-circuited, or cancel the pending run in _scheduled_functions.
 export const drainLogBacklog = internalMutation({

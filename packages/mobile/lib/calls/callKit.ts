@@ -25,7 +25,6 @@
 // Guarded like every other native dep here (lib/gestureHandler, livekitNative):
 // a JS bundle newer than the binary degrades to the notification ring.
 import { AppState } from "react-native";
-type EventSubscription = { remove(): void };
 import { api } from "@codecast/convex/convex/_generated/api";
 import { convex } from "../convex";
 import { parseCallRingPush } from "@codecast/shared/contracts";
@@ -108,8 +107,6 @@ const ANSWER_AUTH_WAIT_MS = 20_000;
 // end-old + accept-new (huddles have no hold).
 type Active = { ckId: string; inviteId: string; roomKey: string; answered: boolean };
 let active: Active | null = null;
-let subs: EventSubscription[] = [];
-let unsubCall: (() => void) | null = null;
 let started = false;
 
 // The ring's settle watch, held for as long as the ring is up.
@@ -257,18 +254,17 @@ export function startCallKitBridge(): void {
   const dbg = (name: string, e: any) => {
     if (__DEV__) (global as any).__ckEvents?.push({ name, e: JSON.parse(JSON.stringify(e ?? null)) });
   };
-  subs = [
-    k.addCallSessionAddedListener((e: any) => { dbg("sessionAdded", e); onSessionAdded(e.session); }),
-    k.addCallSessionUpdatedListener((e: any) => dbg("sessionUpdated", e)),
-    k.addCallSessionRemovedListener((e: any) => dbg("sessionRemoved", e)),
-    k.addCallAnsweredListener((e: any) => { dbg("answered", e); void onAnswered(e); }),
-    k.addCallEndedListener((e: any) => { dbg("ended", e); void onEnded(e); }),
-    k.addReportedCallEndedListener((e: any) => dbg("reportedEnded", e)),
-    k.addIncomingCallReportedListener((e: any) => dbg("incomingReported", e)),
-    k.addSetMutedActionListener((e: any) => onSetMuted(e)),
-    // PushKit token → server, so invites route through APNs VoIP.
-    k.addVoIPPushTokenUpdatedListener((e: any) => void publishVoipToken(e?.token ?? null)),
-  ];
+  // The bridge lives as long as the app does, so the listeners are never removed.
+  k.addCallSessionAddedListener((e: any) => { dbg("sessionAdded", e); onSessionAdded(e.session); });
+  k.addCallSessionUpdatedListener((e: any) => dbg("sessionUpdated", e));
+  k.addCallSessionRemovedListener((e: any) => dbg("sessionRemoved", e));
+  k.addCallAnsweredListener((e: any) => { dbg("answered", e); void onAnswered(e); });
+  k.addCallEndedListener((e: any) => { dbg("ended", e); void onEnded(e); });
+  k.addReportedCallEndedListener((e: any) => dbg("reportedEnded", e));
+  k.addIncomingCallReportedListener((e: any) => dbg("incomingReported", e));
+  k.addSetMutedActionListener((e: any) => onSetMuted(e));
+  // PushKit token → server, so invites route through APNs VoIP.
+  k.addVoIPPushTokenUpdatedListener((e: any) => void publishVoipToken(e?.token ?? null));
   // Cold start: the module queued the incoming session before JS was up.
   void k.getActiveCallSession().then((s: any) => s && onSessionAdded(s)).catch(() => {});
   // Token may already be there.
@@ -279,7 +275,7 @@ export function startCallKitBridge(): void {
   // updates the system UI.
   let lastPhase = getCallSnapshot().phase;
   let lastMuted = getCallSnapshot().muted;
-  unsubCall = subscribeCall(() => {
+  subscribeCall(() => {
     const s = getCallSnapshot();
     if (active?.answered) {
       if (lastPhase !== "idle" && s.phase === "idle") void endCallKitCall("local");
@@ -292,14 +288,6 @@ export function startCallKitBridge(): void {
     lastPhase = s.phase;
     lastMuted = s.muted;
   });
-}
-
-export function stopCallKitBridge(): void {
-  for (const s of subs) s.remove();
-  subs = [];
-  unsubCall?.();
-  unsubCall = null;
-  started = false;
 }
 
 let lastPublished: string | null | undefined;

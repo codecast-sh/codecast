@@ -618,7 +618,10 @@ export const isSessionManaged = query({
     const STALE_THRESHOLD = 60 * 1000;
     const now = Date.now();
 
-    if (!session) {
+    // Only the session's own runner learns its process details (session id,
+    // pid, pane, permission mode). Anyone else gets the same answer as for a
+    // conversation with no managed session.
+    if (!session || session.user_id?.toString() !== authUserId.toString()) {
       return { managed: false };
     }
 
@@ -686,8 +689,7 @@ export const getPendingMessagesForSession = query({
 
     const messages = await ctx.db
       .query("pending_messages")
-      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", session.conversation_id))
-      .filter((q: any) => q.eq(q.field("status"), "pending"))
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", session.conversation_id).eq("status", "pending"))
       .collect();
 
     return messages;
@@ -711,6 +713,17 @@ export const markMessageDelivered = mutation({
     }
 
     await requireConversationExecution(ctx, authUserId, message.conversation_id);
+
+    // Same refusals as pendingMessages.updateMessageStatus: a settled row
+    // (delivered, cancelled) stays settled, and a row under the fenced
+    // delivery protocol is settled only by its binding.
+    if (
+      message.status === "delivered" ||
+      message.status === "cancelled" ||
+      (message as any).delivery_protocol_version !== undefined
+    ) {
+      return { success: true, skipped: true };
+    }
 
     await ctx.db.patch(args.message_id, {
       status: "delivered" as const,

@@ -16,8 +16,8 @@
  *
  * The model is OpenCode browse's (execute/human-input.ts), which runs in its
  * relay the same way: here it is called by the bridge host for the real
- * Chrome and by the built-in driver (actions.ts). The managed clone through
- * the engine is unaffected, so nothing slows that path.
+ * Chrome (bridge/host.ts). The managed clone, through the engine or the
+ * built-in driver, is unaffected, so nothing slows that path.
  *
  * Off by default: it costs about a second a click, and most pages do not
  * score input. It turns on by itself for a tab where challenge detection saw
@@ -301,8 +301,6 @@ export function createHumanInput(deps: HumanInputDeps = {}) {
     },
   };
 }
-
-export type HumanInput = ReturnType<typeof createHumanInput>;
 
 /** The process-wide pacer: the bridge host's relay and the built-in driver share it. */
 export const humanInput = createHumanInput();

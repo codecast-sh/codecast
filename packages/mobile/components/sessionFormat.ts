@@ -2,15 +2,10 @@
 // search and the long-press sheet. SessionItem.tsx re-exports them.
 import { Theme } from '@/constants/Theme';
 import { agentStatusAt } from '@codecast/web/lib/liveness';
-import { isHostedAgentType } from '@codecast/shared/contracts';
+import { agentDisplayName, isHostedAgentType } from '@codecast/shared/contracts';
+import { MOBILE_AGENT_TINT } from '@codecast/shared/render/mobileSessionStyle';
 import { conversationTitle } from '@codecast/web/components/simple/lane';
 import type { SessionData } from '@/components/SessionItem';
-
-/** "claude-opus-4-8" → "opus-4-8"; unknowns pass through. */
-export function formatModelShort(model?: string | null): string | null {
-  if (!model) return null;
-  return model.replace(/^claude-/, "").replace(/-20\d{6}$/, "");
-}
 
 export function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -54,14 +49,10 @@ export function sessionTitle(session: Pick<SessionData, 'agent_type' | 'title' |
   return isHostedAgentType(session.agent_type) ? conversationTitle(session) : cleanTitle(session.title);
 }
 
+/** The agent's name from the shared registry, so a new agent is named here
+ *  the day it is added there. Empty for a row with no agent. */
 export function agentLabel(agentType: string): string {
-  switch (agentType) {
-    case "claude_code": return "Claude";
-    case "codex": return "Codex";
-    case "cursor": return "Cursor";
-    case "gemini": return "Gemini";
-    default: return "";
-  }
+  return agentType ? agentDisplayName(agentType) : "";
 }
 
 const projectColors = [Theme.blue, Theme.cyan, Theme.violet, Theme.magenta, Theme.green, Theme.orange];
@@ -72,14 +63,12 @@ export function projectColor(name: string): string {
   return projectColors[Math.abs(hash) % projectColors.length];
 }
 
+/** The agent's tint, the one the session header uses (MOBILE_AGENT_TINT). */
 export function agentColor(agentType: string): string {
-  switch (agentType) {
-    case "claude_code": return Theme.orange;
-    case "codex": return Theme.green;
-    case "cursor": return Theme.violet;
-    case "gemini": return Theme.blue;
-    default: return Theme.textMuted0;
-  }
+  const tint = MOBILE_AGENT_TINT[agentType];
+  if (tint) return tint;
+  if (agentType === "grok") return Theme.text;
+  return agentType ? Theme.accent : Theme.textMuted0;
 }
 
 export const isProducingStatus = (status: string | undefined) => status === "working" || status === "thinking";

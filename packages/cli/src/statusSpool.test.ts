@@ -200,7 +200,7 @@ describe("the hook's fallback write", () => {
   describe.each(["sh", "dash", "bash"])("its id guard under %s", (shell) => {
     const guard = CODECAST_STATUS_HOOK.slice(
       CODECAST_STATUS_HOOK.lastIndexOf('case "$SESSION_ID" in'),
-      CODECAST_STATUS_HOOK.indexOf('STATUS_DIR="$HOME'),
+      CODECAST_STATUS_HOOK.indexOf('STATUS_DIR="$CC_DIR'),
     );
 
     function accepts(sessionId: string): boolean {
@@ -232,7 +232,7 @@ describe("the hook's fallback write", () => {
   test("the guard runs before either path is built", () => {
     const guardAt = CODECAST_STATUS_HOOK.lastIndexOf('case "$SESSION_ID" in');
     expect(guardAt).toBeGreaterThan(0);
-    expect(guardAt).toBeLessThan(CODECAST_STATUS_HOOK.indexOf('STATUS_DIR="$HOME'));
+    expect(guardAt).toBeLessThan(CODECAST_STATUS_HOOK.indexOf('STATUS_DIR="$CC_DIR'));
     expect(guardAt).toBeLessThan(CODECAST_STATUS_HOOK.indexOf("$SESSION_ID.json"));
     expect(guardAt).toBeLessThan(CODECAST_STATUS_HOOK.indexOf(`$SESSION_ID${SPOOL_EXT}`));
   });

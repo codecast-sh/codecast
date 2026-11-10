@@ -16,6 +16,7 @@
 // regulated, and only that team's signed-in members are handed its `m` token
 // (artifacts.ownerUnlock / embedInfo). It is checked before the others, so a
 // password or email wall on top of it never opens it to anyone else.
+import { sha256Hex } from "./hash";
 
 export type GatedArtifact = {
   slug: string;
@@ -26,10 +27,7 @@ export type GatedArtifact = {
   team_gate?: string | null;
 };
 
-export async function sha256Hex(s: string): Promise<string> {
-  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
+export { sha256Hex };
 
 export async function passwordHash(password: string, slug: string): Promise<string> {
   return await sha256Hex(`${password}:${slug}`);

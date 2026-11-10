@@ -10,8 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "../proc.js";
 import { isWriteConflict } from "../cliHttp.js";
-import { ensureUp, hostForDevice, readHosts, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
-import { learnHostDeviceId } from "../cloud/prepare.js";
+import { type CloudHost } from "../browser/cloudHost.js";
 import { deviceId as localDeviceId } from "../remote/device.js";
 import {
   convexClient,
@@ -25,8 +24,6 @@ import {
 } from "../remote/cli.js";
 import {
   ensureRemoteClaudeReady,
-  readPushableCredentialAsync,
-  remoteClaudeLoginLive,
   gitEnv,
   gitSshUrl,
   gitRootOf,

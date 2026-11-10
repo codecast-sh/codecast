@@ -27,11 +27,6 @@ export type AssistantOpeningFacts = {
   team?: string;
 };
 
-/** "all your workspaces", or the team's name. */
-export function assistantReachLabel(reach: AssistantReach<unknown>, team?: string | null): string {
-  return reach.reach === "global" ? "all your workspaces" : (team ?? "the team");
-}
-
 export function executiveAssistantOpening(facts: AssistantOpeningFacts): string {
   const global = facts.reach.reach === "global";
   const reach = global ? `everything ${facts.person} works on` : (facts.team ?? "the team");

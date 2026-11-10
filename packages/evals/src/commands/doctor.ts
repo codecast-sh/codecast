@@ -12,9 +12,10 @@ import { evalsApiKey } from '../adapters/apiCall';
 import { apiConfig } from '../adapters/convo';
 import { codecastFreezeStore } from '../adapters/freezes';
 import { hasSnapshot, loadLabel, loadSnapshot } from '../adapters/resolver';
-import { CALL_MODEL, PROSE_MODEL, sendsThinkingOff } from '../models';
+import { CALL_MODEL, PROD_DEFAULT_MODEL, PROSE_MODEL, sendsThinkingOff, STRONG_MODEL } from '../models';
 import { DRY_RUN_SCRIPT, homePaths, LABELS_REMOTE, REPO_ROOT } from '../paths';
 import { surfaces } from '../registry';
+import type { SurfaceMeta } from '../surface';
 import { labelsRemoteProblem, labelsRepoVisibility } from '../labels';
 import { snippetInstalled } from '../snippet';
 
@@ -24,8 +25,31 @@ import { snippetInstalled } from '../snippet';
 
 const git = (cwd: string, args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8' });
 
-/** The call surfaces that replay the Changes page's prose, which prod asks on PROSE_MODEL. */
-const PROSE_SURFACES = new Set(['changes-story', 'changes-edition']);
+/**
+ * The call surfaces whose prod call is not on CALL_MODEL, each with the model prod asks:
+ * the Changes prose on PROSE_MODEL (changes.test.ts holds the two to their builders), the
+ * line's ground step on STRONG_MODEL (lineGround.ts), and the two that replay a person's
+ * own Claude Code session (cast decide, the review station) on that person's default.
+ */
+const PROD_CALL_MODEL: Record<string, string> = {
+  'changes-story': PROSE_MODEL,
+  'changes-edition': PROSE_MODEL,
+  ground: STRONG_MODEL,
+  decide: PROD_DEFAULT_MODEL,
+  'review-note': PROD_DEFAULT_MODEL,
+};
+
+/** The model prod calls a call surface on: its entry above, else CALL_MODEL. */
+export const prodCallModel = (id: string): string => PROD_CALL_MODEL[id] ?? CALL_MODEL;
+
+/** The "model pins" check over a set of surfaces: every call surface pins the model its prod call uses. */
+export function modelPinsCheck(all: Pick<SurfaceMeta, 'id' | 'route' | 'model'>[]): { ok: boolean; detail: string } {
+  const calls = all.filter((s) => s.route === 'call');
+  const off = calls.filter((s) => s.model !== prodCallModel(s.id));
+  if (off.length) return { ok: false, detail: `off their prod model: ${off.map((s) => `${s.id}=${s.model}, prod calls ${prodCallModel(s.id)}`).join('; ')}` };
+  const by = [...new Set(calls.map((s) => s.model))].map((m) => `${m} (${calls.filter((s) => s.model === m).length})`).join(', ');
+  return { ok: true, detail: `call surfaces pin the models prod calls: ${by}` };
+}
 
 function labelsCheck(): ReturnType<DoctorCheck['run']> {
   const dir = homePaths().labels;
@@ -97,14 +121,8 @@ export const CHECKS: DoctorCheck[] = [
   },
   {
     name: 'model pins',
-    run: () => {
-      // Each call surface pins the model its prod call uses: the Changes prose asks PROSE_MODEL (changes.test.ts holds the two to their builders), every other call CALL_MODEL. Both pins come from prod's own homes (models.ts).
-      const calls = surfaces().filter((s) => s.route === 'call');
-      const want = (id: string) => (PROSE_SURFACES.has(id) ? PROSE_MODEL : CALL_MODEL);
-      const off = calls.filter((s) => s.model !== want(s.id));
-      const by = [CALL_MODEL, PROSE_MODEL].map((m) => `${m} (${calls.filter((s) => s.model === m).length})`).join(', ');
-      return !off.length ? { ok: true, detail: `call surfaces pin the models prod calls: ${by}` } : { ok: false, detail: `off their prod model: ${off.map((s) => `${s.id}=${s.model}, prod calls ${want(s.id)}`).join('; ')}` };
-    },
+    // Every pin comes from prod's own homes (models.ts).
+    run: () => modelPinsCheck(surfaces()),
   },
   {
     name: 'evals API key',

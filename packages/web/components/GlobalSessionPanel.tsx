@@ -1,4 +1,5 @@
 import { cliNeverConnected } from "../lib/cliConnected";
+import { forkTreeRootId } from "../lib/forkTreeRoot";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvex, useMutation, useQuery } from "convex/react";
@@ -25,7 +26,7 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, viewerCommandsSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -257,24 +258,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
     </div>
   );
 });
-
-// -- Fork tree color --
-
-// The corner color is keyed by the ROOT of the fork tree so every session in
-// the same tree — parent, forks, forks-of-forks — renders the same color.
-// Walk forked_from as far as the loaded cache allows; an unloaded ancestor's
-// id is still a key all of its visible descendants agree on.
-function forkTreeRootId(session: InboxSession, sessions: Record<string, InboxSession>): string {
-  let cur = session;
-  const seen = new Set([cur._id]);
-  while (cur.forked_from) {
-    const parent = sessions[cur.forked_from];
-    if (!parent || seen.has(parent._id)) return cur.forked_from;
-    cur = parent;
-    seen.add(cur._id);
-  }
-  return cur._id;
-}
 
 // The login flow's device-row state, as listAccountProfiles reports it.
 type LoginFlowState = {
@@ -2600,8 +2583,7 @@ function SessionListPanelImpl({
   // Reset each render; renderSection (a closure over this) consumes it in call order.
   let globalRenderedCards = 0;
   // Three-way view mode; the legacy boolean is honored when the mode is unset.
-  const viewMode: InboxViewMode =
-    s.clientState.ui?.inbox_view_mode ?? ((s.clientState.ui?.inbox_flat_view ?? false) ? "time" : "grouped");
+  const viewMode: InboxViewMode = resolveInboxViewMode(s.clientState.ui);
   const flatView = viewMode === "time" || viewMode === "recent";
   // Manual drag-order overlay, only consulted in "time" mode (see comparator).
   const manualOrder = s.clientState.ui?.inbox_manual_order;

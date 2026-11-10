@@ -122,27 +122,6 @@ export const listAdoptions = query({
  * Events — the audit line an incident needs (ct-42854)
  * ========================================================================== */
 
-/** Internal helper other capability mutations call: one insert, no fan-out. */
-export const recordCapabilityEvent = internalMutation({
-  args: {
-    user_id: v.string(),
-    kind: v.union(
-      v.literal("bind"), v.literal("unbind"), v.literal("enable"), v.literal("disable"),
-      v.literal("consent"), v.literal("apply"), v.literal("conflict"), v.literal("import"),
-    ),
-    actor_user_id: v.string(),
-    device_id: v.optional(v.string()),
-    scope_kind: v.optional(v.string()),
-    scope_key: v.optional(v.string()),
-    capability_slug: v.optional(v.string()),
-    manifest_hash: v.optional(v.string()),
-    ops_json: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const db = capDb(ctx.db);
-    await db.insert("capability_events", { ...args, created_at: Date.now() } as any);
-  },
-});
 
 /** 90 days of audit is the retention bargain: long enough for any incident
  *  that will actually be investigated, short enough that the table cannot

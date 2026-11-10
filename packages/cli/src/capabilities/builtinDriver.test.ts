@@ -159,6 +159,62 @@ describe("reconcileFromHeartbeat", () => {
       fetchImpl: (async () => { throw new Error("network"); }) as any,
     });
     expect(out.ran).toBe(false);
+    expect(out.skipped).toBe("fetch_failed");
     expect(convergenceState().applied).toBe(0);
+  });
+
+  test("dry: a revision is planned once; the next beat is free until it moves or the mode turns on", async () => {
+    recordConvergenceSignals({ capabilities_mode: "dry", capability_desired_revision: 3 });
+    const rows = [{ capability_slug: "builtin/visual", scope_kind: "user", scope_key: "", enabled: true, updated_at: 1 }];
+    let fetches = 0;
+    const deps = {
+      siteUrl: "http://x", apiToken: "t", userId: "u1", home, log: () => {},
+      fetchImpl: (async () => { fetches++; return new Response(JSON.stringify(rows), { status: 200 }); }) as any,
+    };
+    expect((await reconcileFromHeartbeat(deps)).ran).toBe(true);
+    const after = fetches;
+    expect((await reconcileFromHeartbeat(deps)).skipped).toBe("revision_current");
+    expect(fetches).toBe(after);
+    expect(convergenceState().applied).toBe(0);
+
+    recordConvergenceSignals({ capabilities_mode: "dry", capability_desired_revision: 4 });
+    expect((await reconcileFromHeartbeat(deps)).ran).toBe(true);
+
+    // Turning the switch on applies the revision dry mode only planned.
+    recordConvergenceSignals({ capabilities_mode: "on", capability_desired_revision: 4 });
+    expect((await reconcileFromHeartbeat(deps)).ran).toBe(true);
+    expect(claudeMd()).toContain("/codecast-visual");
+    expect(convergenceState().applied).toBe(4);
+  });
+
+  test("a second beat while a pass is still fetching does not start another", async () => {
+    recordConvergenceSignals({ capabilities_mode: "on", capability_desired_revision: 3 });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let fetches = 0;
+    const deps = {
+      siteUrl: "http://x", apiToken: "t", userId: "u1", home, log: () => {},
+      fetchImpl: (async () => { fetches++; await gate; return new Response("[]", { status: 200 }); }) as any,
+    };
+    const first = reconcileFromHeartbeat(deps);
+    const second = await reconcileFromHeartbeat(deps);
+    expect(second).toMatchObject({ ran: false, skipped: "in_flight" });
+    expect(fetches).toBe(1);
+    release();
+    expect((await first).ran).toBe(true);
+  });
+
+  test("a project binding applies when its key is among the active conversations' keys", async () => {
+    const key = "git:github.com/acme/app";
+    const rows = [{ capability_slug: "builtin/visual", scope_kind: "project", scope_key: key, enabled: true, updated_at: 1 }];
+    const deps = { siteUrl: "http://x", apiToken: "t", userId: "u1", home, log: () => {}, fetchImpl: stubFetch(rows) };
+
+    recordConvergenceSignals({ capabilities_mode: "on", capability_desired_revision: 3 });
+    await reconcileFromHeartbeat({ ...deps, projectKeys: ["git:github.com/other/repo"] });
+    expect(claudeMd()).not.toContain("/codecast-visual");
+
+    recordConvergenceSignals({ capabilities_mode: "on", capability_desired_revision: 4 });
+    await reconcileFromHeartbeat({ ...deps, projectKeys: [key] });
+    expect(claudeMd()).toContain("/codecast-visual");
   });
 });

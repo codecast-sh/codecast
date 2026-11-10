@@ -86,7 +86,7 @@ describe("updateClientUI stamped view keys", () => {
   // A mute is a per-user preference: sounds turned off on any device must
   // silence every client, including a localhost dev origin whose bag never
   // held the key. Regression for the sound gates sitting outside
-  // STAMPED_UI_KEYS, where local_wins froze each device at the first value
+  // the stamped ui keys (isStampedUiKey), where local_wins froze each device at the first value
   // it ever saw.
   it("stamps the sound gates so a mute reaches every device", () => {
     const before = Date.now();

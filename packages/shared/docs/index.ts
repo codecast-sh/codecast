@@ -61,14 +61,6 @@ export function docTypeLabel(docType: string | null | undefined): string {
   return DOC_TYPE_LABELS[docType as DocType] ?? DOC_TYPE_LABELS.note;
 }
 
-export type DocSource =
-  | "human"
-  | "agent"
-  | "plan_mode"
-  | "file_sync"
-  | "inline_extract"
-  | "import";
-
 export type DocOrigin = "human" | "agent";
 
 /**

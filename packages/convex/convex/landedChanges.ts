@@ -51,7 +51,7 @@ export async function recordCore(ctx: any, userId: Id<"users">, args: { team_id:
   const repository = normalizeRepository(args.repository);
   const workspace = `team:${args.team_id}`;
   const rowOf = (sha: string): Promise<Doc<"landed_changes"> | null> =>
-    ctx.db.query("landed_changes").withIndex("by_repository_sha", (q: any) => q.eq("repository", repository).eq("sha", sha.toLowerCase())).first();
+    ctx.db.query("landed_changes").withIndex("by_repository_sha", (q: any) => q.eq("repository", repository).eq("sha", sha.toLowerCase())).filter((q: any) => q.eq(q.field("workspace"), workspace)).first();
 
   // Who wrote each new change: the blame resolver's tiers (trailer, commits row, stored hash, subject and time).
   const fresh: typeof args.changes = [];
@@ -104,7 +104,8 @@ export const cursor = query({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
     await requireTeamMembership(ctx, auth.userId, args.team_id);
-    const newest = await ctx.db.query("landed_changes").withIndex("by_repository_landed", (q: any) => q.eq("repository", normalizeRepository(args.repository))).order("desc").first();
+    // Two teams can trace the same repository; each resumes from its own rows.
+    const newest = await ctx.db.query("landed_changes").withIndex("by_repository_landed", (q: any) => q.eq("repository", normalizeRepository(args.repository))).order("desc").filter((q: any) => q.eq(q.field("workspace"), `team:${args.team_id}`)).first();
     return { landed_at: newest?.landed_at ?? null, recorded_at: newest?.recorded_at ?? null };
   },
 });

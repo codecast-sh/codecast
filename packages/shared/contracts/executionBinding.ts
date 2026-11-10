@@ -44,17 +44,6 @@ export interface StructuredFailure {
   details?: Record<string, string | number | boolean | null>;
 }
 
-export interface PendingSuccessor {
-  state: "waiting-for-drain";
-  target: ExecutionTargetSpec;
-  configuration: RuntimeConfiguration;
-  ownerDeviceId: string;
-  daemonBootId: string;
-  requiredCapabilities: readonly RuntimeCapability[];
-  policy: "drain-current" | "cancel-unstarted";
-  requestedAtConversationSequence: string;
-}
-
 export interface ReadyBinding {
   conversationId: string;
   epoch: number;
@@ -70,38 +59,6 @@ export interface ReadyBinding {
   protocolVersion: number;
   capabilities: readonly RuntimeCapability[];
 }
-
-interface ExecutionBase {
-  target: ExecutionTargetSpec;
-  configuration: RuntimeConfiguration;
-  ownerDeviceId: string;
-  daemonBootId: string;
-  requiredCapabilities: readonly RuntimeCapability[];
-  pendingSuccessor?: PendingSuccessor;
-}
-
-export type ExecutionRecord =
-  | (ExecutionBase & { state: "requested" })
-  | (ExecutionBase & { state: "starting"; operationId: string })
-  | (ExecutionBase & { state: "ready"; binding: ReadyBinding })
-  | (ExecutionBase & {
-      state: "start-failed-before-effect";
-      operationId: string;
-      failure: StructuredFailure;
-    })
-  | (ExecutionBase & {
-      state: "start-ambiguous";
-      operationId: string;
-      suspectedRuntimeId?: string;
-      failure: StructuredFailure;
-    })
-  | (ExecutionBase & { state: "stopped"; stoppedReason: string })
-  | (ExecutionBase & {
-      state: "quarantined";
-      binding?: ReadyBinding;
-      operationId: string;
-      failure: StructuredFailure;
-    });
 
 export interface DeliveryPermit {
   messageId: string;

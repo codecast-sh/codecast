@@ -19,7 +19,6 @@ import {
 } from "./localJournal.js";
 import type { EnsureBindingRequest } from "./types.js";
 import type { ExecutionConvexTransport } from "./convexControlPlane.js";
-import { codecastPath } from "../codecastDir.js";
 import { defaultConfigDir } from "../config/configDir.js";
 
 export const FENCED_EXECUTION_FEATURE_FLAG = "CODECAST_FENCED_EXECUTION_V1" as const;

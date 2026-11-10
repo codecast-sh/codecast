@@ -2,12 +2,10 @@
 
 import { toast } from "sonner";
 import { useState } from "react";
-import { Lock, Unlock } from "lucide-react";
 import { AvatarImg } from "../../lib/avatarCache";
 import { useTrackedStore } from "../../store/inboxStore";
 import type { RoomKnock } from "../../store/callRoomTypes";
 import { admitKnock } from "../../lib/calls/callManager";
-import { useRoomLock } from "../../hooks/useLiveRooms";
 import { firstName } from "./speakers";
 import { GuestTag } from "./GuestTag";
 import { admitGuest, denyGuest } from "../../lib/calls/guestDoorActions";
@@ -21,30 +19,6 @@ function linkOf(k: RoomKnock): string {
 // and the people knocking to be let into it. Both live in the dock and the
 // stage header, because the door belongs to whoever is inside.
 
-// The lock button. The state and the gesture live in useRoomLock (hooks/), so
-// the stage header can draw its own chrome from the same source and the lock
-// can never mean two things.
-export function RoomLockButton({ roomKey }: { roomKey: string }) {
-  const { locked, toggle, title } = useRoomLock(roomKey);
-  return (
-    <button
-      onClick={toggle}
-      className={`rounded-md p-1.5 transition-colors ${
-        locked
-          ? "bg-sol-violet/15 text-sol-violet"
-          : "text-sol-text-muted hover:bg-sol-bg-highlight"
-      }`}
-      title={title}
-      // aria-pressed is right HERE — unlike push to talk, this is a genuine
-      // click-to-latch toggle. But the glyph is the whole button, so without a
-      // name it announced as an unlabelled toggle.
-      aria-label={locked ? "Locked — click to open the room" : "Open room — click to lock it"}
-      aria-pressed={locked}
-    >
-      {locked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
-    </button>
-  );
-}
 
 /** Who is at the door. Renders nothing when nobody is — a knock is a moment,
  *  not a queue. Admit rings a teammate in: the accepted ring is their grant,

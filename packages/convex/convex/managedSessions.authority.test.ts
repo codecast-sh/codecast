@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { registerManagedSession, updateSessionConversation, getPendingMessagesForSession, markMessageDelivered, updateAgentStatus, updateManagedSessionId, heartbeat, heartbeatBatch } from "./managedSessions";
+import { registerManagedSession, updateSessionConversation, getPendingMessagesForSession, markMessageDelivered, isSessionManaged, updateAgentStatus, updateManagedSessionId, heartbeat, heartbeatBatch } from "./managedSessions";
 
 const CALLER = "caller";
 const OTHER = "other";
@@ -105,6 +105,27 @@ describe("managed session execution authority", () => {
   });
 });
 
+
+describe("managed session process details and settled rows", () => {
+  test("only the runner reads a session's process details", async () => {
+    const foreign = fixture();
+    expect(await (isSessionManaged as any)._handler(foreign, { conversation_id: "conv" })).toEqual({ managed: false });
+    const own = fixture();
+    own.db._tables.managed_sessions[0].user_id = CALLER;
+    own.db._tables.managed_sessions[0].last_heartbeat = Date.now();
+    expect(await (isSessionManaged as any)._handler(own, { conversation_id: "conv" })).toMatchObject({ managed: true, session_id: "target" });
+  });
+  test("a cancelled or fenced row is not flipped to delivered", async () => {
+    const ctx = fixture(CALLER);
+    ctx.db._tables.pending_messages[0].status = "cancelled";
+    expect(await (markMessageDelivered as any)._handler(ctx, { message_id: "message" })).toEqual({ success: true, skipped: true });
+    expect(ctx.db._tables.pending_messages[0].status).toBe("cancelled");
+    ctx.db._tables.pending_messages[0].status = "pending";
+    ctx.db._tables.pending_messages[0].delivery_protocol_version = 1;
+    expect(await (markMessageDelivered as any)._handler(ctx, { message_id: "message" })).toEqual({ success: true, skipped: true });
+    expect(ctx.db._tables.pending_messages[0].status).toBe("pending");
+  });
+});
 
 describe("managed session identity and liveness", () => {
   test("a foreign session ID cannot be adopted by renaming an owned row", async () => {

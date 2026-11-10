@@ -18,9 +18,6 @@ export type RoleInitiative = {
   projects: number;
 };
 
-/** How the role stands to the goal, in words: it drives it, or its projects carry it. */
-export const initiativeRelation = (i: RoleInitiative): string =>
-  i.owned ? "drives it" : `through ${i.projects} ${i.projects === 1 ? "project" : "projects"}`;
 
 const CLOSED: ReadonlySet<string> = new Set(["completed", "cancelled"]);
 

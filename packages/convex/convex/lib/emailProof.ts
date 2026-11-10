@@ -14,16 +14,14 @@ import type { MutationCtx } from "../_generated/server";
 import { ConvexError } from "convex/values";
 import { internal } from "../_generated/api";
 import { bumpWindow } from "../ipRateLimit";
+import { sha256Hex } from "./hash";
 
 export const CODE_TTL_MS = 15 * 60 * 1000;
 const MAX_CODE_ATTEMPTS = 5;
 const CODES_PER_HOUR = 5;
 
 /** Hex SHA-256 of a code, as stored. */
-async function sha256(text: string): Promise<string> {
-  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
-}
+const sha256 = sha256Hex;
 
 function sixDigits(): string {
   const [n] = crypto.getRandomValues(new Uint32Array(1));

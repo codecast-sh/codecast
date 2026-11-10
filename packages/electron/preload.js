@@ -15,8 +15,11 @@
 const { contextBridge, ipcRenderer, webFrame } = require("electron");
 const { createBridge, bufferedChannel } = require("@platform/desktop");
 
-const { trustedShellUrl, originOf } = require("./shellAuthority");
-const origins = ["https://codecast.sh", "https://local.codecast.sh", originOf(process.env.CODECAST_URL)].filter(Boolean);
+// The same origin list main.js admits IPC from. The local dev site is on it
+// only when main marked this run as one that may use it (never a packaged
+// build): see LOCAL_DEV_ALLOWED there.
+const { trustedShellUrl, shellOrigins, LOCAL_DEV_FLAG } = require("./shellAuthority");
+const origins = shellOrigins({ localDev: process.env[LOCAL_DEV_FLAG] === "1", baseUrl: process.env.CODECAST_URL });
 if (process.isMainFrame && trustedShellUrl(globalThis.location.href, origins)) {
 const zoomArg = process.argv.find(a => a.startsWith('--zoom-factor='));
 if (zoomArg) {
@@ -30,10 +33,17 @@ if (zoomArg) {
 // subscribe instead of landing on no listener and being silently dropped.
 const shared = createBridge({ ipcRenderer, argv: process.argv });
 
-// The call panel closing hands its room back to the main window. Buffered
-// because a dropped one drops a live call: the panel is going away either way,
-// so this message is the only thing that keeps the huddle alive.
-const onCallPanelHandback = bufferedChannel(ipcRenderer, "call-panel-handback");
+// The package's bridge is written for the package's own main process. This
+// shell has its own main.js, which answers most of that bridge and not these:
+// the offline copy of the site, default-client registration for other URL
+// schemes, the notification status trio (osPermissions covers that ground
+// here), and two calls the web app stopped making (the environment name, the
+// palette's new-session press). A method whose channel nobody handles rejects
+// when called, so each is taken off and the page sees it as absent, which is
+// what the web side already gates on. preload.channels.test.js fails when a
+// method is exposed without a handler, or listed here while main.js has one.
+const SHARED_WITHOUT_A_HANDLER = ["getWebRelease", "refreshWeb", "setAsDefaultClient", "isDefaultClient", "getNotificationStatus", "testNotification", "openNotificationSettings", "getEnv", "paletteNewSession"];
+for (const key of SHARED_WITHOUT_A_HANDLER) delete shared[key];
 
 // The ring window answered; the call window is the one that joins. Buffered
 // because that window is usually being CREATED by this very answer — the
@@ -98,7 +108,6 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // shell to land in whichever window owns it. All absent on older builds.
   appWindow: (process.argv.find((a) => a.startsWith("--app-window=")) || "").split("=")[1] || null,
   openAppWindow: (app, navPath) => ipcRenderer.invoke("open-app-window", app, navPath ?? null),
-  closeAppWindow: (app) => ipcRenderer.invoke("close-app-window", app),
   routeNavigate: (navPath) => ipcRenderer.invoke("route-navigate", navPath),
   // Bring another app to the front by pid (the Chrome holding a tab the
   // daemon just focused). Only the active app may, which this one is when
@@ -127,7 +136,6 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   showCallPanel: () => ipcRenderer.invoke("show-call-panel"),
   closeCallPanel: (opts) => ipcRenderer.invoke("close-call-panel", opts ?? {}),
   reportCallPanelState: (state) => ipcRenderer.send("report-call-panel-state", state),
-  onCallPanelHandback,
   onCallRingAccept,
   onCallPanelOpen,
   onCallPanelShow,

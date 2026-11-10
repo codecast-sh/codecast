@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { mapPath } from "./syncRequests";
 import { requestPath } from "./syncCli";
 
@@ -19,6 +22,41 @@ describe("where a pulled path lands", () => {
     expect(() => mapPath("../other/secret", where)).toThrow("leaves the folder");
     expect(() => mapPath("/etc/passwd", where)).toThrow("outside your home folder");
     expect(() => mapPath("~", where)).toThrow("whole home folder");
+  });
+});
+
+describe("credential stores never travel", () => {
+  test("a store, a path inside one, and a folder that holds one are refused by name", () => {
+    expect(() => mapPath("~/.ssh", where)).toThrow("is in ~/.ssh, which keeps credentials");
+    expect(() => mapPath("~/.aws/credentials", where)).toThrow("is in ~/.aws");
+    expect(() => mapPath("/Users/me/.config/gh/hosts.yml", where)).toThrow("is in ~/.config/gh");
+    expect(() => mapPath("~/Library/Keychains/login.keychain-db", where)).toThrow("is in ~/Library/Keychains");
+    expect(() => mapPath("~/.codecast/config.json", where)).toThrow("is in ~/.codecast");
+    expect(() => mapPath("~/.config", where)).toThrow("holds ~/.config/gh");
+    expect(() => mapPath("~/Library", where)).toThrow("holds ~/Library/Keychains");
+  });
+
+  test("a repo's own files and folders with a store's name still travel", () => {
+    expect(mapPath(".aws/config", where)).toMatchObject({ outside: false });
+    expect(mapPath(".codecast/notes.md", where)).toMatchObject({ outside: false });
+    expect(mapPath("~/.sshconfig-notes/x", where)).toMatchObject({ outside: true });
+  });
+
+  test("a link that resolves into a store is refused, from the repo or from home", () => {
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sync-map-")));
+    try {
+      const w = { ...where, home, localRoot: path.join(home, "src/app") };
+      fs.mkdirSync(path.join(home, ".ssh"));
+      fs.mkdirSync(path.join(home, "src/app"), { recursive: true });
+      fs.mkdirSync(path.join(home, "data"));
+      fs.writeFileSync(path.join(home, ".ssh/id_ed25519"), "key");
+      fs.symlinkSync(path.join(home, ".ssh/id_ed25519"), path.join(home, "src/app/notes.txt"));
+      fs.symlinkSync(path.join(home, ".ssh"), path.join(home, "data/keys"));
+      fs.writeFileSync(path.join(home, "src/app/real.txt"), "x");
+      expect(() => mapPath("notes.txt", w)).toThrow("is in ~/.ssh");
+      expect(() => mapPath("~/data/keys/id_ed25519", w)).toThrow("is in ~/.ssh");
+      expect(mapPath("real.txt", w)).toMatchObject({ outside: false });
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
   });
 });
 

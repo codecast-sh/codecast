@@ -1,3 +1,4 @@
 out/
 raw/*
 !raw/.gitkeep
+!raw/placeholder.png

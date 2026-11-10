@@ -9,16 +9,6 @@ export function deployTitle(d: DeployLike): string {
   return `${d.target ?? "deploy"}${v ? ` ${v}` : ""}`;
 }
 
-/** good: live and quiet; bad: something it carried came back, or an error started; live: going out; dim: failed, cancelled. */
-export type DeployTone = "good" | "bad" | "live" | "dim" | "plain";
-
-export function deployTone(d: DeployLike): DeployTone {
-  if (d.status === "requested" || d.status === "running") return "live";
-  if (d.status === "failed" || d.status === "cancelled") return "dim";
-  if (d.after && (d.after.regressions || d.after.new_errors)) return "bad";
-  if (d.after?.quiet && (d.carries?.length ?? 0) > 0) return "good";
-  return "plain";
-}
 
 export const deployState = (d: DeployLike): string => deployStateWords({ status: d.status ?? "live", carries: d.carries ?? [] }, d.after ?? null);
 

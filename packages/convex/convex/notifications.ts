@@ -13,6 +13,7 @@ import { internal } from "./_generated/api";
 import { enqueuePush, readMissedSince } from "./pushRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { canAccessConversation, canAccessDoc, canAccessPlan, canAccessTask } from "./lib/access";
 import { isConversationTeamVisible } from "./privacy";
 import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
 import { isAgentSpawnedConversation, isSubagentConversation } from "./ccAccountsShared";
@@ -1209,6 +1210,8 @@ const ENTITY_TYPE_VALIDATOR = v.union(
   v.literal("conversation")
 );
 
+const WATCH_TABLE = { task: "tasks", doc: "docs", plan: "plans", conversation: "conversations" } as const;
+
 export const isWatching = query({
   args: {
     entity_type: ENTITY_TYPE_VALIDATOR,
@@ -1250,6 +1253,17 @@ export const toggleWatch = mutation({
       await ctx.db.patch(existing._id, { muted: !existing.muted });
       return { watching: existing.muted };
     }
+    // A watcher receives what is said on the thing: only someone who can
+    // read it may start watching it.
+    const entityId = ctx.db.normalizeId(WATCH_TABLE[args.entity_type], args.entity_id);
+    const entity: any = entityId ? await ctx.db.get(entityId) : null;
+    const readable = !!entity && (
+      args.entity_type === "task" ? await canAccessTask(ctx, userId, entity)
+      : args.entity_type === "doc" ? await canAccessDoc(ctx, userId, entity)
+      : args.entity_type === "plan" ? await canAccessPlan(ctx, userId, entity)
+      : await canAccessConversation(ctx, userId, entity)
+    );
+    if (!readable) throw new Error("Not found");
     await ctx.db.insert("entity_subscriptions", {
       user_id: userId,
       entity_type: args.entity_type,

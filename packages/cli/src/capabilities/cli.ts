@@ -1,8 +1,8 @@
 // `cast cap` — the registrar, and nothing else.
 //
-// RULE: one module per verb (status.ts, ls.ts, show.ts; phase 2 adds add.ts,
-// sync.ts, why.ts, token.ts), each exporting register<Verb>(cap, deps) plus
-// pure formatters/filters for its tests. This file only assembles them. Nine
+// RULE: one module per verb (status.ts, ls.ts, show.ts, equip.ts, publish.ts,
+// promote.ts), each exporting register<Verb>(cap, deps) plus pure
+// formatters/filters for its tests. This file only assembles them. Nine
 // tasks across the plan write this surface; without the split they serialize
 // on one file, and with it a wave lands four verbs without a merge conflict.
 //

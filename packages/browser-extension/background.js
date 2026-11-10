@@ -12,17 +12,16 @@
  * nothing, so the handshake is mutual: we send a fresh nonce with
  * HMAC(token, "ext:" + nonce), the host answers HMAC(token, nonce), and not
  * one op is executed before that answer checks out. A host that cannot
- * answer is treated like a bad token: the socket is closed and the retry
- * alarm stays quiet until the human runs setup again.
+ * answer is treated like a bad token: the socket is closed, the quick retries
+ * stop, and the 30 s alarm keeps asking (below).
  *
  * Visibility is a feature, not an accident: chrome.debugger shows Chrome's own
  * "is debugging this browser" banner for as long as a tab is attached, and we
- * add signals of our own. A Chrome tab group per session (the host asks for
- * it on tabs.create) whose title shows cycling dots while a session works and
- * a checkmark for a moment after; the extension remembers the groups it made
- * and never touches one the human made. A thin border in the group's colour
- * around the driven page, injected through the debugger session so it needs
- * no host permission and no content script; hidden for every screenshot so
+ * add signals of our own. One Chrome tab group for agent tabs (the host names
+ * it on tabs.create) whose title never changes; the extension remembers the
+ * groups it made and never touches one the human made. A thin border in the
+ * group's colour around the driven page, injected through the debugger
+ * session rather than as a content script; hidden for every screenshot so
  * captures stay clean, and kept alive by a heartbeat so a cancelled banner or
  * a crashed host cannot leave it behind. A badge on the extension icon for
  * the tab in view (RUN while an agent drives it, WAIT while an agent waits on
@@ -675,18 +674,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return false;
 });
 
-// Exposed for the smoke script, which seeds storage over CDP and reconnects.
-globalThis.__castReconnect = reconnect;
-
 // --------------------------------------------------------------------------
 // Ops
 // --------------------------------------------------------------------------
 
 async function handle(m) {
   switch (m.op) {
-    case "ping":
-      return { version: chrome.runtime.getManifest().version, protocol: PROTOCOL };
-
     case "tabs.list": {
       await loadOwnership();
       // Under the host's 40 s listing budget; a frozen process answers when it wakes.
@@ -963,7 +956,7 @@ async function attachTab(tabId) {
     if (t && t.discarded) throw new Error("this tab was discarded by Chrome's memory saver; activate it once to wake it");
     await attachDebugger({ tabId });
     attached.add(tabId);
-    markDriven(tabId, true);
+    paintBadge(tabId);
     syncPage(tabId).catch(() => {});
   }
   emulateFocus(tabId);
@@ -991,7 +984,7 @@ async function attachTab(tabId) {
 
 async function detachTab(tabId) {
   if (attached.has(tabId)) {
-    markDriven(tabId, false);
+    paintBadge(tabId);
     try {
       await bounded(removeBorder(tabId), "overlay removal").catch(() => {});
     } finally {
@@ -1004,11 +997,6 @@ async function detachTab(tabId) {
 
 function detachAll() {
   for (const tabId of [...attached]) detachTab(tabId);
-}
-
-/** Per-tab badge on the extension icon (paintBadge reads who has the tab). */
-function markDriven(tabId) {
-  paintBadge(tabId);
 }
 
 /** The tab shape the host turns into CDP TargetInfo. A group is reported
@@ -1042,10 +1030,9 @@ const groups = new Map(); // groupId → chrome.tabGroups.TabGroup (title as Chr
 const tabGroupOf = new Map(); // tabId → groupId, kept current by tab events
 
 /**
- * Groups this extension created. Everything that touches a group (the
- * animated title, the border colour, what the host is told) is limited to
- * these, so a group the human made is never renamed, animated or handed to a
- * session. Persisted in session storage: a service worker restart must not
+ * Groups this extension created. Everything that touches a group (its
+ * title, the border colour, what the host is told) is limited to these, so a
+ * group the human made is never renamed or handed to a session. Persisted in session storage: a service worker restart must not
  * make us forget which groups are ours, and a browser restart (which empties
  * session storage) also drops every group id, so nothing stale survives.
  */
@@ -1467,7 +1454,7 @@ chrome.debugger.onDetach.addListener((source) => {
     borderScripts.delete(source.tabId); // the session is gone, and its scripts with it
     borderIds.delete(source.tabId);
     worlds.delete(source.tabId);
-    markDriven(source.tabId);
+    paintBadge(source.tabId);
     syncPage(source.tabId).catch(() => {});
     send({ op: "detached", tabId: source.tabId });
   }

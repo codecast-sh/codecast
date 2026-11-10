@@ -17,7 +17,6 @@ import { PROJECT_STATUS, PROJECT_STATUS_ORDER, projectStatusOf } from "../../lib
 import { FilterOptionList, type FilterOption } from "../FilterDropdown";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { INITIATIVE_ACCENT } from "../../lib/initiativeColors";
-import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useProjectDeadline, type DeadlineProject } from "../../hooks/useProjectDeadline";
 import { TargetDate } from "./InitiativeAtoms";
 
@@ -226,67 +225,6 @@ export function ProjectDeadlineChip({ project, now, ...data }: { project: Deadli
 
 export type IntentTab<K extends string = string> = { key: K; label: string; icon?: LucideIcon; count?: number };
 
-/** The tab strip, in the scope panel's grammar (components/org/scope/ScopePanel). */
-export function IntentTabs<K extends string>({ tabs, active, onTab, accent = INITIATIVE_ACCENT, trailing, bare, className }: {
-  tabs: readonly IntentTab<K>[];
-  active: K;
-  onTab: (next: K) => void;
-  accent?: string;
-  /** A control at the strip's right end (a panel's close button). */
-  trailing?: ReactNode;
-  /** No rule of its own: the strip sits on a border its parent already draws. */
-  bare?: boolean;
-  className?: string;
-}) {
-  // A strip wider than a phone keeps the active tab in view, so a tab opened
-  // by a link (?tab=line) is never scrolled off the end.
-  const activeRef = useRef<HTMLButtonElement | null>(null);
-  useWatchEffect(() => {
-    const strip = activeRef.current?.parentElement;
-    if (!strip) return;
-    const reveal = () => {
-      const el = activeRef.current;
-      if (!el || strip.scrollWidth <= strip.clientWidth) return;
-      const r = el.getBoundingClientRect();
-      const box = strip.getBoundingClientRect();
-      if (r.right > box.right) strip.scrollLeft += r.right - box.right + 8;
-      else if (r.left < box.left) strip.scrollLeft -= box.left - r.left + 8;
-    };
-    reveal();
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(reveal);
-    ro.observe(strip);
-    return () => ro.disconnect();
-  }, [active]);
-  return (
-    <div className={cn("shrink-0 flex items-center gap-1", !bare && "border-b pl-1 pr-1.5", className)} style={bare ? undefined : { borderColor: INTENT_HAIRLINE }} data-intent-tabs>
-      <nav className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto cq-no-scrollbar -mb-px" aria-label="Sections">
-        {tabs.map((t) => {
-          const Icon = t.icon;
-          const on = active === t.key;
-          return (
-            <button
-              key={t.key}
-              ref={on ? activeRef : undefined}
-              type="button"
-              onClick={() => onTab(t.key)}
-              data-scope-tab={t.key}
-              className={cn("relative shrink-0 inline-flex items-center gap-1.5 h-8 px-2 text-[12px] transition-colors rounded-t-md", on ? "font-semibold" : "hover:bg-sol-bg-highlight/60")}
-              style={{ color: on ? "var(--sol-text)" : "var(--sol-text-muted)" }}
-              aria-current={on ? "page" : undefined}
-            >
-              {Icon && <Icon className="w-3.5 h-3.5" style={{ color: on ? accent : undefined }} />}
-              <span>{t.label}</span>
-              {t.count ? <span className="text-[10.5px] font-normal tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{t.count}</span> : null}
-              {on && <span className="absolute left-1.5 right-1.5 -bottom-px h-[2px] rounded-full" style={{ background: accent }} />}
-            </button>
-          );
-        })}
-      </nav>
-      {trailing}
-    </div>
-  );
-}
 
 /** A page's tab, kept in the URL (?tab=) so a tab stays linkable. The first
  *  key is the one the bare address opens on. */

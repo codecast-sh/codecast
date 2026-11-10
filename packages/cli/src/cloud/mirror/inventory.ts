@@ -315,12 +315,13 @@ export async function collectMirrorSources(opts: Omit<CollectOptions, "hostHome"
 
   const list = [...entries.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const total = list.reduce((n, e) => n + e.bytes.length, 0);
-  if (total > (opts.maxBytes ?? MIRROR_SIZE_CAP)) {
+  const cap = opts.maxBytes ?? MIRROR_SIZE_CAP;
+  if (total > cap) {
     const byRoot = new Map<string, number>();
     for (const e of list) byRoot.set(e.root, (byRoot.get(e.root) ?? 0) + e.bytes.length);
     const biggest = [...byRoot.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
       .map(([r, n]) => `${r} (${(n / 1048576).toFixed(1)} MiB)`).join(", ");
-    throw new Error(`home mirror is ${(total / 1048576).toFixed(1)} MiB, over the ${MIRROR_SIZE_CAP / 1048576} MiB cap — largest: ${biggest}; exclude with \`cast config cloud_mirror_exclude\``);
+    throw new Error(`home mirror is ${(total / 1048576).toFixed(1)} MiB, over the ${+(cap / 1048576).toFixed(1)} MiB cap — largest: ${biggest}; exclude with \`cast config cloud_mirror_exclude\``);
   }
   return { home, gitPairs, entries: list, skipped, excludesApplied: [...excludesApplied], warnings: [...new Set(warnings)], gitIdentity };
 }

@@ -148,6 +148,36 @@ describe("apply", () => {
     expect(again).toEqual([]);
   });
 
+  test("a write that throws becomes a conflict; what already landed stays in the ledger", () => {
+    const h = fs.realpathSync(home());
+    const good = path.join(h, ".claude", "skills", "d", "SKILL.md");
+    // A regular file where the second write needs a directory.
+    const blocker = path.join(h, ".claude", "skills", "d", "ref");
+    fs.mkdirSync(path.dirname(blocker), { recursive: true });
+    fs.writeFileSync(blocker, "in the way");
+    const bad = path.join(blocker, "notes.md");
+    const after = path.join(h, ".claude", "skills", "d", "LATER.md");
+    const other = path.join(h, ".claude", "skills", "e", "SKILL.md");
+
+    const outcome = apply(
+      [
+        { op: "write_file", path: good, slug: "kit/d", content: "body\n" },
+        { op: "write_file", path: bad, slug: "kit/d", content: "notes\n" },
+        { op: "write_file", path: after, slug: "kit/d", content: "later\n" },
+        { op: "write_file", path: other, slug: "kit/e", content: "other\n" },
+      ],
+      empty,
+    );
+    expect(outcome.conflicts).toHaveLength(1);
+    expect(outcome.conflicts[0]).toMatchObject({ slug: "kit/d", reason: "write_failed" });
+    // The file that landed is recorded, so the next plan knows it is ours.
+    expect(outcome.ledger.files["kit/d"]).toEqual([good]);
+    // The failed slug stops; an unrelated slug still installs.
+    expect(fs.existsSync(after)).toBe(false);
+    expect(outcome.ledger.files["kit/e"]).toEqual([other]);
+    expect(fs.readFileSync(other, "utf-8")).toBe("other\n");
+  });
+
   test("clean removal: listed files, then the directory only if empty", () => {
     const h = home();
     const dir = path.join(h, ".claude", "skills", "gone");

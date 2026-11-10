@@ -15,8 +15,9 @@
  * asking, what happens. Below it, the built-in engine derives holders from
  * its tab-ownership map (`tabsBySession` — the same map that marks `*` and
  * `~` in `cast browser tabs`, deliberately not a second registry) stamped
- * with when each holder last acted; the agent-browser adapter derives them
- * from `agent-browser session list`. Same contract either way.
+ * with when each holder last acted. The agent-browser engine pins one tab
+ * per session and closes only that on `stop` (cliEngine.ts), so it needs no
+ * holder count of its own.
  */
 
 import { readState, writeState, type InstanceState } from "./instance.js";

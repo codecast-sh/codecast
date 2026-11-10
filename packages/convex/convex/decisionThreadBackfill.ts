@@ -13,8 +13,8 @@
 // uses, so a hand-off made after the thread shipped is never written twice.
 // Nothing is relayed and nobody is notified: this is history.
 //
-//   npx convex run decisionThreadBackfill:backfill '{}'                  # dry run, first page
-//   npx convex run decisionThreadBackfill:backfill '{"dry_run": false}'  # write it
+//   packages/convex/run.sh decisionThreadBackfill:backfill '{}'                  # dry run, first page
+//   packages/convex/run.sh decisionThreadBackfill:backfill '{"dry_run": false}'  # write it
 //   ... '{"dry_run": false, "cursor": "<next_cursor>"}'                    # next page
 
 import { internalMutation } from "./functions";

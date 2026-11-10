@@ -7,12 +7,19 @@ peer, huddle feed), reads a random sample inside the recipient's transcript and
 has a model label what each message did, then writes one report beside the
 earlier ones so a change shows as a moved number.
 
-Everything real (exports, transcripts read, labels, reports) lives in
-$CODECAST_EVALS_HOME/org-comms (default ~/.local/share/codecast/evals), never
-in git. The study this continues: docs/architecture/agent-comms.md.
+Everything real (exports, transcripts read, labels, reports, the baseline)
+lives in $CODECAST_EVALS_HOME/org-comms (default ~/.local/share/codecast/evals),
+never in git: this repo is public. The study this continues:
+docs/architecture/agent-comms.md.
 
     python3 packages/evals/org-comms/monitor.py [--days 7] [--sample 120]
         [--user <users id>] [--account <profile>] [--model <id>] [--skip-export]
+
+Whose sessions to read is a Convex users id, given as --user or in
+$CODECAST_ORG_COMMS_USER; it is never written in this file. The first column
+of every report is $CODECAST_EVALS_HOME/org-comms/baseline.json (the
+2026-10-06 measurement); the run stops before it exports anything when that
+file is absent.
 """
 import argparse, collections, datetime, glob, json, os, random, re, statistics, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
@@ -23,7 +30,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONTEXT_GAP_MS = int(re.search(r"CONTEXT_MIN_GAP_MS = ([\d_]+)", open(os.path.join(REPO, "packages/convex/convex/transcripts.ts")).read()).group(1).replace("_", ""))
 HOME = os.path.join(os.environ.get("CODECAST_EVALS_HOME") or os.path.expanduser("~/.local/share/codecast/evals"), "org-comms")
 HARNESS = os.path.join(REPO, "packages/cli/scripts/prompt-dry-run.ts")
-ASHOT = "kd700q4pr2m98a3nghfesw4vxx7wkn6z"
+BASELINE = os.path.join(HOME, "baseline.json")
+USER_ENV = "CODECAST_ORG_COMMS_USER"
 
 
 def convex_data(table, limit, out):
@@ -158,11 +166,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--sample", type=int, default=120)
-    ap.add_argument("--user", default=ASHOT, help="whose sessions to read (only their own content is opened)")
+    ap.add_argument("--user", default=os.environ.get(USER_ENV), help=f"users id whose sessions to read (only their own content is opened); default ${USER_ENV}")
     ap.add_argument("--account", default=os.environ.get("CODECAST_EVALS_ACCOUNT"))
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--skip-export", action="store_true")
     a = ap.parse_args()
+    if not a.user: sys.exit(f"monitor.py: no user. Pass --user <users id> or set {USER_ENV} to the Convex users id whose sessions to read.")
+    if not os.path.exists(BASELINE): sys.exit(f"monitor.py: {BASELINE} is missing. The baseline report is private and lives in EVALS_HOME, not in git; copy it there before running.")
 
     today = datetime.date.today().isoformat()
     run = os.path.join(HOME, "runs", today)
@@ -312,8 +322,7 @@ def main():
     for d in sorted(os.listdir(os.path.join(HOME, "runs"))):
         p = os.path.join(HOME, "runs", d, "report.json")
         if os.path.exists(p): reports.append(json.load(open(p)))
-    base = os.path.join(HERE, "baseline.json")
-    if os.path.exists(base): reports.insert(0, json.load(open(base)))
+    reports.insert(0, json.load(open(BASELINE)))
     rows = [("messages/new session", lambda r: r.get("messages_per_new_session")),
             ("huddle chunks unnamed", lambda r: r["huddle"]["unnamed"] if r.get("days") == 7 else round(r["huddle"]["unnamed"] * 7 / r["days"])),
             ("unnamed chunks inside the delivery gap %", lambda r: r["huddle"]["inside_gap_pct"]),

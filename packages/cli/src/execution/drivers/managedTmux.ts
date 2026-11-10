@@ -5,7 +5,6 @@ import {
   type ExecutionTargetSpec,
   type RuntimeCapability,
   type RuntimeConfiguration,
-  type StructuredFailure,
 } from "@codecast/shared/contracts";
 import { assertRuntimeDeliveryFence, type RuntimeDriver } from "../driver.js";
 import type {

@@ -83,6 +83,29 @@ export function isAgentRuntimePath(rel: string): boolean {
   return AGENT_RUNTIME_ROOTS.some((root) => rel === root || rel.startsWith(`${root}/`))
     || /^\.claude\/plugins\/cache\/.*\/(?:\.in_use(?:\/|$)|\.orphaned_at$)/.test(rel);
 }
+/**
+ * Home-relative folders and files that hold keys, tokens and logins. Nothing
+ * that leaves the laptop on a host's request may come from one: the mirror
+ * (CONTEXT_DENYLIST), a reached folder (cloud/reach.ts) and `cast sync pull`
+ * or `diff` of a home path (cloud/syncRequests.ts) all refuse them.
+ */
+export const CREDENTIAL_STORE_PATHS: readonly string[] = [
+  ".config/gh", ".config/gcloud", ".ssh", ".aws", ".gnupg", ".kube", ".docker/config.json",
+  ".app-store-connect", ".cloudflared", ".convex", ".railway", ".fly", ".supabase", ".vercel", ".netlify", ".wrangler",
+  ".config/railway", ".config/fly", ".config/supabase", ".config/vercel", ".config/netlify", ".config/.wrangler",
+  ".azure", ".terraform.d", ".pulumi", ".config/doppler", ".config/op", ".password-store", ".local/share/keyrings",
+  ".netrc", ".npmrc", ".pgpass", ".codecast", "Library/Keychains",
+];
+
+/**
+ * The credential store a home-relative path touches, or null: the store
+ * itself, something inside it, or (with `orHolds`) a folder that contains it.
+ */
+export function credentialStoreFor(homeRel: string, orHolds = false): string | null {
+  const rel = homeRel.split(path.sep).join("/").replace(/\/+$/, "");
+  return CREDENTIAL_STORE_PATHS.find((s) => rel === s || rel.startsWith(`${s}/`) || (orHolds && s.startsWith(`${rel}/`))) ?? null;
+}
+
 export const CONTEXT_DENYLIST: readonly string[] = [
   ".claude/.credentials.json", ".claude.json", ".claude/history.jsonl",
   ".claude/sessions", ".claude/session-env", ".claude/shell-snapshots", ".claude/file-history",
@@ -111,14 +134,11 @@ export const CONTEXT_DENYLIST: readonly string[] = [
   ".gemini/oauth_creds.json", ".gemini/google_accounts.json", ".gemini/tmp", ".gemini/history",
   ".gemini/antigravity/brain", ".gemini/antigravity/code_tracker", ".gemini/antigravity/conversations", ".gemini/antigravity/implicit",
   ".gemini/antigravity/installation_id", ".gemini/antigravity/user_settings.pb", ".gemini/antigravity/browserAllowlist.txt",
-  ".config/gh", ".config/gcloud", ".ssh", ".aws", ".gnupg", ".kube", ".docker/config.json",
-  ".app-store-connect", ".cloudflared", ".convex", ".railway", ".fly", ".supabase", ".vercel", ".netlify", ".wrangler",
-  ".config/railway", ".config/fly", ".config/supabase", ".config/vercel", ".config/netlify", ".config/.wrangler",
-  ".azure", ".terraform.d", ".pulumi", ".config/doppler", ".config/op", ".password-store", ".local/share/keyrings",
+  ...CREDENTIAL_STORE_PATHS,
   ".fig", ".vimrc", ".vim", ".config/nvim", ".config/fish/fish_variables", ...HOST_OWNED_LOCAL_BIN,
   "Dropbox", "OneDrive", "Google Drive", "GoogleDrive", ".dropbox", ".dropbox-dist",
   "Library", "Applications", ".Trash", ".mozilla", ".config/google-chrome", ".config/chromium",
-  ".netrc", ".npmrc", ".pgpass", ".codecast", ".config/opencode/plugins/codecast-stable.js",
+  ".config/opencode/plugins/codecast-stable.js",
   "*.pem", "id_*", "*.key", "*.p8", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.sqlite*", "credentials*.json", "hosts.yml", "auth.json", "auth.json.*", "oauth_creds.json", ".env", ".env.*",
   "pass.txt", "passwords.txt", "passwords.csv", "*.kdbx", "*.1password", "*.keychain", "*.keychain-db",
 ];

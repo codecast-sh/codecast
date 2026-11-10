@@ -3,8 +3,8 @@
  * reads off a `cast browser` row — the page URL on its own line, then the tab
  * identity from tabId.ts. The built-in driver prints both itself; the engine
  * passthrough prints only what agent-browser prints, which names tabs by a
- * per-session label (`t1`) that no browser-level CDP call can act on. Called
- * from cliEngine.ts passthrough() after tab-affecting verbs.
+ * per-session label (`t1`) that no browser-level CDP call can act on.
+ * cliEngine.ts printFooter() prints these lines after tab-affecting verbs.
  */
 
 import { fmt } from "../colors.js";
@@ -44,19 +44,4 @@ export function tabFooterLines(tabs: FooterTab[]): string[] {
   if (active.url && /^https?:\/\//.test(active.url)) lines.push(`  ${active.url}`);
   lines.push(fmt.muted(`  ${tabLine(active.targetId)}`));
   return lines;
-}
-
-/**
- * Print the footer for a passthrough verb. `listTabs` is engine.ts
- * engineTabs() (its {tabId,targetId,active,url} rows fit FooterTab as-is).
- * Failures print nothing: the footer is a courtesy, never a reason to fail a
- * command that already succeeded.
- */
-export function printTabFooter(engineVerb: string, listTabs: () => FooterTab[]): void {
-  if (!TAB_AFFECTING_VERBS.has(engineVerb)) return;
-  try {
-    for (const line of tabFooterLines(listTabs())) console.log(line);
-  } catch {
-    /* courtesy only */
-  }
 }

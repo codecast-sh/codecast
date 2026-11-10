@@ -26,10 +26,6 @@ export function sharePageUrl(path: string): string {
   return publicUrl(path);
 }
 
-export function canonicalUrl(): string {
-  if (typeof window === "undefined") return shareOrigin();
-  return `${shareOrigin()}${window.location.pathname}${window.location.search}${window.location.hash}`;
-}
 
 // Shared match rule for the project pickers (chip picker + new-session modal).
 // Queries match the project NAME (last path segment) anchored at the start of

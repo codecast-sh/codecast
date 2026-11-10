@@ -66,6 +66,26 @@ describe("requestLocalRead", () => {
   });
 });
 
+describe("requestLocalRead across teams", () => {
+  test("a second team asking the same key opens its own request instead of re-opening the first team's", async () => {
+    const ctx = context("reader");
+    const first = await request(ctx, {});
+    const second = await request(ctx, { team_id: "other-team", requested_by: "outsider" });
+    expect(second.request_id).not.toBe(first.request_id);
+    expect(ctx.db._tables.repo_read_requests.map((r: any) => r.team_id).sort()).toEqual(["other-team", "team"]);
+    // Each team's publisher sees only its own team's request.
+    expect((await pending({ ...context("outsider"), db: ctx.db })).map((r: any) => r._id)).toEqual([second.request_id]);
+    expect((await pending({ ...context("publisher"), db: ctx.db })).map((r: any) => r._id)).toEqual([first.request_id]);
+  });
+
+  test("an answer is stamped with the request's workspace", async () => {
+    const ctx = context("reader");
+    const { request_id } = await request(ctx, {});
+    await answer({ ...context("publisher"), db: ctx.db }, { request_id, row: { kind: "blob", ref: "main", path: "src/x.ts", content: "{}" } });
+    expect(ctx.db._tables.repo_cache[0]).toMatchObject({ local_workspace: "team:team", team_id: "team" });
+  });
+});
+
 describe("browse access", () => {
   test("a member of the publishing team reads the checkout first; the installation is the fallback", async () => {
     const ctx = context("reader", {

@@ -140,23 +140,20 @@ export async function ensureViewTunnel(host: RemoteHost): Promise<ViewUrls> {
 
 /**
  * One frame of the machine's display, saved locally. Captured on the box with
- * ffmpeg (already there from provisioning) and copied back — no stream, no
- * tunnel, just a still of whatever the screen shows right now.
+ * ffmpeg (already there from provisioning) and streamed back over the same
+ * ssh call: no stream, no tunnel, and no copy of the screen left on the host,
+ * where a fixed path in /tmp was readable by every user of the box.
  */
 export function machineShot(host: RemoteHost, display = SCREEN_DISPLAY): string {
-  execFileSync(
+  const png = execFileSync(
     "ssh",
     ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
      "-o", "BatchMode=yes", `${host.user}@${host.address}`,
-     `ffmpeg -y -loglevel error -f x11grab -i ${display} -frames:v 1 /tmp/cast-machine-shot.png`],
-    { timeout: 30_000, stdio: ["ignore", "ignore", "pipe"] },
+     `ffmpeg -loglevel error -f x11grab -i ${display} -frames:v 1 -f image2pipe -c:v png -`],
+    { timeout: 30_000, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 },
   );
+  if (!png.length) throw new Error("the host returned no screenshot");
   const local = agentTempPath(SHOT_TEMP_KIND, `cast-machine-${Date.now()}.png`);
-  execFileSync(
-    "scp",
-    ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-     "-o", "BatchMode=yes", `${host.user}@${host.address}:/tmp/cast-machine-shot.png`, local],
-    { timeout: 30_000, stdio: ["ignore", "ignore", "pipe"] },
-  );
+  fs.writeFileSync(local, png, { mode: 0o600 });
   return local;
 }

@@ -17,7 +17,6 @@ export const TimelineIcon = () => (
   <Icon><path d="M1.5 8h9M2.5 4.5v7M6.5 4.5v7" /><circle cx="12.5" cy="8" r="2.2" fill="currentColor" /></Icon>
 );
 export const ArrowUpIcon = () => <Icon stroke={2.1}><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5" /></Icon>;
-export const ArrowRightIcon = () => <Icon><path d="M3 8h10M9 4l4 4-4 4" /></Icon>;
 export const PickIcon = () => (
   <Icon>
     <path d="M2.5 6V3.5a1 1 0 0 1 1-1H6M10 2.5h2.5a1 1 0 0 1 1 1V6M2.5 10v2.5a1 1 0 0 0 1 1H6" />

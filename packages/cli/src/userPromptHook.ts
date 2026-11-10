@@ -1,7 +1,7 @@
 // Claude Code UserPromptSubmit -> one process for all four codecast jobs.
 // Installed to ~/.claude/hooks/codecast-prompt.sh. The other events still
 // use the individual scripts (Stop, SessionStart, PreToolUse, …).
-import { HOOK_FIELDS_READ } from "./hookJson.js";
+import { HOOK_FEATURE_ON, HOOK_FIELDS_READ, HOOK_STATE_DIR } from "./hookJson.js";
 import { CODECAST_STATUS_EMIT } from "./statusHook.js";
 import { SESSION_REGISTER_JOB } from "./sessionRegisterHook.js";
 import { TASK_PULSE_JOB } from "./taskPulseHook.js";
@@ -13,6 +13,7 @@ export const USER_PROMPT_HOOK = `#!/bin/bash
 # One UserPromptSubmit process: status, session-register, task-pulse, thread-state.
 # Four separate scripts used to each spawn bash+awk; Claude waits for all of them.
 set -uo pipefail
+${HOOK_STATE_DIR}
 
 INPUT=$(dd bs=65536 count=1 2>/dev/null || true)
 [ -n "$INPUT" ] || exit 0
@@ -40,6 +41,7 @@ TRANSCRIPT_PATH=""
 
 ${CODECAST_STATUS_EMIT}
 ${SESSION_REGISTER_JOB}
+${HOOK_FEATURE_ON}
 ${TASK_PULSE_JOB}
 ${THREAD_STATE_JOB}
 

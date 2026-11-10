@@ -87,12 +87,6 @@ export const ASKS = {
  *  the marketing page's section for people who do not write code. */
 export const ASSISTANT_HEADLINE = "An assistant for the busywork.";
 
-/** The link that invites a visitor who does not write code. */
-export function assistantInvite(mail: boolean): string {
-  return mail
-    ? "Get an assistant for your errands, notes and routines, mail included"
-    : "Get an assistant for your errands, notes and routines";
-}
 
 /** The one line under the sign in heading, in the assistant's own voice and
  *  ending on the same promise the lane makes. */

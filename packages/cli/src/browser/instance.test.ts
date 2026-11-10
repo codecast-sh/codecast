@@ -114,6 +114,14 @@ describe("a hung browser", () => {
     await proc.exited;
   });
 
+  test("a remote browser's idle ssh tunnel is never taken for a hung browser", async () => {
+    // For a remote browser the pid is `ssh -N`: asleep with no CPU is its normal state.
+    const proc = child(["sleep", "60"]);
+    await sleep(200);
+    expect(await probeLiveness(fakeState({ pid: proc.pid, remote: { host: "203.0.113.7", user: "ubuntu", sshPid: proc.pid } }), 1500)).toBe("unverifiable");
+    expect(proc.exitCode).toBeNull();
+  });
+
   test("a silent browser that is burning CPU is overloaded, not hung, and is left alone", async () => {
     const proc = child(["bun", "-e", "for(;;){}"]);
     await sleep(300);

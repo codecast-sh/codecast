@@ -487,7 +487,9 @@ export async function buildShareUpdate(
 
   const owner = await ctx.db.get(ownerId);
   const fallback = owner?.active_team_id ?? owner?.team_id;
-  if (fallback) updates.team_id = fallback;
+  // The pointer outlives a lapsed membership: sharing into a team the owner
+  // has left would show the conversation to people they no longer work with.
+  if (fallback && (await isTeamMember(ctx, ownerId, fallback))) updates.team_id = fallback;
   return updates;
 }
 

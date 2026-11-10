@@ -12,6 +12,7 @@ import { acceptInvite, declineInvite, joinCall } from '@/lib/calls/callManager';
 import { useAuth } from '@/lib/auth';
 import { catchUpConversation } from '@/lib/foregroundResume';
 import { openLink } from '@/lib/links';
+import { setDevicePushToken } from '@/lib/devicePushToken';
 import {
   CALL_PUSH_ACTION_DECLINE,
   CALL_PUSH_ACTION_JOIN,
@@ -103,17 +104,26 @@ export function usePushNotifications() {
     }
   }, [isAuthenticated]);
 
+  // The system issues the token once per launch, usually before Convex auth is
+  // up, and storePushToken refuses an unauthenticated call. So the token waits
+  // in state and is stored whenever both exist: at a cold launch once the
+  // session is read, and again after every sign-in (as the VoIP token is
+  // republished on auth in app/_layout).
   useEffect(() => {
-    registerForPushNotificationsAsync().then(async (token) => {
-      if (token) {
-        setPushToken(token);
-        try {
-          await storePushToken({ push_token: token });
-        } catch (error) {
-          console.error('Failed to store push token:', error);
-        }
-      }
+    if (!isAuthenticated || !pushToken) return;
+    storePushToken({ push_token: pushToken }).catch((error) => {
+      console.error('Failed to store push token:', error);
     });
+  }, [isAuthenticated, pushToken]);
+
+  useEffect(() => {
+    registerForPushNotificationsAsync()
+      .then((token) => {
+        if (!token) return;
+        setDevicePushToken(token);
+        setPushToken(token);
+      })
+      .catch((error) => console.error('Failed to get push token:', error));
 
     const handleNotificationResponse = (response: Notifications.NotificationResponse) => {
       const data = response.notification.request.content.data;

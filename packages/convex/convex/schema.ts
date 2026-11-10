@@ -402,7 +402,9 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_last_heartbeat", ["last_heartbeat"])
     // The Monday weekly card sweep reads only the people who turned it on.
-    .index("by_weekly_card", ["weekly_card_enabled"]),
+    .index("by_weekly_card", ["weekly_card_enabled"])
+    // One phone, one account: storePushToken takes the token off any other user.
+    .index("by_push_token", ["push_token"]),
 
   // Per-user skills blob, split out of the users doc. The users doc is patched
   // on every heartbeat, and Convex versions the WHOLE doc per patch — carrying
@@ -1651,7 +1653,6 @@ export default defineSchema({
     .index("by_team", ["team_id"])
     .index("by_scope_user", ["scope_user_id"])
     .index("by_bot_user", ["bot_user_id"])
-    .index("by_host_user", ["host_user_id"])
     .index("by_conversation", ["conversation_id"]),
 
   // Maps an external comms channel (e.g. a Slack channel) to the anchor that
@@ -2313,8 +2314,7 @@ export default defineSchema({
     message_count: v.number(),
     created_at: v.number(),
     view_count: v.number(),
-  })
-    .index("by_created_at", ["created_at"]),
+  }),
 
   messages: defineTable({
     conversation_id: v.id("conversations"),
@@ -2394,7 +2394,6 @@ export default defineSchema({
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
-    .index("by_conversation_transcript_revision", ["conversation_id", "transcript_revision"])
     .index("by_conversation_uuid", ["conversation_id", "message_uuid"])
     .index("by_conversation_client_id", ["conversation_id", "client_id"])
     .index("by_message_uuid", ["message_uuid"])
@@ -2588,7 +2587,6 @@ export default defineSchema({
     updated_at: v.number(),
   })
     .index("by_user_id", ["user_id"])
-    .index("by_user_project", ["user_id", "project_path"])
     .index("by_team_id", ["team_id"])
     .index("by_workspace", ["workspace"])
     .searchIndex("search_decisions_v2", {
@@ -2638,8 +2636,7 @@ export default defineSchema({
     timestamp: v.number(),
   })
     .index("by_conversation", ["conversation_id"])
-    .index("by_user_file", ["user_id", "file_path"])
-    .index("by_timestamp", ["timestamp"]),
+    .index("by_user_file", ["user_id", "file_path"]),
 
   // History: conversation comments written before 2026-11-03. Nothing writes
   // this table; every comment, these included, is read and written through
@@ -2681,15 +2678,7 @@ export default defineSchema({
     client_id: v.optional(v.string()),
   })
     .index("by_conversation_id", ["conversation_id"])
-    .index("by_conversation_client_id", ["conversation_id", "client_id"])
-    .index("by_message_id", ["message_id"])
-    .index("by_user_id", ["user_id"])
-    .index("by_parent_comment_id", ["parent_comment_id"])
-    .index("by_pr_id", ["pr_id"])
-    .index("by_github_comment_id", ["github_comment_id"])
-    // Cross-conversation recency scan for the review queue (open threads across
-    // every conversation the viewer can access).
-    .index("by_created_at", ["created_at"]),
+    .index("by_user_id", ["user_id"]),
 
   // Retired: no function reads or writes it. Kept until confirmed empty.
   public_comments: defineTable({
@@ -2707,8 +2696,7 @@ export default defineSchema({
     last_position: v.number(),
     last_synced_at: v.number(),
   })
-    .index("by_user_id", ["user_id"])
-    .index("by_file_path_hash", ["file_path_hash"]),
+    .index("by_user_id", ["user_id"]),
 
   rate_limits: defineTable({
     user_id: v.id("users"),
@@ -2879,9 +2867,7 @@ export default defineSchema({
     // with every addMessages pending-write → OCC stampede → 60s sync timeouts).
     .index("by_status", ["status"])
     .index("by_conversation_sequence", ["conversation_id", "conversation_sequence"])
-    .index("by_conversation_client_id", ["conversation_id", "client_id"])
-    .index("by_delivery_id", ["delivery_id"])
-    .index("by_owner_delivery_status", ["owner_user_id", "delivery_protocol_version", "delivery_status"]),
+    .index("by_conversation_client_id", ["conversation_id", "client_id"]),
 
   // One authoritative ordering/fencing row per conversation. Convex OCC on
   // this row serializes enqueue, delivery-slot acquisition, terminal-prefix
@@ -3088,8 +3074,7 @@ export default defineSchema({
     created_at: v.number(),
     updated_at: v.number(),
   })
-    .index("by_conversation_epoch", ["conversation_id", "epoch"])
-    .index("by_owner_device_state", ["owner_user_id", "owner_device_id", "state"]),
+    .index("by_conversation_epoch", ["conversation_id", "epoch"]),
 
   // Every retry gets a fresh attempt row; delivery_id and sequence stay stable.
   // An ambiguous attempt remains the conversation-global slot owner until an
@@ -3123,9 +3108,7 @@ export default defineSchema({
     delivery_started_at: v.optional(v.number()),
     completed_at: v.optional(v.number()),
   })
-    .index("by_message", ["message_id"])
-    .index("by_conversation_sequence", ["conversation_id", "conversation_sequence"])
-    .index("by_conversation_state", ["conversation_id", "state"]),
+    .index("by_conversation_sequence", ["conversation_id", "conversation_sequence"]),
 
   // One row per machine the user runs a codecast daemon on. The remote Mac is
   // just another device. device_id is a stable hash of ~/.codecast/.machine_key,
@@ -3426,9 +3409,6 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_id", ["user_id"])
     .index("by_user_heartbeat", ["user_id", "last_heartbeat"])
-    // The user's daemon rows by heartbeat (hosted absent), so the newest
-    // daemon heartbeat is one seek even for a user whose rows are all hosted.
-    .index("by_user_hosted_heartbeat", ["user_id", "hosted", "last_heartbeat"])
     .index("by_user_status", ["user_id", "agent_status"])
     // addMessages asks whether its session is idle or blocked here: while the
     // session works the range is empty, so heartbeats never conflict with it.
@@ -3718,7 +3698,6 @@ export default defineSchema({
     .index("by_repository_state", ["repository", "state"])
     .index("by_repository_head", ["repository", "head_sha"])
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
-    .index("by_updated_at", ["updated_at"])
     // A team's pull requests touched in a trailing window (page data readers).
     .index("by_team_updated", ["team_id", "updated_at"]),
 
@@ -3760,7 +3739,6 @@ export default defineSchema({
   })
     .index("by_pull_request", ["pull_request_id"])
     .index("by_reviewer", ["reviewer_user_id"])
-    .index("by_pull_request_state", ["pull_request_id", "state"])
     .index("by_github_review_id", ["github_review_id"]),
 
   // Code comments: a comment anchored to a file (and optionally a line range)
@@ -3807,8 +3785,7 @@ export default defineSchema({
     shared_sessions: v.optional(v.number()),
   })
     .index("by_conversation_taken", ["conversation_id", "taken_at"])
-    .index("by_conversation_sha", ["conversation_id", "sha"])
-    .index("by_checkout_taken", ["checkout_key", "taken_at"]),
+    .index("by_conversation_sha", ["conversation_id", "sha"]),
 
   review_comments: defineTable({
     review_id: v.optional(v.id("reviews")),
@@ -3950,13 +3927,11 @@ export default defineSchema({
     .index("by_owner_role", ["owner_role_id", "resolved"])
     .index("by_review", ["review_id"])
     .index("by_author_git_root", ["author_user_id", "git_root"])
-    .index("by_review_resolved", ["review_id", "resolved"])
     .index("by_pull_request", ["pull_request_id"])
     .index("by_github_comment_id", ["github_comment_id"])
     .index("by_repository_file", ["repository", "file_path"])
     .index("by_sent_conversation_answered", ["sent_to_conversation_id", "answered_at"])
     .index("by_conversation", ["conversation_id"])
-    .index("by_task", ["task_id"])
     .index("by_parent", ["parent_id"])
     .index("by_author_client_id", ["author_user_id", "client_id"]),
 
@@ -4053,7 +4028,6 @@ export default defineSchema({
     .index("by_pr_created", ["pr_id", "created_at"])
     .index("by_conversation_created", ["conversation_id", "created_at"])
     .index("by_task_created", ["task_id", "created_at"])
-    .index("by_issue_key", ["issue.key", "created_at"])
     .index("by_dedupe_key", ["dedupe_key"]),
 
   // A deploy as an object (docs/architecture/deploys.md): one version going
@@ -4127,10 +4101,8 @@ export default defineSchema({
   })
     .index("by_short_id", ["short_id"])
     .index("by_workspace_created", ["workspace", "created_at"])
-    .index("by_project_created", ["project_id", "created_at"])
     .index("by_source_created", ["source_id", "created_at"])
     .index("by_repository_created", ["repository", "created_at"])
-    .index("by_project_status", ["project_id", "status"])
     .index("by_workspace_target_created", ["workspace", "target", "created_at"]),
 
   // Read-through cache of repository content fetched with the GitHub App
@@ -4153,6 +4125,13 @@ export default defineSchema({
     truncated: v.optional(v.boolean()),
     etag: v.optional(v.string()),
     fetched_at: v.number(),
+    // Set on a row a local checkout published (repos.ingestLocal,
+    // answerLocalRead): the workspace key of the team it was published to.
+    // The repository name on such a row is the publisher's own claim, so the
+    // row is read and replaced only inside that workspace. Absent on a row
+    // fetched from GitHub with an installation token, and on rows from before
+    // this field, which are read only through an installation.
+    local_workspace: v.optional(v.string()),
   })
     .index("by_key", ["repository", "kind", "ref", "path"])
     .index("by_team_fetched", ["team_id", "fetched_at"])
@@ -4480,7 +4459,7 @@ export default defineSchema({
     suggestion: v.string(),
     outcome: v.union(v.literal("sent"), v.literal("edited"), v.literal("dismissed")),
     created_at: v.number(),
-  }).index("by_user_created", ["user_id", "created_at"]),
+  }),
 
   // Per-user mined composer-input corpus: how this user actually talks to
   // their agents. `phrases` are recurring multi-word fragments mined across
@@ -4931,8 +4910,7 @@ export default defineSchema({
     refresh_due_at: v.optional(v.number()),
     updated_at: v.number(),
   })
-    .index("by_user", ["user_id"])
-    .index("by_activity_id", ["activity_id"]),
+    .index("by_user", ["user_id"]),
 
   // Fixed-window counters for the IP-keyed rate limiter (ipRateLimit.ts) used on
   // UNAUTHENTICATED endpoints (the auth relay, webhooks) — the existing per-user
@@ -5229,7 +5207,6 @@ export default defineSchema({
     // Global recency scan for the email digest sweep: recent pending decisions.
     .index("by_status_created", ["status", "created_at"])
     .index("by_task", ["task_id", "status"])
-    .index("by_stack", ["stack_id"])
     .index("by_holder_status", ["holder_key", "status"])
     .index("by_short_id", ["short_id"])
     // Agreement history and grant scope moves: one range read per category.
@@ -5442,8 +5419,7 @@ export default defineSchema({
     updated_at: v.number(),
   })
     .index("by_conversation", ["conversation_id"])
-    .index("by_conversation_grantee", ["conversation_id", "grantee_user_id"])
-    .index("by_owner_status", ["owner_user_id", "status"]),
+    .index("by_conversation_grantee", ["conversation_id", "grantee_user_id"]),
 
   // An anonymous viewer of a session's share link who gave a name to suggest
   // messages (guestSuggestions.ts). They prove it with the secret their
@@ -5590,8 +5566,7 @@ export default defineSchema({
     include_conversation_link: v.optional(v.boolean()),
     created_at: v.number(),
   })
-    .index("by_share_token", ["share_token"])
-    .index("by_message_id", ["message_id"]),
+    .index("by_share_token", ["share_token"]),
 
   system_config: defineTable({
     key: v.string(),
@@ -5782,7 +5757,6 @@ export default defineSchema({
     .index("by_status_run_at", ["status", "run_at"])
     // The hosted routines a deployment with no cloud wake host still fires.
     .index("by_hosted_status_run_at", ["hosted_home", "status", "run_at"])
-    .index("by_event_filter", ["status"])
     // A firing reads only the triggers armed on its name (matchTaskTriggers).
     .index("by_status_event_type", ["status", "event_filter.event_type"])
     .index("by_short_id", ["short_id"])
@@ -6624,7 +6598,6 @@ export default defineSchema({
     .index("by_workspace", ["workspace"])
     .index("by_created_from_conversation_id", ["created_from_conversation_id"])
     .index("by_project_id", ["project_id"])
-    .index("by_current_session", ["current_session_id"])
     .index("by_doc_id", ["doc_id"]),
 
   tasks: defineTable({
@@ -6964,8 +6937,6 @@ export default defineSchema({
     .index("by_created_from_conversation", ["created_from_conversation"])
     .index("by_first_linked_conversation", ["first_linked_conversation"])
     .index("by_from_call", ["from_call"])
-    .index("by_user_insight", ["user_id", "created_from_insight"])
-    .index("by_workflow_run", ["workflow_run_id"])
     .index("by_assignee_status", ["assignee", "status"])
     .index("by_assignee_updated", ["assignee", "updated_at"])
     // The provider twin lookup: every inbound issue event resolves its task
@@ -7303,7 +7274,6 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
-    .index("by_user_type", ["user_id", "doc_type"])
     .index("by_parent_id", ["parent_id"])
     .index("by_project_id", ["project_id"])
     // Sparse: docs attached to a plan, for the org scope feed (F2).
@@ -7682,7 +7652,6 @@ export default defineSchema({
     .index("by_user_vault_device", ["user_id", "vault_id", "device_id", "path"])
     // Reader index: one vault across every device the user mirrors it from.
     .index("by_user_vault", ["user_id", "vault_id", "path"])
-    .index("by_vault_path", ["vault_id", "path"])
     .index("by_user", ["user_id"]),
 
   doc_snapshots: defineTable({
@@ -8075,8 +8044,7 @@ export default defineSchema({
     at: v.number(),
   })
     .index("by_key", ["key"])
-    .index("by_workspace_at", ["workspace", "at"])
-    .index("by_run", ["run_id", "node_id"]),
+    .index("by_workspace_at", ["workspace", "at"]),
 
   // A person's conversation with a project's line (line-workspace.md LW4,
   // convex/lineChat.ts): what they said, each ask naming the session it went
@@ -8137,7 +8105,6 @@ export default defineSchema({
     // The daemon command that carries the try: a machine that never picks it up lets it expire.
     command_id: v.optional(v.id("daemon_commands")),
   })
-    .index("by_key", ["key"])
     .index("by_try", ["try_id"])
     .index("by_project_at", ["project_id", "at"]),
 

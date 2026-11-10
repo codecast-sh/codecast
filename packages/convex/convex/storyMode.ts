@@ -3,7 +3,7 @@ import { query, action, internalQuery, internalMutation, internalAction } from "
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation } from "./lib/access";
-import { isLowSignalPrompt, sampleEvenly } from "./titleGeneration";
+import { isLowSignalPrompt } from "./titleGeneration";
 import { CHEAP_MODEL, callModel } from "./lib/anthropic";
 import type { VendorGate } from "./lib/vendorGuard";
 
@@ -182,7 +182,10 @@ export const getCachedStory = internalQuery({
       .unique();
     let beats: Beat[] = [];
     if (row?.story) { try { beats = JSON.parse(row.story); } catch { beats = []; } }
-    return { beats, message_count: conv.message_count ?? 0 };
+    // The count the beats were BUILT at, not the session's count now: a
+    // summary made from these beats covers that many messages and no more.
+    const builtAt = (row?.story_message_count as number | undefined) ?? 0;
+    return { beats, message_count: builtAt, stale: beats.length === 0 || (conv.message_count ?? 0) - builtAt >= STALE_AFTER };
   },
 });
 
@@ -353,9 +356,9 @@ export const generateSummary = action({
     if (!userId) return { ok: false, phases: 0 };
     if (!process.env.ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY not configured"); return { ok: false, phases: 0 }; }
 
-    // Summary is built FROM the story beats. Ensure they exist first.
+    // Summary is built FROM the story beats. Ensure they exist and cover the session as it is now.
     let cached = await ctx.runQuery(internal.storyMode.getCachedStory, { conversation_id: args.conversation_id, user_id: userId });
-    if (!cached || cached.beats.length === 0) {
+    if (!cached || cached.stale) {
       await ctx.runAction(internal.storyMode.generateStoryInternal, { conversation_id: args.conversation_id, user_id: userId });
       cached = await ctx.runQuery(internal.storyMode.getCachedStory, { conversation_id: args.conversation_id, user_id: userId });
     }

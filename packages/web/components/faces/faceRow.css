@@ -940,7 +940,7 @@
   font-weight: 600;
   color: var(--sol-text);
 }
-/* A private huddle, beside its name: the lock's violet (RoomLockButton). */
+/* A private huddle, beside its name: the lock's violet. */
 .engagement-card-private {
   display: inline-flex;
   flex-shrink: 0;

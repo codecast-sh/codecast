@@ -126,10 +126,6 @@ export function sessionTargets(conversationId: string, targets: ReadonlyArray<De
   return out;
 }
 
-/** The sessions waiting on a target, with how many commits each. */
-export function waitingSessions(t: DeployTargetRow): Array<{ key: string; title: string | null; commits: number }> {
-  return t.queue.groups.map((g) => ({ key: g.key, title: g.session?.title ?? null, commits: g.commits.length }));
-}
 
 /** A target's display order: going out, failed, waiting (most commits first), then the rest by name. */
 export function orderTargets(targets: ReadonlyArray<DeployTargetRow>, deploys: ReadonlyArray<TeamDeployRow>): DeployTargetRow[] {

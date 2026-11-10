@@ -486,41 +486,6 @@ export const webGetTaskDetail = query({
   },
 });
 
-export const backfillMinedTimestamps = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const tasks = await ctx.db.query("tasks").collect();
-    let patched = 0;
-    for (const task of tasks) {
-      if (task.source !== "insight" || !task.created_from_insight) continue;
-      const insight = await ctx.db.get(task.created_from_insight);
-      if (!insight?.generated_at) continue;
-      if (Math.abs(task.created_at - insight.generated_at) < 60000) continue;
-      await ctx.db.patch(task._id, {
-        created_at: insight.generated_at,
-        updated_at: insight.generated_at,
-        ...(task.closed_at ? { closed_at: insight.generated_at } : {}),
-      });
-      patched++;
-    }
-
-    const docs = await ctx.db.query("docs").collect();
-    let docsPatched = 0;
-    for (const doc of docs) {
-      if (doc.source !== "agent" || !doc.conversation_id) continue;
-      const conv = await ctx.db.get(doc.conversation_id);
-      if (!conv?.started_at) continue;
-      if (Math.abs(doc.created_at - conv.started_at) < 60000) continue;
-      await ctx.db.patch(doc._id, {
-        created_at: conv.started_at,
-        updated_at: conv.started_at,
-      });
-      docsPatched++;
-    }
-
-    return { tasks_patched: patched, docs_patched: docsPatched };
-  },
-});
 
 // Cron: a plan whose linked sessions moved since its last update takes the
 // newest insight's time as its own, so plans with sessions but no task links
@@ -557,22 +522,3 @@ export const refreshPlanTimestamps = internalAction({
   },
 });
 
-export const backfillTaskProjectPaths = internalMutation({
-  args: { cursor: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const result = await ctx.db.query("tasks").paginate({ numItems: 200, cursor: args.cursor as any || null });
-    let patched = 0;
-    for (const task of result.page) {
-      if ((task as any).project_path) continue;
-      const convId = (task as any).created_from_conversation;
-      if (!convId) continue;
-      const conv = await ctx.db.get(convId as any) as any;
-      const projectPath = conv?.project_path || (conv as any)?.git_root;
-      if (projectPath) {
-        await ctx.db.patch(task._id, { project_path: projectPath } as any);
-        patched++;
-      }
-    }
-    return { patched, pageSize: result.page.length, isDone: result.isDone, continueCursor: result.continueCursor };
-  },
-});

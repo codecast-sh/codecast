@@ -83,8 +83,6 @@ export const KIND_COLOR: Partial<Record<string, string>> = {
 /** Risk is a texture, never a fill (spec 5.2). Defined once on `.chg-root` in globals.css, with its light theme strength. */
 export const RISK_HATCH = "var(--chg-risk-hatch)";
 
-/** The release stamp's pill border. */
-export const RELEASE_COLOR = "var(--sol-green)";
 
 /** The Stuck group's rule. */
 export const STUCK_RULE = "color-mix(in srgb, var(--sol-red) 80%, transparent)";

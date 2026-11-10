@@ -45,6 +45,5 @@ export const teamHostTables = {
     requested_at: v.number(),
     ready_at: v.optional(v.number()),
   })
-    .index("by_host", ["host_id"])
-    .index("by_user", ["user_id"]),
+    .index("by_host", ["host_id"]),
 };

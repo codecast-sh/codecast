@@ -4,10 +4,10 @@
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) 1.3+ (package manager and runtime)
+- [Bun](https://bun.sh) 1.4+ (package manager and runtime)
 - [Convex](https://www.convex.dev) (self-hosted or cloud)
 - Node.js 20+ (the Convex CLI runs on it)
-- nginx (optional, for local domain routing; `setup-hosts.sh` installs it)
+- nginx (optional, for local domain routing: `brew install nginx`, then `setup-hosts.sh` runs it as a service)
 
 ### Setup
 
@@ -29,18 +29,17 @@
 
 4. Start the dev server:
    ```bash
-   ./dev.sh      # https://local.codecast.sh (port 3200)
-   ./dev.sh 1    # https://local.1.codecast.sh (port 3201, multi-instance)
+   ./dev.sh      # http://local.codecast.sh (port 3200)
+   ./dev.sh 1    # http://local.1.codecast.sh (port 3201, multi-instance)
    ```
 
    `dev.sh` runs Vite and the gated Convex pusher, which pushes your Convex changes to the deployment in `packages/convex/.env.local`. [Getting Started](docs/GETTING-STARTED.md) covers the full setup.
 
 ### Nginx (optional)
 
-`sudo ./setup-hosts.sh` adds the `local.*.codecast.sh` names to `/etc/hosts` and installs the nginx proxy. To configure nginx by hand instead, start from the example:
-```bash
-cp nginx.dev.conf.example nginx.dev.conf
-```
+Install nginx first (`brew install nginx`). `sudo ./setup-hosts.sh` then adds the `local.*.codecast.sh` names to `/etc/hosts`, copies `nginx.dev.conf.example` to `nginx.dev.conf` if you have none, and installs a launchd service that runs nginx with it. To change the proxy, edit `nginx.dev.conf` and rerun the script.
+
+The example serves http only. The desktop app loads `https://local.codecast.sh`, so to run it against your local web, follow the TLS comment in `nginx.dev.conf.example` (a mkcert certificate and a 443 server block).
 
 Without either, use `http://localhost:3200`.
 
@@ -102,7 +101,7 @@ All data mutations go through `inboxStore` actions (optimistic local-first updat
 ## Checks
 
 ```bash
-cast check                 # typecheck cli, web and convex through shared tsc watchers
+cast check                 # typecheck every program in .codecast/check.toml through shared tsc watchers
 bun test path/to/file.test.ts
 ```
 

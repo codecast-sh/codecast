@@ -380,7 +380,7 @@ export async function prepareReparentBatch(ctx: { db: any }, authUserId: Id<"use
     role,
     canReshape: await userCanAdminRole(ctx, authUserId, role),
     actor: await read(authUserId),
-    sender: fromRef ? await findConversationByAnyRefWhere(ctx, fromRef, async () => true) : null,
+    sender: fromRef ? await findOwnableConversation(ctx, authUserId, fromRef) : null,
     read,
   };
 }
@@ -566,7 +566,7 @@ async function tellSession(
 ): Promise<"told" | "deferred"> {
   const actor = batch ? batch.actor : await ctx.db.get(authUserId);
   const fromRef = fromSession?.trim();
-  const sender = batch ? batch.sender : fromRef ? await findConversationByAnyRefWhere(ctx, fromRef, async () => true) : null;
+  const sender = batch ? batch.sender : fromRef ? await findOwnableConversation(ctx, authUserId, fromRef) : null;
   const fromShortId = sender ? (sender.short_id ?? sender._id.toString().slice(0, 7)) : "unknown";
   return sayIntoSession(ctx, authUserId, conversation, {
     content: formatSessionMessage(fromShortId, body, { name: personName(actor) }),
@@ -776,42 +776,6 @@ export async function performSetSessionOwner(
   });
   return { ok: true, short_id: result.short_id, owner: result.owners[0] ?? null };
 }
-
-// Admin: flag a full agent member account (e.g. Mr Bot) as is_bot so the
-// ownership guards apply to it. Anchor identities get the flag at creation;
-// agent accounts that predate it (or are created by plain signup) need this
-// one-off. Run via `npx convex run sessionOwnership:flagBotAccount '{"ref":"…"}'`.
-// Idempotent; `ref` matches exact email, exact name, or unique substring.
-export const flagBotAccount = internalMutation({
-  args: { ref: v.string() },
-  handler: async (ctx, args) => {
-    const needle = args.ref.trim().toLowerCase();
-    const users = await ctx.db.query("users").collect();
-    const matches = users.filter(
-      (u: any) =>
-        (u.email || "").toLowerCase() === needle ||
-        (u.name || "").toLowerCase() === needle ||
-        (u.email || "").toLowerCase().includes(needle) ||
-        (u.name || "").toLowerCase().includes(needle)
-    );
-    // Prefer exact hits so a substring can't shadow an exact match.
-    const exact = matches.filter(
-      (u: any) => (u.email || "").toLowerCase() === needle || (u.name || "").toLowerCase() === needle
-    );
-    const pool = exact.length > 0 ? exact : matches;
-    if (pool.length !== 1) {
-      const names = pool.map((u: any) => `${u.name ?? "?"} <${u.email ?? "?"}>`).join(", ");
-      throw new Error(
-        pool.length === 0
-          ? `No user matching "${args.ref}"`
-          : `"${args.ref}" matches multiple users (${names}) — use an exact email`
-      );
-    }
-    const user = pool[0];
-    if (!user.is_bot) await ctx.db.patch(user._id, { is_bot: true });
-    return { user_id: user._id.toString(), name: user.name ?? null, email: user.email ?? null, already_flagged: !!user.is_bot };
-  },
-});
 
 // ── Public mutations ─────────────────────────────────────────────────────────
 // Each fires the "assigned to you" notification for whoever it NEWLY added —
@@ -1074,7 +1038,7 @@ export const listOwnerCandidates = query({
 // cache and are safe either way.
 //
 // Idempotent and re-runnable. Drive it with the action below — one call:
-//   npx convex run sessionOwnership:runBackfillSessionOwners '{}'
+//   packages/convex/run.sh sessionOwnership:runBackfillSessionOwners '{}'
 export const backfillSessionOwners = internalMutation({
   args: {
     cursor: v.optional(v.union(v.string(), v.null())),
@@ -1110,7 +1074,7 @@ export const backfillSessionOwners = internalMutation({
 // until it's done, so the migration is a single call instead of hundreds of CLI
 // round-trips (each `npx convex run` costs ~1.5s of startup, which dominates the
 // actual work — and a mid-run failure in a shell loop loses the cursor).
-//   npx convex run sessionOwnership:runBackfillSessionOwners '{}'
+//   packages/convex/run.sh sessionOwnership:runBackfillSessionOwners '{}'
 export const runBackfillSessionOwners = internalAction({
   args: { batch: v.optional(v.number()) },
   handler: async (ctx, args): Promise<{ pages: number; scanned: number; migrated: number }> => {

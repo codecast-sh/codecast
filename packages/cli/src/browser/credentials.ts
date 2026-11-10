@@ -68,7 +68,13 @@ const KDF_ROUNDS = 1003;
 const KDF_LEN = 16;
 const AES_IV = Buffer.alloc(16, 0x20); // sixteen spaces
 
-let cachedKey: Buffer | null = null;
+/** One key per Keychain entry: Chrome and Chromium keep different ones. */
+const cachedKeys = new Map<string, Buffer>();
+
+/** Chromium keeps its key under its own name; every Google Chrome channel shares one. */
+function safeStorageEntry(channel: ChromeChannel): { service: string; account: string } {
+  return channel === "chromium" ? { service: "Chromium Safe Storage", account: "Chromium" } : { service: "Chrome Safe Storage", account: "Chrome" };
+}
 
 /**
  * The AES key Chrome derives from the login Keychain.
@@ -77,13 +83,15 @@ let cachedKey: Buffer | null = null;
  * already trusted for this binary. Cached for the life of the process so a
  * batch of navigations asks once.
  */
-export function chromeEncryptionKey(deps: { platform?: NodeJS.Platform; exec?: typeof execFileSync } = {}): Buffer | null {
-  if (cachedKey) return cachedKey;
+export function chromeEncryptionKey(deps: { platform?: NodeJS.Platform; exec?: typeof execFileSync; channel?: ChromeChannel } = {}): Buffer | null {
+  const { service, account } = safeStorageEntry(deps.channel ?? "chrome");
+  const cached = cachedKeys.get(service);
+  if (cached) return cached;
   if ((deps.platform ?? process.platform) !== "darwin") return null;
   try {
     const secret = (deps.exec ?? execFileSync)(
       "security",
-      ["find-generic-password", "-w", "-s", "Chrome Safe Storage", "-a", "Chrome"],
+      ["find-generic-password", "-w", "-s", service, "-a", account],
       // Bounded: from a daemon child the Keychain may show an on-screen prompt
       // nobody answers (or fail at once with no GUI session); an unanswered
       // prompt would otherwise wedge the child until its hard kill, and the
@@ -91,8 +99,9 @@ export function chromeEncryptionKey(deps: { platform?: NodeJS.Platform; exec?: t
       { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 45_000 },
     ).trim();
     if (!secret) return null;
-    cachedKey = crypto.pbkdf2Sync(secret, KDF_SALT, KDF_ROUNDS, KDF_LEN, "sha1");
-    return cachedKey;
+    const key = crypto.pbkdf2Sync(secret, KDF_SALT, KDF_ROUNDS, KDF_LEN, "sha1");
+    cachedKeys.set(service, key);
+    return key;
   } catch {
     return null;
   }
@@ -162,10 +171,10 @@ export interface ReadCookiesResult {
  * The database is copied before reading: Chrome holds it open with WAL, and
  * querying the live file risks both a lock error and a torn read.
  */
-export function localCookiesForHost(userDataDir: string, host: string | null, profileDir = "Default"): ReadCookiesResult {
+export function localCookiesForHost(userDataDir: string, host: string | null, profileDir = "Default", channel: ChromeChannel = "chrome"): ReadCookiesResult {
   const db = cookieDbPath(userDataDir, profileDir);
   if (!db) return { cookies: [], reason: `no cookie database under ${userDataDir}` };
-  const key = chromeEncryptionKey();
+  const key = chromeEncryptionKey({ channel });
   if (!key) return { cookies: [], reason: "could not read the Chrome key from the login Keychain" };
 
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "cast-cred-"));
@@ -366,7 +375,7 @@ export async function provisionLocalLogins(
   const root = chromeUserDataRoot(source.channel ?? "chrome");
   if (!root) return { injected: 0, host: label, reason: "no real Chrome profile on this machine" };
 
-  const read = localCookiesForHost(root, host, source.profileDir);
+  const read = localCookiesForHost(root, host, source.profileDir, source.channel ?? "chrome");
   // The whole jar minus the sites whose login the agent browser owns.
   const cookies = host ? read.cookies : read.cookies.filter((c) => !keepsOwnLogin(c.domain));
   if (!cookies.length) return { injected: 0, host: label, reason: read.reason ?? "no local cookies for this site" };

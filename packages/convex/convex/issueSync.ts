@@ -45,7 +45,7 @@ import * as linearApi from "./linearApi";
 import * as githubIssuesApi from "./githubIssuesApi";
 import { createDataContext } from "./data";
 import { nextShortId } from "./counters";
-import { heldKeysFor, requireTeamMembership, resolveWorkspaceKey, workspaceForResource } from "./lib/access";
+import { activeTeamMembershipFor, heldKeysFor, requireTeamMembership, resolveWorkspaceKey, workspaceForResource } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
 import {
   insertTaskComment,
@@ -57,8 +57,7 @@ import {
 import { afterStatusEdges } from "./taskLinks";
 import { recordTaskChange, type TaskChangeBy, type TaskFieldChange } from "./lib/taskHistory";
 import { verifyApiToken } from "./apiTokens";
-import { installationCoversRepo } from "./githubApp";
-import { connectionForWork } from "./oauthConnectors";
+import { connectionReaches, githubDeliveryServesSource, hasPersonalConnection, linearDeliveryServesSource, resolveLinearLabelIds } from "./lib/issueSyncAccess";
 import { teamTaskStatuses } from "@codecast/shared/tasks";
 import { inlineForeignText } from "@codecast/shared/contracts";
 import { mintProjectShortId } from "./lib/projectShortId";
@@ -324,6 +323,7 @@ export const onLinearEvent = internalMutation({
     const source = (await sourceFor(ctx, "linear", container?.project?.id ?? "__none__"))
       ?? (await sourceFor(ctx, "linear", container?.team?.id ?? "__none__"));
     if (!source) return await done("no_source");
+    if (!(await linearDeliveryServesSource(ctx, source as SourceDoc, payload))) return await done("foreign_organization");
 
     const now = Date.now();
     await stampInboundHealth(ctx, source as SourceDoc, now);
@@ -431,6 +431,7 @@ export const onGithubIssue = internalMutation({
 
     const source = await sourceFor(ctx, "github", repo);
     if (!source) return { skipped: "no_source" as const };
+    if (!(await githubDeliveryServesSource(ctx, source as SourceDoc, payload, repo))) return { skipped: "foreign_installation" as const };
 
     const action: string = payload?.action ?? event.action ?? "edited";
     const now = Date.now();
@@ -467,6 +468,7 @@ export const onGithubIssueComment = internalMutation({
 
     const source = await sourceFor(ctx, "github", repo);
     if (!source) return { skipped: "no_source" as const };
+    if (!(await githubDeliveryServesSource(ctx, source as SourceDoc, payload, repo))) return { skipped: "foreign_installation" as const };
 
     const now = Date.now();
     await stampInboundHealth(ctx, source as SourceDoc, now);
@@ -825,7 +827,9 @@ async function fireTriggers(
   githubAction: string | undefined,
   hasComment: boolean,
 ) {
-  const repository = issue.repo ?? issue.team_key ?? source?.external_id;
+  // A source that is gone has no workspace to keep the fan out inside: wake nobody.
+  if (!source) return;
+  const repository = issue.repo ?? issue.team_key ?? source.external_id;
   const eventType = hasComment ? "issue_comment" : "issues";
   const action = githubAction ?? linearActionFor(kind);
   // team_id keeps the fan out inside the source's team: event filters are
@@ -836,7 +840,9 @@ async function fireTriggers(
     event_type: eventType,
     action,
     repository,
-    team_id: source?.team_id,
+    // A personal source has no team, and an event with neither a team nor a
+    // workspace wakes every user's trigger: scope it to the source's own key.
+    ...(source.team_id ? { team_id: source.team_id } : { workspace: source.workspace }),
   });
 }
 
@@ -919,21 +925,6 @@ async function providerAssignee(
   if (!user) return { assignee_emails: [] };
   const emails = [user.email, ...(user.alternate_emails ?? [])].filter((e: unknown): e is string => typeof e === "string" && !!e);
   return { assignee_emails: [...new Set(emails)], assignee_login: user.github_username };
-}
-
-/** Does `userId` hold a personal connection that can reach this container? */
-async function hasPersonalConnection(
-  ctx: any,
-  provider: string,
-  userId: Id<"users">,
-  externalId: string,
-): Promise<boolean> {
-  if (provider === "linear") return !!(await connectionForWork(ctx, "linear", { user_id: userId }));
-  const installs = await ctx.db
-    .query("github_app_installations")
-    .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
-    .collect();
-  return installs.some((row: any) => installationCoversRepo(row, externalId));
 }
 
 /**
@@ -1048,7 +1039,8 @@ export const pushTask = internalAction({
       return { pushed: args.fields };
     } catch (error) {
       // Never throw out of an outbound push: the write already landed on our
-      // side, and the 15 minute reconcile is the retry (S5).
+      // side. Nothing retries it: the 15 minute reconcile only pulls, so the
+      // error stamped below stays on the task until its next edit pushes again (S5).
       const message = error instanceof Error ? error.message : String(error);
       console.error(`issueSync.pushTask ${args.task_id}: ${message}`);
       await ctx.runMutation(internal.issueSync.stampPushed, {
@@ -1060,44 +1052,6 @@ export const pushTask = internalAction({
     }
   },
 });
-
-/**
- * Label names -> Linear label ids, creating the ones neither the team nor the
- * workspace has.
- *
- * Creation is the one write the app actor may lack: Linear lets a workspace
- * forbid apps from minting team labels ("You are not allowed to create labels
- * in this team"). Such a label is reported in `refused`, not thrown — the
- * push still carries every label that exists, and the title, state and the
- * rest of the write, so one unknown label cannot park the whole task.
- */
-async function resolveLinearLabelIds(
-  token: string,
-  teamId: string,
-  names: string[],
-): Promise<{ ids: string[]; refused: string[] }> {
-  if (names.length === 0) return { ids: [], refused: [] };
-  const existing = await linearApi.fetchLabels(token, teamId);
-  const byName = new Map(existing.map((l) => [l.name.toLowerCase(), l.id]));
-  const ids: string[] = [];
-  const refused: string[] = [];
-  for (const name of names) {
-    const hit = byName.get(name.toLowerCase());
-    if (hit) {
-      ids.push(hit);
-      continue;
-    }
-    try {
-      const created = await linearApi.createLabel(token, teamId, name);
-      byName.set(name.toLowerCase(), created.id);
-      ids.push(created.id);
-    } catch (error) {
-      if (!(error instanceof linearApi.LinearGraphqlError) || !error.forbidden) throw error;
-      refused.push(name);
-    }
-  }
-  return { ids, refused };
-}
 
 /**
  * Record a completed push (S3): `field_ts[field]` is what makes a webhook
@@ -1349,7 +1303,7 @@ function isAuthFailure(message: string): boolean {
  * same path, so a reconcile is exactly as safe as a webhook — the diff rule
  * (S3) decides what actually changes in either case.
  */
-async function pullSource(ctx: any, source: any, since?: number): Promise<number> {
+async function pullSource(ctx: any, source: any, since?: number, resume: PullResume = {}): Promise<{ applied: number; next?: PullResume }> {
   let applied = 0;
   // Children whose parent had not been applied when they were: a page is
   // ordered by updatedAt, not by tree, so the parent may follow its child.
@@ -1367,8 +1321,10 @@ async function pullSource(ctx: any, source: any, since?: number): Promise<number
   if (source.provider === "linear") {
     const token = await tokenFor(ctx, "linear", source.team_id, source.user_id);
     if (!token) throw new Error("no_connection");
-    let after: string | undefined;
+    let after: string | undefined = resume.after;
+    let more = false;
     for (let page = 0; page < IMPORT_MAX_PAGES; page++) {
+      more = false;
       const result = await linearApi.fetchIssuesPage(token, {
         projectId: source.kind === "linear_project" ? source.external_id : undefined,
         teamId: source.kind === "linear_team" ? source.external_id : undefined,
@@ -1384,16 +1340,20 @@ async function pullSource(ctx: any, source: any, since?: number): Promise<number
       }
       if (!result.hasNextPage || !result.endCursor) break;
       after = result.endCursor;
+      more = true;
     }
     await linkPending();
-    return applied;
+    return { applied, ...(more && after ? { next: { after } } : {}) };
   }
 
   const repo: string = source.external_id;
   const token = await tokenFor(ctx, "github", source.team_id, source.user_id, repo);
   if (!token) throw new Error("no_connection");
-  for (let page = 1; page <= IMPORT_MAX_PAGES; page++) {
-    const rows = await githubIssuesApi.listIssues(token, repo, { since, page });
+  const firstPage = Math.max(1, resume.page ?? 1);
+  let nextPage: number | undefined;
+  for (let page = firstPage; page < firstPage + IMPORT_MAX_PAGES; page++) {
+    const { issues: rows, raw } = await githubIssuesApi.listIssuesPage(token, repo, { since, page });
+    nextPage = undefined;
     for (const row of rows) {
       const issue = normalizeGithubIssue(row, repo);
       // The comment count is free in the list payload, so an issue nobody has
@@ -1404,20 +1364,49 @@ async function pullSource(ctx: any, source: any, since?: number): Promise<number
         : [];
       await applyIssue(issue, comments);
     }
-    if (rows.length < 100) break;
+    // The page GitHub sent, not what is left after pull requests are dropped.
+    if (raw < 100) break;
+    nextPage = page + 1;
   }
   await linkPending();
-  return applied;
+  return { applied, ...(nextPage ? { next: { page: nextPage } } : {}) };
+}
+
+/** Where a pull that hit IMPORT_MAX_PAGES picks up: GitHub's page number, Linear's cursor. */
+type PullResume = { page?: number; after?: string };
+/** Continuations one import may chain, so a runaway listing ends (50 x 10 pages). */
+const IMPORT_MAX_HOPS = 50;
+
+/**
+ * After a pull: a source with more pages than one run takes continues in a
+ * scheduled run, and is stamped synced only when the listing ends. Stamping
+ * it at the page cap moved `last_synced_at` past issues never read, and the
+ * next reconcile's window then started after them.
+ */
+async function finishPull(ctx: any, sourceId: Id<"issue_sync_sources">, since: number | undefined, next: PullResume | undefined, hop: number) {
+  if (next && hop < IMPORT_MAX_HOPS) {
+    await ctx.scheduler.runAfter(0, internal.issueSync.importSource, { source_id: sourceId, since, ...next, hop: hop + 1 });
+    return;
+  }
+  if (next) console.error(`issueSync: ${sourceId} still had pages after ${IMPORT_MAX_HOPS} runs; stamped synced without them`);
+  await ctx.runMutation(internal.issueSync.markSourceSynced, { source_id: sourceId });
 }
 
 export const importSource = internalAction({
-  args: { source_id: v.id("issue_sync_sources") },
+  args: {
+    source_id: v.id("issue_sync_sources"),
+    // Set only by a continuation (finishPull): the window and where it resumes.
+    since: v.optional(v.number()),
+    page: v.optional(v.number()),
+    after: v.optional(v.string()),
+    hop: v.optional(v.number()),
+  },
   handler: async (ctx, args): Promise<{ applied?: number; error?: string }> => {
     const source: any = await ctx.runQuery(internal.issueSync.getSource, { source_id: args.source_id });
     if (!source) return { error: "no_source" };
     try {
-      const applied = await pullSource(ctx, source);
-      await ctx.runMutation(internal.issueSync.markSourceSynced, { source_id: args.source_id });
+      const { applied, next } = await pullSource(ctx, source, args.since, { page: args.page, after: args.after });
+      await finishPull(ctx, args.source_id, args.since, next, args.hop ?? 0);
       return { applied };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1439,8 +1428,8 @@ export const reconcileSources = internalAction({
     for (const source of sources) {
       try {
         const since = source.last_synced_at ? source.last_synced_at - RECONCILE_OVERLAP_MS : undefined;
-        await pullSource(ctx, source, since);
-        await ctx.runMutation(internal.issueSync.markSourceSynced, { source_id: source._id });
+        const { next } = await pullSource(ctx, source, since);
+        await finishPull(ctx, source._id, since, next, 0);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`issueSync.reconcileSources ${source._id}: ${message}`);
@@ -1503,7 +1492,14 @@ async function addSourceFor(
   },
 ) {
   const existing = await sourceFor(ctx, args.provider, args.external_id);
-  if (existing) return { id: existing._id, project_id: existing.project_id, existing: true };
+  if (existing) {
+    // Only someone who can read the source learns its ids; to anyone else it
+    // is a container another workspace already syncs.
+    if (String(existing.user_id) !== String(userId) && !(await heldKeysFor(ctx, userId)).has(existing.workspace)) {
+      forbidden("Forbidden: another workspace already syncs this");
+    }
+    return { id: existing._id, project_id: existing.project_id, existing: true };
+  }
 
   const now = Date.now();
   let project = args.project_id ? await ctx.db.get(args.project_id) : null;
@@ -1515,13 +1511,18 @@ async function addSourceFor(
     // With no team at all the source lives in the personal workspace, which
     // works only through the actor's own connection — refuse a row that could
     // never find a token rather than leave a dead source behind.
-    const actor = await ctx.db.get(userId);
-    teamId = ((actor as any)?.active_team_id ?? (actor as any)?.team_id) as Id<"teams"> | undefined;
+    teamId = (await activeTeamMembershipFor(ctx, userId))?.teamId;
     if (!teamId && !(await hasPersonalConnection(ctx, args.provider, userId, args.external_id))) {
       throw new Error(`Connect ${args.provider} for yourself, or join a team that has: nothing here can reach it`);
     }
   }
   if (teamId) await requireTeamMembership(ctx, userId, teamId);
+  // The workspace must hold a connection that reaches the container: a row for
+  // a repository its installations do not cover would never pull, and would
+  // still be the row another workspace's webhooks are matched to.
+  if (!(await connectionReaches(ctx, args.provider, teamId, userId, args.external_id))) {
+    forbidden(`Forbidden: no ${args.provider} connection in this workspace reaches ${args.external_id}`);
+  }
 
   const db = await createDataContext(ctx, {
     userId,
@@ -1714,8 +1715,8 @@ export const resolveActor = internalQuery({
       await requireTeamMembership(ctx, args.user_id, args.team_id);
       return { user_id: args.user_id, team_id: args.team_id };
     }
-    const user = await ctx.db.get(args.user_id);
-    return { user_id: args.user_id, team_id: (user?.active_team_id ?? user?.team_id) as Id<"teams"> | undefined };
+    // A read may default: the team the caller is working in, counted only with a live membership.
+    return { user_id: args.user_id, team_id: (await activeTeamMembershipFor(ctx, args.user_id))?.teamId };
   },
 });
 
@@ -1888,7 +1889,3 @@ export const cliListRemoteCandidates = action({
 
 /* ---------------- Internal lookups shared with tasks.ts / http.ts ---------------- */
 
-export const getSourceByExternal = internalQuery({
-  args: { provider: issueProviderValidator, external_id: v.string() },
-  handler: async (ctx, args) => await sourceFor(ctx, args.provider, args.external_id),
-});

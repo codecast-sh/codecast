@@ -9,9 +9,11 @@
 // say "only one machine has reported". A shared module makes that impossible
 // rather than merely discouraged.
 //
-// This file stays as the CLI's spelling of it, so every caller and every test
-// here keeps importing `./fleetDiff.js` unchanged. The names are listed rather
-// than splatted: `@codecast/shared/contracts` is the whole contract barrel, and
+// This file stays for two reasons. It holds the build-time check below, which
+// ties this machine's inventory reader to the vocabulary the shared diff ranks,
+// and it is the CLI's spelling of the diff for `inventory.test.ts`, today its
+// only importer: no production CLI code calls the diff. The names are listed
+// rather than splatted: `@codecast/shared/contracts` is the whole contract barrel, and
 // `export *` from it would quietly make this module a second front door to
 // every unrelated enum in the repo.
 export {

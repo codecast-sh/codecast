@@ -8,7 +8,7 @@
 // mark moves forward only: an out-of-order write must never resurrect replies
 // already seen. Bots never get a row: an anchor has no inbox.
 
-import { internalMutation, internalQuery } from "./functions";
+import { internalMutation } from "./functions";
 import { v } from "convex/values";
 import { isConversationComment } from "./lib/conversationCommentRows";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -304,18 +304,6 @@ export async function purgeUserTeam(
 // and a live touch that lands mid-run is never lowered.
 
 const MIGRATION_PAGE = 400;
-
-/** For the migration count check: thread_reads rows, optionally of one kind. */
-export const countThreadReads = internalQuery({
-  args: { kind: v.optional(threadKindValidator) },
-  handler: async (ctx, args) => {
-    let count = 0;
-    for await (const row of ctx.db.query("thread_reads")) {
-      if (!args.kind || row.kind === args.kind) count++;
-    }
-    return count;
-  },
-});
 
 // Seeds thread_reads from existing history, one page of source rows at a
 // time. Every seeded row starts READ (last_read_at = last_activity_at): the

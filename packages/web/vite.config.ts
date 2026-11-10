@@ -194,18 +194,14 @@ export default defineConfig(({ mode, command }) => ({
       "nanoid",
       "react-resizable-panels",
       "react-rnd",
-      "@dnd-kit/core",
-      "@dnd-kit/sortable",
       "@radix-ui/react-dialog",
       "@radix-ui/react-dropdown-menu",
       "@radix-ui/react-popover",
       "@radix-ui/react-tooltip",
       "@radix-ui/react-tabs",
-      "@radix-ui/react-scroll-area",
       "@radix-ui/react-slot",
       "@radix-ui/react-label",
       "@radix-ui/react-accordion",
-      "@radix-ui/react-avatar",
       "dexie",
       // Reached only through lazy routes (doc editor, workflow graph, plan
       // detail) — without pre-bundling, first visit mid-session triggers a
@@ -258,12 +254,9 @@ export default defineConfig(({ mode, command }) => ({
           // Text diffing (jsdiff). Not @pierre/diffs or Shiki: DiffView loads
           // them with a dynamic import, and a named chunk would pull them into
           // the static graph (see the NOTE above).
-          if (id.includes("/node_modules/diff/") || id.includes("/node_modules/diff-match-patch/")) {
+          if (id.includes("/node_modules/diff/")) {
             return "diff";
           }
-
-          // Drag-drop only used in queue/board UIs.
-          if (id.includes("/node_modules/@dnd-kit/")) return "dnd";
 
           if (
             id.includes("/node_modules/react/") ||

@@ -614,6 +614,64 @@ describe("workflow/runner (LE14: json vars, graph hash, plan ready_tasks)", () =
     expect(ctx["fail.output"]).toBe("why it failed");
   });
 
+  test("a fanout with a failed branch stops the run: no branch reruns and nothing past the fanin runs", async () => {
+    const log = path.join(tmpDir, "fanout.log");
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      split [shape=component]
+      one   [shape=parallelogram, script="echo one >> ${log}"]
+      two   [shape=parallelogram, script="echo two >> ${log}; exit 1"]
+      join  [shape=tripleoctagon]
+      after [shape=parallelogram, script="echo after >> ${log}"]
+      exit  [shape=Msquare]
+      start -> split
+      split -> one
+      split -> two
+      one -> join
+      two -> join
+      join -> after -> exit
+    }`);
+    expect(await runWorkflow(g, { cwd: tmpDir })).toBe("failed");
+    expect(fs.readFileSync(log, "utf-8").trim().split("\n").sort()).toEqual(["one", "two"]);
+  });
+
+  test("a fanout whose branches all pass continues past the fanin", async () => {
+    const log = path.join(tmpDir, "fanout-ok.log");
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      split [shape=component]
+      one   [shape=parallelogram, script="echo one >> ${log}"]
+      two   [shape=parallelogram, script="echo two >> ${log}"]
+      join  [shape=tripleoctagon]
+      after [shape=parallelogram, script="echo after >> ${log}"]
+      exit  [shape=Msquare]
+      start -> split
+      split -> one
+      split -> two
+      one -> join
+      two -> join
+      join -> after -> exit
+    }`);
+    expect(await runWorkflow(g, { cwd: tmpDir })).toBe("completed");
+    expect(fs.readFileSync(log, "utf-8").trim().split("\n").sort()).toEqual(["after", "one", "two"]);
+  });
+
+  test("a station the timeout killed records exit code 124, never 0", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      slow  [shape=parallelogram, script="sleep 5", timeout=1]
+      died  [shape=parallelogram, script="kill -TERM $$"]
+      exit  [shape=Msquare]
+      start -> slow -> died -> exit
+    }`);
+    const ctx: Record<string, string> = {};
+    const { executeCommand } = await import("./commandStation.js");
+    expect(await executeCommand(g.nodes.get("slow")!, ctx, tmpDir)).toBe("failure");
+    expect(ctx["slow.exit_code"]).toBe("124");
+    expect(await executeCommand(g.nodes.get("died")!, ctx, tmpDir)).toBe("failure");
+    expect(ctx["died.exit_code"]).toBe("143");
+  }, 15000);
+
   test("the run reports a graph hash that ignores formatting but not content", async () => {
     const { graphHash } = await import("./parser.js");
     const a = parseWorkflowSource(`digraph g { start [shape=Mdiamond]\n exit [shape=Msquare]\n start -> exit }`);

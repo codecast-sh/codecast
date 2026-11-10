@@ -24,6 +24,7 @@ import { spawn } from "../proc.js";
 import { gitSshUrl, remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
 import { mergeTrees, overlayTree, sshHostSide } from "./liveSync.js";
 import type { LiveSyncJobs } from "./liveSyncJobs.js";
+import { credentialStoreFor } from "./mirror/discovery.js";
 import { groupSyncSkipped } from "@codecast/shared/contracts";
 import { describeSkipped, runRemoteSide, runSide, type LandResult, type LsEntry, type Skipped, type SnapshotResult, type SyncScope } from "./syncSide.js";
 
@@ -74,16 +75,37 @@ function pipeline(line: string, env?: NodeJS.ProcessEnv): Promise<string> {
 }
 const sshLine = (host: RemoteHost, command: string) => ["ssh", ...sshArgs(host, command)].map(shq).join(" ");
 /** Unpack a tar stream into `dir` only once all of it arrived: a cut stream leaves nothing half-written. */
-const unpackInto = (dir: string) => `d=${shq(dir)}; t=$(mktemp -d "\${TMPDIR:-/tmp}/codecast-pull.XXXXXX") && tar -C "$t" -xf - && mkdir -p "$d" && cp -a "$t"/. "$d"/ && rm -rf "$t"`;
+const unpackInto = (dir: string) => `d=${shq(dir)}; t=$(mktemp -d "\${TMPDIR:-/tmp}/codecast-pull.XXXXXX") && { tar -C "$t" -xf - && mkdir -p "$d" && cp -a "$t"/. "$d"/; rc=$?; rm -rf "$t"; [ $rc -eq 0 ]; }`;
 const sshArgs = (host: RemoteHost, command: string) => [...sshBase(host), `${host.user}@${host.address}`, command];
 const mb = (n: number) => n >= 1048576 ? `${(n / 1048576).toFixed(n >= 10 * 1048576 ? 0 : 1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 const listed = (items: string[]) => items.length > LISTED ? [...items.slice(0, LISTED), `…and ${items.length - LISTED} more`] : items;
 
 /**
+ * A host asks and the laptop answers, so the laptop refuses its own key and
+ * login stores (the list the mirror and reached folders refuse): the path as
+ * named, the place a symlink on the way resolves to, and a folder that holds
+ * a store. A repo file such as .env.local still travels; that is what pull is for.
+ */
+function refuseCredentialStore(asked: string, from: string, where: { localRoot: string; home: string }, outside: boolean): void {
+  const real = (p: string) => { try { return fs.realpathSync(p); } catch { return p; } };
+  const under = (abs: string, root: string) => abs === root || abs.startsWith(root + path.sep);
+  const check = (abs: string, home: string) => {
+    if (!under(abs, home) || abs === home) return;
+    const store = credentialStoreFor(path.relative(home, abs), true);
+    if (store) throw new Error(`${asked} ${under(abs, path.join(home, store)) ? "is in" : "holds"} ~/${store}, which keeps credentials; a sync never carries it`);
+  };
+  if (outside) check(from, where.home);
+  // A link, in the repo or out of it, that resolves into a store.
+  const realFrom = real(from);
+  if (outside || !under(realFrom, real(where.localRoot))) check(realFrom, real(where.home));
+}
+
+/**
  * Where a requested path lives on each machine: repo-relative paths map
  * between the laptop checkout and the cloud working folder, `~/…` and
  * absolute paths under the laptop's home map to the same place in the
- * host's home. Anything else is refused by name.
+ * host's home. Anything else is refused by name, as is a credential store
+ * (~/.ssh, ~/.aws, …) however it is reached.
  */
 export function mapPath(p: string, where: { localRoot: string; remoteCwd: string; home: string; hostHome: string }): { from: string; fromRoot: string; to: string; rel: string; outside: boolean } {
   const clean = p.trim().replace(/\/+$/, "");
@@ -101,7 +123,9 @@ export function mapPath(p: string, where: { localRoot: string; remoteCwd: string
     fromRoot = where.localRoot; toRoot = where.remoteCwd; rel = path.normalize(clean);
   }
   if (!rel || rel === "." || rel.startsWith("..") || path.isAbsolute(rel)) throw new Error(`${p} leaves the folder it names`);
-  return { from: path.join(fromRoot, rel), fromRoot, to: path.posix.join(toRoot, rel.split(path.sep).join("/")), rel, outside };
+  const from = path.join(fromRoot, rel);
+  refuseCredentialStore(p, from, where, outside);
+  return { from, fromRoot, to: path.posix.join(toRoot, rel.split(path.sep).join("/")), rel, outside };
 }
 
 export async function handleSyncRequest(args: SyncRequestArgs, deps: SyncRequestDeps): Promise<SyncAnswer> {
@@ -160,10 +184,9 @@ async function status(args: SyncRequestArgs, deps: SyncRequestDeps, host: Remote
   }
   // No sync running: compare the cloud folder with the laptop checkout, each against where the session started.
   const [h, l] = await Promise.all([
-    runRemoteSide<SnapshotResult>(host, { op: "snapshot", cwd: args.remote_cwd, scope }),
+    fetchHostTree(args, host, scope),
     runSide<SnapshotResult>({ op: "snapshot", cwd: args.local_root, scope, commit: true }),
   ]);
-  await fetchHostTree(args, host, scope);
   const base = args.seed_tree && (await git(args.local_root, ["cat-file", "-t", args.seed_tree]).catch(() => "")) === "tree" ? args.seed_tree : null;
   const changed = async (a: string, b: string) => a === b ? [] : (await git(args.local_root, ["diff", "--name-only", "-z", a, b])).split("\0").filter(Boolean);
   const lines: string[] = [];

@@ -6,14 +6,15 @@
 // The stamp and mark files it reads are written by `cast state` — see
 // stateCommand.ts (writeThreadStatePulse / clearThreadStatePulse).
 import { THREAD_STATE_NUDGE_MSGS, THREAD_STATE_RECRUIT_MSGS } from "@codecast/shared/contracts";
-import { HOOK_FEATURE_ON, HOOK_FIELDS_READ } from "./hookJson.js";
+import { HOOK_FEATURE_ON, HOOK_FIELDS_READ, HOOK_STATE_DIR } from "./hookJson.js";
 
-/** Assumes SESSION_ID, EVENT, TRANSCRIPT, STOP_ACTIVE. Returns instead of exiting. */
-export const THREAD_STATE_JOB = `${HOOK_FEATURE_ON}
+/** Assumes SESSION_ID, EVENT, TRANSCRIPT, STOP_ACTIVE, CC_DIR and feature_on
+ *  (HOOK_STATE_DIR and HOOK_FEATURE_ON). Returns instead of exiting. */
+export const THREAD_STATE_JOB = `
 thread_state_job() {
 # Part of Thread State in Agent Features: off there, silent here.
 feature_on state_enabled || return 0
-DIR="$HOME/.codecast/thread-state"
+DIR="$CC_DIR/thread-state"
 
 # Count user+assistant entries, the same unit the UI's "N messages since" uses.
 # Transcripts are append-only JSONL: cache (size, count) and grep only the tail.
@@ -105,6 +106,7 @@ export const THREAD_STATE_HOOK = `#!/bin/bash
 # one more step, refreshing the state) and on UserPromptSubmit (fallback for a
 # turn that never reached Stop, e.g. interrupted).
 set -uo pipefail
+${HOOK_STATE_DIR}
 
 # Envelope only. The transcript is counted from disk when we actually need it;
 # grepping it on every UserPromptSubmit is what blew the hook timeout on long
@@ -126,6 +128,7 @@ EVENT="\${HOOK_hook_event_name:-}"
 TRANSCRIPT="\${HOOK_transcript_path:-}"
 STOP_ACTIVE="\${HOOK_stop_hook_active:-}"
 
+${HOOK_FEATURE_ON}
 ${THREAD_STATE_JOB}
 thread_state_job
 `;

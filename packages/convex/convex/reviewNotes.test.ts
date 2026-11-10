@@ -133,6 +133,30 @@ describe("access", () => {
   });
 });
 
+describe("a promise's owner", () => {
+  const due_at = Date.now() + 86_400_000;
+  const mapped = { directory_team_mappings: [{ _id: "map1", user_id: USER, team_id: TEAM, path_prefix: ROOT, auto_share: true, created_at: 1 }] };
+  const roles = [
+    { _id: "role_other", team_id: "team_2", scope_type: "team", handle: "qa", status: "active" },
+    { _id: "role_mine", team_id: TEAM, scope_type: "team", handle: "qa", status: "active" },
+  ];
+
+  test("a handle names the role in the note's own team, never another team's role of the same handle", async () => {
+    const ctx = context(USER, { ...mapped, org_roles: roles });
+    await addNote(ctx, { disposition: "deferred", owner: "@qa", due_at });
+    expect(ctx.db._tables.review_comments[0].owner_role_id).toBe("role_mine");
+  });
+
+  test("a handle or a name that exists only in another team is refused", async () => {
+    const ctx = context(USER, { ...mapped, org_roles: [roles[0]], users: [{ _id: USER, name: "Ashot" }, { _id: OTHER, name: "Sam" }, { _id: "user_3", name: "Stranger" }] });
+    await expect(addNote(ctx, { disposition: "deferred", owner: "@qa", due_at })).rejects.toThrow(/No role or user named/);
+    await expect(addNote(ctx, { disposition: "deferred", owner: "Stranger", due_at })).rejects.toThrow(/No role or user named/);
+    // A teammate's name still resolves.
+    await addNote(ctx, { disposition: "deferred", owner: "Sam", due_at });
+    expect(ctx.db._tables.review_comments[0].owner_user_id).toBe(OTHER);
+  });
+});
+
 describe("reviewNotes.list", () => {
   test("the batch is this worktree's unsent notes, oldest first", async () => {
     const ctx = context(USER);

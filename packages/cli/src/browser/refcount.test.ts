@@ -19,7 +19,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { readState, setActiveTarget, writeState, type InstanceState } from "./instance.js";
 import { decideStop, HOLDER_STALE_MS, liveHolders, planStop, releaseSession } from "./refcount.js";
-import { planEngineStop } from "./engineStop.js";
 
 const state = (
   tabsBySession: Record<string, string>,
@@ -169,37 +168,5 @@ describe("register on use / release", () => {
     expect(s.activeTargetId).toBeNull();
     // The remaining holder is now the last one, so its stop is a teardown.
     expect(planStop(s, "session:me", { now: NOW }).action).toBe("teardown");
-  });
-});
-
-describe("planEngineStop (agent-browser adapter)", () => {
-  // Holders come from `agent-browser session list`; "default" is the unnamed
-  // session a human at a shell drives, and it counts like any other.
-  test("plain stop closes only this session and names who keeps theirs", () => {
-    const r = planEngineStop({ sessions: ["default", "session-me", "session-a"], me: "session-me" });
-    expect(r.plan.action).toBe("release");
-    expect(r.closeArgs).toEqual([]);
-    expect(r.warning).toBeNull();
-    expect(r.summary).toContain("2 other session(s) keep theirs: default, session-a");
-  });
-
-  test("the last session's stop is a plain close with no warning", () => {
-    const r = planEngineStop({ sessions: ["session-me"], me: "session-me" });
-    expect(r.plan.action).toBe("teardown");
-    expect(r.closeArgs).toEqual([]);
-    expect(r.warning).toBeNull();
-  });
-
-  test("--force becomes close --all and warns with every session that dies", () => {
-    const r = planEngineStop({ sessions: ["default", "session-me", "session-a"], me: "session-me", force: true });
-    expect(r.closeArgs).toEqual(["--all"]);
-    expect(r.warning).toContain("default, session-a");
-    expect(r.summary).toContain("every browser session");
-  });
-
-  test("--force alone (no other sessions) needs no --all and no warning", () => {
-    const r = planEngineStop({ sessions: ["session-me"], me: "session-me", force: true });
-    expect(r.closeArgs).toEqual([]);
-    expect(r.warning).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { autoShotsEnabled, clearAutoShots, isMutatingStep, maybeAutoShot, pruneHashes, recordIfChanged, setAutoShots } from "./autoShot.js";
+import { autoShotsEnabled, clearAutoShots, isMutatingStep, MAX_HASHES, maybeAutoShot, pruneHashes, recordIfChanged, setAutoShots } from "./autoShot.js";
 import { readSharedConfig } from "../config/sharedConfig.js";
 import { runBatch, type BatchContext } from "./batch.js";
 import type { PageSession } from "./instance.js";
@@ -71,6 +71,17 @@ describe("recordIfChanged", () => {
     const dir = tmp();
     fs.writeFileSync(path.join(dir, "auto-shots.json"), "{nope");
     expect(recordIfChanged("tab1", "aaa", dir)).toBe(true);
+  });
+
+  test("the store is capped: the tabs written longest ago are dropped", () => {
+    const dir = tmp();
+    for (let i = 0; i < MAX_HASHES + 5; i++) recordIfChanged(`engine:s${i}`, "h", dir);
+    recordIfChanged("engine:s10", "h2", dir); // touched again: now the newest
+    const map = JSON.parse(fs.readFileSync(path.join(dir, "auto-shots.json"), "utf-8"));
+    expect(Object.keys(map)).toHaveLength(MAX_HASHES);
+    expect(map["engine:s0"]).toBeUndefined();
+    expect(map["engine:s10"]).toBe("h2");
+    expect(map[`engine:s${MAX_HASHES + 4}`]).toBe("h");
   });
 
   test("pruneHashes drops closed tabs and keeps live ones", () => {

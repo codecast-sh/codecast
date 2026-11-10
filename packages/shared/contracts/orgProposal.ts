@@ -700,9 +700,6 @@ export function withAboutAsk(content: string, proposalShortId: string, index: nu
 export function aboutProposalHeader(proposalShortId: string, title: string): string {
   return `About ${proposalShortId} ${quotedTitle(title)}:`;
 }
-export function withAboutProposal(content: string, proposalShortId: string, title: string): string {
-  return `${aboutProposalHeader(proposalShortId, title)}\n\n${content}`;
-}
 const ABOUT_RE = /^About (op-\d+) change (\d+) \("([^\n]*)"\):\n\n?/;
 /** The change a message names, and the words after the header; null when it names none. */
 export function parseAboutChange(content: string): { proposal: string; seq: number; line: string; body: string } | null {

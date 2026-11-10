@@ -333,17 +333,3 @@ export function ShortcutTooltip({ label, action, accel, hint, side = "bottom", a
     </TooltipProvider>
   );
 }
-
-export function ShortcutsToggleButton() {
-  const s = useTrackedStore([]);
-  return (
-    <ShortcutTooltip label="Keyboard shortcuts" action="ui.toggleShortcutsHelp">
-      <button
-        onClick={s.toggleShortcutsPanel}
-        className="p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
-      >
-        <Keyboard className="w-[18px] h-[18px]" />
-      </button>
-    </ShortcutTooltip>
-  );
-}

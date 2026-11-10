@@ -54,19 +54,6 @@ export function StatLine({ items, size = "md", className }: { items: readonly St
   );
 }
 
-/** The one number a page is about, with its state beside it and the stat line it leads. */
-export function OpsHero({ value, state, stats, aside }: { value: ReactNode; state?: ReactNode; stats?: readonly StatItem[]; aside?: ReactNode }) {
-  return (
-    <div className="osx-hero">
-      <div className="osx-hero-main">
-        <b className="osx-hero-value">{value}</b>
-        {state}
-      </div>
-      {stats && stats.length > 0 && <StatLine items={stats} />}
-      {aside && <div className="osx-hero-aside">{aside}</div>}
-    </div>
-  );
-}
 
 /** A state as a colored dot and word: OK, Alerting, Muted. */
 export function StateMark({ ink, children, title }: { ink: string; children: ReactNode; title?: string }) {

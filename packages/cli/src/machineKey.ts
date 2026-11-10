@@ -28,7 +28,6 @@ import { execFileSync } from "./proc.js";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { codecastDir } from "./codecastDir.js";
 import { defaultConfigDir } from "./config/configDir.js";
 
 export const MACHINE_KEY_LEN = 32;

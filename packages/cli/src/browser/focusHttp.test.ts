@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { focusBrowserTab, focusEndpoint, probeBrowserTab, focusRequestedTab, makeBridgeFocusEngine, matchTab, type BridgeFocusDeps, type FocusEngine, type FocusTab } from "./focusHttp.js";
+import * as http from "node:http";
+import type { AddressInfo } from "node:net";
+import { focusBrowserTab, focusEndpoint, handleBrowserFocusHttp, probeBrowserTab, focusRequestedTab, makeBridgeFocusEngine, matchTab, type BridgeFocusDeps, type FocusEngine, type FocusTab } from "./focusHttp.js";
 import { shortTabId, tabLine } from "./tabId.js";
 
 const T1 = "2BE86883491FD502B8D986C164423006";
@@ -308,5 +310,35 @@ describe("focusRequestedTab", () => {
       resolveSessionTab: () => null,
     });
     expect(out).toEqual({ tab: "", result: { ok: false, reason: "tab-not-found" } });
+  });
+});
+
+describe("handleBrowserFocusHttp", () => {
+  test("a handler that throws after the route returned still answers, with a 500", async () => {
+    const logged: string[] = [];
+    const opts = { token: "t0ken", log: (m: string) => logged.push(m), allowOrigin: () => true };
+    const deps = {
+      engines: [],
+      raiseApp: () => {},
+      resolveSessionTab: () => {
+        throw new Error("binding file unreadable");
+      },
+    };
+    const srv = http.createServer((req, res) => {
+      handleBrowserFocusHttp(req, res, opts, deps);
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    try {
+      const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+      const headers = { Authorization: "Bearer t0ken", Origin: "http://example.test" };
+      for (const route of ["focus", "probe"]) {
+        const res = await fetch(`${base}/browser/${route}?session_uuid=s-1`, { method: "POST", headers, signal: AbortSignal.timeout(5000) });
+        expect(res.status).toBe(500);
+        expect(await res.json()).toEqual({ error: "internal" });
+      }
+      expect(logged.filter((l) => l.includes("binding file unreadable"))).toHaveLength(2);
+    } finally {
+      srv.close();
+    }
   });
 });

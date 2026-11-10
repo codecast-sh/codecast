@@ -40,7 +40,7 @@ import { filesHref } from "../lib/vault/vaultHref";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, projectOfFromState, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { projectChipLabel } from "../store/workProjects";
 import { resolveRecentVisits, visitTimeAgo, visitObjectLabel, type ResolvedVisit } from "../lib/recentVisits";
-import { inActiveWorkspace } from "../lib/workspaceScope";
+import { activeWorkspaceKey, inWorkspace, workspaceKeyOfRow } from "../lib/workspaceScope";
 import { kindOfQuery, matchGoals, matchMentionGroups, matchProjects, matchRoles, matchRoutines, searchIndexOf, type MentionRecord } from "../lib/universalSearch";
 import { useRemoteSearch } from "../hooks/useRemoteSearch";
 import { RecentVisitGlyph } from "./RecentVisitRow";
@@ -749,12 +749,14 @@ export function ActionSubmenu({
     if (mode === "parent") {
       // Candidate parents: same-workspace, open, not the targets themselves.
       const targetIds = new Set(targets.map((t: any) => String(t._id)));
-      const teamKey = isTask(target) ? (target.team_id ?? null) : null;
+      // The target's own access key; a row minted before the key existed and
+      // tagged with no team is personal to the viewer.
+      const workspaceKey = (isTask(target) ? workspaceKeyOfRow(target) : null) ?? activeWorkspaceKey(null, String(useInboxStore.getState().currentUser?._id ?? "") || null);
       const all = Object.values(useInboxStore.getState().tasks) as TaskItem[];
       return all
         .filter((t: any) =>
           !targetIds.has(String(t._id)) &&
-          inActiveWorkspace(t, teamKey) &&
+          inWorkspace(t, workspaceKey) &&
           t.status !== "done" && t.status !== "dropped" &&
           !String(t._id).startsWith("temp_") &&
           (q === "" || t.title?.toLowerCase().includes(q) || t.short_id?.toLowerCase().includes(q)))

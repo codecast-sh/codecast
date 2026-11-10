@@ -14,15 +14,3 @@ export function hostedConnectionWords(copy: ConnectionChipCopy, sending: boolean
 export function useHostedConnection(): ConnectionChipCopy | null {
   return connectionChipCopy(useAppOffline());
 }
-
-/** The sidebar foot's line while the link is down; nothing while it is up. */
-export function HostedConnectionFoot() {
-  const copy = useHostedConnection();
-  if (!copy) return null;
-  return (
-    <span data-cc-connection-foot role="status" title={copy.detail} className="flex min-w-0 items-center gap-1.5 px-3 pb-1 text-[11.5px] text-sol-text-muted">
-      <span aria-hidden className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-sol-text-dim" />
-      <span className="truncate">{hostedConnectionWords(copy, false)}</span>
-    </span>
-  );
-}

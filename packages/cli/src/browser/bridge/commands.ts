@@ -196,7 +196,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       if (mode !== "real") die("Ordinary commands cannot select a separate browser. The human's Chrome is always the default.");
       setStickyTarget(me(), mode);
       console.log(`${OK} ordinary commands use the human's Chrome through the extension`);
-      if (mode === "real" && !readBridgeState()?.token) {
+      if (!readBridgeState()?.token) {
         console.log(`${WARN} the bridge is not set up yet — run \`cast browser extension setup\``);
         console.log(`  Install Codecast from ${fmt.highlight(BRIDGE_STORE_URL)} first.`);
       }

@@ -88,13 +88,6 @@ export interface SandboxBackend {
   ): Promise<void>;
 }
 
-/** Acquire result type used at the lifecycle layer (above the backend). */
-export interface AcquireBackendResult {
-  workspace: Workspace;
-  /** True if a new workspace was created; false if attached to existing. */
-  created: boolean;
-}
-
 /**
  * Registry of available backends, keyed by name. The default registry has
  * {local: LocalBackend}. C2 will wire CLI selection through this.

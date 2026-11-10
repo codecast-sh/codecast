@@ -259,27 +259,12 @@ export function buildRoleScope(source: RoleScopeSource, rows: RoleScopeRows, tod
   };
 }
 
-/** A project's one line state: "14 open tasks · 3 done", "paused · nothing open". */
-export function projectStateLine(p: Pick<ScopeProject, "status" | "open" | "done">): string {
-  const parts: string[] = [];
-  if (p.status && p.status !== "active") parts.push(p.status);
-  parts.push(p.open > 0 ? plural(p.open, "open task") : "nothing open");
-  if (p.done > 0) parts.push(`${p.done.toLocaleString("en-US")} done`);
-  return parts.join(" · ");
-}
 
 /** The sessions in a project: "1 waiting on a person · 2 working". */
 export function groupsLine(groups: ScopeSessionGroup[]): string {
   return groups.map((g) => `${g.count} ${g.label}`).join(" · ");
 }
 
-/** A plan's one line state: "3 of 8 done", "draft · no tasks yet". */
-export function planStateLine(p: ScopePlan): string {
-  const parts: string[] = [];
-  if (p.status && p.status !== "active") parts.push(p.status);
-  parts.push(p.total > 0 ? `${p.done} of ${p.total} done` : "no tasks yet");
-  return parts.join(" · ");
-}
 
 /** The sessions in one line: "2 waiting on a person · 3 working". */
 export function sessionsLine(s: NonNullable<RoleScopeModel["sessions"]>): string {

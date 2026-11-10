@@ -158,23 +158,6 @@ function floatPositionFor(anchor, size) {
 }
 
 /**
- * @param {object} facts
- * @param {boolean} facts.ended      The closing window says the call was hung up.
- * @param {boolean} facts.quitting   The whole app is going away.
- * @param {string|null} facts.room   The room the closing window was hosting.
- * @returns {boolean} Whether to hand the room back to the main window.
- */
-function shouldHandBackCall({ ended, quitting, room }) {
-  // A huddle lives in its own window, like the palette. Pouring it into the
-  // main window on close was the in-app card stuck inside the parent. The
-  // call either stays in this window (hide) or it ends (hang-up).
-  void ended;
-  void quitting;
-  void room;
-  return false;
-}
-
-/**
  * Close of the call window: hide, do not destroy.
  *
  * A window whose renderer declared itself the VOICE HOST is never destroyed
@@ -209,7 +192,6 @@ function callWindowTitle(size) {
 
 module.exports = {
   callWindowTitle,
-  shouldHandBackCall,
   shouldHideCallWindow,
   callWindowChrome,
   callWindowPlacementKey,

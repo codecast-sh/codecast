@@ -302,9 +302,3 @@ export function fmtAgo(at: number | undefined, now: number): string {
   const h = Math.round(m / 60);
   return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
 }
-
-export function fmtRange(lo: number | undefined, hi: number | undefined, f: (n: number) => string): string {
-  if (lo === undefined && hi === undefined) return "unknown";
-  if (lo === undefined || hi === undefined || Math.abs(hi - lo) < 1) return f((lo ?? hi)!);
-  return `${f(lo)} – ${f(hi)}`;
-}

@@ -273,7 +273,10 @@ describe("command groups stay off the boot graph", () => {
     // 347 the same day: commandGroupActivation.ts, the placeholder and
     // activation code split out of commandGroups.ts for its max-lines cap.
     // index.ts already loaded both halves.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(347);
+    // 348 on 2026-11-09: imagePayload.ts, a leaf over node:crypto. syncService
+    // and imageCache each carried a copy of its image sniffing, decoding and
+    // hashing; they now import the one.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(348);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -534,7 +537,10 @@ describe("command groups stay off the boot graph", () => {
     // `cast browser` verb (a leaf over colors.js). runEngine reads what is
     // left of it synchronously before each engine run, so it cannot load
     // behind import(); in the daemon no budget is armed and it costs nothing.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(579);
+    // 580 on 2026-11-09: imagePayload.ts (as on the index.ts graph above) and
+    // pidAlive.ts, the import-free liveness probe that replaced four private
+    // copies, came on; cursorProcessor.ts, which nothing called, went.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(580);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

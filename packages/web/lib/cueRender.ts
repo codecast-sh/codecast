@@ -182,14 +182,6 @@ export function cuePeak(spec: CueSpec, sampleRate = RENDER_SAMPLE_RATE): number 
   return peak;
 }
 
-/** Loudness over the whole cue. A tail of noise and a chirp can share a peak
- *  and still be nothing alike; this is what separates them. */
-export function cueRms(spec: CueSpec, sampleRate = RENDER_SAMPLE_RATE): number {
-  const samples = renderCue(spec, sampleRate);
-  let sum = 0;
-  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
-  return Math.sqrt(sum / samples.length);
-}
 
 /** How much of a cue's energy sits above `cutoff`, as a share of all of it.
  *

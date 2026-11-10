@@ -19,10 +19,3 @@ export function focusComposer(): boolean {
   el.scrollIntoView({ block: "nearest" });
   return true;
 }
-
-export function sendComposer(): boolean {
-  const form = composerInput()?.closest("form");
-  if (!form) return false;
-  form.requestSubmit();
-  return true;
-}

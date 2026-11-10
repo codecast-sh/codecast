@@ -109,4 +109,16 @@ exit 0
     expect(redBase).toBe(handBase);
     expect(git(work, "rev-parse", "--abbrev-ref", "HEAD")).toBe("codecast/line-ct-1");
   });
+
+  // bash 3.2 (macOS) answers `cd ""` with success, so a failed `cast ws path`
+  // once left the script running in the box's own checkout, where it detached HEAD.
+  test("a worktree that cannot be found stops the station before it touches the checkout it started in", () => {
+    fs.writeFileSync(path.join(bin, "cast"), `#!/bin/bash\nif [ "$1 $2" = "ws path" ]; then exit 1; fi\nexit 0\n`, { mode: 0o755 });
+    const before = git(box, "rev-parse", "--abbrev-ref", "HEAD");
+    const r = spawnSync("bash", ["-c", expandScriptVars(SCRIPT, context())], { cwd: box, encoding: "utf-8", env: env() });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(git(box, "rev-parse", "--abbrev-ref", "HEAD")).toBe(before);
+    expect(fs.existsSync(path.join(runDir, "bases"))).toBe(false);
+  });
 });

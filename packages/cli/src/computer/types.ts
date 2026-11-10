@@ -174,8 +174,6 @@ export type ComputerMethod =
 
 export type ComputerActionMethod = Exclude<ComputerMethod, "handshake" | "listApps" | "listWindows" | "getAppState" | "terminate">;
 
-export type ComputerRequest = { id: number; method: ComputerMethod; params: unknown; token: string };
-
 export type ComputerResponse =
   | { id: number; ok: true; result: unknown }
   | { id: number; ok: false; error: { code: ComputerErrorCode; message: string } };

@@ -24,7 +24,6 @@ export type InitiativeStatus = (typeof INITIATIVE_STATUSES)[number];
 export const INITIATIVE_UPDATE_HEALTHS = ["on_track", "at_risk", "off_track"] as const;
 export type InitiativeUpdateHealth = (typeof INITIATIVE_UPDATE_HEALTHS)[number];
 export type InitiativeHealth = "none" | InitiativeUpdateHealth;
-export const INITIATIVE_HEALTHS = ["none", ...INITIATIVE_UPDATE_HEALTHS] as const;
 
 export const INITIATIVE_STATUS_LABEL: Record<InitiativeStatus, string> = {
   proposed: "Proposed",

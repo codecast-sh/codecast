@@ -34,7 +34,6 @@ export default [
       "dist/**",
       "dist-ssr/**",
       "dist-perf/**",
-      ".next/**",
       "build/**",
       "out/**",
       "public/**",

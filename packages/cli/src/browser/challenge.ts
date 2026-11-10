@@ -73,8 +73,6 @@ export const PROBE_SELECTORS = [
   "#main-iframe[src*='_Incapsula_Resource']",
   // AWS WAF
   "#captcha-container awswaf-captcha", "awswaf-captcha", "#challenge-container",
-  // reCAPTCHA / hCaptcha
-  ".g-recaptcha", "iframe[src*='/recaptcha/'][title*='challenge']", ".h-captcha",
 ] as const;
 
 /** One synchronous expression for the engine's `eval`, returning the probe as

@@ -44,6 +44,7 @@ import {
 } from "@codecast/shared/contracts/deployTargets";
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
 import { commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
+import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
 
 /** Commits kept on one deploy's record. */
 const COMMITS_MAX = 200;
@@ -515,7 +516,12 @@ export const pollLiveReaders = internalAction({
     let recorded = 0;
     for (const t of targets) {
       try {
+        const refusal = liveReaderUrlRefusal(t.live.url);
+        if (refusal) throw new Error(refusal);
         const res = await fetch(t.live.url, { headers: { Accept: "application/json", "Cache-Control": "no-cache" }, signal: AbortSignal.timeout(10_000) });
+        // A redirect must end somewhere the reader could have named itself.
+        const landed = res.url ? liveReaderUrlRefusal(res.url) : null;
+        if (landed) throw new Error(`${t.live.url} redirected: ${landed}`);
         if (!res.ok) throw new Error(`${t.live.url} answered ${res.status}`);
         const { sha, version } = readJsonLive(t.live, await res.json());
         const r = await ctx.runMutation(internal.deployTargets.recordLiveRead, { target_id: t._id, ...(sha ? { sha } : {}), ...(version ? { version } : {}) });

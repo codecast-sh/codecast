@@ -428,7 +428,7 @@ export async function appendSyncAction(
         const doc = extra.fullDoc && extra.table && !payloadsDisabled() ? await extra.fullDoc() : null;
         const full = doc ? buildCargo(extra.table!, doc, { full: true }) : null;
         merged = full && full.patch && !full.partial
-          ? { ...full, omitted: mergeOmitted(merged.omitted, full.omitted) }
+          ? { ...full, omitted: mergeOmittedNames(merged.omitted, full.omitted) }
           : { partial: true, omitted: merged.omitted };
       }
       cargoFields = cargoRowFields(merged);
@@ -479,11 +479,6 @@ function cargoRowFields(c: Cargo): Record<string, any> {
 }
 
 function mergeOmittedNames(a?: string[], b?: string[]): string[] | undefined {
-  const set = new Set([...(a ?? []), ...(b ?? [])]);
-  return set.size ? [...set] : undefined;
-}
-
-function mergeOmitted(a?: string[], b?: string[]): string[] | undefined {
   const set = new Set([...(a ?? []), ...(b ?? [])]);
   return set.size ? [...set] : undefined;
 }

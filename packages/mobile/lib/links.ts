@@ -14,7 +14,7 @@
  *  3. Everything else (mailto:, tel:, custom schemes) goes to the system.
  *
  * The URL → route table lives in `lib/linkRoutes` and is shared with the
- * deep-link handler in `app/_layout.tsx`, so a link tapped inside the app and
+ * deep-link handler in `app/+native-intent.tsx`, so a link tapped inside the app and
  * the same link tapped in Mail land on exactly the same screen.
  */
 

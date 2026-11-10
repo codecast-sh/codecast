@@ -308,10 +308,6 @@ export function isPaneStreaming(target: string): boolean {
   return active.has(target);
 }
 
-export function activePaneStreams(): string[] {
-  return [...active.keys()];
-}
-
 /** Start the loop for `target` unless it is already running. */
 export function startPaneStream(
   target: string,

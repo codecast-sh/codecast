@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   matchBucketByName,
+  requireExactLabel,
   findActiveBucketByExactName,
   resolveOrCreateBucket,
   assignConversationToBucketForUser,
@@ -169,7 +170,21 @@ describe("assignConversationToBucketForUser", () => {
   });
 });
 
-describe("matchBucketByName (existing helper, used by rename/rm)", () => {
+describe("rename and archive take the exact label only", () => {
+  const buckets = [{ _id: "b1", name: "apiv2" }, { _id: "b2", name: "Frontend" }, { _id: "b3", name: "old", archived_at: 1 }];
+
+  test("a substring of another label is refused, naming the labels there are", async () => {
+    await expect(requireExactLabel(buckets, "api")).rejects.toThrow(/No label named "api". Your labels: Frontend, apiv2/);
+    await expect(requireExactLabel(buckets, "old")).rejects.toThrow(/No label named/);
+  });
+
+  test("the exact name matches, whatever its case", async () => {
+    expect((await requireExactLabel(buckets, " frontend "))._id).toBe("b2");
+    expect((await requireExactLabel(buckets, "apiv2"))._id).toBe("b1");
+  });
+});
+
+describe("matchBucketByName (existing helper, used by the read filters)", () => {
   const buckets = [{ _id: "b1", name: "backend" }, { _id: "b2", name: "frontend" }] as any[];
 
   test("exact wins, substring falls back, miss lists the catalog", () => {

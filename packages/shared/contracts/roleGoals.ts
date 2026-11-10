@@ -131,10 +131,3 @@ export function goalStateLine(g: GoalProgress, now: number): string {
   else if (g.unmatched) parts.push("unmatched for a week");
   return parts.join(" · ");
 }
-
-/** The section a role writes for a person who has no goals yet: the shape,
- *  never the words. Shown to the role in its frame and to a person on the
- *  Brief tab. */
-export function goalSectionTemplate(personName: string): string {
-  return [`## Goals: ${personName}`, `1. <the goal in their words> (high)`, `2. <the next goal>`].join("\n");
-}

@@ -163,8 +163,3 @@ export function standingLineAgeDays(line: StandingLine, now: number): number | n
 export function standingLineStale(line: StandingLine, now: number): boolean {
   return line.written_at !== null && now - line.written_at > STANDING_STALE_MS;
 }
-
-/** The section as the role should write it, for a role that has none yet. */
-export function standingSectionTemplate(projects: Array<{ title: string }>, today: string): string {
-  return ["## Where it stands", ...projects.map((p) => `- ${p.title}: <what moved, what is stuck, what it waits for> (${today})`)].join("\n");
-}

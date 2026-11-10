@@ -4,7 +4,6 @@ const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const {
   callWindowTitle,
-  shouldHandBackCall,
   shouldHideCallWindow,
   callWindowChrome,
   callWindowPlacementKey,
@@ -30,10 +29,9 @@ const facts = (over) => ({
   ...over,
 });
 
-test("a live huddle is never poured into the main window", () => {
-  // The main window is not a fallback surface. An in-app card cannot leave
-  // that window's edges, which is why the huddle has a window of its own.
-  assert.equal(shouldHandBackCall(facts({})), false);
+test("closing the window with a live huddle hides it", () => {
+  // The huddle has a window of its own and stays in it: the main window is
+  // not a fallback surface for a call.
   assert.equal(shouldHideCallWindow(facts({})), true);
 });
 
@@ -49,20 +47,6 @@ test("a voice host is never destroyed by its own hang-up, only by the app quitti
   assert.equal(shouldHideCallWindow(facts({ host: true })), true);
   assert.equal(shouldHideCallWindow(facts({ quitting: true, host: true })), false);
   assert.equal(shouldHideCallWindow(facts({ ended: true, quitting: true, host: true })), false);
-});
-
-test("a hang-up hands nothing back", () => {
-  assert.equal(shouldHandBackCall(facts({ ended: true })), false);
-});
-
-test("quitting hands nothing back, even with a call running", () => {
-  // Every window gets `close` during a quit; a handback would raise the main
-  // window on the way out and ask it to join a room this process is ending.
-  assert.equal(shouldHandBackCall(facts({ quitting: true })), false);
-});
-
-test("a window that never hosted anything hands nothing back", () => {
-  assert.equal(shouldHandBackCall(facts({ room: null })), false);
 });
 
 // ── The shapes ────────────────────────────────────────────────────────────
