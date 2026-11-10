@@ -18352,11 +18352,28 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     { settleMs: opts.receiptSettleMs },
   ) : null;
   if (delivery?.prior) delivery.journal.begin(opts!.delivery!, delivery.generation, sanitized);
-  if (delivery?.prior?.phase === "verified" && !delivery.unacknowledged) return;
+  // A verified command that opened a panel is final even unacknowledged: it
+  // echoes only once the panel closes, so writing it again on the missing echo
+  // repeats it (commandPanel.ts).
+  const panelCommand = mayOpenPanel(sanitized);
+  if (delivery?.prior?.phase === "verified" && (!delivery.unacknowledged || panelCommand)) return;
   let prior = delivery?.prior ?? null;
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(80, contentLines + Math.ceil(sanitized.length / 60) + 10);
   const pastDialog = isForcedPastDialog(opts?.delivery?.messageId);
+  // An earlier attempt pressed this command's Enter and the composer no longer
+  // holds it: it ran. Its panel may still be open, unremembered after a daemon
+  // restart, where the guard below would hold the command, and every message
+  // behind it, on its own panel (jx78ys8, 2026-10-30: 53 minutes, 72 attempts).
+  if (panelCommand && prior?.phase === "submit") {
+    const pane = await captureTmuxComposerPane(tmuxExec, target, captureLines).catch(() => "");
+    if (pane.trim() && !tmuxComposerHoldsPayload(pane, sanitized)) {
+      delivery!.journal.advance(prior.messageId, "verified");
+      if (syncServiceRef) await syncServiceRef.updateMessageStatus({ messageId: prior.messageId, status: "delivered", deliveredAt: Date.now() }).catch(logConvexFailure);
+      log(`The command ${prior.messageId} left the composer of ${target} after its Enter; counting it delivered`);
+      return;
+    }
+  }
   const beforeInput = inputGuard(async () =>
     (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout, sanitized, pastDialog);
   const exec: typeof tmuxExec = async (args, opts) => {

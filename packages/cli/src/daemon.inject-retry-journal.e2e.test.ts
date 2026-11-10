@@ -287,3 +287,68 @@ test.skipIf(!Bun.which("tmux"))("a payload left in the composer after the submit
     rmSync(cwd, { recursive: true, force: true });
   }
 }, 120_000);
+
+// jx78ys8, 2026-10-30: "/mcp" sent from a phone opened Claude Code's MCP panel.
+// The panel read as a dialog waiting for a human, so the message was held as
+// undelivered although it had run, and every later message queued behind it
+// for 53 minutes. Once the panel was closed, the receipt had settled with no
+// transcript echo (a local command writes none), so "/mcp" was typed again and
+// the panel came back.
+test.skipIf(!Bun.which("tmux"))("a slash command that opens a panel is delivered once and never typed again", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "codecast-slash-panel-"));
+  const statePath = join(cwd, "state.json");
+  const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
+  const pane = spawnHarness({ cwd, jsonlPath: statePath,
+    command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude"].map(shellQuote).join(" ")}` });
+  const target = `${pane.tmuxSession}:0.0`;
+  const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
+  const delivery = { messageId: "slash-mcp", conversationId: "fixture" };
+  const state = () => JSON.parse(readFileSync(statePath, "utf8"));
+  try {
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    await injectViaTmux(target, "/mcp", "claude", { delivery, journal });
+    expect(journal.get(delivery.messageId)?.phase).toBe("verified");
+    await waitFor(() => pane.capturePane().includes("⏺ Done."));
+    tmuxRun(["send-keys", "-t", target, "Escape"]);
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    await injectViaTmux(target, "/mcp", "claude", { delivery, journal, receiptSettleMs: 0, readTranscript: async () => "" });
+    await injectViaTmux(target, "next message", "claude", { delivery: { ...delivery, messageId: "next" }, journal });
+    expect(state()).toMatchObject({ commands: ["/mcp"], panelKeys: 0, queued: ["Existing worker report.", "next message"] });
+  } finally {
+    journal.close();
+    pane.tearDown();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 120_000);
+
+// The same incident from a receipt an earlier attempt left at "submit": the
+// panel is still open and its command is gone from the composer, so the
+// command ran. Holding for the panel would block the queue behind it.
+test.skipIf(!Bun.which("tmux"))("a submitted slash command whose panel is still open counts as delivered", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "codecast-slash-held-"));
+  const statePath = join(cwd, "state.json");
+  const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
+  const pane = spawnHarness({ cwd, jsonlPath: statePath,
+    command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude"].map(shellQuote).join(" ")}` });
+  const target = `${pane.tmuxSession}:0.0`;
+  const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
+  const delivery = { messageId: "held-mcp", conversationId: "fixture" };
+  const state = () => JSON.parse(readFileSync(statePath, "utf8"));
+  try {
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    const exec = async (args: string[]) => ({ stdout: tmuxRun(args).stdout });
+    const prepared = await prepareTmuxDelivery(target, delivery, exec, async () => false, journal);
+    journal.begin(delivery, prepared.generation, "/mcp");
+    journal.advance(delivery.messageId, "submit");
+    tmuxRun(["send-keys", "-t", target, "-l", "/mcp"]);
+    tmuxRun(["send-keys", "-t", target, "Enter"]);
+    await waitFor(() => pane.capturePane().includes("⏺ Done."));
+    await injectViaTmux(target, "/mcp", "claude", { delivery, journal, receiptSettleMs: 0, readTranscript: async () => "" });
+    expect(journal.get(delivery.messageId)?.phase).toBe("verified");
+    expect(state()).toMatchObject({ commands: ["/mcp"], panelKeys: 0 });
+  } finally {
+    journal.close();
+    pane.tearDown();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 120_000);
