@@ -37,6 +37,8 @@ const categoryLabel = (c: string) => (c === "unknown" ? "No category" : c[0].toU
 
 export type DecisionListProps = {
   title: string;
+  /** The list is the page (the Decisions page); false as a pane of another page (For you). */
+  page?: boolean;
   state: DecisionViewState;
   /** The viewer's own rows from every workspace (Mine), and the active workspace's (every other tab). */
   rows: { mine: ReadonlyArray<SessionDecisionItem>; workspace: ReadonlyArray<SessionDecisionItem> };
@@ -56,7 +58,7 @@ export type DecisionListProps = {
   compact?: boolean;
 };
 
-export function DecisionList({ title, state, rows, tabs = ["mine", "team", "unassigned", "escalated", "answered"], hideAxes = [], routeOf, renderPreview, activeItemId, savedViews, headerExtra, displayExtra, customContent, emptyMessage, compact }: DecisionListProps) {
+export function DecisionList({ title, page, state, rows, tabs = ["mine", "team", "unassigned", "escalated", "answered"], hideAxes = [], routeOf, renderPreview, activeItemId, savedViews, headerExtra, displayExtra, customContent, emptyMessage, compact }: DecisionListProps) {
   const { view, set, prefs, replace } = state;
   const now = useCoarseNow(60_000);
   const me = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
@@ -145,6 +147,7 @@ export function DecisionList({ title, state, rows, tabs = ["mine", "team", "unas
   return (
     <GenericListView<SessionDecisionItem>
       title={title}
+      page={page}
       tabs={listTabs}
       activeTab={view.tab}
       onTabChange={(t) => set({ tab: t as DecisionTab })}

@@ -1,0 +1,164 @@
+/* The rail in the Modern interface style (components/sidebar/ModernSidebar).
+ *
+ * It draws with the classic rail's own primitives (NavSection, SectionRow,
+ * RailHeading, NavCount) so it shares their behaviour, and takes its look from
+ * here, keyed on its own marker: [data-modern-rail]. Simple view's and
+ * Minimal's rules key on [data-sv-nav], which only the classic rail carries,
+ * so neither reaches this rail and nothing here reaches theirs.
+ *
+ * One row: 32px, inset 8px from the rail's edges, a 16px icon in one stroke
+ * weight, the name at the ui step. The row you are on: a cyan tint and a 2px
+ * accent bar. Counts: a quiet pill of mark-step numerals at the row's end.
+ * Every rule leads with the element (nav[...]) so it outranks the utility
+ * classes it overrides, wherever this sheet lands in the cascade.
+ */
+
+nav[data-modern-rail] {
+  font-size: var(--fs-ui);
+}
+
+/* ---- Rows ---------------------------------------------------------------- */
+
+nav[data-modern-rail] :is([class*="group/nav"], [class*="group/wb"]),
+nav[data-modern-rail] div:has(> [data-nav-subrow]) {
+  position: relative;
+  min-height: 32px;
+  margin-inline: 8px;
+  border-left-width: 0;
+  border-radius: 6px;
+}
+
+nav[data-modern-rail] [data-nav-row],
+nav[data-modern-rail] [class*="group/wb"] > button:first-child {
+  min-height: 32px;
+  padding: 0 0 0 10px;
+  gap: 10px;
+  border-radius: 6px;
+}
+
+nav[data-modern-rail] [data-nav-subrow] {
+  min-height: 32px;
+  padding-left: 10px;
+  gap: 10px;
+  border-radius: 6px;
+}
+nav[data-modern-rail] [data-nav-subrow] > span.truncate {
+  font-size: var(--fs-ui);
+}
+
+/* A level's rows (the Chat and Tasks drills) sit on the same edge as the
+   rail's own rows. */
+nav[data-modern-rail] [data-sidebar-drill] div:has(> [data-nav-subrow]) {
+  padding-left: 0;
+}
+
+/* The row you are on. */
+nav[data-modern-rail] :is([class*="group/nav"], [class*="group/wb"], div:has(> [data-nav-subrow])):has(> :is(a, button)[aria-current]) {
+  background-color: color-mix(in srgb, var(--sol-cyan) 10%, transparent);
+  color: var(--sol-text);
+}
+nav[data-modern-rail] :is([class*="group/nav"], [class*="group/wb"], div:has(> [data-nav-subrow])):has(> :is(a, button)[aria-current])::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 9999px;
+  background: var(--sol-cyan);
+}
+
+/* Keyboard focus: a ring inside the row, never the browser's outline. */
+nav[data-modern-rail] :is([data-nav-row], [data-nav-subrow], [class*="group/wb"] > button:first-child):focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-cyan) 60%, transparent);
+}
+
+/* One icon size and stroke for every row's glyph. */
+nav[data-modern-rail] [data-nav-row] svg:is(.w-5, [data-rail-icon]),
+nav[data-modern-rail] [data-nav-subrow] > svg,
+nav[data-modern-rail] [class*="group/wb"] > button:first-child > svg:first-child {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+  flex-shrink: 0;
+}
+
+/* Nested lists (Docs' saved views) are plain rows here: no recess. */
+nav[data-modern-rail] .nav-subsection {
+  background: none;
+  box-shadow: none;
+}
+
+/* ---- Counts --------------------------------------------------------------- */
+
+nav[data-modern-rail] [data-sv-count] {
+  min-width: 18px;
+  height: 18px;
+  margin-left: 0;
+  padding-inline: 6px;
+  font-size: var(--fs-mark);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Headings ------------------------------------------------------------- */
+
+nav[data-modern-rail] [data-rail-heading],
+nav[data-modern-rail] [data-rail-group="layouts"] > div:first-child {
+  min-height: 28px;
+  margin: 12px 0 2px;
+  padding: 0 12px 0 18px;
+  font-size: var(--fs-mark);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sol-text-dim);
+}
+nav[data-modern-rail] [data-rail-heading]:first-child,
+nav[data-modern-rail] [data-rail-group="layouts"] > div:first-child {
+  margin-top: 0;
+}
+nav[data-modern-rail] [data-rail-group="layouts"] > div:first-child > span {
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+}
+
+/* ---- Levels and lists ------------------------------------------------------ */
+
+/* A level's Back row is a row like the others. */
+nav[data-modern-rail] [data-sidebar-drill] > button:first-child {
+  width: calc(100% - 16px);
+  min-height: 32px;
+  margin-inline: 8px;
+  padding-block: 0;
+  font-size: var(--fs-ui);
+}
+
+/* The project folders, rows of the rail's shape. */
+nav[data-modern-rail] [data-rail-group="folders"] button.w-full {
+  width: calc(100% - 16px);
+  min-height: 32px;
+  margin-inline: 8px;
+  padding: 0 8px 0 10px;
+  gap: 10px;
+  border-left-width: 0;
+  border-radius: 6px;
+  font-size: var(--fs-ui);
+}
+nav[data-modern-rail] [data-rail-group="folders"] button.w-full > svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---- Phone drawer ---------------------------------------------------------- */
+
+@media (max-width: 767px) {
+  .cc-mobile-drawer[data-cc-mobile-drawer] nav[data-modern-rail] {
+    padding-top: 4px;
+  }
+  .cc-mobile-drawer[data-cc-mobile-drawer] nav[data-modern-rail] :is([data-nav-row], [data-nav-subrow], [data-rail-heading] > button, [data-rail-group="folders"] button.w-full) {
+    min-height: 44px;
+  }
+}

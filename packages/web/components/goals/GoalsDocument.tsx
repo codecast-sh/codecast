@@ -407,7 +407,7 @@ function Facts({ goal, now }: { goal: InitiativeRow; now: number }) {
         {goal.target_date ? <TargetDate ts={goal.target_date} now={now} done={initiativeEnded(goal.status)} /> : null}
       </IntentTargetChip>
       </span>
-      {goal.short_id && <Link href={objectHref("initiative", goal.short_id)} className="ml-auto text-meta tabular-nums no-underline hover:underline focus-visible:underline" style={{ color: DIM }} title="Open the goal's page: its record and activity">{goal.short_id}</Link>}
+      {goal.short_id && <Link href={objectHref("initiative", goal.short_id)} className="ml-auto modern:font-mono text-meta tabular-nums no-underline hover:underline focus-visible:underline" style={{ color: DIM }} title="Open the goal's page: its record and activity">{goal.short_id}</Link>}
     </div>
   );
 }
@@ -467,7 +467,7 @@ function ProposedGoal({ goal, depth }: { goal: DocGoal; depth: number }) {
       <h2 className={cn(depth === 0 ? "text-[21px]" : "text-[17px]", "leading-[1.3]")} style={{ ...SERIF, color: VIOLET }}>{goal.title}</h2>
       <p className="mt-1.5 text-[12px]" style={{ color: VIOLET }}>
         {goal.unknown ? "Named by a proposal, not found" : "Proposed"}
-        {p && <> · <Link href={proposalChangeHref(p)} className="underline-offset-[3px] hover:underline" style={{ color: VIOLET }}>answer in {p.short_id}</Link></>}
+        {p && <> · <Link href={proposalChangeHref(p)} className="underline-offset-[3px] hover:underline" style={{ color: VIOLET }}>answer in <span className="modern:font-mono">{p.short_id}</span></Link></>}
       </p>
       {goal.purpose && <p className="mt-3 text-[14px] leading-[1.65]" style={{ color: "var(--sol-text-secondary)" }}>{goal.purpose}</p>}
     </section>
@@ -482,7 +482,7 @@ function ProposedChanges({ goal }: { goal: DocGoal }) {
         <li key={c.row.change_id} className="flex items-baseline gap-2">
           <span className="h-[6px] w-[6px] shrink-0 translate-y-[-1px] rotate-45 rounded-[1px]" style={{ background: VIOLET }} aria-hidden />
           <span className="min-w-0">{c.sentence ?? c.row.detail ?? c.row.chip ?? c.row.line}</span>
-          {c.proposal && <Link href={proposalChangeHref(c.proposal)} className="shrink-0 underline-offset-[3px] hover:underline" style={{ color: VIOLET }}>{c.proposal.short_id}</Link>}
+          {c.proposal && <Link href={proposalChangeHref(c.proposal)} className="shrink-0 modern:font-mono underline-offset-[3px] hover:underline" style={{ color: VIOLET }}>{c.proposal.short_id}</Link>}
         </li>
       ))}
     </ul>

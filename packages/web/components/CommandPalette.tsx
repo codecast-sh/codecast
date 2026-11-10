@@ -93,6 +93,8 @@ import { PalettePickHeader } from "./PalettePickPreview";
 import { groupClass, itemClass, paletteClass, paletteInputClass } from "./paletteStyles";
 import { DecisionPalette } from "./decisions/DecisionPalette";
 import { NavIcon, PaletteSearchBar, PaletteSessionRow, PaletteSearchResultRow, PaletteTaskRow } from "./PaletteRows";
+import { RailIcon } from "./sidebar/RailIcon";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { formatDateSmart } from "@codecast/shared/time";
 
 // Loaded only on the confirm step so the search palette does not pull the
@@ -1635,7 +1637,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const callsOn = useCallsAvailable();
   const orgOn = useWorkspaceFeature("org");
   const changesOn = useTeamFeature("changes");
-  const featuresOn: Partial<Record<TeamFeatureKey, boolean>> = { chat: chatOn, calls: callsOn, org: orgOn, changes: changesOn };
+  // Modern lists the rail's pages under the rail's names (lib/navPagesModern),
+  // Flows among them where the workspace has it, as the Modern rail does.
+  const modernStyle = useIsModernStyle();
+  const flowsOn = useWorkspaceFeature("line");
+  const featuresOn: Partial<Record<TeamFeatureKey, boolean>> = { chat: chatOn, calls: callsOn, org: orgOn, changes: changesOn, line: modernStyle && flowsOn };
   const featureOn = (f: TeamFeatureKey | undefined) => !f || featuresOn[f];
 
   // Merge locally-loaded inbox sessions (own, instant) with the server list (own +
@@ -2592,14 +2598,14 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const localHit = askable && (
     namedCommands.length > 0 || recentMatches.length > 0 || searchRows.length > 0 || taskMatches.length > 0 || docMatches.length > 0 ||
     planMatches.length > 0 || triggerMatches.length > 0 ||
-    palettePages(featureOn, true).some((row) => paletteItemScore(palettePageValue(row), query) > 0)
+    palettePages(featureOn, true, modernStyle).some((row) => paletteItemScore(palettePageValue(row), query) > 0)
   );
   const askLeads = askable && !localHit;
   // A query that names a page ("notes", "rout", "ops", "issues") leads with
   // that page, as a named command does, so Enter goes there before any object
   // named alike: from an exact name or three letters of one.
   const pageLeads = !picking && !!commandQuery &&
-    queryNamesPage(palettePages(featureOn, true), commandQuery, 3);
+    queryNamesPage(palettePages(featureOn, true, modernStyle), commandQuery, 3);
   const renderCommand = (cmd: (typeof GLOBAL_COMMANDS)[number]) => {
     const Icon = cmd.icon;
     const label = commandLabel(cmd);
@@ -2664,7 +2670,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // The app's pages, to go to.
   const pagesGroup = (
         <CommandPrimitive.Group heading="Pages" className={groupClass}>
-          {palettePages(featureOn, !!query.trim()).map(({ page, label }) => {
+          {palettePages(featureOn, !!query.trim(), modernStyle).map(({ page, label }) => {
             return (
             <CommandPrimitive.Item
               key={typeof page.path === "string" ? page.path + label : label}
@@ -2673,7 +2679,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               className={itemClass}
             >
               <span className="text-sol-text-dim flex-shrink-0">
-                <NavIcon type={page.icon} />
+                {page.navIcon ? <RailIcon name={page.navIcon} /> : <NavIcon type={page.icon} />}
               </span>
               <span className="truncate flex-1">{label}</span>
               {/* An Ops page says whether anything is wrong, with the count its tab and the sidebar show. */}
@@ -3475,8 +3481,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <span className="text-sol-text-dim flex-shrink-0">
                   <NavIcon type="folder" />
                 </span>
-                <span className="truncate">{getShortPath(dir)}</span>
-                <span className="text-meta text-sol-text-dim truncate ml-auto max-w-[200px]">{dir}</span>
+                <span className="truncate modern:font-mono">{getShortPath(dir)}</span>
+                <span className="modern:font-mono text-meta text-sol-text-dim truncate ml-auto max-w-[200px]">{dir}</span>
               </CommandPrimitive.Item>
             ))}
           </CommandPrimitive.Group>

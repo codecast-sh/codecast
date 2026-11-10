@@ -19,6 +19,7 @@ import { castPlayerScriptPlugin } from "./plugins/castPlayerScript";
 import { tailwindInWorker } from "./plugins/tailwindWorker";
 import { stallWatchdogPlugin } from "./plugins/stallWatchdog";
 import { convexPreconnectPlugin } from "./plugins/convexPreconnect";
+import { uiFontPreloadPlugin } from "./plugins/uiFontPreload";
 import { precacheScope } from "./plugins/precacheScope";
 import autoprefixer from "autoprefixer";
 import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS } from "./vite.pwa";
@@ -77,6 +78,9 @@ export default defineConfig(({ mode, command }) => ({
     colorThemeBootPlugin(),
     // DNS and TLS to the Convex deployment start with the page, not after boot.
     convexPreconnectPlugin(),
+    // With the Modern style on, its interface face (Instrument Sans) starts
+    // with the page, so the first paint does not swap from a fallback.
+    uiFontPreloadPlugin(),
     // codecast.sh/a/<slug> is a redirect to the branded artifact document the
     // Convex HTTP action serves (production: Hono route in server/index.ts).
     // Same behavior in dev so the path never falls through to the SPA shell.

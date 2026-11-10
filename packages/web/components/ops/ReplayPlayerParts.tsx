@@ -339,7 +339,7 @@ function RailRowView({ e, i, past, current, open, onSeek, onToggle, onMute, run,
 function NetText({ method, url, failed }: { method: string; url: string; failed: boolean }) {
   const { head, tail } = netParts(method, url);
   return (
-    <span className="rp-net-path" title={`${method} ${url}`} style={{ color: failed ? "var(--sol-red)" : undefined }}>
+    <span className="rp-net-path modern:font-mono" title={`${method} ${url}`} style={{ color: failed ? "var(--sol-red)" : undefined }}>
       <span className="rp-net-method">{method}</span>
       {head && <span className="rp-net-head">{head}</span>}
       <span className="rp-net-tail">{tail}</span>

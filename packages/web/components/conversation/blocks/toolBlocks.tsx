@@ -37,6 +37,9 @@ import { getToolPatchInputs, parseApplyPatchSections } from "../../../lib/applyP
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../../../lib/unifiedDiffParser";
 import { ChevronDown, ChevronUp, SquareCheck, Workflow, MoveHorizontal } from "lucide-react";
 import { ImageBlock } from "./interactiveBlocks";
+import { RowIcon } from "./ModernRow";
+import { modernToolHead } from "../../../lib/modernRow";
+import { useIsModernStyle } from "../../../hooks/useVisualStyle";
 import { PlanBlock } from "./planBlock";
 import { FooterIconButton, FullscreenIcon, NestedStepList } from "./shared";
 import { pressable } from "../../ops/parts";
@@ -89,30 +92,30 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
 
   if (isCompleted && spawnInfo) {
     return (
-      <div className="my-0.5">
+      <div className="my-0.5" data-cc-row="task">
         {(() => {
           const body = (
             <>
-              <span className="text-emerald-400 text-meta">{"\u2713"}</span>
-              <span className={`font-mono text-xs ${colors.text}`}>Task</span>
-              <span className={`px-1 py-0.5 rounded text-meta font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
+              <span data-cc-row-icon className="text-emerald-400 text-meta">{"\u2713"}</span>
+              <span data-cc-row-verb className={`font-mono text-xs ${colors.text}`}>Task</span>
+              <span data-cc-row-tag className={`px-1 py-0.5 rounded text-meta font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
                 {subagentType}
               </span>
               {(spawnInfo.agentName || name) && (
-                <span className="text-meta px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 font-mono">
+                <span data-cc-row-tag className="text-meta px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 font-mono">
                   @{spawnInfo.agentName || name}
                 </span>
               )}
-              {description && <span className="text-sol-text-dim truncate flex-1">{description}</span>}
+              {description && <span data-cc-row-text className="text-sol-text-dim truncate flex-1">{description}</span>}
             </>
           );
           // A real link, so it is reachable by Tab and opens in a new tab on a modified click.
           return resolvedChildId ? (
-            <Link href={`/conversation/${resolvedChildId}`} className="flex items-center gap-1.5 text-xs cursor-pointer rounded px-1.5 py-1 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors">
+            <Link href={`/conversation/${resolvedChildId}`} data-cc-row-head className="flex items-center gap-1.5 text-xs cursor-pointer rounded px-1.5 py-1 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors">
               {body}
             </Link>
           ) : (
-            <div className="flex items-center gap-1.5 text-xs">{body}</div>
+            <div data-cc-row-head className="flex items-center gap-1.5 text-xs">{body}</div>
           );
         })()}
       </div>
@@ -121,33 +124,34 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
 
   if (isCompleted) {
     return (
-      <div className={`my-3 rounded-lg ${result?.is_error ? "bg-sol-red/10 border-sol-red/30" : `${colors.bg} ${colors.border}`} border`}>
+      <div data-cc-row="task" data-cc-row-tone={result?.is_error ? "error" : undefined} className={`my-3 rounded-lg ${result?.is_error ? "bg-sol-red/10 border-sol-red/30" : `${colors.bg} ${colors.border}`} border`}>
         <div
+          data-cc-row-head
           className="px-3 py-2 flex flex-wrap items-center gap-x-2 gap-y-1 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
           {...pressable(() => setExpanded(!expanded))}
           aria-expanded={expanded}
         >
-          <span className={`text-meta ${result?.is_error ? "text-sol-red" : "text-emerald-400"}`}>
+          <span data-cc-row-icon className={`text-meta ${result?.is_error ? "text-sol-red" : "text-emerald-400"}`}>
             {result?.is_error ? "\u2717" : "\u2713"}
           </span>
-          <span className={`font-mono text-xs font-medium ${result?.is_error ? "text-sol-red" : colors.text}`}>
+          <span data-cc-row-verb className={`font-mono text-xs font-medium ${result?.is_error ? "text-sol-red" : colors.text}`}>
             Task
           </span>
-          <span className={`px-1.5 py-0.5 rounded text-meta font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
+          <span data-cc-row-tag className={`px-1.5 py-0.5 rounded text-meta font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
             {subagentType}
           </span>
           {description && (
-            <span className="text-sol-text-muted text-xs truncate flex-1">
+            <span data-cc-row-text className="text-sol-text-muted text-xs truncate flex-1">
               {description}
             </span>
           )}
-          <span className="text-sol-text-dim text-meta ml-auto">
+          <span data-cc-row-hint className="text-sol-text-dim text-meta ml-auto">
             {expanded ? "collapse" : "expand"}
           </span>
         </div>
 
         {expanded && (
-          <>
+          <div data-cc-row-detail>
             {prompt && (
               <div className="border-t border-sol-border/30 px-3 py-2">
                 <div className="text-meta text-sol-text-dim mb-1">Prompt</div>
@@ -170,11 +174,11 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
                 </div>
               </div>
             )}
-          </>
+          </div>
         )}
 
         {resolvedChildId && (
-          <div className="border-t border-sol-border/30 px-2 py-1.5 flex justify-end">
+          <div data-cc-row-foot className="border-t border-sol-border/30 px-2 py-1.5 flex justify-end">
             <Link
               href={`/conversation/${resolvedChildId}`}
               className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium cursor-pointer hover:brightness-125 transition ${colors.text} ${colors.bg} border ${colors.border}`}
@@ -194,43 +198,44 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
   const truncatedPrompt = prompt.length > 300 && !expanded ? prompt.slice(0, 300) + "..." : prompt;
 
   return (
-    <div className={`my-3 rounded-lg ${colors.bg} border ${colors.border}`}>
+    <div data-cc-row="task" className={`my-3 rounded-lg ${colors.bg} border ${colors.border}`}>
       <div
+        data-cc-row-head
         className="px-3 py-2 flex flex-wrap items-center gap-x-2 gap-y-1 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
         {...pressable(() => setExpanded(!expanded))}
         aria-expanded={expanded}
       >
-        <span className={`w-2.5 h-2.5 rounded-full border border-current border-t-transparent ${colors.text} opacity-60`} />
-        <span className={`font-mono text-xs font-semibold ${colors.text}`}>
+        <span data-cc-row-icon className={`w-2.5 h-2.5 rounded-full border border-current border-t-transparent ${colors.text} opacity-60`} />
+        <span data-cc-row-verb className={`font-mono text-xs font-semibold ${colors.text}`}>
           Task
         </span>
-        <span className={`px-1.5 py-0.5 rounded text-meta font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
+        <span data-cc-row-tag className={`px-1.5 py-0.5 rounded text-meta font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
           {subagentType}
         </span>
         {description && (
-          <span className="text-sol-text-muted text-xs truncate flex-1">
+          <span data-cc-row-text className="text-sol-text-muted text-xs truncate flex-1">
             {description}
           </span>
         )}
         {model && (
-          <span className="text-sol-text-dim text-meta font-mono">
+          <span data-cc-row-tag className="text-sol-text-dim text-meta font-mono">
             {formatModel(model)}
           </span>
         )}
         {name && (
-          <span className="text-sol-text-dim text-meta font-mono">
+          <span data-cc-row-tag className="text-sol-text-dim text-meta font-mono">
             {name}
           </span>
         )}
         {runInBackground && (
-          <span className="text-sol-text-dim text-meta">background</span>
+          <span data-cc-row-tag className="text-sol-text-dim text-meta">background</span>
         )}
-        <span className="text-sol-text-dim text-meta ml-auto">
+        <span data-cc-row-hint className="text-sol-text-dim text-meta ml-auto">
           {expanded ? "collapse" : "expand"}
         </span>
       </div>
 
-      <div className="px-3 pb-2">
+      <div data-cc-row-detail className="px-3 pb-2">
         <div className="text-sol-text-secondary text-xs font-mono whitespace-pre-wrap break-words leading-relaxed">
           {truncatedPrompt}
         </div>
@@ -245,7 +250,7 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
       </div>
 
       {resolvedChildId && (
-        <div className="border-t border-sol-border/30 px-2 py-1.5 flex justify-end">
+        <div data-cc-row-foot className="border-t border-sol-border/30 px-2 py-1.5 flex justify-end">
           <Link
             href={`/conversation/${resolvedChildId}`}
             className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium cursor-pointer hover:brightness-125 transition ${colors.text} ${colors.bg} border ${colors.border}`}
@@ -307,23 +312,23 @@ export function WorkflowToolBlock({ tool, result, conversationId }: { tool: Tool
     : { border: "border-sol-cyan/25", bg: "bg-sol-cyan/[0.06]", divider: "border-sol-cyan/15" };
 
   return (
-    <div data-cc-feed-card className={`my-2 rounded-lg border ${frame.border} ${frame.bg} overflow-hidden`}>
+    <div data-cc-feed-card data-cc-row="workflow" data-cc-row-tone={isError ? "error" : undefined} className={`my-2 rounded-lg border ${frame.border} ${frame.bg} overflow-hidden`}>
       <div
         className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-sol-bg-highlight/40 transition-colors"
         {...pressable(() => setExpanded(!expanded))}
-        aria-expanded={expanded}
+        aria-expanded={expanded} data-cc-row-head
       >
-        <Workflow className={`w-3.5 h-3.5 flex-shrink-0 ${isError ? "text-sol-red" : "text-sol-cyan"}`} />
-        <span data-cc-tech className={`text-mark uppercase tracking-wider font-semibold ${isError ? "text-sol-red" : "text-sol-cyan"}`}>
+        <Workflow data-cc-row-icon className={`w-3.5 h-3.5 flex-shrink-0 ${isError ? "text-sol-red" : "text-sol-cyan"}`} />
+        <span data-cc-tech data-cc-row-verb className={`text-mark uppercase tracking-wider font-semibold ${isError ? "text-sol-red" : "text-sol-cyan"}`}>
           Workflow
         </span>
-        <span className="text-xs text-sol-text-muted truncate">{name}</span>
+        <span data-cc-row-object className="text-xs text-sol-text-muted truncate">{name}</span>
         {resumeFromRunId && (
-          <span data-cc-tech className="px-1 py-0.5 rounded text-meta font-medium bg-sol-cyan/15 border border-sol-cyan/25 text-sol-cyan flex-shrink-0">
+          <span data-cc-tech data-cc-row-tag className="px-1 py-0.5 rounded text-meta font-medium bg-sol-cyan/15 border border-sol-cyan/25 text-sol-cyan flex-shrink-0">
             resume
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+        <div data-cc-row-meta className="ml-auto flex items-center gap-2 flex-shrink-0">
           {run?.agent_count != null && <span data-cc-tech className="text-meta text-sol-text-dim">{run.agent_count} agents</span>}
           {run?.total_tokens ? <span data-cc-tech className="text-meta text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
           {launch.taskId && <span data-cc-tech className="text-meta text-sol-text-dim/70 font-mono">{launch.taskId}</span>}
@@ -345,12 +350,12 @@ export function WorkflowToolBlock({ tool, result, conversationId }: { tool: Tool
               launching
             </span>
           )}
-          <span data-cc-tech className="text-sol-text-dim text-meta">{expanded ? "collapse" : "expand"}</span>
+          <span data-cc-tech data-cc-row-hint className="text-sol-text-dim text-meta">{expanded ? "collapse" : "expand"}</span>
         </div>
       </div>
 
       {summary && (
-        <div data-cc-wf-summary className="px-3 pb-2 -mt-0.5">
+        <div data-cc-wf-summary data-cc-row-sub className="px-3 pb-2 -mt-0.5">
           <div className={`text-xs text-sol-text-dim ${expanded ? "" : "line-clamp-2"}`}>{summary}</div>
         </div>
       )}
@@ -358,13 +363,13 @@ export function WorkflowToolBlock({ tool, result, conversationId }: { tool: Tool
       {/* Live agent tree only on expand — the daemon's anchor message (DynamicRunCard)
           already carries it inline, so the default state stays a compact receipt. */}
       {run && expanded && (
-        <div className={`border-t ${frame.divider} px-3 py-2`}>
+        <div data-cc-row-detail className={`border-t ${frame.divider} px-3 py-2`}>
           <WorkflowRunNodes run={run} />
         </div>
       )}
 
       {expanded && (
-        <>
+        <div data-cc-row-detail>
           {script && (
             <div className={`border-t ${frame.divider} px-3 py-2`}>
               <div className="text-meta text-sol-text-dim mb-1">Script</div>
@@ -416,7 +421,7 @@ export function WorkflowToolBlock({ tool, result, conversationId }: { tool: Tool
               all workflows {"→"}
             </Link>
           </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -755,6 +760,8 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
   const displayToolName = isApplyPatch ? formatToolName("apply_patch") : isNested && nestedActions.length === 1
     ? formatToolName(nestedActions[0].name)
     : formatToolName(tool.name);
+  // Modern reads the row as a verb, its object and the result (lib/modernRow).
+  const mh = useIsModernStyle() ? modernToolHead({ name: isApplyPatch ? "apply_patch" : isNested && nestedActions.length === 1 ? nestedActions[0].name : tool.name, displayName: displayToolName, result, resultSummary }) : null;
 
   const browserTab = useMemo(() => browserTabOf(tool, null, result?.content, EMPTY_BROWSER_ROWS), [tool, result?.content]);
 
@@ -845,7 +852,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
   }
 
   return (
-    <div className="my-0.5">
+    <div className="my-0.5" data-cc-row="tool" data-cc-row-tone={result?.is_error ? "error" : undefined}>
       <div
         className={`flex items-center gap-1.5 group text-xs ${
           isClickable
@@ -857,6 +864,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
             : ''
         }`}
         role="button"
+        data-cc-row-head
         tabIndex={0}
         aria-expanded={isClickable ? undefined : expanded}
         aria-pressed={isClickable ? isSelected : undefined}
@@ -869,9 +877,9 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
           handleClick(e);
         }}
       >
-        <span className={`font-mono flex-shrink-0 group-hover:underline ${toolColor}`}>{displayToolName}</span>
+        {mh && <RowIcon kind={mh.kind} />}<span data-cc-row-verb className={`font-mono flex-shrink-0 group-hover:underline ${toolColor}`}>{mh?.verb ?? displayToolName}</span>
         {summary && (
-          <span className="text-sol-text-muted font-mono truncate min-w-0">
+          <span data-cc-row-object className="text-sol-text-muted font-mono truncate min-w-0">
             {(isStandardEdit || isRead) && filePath ? (
               // The file a Read/Edit touched, linked into Files. Stop the click
               // so it opens the file rather than toggling the row.
@@ -881,9 +889,9 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
         )}
         {browserTab && <BrowserTabPill tab={browserTab} />}
         {gitOutcome && <GitOutcomeRow outcome={gitOutcome} repository={outcomeRepository} />}
-        {resultSummary && (
-          <span className={`font-mono flex-shrink-0 whitespace-nowrap ${result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"}`}>
-            {resultSummary}
+        {(mh ? mh.meta : resultSummary) && (
+          <span data-cc-row-meta className={`font-mono flex-shrink-0 whitespace-nowrap ${result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"}`} title={mh?.failed ? mh.meta! : undefined}>
+            {mh ? mh.meta : resultSummary}
           </span>
         )}
       </div>
@@ -911,6 +919,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
         <div
           ref={fullWidth.containerRef}
           style={fullWidth.style}
+          data-cc-row-detail
           className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset transition-all duration-200"
         >
           {/* Markdown toggle header */}
@@ -1014,7 +1023,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
                   <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setMdFullscreen(false)}>
                     <div className="conv-col mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-between mb-6">
-                        <span className="text-sol-text-secondary text-sm font-medium">{filePath.split('/').pop()}</span>
+                        <span className="text-sol-text-secondary text-sm modern:font-mono font-medium">{filePath.split('/').pop()}</span>
                         <button
                           onClick={() => setMdFullscreen(false)}
                           className="text-sol-text-dim hover:text-sol-text-muted transition-colors p-1"
@@ -1220,18 +1229,18 @@ export function TodoWriteBlock({ tool }: { tool: ToolCall }) {
   const inProgress = todos.filter(t => t.status === 'in_progress').length;
 
   return (
-    <div className="my-2">
-      <div className="flex items-center gap-2 py-0.5">
-        <span className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0" />
-        <span className="font-mono text-sm font-medium text-pink-600 dark:text-sol-magenta">
+    <div className="my-2" data-cc-row="todo">
+      <div className="flex items-center gap-2 py-0.5" data-cc-row-head>
+        <span data-cc-row-icon className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0" />
+        <span data-cc-row-verb className="font-mono text-sm font-medium text-pink-600 dark:text-sol-magenta">
           {formatToolName(tool.name)}
         </span>
-        <span className="text-sol-text-dim text-sm font-mono">
+        <span data-cc-row-meta className="text-sol-text-dim text-sm font-mono">
           {completed}/{todos.length} done
           {inProgress > 0 && `, ${inProgress} in progress`}
         </span>
       </div>
-      <div className="ml-3.5 mt-1 space-y-0.5">
+      <div className="ml-3.5 mt-1 space-y-0.5" data-cc-row-list>
         {todos.map((todo, i) => (
           <div key={i} className="flex items-start gap-2 text-sm">
             {todo.status === 'completed' ? (
@@ -1281,15 +1290,15 @@ export function TaskListBlock({ tool, result, taskRecordMap }: { tool: ToolCall;
   const inProgress = items.filter(t => t.status === "in_progress").length;
 
   return (
-    <div className="my-2">
-      <div className="flex items-center gap-2 py-0.5">
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
-        <span className="font-mono text-sm font-medium text-emerald-600 dark:text-emerald-400">TaskList</span>
-        <span className="text-sol-text-dim text-sm font-mono">
+    <div className="my-2" data-cc-row="todo">
+      <div className="flex items-center gap-2 py-0.5" data-cc-row-head>
+        <span data-cc-row-icon className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+        <span data-cc-row-verb className="font-mono text-sm font-medium text-emerald-600 dark:text-emerald-400">TaskList</span>
+        <span data-cc-row-meta className="text-sol-text-dim text-sm font-mono">
           {completed}/{items.length} done{inProgress > 0 && `, ${inProgress} active`}
         </span>
       </div>
-      <div className="ml-3.5 mt-1 space-y-0.5">
+      <div className="ml-3.5 mt-1 space-y-0.5" data-cc-row-list>
         {items.map(task => {
           const isBlocked = task.blockedBy && task.blockedBy.length > 0;
           const matched = taskRecordMap?.byTitle[task.subject] || taskRecordMap?.byLocalId[task.id];
@@ -1373,18 +1382,18 @@ export function TaskCreateUpdateBlock({ tool, result, taskSubjectMap, taskRecord
   const rowClass = `flex items-center gap-1.5 text-xs${isClickable ? " cursor-pointer rounded px-1.5 py-0.5 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`;
   // A matched task's row is a real link: reachable by Tab, and a modified click opens a new tab.
   const row = (body: ReactNode) => matchedTask
-    ? <Link href={`/tasks/${matchedTask._id}`} className={rowClass}>{body}</Link>
-    : <div className={rowClass}>{body}</div>;
+    ? <Link href={`/tasks/${matchedTask._id}`} className={rowClass} data-cc-row-head>{body}</Link>
+    : <div className={rowClass} data-cc-row-head>{body}</div>;
 
   const displaySubject = resolvedSubject || matchedTask?.title;
 
   if (!isCreate && displaySubject) {
     return (
-      <div className="my-0.5">
+      <div className="my-0.5" data-cc-row="task">
         {row(<>
-          <span className="text-sol-text-muted">{String(displaySubject).slice(0, 60)}</span>
+          <span data-cc-row-text className="text-sol-text-muted">{String(displaySubject).slice(0, 60)}</span>
           {status && (
-            <span className={`px-1 py-0.5 rounded text-meta font-mono ${
+            <span data-cc-row-meta className={`px-1 py-0.5 rounded text-meta font-mono ${
               status === "completed" ? "bg-emerald-500/15 text-emerald-400" :
               status === "in_progress" ? "bg-amber-500/15 text-amber-400" :
               status === "deleted" ? "bg-red-500/15 text-red-400" :
@@ -1393,27 +1402,27 @@ export function TaskCreateUpdateBlock({ tool, result, taskSubjectMap, taskRecord
               {status}
             </span>
           )}
-          {owner && <span className="text-meta px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
+          {owner && <span data-cc-row-tag className="text-meta px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
         </>)}
       </div>
     );
   }
 
   return (
-    <div className="my-0.5">
+    <div className="my-0.5" data-cc-row="task">
       {row(<>
-        <span className="font-mono text-emerald-500/80">{tool.name}</span>
+        <span data-cc-row-verb className="font-mono text-emerald-500/80">{tool.name}</span>
         {isCreate ? (
           <>
-            {resultId && <span className="text-sol-text-dim font-mono">#{resultId}</span>}
-            {subject && <span className="text-sol-text-muted">{String(subject).slice(0, 60)}</span>}
-            {activeForm && <span className="text-sol-text-dim italic">({activeForm})</span>}
+            {resultId && <span data-cc-row-object className="text-sol-text-dim font-mono">#{resultId}</span>}
+            {subject && <span data-cc-row-text className="text-sol-text-muted">{String(subject).slice(0, 60)}</span>}
+            {activeForm && <span data-cc-row-tag className="text-sol-text-dim italic">({activeForm})</span>}
           </>
         ) : (
           <>
-            {taskId && <span className="text-sol-text-dim font-mono">#{taskId}</span>}
+            {taskId && <span data-cc-row-object className="text-sol-text-dim font-mono">#{taskId}</span>}
             {status && (
-              <span className={`px-1 py-0.5 rounded text-meta font-mono ${
+              <span data-cc-row-meta className={`px-1 py-0.5 rounded text-meta font-mono ${
                 status === "completed" ? "bg-emerald-500/15 text-emerald-400" :
                 status === "in_progress" ? "bg-amber-500/15 text-amber-400" :
                 status === "deleted" ? "bg-red-500/15 text-red-400" :
@@ -1422,7 +1431,7 @@ export function TaskCreateUpdateBlock({ tool, result, taskSubjectMap, taskRecord
                 {status}
               </span>
             )}
-            {owner && <span className="text-meta px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
+            {owner && <span data-cc-row-tag className="text-meta px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
           </>
         )}
       </>)}
@@ -1519,9 +1528,9 @@ export function SendMessageBlock({ tool, agentNameToChildMap }: { tool: ToolCall
   const displayText = summary || (content && String(content).slice(0, 80)) || "";
 
   return (
-    <div className="my-0.5">
-      <div className={`flex items-center gap-1.5 text-xs py-1.5 px-2.5 rounded-md border ${typeConfig.bg}`}>
-        <span className={typeConfig.color}>{typeConfig.icon}</span>
+    <div className="my-0.5" data-cc-row="message">
+      <div data-cc-row-head className={`flex items-center gap-1.5 text-xs py-1.5 px-2.5 rounded-md border ${typeConfig.bg}`}>
+        <span data-cc-row-icon className={typeConfig.color}>{typeConfig.icon}</span>
         {isShutdown ? (
           <>
             {recipient && <span className="text-meta px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/20 font-mono">@{recipient}</span>}
@@ -1536,8 +1545,8 @@ export function SendMessageBlock({ tool, agentNameToChildMap }: { tool: ToolCall
                 <span className="text-meta px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono">@{recipient}</span>
               )
             )}
-            {isBroadcast && <span className="text-meta px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-mono">all</span>}
-            {displayText && <span className="text-sol-text-muted truncate">{displayText}</span>}
+            {isBroadcast && <span data-cc-row-tag className="text-meta px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-mono">all</span>}
+            {displayText && <span data-cc-row-text className="text-sol-text-muted truncate">{displayText}</span>}
           </>
         )}
       </div>
@@ -1552,20 +1561,20 @@ export function TeamCreateBlock({ tool }: { tool: ToolCall }) {
   const isDelete = tool.name === "TeamDelete";
 
   return (
-    <div className="my-0.5">
-      <div className={`flex items-center gap-1.5 text-xs py-1.5 px-2.5 rounded-md border ${isDelete ? "bg-red-500/5 border-red-500/15" : "bg-cyan-500/8 border-cyan-500/15"}`}>
-        <svg className={`w-3 h-3 shrink-0 ${isDelete ? "text-red-400/70" : "text-cyan-400/70"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <div className="my-0.5" data-cc-row="team">
+      <div data-cc-row-head className={`flex items-center gap-1.5 text-xs py-1.5 px-2.5 rounded-md border ${isDelete ? "bg-red-500/5 border-red-500/15" : "bg-cyan-500/8 border-cyan-500/15"}`}>
+        <svg data-cc-row-icon className={`w-3 h-3 shrink-0 ${isDelete ? "text-red-400/70" : "text-cyan-400/70"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
         </svg>
-        <span className={`font-mono text-xs font-medium ${isDelete ? "text-red-400/80" : "text-cyan-400/80"}`}>
+        <span data-cc-row-verb className={`font-mono text-xs font-medium ${isDelete ? "text-red-400/80" : "text-cyan-400/80"}`}>
           {isDelete ? "Team dissolved" : "Team created"}
         </span>
         {parsedInput.team_name && (
-          <span className="px-1.5 py-0.5 rounded text-meta font-mono bg-cyan-500/15 text-cyan-400 border border-cyan-500/20">
+          <span data-cc-row-object className="px-1.5 py-0.5 rounded text-meta font-mono bg-cyan-500/15 text-cyan-400 border border-cyan-500/20">
             {parsedInput.team_name}
           </span>
         )}
-        {parsedInput.description && <span className="text-sol-text-dim truncate">{String(parsedInput.description).slice(0, 60)}</span>}
+        {parsedInput.description && <span data-cc-row-text className="text-sol-text-dim truncate">{String(parsedInput.description).slice(0, 60)}</span>}
       </div>
     </div>
   );
@@ -1576,10 +1585,10 @@ export function SkillBlock({ tool }: { tool: ToolCall }) {
   try { parsedInput = JSON.parse(tool.input); } catch {}
   const skillName = parsedInput.skill || "skill";
   return (
-    <div className="my-0.5">
-      <div className="flex items-center gap-1.5 text-xs">
-        <span className="font-mono text-sol-cyan/80">/{skillName}</span>
-        {parsedInput.args && <span className="text-sol-text-dim min-w-0 break-words">{parsedInput.args}</span>}
+    <div className="my-0.5" data-cc-row="skill">
+      <div className="flex items-center gap-1.5 text-xs" data-cc-row-head>
+        <span data-cc-row-verb className="hidden modern:inline">Used skill</span><span data-cc-row-object className="font-mono text-sol-cyan/80">/{skillName}</span>
+        {parsedInput.args && <span data-cc-row-text className="text-sol-text-dim min-w-0 break-words">{parsedInput.args}</span>}
       </div>
     </div>
   );

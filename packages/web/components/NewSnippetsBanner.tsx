@@ -145,7 +145,7 @@ export function NewSnippetsBanner() {
               <Sparkles className="w-4 h-4 text-sol-cyan" />
               New agent features
             </DialogTitle>
-            <DialogDescription className="text-sol-base1">
+            <DialogDescription className="text-sol-text-muted">
               These shipped since you set up codecast. Each one installs a small section into a
               machine&apos;s CLAUDE.md that teaches agents the capability — nothing runs until an
               agent uses it. You can turn any of them on or off later on the Agent features
@@ -168,7 +168,7 @@ export function NewSnippetsBanner() {
                           New
                         </span>
                       </div>
-                      <div className="text-[13px] text-sol-base1 mt-0.5">{s.desc}</div>
+                      <div className="text-[13px] text-sol-text-muted mt-0.5">{s.desc}</div>
                     </div>
                     {on ? (
                       <span className="inline-flex items-center gap-1 text-xs text-sol-green flex-shrink-0 mt-0.5">
@@ -195,7 +195,7 @@ export function NewSnippetsBanner() {
                       />
                     )}
                   </div>
-                  <p className="text-[12px] text-sol-base1 leading-relaxed mt-2">{s.detail}</p>
+                  <p className="text-[12px] text-sol-text-muted leading-relaxed mt-2">{s.detail}</p>
                   <p className="text-meta text-sol-text-dim mt-2 font-mono">{s.writesTo}</p>
                 </div>
               );
@@ -216,7 +216,7 @@ export function NewSnippetsBanner() {
                   setOpen(false);
                   router.push("/agent-features");
                 }}
-                className="px-3 py-1 text-xs rounded border border-sol-border text-sol-base1 hover:text-sol-text hover:border-sol-base1 transition-colors inline-flex items-center gap-1 whitespace-nowrap"
+                className="px-3 py-1 text-xs rounded border border-sol-border text-sol-text-muted hover:text-sol-text hover:border-sol-text-dim transition-colors inline-flex items-center gap-1 whitespace-nowrap"
               >
                 All agent features
                 <ArrowRight className="w-3 h-3" />
@@ -226,7 +226,7 @@ export function NewSnippetsBanner() {
                   stampAll();
                   setOpen(false);
                 }}
-                className="px-3 py-1 text-xs rounded border border-sol-border text-sol-base1 hover:text-sol-text hover:border-sol-base1 transition-colors"
+                className="px-3 py-1 text-xs rounded border border-sol-border text-sol-text-muted hover:text-sol-text hover:border-sol-text-dim transition-colors"
               >
                 {/* It stamps every feature shown as seen for good, so it says so. */}
                 Dismiss

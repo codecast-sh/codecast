@@ -2,6 +2,15 @@ import { useState, useRef } from "react";
 import { ChevronDown, Check } from "lucide-react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { modernFocusRing } from "./ui/styles";
+
+// The Modern style redraws the box variant as a soft tray of the ink with the
+// chosen option raised in white on a hairline (the look Tabs has there), every
+// segment at least 24px tall, and the one focus ring; the collapsed dropdown
+// takes the menu's surface and rows. Classic and Minimal are unchanged.
+const MODERN_TRAY = "modern:gap-0.5 modern:rounded-control modern:border-0 modern:bg-sol-text/[0.06] modern:overflow-visible";
+const MODERN_SEGMENT = `modern:rounded-[4px] modern:border-l-0 modern:text-meta modern:duration-press modern:ease-ui ${modernFocusRing}`;
+const MODERN_CHOSEN = "modern:bg-sol-card modern:font-medium modern:text-sol-text modern:shadow-[0_0_0_1px_var(--sol-border),0_1px_2px_rgb(0_0_0/0.06)]";
 
 /** A compact segmented pill group — the bordered "All / 👤 / 🤖" style control
  *  shared across list headers (source filters, the List/Board view switch, etc.).
@@ -48,7 +57,7 @@ export function SegmentedToggle({
   const segments = (
     <div
       className={`flex items-center ${sm ? "h-6" : "h-7"} ${
-        bare ? "gap-3" : "rounded-md border border-sol-border/40 overflow-hidden"
+        bare ? "gap-3" : `rounded-md border border-sol-border/40 overflow-hidden ${MODERN_TRAY} ${sm ? "modern:h-[26px] modern:p-px" : "modern:p-0.5"}`
       } ${collapse ? "cq-seg-full" : ""} ${fullWidth ? "w-full" : ""}`}
     >
       {items.map((it, i) => {
@@ -69,7 +78,7 @@ export function SegmentedToggle({
                   : "text-sol-text-dim hover:text-sol-text"
                 : `${sm ? "px-2" : "px-2.5"} ${i > 0 ? "border-l border-sol-border/40" : ""} ${
                     selected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
-                  }`
+                  } ${MODERN_SEGMENT} ${selected ? MODERN_CHOSEN : "modern:text-sol-text-muted"}`
             }`}
           >
             {Icon && <Icon className="w-3.5 h-3.5" />}
@@ -129,7 +138,7 @@ function SegmentedDropdown({
     <div ref={ref} className="cq-seg-compact relative flex-shrink-0">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 h-7 px-2 rounded-md border border-sol-border/40 text-xs text-sol-text hover:border-sol-border transition-colors"
+        className={`flex items-center gap-1.5 h-7 px-2 rounded-md border border-sol-border/40 text-xs text-sol-text hover:border-sol-border transition-colors modern:rounded-control modern:border-sol-border modern:bg-sol-card modern:hover:border-sol-text-dim/50 ${modernFocusRing}`}
         title={active?.title || active?.label}
       >
         {ActiveIcon && <ActiveIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-muted" />}
@@ -137,7 +146,7 @@ function SegmentedDropdown({
         <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
+        <div className="absolute top-full right-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1 modern:rounded-card modern:bg-sol-card modern:p-1 modern:shadow-popover">
           {items.map((it) => {
             const Icon = it.icon;
             return (
@@ -147,7 +156,7 @@ function SegmentedDropdown({
                 aria-pressed={it.key === value}
                 className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors ${
                   it.key === value ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
+                } modern:min-h-control-sm modern:rounded-control modern:px-2 modern:py-1 modern:text-ui modern:hover:bg-sol-cyan/10 ${it.key === value ? "modern:bg-transparent" : ""}`}
               >
                 {Icon && <Icon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
                 <span className="flex-1">{it.label || it.title}</span>

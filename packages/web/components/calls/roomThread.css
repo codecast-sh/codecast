@@ -900,3 +900,6 @@ button.rt-event-agent:hover {
     opacity: 1;
   }
 }
+
+/* Modern (.modern-style): labels and controls in the interface sans; clocks and ids keep mono. */
+.modern-style :is(.rt-density-label, .rt-seg-btn-labeled, .rt-divider, .rt-recap-items-label) { font-family: var(--font-ui, system-ui, sans-serif); }

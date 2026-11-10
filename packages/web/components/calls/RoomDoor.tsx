@@ -82,7 +82,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
                   alt=""
                   className="h-full w-full object-cover"
                   fallback={
-                    <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-meta">
+                    <span className="flex h-full w-full items-center justify-center bg-sol-bg-alt text-meta">
                       {(k.from_name || "?").charAt(0).toUpperCase()}
                     </span>
                   }

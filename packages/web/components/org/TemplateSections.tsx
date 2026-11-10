@@ -154,7 +154,7 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
               return (
                 <li key={r.id} className="flex items-start gap-2" data-template-routine={r.id} data-state={state}>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sol-text">{r.title} {t?.short_id && <Link href={`/triggers/${t.short_id}`} className="text-sol-cyan hover:underline" data-template-trigger={t.short_id}>{t.short_id}</Link>} <span className="text-sol-text-dim">every {r.every} · {state}{t?.status === "scheduled" || t?.status === "running" ? `, ${rd.mode}` : ""}</span></p>
+                    <p className="text-sol-text">{r.title} {t?.short_id && <Link href={`/triggers/${t.short_id}`} className="modern:font-mono text-sol-cyan hover:underline" data-template-trigger={t.short_id}>{t.short_id}</Link>} <span className="text-sol-text-dim">every {r.every} · {state}{t?.status === "scheduled" || t?.status === "running" ? `, ${rd.mode}` : ""}</span></p>
                     {rd.missing.length > 0 && <p className="text-sol-text-dim">{rd.missing.join("; ")}</p>}
                   </div>
                   {canEdit && t && t.status === "paused" && rd.ready && !r.external && (
@@ -181,7 +181,7 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
       )}
       <Part sheet={inSheet} label="Template" name="template-release">
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
-          <li>{instance.template?.name ?? instance.template_id} {instance.version}{behind && <span className="text-sol-yellow" data-template-behind={instance.releases_behind}> · {behind}</span>} <span className="text-sol-text-dim">sha256 {String(instance.digest).slice(0, 12)}</span>{instance.host ? <span className="text-sol-text-dim"> · on {instance.host.machine}</span> : null}</li>
+          <li>{instance.template?.name ?? instance.template_id} <span className="modern:font-mono">{instance.version}</span>{behind && <span className="text-sol-yellow" data-template-behind={instance.releases_behind}> · {behind}</span>} <span className="modern:font-mono text-sol-text-dim">sha256 {String(instance.digest).slice(0, 12)}</span>{instance.host ? <span className="text-sol-text-dim"> · on {instance.host.machine}</span> : null}</li>
           {instance.template?.workspace && <li data-template-publisher={instance.template.workspace}>{instance.template.workspace === "codecast" ? "From Codecast's library" : "This workspace's own copy"}</li>}
           {((instance.tools ?? []) as any[]).length > 0 && (
             <li className="flex flex-wrap items-baseline gap-1" data-template-tools={(instance.tools as any[]).length}>
@@ -222,7 +222,7 @@ function UpdateCardView({ card, to, status, proposed, busy, onPropose }: { card:
   const [latest, ...earlier] = card.changelogs;
   const section = (c: { version: string; text: string }) => (
     <div key={c.version} className="mt-1" data-template-changelog={c.version}>
-      <p className="text-meta text-sol-text-dim">{c.version}</p>
+      <p className="modern:font-mono text-meta text-sol-text-dim">{c.version}</p>
       <MarkdownRenderer content={c.text} className="cc-cmt-md prose-headings:mb-1 prose-headings:mt-1 prose-headings:text-[12px] prose-ol:pl-4 prose-ul:pl-4" />
     </div>
   );
@@ -333,7 +333,7 @@ function HostStep({ instance, canEdit, purpose }: { instance: any; canEdit: bool
           {canEdit && device && (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Button type="button" variant="violet" size="sm" onClick={() => void run()} disabled={busy || (purpose === "secrets" && typed.length === 0) || (typed.length > 0 && !device.can_receive_secrets)} className="rounded-lg" data-host-run>{busy ? "Sending…" : step.state === "failed" ? `Try again on ${device.label}` : label}</Button>
-              <span className="text-meta text-sol-text-dim">{device.online ? "online" : "offline: queued until it wakes"}{host?.dir ? ` · ${host.dir}` : ""}</span>
+              <span className="text-meta text-sol-text-dim">{device.online ? "online" : "offline: queued until it wakes"}{host?.dir ? <> · <span className="modern:font-mono">{host.dir}</span></> : ""}</span>
             </div>
           )}
           {error && <p className="mt-1 text-sol-red" role="alert">{error}</p>}

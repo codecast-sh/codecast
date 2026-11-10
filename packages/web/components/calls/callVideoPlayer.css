@@ -303,3 +303,6 @@
     animation: none !important;
   }
 }
+
+/* Modern (.modern-style): the chip and menu are words; the time tip keeps mono. */
+.modern-style :is(.call-controls-chip, .call-controls-menu) { font-family: var(--font-ui, system-ui, sans-serif); }

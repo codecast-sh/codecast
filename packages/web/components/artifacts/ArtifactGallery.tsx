@@ -10,6 +10,7 @@ import { ArrowUpDown, CalendarDays, Globe, LayoutGrid, Search, User, X } from "l
 import { ArtifactCard, type ArtifactRow } from "./ArtifactCard";
 import { FilterDropdown, type FilterOption } from "../FilterDropdown";
 import { SegmentedToggle } from "../SegmentedToggle";
+import { PageFrame, PageHeader } from "../ui/page-header";
 import { groupByDay, pageTime, sortPages, type PageSort } from "./artifactCardUtils";
 import { ArtifactEditModal } from "./ArtifactEditModal";
 import { FeatureUpsell } from "../agentFeatures/FeatureUpsell";
@@ -114,17 +115,11 @@ export function ArtifactGallery() {
   const days = useMemo(() => (view === "timeline" ? groupByDay(shown, sort) : []), [view, shown, sort]);
   const filtered = !!people || !!query.trim();
 
-  return (
-    <div className="py-6">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 mb-5">
-        <h1 className="text-lg font-semibold text-sol-text">Pages</h1>
-        {data && artifacts.length > 0 && (
-          <span className="text-xs text-sol-text-dim font-mono tabular-nums">
-            {filtered ? `${shown.length} / ${artifacts.length}` : artifacts.length}
-          </span>
-        )}
-        {data && artifacts.length > 0 && (
-          <div className="ml-auto flex items-center gap-2">
+  const hasPages = !!data && artifacts.length > 0;
+  const viewToggle = <SegmentedToggle value={view} onChange={(v) => setUI({ pages_view: v as "grid" | "timeline" })} items={VIEWS} />;
+  // Search, people and sort, drawn by whichever header is up.
+  const controls = (
+          <>
             <div className="flex items-center gap-1.5 h-7 px-2 rounded-md border border-sol-border/40 focus-within:border-sol-cyan/50">
               <Search className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
               <input
@@ -157,15 +152,31 @@ export function ArtifactGallery() {
               options={SORTS}
               onChange={(v) => setUI({ pages_sort: (v || "updated") as PageSort })}
             />
-            <SegmentedToggle
-              value={view}
-              onChange={(v) => setUI({ pages_view: v as "grid" | "timeline" })}
-              items={VIEWS}
-            />
+          </>
+  );
+  const countWords = filtered ? `${shown.length} / ${artifacts.length}` : artifacts.length;
+  const legacy = (
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 mb-5">
+        <h1 className="text-lg font-semibold text-sol-text">Pages</h1>
+        {data && artifacts.length > 0 && (
+          <span className="text-xs text-sol-text-dim font-mono tabular-nums">
+            {countWords}
+          </span>
+        )}
+        {data && artifacts.length > 0 && (
+          <div className="ml-auto flex items-center gap-2">
+            {controls}
+            {viewToggle}
           </div>
         )}
       </div>
-
+  );
+  return (
+    <PageFrame
+      header={<PageHeader legacy={legacy} title="Pages" count={hasPages ? countWords : null} tabs={hasPages ? viewToggle : null} actions={hasPages ? controls : null} />}
+      legacyColumn="py-6"
+      column="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8"
+    >
       <FeatureUpsell
         slug="publish"
         className="mb-5"
@@ -207,6 +218,6 @@ export function ArtifactGallery() {
       )}
 
       {teamEditing && <ArtifactEditModal artifact={teamEditing} onClose={() => setTeamEditing(null)} />}
-    </div>
+    </PageFrame>
   );
 }

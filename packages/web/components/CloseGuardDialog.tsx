@@ -47,7 +47,7 @@ export function GlobalCloseGuardDialog() {
           {open.length} open subtask{open.length === 1 ? "" : "s"}
         </div>
         <div className="text-xs text-sol-text-muted mb-3">
-          {gerund} {many ? `${parents.length} tasks` : parents[0]!.shortId} leaves {open.length === 1 ? "it" : "these"} unfinished:
+          {gerund} {many ? `${parents.length} tasks` : <span className="modern:font-mono">{parents[0]!.shortId}</span>} leaves {open.length === 1 ? "it" : "these"} unfinished:
         </div>
         <div className="max-h-40 overflow-y-auto mb-4 space-y-2">
           {parents.map((p) => (

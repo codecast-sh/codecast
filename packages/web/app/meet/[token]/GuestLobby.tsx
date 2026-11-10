@@ -143,7 +143,7 @@ export function GuestLobby({
                     alt=""
                     className="h-full w-full object-cover"
                     fallback={
-                      <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-meta text-sol-text-muted">
+                      <span className="flex h-full w-full items-center justify-center bg-sol-bg-alt text-meta text-sol-text-muted">
                         {inviter.name.charAt(0).toUpperCase()}
                       </span>
                     }
@@ -224,7 +224,7 @@ export function GuestLobby({
             <div
               className={
                 pinned
-                  ? "max-sm:sticky max-sm:bottom-0 max-sm:z-10 max-sm:-mx-4 max-sm:-mt-4 max-sm:bg-gradient-to-t max-sm:from-sol-base03 max-sm:from-60% max-sm:to-transparent max-sm:px-4 max-sm:pb-[max(12px,env(safe-area-inset-bottom))] max-sm:pt-4"
+                  ? "max-sm:sticky max-sm:bottom-0 max-sm:z-10 max-sm:-mx-4 max-sm:-mt-4 max-sm:bg-gradient-to-t max-sm:from-sol-bg max-sm:from-60% max-sm:to-transparent max-sm:px-4 max-sm:pb-[max(12px,env(safe-area-inset-bottom))] max-sm:pt-4"
                   : undefined
               }
             >
@@ -353,7 +353,7 @@ function WaitingCard({
     <div className="flex flex-col gap-4 rounded-2xl bg-white/[0.035] p-5 ring-1 ring-white/[0.07]">
       <div className="flex items-center gap-4">
         {/* No ring while the door is full: nobody inside can see them yet. */}
-        <span className="meet-knock flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sol-base02 font-mono text-[16px] text-sol-text">
+        <span className="meet-knock flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sol-bg-alt font-mono text-[16px] text-sol-text">
           {!doorFull && <span className="meet-knock-ring" aria-hidden />}
           {(name || "?").charAt(0).toUpperCase()}
         </span>
@@ -453,7 +453,7 @@ function PreviewFrame({
               </>
             ) : (
               <>
-                <span className="flex h-20 w-20 items-center justify-center rounded-full bg-sol-base02 font-mono text-[30px] text-sol-text-secondary max-sm:h-14 max-sm:w-14 max-sm:text-[22px]">
+                <span className="flex h-20 w-20 items-center justify-center rounded-full bg-sol-bg-alt font-mono text-[30px] text-sol-text-secondary max-sm:h-14 max-sm:w-14 max-sm:text-[22px]">
                   {initial}
                 </span>
                 <span className="text-[12px] text-sol-text-muted">{noCamera ? DEVICE_META.camera.empty : p.cameraError ? "No camera" : "Your camera is off"}</span>

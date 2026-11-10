@@ -48,7 +48,8 @@ import {
   Terminal,
   X,
 } from "lucide-react";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { PageFrame, PageHeader } from "../../components/ui/page-header";
+import { TriggersLegacyHeader } from "./TriggersLegacyHeader";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
@@ -1031,7 +1032,6 @@ function TriggersContent() {
   // synchronously; the feeder keeps it fresh. `undefined` only while the cache
   // is empty AND the first answer is in flight.
   const { tasks: taskRows, ready: tasksReady } = useTriggers();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const tasks: TaskRow[] | undefined = tasksReady || taskRows.length > 0 ? taskRows : undefined;
   // Deep links, read REACTIVELY (tab-context searchParams): the tab shell
   // keeps this page mounted, so a later click on another trigger changes only
@@ -1129,27 +1129,21 @@ function TriggersContent() {
   const anyShown = active.length + paused.length + history.length > 0;
   const listProps = { now, grouping, form, setForm, deepLinkId, showProject: projects.length > 1 };
 
+  // One way to start a trigger at a time: the empty state offers its own, and
+  // an open form is already the new trigger.
+  const newTrigger = !showForm && hasTasks ? (
+    <Button data-tour="triggers-new" onClick={() => setShowForm(true)} variant="amber" size="sm" className="ml-auto shrink-0">
+      <Plus /> New trigger
+    </Button>
+  ) : null;
   return (
-    <div className="h-full overflow-y-auto bg-sol-bg" data-main-scroll>
-      <div className="mx-auto w-full max-w-3xl px-5 sm:px-6 py-8">
-        <div ref={titlebarRef} className="flex gap-2 items-center mb-5">
-          <Zap className="w-4 h-4 text-sol-amber" />
-          <h1 className="text-lg font-semibold text-sol-text whitespace-nowrap">Triggers</h1>
-          {/* One way to start a trigger at a time: the empty state offers its
-              own, and an open form is already the new trigger. */}
-          {!showForm && hasTasks && (
-            <Button
-              data-tour="triggers-new"
-              onClick={() => setShowForm(true)}
-              variant="amber"
-              size="sm"
-              className="ml-auto shrink-0"
-            >
-              <Plus /> New trigger
-            </Button>
-          )}
-        </div>
-
+    <PageFrame
+      header={<PageHeader legacy={<TriggersLegacyHeader action={newTrigger} />} title="Triggers" icon={Zap} actions={newTrigger} />}
+      legacyScroll="h-full overflow-y-auto bg-sol-bg"
+      legacyScrollProps={{ "data-main-scroll": true }}
+      legacyColumn="mx-auto w-full max-w-3xl px-5 sm:px-6 py-8"
+      column="mx-auto w-full max-w-3xl px-5 sm:px-6 py-6"
+    >
         <FeatureUpsell
           slug="triggers"
           className="mb-5"
@@ -1231,8 +1225,7 @@ function TriggersContent() {
             )}
           </>
         )}
-      </div>
-    </div>
+    </PageFrame>
   );
 }
 

@@ -21,6 +21,8 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import type { CommitCiState, QueueGroup } from "@codecast/shared/contracts/deployTargets";
 import { entityRoute } from "@codecast/shared/entities";
 import { ShareControl } from "../ShareControl";
+import { PageHeader } from "../ui/page-header";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import "./deploys.css";
 
 /** Who sent a deploy codecast did not start, by where it reports from. */
@@ -57,23 +59,30 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy }: { ini
   const want = pickedId ?? (where ? (where.repository ? `${where.repository}#${where.target}` : where.target) : null);
   const picked = ordered.find((t) => t._id === want || t.name === want) ?? ordered[0] ?? null;
   const press = useDeployPress(teamId, deploys);
+  const modern = useIsModernStyle();
   const repos = new Set(allTargets.map((t) => t.repository).filter(Boolean));
 
-  if (!teamId) return <div className="dpp-empty">Deploys belong to a team.</div>;
+  if (!teamId) return modern ? <div className="dpp-frame dpp-frame--headed"><PageHeader legacy={null} title="Deploys" /><div className="min-h-0 flex-1"><div className="dpp-empty">Deploys belong to a team.</div></div></div> : <div className="dpp-empty">Deploys belong to a team.</div>;
   const teamPicker = teams.length > 1 ? (
     <select className="dpp-team" value={teamId} onChange={(e) => { setTeamPick(e.target.value); setPicked(null); }} aria-label="Team" data-deploys-team>
       {teams.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}
     </select>
   ) : null;
   // `dpp-frame` is the page's own width (deploys.css): a narrow pane stacks the targets above the target.
-  if (!ready && allTargets.length === 0) return <div className="dpp-frame"><div className="dpp" aria-busy><nav className="dpp-rail"><div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div></nav><div className="dpp-main dpp-cold" /></div></div>;
-  if (allTargets.length === 0) return <div className="dpp-frame"><div className="dpp" data-deploys-none><nav className="dpp-rail"><div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div></nav><div className="dpp-empty">No deploys yet</div></div></div>;
+  // Classic and Minimal: the page's name at the top of the targets rail.
+  // Modern: the page header over the targets and the target.
+  const header = <PageHeader legacy={null} title="Deploys" count={allTargets.length || null} actions={teamPicker} />;
+  const railTitle = !modern && <div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div>;
+  const frame = modern ? "dpp-frame dpp-frame--headed" : "dpp-frame";
+  if (!ready && allTargets.length === 0) return <div className={frame}>{header}<div className="dpp" aria-busy><nav className="dpp-rail">{railTitle}</nav><div className="dpp-main dpp-cold" /></div></div>;
+  if (allTargets.length === 0) return <div className={frame}>{header}<div className="dpp" data-deploys-none><nav className="dpp-rail">{railTitle}</nav><div className="dpp-empty">No deploys yet</div></div></div>;
 
   return (
-    <div className="dpp-frame">
+    <div className={frame}>
+    {header}
     <div className="dpp" data-deploys-page>
       <nav className="dpp-rail" aria-label="Deploy targets">
-        <div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div>
+        {railTitle}
         <ul>
           {ordered.map((t) => {
             const n = targetNow(t, deploys);

@@ -40,7 +40,8 @@ import { copyText } from "../../lib/copyText";
 import { memberDisplayName } from "../../lib/liveEntities";
 import { isConvexId, useInboxStore } from "../../store/inboxStore";
 import { TooltipProvider } from "../ui/tooltip";
-import { TimelineHeader, type FilterOptions } from "./ChangesHeader";
+import { TimelineHeader, TimelineWorks, type FilterOptions } from "./ChangesHeader";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { commitPath } from "./EvidenceDrawer";
 import { assignAreaColors } from "./areaColor";
 import { nameOfPerson, peopleOf, personFor } from "./editionModel";
@@ -334,6 +335,8 @@ export function ChangesPage() {
   const filterToggleRef = useRef<HTMLButtonElement>(null);
   const [focus] = useState(() => createFocusStore(url.story ?? null));
   const [filterOpen, setFilterOpen] = useState(false);
+  const [worksOpen, setWorksOpen] = useState(false);
+  const modern = useIsModernStyle();
   // A story link opens the story whatever the viewer's filters: the repository, the story, and every branch when it is off main.
   const storyLink = useCallback((story: Pick<Story, "story_key" | "on_default_branch">) =>
     `${location.origin}${changesHref({ ...EMPTY_URL, repo, story: story.story_key, branches: story.on_default_branch ? "main" : "all" })}`, [repo]);
@@ -457,24 +460,25 @@ export function ChangesPage() {
   const cold = !feed.ready && stories.length === 0 && editions.length === 0;
   const filtering = hasFilters(url);
 
-  return (
-    <TooltipProvider delayDuration={300}>
-      <div className="h-full overflow-y-auto" data-main-scroll>
-      <div ref={rootRef} className="chg-root mx-auto w-full max-w-[52rem] px-6 pb-24">
-        <TimelineHeader
-          repos={repos}
-          repo={repo}
-          url={url}
-          setUrl={setUrl}
-          live={live}
-          works={works}
-          filterOpen={filterOpen}
-          onToggleFilter={() => setFilterOpen((o) => !o)}
-          filterRef={filterRef}
-          filterToggleRef={filterToggleRef}
-          options={options}
-          personName={personName}
-        />
+  const header = (
+    <TimelineHeader
+      repos={repos}
+      repo={repo}
+      url={url}
+      setUrl={setUrl}
+      live={live}
+      works={works}
+      filterOpen={filterOpen}
+      onToggleFilter={() => setFilterOpen((o) => !o)}
+      filterRef={filterRef}
+      filterToggleRef={filterToggleRef}
+      options={options}
+      personName={personName}
+      worksOpen={worksOpen}
+      onToggleWorks={() => setWorksOpen((o) => !o)}
+    />
+  );
+  const body = (
         <StoryCtx.Provider value={ctx}>
           {cold ? (
             <Skeleton />
@@ -535,6 +539,32 @@ export function ChangesPage() {
           ))}
           {feed.error && cold && <p className="mt-6 font-mono text-meta text-sol-text-muted">Changes could not load: {feed.error.message}</p>}
         </StoryCtx.Provider>
+  );
+
+  // Classic and Minimal: the masthead at the top of the page's one column.
+  // Modern: the page header pinned above it, the work in progress opening at
+  // the top of the column.
+  if (modern) {
+    return (
+      <TooltipProvider delayDuration={300}>
+        <div className="flex h-full min-h-0 flex-col">
+          {header}
+          <div className="min-h-0 flex-1 overflow-y-auto" data-main-scroll>
+            <div ref={rootRef} className="chg-root mx-auto w-full max-w-[52rem] px-4 pb-24 sm:px-6">
+              {worksOpen && <TimelineWorks works={works} />}
+              {body}
+            </div>
+          </div>
+        </div>
+      </TooltipProvider>
+    );
+  }
+  return (
+    <TooltipProvider delayDuration={300}>
+      <div className="h-full overflow-y-auto" data-main-scroll>
+      <div ref={rootRef} className="chg-root mx-auto w-full max-w-[52rem] px-6 pb-24">
+        {header}
+        {body}
       </div>
       </div>
     </TooltipProvider>

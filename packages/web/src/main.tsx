@@ -1,5 +1,10 @@
 import { bootAfterHandoffGate, isStandaloneSharePath } from "../lib/desktopHandoff";
 import "../app/globals.css";
+// The bundled faces' @font-face rules (Instrument Sans is the Modern style's
+// interface face, globals.css .modern-style --font-ui) in the same head
+// stylesheet, so the boot shell and the first paint have them declared
+// rather than waiting for boot's chunk (components/simple/laneLook).
+import "@platform/design/fonts";
 import { startRouteModule } from "./earlyRoutes";
 
 /**
@@ -15,8 +20,8 @@ import { startRouteModule } from "./earlyRoutes";
  * background tab that will hand off once looked at boots only if the gate
  * decides against the handoff.
  *
- * globals.css stays imported here so the stylesheet remains a plain <link> in
- * the built HTML, fetched in parallel on every load.
+ * globals.css and the bundled faces stay imported here so the stylesheet
+ * remains a plain <link> in the built HTML, fetched in parallel on every load.
  */
 bootAfterHandoffGate(() => {
   // Share pages boot standalone: they hydrate server-rendered markup and never

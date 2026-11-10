@@ -202,7 +202,7 @@ export function ChromeButton({ ways: w }: { ways: SigninWaysState }) {
           className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text hover:border-sol-text-dim"
           data-vault-signin-open
         >
-          Open {w.host} <ExternalLink size={12} className="text-sol-text-dim" />
+          Open <span className="modern:font-mono">{w.host}</span> <ExternalLink size={12} className="text-sol-text-dim" />
         </a>
       )}
       <div className={cn(buttonVariants({ variant: signedOut ? "outline" : "yellow", size: "sm" }), "min-w-0 items-stretch gap-0 overflow-hidden p-0")} data-vault-signin-button={w.state}>
@@ -255,7 +255,7 @@ function Outcome({ ways: w }: { ways: SigninWaysState }) {
     return (
       <div className="flex min-w-0 items-center gap-1.5 text-[12px]" data-vault-signin-state="signed-out">
         <span className="size-1.5 shrink-0 rounded-full bg-sol-red" />
-        <span className="shrink-0 text-sol-red">Not signed in to {w.host}</span>
+        <span className="shrink-0 text-sol-red">Not signed in to <span className="modern:font-mono">{w.host}</span></span>
         <span className="truncate text-sol-text-muted">
           · Chrome{w.checkedProfile ? `, profile ${w.checkedProfile}` : ""}, on {w.device.label}
         </span>

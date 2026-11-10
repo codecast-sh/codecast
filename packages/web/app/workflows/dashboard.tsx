@@ -10,7 +10,10 @@ import { WorkflowRunNodes } from "../../components/WorkflowRunNodes";
 import { wfStatusMeta, wfFmtTokens } from "../../lib/workflowRun";
 import { AppLoader } from "../../components/AppLoader";
 import { ExternalLink, Workflow } from "lucide-react";
+import type { ReactNode } from "react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { PageFrame, PageHeader } from "../../components/ui/page-header";
 
 const api = _api as any;
 
@@ -57,22 +60,31 @@ function RunCard({ run }: { run: any }) {
   );
 }
 
-export function WorkflowsDashboardContent() {
+/** `tabs`: the Workflows page's section switch, when this is one of its tabs. */
+export function WorkflowsDashboardContent({ tabs }: { tabs?: ReactNode }) {
   // Store-fed (hooks/useSyncWorkflows): the dashboard paints from cached
   // runs; the loader shows only for a genuinely cold cache.
   const { runs: runRows, ready } = useDynamicRuns();
   const runs = ready || runRows.length > 0 ? runRows : undefined;
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
-  if (runs === undefined) return <AppLoader className="min-h-[16rem] h-full" />;
+  // Modern keeps its header (and the page's tabs in it) while a cold cache loads.
+  const modern = useIsModernStyle();
+  if (runs === undefined && !modern) return <AppLoader className="min-h-[16rem] h-full" />;
+  const legacy = (
+    <div ref={titlebarRef} className="flex items-baseline gap-2 mb-5">
+      <Workflow className="w-4 h-4 text-sol-cyan self-center" />
+      <h1 className="text-lg font-semibold text-sol-text">Workflows</h1>
+      <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs?.length}</span>
+    </div>
+  );
   return (
-    <div className="h-full overflow-y-auto bg-sol-bg">
-      <div className="max-w-3xl mx-auto px-6 py-6">
-        <div ref={titlebarRef} className="flex items-baseline gap-2 mb-5">
-          <Workflow className="w-4 h-4 text-sol-cyan self-center" />
-          <h1 className="text-lg font-semibold text-sol-text">Workflows</h1>
-          <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs.length}</span>
-        </div>
-        {runs.length === 0 ? (
+    <PageFrame
+      header={<PageHeader legacy={legacy} title="Workflows" icon={Workflow} count={runs?.length} tabs={tabs} />}
+      legacyScroll="h-full overflow-y-auto bg-sol-bg"
+      legacyColumn="max-w-3xl mx-auto px-6 py-6"
+      column="max-w-3xl mx-auto px-4 sm:px-6 py-6"
+    >
+        {runs === undefined ? <AppLoader className="min-h-[16rem]" /> : runs.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 py-24 text-center">
             <Workflow className="w-8 h-8 text-sol-text-dim" />
             <p className="text-sm text-sol-text-muted">No workflow runs yet</p>
@@ -82,8 +94,7 @@ export function WorkflowsDashboardContent() {
             {runs.map((r: any) => <RunCard key={r._id} run={r} />)}
           </div>
         )}
-      </div>
-    </div>
+    </PageFrame>
   );
 }
 

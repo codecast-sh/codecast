@@ -82,7 +82,7 @@ function AreaFiles({ area, paths }: { area: string; paths: readonly FileLines[] 
     <div className="mt-0.5 border-l pl-3 font-mono text-meta leading-relaxed text-sol-text-muted" style={{ borderColor: areaColor(area, colors) }}>
       {(all ? paths : paths.slice(0, MAX_FILES)).map((f) => (
         <div key={f.path} className="flex min-w-0 items-baseline gap-3">
-          <span className="min-w-0 flex-1 truncate" title={f.path}>{f.path}</span>
+          <span className="min-w-0 flex-1 truncate modern:font-mono" title={f.path}>{f.path}</span>
           {f.lines > 0 && <span className="shrink-0 tabular-nums text-sol-text-dim">{f.lines.toLocaleString()}</span>}
         </div>
       ))}

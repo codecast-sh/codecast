@@ -34,6 +34,10 @@ import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { LivePulseDot } from "./SessionActivityLine";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { ModernFleetBody } from "./fleet/ModernFleetBoard";
+import { hostedStopOf } from "../lib/hostedNotice";
+import { isHostedAgentType } from "@codecast/shared/contracts";
 // The fleet board: the inbox home surface when clientState.ui.inbox_home is
 // "board" (the default). Every visible session as a dense two-line tile,
 // grouped into NEEDS YOU / RUNNING / FINISHED bands — supervision by scanning,
@@ -419,6 +423,16 @@ export function FleetBoard() {
     [openTileMenu],
   );
   const { killWithNotice } = useTriggerKillNotice();
+  // Modern bands the rail's own sections in the status vocabulary
+  // (fleet/ModernFleetBoard); Classic and Minimal keep the bands above.
+  const modern = useIsModernStyle();
+  const modernOpts = useMemo(() => ({
+    queued: s.sessionsWithQueuedMessages,
+    pendingSendIds,
+    reviveAt: s.blockedReviveRequestedAt,
+    now: coarseNow,
+    stopped: (row: InboxSession) => (isHostedAgentType(row.agent_type) ? hostedStopOf(row, useInboxStore.getState().messages[row._id]) : null),
+  }), [s.sessionsWithQueuedMessages, pendingSendIds, s.blockedReviveRequestedAt, coarseNow]);
 
   const total = bands.needsYou.length + bands.running.length + bands.finished.length;
 
@@ -432,13 +446,15 @@ export function FleetBoard() {
                 <LivePulseDot still className="h-1.5 w-1.5" />
                 FLEET
               </h2>
-              <span className="truncate text-meta tracking-[0.1em] text-sol-text-dim">
+              {!modern && <span className="truncate text-meta tracking-[0.1em] text-sol-text-dim">
                 {bands.running.length} RUNNING · {bands.needsYou.length} NEED YOU · {bands.finished.length} FINISHED
-              </span>
+              </span>}
             </div>
             <InboxHomeToggle />
           </div>
-          {total === 0 ? (
+          {modern ? (
+            <ModernFleetBody placed={categorized} opts={modernOpts} onOpen={handleOpen} onTileContextMenu={handleTileContextMenu} />
+          ) : total === 0 ? (
             <div className="rounded-lg border border-sol-border/30 px-4 py-10 text-center text-sm text-sol-text-dim">
               No sessions yet — start one from the CLI or the composer.
             </div>

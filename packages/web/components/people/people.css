@@ -772,3 +772,6 @@
   overflow-y: auto;
   padding: 10px 10px 16px;
 }
+
+/* Modern (.modern-style): words in the interface sans. */
+.modern-style :is(.people-face-gesture, .people-legend) { font-family: var(--font-ui); }

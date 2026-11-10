@@ -107,7 +107,7 @@ export function MiddlePath({ text }: { text: string }) {
   const head = cut > 0 ? text.slice(0, cut) : "";
   const tail = cut > 0 ? text.slice(cut) : text;
   return (
-    <span className="rp-h1-path" title={text}>
+    <span className="rp-h1-path modern:font-mono" title={text}>
       {head && <span className="rp-h1-path-head">{head}</span>}
       <span className="rp-h1-path-tail">{tail}</span>
     </span>

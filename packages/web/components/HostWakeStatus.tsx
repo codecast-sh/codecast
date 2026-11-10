@@ -92,7 +92,7 @@ function WakeLine({ w }: { w: HostWake }) {
           <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: color }} />
           Couldn't start
         </span>
-        <span className="whitespace-nowrap text-sol-text-dim">{w.host}</span>
+        <span className="whitespace-nowrap modern:font-mono text-sol-text-dim">{w.host}</span>
         <span className="line-clamp-2 basis-full break-words pl-3 font-mono text-meta text-sol-text-dim" title={w.error}>{w.error}</span>
       </>
     );
@@ -104,7 +104,7 @@ function WakeLine({ w }: { w: HostWake }) {
           <Moon className="h-3 w-3 shrink-0" />
           Can't wake: {w.waker} offline
         </span>
-        <span className="whitespace-nowrap text-sol-text-dim">{w.host}</span>
+        <span className="whitespace-nowrap modern:font-mono text-sol-text-dim">{w.host}</span>
       </>
     );
   }
@@ -112,7 +112,7 @@ function WakeLine({ w }: { w: HostWake }) {
     <>
       <WakeSteps w={w} />
       {isWaking(w) && <span className="font-mono text-meta tabular-nums text-sol-text-dim">{elapsed(w)}</span>}
-      <span className="whitespace-nowrap text-sol-text-dim">{w.host}</span>
+      <span className="whitespace-nowrap modern:font-mono text-sol-text-dim">{w.host}</span>
     </>
   );
 }

@@ -116,7 +116,7 @@ export function DeviceSetupDialog() {
             <ShieldCheck className="h-4 w-4 text-sol-cyan" />
             Set up this {isElectron() ? "Mac" : "browser"}
           </DialogTitle>
-          <DialogDescription className="text-sol-base1">
+          <DialogDescription className="text-sol-text-muted">
             Each one asks the system once. You can change any of them later in Settings.
           </DialogDescription>
           {required.length > 0 && (

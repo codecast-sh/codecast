@@ -27,6 +27,7 @@ import { useForeignItemWorkspace, useTabFit } from "./opsShellHooks";
 import { issueOrigin } from "./issueNav";
 import { WATCH_KINDS_BY_PROVIDER } from "@codecast/shared/contracts/ingest";
 import type { OpsSource } from "./opsTypes";
+import { PageHeader } from "../ui/page-header";
 import "./ops.css";
 import "./opsHome.css";
 import "./opsLayout.css";
@@ -183,14 +184,9 @@ export function OpsShell({ view, children }: { view: OpsView; children: ReactNod
     tabsRef.current?.querySelector<HTMLElement>('[data-active="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [activeTab, view.view]);
 
-  return (
-    <SourceHealthContext.Provider value={health}>
-    <AppHealthFeeders />
-    <div className="ops-area" data-ops-view={view.view}>
-      <header className="ops-head">
-        <div className="ops-title-row">
-          <nav className="ops-crumbs" aria-label="Breadcrumb">
-            <Link href={opsHref.home()} className="ops-crumb ops-crumb-root" data-ops-crumb="home"><Radar className="w-4 h-4" aria-hidden />Ops</Link>
+  // The head's parts, drawn by whichever header is up.
+  const crumbTail = (
+    <>
             {source || sourceFilter ? (
               <>
                 <span className="ops-crumb-sep" aria-hidden>/</span>
@@ -213,20 +209,25 @@ export function OpsShell({ view, children }: { view: OpsView; children: ReactNod
                 {view.view === "issue" && !foreign ? <IssueStepper id={view.id} /> : null}
               </>
             ) : null}
-          </nav>
+    </>
+  );
+  const wsChip = (
           <span className="ops-ws" title={`Ops reads the ${ws.name} workspace; the switcher top left changes it`} data-ops-workspace={ws.name} data-foreign={foreign ? "true" : undefined}>
             {ws.icon || ws.color ? <TeamIcon icon={ws.icon} color={ws.color} className="w-3.5 h-3.5" /> : null}
             <span className="truncate">{ws.name}</span>
           </span>
-          <div className="ops-head-r">
-            <OpsFreshness feeds={feeds} sources={sources} scope={sourceFilter} />
-            {!foreign && <OpsSourceFilter sources={sources} value={sourceFilter} hrefFor={filterHref} />}
-            <Link href={SETUP_HREF} className="ops-btn shrink-0" title="Connect and set up sources">
-              <Settings2 className="w-3.5 h-3.5" />
-              <span className="ops-hide-narrow">Sources</span>
-            </Link>
-          </div>
-        </div>
+  );
+  const headRight = (
+    <>
+          <OpsFreshness feeds={feeds} sources={sources} scope={sourceFilter} />
+          {!foreign && <OpsSourceFilter sources={sources} value={sourceFilter} hrefFor={filterHref} />}
+          <Link href={SETUP_HREF} className="ops-btn shrink-0" title="Connect and set up sources">
+            <Settings2 className="w-3.5 h-3.5" />
+            <span className="ops-hide-narrow">Sources</span>
+          </Link>
+    </>
+  );
+  const tabBar = (
         <nav ref={tabsRef} className="ops-tabs" aria-label="Ops views" data-fit={fitted ? "true" : undefined}>
           {tabs.map((tab) => {
             const c = counts[tab];
@@ -250,7 +251,40 @@ export function OpsShell({ view, children }: { view: OpsView; children: ReactNod
           {/* The number keys switch tabs: one hint at the bar's end, apart from every tab's count. */}
           <span className="ops-tab-keys" aria-hidden title="Switch tabs"><KeyCap size="xs">1</KeyCap>–<KeyCap size="xs">{tabs.length}</KeyCap></span>
         </nav>
-      </header>
+  );
+
+  return (
+    <SourceHealthContext.Provider value={health}>
+    <AppHealthFeeders />
+    <div className="ops-area" data-ops-view={view.view}>
+      {/* Classic and Minimal: the crumbs (Ops / source / tab / item), the
+          workspace and the controls, the tab bar under them. Modern: the
+          page header, Ops its title and the rest of the crumbs after it,
+          the tab bar its second row. */}
+      <PageHeader
+        legacy={
+          <header className="ops-head">
+            <div className="ops-title-row">
+              <nav className="ops-crumbs" aria-label="Breadcrumb">
+                <Link href={opsHref.home()} className="ops-crumb ops-crumb-root" data-ops-crumb="home"><Radar className="w-4 h-4" aria-hidden />Ops</Link>
+                {crumbTail}
+              </nav>
+              {wsChip}
+              <div className="ops-head-r">
+                {headRight}
+              </div>
+            </div>
+            {tabBar}
+          </header>
+        }
+        className="ops-page-head"
+        title="Ops"
+        icon={Radar}
+        tabs={source || sourceFilter || activeTab || item ? <nav className="ops-crumbs" aria-label="Breadcrumb">{crumbTail}</nav> : null}
+        actions={<>{wsChip}{headRight}</>}
+      >
+        {tabBar}
+      </PageHeader>
       <div className="ops-body">
         <OpsFeedsContext.Provider value={feeds}>{children}</OpsFeedsContext.Provider>
       </div>

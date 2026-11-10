@@ -118,7 +118,7 @@ export function SimCatalogView({ catalog, sessions, sweep, onSweep, now = Date.n
                     <td>
                       <div className="evs-scn">
                         <b>{r.name}</b>
-                        <span>{r.scenario ? r.scenario.file : "no longer in the suite"}</span>
+                        <span className={r.scenario ? "modern:font-mono" : undefined}>{r.scenario ? r.scenario.file : "no longer in the suite"}</span>
                       </div>
                     </td>
                     {modes.map((m) => (

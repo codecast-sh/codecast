@@ -41,7 +41,10 @@ const WAIT_H = 18;
 const WAIT_GAP = 4;
 /** The lane a column gains when any of its tasks has waits: the wait nodes and their connector. */
 const WAIT_LANE = WAIT_W + 28;
-/** JetBrains Mono's advance, in em: what a label of n characters spans. */
+/** JetBrains Mono's advance, in em: what a label of n characters spans. The id
+ *  is drawn in mono, so its share is exact; a title is in the interface face,
+ *  which in Minimal and Modern is a narrower sans, so there this is an upper
+ *  bound and a long title wraps or clips a little early, never overruns. */
 const CHAR_EM = 0.6;
 const TITLE_SIZE = 11;
 const WAIT_SIZE = 10;
@@ -301,7 +304,7 @@ export function PlanGraphView({ tasks }: { tasks: Task[] }) {
               />
               {/* The id and the title share a line; a long title goes on below. */}
               <text x={p.x + 8} y={p.y + (line2 ? 18 : 26)} style={{ fill: text }} fontSize={TITLE_SIZE}>
-                <tspan opacity={0.6}>{task.short_id}</tspan>
+                <tspan opacity={0.6} className="modern:font-mono">{task.short_id}</tspan>
                 <tspan dx={TITLE_SIZE * CHAR_EM} fontWeight={500}>{line1}</tspan>
               </text>
               {line2 && (

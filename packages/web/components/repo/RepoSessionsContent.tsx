@@ -101,7 +101,7 @@ function SessionRow({ row, repository, family, now, index }: { row: RepoSession;
                 title={path}
               >
                 <FileCode2 className="w-2.5 h-2.5 shrink-0 opacity-70" />
-                <span className="truncate">
+                <span className="truncate modern:font-mono">
                   {path.includes("/") && <span className="text-sol-text-dim">{path.slice(0, path.length - entryName(path).length)}</span>}
                   {entryName(path)}
                 </span>

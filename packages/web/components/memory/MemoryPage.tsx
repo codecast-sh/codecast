@@ -12,6 +12,8 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { PageHeader } from "../ui/page-header";
 import { useDerivedSize } from "../../hooks/useDerivedSize";
 import { useMemoryStore } from "../../store/memoryStore";
 import { LocalDaemonUnreachable } from "../LocalDaemonUnreachable";
@@ -82,6 +84,7 @@ function MemoryBody({ fit }: { fit: Fit }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
+  const modern = useIsModernStyle();
   const isTabActive = useTabActive();
 
   const connection = useMemoryStore((s) => s.connection);
@@ -173,14 +176,21 @@ function MemoryBody({ fit }: { fit: Fit }) {
     close();
   });
 
+  // Modern: every state keeps the page header; the states before a project only have no tabs or actions yet.
+  const bare = (body: ReactNode) => !modern ? body : (
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader legacy={null} title="Memory" icon={Brain} />
+      <div className="min-h-0 flex-1">{body}</div>
+    </div>
+  );
   if (connection === "no-daemon") {
-    return <LocalDaemonUnreachable what="Memories" reason={unreachableReason} detail={unreachableDetail} onRetry={() => void connect(convex, { force: true })} />;
+    return bare(<LocalDaemonUnreachable what="Memories" reason={unreachableReason} detail={unreachableDetail} onRetry={() => void connect(convex, { force: true })} />);
   }
   if (connection !== "connected") {
-    return <div className="h-full flex items-center justify-center text-sm text-sol-text-dim">Connecting to this machine&apos;s memories…</div>;
+    return bare(<div className="h-full flex items-center justify-center text-sm text-sol-text-dim">Connecting to this machine&apos;s memories…</div>);
   }
   if (projects.length === 0) {
-    return (
+    return bare(
       <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-8">
         <Brain className="w-10 h-10 text-sol-text-dim opacity-40" />
         <div className="text-sol-text font-medium">No memories on this machine yet</div>
@@ -195,41 +205,8 @@ function MemoryBody({ fit }: { fit: Fit }) {
   const shown = atlas ? (visible ? atlas.notes.filter((n) => visible.has(n.file)) : atlas.notes) : [];
   const unreached = health?.unreached.length ?? 0;
 
-  return (
-    <div className="relative h-full min-h-0 flex">
-      {fit !== "narrow" && <ProjectRail projects={projects} activeId={activeId} onSelect={pickProject} />}
-
-      <div className="flex-1 min-w-0 flex flex-col">
-        <div ref={titlebarRef} className="flex items-end gap-6 px-5 pt-4 pb-3">
-          <div className="flex-1 min-w-0">
-            {fit === "narrow" ? (
-              <select
-                value={activeId ?? ""}
-                onChange={(e) => pickProject(e.target.value)}
-                className="max-w-full bg-transparent text-lg font-semibold text-sol-text outline-none cursor-pointer"
-              >
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {projectName(p)} ({p.count})
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <h1 className="text-xl font-semibold text-sol-text truncate">{summary ? projectName(summary) : "Memory"}</h1>
-            )}
-            <div className="font-mono text-meta text-sol-text-dim truncate">{project?.dir.replace(/^\/Users\/[^/]+/, "~")}</div>
-          </div>
-          {atlas && (
-            <>
-              {fit === "wide" && <Stat value={atlas.notes.length} label="memories" />}
-              {fit === "wide" && <Stat value={atlas.edges.length} label="links" />}
-              <Stat value={unreached} label="never reached" alarm={unreached > 0} onClick={() => go({ view: "health" })} />
-              <BudgetMeter budget={atlas.index.budget} className={`${fit === "narrow" ? "w-44" : "w-52"} shrink-0`} />
-            </>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 pb-2.5 border-b border-sol-border/40">
+  // The page's controls, drawn by whichever header is up (Classic's two rows, or Modern's bar).
+  const views = (
           <div className="flex rounded-md border border-sol-border/60 overflow-hidden text-xs">
             {MEMORY_VIEWS.map((v) => (
               <button
@@ -245,6 +222,8 @@ function MemoryBody({ fit }: { fit: Fit }) {
               </button>
             ))}
           </div>
+  );
+  const types = (
           <div className={`flex flex-wrap gap-1.5 ${fit === "narrow" ? "order-last basis-full" : ""}`}>
             {[...typeCounts.entries()].map(([t, count]) => {
               const off = hiddenTypes.has(t);
@@ -269,6 +248,8 @@ function MemoryBody({ fit }: { fit: Fit }) {
               );
             })}
           </div>
+  );
+  const search = (
           <label className={`ml-auto relative ${fit === "narrow" ? "flex-1 min-w-[8rem]" : "w-64"}`}>
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-sol-text-dim" />
             <input
@@ -280,12 +261,30 @@ function MemoryBody({ fit }: { fit: Fit }) {
               className="w-full bg-sol-bg border border-sol-border/60 rounded-md pl-8 pr-2 py-1 text-[13px] text-sol-text placeholder:text-sol-text-dim outline-none focus:border-sol-cyan transition-colors"
             />
           </label>
-          <Button type="button" variant="secondary" size="xs" onClick={() => open(NEW_MEMORY)}>
+  );
+  const newMemory = (size: "xs" | "sm") => (
+          <Button type="button" variant="secondary" size={size} onClick={() => open(NEW_MEMORY)}>
             <Plus />
             {fit === "narrow" ? "New" : "New memory"}
           </Button>
-        </div>
-
+  );
+  const projectPicker = (className: string, label?: string) => (
+              <select
+                value={activeId ?? ""}
+                onChange={(e) => pickProject(e.target.value)}
+                aria-label={label}
+                className={className}
+              >
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {projectName(p)} ({p.count})
+                  </option>
+                ))}
+              </select>
+  );
+  const budget = atlas && <BudgetMeter budget={atlas.index.budget} className={`${fit === "narrow" ? "w-44" : "w-52"} shrink-0`} />;
+  const rail = fit !== "narrow" && <ProjectRail projects={projects} activeId={activeId} onSelect={pickProject} />;
+  const main = (
         <div className="flex-1 min-h-0 relative">
           {!atlas || loadingProject ? (
             <div className="h-full flex items-center justify-center text-sm text-sol-text-dim">Reading memories…</div>
@@ -301,13 +300,79 @@ function MemoryBody({ fit }: { fit: Fit }) {
             <MemoryHealthView atlas={atlas} onOpen={open} onJumpToLine={jumpToLine} />
           )}
         </div>
-      </div>
-
-      {atlas && openFile && (openFile === NEW_MEMORY || openFile === MEMORY_INDEX_FILE || atlas.byFile.has(openFile)) && (
+  );
+  const editor = atlas && openFile && (openFile === NEW_MEMORY || openFile === MEMORY_INDEX_FILE || atlas.byFile.has(openFile)) && (
         <EditorSlot fit={fit}>
           <MemoryEditor key={`${activeId}/${openFile}`} atlas={atlas} file={openFile} onOpen={open} onClose={close} onJumpToLine={jumpToLine} leaveGuard={leaveGuard} />
         </EditorSlot>
-      )}
+  );
+
+  // Modern: one header over the rail and the views; the project is the rail's
+  // lit row (a picker in the second row when narrow).
+  if (modern) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <PageHeader
+          legacy={null}
+          title="Memory"
+          icon={Brain}
+          count={atlas?.notes.length}
+          tabs={views}
+          actions={<>
+            {atlas && fit === "wide" && <InlineStat value={atlas.edges.length} label="links" />}
+            {atlas && <InlineStat value={unreached} label="never reached" alarm={unreached > 0} onClick={() => go({ view: "health" })} />}
+            {newMemory("sm")}
+          </>}
+        >
+          {fit === "narrow" && projectPicker("basis-full min-w-0 bg-transparent text-ui font-medium text-sol-text outline-none cursor-pointer", "Project")}
+          {types}
+          {search}
+          {budget}
+        </PageHeader>
+        <div className="relative flex min-h-0 flex-1">
+          {rail}
+          <div className="flex-1 min-w-0 flex flex-col">{main}</div>
+          {editor}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative h-full min-h-0 flex">
+      {rail}
+
+      <div className="flex-1 min-w-0 flex flex-col">
+        <div ref={titlebarRef} className="flex items-end gap-6 px-5 pt-4 pb-3">
+          <div className="flex-1 min-w-0">
+            {fit === "narrow" ? (
+              projectPicker("max-w-full bg-transparent text-lg font-semibold text-sol-text outline-none cursor-pointer")
+            ) : (
+              <h1 className="text-xl font-semibold text-sol-text truncate">{summary ? projectName(summary) : "Memory"}</h1>
+            )}
+            <div className="font-mono text-meta text-sol-text-dim truncate">{project?.dir.replace(/^\/Users\/[^/]+/, "~")}</div>
+          </div>
+          {atlas && (
+            <>
+              {fit === "wide" && <Stat value={atlas.notes.length} label="memories" />}
+              {fit === "wide" && <Stat value={atlas.edges.length} label="links" />}
+              <Stat value={unreached} label="never reached" alarm={unreached > 0} onClick={() => go({ view: "health" })} />
+              {budget}
+            </>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 pb-2.5 border-b border-sol-border/40">
+          {views}
+          {types}
+          {search}
+          {newMemory("xs")}
+        </div>
+
+        {main}
+      </div>
+
+      {editor}
     </div>
   );
 }
@@ -325,6 +390,24 @@ function Stat({ value, label, alarm, onClick }: { value: number; label: string; 
     </button>
   ) : (
     <div className="text-right">{body}</div>
+  );
+}
+
+/** Modern: a number and its noun, on one line beside the header's actions. */
+function InlineStat({ value, label, alarm, onClick }: { value: number; label: string; alarm?: boolean; onClick?: () => void }) {
+  const body = (
+    <>
+      <span className={`text-ui font-semibold tabular-nums ${alarm ? "text-sol-red" : "text-sol-text"}`}>{value}</span>
+      {label}
+    </>
+  );
+  const cls = "inline-flex items-baseline gap-1 whitespace-nowrap px-1 text-meta text-sol-text-dim";
+  return onClick ? (
+    <button type="button" onClick={onClick} className={`${cls} hover:opacity-80 transition-opacity`}>
+      {body}
+    </button>
+  ) : (
+    <span className={cls}>{body}</span>
   );
 }
 

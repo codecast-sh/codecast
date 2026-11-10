@@ -270,7 +270,7 @@ function LegacyCallPanel({ roomKey, params }: { roomKey: string | null; params: 
 
   if (!roomKey) {
     return (
-      <div className="dark flex h-screen items-center justify-center bg-sol-base03 px-8 text-center text-[13px] text-sol-text-muted">
+      <div className="dark flex h-screen items-center justify-center bg-sol-bg px-8 text-center text-[13px] text-sol-text-muted">
         This window opens onto a call, and none was named.
       </div>
     );

@@ -114,7 +114,7 @@ function SampleReplay({ sample }: { sample: OpsSample }) {
   return (
     <div className="px-3 pb-3 flex flex-col gap-2">
       <Link className="text-sol-link hover:underline text-[12px] inline-flex items-center gap-1" href={opsHref.replay(id, t)}>
-        {replay?.short_id ?? "Replay"}{t !== null ? ` at ${formatReplayTime(t)}` : ""} <ChevronRight className="w-3 h-3" />
+        {replay?.short_id ? <span className="modern:font-mono">{replay.short_id}</span> : "Replay"}{t !== null ? ` at ${formatReplayTime(t)}` : ""} <ChevronRight className="w-3 h-3" />
       </Link>
       {replay && replay.short_id && <ReplayMomentEmbed rawId={replayRefId(replay.short_id, t)} entity={replay} served href={opsHref.replay(id, t)} />}
     </div>

@@ -51,6 +51,8 @@ import { SidebarDrillStack } from "./sidebar/SidebarDrill";
 import { useSidebarDrill } from "../hooks/useSidebarDrill";
 import { FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView, orgRowsActive } from "./sidebar/SidebarNav";
 import { usePoppedOut } from "../hooks/usePoppedOut";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { ModernSidebar } from "./sidebar/ModernSidebar";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 
 const LiveNowRail = lazy(() =>
@@ -336,6 +338,7 @@ const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ??
 export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope, peek = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
+  const modern = useIsModernStyle();
   const isSessions = pathname?.startsWith("/sessions");
   const orgRows = orgRowsActive(pathname);
   // A solo account's rail opens on its sessions and work (lib/railFocus.ts).
@@ -649,6 +652,141 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
     />
   );
 
+  // Rows shared with the Modern rail (sidebar/ModernSidebar), which heads them its own way.
+  const bookmarkRows = (
+    <div className="space-y-1">
+      {(showAllBookmarks ? bookmarks : bookmarks.slice(0, 8)).map((bm: any, i: number, arr: any[]) => {
+        const isOpen = bm.conversation_id === openConversationId;
+        // Adjacent bookmarks from the same conversation drop the repeated
+        // conversation line — the row above already named it.
+        const sameConvAsPrev = i > 0 && arr[i - 1].conversation_id === bm.conversation_id;
+        const named = !!bm.name;
+        const primary = bm.name || bm.message_preview || "";
+        const convTitle = cleanTitle(bm.conversation_title || "New Session");
+        const isUser = bm.message_role === "user";
+        // Each workspace gets a stable hashed color so the eye can sort by project.
+        const proj = bm.project_path ? getShortPath(bm.project_path) : "";
+        const projColor = proj ? getLabelColor(proj) : null;
+        return (
+          <div key={bm._id} className="group relative px-1.5" onMouseEnter={() => prefetchBookmark(bm)} onFocus={() => prefetchBookmark(bm)}>
+            <button
+              onClick={() => {
+                const store = useInboxStore.getState();
+                // Pair navigation + scroll target atomically so the inbox's
+                // pendingNavigateId watcher resolves them together (separate sets
+                // raced the cache-hit watcher, pinning scroll to the previous conv).
+                store.requestNavigate(bm.conversation_id, { scrollToMessageId: bm.message_id, scrollToMessageTimestamp: bm.message_timestamp });
+                const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
+                if (activeTab) store.updateTab(activeTab.id, { path: "/inbox" });
+                if (!store.tabs.length) router.push("/inbox");
+                onMobileClose?.();
+              }}
+              title={primary || convTitle}
+              aria-label={`Open bookmark ${named ? `"${bm.name}"` : "message"} in ${convTitle}`}
+              className={`flex items-stretch gap-2.5 w-full pl-2 pr-2.5 py-1.5 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-sol-cyan/60 ${
+                isOpen ? "bg-sol-cyan/10" : "hover:bg-sol-bg-highlight/50"
+              }`}
+            >
+              {/* A saved excerpt, so a quote-bar spine: role-colored, cyan while its conversation is open.
+                  Held at a visible base opacity so it anchors each row, not just on hover. */}
+              <span
+                aria-hidden
+                className={`flex-shrink-0 w-[3px] self-stretch rounded-full transition-colors ${
+                  isOpen ? "bg-sol-cyan/80" : isUser ? "bg-sol-blue/45 group-hover:bg-sol-blue/80" : "bg-sol-violet/45 group-hover:bg-sol-violet/80"
+                }`}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline gap-2">
+                  {/* Headline: full-contrast and weighted up for deliberately-named bookmarks so
+                      curated entries out-rank auto-captured previews at a glance. */}
+                  <span className={`min-w-0 flex-1 truncate text-[13px] leading-snug text-sol-text-muted group-hover:text-sol-text-secondary transition-colors ${named ? "font-semibold" : "font-normal"}`}>
+                    {named && (
+                      <svg aria-hidden viewBox="0 0 24 24" className="inline-block w-2.5 h-2.5 mr-1 -mt-px align-middle text-sol-yellow/90" fill="currentColor">
+                        <path d="M6 3a2 2 0 0 0-2 2v15.5a.5.5 0 0 0 .79.407L12 16l7.21 4.907A.5.5 0 0 0 20 20.5V5a2 2 0 0 0-2-2H6z" />
+                      </svg>
+                    )}
+                    {primary || <span className="italic font-normal text-sol-text-dim/60">No preview</span>}
+                  </span>
+                  <span
+                    className="flex-shrink-0 text-meta tabular-nums text-sol-text-dim"
+                    title={new Date(bm.created_at).toLocaleString()}
+                  >
+                    {visitTimeAgo(bm.created_at)}
+                  </span>
+                </span>
+                {!sameConvAsPrev && (
+                  // Source line: deliberately recessed (dimmest text) so it reads as context, not a
+                  // second headline; the project dot carries the only color so the eye groups by project.
+                  <span className="flex items-center gap-1.5 mt-[3px] min-w-0">
+                    {projColor && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-75 ${projColor.dot}`} title={proj} />}
+                    <span className="min-w-0 truncate text-meta text-sol-text-dim leading-tight">
+                      {convTitle}
+                    </span>
+                  </span>
+                )}
+              </span>
+            </button>
+            {/* Remove floats over the timestamp on hover so the row never reflows. */}
+            <button
+              onClick={(e) => { e.stopPropagation(); toggleBookmark(bm.conversation_id, bm.message_id); }}
+              className="absolute right-3 top-1.5 p-0.5 rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100 bg-sol-bg-highlight text-sol-text-dim hover:text-sol-red transition-opacity"
+              title="Remove bookmark"
+              aria-label="Remove bookmark"
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        );
+      })}
+      {bookmarks.length > 8 && (
+        <button
+          onClick={() => setShowAllBookmarks(v => !v)}
+          className="w-full mt-1 px-4 py-1 flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors"
+        >
+          <svg className={`w-2.5 h-2.5 transition-transform ${showAllBookmarks ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+          {showAllBookmarks ? "Show fewer" : `${bookmarks.length - 8} more`}
+        </button>
+      )}
+    </div>
+  );
+  const folderRows = (
+    <div className="space-y-0.5">
+      {computedDirectories.slice(0, 8).map((dir) => (
+        <button
+          key={dir}
+          onClick={() => handleDirectoryClick(dir)}
+          className={`w-full flex items-center gap-2 px-4 py-1.5 transition-colors motion-reduce:transition-none text-left text-sm ${
+            directoryFilter === dir
+              ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+              : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+          }`}
+          title={dir}
+        >
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+          <span className="truncate modern:font-mono">{getShortPath(dir)}</span>
+        </button>
+      ))}
+    </div>
+  );
+  const appFooter = offerNativeApp && nativeApp && !isNarrow && (
+    <a
+      href={NATIVE_APP_LINKS[nativeApp]}
+      target={nativeApp === "ios" ? "_blank" : undefined}
+      rel={nativeApp === "ios" ? "noopener noreferrer" : undefined}
+      onClick={() => trackNativeAppClick(nativeApp, "sidebar")}
+      className="flex items-center gap-2 px-3 py-2 mt-2 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors border-t border-sol-border/30 pt-3"
+    >
+      {nativeApp === "mac" ? <Monitor className="w-4 h-4 flex-shrink-0" /> : <Smartphone className="w-4 h-4 flex-shrink-0" />}
+      <span>{NATIVE_APP_COPY[nativeApp].cta}</span>
+    </a>
+  );
+
   const sidebarContent = (
     <>
       <div className="flex-1 flex flex-col min-h-0">
@@ -743,104 +881,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
               isNarrow={false}
               action={<span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-sol-bg-highlight/70 text-mark tabular-nums text-sol-text-dim normal-case font-normal">{bookmarks.length}</span>}
             />
-            <div className="space-y-1">
-              {(showAllBookmarks ? bookmarks : bookmarks.slice(0, 8)).map((bm: any, i: number, arr: any[]) => {
-                const isOpen = bm.conversation_id === openConversationId;
-                // Adjacent bookmarks from the same conversation drop the repeated
-                // conversation line — the row above already named it.
-                const sameConvAsPrev = i > 0 && arr[i - 1].conversation_id === bm.conversation_id;
-                const named = !!bm.name;
-                const primary = bm.name || bm.message_preview || "";
-                const convTitle = cleanTitle(bm.conversation_title || "New Session");
-                const isUser = bm.message_role === "user";
-                // Each workspace gets a stable hashed color so the eye can sort by project.
-                const proj = bm.project_path ? getShortPath(bm.project_path) : "";
-                const projColor = proj ? getLabelColor(proj) : null;
-                return (
-                  <div key={bm._id} className="group relative px-1.5" onMouseEnter={() => prefetchBookmark(bm)} onFocus={() => prefetchBookmark(bm)}>
-                    <button
-                      onClick={() => {
-                        const store = useInboxStore.getState();
-                        // Pair navigation + scroll target atomically so the inbox's
-                        // pendingNavigateId watcher resolves them together (separate sets
-                        // raced the cache-hit watcher, pinning scroll to the previous conv).
-                        store.requestNavigate(bm.conversation_id, { scrollToMessageId: bm.message_id, scrollToMessageTimestamp: bm.message_timestamp });
-                        const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
-                        if (activeTab) store.updateTab(activeTab.id, { path: "/inbox" });
-                        if (!store.tabs.length) router.push("/inbox");
-                        onMobileClose?.();
-                      }}
-                      title={primary || convTitle}
-                      aria-label={`Open bookmark ${named ? `"${bm.name}"` : "message"} in ${convTitle}`}
-                      className={`flex items-stretch gap-2.5 w-full pl-2 pr-2.5 py-1.5 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-sol-cyan/60 ${
-                        isOpen ? "bg-sol-cyan/10" : "hover:bg-sol-bg-highlight/50"
-                      }`}
-                    >
-                      {/* A saved excerpt, so a quote-bar spine: role-colored, cyan while its conversation is open.
-                          Held at a visible base opacity so it anchors each row, not just on hover. */}
-                      <span
-                        aria-hidden
-                        className={`flex-shrink-0 w-[3px] self-stretch rounded-full transition-colors ${
-                          isOpen ? "bg-sol-cyan/80" : isUser ? "bg-sol-blue/45 group-hover:bg-sol-blue/80" : "bg-sol-violet/45 group-hover:bg-sol-violet/80"
-                        }`}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-baseline gap-2">
-                          {/* Headline: full-contrast and weighted up for deliberately-named bookmarks so
-                              curated entries out-rank auto-captured previews at a glance. */}
-                          <span className={`min-w-0 flex-1 truncate text-[13px] leading-snug text-sol-text-muted group-hover:text-sol-text-secondary transition-colors ${named ? "font-semibold" : "font-normal"}`}>
-                            {named && (
-                              <svg aria-hidden viewBox="0 0 24 24" className="inline-block w-2.5 h-2.5 mr-1 -mt-px align-middle text-sol-yellow/90" fill="currentColor">
-                                <path d="M6 3a2 2 0 0 0-2 2v15.5a.5.5 0 0 0 .79.407L12 16l7.21 4.907A.5.5 0 0 0 20 20.5V5a2 2 0 0 0-2-2H6z" />
-                              </svg>
-                            )}
-                            {primary || <span className="italic font-normal text-sol-text-dim/60">No preview</span>}
-                          </span>
-                          <span
-                            className="flex-shrink-0 text-meta tabular-nums text-sol-text-dim"
-                            title={new Date(bm.created_at).toLocaleString()}
-                          >
-                            {visitTimeAgo(bm.created_at)}
-                          </span>
-                        </span>
-                        {!sameConvAsPrev && (
-                          // Source line: deliberately recessed (dimmest text) so it reads as context, not a
-                          // second headline; the project dot carries the only color so the eye groups by project.
-                          <span className="flex items-center gap-1.5 mt-[3px] min-w-0">
-                            {projColor && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-75 ${projColor.dot}`} title={proj} />}
-                            <span className="min-w-0 truncate text-meta text-sol-text-dim leading-tight">
-                              {convTitle}
-                            </span>
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                    {/* Remove floats over the timestamp on hover so the row never reflows. */}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); toggleBookmark(bm.conversation_id, bm.message_id); }}
-                      className="absolute right-3 top-1.5 p-0.5 rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100 bg-sol-bg-highlight text-sol-text-dim hover:text-sol-red transition-opacity"
-                      title="Remove bookmark"
-                      aria-label="Remove bookmark"
-                    >
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                );
-              })}
-              {bookmarks.length > 8 && (
-                <button
-                  onClick={() => setShowAllBookmarks(v => !v)}
-                  className="w-full mt-1 px-4 py-1 flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors"
-                >
-                  <svg className={`w-2.5 h-2.5 transition-transform ${showAllBookmarks ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                  </svg>
-                  {showAllBookmarks ? "Show fewer" : `${bookmarks.length - 8} more`}
-                </button>
-              )}
-            </div>
+            {bookmarkRows}
           </div>
         )}
 
@@ -865,25 +906,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
                 </svg>
               </button>}
             />
-            <div className="space-y-0.5">
-              {computedDirectories.slice(0, 8).map((dir) => (
-                <button
-                  key={dir}
-                  onClick={() => handleDirectoryClick(dir)}
-                  className={`w-full flex items-center gap-2 px-4 py-1.5 transition-colors motion-reduce:transition-none text-left text-sm ${
-                    directoryFilter === dir
-                      ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                      : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-                  }`}
-                  title={dir}
-                >
-                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                  </svg>
-                  <span className="truncate">{getShortPath(dir)}</span>
-                </button>
-              ))}
-            </div>
+            {folderRows}
           </div>
         )}
 
@@ -892,6 +915,8 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
     </>
   );
 
+  // The Modern style draws its own rail (lib/navRegistry) from the same data.
+  if (modern) return <ModernSidebar {...{ isMobileOpen, onMobileClose, isNarrow, scope, peek, pathname, titlebarStripRef, pinnedRail, taskViewItems, docViewItems, decisionViewItems, viewSectionOverride, setViewSectionOverride, bookmarkRows, folderRows, appFooter, openCompose }} counts={{ bookmarks: bookmarks?.length ?? 0, folders: computedDirectories.length }} hasTeam={!!activeTeam} hasTeams={!!teams?.length} focus={{ offered: railMoreOffered, focused: railIsFocused }} />;
   return (
     <nav
       data-sv-nav
@@ -918,18 +943,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
       >
         {sidebarContent}
       </SidebarDrillStack>
-      {offerNativeApp && nativeApp && !isNarrow && (
-        <a
-          href={NATIVE_APP_LINKS[nativeApp]}
-          target={nativeApp === "ios" ? "_blank" : undefined}
-          rel={nativeApp === "ios" ? "noopener noreferrer" : undefined}
-          onClick={() => trackNativeAppClick(nativeApp, "sidebar")}
-          className="flex items-center gap-2 px-3 py-2 mt-2 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors border-t border-sol-border/30 pt-3"
-        >
-          {nativeApp === "mac" ? <Monitor className="w-4 h-4 flex-shrink-0" /> : <Smartphone className="w-4 h-4 flex-shrink-0" />}
-          <span>{NATIVE_APP_COPY[nativeApp].cta}</span>
-        </a>
-      )}
+      {appFooter}
     </nav>
   );
 });

@@ -685,3 +685,6 @@
 .walkie-strip-end {
   gap: 7px;
 }
+
+/* Modern (.modern-style): the stage line is words, in the interface sans. */
+.modern-style .walkie-stage { font-family: var(--font-ui); }

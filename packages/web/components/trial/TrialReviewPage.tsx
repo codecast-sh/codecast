@@ -19,6 +19,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatCountdown, USAGE_WARN_PERCENT } from "@codecast/shared/contracts";
 import Link from "next/link";
 import { ArrowLeft, ExternalLink, RotateCcw } from "lucide-react";
+import { PageHeader } from "../ui/page-header";
 import { SupersededNote } from "../SupersededNote";
 import { useSyncTrial, useSyncTrialSpend, useTrialCards, useTrialProjects, useTrialRuns, useTrialSpend, type TrialCardRow, type TrialProjectRow, type TrialRunRow, type TrialSpendRow } from "../../hooks/useSyncTrial";
 import { useInboxStore } from "../../store/inboxStore";
@@ -233,13 +234,9 @@ function TrialReview({ askedProject, from, spaces, scope, onPick, onNoTrial }: {
   const selectedLeft = !!selected && !shown.some((c) => c._id === selected._id);
   const selectedRun = RUN_FILTERS.has(filter) ? runList.find((r) => r._id === selectedId) ?? runList[0] ?? null : null;
 
-  return (
-    <div className="flex h-full min-h-0 flex-col" data-trial-page>
-      <header className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-sol-border/40 px-5 py-3">
-        <div className="flex items-baseline gap-2">
-          {/* Opened from /line, the way back to the item it was opened on. */}
-          {from && <Link href={from} className="mr-1 inline-flex items-center gap-1 self-center text-[12px] text-sol-text-muted hover:text-sol-text" data-trial-back><ArrowLeft className="h-3.5 w-3.5" />{lineFromName(from)}</Link>}
-          <h1 className="text-[15px] font-semibold text-sol-text">Trial</h1>
+  // The header's parts, drawn by whichever header is up.
+  const pickers = (
+    <>
           {/* The line's workspaces: the trial read is one of them, and any other is a pick away. */}
           {spaces.length > 1 ? (
             <select value={scope ?? ""} onChange={(e) => onPick(e.target.value)} className="rounded border border-sol-border/50 bg-transparent px-1.5 py-0.5 text-[12px] text-sol-text" aria-label="Workspace" data-trial-space>
@@ -254,11 +251,35 @@ function TrialReview({ askedProject, from, spaces, scope, onPick, onNoTrial }: {
           ) : project ? <span className="text-[12px] text-sol-text-muted" data-trial-project>{project.title}</span> : null}
           {/* A trial read outside the app's workspace names whose it is. */}
           {elsewhere && spaces.length < 2 && <span className="text-[12px] text-sol-text-dim" data-trial-workspace>{elsewhere}</span>}
-        </div>
-        {owed && <span className="rounded border border-sol-yellow/40 px-1.5 py-0.5 text-meta text-sol-yellow" title="The trial never runs a change's evals: they write to the database they point at. A card that owes them says so beside its answer." data-trial-evals>Evals not run in the trial</span>}
-        {/* Whether the dispatcher is held and by which limit, the act that lifts it, and the spend against its cap. */}
-        <TrialLimitsBar spend={spend} project={project} held={dispatchHeld} heldHref={project ? `/flows?view=problems&status=notstarted&project=${encodeURIComponent(lineFilterParam(project, projects))}` : null} />
-      </header>
+    </>
+  );
+  const trialState = (
+    <>
+          {owed && <span className="rounded border border-sol-yellow/40 px-1.5 py-0.5 text-meta text-sol-yellow" title="The trial never runs a change's evals: they write to the database they point at. A card that owes them says so beside its answer." data-trial-evals>Evals not run in the trial</span>}
+          {/* Whether the dispatcher is held and by which limit, the act that lifts it, and the spend against its cap. */}
+          <TrialLimitsBar spend={spend} project={project} held={dispatchHeld} heldHref={project ? `/flows?view=problems&status=notstarted&project=${encodeURIComponent(lineFilterParam(project, projects))}` : null} />
+    </>
+  );
+  return (
+    <div className="flex h-full min-h-0 flex-col" data-trial-page>
+      <PageHeader
+        legacy={
+          <header className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-sol-border/40 px-5 py-3">
+            <div className="flex items-baseline gap-2">
+              {/* Opened from /line, the way back to the item it was opened on. */}
+              {from && <Link href={from} className="mr-1 inline-flex items-center gap-1 self-center text-[12px] text-sol-text-muted hover:text-sol-text" data-trial-back><ArrowLeft className="h-3.5 w-3.5" />{lineFromName(from)}</Link>}
+              <h1 className="text-[15px] font-semibold text-sol-text">Trial</h1>
+              {pickers}
+            </div>
+            {trialState}
+          </header>
+        }
+        title="Trial"
+        // Opened from /line, the way back to the item it was opened on.
+        crumbs={from ? <Link href={from} className="hover:text-sol-text" data-trial-back>{lineFromName(from)}</Link> : undefined}
+        tabs={pickers}
+        actions={trialState}
+      />
 
       <div className="flex min-h-0 flex-1">
         {/* A share of the page, not a fixed 20rem: opened in a split pane beside a conversation, the card keeps most of it. */}
@@ -767,7 +788,7 @@ function LeftBanner({ card: c, left, now }: { card: TrialCardRow; left: LeftLane
       <span className="text-sol-text">{what}</span>
       {left.next && (
         <button type="button" onClick={() => left.onOpen(left.next!)} className="ml-auto text-sol-blue hover:underline" data-trial-left-next={left.next.short_id}>
-          Asked again as {left.next.short_id}
+          Asked again as <span className="modern:font-mono">{left.next.short_id}</span>
         </button>
       )}
     </div>

@@ -3,6 +3,8 @@
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { localDay } from "./changesDay";
 import type { ShortcutAction } from "../shortcuts/registry";
+import type { NavIconName } from "./navRegistry";
+import { buildModernNavPages } from "./navPagesModern";
 
 // Ranked by expected use. `secondary` pages are reachable only by typing:
 // they'd otherwise pad the empty-palette view that lives or dies by scan speed.
@@ -21,6 +23,8 @@ export const NAV_PAGES: ReadonlyArray<{
   /** The shortcut that opens the page, shown on its row so the palette
    *  teaches the fast way. */
   action?: ShortcutAction;
+  /** Modern's rows (lib/navPagesModern): the page's icon as the rail draws it. */
+  navIcon?: NavIconName;
 }> = [
   // "Feed", as the rail names it; the old palette name still finds it.
   { label: "Feed", path: "/team/activity", icon: "grid", aliases: ["Dashboard"], keywords: "home sessions main activity feed team" },
@@ -94,18 +98,26 @@ export const NAV_PAGES: ReadonlyArray<{
 
 export type NavPage = (typeof NAV_PAGES)[number];
 
+let modernPages: ReadonlyArray<NavPage> | null = null;
+/** Modern's rows (lib/navPagesModern), built once from these. */
+function modernNavPages(): ReadonlyArray<NavPage> {
+  return (modernPages ??= buildModernNavPages(NAV_PAGES));
+}
+
 /** A page's address: a dated address is still its page (/changes?d=... is /changes). */
 export function pagePath(page: NavPage): string {
   return typeof page.path === "string" ? page.path : page.path();
 }
 
 /** The Pages rows to list. Secondary pages show only while searching; a
- *  page whose team feature is off never shows. */
+ *  page whose team feature is off never shows. The Modern style lists the
+ *  registry's pages under the Modern rail's names (lib/navPagesModern). */
 export function palettePages(
   featureOn: (feature: TeamFeatureKey | undefined) => boolean | undefined,
   searching: boolean,
+  modern = false,
 ): Array<{ page: NavPage; label: string }> {
-  return NAV_PAGES
+  return (modern ? modernNavPages() : NAV_PAGES)
     .filter((p) => (searching || !p.secondary) && featureOn(p.feature))
     .map((page) => ({ page, label: page.label }));
 }

@@ -22,6 +22,10 @@ const H_DEVICE = 20;
 const H_LANE = 26;
 const GROUP_GAP = 8;
 const MIN_COL = 9;
+/** A step label's average advance at 12px (.evs-band-label/-verb, in the
+ *  interface face): about mono's, and an upper bound for the sans of Minimal
+ *  and Modern, so a label there is cut a little early, never runs into its
+ *  neighbour. */
 const CHAR_W = 7;
 /** Baselines of the two step label rows above the lanes. */
 const LABEL_Y = [16, 30] as const;

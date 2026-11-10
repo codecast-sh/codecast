@@ -21,9 +21,11 @@ export function MarketingLayout() {
     scrollRef.current?.scrollTo(0, 0);
   }, [pathname]);
 
+  // The public site keeps the type it was drawn in when the visitor has the
+  // Modern style on: mono, its font-sans and prose too (--font-ui).
   return (
     <>
-      <div ref={scrollRef} className="light min-h-screen w-full fixed inset-0 overflow-auto" style={{ backgroundColor: '#fdf6e3' }}>
+      <div ref={scrollRef} className="light modern:font-mono modern:[--font-ui:var(--font-mono)] min-h-screen w-full fixed inset-0 overflow-auto" style={{ backgroundColor: '#fdf6e3' }}>
         <ErrorBoundary name="MarketingPage">
           <Outlet />
         </ErrorBoundary>

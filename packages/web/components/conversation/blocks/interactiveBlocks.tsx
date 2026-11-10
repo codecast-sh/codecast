@@ -21,6 +21,8 @@ import { formatFullTimestamp, formatRelativeTime } from "../../../lib/conversati
 import { renderAssistantBody } from "../../../lib/renderAssistantBody";
 import type { ImageData, ToolCall, ToolResult } from "../types";
 import { useImageSrc } from "../../../hooks/useImageSrc";
+import { useIsModernStyle } from "../../../hooks/useVisualStyle";
+import { ModernImage } from "./ModernImage";
 
 // Live status badge + latest event for a Monitor or background-Bash block,
 // derived from the conversation's message window (monitorRowsFor — one
@@ -608,6 +610,7 @@ export function ImageBlock({ image }: { image: ImageData }) {
   const { src, href, storageResolved, storageMissing } = useImageSrc(image);
   const gallery = useImageGallery();
   const messageId = useGalleryMessageId();
+  const modern = useIsModernStyle();
 
   // Seed "loaded" from the module cache so an already-decoded image skips the
   // overlay on remount instead of flashing it while the HTTP-cached bytes decode.
@@ -640,6 +643,9 @@ export function ImageBlock({ image }: { image: ImageData }) {
       </div>
     );
   }
+
+  // Modern shows the whole picture at its aspect ratio (ModernImage, CONV-18).
+  if (modern) return <ModernImage image={image} src={src} loaded={loaded} onLoad={() => { markSrcDecoded(src); setLoaded(true); }} onError={() => setErrored(true)} onOpen={() => { if (src) gallery?.open(src); }} />;
 
   if (!src) {
     return (

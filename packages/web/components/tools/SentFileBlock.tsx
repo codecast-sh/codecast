@@ -160,7 +160,7 @@ const FileCard = memo(function FileCard({ file, soloFile }: { file: SentFileData
         )}
 
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-sol-text truncate" title={file.name}>{file.name}</div>
+          <div className="text-sm modern:font-mono font-medium text-sol-text truncate" title={file.name}>{file.name}</div>
           <div className="text-meta text-sol-text-dim tabular-nums">
             {undelivered ? `${meta} — ${ERROR_TEXT[file.error ?? ""] ?? "not attached"}` : meta}
           </div>

@@ -13,6 +13,7 @@ import { useExpectationsOverview, useSyncExpectationsOverview, type Expectations
 import { shortDay } from "../../lib/line/runReport";
 import { cn } from "../../lib/utils";
 import { EXPECTATIONS_ABOUT, expectationsHref, sortOverview } from "../../lib/expectations/view";
+import { PageFrame, PageHeader } from "../ui/page-header";
 
 const ref = (r: ExpectationsOverviewRow) => r.project.short_id || r.project.id;
 
@@ -23,20 +24,49 @@ export function ExpectationsOverview() {
   const { documents, without } = useMemo(() => sortOverview(rows), [rows]);
   const totals = useMemo(() => documents.reduce((t, r) => ({ lines: t.lines + r.active, waiting: t.waiting + r.open_proposals, breaks7: t.breaks7 + r.breaks7 }), { lines: 0, waiting: 0, breaks7: 0 }), [documents]);
 
-  return (
-    <div className="h-full overflow-y-auto" data-expectations-overview>
-      <div className="mx-auto max-w-[72rem] px-4 py-8 sm:px-6 space-y-8">
+  // What waits and what broke, said by whichever header is up.
+  const pressure = (
+    <>
+              {totals.waiting > 0 && <span className="text-sol-yellow">, {totals.waiting} proposed {totals.waiting === 1 ? "change waits" : "changes wait"}</span>}
+              {totals.breaks7 > 0 && <span className="text-sol-red">, {totals.breaks7} {totals.breaks7 === 1 ? "break" : "breaks"} this week</span>}
+    </>
+  );
+  const legacy = (
         <header>
           <h1 className="text-[18px] font-semibold text-sol-text">Expectations</h1>
           <p className="mt-1 max-w-[48rem] text-[13px] leading-relaxed text-sol-text-muted">{EXPECTATIONS_ABOUT} Each project keeps its own document; a proposal changes it, and every version is kept.</p>
           {documents.length > 0 && (
             <p className="mt-3 text-[12px] text-sol-text-dim tabular-nums" data-expectations-overview-totals>
               {documents.length} {documents.length === 1 ? "document" : "documents"}, {totals.lines} lines
-              {totals.waiting > 0 && <span className="text-sol-yellow">, {totals.waiting} proposed {totals.waiting === 1 ? "change waits" : "changes wait"}</span>}
-              {totals.breaks7 > 0 && <span className="text-sol-red">, {totals.breaks7} {totals.breaks7 === 1 ? "break" : "breaks"} this week</span>}
+              {pressure}
             </p>
           )}
         </header>
+  );
+  // Modern: the about sentence goes (a screen is not a document); the counts stay.
+  const header = (
+    <PageHeader
+      legacy={legacy}
+      title="Expectations"
+      count={documents.length > 0 ? `${documents.length} ${documents.length === 1 ? "document" : "documents"}` : null}
+      actions={documents.length > 0 ? (
+        <span className="text-meta text-sol-text-dim tabular-nums" data-expectations-overview-totals>
+          {totals.lines} lines
+          {pressure}
+        </span>
+      ) : null}
+    />
+  );
+
+  return (
+    <PageFrame
+      header={header}
+      legacyScroll="h-full overflow-y-auto"
+      legacyScrollProps={{ "data-expectations-overview": true }}
+      legacyColumn="mx-auto max-w-[72rem] px-4 py-8 sm:px-6 space-y-8"
+      column="mx-auto max-w-[72rem] px-4 py-6 sm:px-6 space-y-8"
+      rootProps={{ "data-expectations-overview": true }}
+    >
 
         {!ready && rows.length === 0 ? (
           <p className="text-[12.5px] text-sol-text-dim">Reading every project's expectations…</p>
@@ -76,8 +106,7 @@ export function ExpectationsOverview() {
             )}
           </>
         )}
-      </div>
-    </div>
+    </PageFrame>
   );
 }
 

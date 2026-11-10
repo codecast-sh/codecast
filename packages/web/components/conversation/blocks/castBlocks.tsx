@@ -33,6 +33,7 @@ import { chatHref } from "../../../lib/chatHref";
 import { BrowserWatchButton } from "./toolBlocks";
 import { decideOutputId, parseCastCommand } from "../classify";
 import { renderAnsi } from "../../../lib/conversationFormat";
+import { failureLine } from "../../../lib/modernRow";
 import { pressable } from "../../ops/parts";
 import { MessageMarkdown, ReactMarkdown } from "../markdown";
 import type { ImageData, ToolCall, ToolResult } from "../types";
@@ -200,27 +201,27 @@ function CastSessionRefBlock({ cat, target, args, rawCmd, output, isError }: {
   if (cat === "send") {
     const { body, kind } = extractSendBody(args);
     return (
-      <div className="my-2 mx-1 rounded border-l-2 border-sol-blue/60 bg-sol-blue/5">
-        <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-          <CornerUpRight className="w-3.5 h-3.5 text-sol-blue/70 shrink-0" />
-          <span className="text-mark font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">Message to</span>
+      <div className="my-2 mx-1 rounded border-l-2 border-sol-blue/60 bg-sol-blue/5" data-cc-row="message" data-cc-row-tone={isError ? "error" : undefined}>
+        <div className="flex items-center gap-2 px-3 pt-2 pb-1" data-cc-row-head>
+          <CornerUpRight data-cc-row-icon className="w-3.5 h-3.5 text-sol-blue/70 shrink-0" />
+          <span data-cc-row-verb className="text-mark font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">Message to</span>
           <EntityIdPill shortId={target} />
           {isError ? (
-            <span className="text-sol-red/80 text-meta ml-auto shrink-0">failed</span>
+            <span data-cc-row-meta className="text-sol-red/80 text-meta ml-auto shrink-0">failed</span>
           ) : (
-            <span className="text-sol-green/70 text-meta ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
+            <span data-cc-row-meta className="text-sol-green/70 text-meta ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
           )}
         </div>
         {kind === "dynamic" ? (
           // The shell computed the real payload ($(…), $VAR, or stdin) before cast
           // ran — the transcript only holds the recipe. Don't dress it up as the
           // delivered message; that misled a sender into resending a 16KB briefing.
-          <div className="px-3 pb-2">
+          <div className="px-3 pb-2" data-cc-row-sub>
             <code className="text-xs font-mono text-sol-text-secondary break-all">{body}</code>
             <div className="text-meta text-sol-text-dim mt-1">shown as typed — the shell filled in the actual message; open the target session to read what arrived</div>
           </div>
         ) : (
-          <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+          <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none" data-cc-row-sub>
             <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
               components={MESSAGE_MD_COMPONENTS}
             >{body}</ReactMarkdown>
@@ -233,22 +234,22 @@ function CastSessionRefBlock({ cat, target, args, rawCmd, output, isError }: {
   // cast read <id> <range>
   const range = args.trim();
   return (
-    <div className="my-0.5">
+    <div className="my-0.5" data-cc-row="cast" data-cc-row-tone={isError ? "error" : undefined}>
       <div
         className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap"
         {...pressable(() => setExpanded(!expanded))}
-        aria-expanded={expanded}
+        aria-expanded={expanded} data-cc-row-head
       >
-        <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-violet/80">
+        <span data-cc-row-lead className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-violet/80">
           <BookOpen className="w-3 h-3" />
-          <span className="group-hover:underline">read</span>
+          <span data-cc-row-verb className="group-hover:underline">read</span>
         </span>
         <EntityIdPill shortId={target} />
-        {range && <span className="text-sol-text-dim font-mono">{range}</span>}
-        {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
+        {range && <span data-cc-row-object className="text-sol-text-dim font-mono">{range}</span>}
+        {isError && <span data-cc-row-meta className="text-sol-red/80 text-meta">(error)</span>}
       </div>
       {expanded && (
-        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
+        <div data-cc-row-detail className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
             <pre className="text-meta sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
               $ {rawCmd}
@@ -284,7 +285,7 @@ function clipBody(text: string): string {
 
 function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: string }) {
   return (
-    <div className={`mt-1 ml-1 border-l-2 pl-2.5 space-y-1.5 ${accent}`}>
+    <div data-cc-row-sub className={`mt-1 ml-1 border-l-2 pl-2.5 space-y-1.5 ${accent}`}>
       {parts.map((part, i) => (
         <div key={i}>
           {part.label && (
@@ -326,28 +327,28 @@ function CastStateBlock({ subcommand, args, rawCmd, output, isError }: { subcomm
   })();
 
   return (
-    <div className="my-0.5">
+    <div className="my-0.5" data-cc-row="cast" data-cc-row-tone={isError ? "error" : undefined}>
       <div
         className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap"
         {...pressable(() => setExpanded(!expanded))}
-        aria-expanded={expanded}
+        aria-expanded={expanded} data-cc-row-head
       >
-        <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-cyan/80">
+        <span data-cc-row-lead className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-cyan/80">
           <Pin className="w-3 h-3" strokeWidth={2.2} />
-          <span className="group-hover:underline">state{verb ? ` ${verb}` : ""}</span>
+          <span data-cc-row-verb className="group-hover:underline">state{verb ? ` ${verb}` : ""}</span>
         </span>
         {statusMeta && (
-          <span className={`self-center shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-mark font-semibold uppercase tracking-wide ${statusMeta.chip}`}>
+          <span data-cc-row-tag className={`self-center shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-mark font-semibold uppercase tracking-wide ${statusMeta.chip}`}>
             <span className="w-1.5 h-1.5 rounded-full bg-current" />
             {statusMeta.label}
           </span>
         )}
-        {headline && <span className="text-sol-text-muted truncate min-w-0">{headline}</span>}
-        {verb === "show" && args && <span className="text-sol-text-dim font-mono">{args.split(/\s+/)[0]}</span>}
-        {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
+        {headline && <span data-cc-row-text className="text-sol-text-muted truncate min-w-0">{headline}</span>}
+        {verb === "show" && args && <span data-cc-row-object className="text-sol-text-dim font-mono">{args.split(/\s+/)[0]}</span>}
+        {isError && <span data-cc-row-meta className="text-sol-red/80 text-meta">(error)</span>}
       </div>
       {expanded && (
-        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
+        <div data-cc-row-detail className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
             <pre className="text-meta sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
               $ {rawCmd}
@@ -406,22 +407,22 @@ function CastDecideRefBlock({ decide, rawCmd, output, isError }: { decide: Decid
   const options = (stored ?? fetched)?.options;
   const chosen = decide.verb === "show" ? null : choiceLabel(decide.choice, options);
   return (
-    <div data-cc-decide className="my-0.5">
-      <div className="flex items-center gap-1.5 text-xs cursor-pointer group flex-wrap" {...pressable(() => setExpanded(!expanded))} aria-expanded={expanded}>
-        <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-yellow/80">
+    <div data-cc-decide className="my-0.5" data-cc-row="decision" data-cc-row-tone={isError ? "error" : undefined}>
+      <div className="flex items-center gap-1.5 text-xs cursor-pointer group flex-wrap" {...pressable(() => setExpanded(!expanded))} aria-expanded={expanded} data-cc-row-head>
+        <span data-cc-row-lead className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-yellow/80">
           <Split className="w-3 h-3" strokeWidth={2.2} />
-          <span className="group-hover:underline">{DECIDE_REF_VERB[decide.verb]}</span>
+          <span data-cc-row-verb className="group-hover:underline">{DECIDE_REF_VERB[decide.verb]}</span>
         </span>
         <span onClick={(e) => e.stopPropagation()} className="min-w-0"><EntityIdPill shortId={ref} type="decision" /></span>
         {chosen && !isError && (
-          <span className="inline-flex items-center gap-1 text-sol-green min-w-0 truncate">
+          <span data-cc-row-text className="inline-flex items-center gap-1 text-sol-green min-w-0 truncate">
             <CornerUpRight className="w-3 h-3 shrink-0" />{chosen}
           </span>
         )}
-        {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
+        {isError && <span data-cc-row-meta className="text-sol-red/80 text-meta">(error)</span>}
       </div>
       {expanded && (
-        <pre className="mt-1 ml-1 border-l-2 border-sol-border pl-2.5 text-meta text-sol-text-dim whitespace-pre-wrap break-words max-h-80 overflow-auto">
+        <pre data-cc-row-detail className="mt-1 ml-1 border-l-2 border-sol-border pl-2.5 text-meta text-sol-text-dim whitespace-pre-wrap break-words max-h-80 overflow-auto">
           $ {rawCmd}
           {output && <>{"\n\n"}{renderAnsi(output)}</>}
         </pre>
@@ -495,31 +496,31 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
   const answerable = !isEdit && !withdrawnHere && row?.status === "pending";
 
   return (
-    <div data-cc-decide className="my-1">
+    <div data-cc-decide className="my-1" data-cc-row="decision" data-cc-row-tone={isError ? "error" : undefined}>
       <div
         className="flex items-center gap-1.5 text-xs cursor-pointer group flex-wrap"
         {...pressable(() => setExpanded(!expanded))}
-        aria-expanded={expanded}
+        aria-expanded={expanded} data-cc-row-head
       >
-        <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-yellow/80">
+        <span data-cc-row-lead className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-yellow/80">
           <Split className="w-3 h-3" strokeWidth={2.2} />
-          <span className="group-hover:underline">{verbLabel}</span>
+          <span data-cc-row-verb className="group-hover:underline">{verbLabel}</span>
         </span>
-        {isEdit && <span className="text-sol-text-dim">{editChanges || "no readable change"}</span>}
+        {isEdit && <span data-cc-row-text className="text-sol-text-dim">{editChanges || "no readable change"}</span>}
         {!isError && row && !answerable && (
-          <span className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-mark font-semibold uppercase tracking-wide ${meta.chip}`}>
+          <span data-cc-row-meta className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-mark font-semibold uppercase tracking-wide ${meta.chip}`}>
             {statusKey === "waiting" && <span className="w-1.5 h-1.5 rounded-full bg-current" />}
             {meta.label}
           </span>
         )}
-        {!isEdit && answerLabel && <span className="text-sol-green truncate min-w-0">{answerLabel}</span>}
-        {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
+        {!isEdit && answerLabel && <span data-cc-row-text className="text-sol-green truncate min-w-0">{answerLabel}</span>}
+        {isError && <span data-cc-row-meta className="text-sol-red/80 text-meta">(error)</span>}
       </div>
 
-      {answerable && row && <div className="mt-1.5"><DecisionCompactCard decision={row} askedOf={askedOf} /></div>}
+      {answerable && row && <div data-cc-row-card className="mt-1.5"><DecisionCompactCard decision={row} askedOf={askedOf} /></div>}
 
       {!isError && !answerable && (question || context || options.length > 0 || reportSlug || decide.report) && (
-        <div className={`mt-1 ml-1 border-l-2 pl-2.5 space-y-1.5 ${meta.accent} ${muted ? "opacity-60" : ""}`}>
+        <div data-cc-row-sub className={`mt-1 ml-1 border-l-2 pl-2.5 space-y-1.5 ${meta.accent} ${muted ? "opacity-60" : ""}`}>
           {question && (
             <div className={`text-[13px] text-sol-text leading-snug ${withdrawnHere || statusKey === "withdrawn" ? "line-through" : ""}`}>
               {question}
@@ -575,7 +576,7 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
       )}
 
       {expanded && (
-        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
+        <div data-cc-row-detail className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
             <pre className="text-meta sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
               $ {rawCmd}
@@ -768,9 +769,9 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
     if (vault && (vault.hidesOutput || subcommand === "run")) {
       return (
         <>
-          {vault.names.map((n) => <span key={n} className="text-sol-text-muted font-mono">{n}</span>)}
-          {vault.command && <span className="text-sol-text-dim font-mono truncate">-- {truncateStr(vault.command, 80)}</span>}
-          {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
+          {vault.names.map((n) => <span key={n} data-cc-row-object className="text-sol-text-muted font-mono">{n}</span>)}
+          {vault.command && <span data-cc-row-object className="text-sol-text-dim font-mono truncate">-- {truncateStr(vault.command, 80)}</span>}
+          {isError && <span data-cc-row-meta className="text-sol-red/80 text-meta">(error)</span>}
         </>
       );
     }
@@ -781,7 +782,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
       return (
         <>
           <DocTitleLink convexId={docConvexId} />
-          {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
+          {isError && <span data-cc-row-meta className="text-sol-red/80 text-meta">(error)</span>}
         </>
       );
     }
@@ -789,7 +790,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
     return (
       <>
         {scheduleCadence && (
-          <span className="px-1 py-0.5 rounded text-meta font-mono bg-sol-orange/15 text-sol-orange/90 flex-shrink-0">
+          <span data-cc-row-tag className="px-1 py-0.5 rounded text-meta font-mono bg-sol-orange/15 text-sol-orange/90 flex-shrink-0">
             {scheduleCadence}
           </span>
         )}
@@ -803,41 +804,41 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
         )}
 
         {isCreate && !entityIds.length && firstArg && (
-          <span className="text-sol-text-muted truncate">{truncateStr(firstArg, 50)}</span>
+          <span data-cc-row-text className="text-sol-text-muted truncate">{truncateStr(firstArg, 50)}</span>
         )}
 
         {(isShow || isGet) && !entityIds.length && firstArg && (
-          <span className="text-sol-text-dim font-mono min-w-0 break-all">{firstArg}</span>
+          <span data-cc-row-object className="text-sol-text-dim font-mono min-w-0 break-all">{firstArg}</span>
         )}
 
         {isIdCommand && !isShow && !isGet && !isStatusChange && !entityIds.length && firstArg && (
-          <span className="text-sol-text-dim font-mono min-w-0 break-all">{firstArg}</span>
+          <span data-cc-row-object className="text-sol-text-dim font-mono min-w-0 break-all">{firstArg}</span>
         )}
 
         {isStatusChange && !isDoneLike && (
-          <span className={`px-1 py-0.5 rounded text-meta font-mono ${statusColors[subcommand] || "bg-gray-500/15 text-gray-400"}`}>
+          <span data-cc-row-tag className={`px-1 py-0.5 rounded text-meta font-mono ${statusColors[subcommand] || "bg-gray-500/15 text-gray-400"}`}>
             {subcommand}
           </span>
         )}
 
         {isList && output && (
-          <span className="text-sol-text-dim font-mono">({outputLines} items)</span>
+          <span data-cc-row-meta className="text-sol-text-dim font-mono"><span className="modern:hidden">(</span>{outputLines} items<span className="modern:hidden">)</span></span>
         )}
 
         {isSearch && firstArg && (
-          <span className="text-sol-text-muted italic truncate">"{truncateStr(firstArg, 40)}"</span>
+          <span data-cc-row-text className="text-sol-text-muted italic truncate">"{truncateStr(firstArg, 40)}"</span>
         )}
 
         {doSteps.length > 0 && (
-          <span className="text-sol-text-muted font-mono truncate">
+          <span data-cc-row-object className="text-sol-text-muted font-mono truncate">
             {truncateStr(`${doSteps.length} steps · ${doSteps.map(st => `${st.verb}${st.args ? ` ${st.args}` : ""}`).join(" · ")}`, 100)}
           </span>
         )}
 
-        {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
+        {isError && <span data-cc-row-meta className="text-sol-red/80 text-meta"><span className="modern:hidden">(error)</span><span className="hidden modern:inline">{failureLine(output) || "failed"}</span></span>}
 
         {!isList && !isError && !isEntityCommand && !doSteps.length && output && outputLines > 1 && (
-          <span className="text-sol-text-dim font-mono">({outputLines} lines)</span>
+          <span data-cc-row-meta className="text-sol-text-dim font-mono"><span className="modern:hidden">(</span>{outputLines} lines<span className="modern:hidden">)</span></span>
         )}
       </>
     );
@@ -882,15 +883,15 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
   }
 
   return (
-    <div className="my-0.5">
+    <div className="my-0.5" data-cc-row="cast" data-cc-row-tone={isError ? "error" : undefined}>
       <div
         className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap"
         {...pressable(() => setExpanded(!expanded))}
-        aria-expanded={expanded}
+        aria-expanded={expanded} data-cc-row-head
       >
-        <span className={`flex items-center gap-1 font-mono flex-shrink-0 ${config.color}`}>
+        <span data-cc-row-lead className={`flex items-center gap-1 font-mono flex-shrink-0 ${config.color}`}>
           {config.icon}
-          <span className="group-hover:underline">{cat}{subLabel ? ` ${subLabel}` : ""}</span>
+          <span data-cc-row-verb className="group-hover:underline">{cat}{subLabel ? ` ${subLabel}` : ""}</span>
         </span>
         {renderSummary()}
         {browserTab && <BrowserTabPill tab={browserTab} />}
@@ -935,7 +936,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
       )}
 
       {expanded && (
-        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
+        <div data-cc-row-detail className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
             <pre className="text-meta sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
               $ {cast.raw}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, type ReactNode } from "react";
 import { ShortId } from "../../components/ShortId";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -14,6 +14,10 @@ import { ContextChatInput } from "../../components/ContextChatInput";
 import { WorkflowGraphView, type WFNode, type WFEdge } from "../../components/WorkflowGraphView";
 import { GitBranch, Clock, ChevronRight, X, Terminal, Bot, User, Zap, GitFork, Merge, Play, Pause, CheckCircle, XCircle, Loader2, ExternalLink, Square, Timer, AlertCircle, CheckSquare, ListChecks, MessageCircleQuestionMark, Workflow } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { PageFrame, PageHeader } from "../../components/ui/page-header";
+import { SegmentedToggle } from "../../components/SegmentedToggle";
+import { RoutinesLegacyNav } from "./RoutinesLegacyNav";
 import { useSyncRuns, useWorkspaceRuns, type LineRun } from "../../hooks/useSyncRuns";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -23,7 +27,6 @@ import { RunGate } from "../../components/WorkflowContextPanel";
 import { WorkflowRunNodes } from "../../components/WorkflowRunNodes";
 import { runNodeCounts, runNodeRows } from "../../lib/workflowRun";
 import { compactAge } from "../../lib/threadState";
-import { cn } from "../../lib/utils";
 import { WorkflowsDashboardContent } from "./dashboard";
 import { useLineForks, type LineForkProject } from "../../hooks/useLineForks";
 import { lineRunKind } from "../../lib/line/lineStations";
@@ -443,13 +446,14 @@ function RunsPanel({ workflowId, activeRunId, onSelectRun }: {
   );
 }
 
-function WorkflowsContent() {
+function WorkflowsContent({ tabs }: { tabs?: ReactNode }) {
   // Store-fed (hooks/useSyncWorkflows): paints from the cache synchronously;
   // `undefined` only while the cache is empty AND the first answer is in flight.
   const { workflows: workflowRows, ready: workflowsReady } = useWorkflows();
-  
+
   const mainTitlebarRef = useTitlebarHead<HTMLDivElement>();
   const railTitlebarRef = useTitlebarHead<HTMLDivElement>();
+  const modern = useIsModernStyle();
   const workflows = (workflowsReady || workflowRows.length > 0 ? workflowRows : undefined) as Workflow[] | undefined;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<WFNode | null>(null);
@@ -477,12 +481,19 @@ function WorkflowsContent() {
 
   const currentNodeId = activeRun?.current_node_id;
 
+  // Modern: the page header over the section; Classic: the section alone, under the section bar.
+  const framed = (body: ReactNode) => !modern ? body : (
+    <div className="flex h-full min-h-0 flex-col bg-sol-bg">
+      <PageHeader legacy={null} title="Workflows" icon={Workflow} count={workflows?.length} tabs={tabs} />
+      <div className="min-h-0 flex-1">{body}</div>
+    </div>
+  );
   if (workflows === undefined) {
-    return <AppLoader className="min-h-[16rem] h-full" />;
+    return framed(<AppLoader className="min-h-[16rem] h-full" />);
   }
 
   if (workflows.length === 0) {
-    return (
+    return framed(
       <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
         <GitBranch className="w-8 h-8 text-sol-text-dim" />
         <div>
@@ -494,7 +505,7 @@ function WorkflowsContent() {
       </div>
     );
   }
-  return (
+  return framed(
     <div className="flex h-full bg-sol-bg">
       {sidebarOpen && (
         <div className="w-52 flex-shrink-0 border-r border-sol-border/20 flex flex-col bg-sol-bg-alt">
@@ -674,23 +685,31 @@ function RunRow({ run, now, onOpen, forks }: { run: LineRun; now: number; onOpen
   );
 }
 
-export function RunsTab() {
+export function RunsTab({ tabs }: { tabs?: ReactNode }) {
   const router = useRouter();
   const now = useCoarseNow(30_000);
   const { ready } = useSyncRuns(useMemo(() => ({ limit: 100 }), []));
   const runs = useWorkspaceRuns();
   const forks = useLineForks();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
-  if (!ready && runs.length === 0) return <AppLoader className="min-h-[16rem] h-full" />;
+  const modern = useIsModernStyle();
+  const cold = !ready && runs.length === 0;
+  if (cold && !modern) return <AppLoader className="min-h-[16rem] h-full" />;
+  const legacy = (
+    <div ref={titlebarRef} className="flex items-baseline gap-2 mb-3">
+      <Workflow className="w-4 h-4 text-sol-cyan self-center" />
+      <h1 className="text-lg font-semibold text-sol-text">Runs</h1>
+      <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs.length}</span>
+    </div>
+  );
   return (
-    <div className="h-full overflow-y-auto bg-sol-bg">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-5">
-        <div ref={titlebarRef} className="flex items-baseline gap-2 mb-3">
-          <Workflow className="w-4 h-4 text-sol-cyan self-center" />
-          <h1 className="text-lg font-semibold text-sol-text">Runs</h1>
-          <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs.length}</span>
-        </div>
-        {runs.length === 0 ? (
+    <PageFrame
+      header={<PageHeader legacy={legacy} title="Workflows" icon={Workflow} count={cold ? null : runs.length} tabs={tabs} />}
+      legacyScroll="h-full overflow-y-auto bg-sol-bg"
+      legacyColumn="max-w-3xl mx-auto px-4 sm:px-6 py-5"
+      column="max-w-3xl mx-auto px-4 sm:px-6 py-5"
+    >
+        {cold ? <AppLoader className="min-h-[16rem]" /> : runs.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 py-24 text-center">
             <Workflow className="w-8 h-8 text-sol-text-dim" />
             <p className="text-sm text-sol-text-muted">No runs yet</p>
@@ -700,8 +719,7 @@ export function RunsTab() {
             {runs.map((r) => <RunRow key={r._id} run={r} now={now} forks={forks} onOpen={() => router.push(`/workflows/runs/${r._id}`)} />)}
           </ul>
         )}
-      </div>
-    </div>
+    </PageFrame>
   );
 }
 
@@ -718,34 +736,22 @@ function RoutinesContent() {
   const searchParams = useSearchParams();
   const initial = searchParams?.get("tab") as RoutinesTab | null;
   const [tab, setTab] = useState<RoutinesTab>(initial && ROUTINES_TABS.some((t) => t.key === initial) ? initial : "routines");
+  // Modern: each section draws the page header itself, with its own count,
+  // and this switch in its tabs slot. Classic: the section bar above them.
+  const modern = useIsModernStyle();
+  const tabs = modern ? <SegmentedToggle value={tab} onChange={(key) => setTab(key as RoutinesTab)} items={ROUTINES_TABS} collapse /> : undefined;
+  const sections = (
+    <>
+      {tab === "routines" && <WorkflowsContent tabs={tabs} />}
+      {tab === "runs" && <RunsTab tabs={tabs} />}
+      {tab === "dynamic" && <WorkflowsDashboardContent tabs={tabs} />}
+    </>
+  );
+  if (modern) return <div className="h-full bg-sol-bg">{sections}</div>;
   return (
     <div className="h-full flex flex-col bg-sol-bg">
-      <nav className="shrink-0 flex items-center gap-1 px-3 border-b border-sol-border/20 overflow-x-auto cq-no-scrollbar" aria-label="Workflow sections">
-        {ROUTINES_TABS.map((t) => {
-          const Icon = t.icon;
-          const active = tab === t.key;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              data-routines-tab={t.key}
-              onClick={() => setTab(t.key)}
-              className={cn("relative shrink-0 inline-flex items-center gap-1.5 h-9 px-2.5 text-[12.5px] transition-colors", active ? "font-semibold" : "hover:bg-sol-bg-highlight/60")}
-              style={{ color: active ? "var(--sol-text)" : "var(--sol-text-muted)" }}
-              aria-current={active ? "page" : undefined}
-            >
-              <Icon className="w-3.5 h-3.5" style={{ color: active ? "var(--sol-cyan)" : undefined }} />
-              {t.label}
-              {active && <span className="absolute left-2 right-2 -bottom-px h-[2px] rounded-full" style={{ background: "var(--sol-cyan)" }} />}
-            </button>
-          );
-        })}
-      </nav>
-      <div className="flex-1 min-h-0">
-        {tab === "routines" && <WorkflowsContent />}
-        {tab === "runs" && <RunsTab />}
-        {tab === "dynamic" && <WorkflowsDashboardContent />}
-      </div>
+      <RoutinesLegacyNav tabs={ROUTINES_TABS} tab={tab} onTab={setTab} />
+      <div className="flex-1 min-h-0">{sections}</div>
     </div>
   );
 }

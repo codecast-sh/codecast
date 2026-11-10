@@ -4070,3 +4070,6 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 }
 .ch-community-cta:hover { opacity: 0.9; }
 @media (max-width: 640px) { .ch-community-links { display: none; } }
+
+/* Modern (.modern-style): words in the interface sans. */
+.modern-style :is(.ch-listen-handle, .ch-community-bar) { font-family: var(--font-ui, system-ui, sans-serif); }

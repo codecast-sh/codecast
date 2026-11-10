@@ -44,7 +44,7 @@ function StandaloneRepoShell({ repository, children }: { repository: string; chi
           <span className="text-[12px]">codecast</span>
         </Link>
         <span className="text-sol-text-dim">/</span>
-        <span className="min-w-0 mr-auto text-[12px] text-sol-text-muted truncate">
+        <span className="min-w-0 mr-auto modern:font-mono text-[12px] text-sol-text-muted truncate">
           {owner}
           <span className="text-sol-text-dim">/</span>
           <span className="text-sol-text">{name}</span>

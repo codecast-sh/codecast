@@ -2788,7 +2788,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         permissionMode === "bypassPermissions" ? "bg-orange-500" :
                         permissionMode === "auto" ? "bg-sol-violet" :
                         permissionMode === "dontAsk" ? "bg-sol-yellow" :
-                        "bg-sol-base00/50"
+                        "bg-sol-text-dim/50"
                       }`} />
                       {/* The mode label appears for a beat when the mode
                           cycles, then collapses back to the dot. Hover the

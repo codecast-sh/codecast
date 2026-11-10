@@ -130,7 +130,8 @@ export function replayFigures(r: Pick<OpsReplay, "counts" | "shape" | "facts">):
   return out;
 }
 
-// The list's figure cell (replays.css .rp-figs at 12px mono): an icon and its gap, each digit, and the gap between figures.
+// The list's figure cell (replays.css .rp-figs at 12px, tabular digits): an icon and its gap, each digit, and the gap between figures.
+// FIG_CHAR_PX is a mono digit's advance, at least as wide as a sans tabular digit (Minimal, Modern), so the column never cuts a count.
 const FIG_ICON_PX = 15;
 const FIG_CHAR_PX = 7.3;
 const FIG_GAP_PX = 7;

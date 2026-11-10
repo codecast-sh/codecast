@@ -606,7 +606,7 @@ export function AudioOnlyStage({
         )}
         {ghosts.map((r) => (
           <div key={`ring:${r.user_id}`} className="flex flex-col items-center gap-3 opacity-60">
-            <div className="animate-pulse rounded-full ring-2 ring-sol-violet/40 ring-offset-4 ring-offset-sol-base03">
+            <div className="animate-pulse rounded-full ring-2 ring-sol-violet/40 ring-offset-4 ring-offset-sol-bg">
               <Avatar m={r} size={scale.size} />
             </div>
             <span className="flex items-center gap-1.5 font-mono text-[12.5px] text-sol-text-muted">
@@ -636,7 +636,7 @@ function AudioFace({ m, size, speaking }: { m: any; size: number; speaking?: Rea
     <PersonMenuArea identity={String(m.user_id)} name={m.user_name} className="group flex flex-col items-center gap-3">
       <div
         className={`rounded-full transition-all duration-300 ${
-          on ? "ring-2 ring-sol-cyan/80 ring-offset-4 ring-offset-sol-base03 shadow-[0_0_0_8px_rgba(42,161,152,0.14)]" : ""
+          on ? "ring-2 ring-sol-cyan/80 ring-offset-4 ring-offset-sol-bg shadow-[0_0_0_8px_rgba(42,161,152,0.14)]" : ""
         }`}
       >
         <Avatar m={m} size={size} />

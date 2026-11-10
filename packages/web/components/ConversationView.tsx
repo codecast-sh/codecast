@@ -77,6 +77,7 @@ import { PRCard } from "./PRCard";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
 import { SessionCallPill } from "./calls/SessionCallPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "./ui/dropdown-menu";
 import { ConversationHeaderBar, ConversationHeaderTitle } from "./conversation/ConversationHeaderBar";
 import { HEADER_CHIP } from "../lib/headerChip";
@@ -519,6 +520,7 @@ const ConversationViewInner = (
   // (see hooks/useSqueezeToFit and the .cq-sq* tiers in globals.css).
   const squeezeRowRef = useRef<HTMLDivElement>(null);
   useSqueezeToFit(squeezeRowRef, 7);
+  const modernStyle = useIsModernStyle();
   // Subagents carry parent_conversation_id; visible children (agent-team
   // teammates, spawns) carry spawned_by_conversation_id. The header chip and
   // the overflow menu row both link here, so folding the chip loses nothing.
@@ -1290,9 +1292,9 @@ const ConversationViewInner = (
     setStickyClamped(el ? el.scrollHeight > el.clientHeight + 1 : false);
   }, [activeStickyMsg?.id, activeStickyMsg?.content, stickyMsgVisible, stickyExpanded]);
 
-  // Publish the sticky prompt card's height on the header as --conv-sticky-h so
-  // header-anchored overlays (the files-changed pill) slide below it instead of
-  // overlapping at narrow widths. Imperative write: no re-render on resize.
+  // Track the sticky prompt card's height (stickyHeightRef, read by the sticky
+  // scroll check) and publish it on the header as --conv-sticky-h for overlays
+  // anchored under the header. Imperative write: no re-render on resize.
   useWatchEffect(() => {
     const header = headerRef.current;
     if (!header) return;
@@ -1572,9 +1574,11 @@ const ConversationViewInner = (
   // on its disclosure state (compact: card vs full turn; condensed: the owner
   // row grows by its opened tool group), so the key must flip with that —
   // otherwise a toggled row reads a stale cached height and the virtualizer
-  // mis-lays the list.
+  // mis-lays the list. The Modern style draws every row at other heights (its
+  // type, its rows, whole images), so its heights are cached apart: switching
+  // styles never reuses the other style's measurements.
   const rowDensityKey = useCallback((index: number): string => {
-    const base = foldWorkingTurns ? `${feedDensity}:fold` : feedDensity;
+    const base = `${foldWorkingTurns ? `${feedDensity}:fold` : feedDensity}${modernStyle ? ":m" : ""}`;
     if (feedDensity === "full") return base;
     const item = timeline[index];
     if (item?.type !== "message") return base;
@@ -1582,7 +1586,7 @@ const ConversationViewInner = (
     const groupKey = foldTurns ? turnAggregates.turnKeyOf.get(msg._id) : msg._id;
     const expanded = groupKey ? expandedGroups.has(groupKey) : false;
     return `${base}:${expanded ? "e" : "c"}`;
-  }, [feedDensity, foldWorkingTurns, foldTurns, timeline, turnAggregates, expandedGroups]);
+  }, [feedDensity, foldWorkingTurns, foldTurns, timeline, turnAggregates, expandedGroups, modernStyle]);
 
   const estimateUncachedSize = useCallback((index: number) => {
     const item = timeline[index];
@@ -4384,8 +4388,8 @@ const ConversationViewInner = (
                     {/* data-cc-keep: the Minimal style rests the header on the
                         title, the live status and this menu; the rest of the
                         cluster fades in on hover or keyboard focus. */}
-                    <button data-cc-keep aria-label="Session menu" className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <button data-cc-keep aria-label="Session menu" title={modernStyle ? "Session menu" : undefined} className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors modern:p-0 modern:w-7 modern:h-7 modern:inline-flex modern:items-center modern:justify-center modern:rounded-control">
+                      <svg className="w-3.5 h-3.5 modern:w-4 modern:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
                       </svg>
                     </button>
@@ -4406,7 +4410,7 @@ const ConversationViewInner = (
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
                         </svg>
-                        Copy ID ({conversation.short_id})
+                        Copy ID (<span className="modern:font-mono">{conversation.short_id}</span>)
                       </DropdownMenuItem>
                     )}
                     {/* Simple view strips the header's branch chip — resurface
@@ -4418,7 +4422,7 @@ const ConversationViewInner = (
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M7 7a2 2 0 100-4 2 2 0 000 4zm0 0v6m0 0a2 2 0 100 4 2 2 0 000-4zm10-6a2 2 0 100-4 2 2 0 000 4zm0 0a5 5 0 01-5 5h-2" />
                         </svg>
-                        Copy branch ({conversation.git_branch})
+                        Copy branch (<span className="modern:font-mono">{conversation.git_branch}</span>)
                       </DropdownMenuItem>
                     )}
                     {/* Run synchronously (no setTimeout) so handleCopyAll's

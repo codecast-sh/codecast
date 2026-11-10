@@ -15,6 +15,16 @@ import { codecastEvalsPaths } from "../components/evals/evalsPaths";
 import { isOpsPath, opsTabLabel } from "../components/ops/opsPaths";
 import { currentPagePath } from "./renamedPages";
 import { legacyFilesHref } from "./vault/vaultHref";
+import { navLabelOfPath } from "./navRegistry";
+import { isModernStyle } from "./visualStyle";
+
+/** Modern's names for the old addresses kept as routes. */
+const MODERN_ALIAS_PATHS: Record<string, string> = {
+  "/artifacts": "/pages",
+  "/schedules": "/triggers",
+  "/line": "/flows",
+  "/line/settings": "/flows/settings",
+};
 
 const REPO_SECTION_LABEL: Record<string, string> = {
   commits: "Commits",
@@ -107,14 +117,16 @@ export function pathLabel(path: string): string {
   // A Files tab is titled by the open file, not the encoded query string. An
   // old /vault?f=… Files link titles the same until it redirects to /files.
   if (/^\/files[?/]/.test(path) || legacyFilesHref(path)) {
+    // Modern calls the page Notes (lib/navRegistry).
+    const files = isModernStyle() ? navLabelOfPath("/files")! : "Files";
     try {
       const f = new URLSearchParams(path.split("?")[1] ?? "").get("f");
       if (f) {
         const base = decodeURIComponent(f).split("/").pop() ?? "";
-        return base.replace(/\.(md|markdown)$/i, "") || "Files";
+        return base.replace(/\.(md|markdown)$/i, "") || files;
       }
     } catch {}
-    return "Files";
+    return files;
   }
   // Browsing a repository. The tab says what you are looking at, which for a
   // file or a directory lives in the query (`?path=`) exactly as it does for
@@ -176,6 +188,11 @@ export function pathLabel(path: string): string {
     // The rail, the palette and the breadcrumb all call it Feed.
     "/team/activity": "Feed",
   };
+  // Modern titles every page the rail or the palette names by that same name.
+  if (isModernStyle()) {
+    const name = navLabelOfPath(MODERN_ALIAS_PATHS[clean] ?? clean);
+    if (name) return name;
+  }
   return segments[clean] || clean.split("/").pop() || "Tab";
 }
 

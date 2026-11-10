@@ -28,7 +28,7 @@ const OUTCOME: Record<Outcome, { label: string; tone: string; tile: string; Icon
 
 function Tile({ className, children, size = "lg" }: { className: string; children: ReactNode; size?: "lg" | "sm" }) {
   return (
-    <span aria-hidden className={cn("flex shrink-0 items-center justify-center rounded-md", size === "lg" ? "h-8 w-8 [&_svg]:size-[17px]" : "h-6 w-6 [&_svg]:size-3.5", className)}>
+    <span aria-hidden data-cc-row-icon className={cn("flex shrink-0 items-center justify-center rounded-md", size === "lg" ? "h-8 w-8 [&_svg]:size-[17px]" : "h-6 w-6 [&_svg]:size-3.5", className)}>
       {children}
     </span>
   );
@@ -59,20 +59,20 @@ export function PermissionRecordLine({ question, outcome, output, className }: {
   const o = OUTCOME[outcome];
   const why = outcome === "failed" && !!output?.trim();
   return (
-    <div className={cn("w-full", className)} data-permission-record={outcome}>
-      <div className="flex max-w-[44rem] items-center gap-2.5 py-1" style={{ animation: "fadeIn 0.2s ease-out both" }}>
+    <div className={cn("w-full", className)} data-permission-record={outcome} data-cc-row="permission" data-cc-row-tone={outcome === "failed" ? "error" : undefined}>
+      <div className="flex max-w-[44rem] items-center gap-2.5 py-1" style={{ animation: "fadeIn 0.2s ease-out both" }} data-cc-row-head>
         <Tile size="sm" className={o.tile}><o.Icon className={outcome === "running" ? "animate-spin" : undefined} /></Tile>
-        <span className={cn("min-w-0 truncate text-[13px]", outcome === "declined" ? "text-sol-text-dim" : "text-sol-text-muted")} title={question}>{question}</span>
+        <span data-cc-row-text className={cn("min-w-0 truncate text-[13px]", outcome === "declined" ? "text-sol-text-dim" : "text-sol-text-muted")} title={question}>{question}</span>
         {why ? (
-          <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className={cn("shrink-0 text-[12px] underline-offset-2 hover:underline", o.tone)}>
+          <button data-cc-row-meta type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className={cn("shrink-0 text-[12px] underline-offset-2 hover:underline", o.tone)}>
             {o.label}
           </button>
         ) : (
-          <span role="status" className={cn("shrink-0 text-[12px]", o.tone)}>{outcome === "running" ? `${o.label}…` : o.label}</span>
+          <span data-cc-row-meta role="status" className={cn("shrink-0 text-[12px]", o.tone)}>{outcome === "running" ? `${o.label}…` : o.label}</span>
         )}
       </div>
       {why && open && (
-        <pre className="m-0 ml-[34px] mt-1 max-w-[42rem] max-h-56 overflow-auto rounded-[var(--radius,8px)] border border-sol-border/70 bg-sol-bg-alt px-3 py-2 font-mono text-meta leading-relaxed text-sol-text-muted whitespace-pre-wrap break-words">{output!.trim()}</pre>
+        <pre data-cc-row-detail className="m-0 ml-[34px] mt-1 max-w-[42rem] max-h-56 overflow-auto rounded-[var(--radius,8px)] border border-sol-border/70 bg-sol-bg-alt px-3 py-2 font-mono text-meta leading-relaxed text-sol-text-muted whitespace-pre-wrap break-words">{output!.trim()}</pre>
       )}
     </div>
   );

@@ -169,7 +169,7 @@ function TeamAsks({ asks, open, toggle, who, tasks, onProblem, problemHref }: {
           <span className="fp-ask-due" data-past={due.past ? "" : undefined}>{due.short}</span>
           <button type="button" className="fp-ask-title" aria-expanded={open === a.signal._id} onClick={() => toggle(a.signal)}>{a.title}</button>
           <span className="fp-ask-for" data-line-team-ask-owner>
-            {t ? <a className="lw-link" href={problemHref(t._id)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); onProblem(t._id); }}>{t.short_id ?? "Problem"}</a> : null}
+            {t ? <a className="lw-link" href={problemHref(t._id)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); onProblem(t._id); }}>{t.short_id ? <span className="modern:font-mono">{t.short_id}</span> : "Problem"}</a> : null}
             <span data-none={!t?.assignee ? "" : undefined}>{owner(t?.assignee)}</span>
           </span>
           {a.url && open !== a.signal._id && <a className="lw-link fp-ask-open" href={a.url} target="_blank" rel="noreferrer" data-line-team-ask-open>{evidenceLinkWords(a.url)} ↗</a>}

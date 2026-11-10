@@ -2,6 +2,7 @@ import * as React from "react";
 import { ChevronDown } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { modernField, modernFocusRing } from "./styles";
 
 // Native <select> with the browser chrome replaced: the default arrow renders
 // flush against the right border, so we hide it (appearance-none) and draw our
@@ -21,9 +22,15 @@ const SelectBox = React.forwardRef<
       ref={ref}
       className={cn(
         "appearance-none w-full text-xs focus:outline-none cursor-pointer",
+        modernFocusRing,
         variant === "bare"
           ? "bg-transparent border-0 pl-0 pr-5 py-1 text-sol-text-muted hover:text-sol-text focus:text-sol-text transition-colors"
-          : "bg-sol-bg-alt border border-sol-border rounded-lg pl-2.5 pr-8 py-1.5 text-sol-text focus:border-sol-cyan/60",
+          : cn(
+              "bg-sol-bg-alt border border-sol-border rounded-lg pl-2.5 pr-8 py-1.5 text-sol-text focus:border-sol-cyan/60",
+              // Modern: the 32px field face Input wears; focus is the ring.
+              modernField,
+              "modern:h-control-md modern:py-0 modern:focus:border-sol-border",
+            ),
         className,
       )}
       {...props}

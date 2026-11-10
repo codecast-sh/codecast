@@ -64,3 +64,6 @@ html:not(.dark) .line-floor {
 }
 .line-ask-again:hover { background: color-mix(in srgb, var(--sol-yellow) 20%, transparent); }
 .line-ask-again:disabled { opacity: 0.6; cursor: default; }
+
+/* Modern (.modern-style): station names read as words, in the arrow's sans. */
+.modern-style .line-edge-names { font-family: inherit; }

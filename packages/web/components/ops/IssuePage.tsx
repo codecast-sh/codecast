@@ -357,7 +357,7 @@ function RegressedBanner({ group, release, task, events, now }: { group: OpsGrou
     <div className="iss-banner" role="status">
       <b>Regressed</b>
       <span>
-        {landed ? <>fixed in <span className="ops-mono">{landed.sha.slice(0, 7)}</span>{task?.short_id ? <> ({task.short_id})</> : null}, </> : null}
+        {landed ? <>fixed in <span className="ops-mono">{landed.sha.slice(0, 7)}</span>{task?.short_id ? <> (<span className="modern:font-mono">{task.short_id}</span>)</> : null}, </> : null}
         {resolved}
         {group.resolved_in ? <> in <span className="ops-mono">{group.resolved_in}</span></> : null}
         {group.resolved_at !== undefined ? <> {formatRelative(group.resolved_at, now)}</> : null}
@@ -397,7 +397,7 @@ function SettledBanner({ group, task, events, now }: { group: OpsGroup; task: Re
         {resolver.via === "recovered" ? "on its own" : resolved.replace(/^resolved ?/, "") || null}
         {group.resolved_at !== undefined ? <> {formatRelative(group.resolved_at, now)}</> : null}
         {group.resolved_in ? <> in <span className="ops-mono">{group.resolved_in}</span></> : null}
-        {landed ? <> · fixed in <span className="ops-mono">{landed.sha.slice(0, 7)}</span>{task?.short_id ? <> ({task.short_id})</> : null}</> : null}
+        {landed ? <> · fixed in <span className="ops-mono">{landed.sha.slice(0, 7)}</span>{task?.short_id ? <> (<span className="modern:font-mono">{task.short_id}</span>)</> : null}</> : null}
       </span>
       <span className="ops-dim">{state ? "its next failure reopens it" : vendor ? `reopens when ${group.external!.provider} does` : "an event from a newer release reopens it"}</span>
     </div>

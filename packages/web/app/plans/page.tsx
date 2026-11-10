@@ -42,6 +42,8 @@ import { toast } from "sonner";
 import { LivePulseHalo } from "../../components/LivenessDot";
 import { planLivenessState } from "../../lib/liveness";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { PageHeader } from "../../components/ui/page-header";
+import { Button } from "../../components/ui/button";
 
 type PlanStatus = "draft" | "active" | "paused" | "done" | "abandoned";
 
@@ -152,6 +154,32 @@ function SidebarPlanItem({
   );
 }
 
+/** Whose plans the list shows: yours (the person glyph) or everyone's, agents'
+ *  included. `small`: the desktop list's own head (Classic and Minimal). */
+function PlanSourceToggle({ planSource, setPlanSource, small }: { planSource: string; setPlanSource: (v: string) => void; small?: boolean }) {
+  return (
+    <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
+      <button
+        onClick={() => setPlanSource("human")}
+        aria-pressed={planSource === "human"}
+        aria-label="My plans"
+        className={`${small ? "px-1.5" : "px-2"} py-1 transition-colors ${planSource === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+        title="My plans"
+      >
+        <User className={small ? "w-3 h-3" : "w-3.5 h-3.5"} />
+      </button>
+      <button
+        onClick={() => setPlanSource("all")}
+        aria-pressed={planSource !== "human"}
+        className={`${small ? "px-1.5" : "px-2"} py-1 ${small ? "text-meta" : "text-xs"} transition-colors border-l border-sol-border/40 ${planSource !== "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+        title="All plans"
+      >
+        All
+      </button>
+    </div>
+  );
+}
+
 function StatusGroup({
   status,
   plans,
@@ -247,6 +275,8 @@ export default function PlansPage() {
       toast.error("Couldn't copy link");
     }
   }, [viewLink]);
+  const sendView = () => openForwardToChat({ url: viewLink(), label: "view" });
+  const toggleCreate = () => setShowCreate(!showCreate);
 
   // Local-first: the board renders from the store's plans collection
   // synchronously (workspace-scoped through the one chokepoint); these
@@ -330,58 +360,61 @@ export default function PlansPage() {
           closeHref="/plans"
           list={
             <div className="flex flex-col h-full bg-sol-bg">
-            <div ref={titlebarRef} className="cc-panel__head justify-between">
-              {/* The tab bar already says "Plans"; repeating it here was the
-                  doubled title. Identity stays as the glyph alone. */}
-              <div className="flex items-center gap-2">
-                <Target className="w-4 h-4 text-sol-cyan" />
-                <h2 className="sr-only">Plans</h2>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
-                  <button
-                    onClick={() => setPlanSource("human")}
-                    aria-pressed={planSource === "human"}
-                    aria-label="My plans"
-                    className={`px-1.5 py-1 transition-colors ${planSource === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                    title="My plans"
-                  >
-                    <User className="w-3 h-3" />
-                  </button>
-                  <button
-                    onClick={() => setPlanSource("all")}
-                    aria-pressed={planSource !== "human"}
-                    className={`px-1.5 py-1 text-meta transition-colors border-l border-sol-border/40 ${planSource !== "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-                    title="All plans"
-                  >
-                    All
-                  </button>
+            <PageHeader
+              legacy={
+                <div ref={titlebarRef} className="cc-panel__head justify-between">
+                  {/* The tab bar already says "Plans"; repeating it here was the
+                      doubled title. Identity stays as the glyph alone. */}
+                  <div className="flex items-center gap-2">
+                    <Target className="w-4 h-4 text-sol-cyan" />
+                    <h2 className="sr-only">Plans</h2>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <PlanSourceToggle planSource={planSource} setPlanSource={setPlanSource} small />
+                    <button
+                      onClick={copyViewLink}
+                      className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                      title="Copy link to this view"
+                    >
+                      <Link2 className="w-3.5 h-3.5" />
+                    </button>
+                    {chatOn && (
+                      <button
+                        onClick={sendView}
+                        className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                        title="Send this view to chat"
+                      >
+                        <Forward className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <button
+                      onClick={toggleCreate}
+                      className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                      title="New Plan"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
-                <button
-                  onClick={copyViewLink}
-                  className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
-                  title="Copy link to this view"
-                >
-                  <Link2 className="w-3.5 h-3.5" />
-                </button>
+              }
+              title="Plans"
+              icon={Target}
+              count={plansLoading ? null : allPlans.length}
+              tabs={<PlanSourceToggle planSource={planSource} setPlanSource={setPlanSource} />}
+              actions={<>
+                <Button variant="ghost" size="icon-sm" onClick={copyViewLink} title="Copy link to this view" aria-label="Copy link to this view">
+                  <Link2 />
+                </Button>
                 {chatOn && (
-                  <button
-                    onClick={() => openForwardToChat({ url: viewLink(), label: "view" })}
-                    className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
-                    title="Send this view to chat"
-                  >
-                    <Forward className="w-3.5 h-3.5" />
-                  </button>
+                  <Button variant="ghost" size="icon-sm" onClick={sendView} title="Send this view to chat" aria-label="Send this view to chat">
+                    <Forward />
+                  </Button>
                 )}
-                <button
-                  onClick={() => setShowCreate(!showCreate)}
-                  className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
-                  title="New Plan"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
+                <Button variant="ghost" size="icon-sm" onClick={toggleCreate} title="New Plan" aria-label="New Plan">
+                  <Plus />
+                </Button>
+              </>}
+            />
 
             {showCreate && (
               <CreateDocModal onClose={() => setShowCreate(false)} initialType="plan" />
@@ -494,33 +527,23 @@ function MobileList({
   hiddenAgentCount: number;
 }) {
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
+  const toggle = <PlanSourceToggle planSource={planSource} setPlanSource={setPlanSource} />;
   return (
     <div className="h-full flex flex-col">
-      <div ref={titlebarRef} className="px-4 py-3 border-b border-sol-border/30 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Target className="w-4 h-4 text-sol-cyan" />
-          <h1 className="text-base font-semibold text-sol-text">Plans</h1>
-        </div>
-        <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
-          <button
-            onClick={() => setPlanSource("human")}
-            aria-pressed={planSource === "human"}
-            aria-label="My plans"
-            className={`px-2 py-1 transition-colors ${planSource === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-            title="My plans"
-          >
-            <User className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setPlanSource("all")}
-            aria-pressed={planSource !== "human"}
-            className={`px-2 py-1 text-xs transition-colors border-l border-sol-border/40 ${planSource !== "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
-            title="All plans"
-          >
-            All
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        legacy={
+          <div ref={titlebarRef} className="px-4 py-3 border-b border-sol-border/30 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Target className="w-4 h-4 text-sol-cyan" />
+              <h1 className="text-base font-semibold text-sol-text">Plans</h1>
+            </div>
+            {toggle}
+          </div>
+        }
+        title="Plans"
+        icon={Target}
+        tabs={toggle}
+      />
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <AppLoader className="min-h-[16rem] h-full" />

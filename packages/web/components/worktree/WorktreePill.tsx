@@ -65,7 +65,7 @@ function WorktreeHoverContent({ found, repository }: { found: FoundWorktree; rep
       {!!w.ports && <div className="font-mono text-sol-text-dim">{Object.entries(w.ports).map(([name, port]) => `${name} :${port}`).join("  ")}</div>}
       <WorktreeSessions sessions={w.sessions} />
       <div className="font-mono text-meta text-sol-text-dim break-all">{w.path}</div>
-      <Link href={repoWorktreesHref(repository, w.name)} className="block pt-1 text-meta text-sol-blue no-underline hover:underline">All worktrees of {repository}</Link>
+      <Link href={repoWorktreesHref(repository, w.name)} className="block pt-1 text-meta text-sol-blue no-underline hover:underline">All worktrees of <span className="modern:font-mono">{repository}</span></Link>
     </div>
   );
 }
@@ -92,7 +92,7 @@ export function WorktreePill({ repository, children, className = "", ...ref }: W
   const body = (
     <>
       <FolderGit2 className="w-[1em] h-[1em] shrink-0 opacity-80" />
-      <span className="truncate">{label}</span>
+      <span className="truncate modern:font-mono">{label}</span>
       {found && <span aria-hidden className={`size-[0.4em] shrink-0 rounded-full bg-current ${TONE[worktreeCondition(found.worktree).tone]}`} />}
     </>
   );

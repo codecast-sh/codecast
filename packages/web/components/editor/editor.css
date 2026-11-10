@@ -853,3 +853,8 @@
 @media (prefers-reduced-motion: reduce) {
   .draft-dots__row, .draft-panel, .draft-trimbar { animation: none; }
 }
+
+/* Modern (.modern-style): a document and the draft tools read in the interface sans; code
+   spans keep .tiptap code's mono. */
+.modern-style .doc-editor,
+.modern-style :is(.mention-date-resolved, .draft-lab-button, .draft-panel, .draft-trimbar) { font-family: var(--font-ui), sans-serif; }

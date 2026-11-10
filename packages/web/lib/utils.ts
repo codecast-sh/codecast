@@ -7,8 +7,24 @@ import { extendTailwindMerge } from "tailwind-merge"
 // cn("text-meta", "text-sol-text-dim") would silently drop the size.
 export const TYPE_SCALE = ["mark", "meta", "ui", "body", "read", "title", "display"] as const;
 
+// The primitive system's names (tailwind.config.ts, app/globals.css). Each
+// is unknown to tailwind-merge until registered, and an unknown name is kept
+// beside the class it should replace: cn("rounded-control", "rounded-lg")
+// would keep both and let stylesheet order pick, so a call site's override
+// would silently lose.
 const twMerge = extendTailwindMerge({
-  extend: { classGroups: { "font-size": [{ text: [...TYPE_SCALE] }] } },
+  extend: {
+    theme: {
+      radius: ["control", "card", "dialog"],
+      shadow: ["popover", "dialog", "toast"],
+      spacing: ["control-sm", "control-md", "control-lg"],
+      ease: ["ui"],
+    },
+    classGroups: {
+      "font-size": [{ text: [...TYPE_SCALE] }],
+      duration: [{ duration: ["press", "pop"] }],
+    },
+  },
 });
 
 export function cn(...inputs: ClassValue[]) {

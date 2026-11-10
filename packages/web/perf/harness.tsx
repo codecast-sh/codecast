@@ -12,7 +12,9 @@
 import { JSDOM } from "jsdom";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
-export type Workload = "switch" | "inbox-load" | "inbox-heartbeat" | "diff";
+// The -modern workloads are the same inbox with the Modern style on (its
+// session card, ModernSessionCardView, and section header): the same budgets.
+export type Workload = "switch" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -386,19 +388,26 @@ async function setupSwitch(): Promise<Bench> {
 const INBOX_SESSIONS = 5000;
 const cards = () => host.querySelectorAll("[data-session-id]").length;
 
-async function inboxPanel() {
+async function inboxPanel(modern = false) {
   const { SessionListPanel } = await import("../components/GlobalSessionPanel");
+  const { ThemeContext } = await import("../components/ThemeProvider");
   seedStore(INBOX_SESSIONS);
   mount();
-  const panel = <SessionListPanel activeSessionId={convId(3)} onSessionSelect={() => {}} />;
+  // Modern: the root class the style's CSS keys on, and the theme context the
+  // components read it from (hooks/useVisualStyle).
+  // Classic mounts the panel bare, as it always did.
+  const bare = <SessionListPanel activeSessionId={convId(3)} onSessionSelect={() => {}} />;
+  if (modern) w.document.documentElement.classList.add("modern-style");
+  const theme = { theme: "light", toggleTheme: () => {}, visualStyle: "modern", setVisualStyle: () => {} } as any;
+  const panel = modern ? <ThemeContext.Provider value={theme}>{bare}</ThemeContext.Provider> : bare;
   const show = async () => { await render(panel); await until(() => cards() > 0, "the session list to draw"); await settle(); };
   const hide = async () => { await act(async () => { root.render(null); }); await settle(); };
   return { show, hide };
 }
 
 // Opening the inbox: the list mounts over the full cache.
-async function setupInboxLoad(): Promise<Bench> {
-  const { show, hide } = await inboxPanel();
+async function setupInboxLoad(modern = false): Promise<Bench> {
+  const { show, hide } = await inboxPanel(modern);
   await show();
   await hide();
   return {
@@ -420,11 +429,11 @@ async function setupInboxLoad(): Promise<Bench> {
 // moves, which changes nothing the list shows, so a beat may re-render
 // nothing.
 const LIVE_SET = 600;
-async function setupInboxHeartbeat(): Promise<Bench> {
+async function setupInboxHeartbeat(modern = false): Promise<Bench> {
   const { applyMineLivenessPayload } = await import("../hooks/useSyncInboxSessions");
   const { INBOX_FACT_FIELDS, INBOX_PROJECTION_VERSION } = await import("@codecast/shared/contracts");
   const { placeInboxRows } = await import("../store/inboxStore");
-  const { show } = await inboxPanel();
+  const { show } = await inboxPanel(modern);
   await show();
   const target = host.querySelector("[data-session-id]")!.getAttribute("data-session-id")!;
   const sessions = useInboxStore.getState().sessions as Record<string, any>;
@@ -520,8 +529,10 @@ async function setupDiff(): Promise<Bench> {
 
 const setups: Record<Workload, () => Promise<Bench>> = {
   switch: setupSwitch,
-  "inbox-load": setupInboxLoad,
-  "inbox-heartbeat": setupInboxHeartbeat,
+  "inbox-load": () => setupInboxLoad(),
+  "inbox-heartbeat": () => setupInboxHeartbeat(),
+  "inbox-load-modern": () => setupInboxLoad(true),
+  "inbox-heartbeat-modern": () => setupInboxHeartbeat(true),
   diff: setupDiff,
 };
 

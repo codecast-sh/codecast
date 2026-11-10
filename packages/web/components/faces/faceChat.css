@@ -379,3 +379,6 @@
     filter: none;
   }
 }
+
+/* Modern (.modern-style): messages read in the interface sans. */
+.modern-style :is(.fc-bubble, .fc-card-msgs) { font-family: var(--font-ui); }

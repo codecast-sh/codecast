@@ -96,7 +96,7 @@ export function ConnectKeyDialog({ provider, onClose, deviceId }: { provider: Ke
           {copy.open}
           <span className="mt-1.5 block">
             <Button type="button" size="sm" variant="outline" onClick={openConsole} className="h-7 gap-1.5 px-2.5 text-meta">
-              Open {page.host}{page.pathname} <ExternalLink className="h-3 w-3" aria-hidden />
+              Open <span className="modern:font-mono">{page.host}{page.pathname}</span> <ExternalLink className="h-3 w-3" aria-hidden />
             </Button>
           </span>
         </Step>

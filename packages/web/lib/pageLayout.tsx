@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
 
 // A route is "full-width" when the page owns its entire canvas — its own scroll
 // container, width, padding, and sometimes its own background (the zinc-themed
@@ -83,6 +84,16 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/o\//,
 ];
 
+// Shell pages that, in the Modern style, draw the shared page header
+// (components/ui/page-header PageFrame): the bar spans the pane and the page
+// scrolls its own column under it, so PageShell steps aside. Classic and
+// Minimal keep them in the shell.
+const MODERN_CANVAS = /^\/(notifications|pages|artifacts|feed|expectations|week|mods)$/;
+
+export function ownsCanvasInModern(pathname: string): boolean {
+  return MODERN_CANVAS.test(routePath(pathname));
+}
+
 function routePath(pathname: string): string {
   return (pathname || "").split("?")[0].split("#")[0];
 }
@@ -123,6 +134,8 @@ export function PageShell({
   pathname: string;
   children: ReactNode;
 }) {
+  const modern = useIsModernStyle();
+  if (modern && ownsCanvasInModern(pathname)) return <>{children}</>;
   return (
     <div className="h-full flex flex-col">
       <TitlebarStrip />

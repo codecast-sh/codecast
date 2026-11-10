@@ -45,6 +45,8 @@ import { SwitchReview } from "../../../components/consequential/ConsequentialSwi
 import { useRunCost } from "../../../components/consequential/useRunCost";
 import { triggerArmLedger, triggerRunNowLedger } from "../../../components/work/startLedgers";
 import { TriggerForm } from "../page";
+import { PageFrame, PageHeader } from "../../../components/ui/page-header";
+import { useIsModernStyle } from "../../../hooks/useVisualStyle";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -191,6 +193,7 @@ export default function TriggerDetailPage() {
   const [reviewing, setReviewing] = useState<null | "runNow" | "resume" | "reactivate">(null);
   const [editing, setEditing] = useState(false);
   const runCost = useRunCost(null);
+  const modern = useIsModernStyle();
 
   const taskId = trigger?._id;
   const runs = useTriggerRuns(taskId ?? null);
@@ -288,29 +291,8 @@ export default function TriggerDetailPage() {
     });
   };
 
-  return (
-    <AuthGuard>
-      <DashboardLayout>
-        <div className="h-full overflow-y-auto" data-main-scroll>
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <Link
-              href="/triggers"
-              data-page-head
-              className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline"
-            >
-              <ArrowLeft className="w-3 h-3" /> All triggers
-            </Link>
-
-            {/* ── Identity ── */}
-            <div className="mt-4 flex items-start gap-4">
-              <div data-page-head className="flex-shrink-0 w-11 h-11 rounded-xl border border-sol-orange/30 bg-sol-orange/10 flex items-center justify-center">
-                <Zap className="w-5 h-5 text-sol-orange" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div data-page-head className="flex items-center gap-2.5 flex-wrap">
-                  <h1 className="text-xl font-semibold text-sol-text leading-tight">{title}</h1>
-                  <ShareControl label="trigger" path={`/triggers/${t._id}`} publicShare={{ kind: "trigger", id: t._id, token: (t as any).share_token, team: policyTeamOf("triggers", t) }} />
-                  {(t.short_id || t._id) && (
+  // The id and the share control, drawn by whichever header is up.
+  const idCopy = (t.short_id || t._id) && (
                     <ShortcutTooltip label={idCopied ? "Copied" : "Copy id"}>
                       <button
                         onClick={copyId}
@@ -324,9 +306,45 @@ export default function TriggerDetailPage() {
                         )}
                       </button>
                     </ShortcutTooltip>
-                  )}
+  );
+  const share = <ShareControl label="trigger" path={`/triggers/${t._id}`} publicShare={{ kind: "trigger", id: t._id, token: (t as any).share_token, team: policyTeamOf("triggers", t) }} />;
+  const backLink = (
+            <Link
+              href="/triggers"
+              data-page-head
+              className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline"
+            >
+              <ArrowLeft className="w-3 h-3" /> All triggers
+            </Link>
+  );
+
+  return (
+    <AuthGuard>
+      <DashboardLayout>
+        <PageFrame
+          // data-page-head: inside a reveal band the band's strip names and shares it (globals.css).
+          header={<PageHeader legacy={backLink} data-page-head crumbs={<Link href="/triggers" className="no-underline hover:text-sol-text">Triggers</Link>} icon={Zap} title={title} actions={idCopy} share={share} />}
+          legacyScroll="h-full overflow-y-auto"
+          legacyScrollProps={{ "data-main-scroll": true }}
+          legacyColumn="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6"
+          column="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-5"
+        >
+            {/* ── Identity (Modern: the header names it; its state and brief lead the page) ── */}
+            <div className={modern ? "flex items-start gap-4" : "mt-4 flex items-start gap-4"}>
+              {!modern && (
+                <div data-page-head className="flex-shrink-0 w-11 h-11 rounded-xl border border-sol-orange/30 bg-sol-orange/10 flex items-center justify-center">
+                  <Zap className="w-5 h-5 text-sol-orange" />
                 </div>
-                <div className="mt-1.5 flex items-center gap-2 flex-wrap text-meta">
+              )}
+              <div className="min-w-0 flex-1">
+                {!modern && (
+                  <div data-page-head className="flex items-center gap-2.5 flex-wrap">
+                    <h1 className="text-xl font-semibold text-sol-text leading-tight">{title}</h1>
+                    {share}
+                    {idCopy}
+                  </div>
+                )}
+                <div className={`${modern ? "" : "mt-1.5 "}flex items-center gap-2 flex-wrap text-meta`}>
                   <StatusChip task={t} now={now} />
                   <span className="text-sol-text-dim">{describeTaskCadence(t)}</span>
                   {t.mode !== "apply" && (
@@ -685,8 +703,7 @@ export default function TriggerDetailPage() {
                 </div>
               </div>
             </div>
-          </div>
-        </div>
+        </PageFrame>
       </DashboardLayout>
     </AuthGuard>
   );

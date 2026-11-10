@@ -51,7 +51,7 @@ function MidBody({ s }: { s: MapSession }) {
         {r?.pr_status && (
           <span className="inline-flex items-center gap-[0.3em]"><GitPullRequest className="h-[1em] w-[1em]" />#{r.pr_status.number} {r.pr_status.state}</span>
         )}
-        {branch && <span className="inline-flex min-w-0 max-w-full items-center gap-[0.3em] truncate"><GitBranch className="h-[1em] w-[1em] shrink-0" /><span className="truncate">{branch}</span></span>}
+        {branch && <span className="inline-flex min-w-0 max-w-full items-center gap-[0.3em] truncate"><GitBranch className="h-[1em] w-[1em] shrink-0" /><span className="truncate modern:font-mono">{branch}</span></span>}
         {!!r?.message_count && <span className="inline-flex items-center gap-[0.3em] tabular-nums"><MessageSquare className="h-[1em] w-[1em]" />{r.message_count}</span>}
         {s.workers > 0 && <span className="inline-flex items-center gap-[0.3em] tabular-nums"><Users className="h-[1em] w-[1em]" />{s.workers}</span>}
         {r?.model && <span className="truncate">{r.model}</span>}

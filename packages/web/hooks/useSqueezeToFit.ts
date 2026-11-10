@@ -68,6 +68,10 @@ export function useSqueezeToFit(
     ro.observe(row);
     const mo = typeof MutationObserver === "undefined" ? null : new MutationObserver(schedule);
     mo?.observe(row, { childList: true, subtree: true, characterData: true });
+    // A style or theme switch (a class on <html>: Modern's larger title and
+    // pills) restyles the row without touching it or its width, so the root's
+    // class is watched too; it changes rarely.
+    mo?.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     // Web fonts land after first layout and change every measured width.
     document.fonts?.ready.then(schedule).catch(() => {});
     return () => {

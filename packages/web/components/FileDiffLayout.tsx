@@ -223,8 +223,8 @@ function FileHeaderName({
   const name = getFileName(file.filename);
   const label = (
     <>
-      {dir && <span className="text-sol-text-dim">{dir}/</span>}
-      <span className="text-sol-text">{name}</span>
+      {dir && <span className="modern:font-mono text-sol-text-dim">{dir}/</span>}
+      <span className="modern:font-mono text-sol-text">{name}</span>
     </>
   );
   return (

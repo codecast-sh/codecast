@@ -70,6 +70,10 @@ import {
 import { CallLinkGuestNote, ShareVideoSwitch } from "../../components/calls/ShareVideoSwitch";
 import { CallVideoStretchChip } from "../../components/calls/CallVideoStretchChip";
 import { SharedFrames } from "../../components/calls/SharedFrames";
+import { PageHeader } from "../../components/ui/page-header";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { CallLegacyHeader, CallSkeletonLegacyHead, CallsListLegacyHead } from "./CallsLegacyHeader";
+import { Button } from "../../components/ui/button";
 import {
   openFeedTargetPicker,
   useSendExcerpt,
@@ -319,28 +323,19 @@ function RecordingScopePicker({ call }: { call: any }) {
  *  video box, since the list cannot say whether the call was filmed). */
 function CallDetailSkeleton({ preview, lead }: { preview?: any; lead?: React.ReactNode }) {
   const bar = "rounded bg-sol-text-muted/10 animate-pulse motion-reduce:animate-none";
+  const meta = preview?.started_at ? (
+    <>
+      <span>{fmtWhen(preview.started_at)}</span>
+      <span>{fmtCallLength(preview.started_at, preview.ended_at)}</span>
+    </>
+  ) : (
+    <div className={`${bar} h-3.5 w-40`} />
+  );
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" aria-busy="true">
-      <div className="shrink-0 border-b border-sol-border/20 px-6 py-4">
-        <div className="flex items-center gap-2.5">
-          {lead}
-          {preview?.title ? (
-            <h1 className="min-w-0 line-clamp-2 text-[17px] font-medium leading-snug text-sol-text">{preview.title}</h1>
-          ) : (
-            <div className={`${bar} h-[22px] w-72 max-w-full`} />
-          )}
-        </div>
-        <div className="mt-2 flex items-center gap-3 text-[12px] text-sol-text-dim">
-          {preview?.started_at ? (
-            <>
-              <span>{fmtWhen(preview.started_at)}</span>
-              <span>{fmtCallLength(preview.started_at, preview.ended_at)}</span>
-            </>
-          ) : (
-            <div className={`${bar} h-3.5 w-40`} />
-          )}
-        </div>
-      </div>
+      <PageHeader legacy={<CallSkeletonLegacyHead lead={lead} title={preview?.title} bar={bar} meta={meta} />} title={preview?.title || "Call"} crumbs={callCrumbs(lead)}>
+        <div className="flex items-center gap-3 text-meta text-sol-text-dim">{meta}</div>
+      </PageHeader>
       <div className="space-y-4 px-6 pt-5" aria-hidden="true">
         {[64, 88, 52, 76, 40].map((w, i) => (
           <div key={i} className="flex gap-2.5">
@@ -355,6 +350,9 @@ function CallDetailSkeleton({ preview, lead }: { preview?: any; lead?: React.Rea
     </div>
   );
 }
+
+/** Modern: with the list folded away, a call's header leads with the way back to it. */
+const callCrumbs = (lead?: React.ReactNode) => (lead ? <>{lead}<Link href="/calls" className="hover:text-sol-text">Calls</Link></> : undefined);
 
 function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: React.ReactNode }) {
   // A live call's transcript streams into this subscription in real time
@@ -670,16 +668,10 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   // hold the player's place, so the words do not jump down when it lands.
   const videoExpected = !recording && callRecs === undefined && (rows ?? []).some((r) => r.event === "record_on" && ofThisCall(r));
 
-  return (
-    <div ref={detailRef} className="flex h-full min-h-0 min-w-0 flex-col">
-      {/* Header: what this call was, who spoke, the ways in. */}
-      <div className="shrink-0 border-b border-sol-border/20 px-6 py-4">
-        <div className="flex items-center gap-2.5">
-          {lead}
-          {recording && <Mic className="h-4 w-4 shrink-0 text-sol-text-dim" />}
-          <h1 className="min-w-0 line-clamp-2 text-[17px] font-medium leading-snug text-sol-text">
-            {title}
-          </h1>
+  // The header's parts, built once: Classic's header (CallsLegacyHeader) and
+  // Modern's bar draw the same marks, meta, delete and share.
+  const marks = (
+    <>
           {live && (
             <span
               className={`flex shrink-0 items-center gap-1.5 text-meta font-medium ${
@@ -693,8 +685,10 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
               does, beside LIVE: the label is the room's, for whoever opens
               the page. */}
           {live && !recording && roomRecording && <RecordingMark size="pill" />}
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-sol-text-dim">
+    </>
+  );
+  const meta = (
+    <>
           <span>{fmtWhen(call.started_at)}</span>
           <span>{fmtCallLength(call.started_at, call.ended_at)}</span>
           {/* Which part of the call has video, in the call's own clock: the
@@ -738,8 +732,10 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
             inThread={recording ? undefined : new Set((call.routes || []).filter((r: any) => r.kind === "session").map((r: any) => String(r.target)))}
           />
           {sentTick && <span className="text-sol-green">{sentTick}</span>}
-          <span className="flex-1" />
-          <DeleteCallButton call={call} live={live} title={title} />
+    </>
+  );
+  const del = <DeleteCallButton call={call} live={live} title={title} />;
+  const share = (
           <ShareControl
             label={recording ? "recording" : "call"}
             path={callAnchorHref(callPathRef(call))}
@@ -773,49 +769,40 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
               </>
             }
           />
-          {/* Bring in somebody from outside the team while it is happening:
-              the same link and panel as the stage's door group. */}
-          {live && !recording && (
+  );
+  const guestRoom = live && !recording ? call.room_key : null;
+  const onJoin = live && !recording && !inThisRoom ? () => void joinCall(call.room_key, { intent: "deliberate" }) : null;
+  const onSend = turns.length > 0 ? () => openFeedTargetPicker({ title: "Send the whole call to…", gesture: "send", withNote: true, onPick: onPick("all") }) : null;
+
+  return (
+    <div ref={detailRef} className="flex h-full min-h-0 min-w-0 flex-col">
+      {/* Header: what this call was, who spoke, the ways in. */}
+      <PageHeader
+        legacy={<CallLegacyHeader lead={lead} recording={recording} title={title} marks={marks} meta={meta} del={del} share={share} guestRoom={guestRoom} onJoin={onJoin} onSend={onSend} />}
+        title={title}
+        crumbs={callCrumbs(lead)}
+        icon={recording ? Mic : undefined}
+        actions={<>
+          {marks}
+          {del}
+          {guestRoom && (
             <GuestInvite
-              roomKey={call.room_key}
+              roomKey={guestRoom}
               align="end"
               trigger={({ open, toggle }) => (
-                <button
-                  onClick={toggle}
-                  aria-expanded={open}
-                  className={`flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-sol-yellow transition-colors ${
-                    open ? "bg-sol-yellow/20" : "bg-sol-yellow/10 hover:bg-sol-yellow/20"
-                  }`}
-                  title="Invite someone outside the team: a link they join from in a browser, no account"
-                >
-                  <Link2 className="h-3.5 w-3.5" /> Invite guest
-                </button>
+                <Button variant={open ? "secondary" : "outline"} size="sm" onClick={toggle} aria-expanded={open} title="Invite someone outside the team: a link they join from in a browser, no account">
+                  <Link2 /> Invite guest
+                </Button>
               )}
             />
           )}
-          {live && !recording && !inThisRoom && (
-            <button
-              onClick={() => void joinCall(call.room_key, { intent: "deliberate" })}
-              className="flex shrink-0 items-center gap-1.5 rounded-md bg-sol-green/15 px-3 py-1.5 text-xs font-medium text-sol-green transition-colors hover:bg-sol-green/25"
-            >
-              <PhoneCall className="h-3.5 w-3.5" /> Join
-            </button>
-          )}
-          {/* Nothing to send until a word was said; on a live call the
-              button appears with the first turn. */}
-          {turns.length > 0 && (
-            <button
-              onClick={() =>
-                openFeedTargetPicker({ title: "Send the whole call to…", gesture: "send", withNote: true, onPick: onPick("all") })
-              }
-              className="flex shrink-0 items-center gap-1.5 rounded-md bg-sol-violet/15 px-3 py-1.5 text-xs font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
-              title="Send the whole transcript to an agent session or doc"
-            >
-              <Sparkles className="h-3.5 w-3.5" /> Send to agent
-            </button>
-          )}
-        </div>
-      </div>
+          {onJoin && <Button variant="green" size="sm" onClick={onJoin}><PhoneCall /> Join</Button>}
+          {onSend && <Button variant="outline" size="sm" onClick={onSend} title="Send the whole transcript to an agent session or doc"><Sparkles /> Send to agent</Button>}
+        </>}
+        share={share}
+      >
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-meta text-sol-text-dim">{meta}</div>
+      </PageHeader>
 
       {/* The media and the thread that follows it (components/calls/callMedia.css):
           stacked on a laptop, side by side on a wide screen when there is a
@@ -1194,6 +1181,23 @@ export default function CallsPage() {
       <PanelLeft className="h-4 w-4" />
     </button>
   ) : undefined;
+  const modern = useIsModernStyle();
+  // The list head's parts, drawn by whichever header is up.
+  const hideList = selectedId ? () => setListOpen(false) : undefined;
+  // What a voice note is and who sees it is on the button's title and the
+  // row's privacy chip, not in a paragraph here.
+  const records = <><SeatedHuddleRecord /><RecordMeetingButton /></>;
+  // Huddles off: a state with its way to act, Settings › Team.
+  const huddlesOff = !callsOn && (
+    <button
+      type="button"
+      onClick={() => useInboxStore.getState().openSettingsModal("team")}
+      title="Huddles are off for this team. A team admin turns them on in Settings › Team. Your voice notes stay here either way."
+      className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-sol-yellow/40 px-2 py-0.5 text-meta text-sol-yellow transition-colors hover:bg-sol-yellow/10"
+    >
+      Huddles off · Settings
+    </button>
+  );
 
   return (
     <AuthGuard>
@@ -1204,37 +1208,20 @@ export default function CallsPage() {
             opened on a phone lands on a page the width of the phone. */}
         <div className="flex h-full min-h-0">
           <div className={`${!showList ? "hidden" : selectedId ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-r border-sol-border/20 md:w-72`}>
-            <div className="shrink-0 border-b border-sol-border/20 px-4 py-3">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-medium text-sol-text" title="Huddles with their transcripts and video, and voice notes. Your agents can read them too.">Calls</h2>
-                {selectedId && (
-                  <button
-                    type="button"
-                    onClick={() => setListOpen(false)}
-                    title="Hide the list"
-                    aria-label="Hide the list"
-                    className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text"
-                  >
-                    <PanelLeftClose className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
-              {/* What a voice note is and who sees it is on the button's
-                  title and the row's privacy chip, not in a paragraph here. */}
-              <SeatedHuddleRecord />
-              <RecordMeetingButton />
-              {/* Huddles off: a state with its way to act, Settings › Team. */}
-              {!callsOn && (
-                <button
-                  type="button"
-                  onClick={() => useInboxStore.getState().openSettingsModal("team")}
-                  title="Huddles are off for this team. A team admin turns them on in Settings › Team. Your voice notes stay here either way."
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-sol-yellow/40 px-2 py-0.5 text-meta text-sol-yellow transition-colors hover:bg-sol-yellow/10"
-                >
-                  Huddles off · Settings
+            <PageHeader
+              legacy={<CallsListLegacyHead onHide={hideList} records={records} huddlesOff={huddlesOff} />}
+              title="Calls"
+              icon={Phone}
+              count={calls.length > 0 ? calls.length : null}
+              actions={hideList && (
+                <button type="button" onClick={hideList} title="Hide the list" aria-label="Hide the list" className="rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text">
+                  <PanelLeftClose className="h-3.5 w-3.5" />
                 </button>
               )}
-            </div>
+            >
+              <div className="-mt-2.5 w-full">{records}</div>
+              {huddlesOff}
+            </PageHeader>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {callsOn && <LiveNowSection transcribedRoomKeys={transcribedRoomKeys} />}
               {calls.length === 0 && callsError ? (
@@ -1290,9 +1277,10 @@ export default function CallsPage() {
             </div>
           </div>
           <div className={`${selectedId ? "flex" : "hidden md:flex"} relative min-w-0 flex-1 flex-col`}>
-            {selectedId && !inBand && (
+            {selectedId && !inBand && (!modern || showList) && (
               // Back to the list, without the moment or the anchor: the
-              // list has no place in a call to keep.
+              // list has no place in a call to keep. (Modern, with the list
+              // folded: the call's header carries this as its crumb.)
               <Link
                 href="/calls"
                 className="flex shrink-0 items-center gap-1 border-b border-sol-border/20 px-3 py-2 text-[12px] text-sol-text-muted transition-colors hover:text-sol-text md:hidden"

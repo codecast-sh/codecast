@@ -42,6 +42,12 @@
 .ops-dot[data-status="error"] { background: var(--sol-red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-red) 20%, transparent); }
 
 .ops-tabs { display: flex; gap: 2px; margin-top: 12px; }
+/* Modern: the shell head is the shared page header (OpsShell). It keeps the
+   ops-head container's name, so the area's narrow rules read it as before,
+   and its tab bar is the header's second row, sitting on the header's rule
+   (the -8px takes back the row's bottom padding) so the underline lands on it. */
+.ops-page-head { container: ops-head / inline-size; }
+.ops-page-head .ops-tabs { width: 100%; margin-top: 0; margin-bottom: -8px; }
 .ops-tab {
   display: inline-flex; align-items: center; gap: 7px;
   padding: 7px 12px 9px; font-size: 12.5px; color: var(--sol-text-muted);

@@ -100,14 +100,14 @@ export function TeamIdentityPicker({ value, onChange, previewName, disabled, cla
                   data-selected={selected}
                   className={cn(
                     "tf-tile p-1.5 rounded-md outline-none",
-                    !selected && "hover:bg-sol-base02/50",
+                    !selected && "hover:bg-sol-bg-highlight",
                     disabled && "opacity-50",
                   )}
                 >
                   <TeamIcon
                     icon={icon}
                     color={selected ? value.color : undefined}
-                    className={cn("w-4 h-4 transition-colors", !selected && "text-sol-base1")}
+                    className={cn("w-4 h-4 transition-colors", !selected && "text-sol-text-muted")}
                   />
                 </button>
               );
@@ -134,7 +134,7 @@ export function TeamIdentityPicker({ value, onChange, previewName, disabled, cla
                   className={cn(
                     "w-7 h-7 rounded-full transition-transform duration-150 outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-sol-bg focus-visible:ring-sol-text",
                     colorBgClassMap[color],
-                    selected ? "ring-2 ring-offset-2 ring-offset-sol-bg ring-sol-base1 scale-110" : "hover:scale-105",
+                    selected ? "ring-2 ring-offset-2 ring-offset-sol-bg ring-sol-text-dim scale-110" : "hover:scale-105",
                     disabled && "opacity-50",
                   )}
                 />

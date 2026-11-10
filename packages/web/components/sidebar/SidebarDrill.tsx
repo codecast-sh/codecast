@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, type ReactNode } from "react";
-import type { DrillLevel } from "../../hooks/useSidebarDrill";
 import { KeyCap } from "../KeyCap";
 import { useShortcutAction, useShortcutParts } from "../../shortcuts";
 
@@ -18,8 +17,8 @@ export function SidebarDrillStack({
   pane,
   children,
 }: {
-  level: DrillLevel | null;
-  shown: DrillLevel | null;
+  level: string | null;
+  shown: string | null;
   label: string;
   /** What still needs you outside this level (the inbox count), so going in
    *  never hides it. */

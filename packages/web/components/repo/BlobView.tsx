@@ -147,7 +147,7 @@ export function BlobView({
                       e.preventDefault();
                       onSelectLine(number, e.shiftKey);
                     }}
-                    className="repo-line-number block text-right tabular-nums"
+                    className="repo-line-number block text-right modern:font-mono tabular-nums"
                     style={{ width: gutterWidth }}
                   >
                     {number}

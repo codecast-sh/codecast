@@ -44,7 +44,7 @@ export function RepoCompareContent({ repository, base, head, family }: {
       {data.commits.length > 0 && <details className="border-b border-sol-border/40">
         <summary className="px-4 py-2 cursor-pointer text-xs">Commits in this comparison ({data.commits.length})</summary>
         <ol className="divide-y divide-sol-border/30">{data.commits.map((commit) => <li key={commit.sha} className="px-4 py-2 flex gap-3 text-xs">
-          <Link href={commitPageHref(repository, commit.sha, family)} className="text-sol-blue shrink-0">{commit.sha.slice(0, 7)}</Link>
+          <Link href={commitPageHref(repository, commit.sha, family)} className="modern:font-mono text-sol-blue shrink-0">{commit.sha.slice(0, 7)}</Link>
           <Link href={commitPageHref(repository, commit.sha, family)} className="truncate flex-1">{commit.message.split("\n")[0]}</Link>
           <span className="text-sol-text-dim">{commit.author_login || commit.author_name}</span>
         </li>)}</ol>

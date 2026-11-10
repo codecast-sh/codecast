@@ -236,7 +236,7 @@ export function DecisionCompactCardView({
                 <DecisionProposalOrigin contextMd={decision.context_md} />
                 {showTask && (task || decision.task_id) && (
                   <Link href={taskHref(String(task?.short_id ?? decision.task_id))} className="px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10">
-                    {task?.short_id ?? "task"}{decision.station ? ` · ${decision.station}` : ""}
+                    {task?.short_id ? <span className="modern:font-mono">{task.short_id}</span> : "task"}{decision.station ? ` · ${decision.station}` : ""}
                   </Link>
                 )}
                 {stack && (

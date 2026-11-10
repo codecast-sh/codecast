@@ -151,3 +151,6 @@
 @media (prefers-reduced-motion: reduce) {
   .ring-card-dot { animation: none; }
 }
+
+/* Modern (.modern-style): the card is words, in the interface sans. */
+.modern-style .ring-card { font-family: var(--font-ui, system-ui, sans-serif); }

@@ -120,6 +120,7 @@ function AppearanceSection() {
   const options = ([
     { value: "classic", label: "Classic", description: <StyleOptionPreview variant="classic" caption="Solarized, compact, information-dense" /> },
     { value: "minimal", label: "Minimal", description: <StyleOptionPreview variant="minimal" caption="Neutral, spacious, reading-first" /> },
+    { value: "modern", label: "Modern", description: <StyleOptionPreview variant="modern" caption="Sans type, grouped navigation, one page header" /> },
   ] satisfies Array<{ value: VisualStyle; label: string; description: ReactNode }>);
   return (
     <SettingsSection title="Appearance" icon={Palette} description="Choose the visual language for every Codecast surface.">

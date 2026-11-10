@@ -159,7 +159,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
       </label>
       {lead && (
         <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12px] leading-relaxed" role="group" aria-label="Project lead" data-template-lead={lead.handle} data-lead-runs={leadRunsItHere ? "here" : leadRunsIt ? "elsewhere" : undefined}>
-          <p className="text-sol-text"><span className="font-semibold">@{lead.handle}</span> leads {project?.title}{leadRunsIt ? <> and already runs <span className="font-semibold">{template.name}</span> {leadInstance?.version}{leadRunsItHere ? " here" : ""}</> : null}.</p>
+          <p className="text-sol-text"><span className="font-semibold">@{lead.handle}</span> leads {project?.title}{leadRunsIt ? <> and already runs <span className="font-semibold">{template.name}</span> <span className="modern:font-mono">{leadInstance?.version}</span>{leadRunsItHere ? " here" : ""}</> : null}.</p>
           {leadRunsItHere && <a href={`/org/${lead.short_id ?? lead._id}`} className="mt-1 inline-block text-[12px] font-semibold text-sol-violet underline-offset-2 hover:underline" data-template-open-lead>Open @{lead.handle}</a>}
           {!leadRunsItHere && <div className="mt-1.5 flex flex-col gap-1">
             {([["under", `Hire under @${lead.handle}: a new role that reports to it; it stays the lead`], ["lead", `Give it to @${lead.handle} instead: no new role; it takes on the template's triggers and record`]] as const).map(([value, label]) => (

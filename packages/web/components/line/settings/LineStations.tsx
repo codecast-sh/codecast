@@ -240,7 +240,7 @@ function RepoLineHeader({ repo, changedCount, onResetAll }: { repo: ReturnType<t
       <div className="min-w-0 max-w-[64ch]">
         <div className="text-[13px]" style={{ color: "var(--sol-text)" }} data-line-stations-headline>
           {own
-            ? <>This project's line lives in its repo, in {dir}{repo.version ? <>, at version <code data-line-version style={{ color: "var(--sol-text-muted)" }}>{repo.version.slice(0, 8)}</code></> : null}.</>
+            ? <>This project's line lives in its repo, in <span className="modern:font-mono">{dir}</span>{repo.version ? <>, at version <code data-line-version style={{ color: "var(--sol-text-muted)" }}>{repo.version.slice(0, 8)}</code></> : null}.</>
             : <>This project's repo has no steps of its own yet, so its runs use their owner's steps or the Standard ones.</>}
         </div>
         <div className="text-meta mt-0.5" style={{ color: "var(--sol-text-dim)" }}>

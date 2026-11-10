@@ -16,6 +16,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useOverflows } from "../../hooks/useOverflows";
 import { MessageMarkdown } from "../conversation/markdown";
 import { Avatar } from "../tasks/TaskCommentStream";
+import { PageHeader } from "../ui/page-header";
 
 const PROMPT_MAX_HEIGHT = 220;
 
@@ -52,10 +53,9 @@ export function PromptsPage() {
   const viewer = useViewerIdentity();
   const columns = useMemo(() => columnsOf(rows, viewer ? [viewer, ...roster] : roster, viewer?._id), [rows, roster, viewer]);
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-3 border-b border-sol-border/40 px-5 py-3">
-        <h1 className="text-[15px] font-semibold text-sol-text">Prompts</h1>
+  // The day's controls and tally, drawn by whichever header is up.
+  const tally = `${rows.length} ${rows.length === 1 ? "prompt" : "prompts"} · ${columns.length} ${columns.length === 1 ? "person" : "people"}`;
+  const dayNav = (
         <div className="flex items-center gap-1">
           <button type="button" aria-label="Previous day" onClick={() => go(addDays(date, -1))} className="rounded p-1 text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text">
             <ChevronLeft className="h-4 w-4" />
@@ -77,10 +77,24 @@ export function PromptsPage() {
             </button>
           )}
         </div>
-        <span className="ml-auto font-mono text-[12px] tabular-nums text-sol-text-muted">
-          {rows.length} {rows.length === 1 ? "prompt" : "prompts"} · {columns.length} {columns.length === 1 ? "person" : "people"}
-        </span>
-      </header>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        legacy={
+          <header className="flex shrink-0 items-center gap-3 border-b border-sol-border/40 px-5 py-3">
+            <h1 className="text-[15px] font-semibold text-sol-text">Prompts</h1>
+            {dayNav}
+            <span className="ml-auto font-mono text-[12px] tabular-nums text-sol-text-muted">
+              {tally}
+            </span>
+          </header>
+        }
+        title="Prompts"
+        count={tally}
+        tabs={dayNav}
+      />
       {!teamId ? (
         <Empty>Prompts shows a team's day. Switch to a team to see it.</Empty>
       ) : columns.length === 0 ? (

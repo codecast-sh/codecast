@@ -20,6 +20,10 @@ const TooltipContent = React.forwardRef<
       sideOffset={sideOffset}
       className={cn(
         "z-[200] overflow-hidden rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 origin-[--radix-tooltip-content-transform-origin]",
+        // Modern: one tooltip look for the app (ShortcutTooltip's light card):
+        // a small white card on the hairline with the popover shadow, 12px
+        // text, 6px corners, above every menu, popover and dialog (z 400).
+        "modern:z-[400] modern:rounded-control modern:border modern:border-sol-border modern:bg-sol-card modern:px-2 modern:py-1 modern:text-meta modern:text-sol-text modern:shadow-popover modern:duration-press modern:ease-ui modern:zoom-in-[0.98] modern:data-[state=closed]:zoom-out-[0.98]",
         className
       )}
       {...props}

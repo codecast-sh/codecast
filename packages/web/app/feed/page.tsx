@@ -2,14 +2,20 @@ import { useState } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { MessageFeed } from "../../components/MessageFeed";
+import { PageFrame, PageHeader } from "../../components/ui/page-header";
+import { SegmentedToggle } from "../../components/SegmentedToggle";
+
+const FILTERS = [
+  { key: "my", label: "My Messages" },
+  { key: "team", label: "Team" },
+];
 
 export default function FeedPage() {
   const [filter, setFilter] = useState<"my" | "team">("my");
 
-  return (
-    <AuthGuard>
-      <DashboardLayout>
-        <div className="space-y-4">
+  // Classic and Minimal: the page's own title row and line.
+  const legacy = (
+    <>
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-bold text-sol-text">Message Feed</h1>
             <div className="flex items-center gap-2">
@@ -38,8 +44,25 @@ export default function FeedPage() {
           <p className="text-sol-text-muted text-sm">
             All messages across your sessions in chronological order.
           </p>
+    </>
+  );
+
+  return (
+    <AuthGuard>
+      <DashboardLayout>
+        <PageFrame
+          header={
+            <PageHeader
+              legacy={legacy}
+              title="Message feed"
+              tabs={<SegmentedToggle value={filter} onChange={(key) => setFilter(key as "my" | "team")} items={FILTERS} />}
+            />
+          }
+          legacyColumn="space-y-4"
+          column="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 lg:px-8"
+        >
           <MessageFeed filter={filter} />
-        </div>
+        </PageFrame>
       </DashboardLayout>
     </AuthGuard>
   );

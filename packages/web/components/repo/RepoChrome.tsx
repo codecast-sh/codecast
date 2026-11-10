@@ -68,7 +68,7 @@ export function BranchPicker({
         aria-expanded={open}
       >
         <GitBranch className="w-3.5 h-3.5" style={{ color: "var(--repo-accent)" }} />
-        <span className="max-w-[14rem] truncate">{value}</span>
+        <span className="max-w-[14rem] truncate modern:font-mono">{value}</span>
         <ChevronDown className="w-3 h-3 text-sol-text-dim" />
       </button>
 
@@ -101,7 +101,7 @@ export function BranchPicker({
                     className={cn("w-3 h-3 shrink-0", branch.name === value ? "opacity-100" : "opacity-0")}
                     style={{ color: "var(--repo-accent)" }}
                   />
-                  <span className="truncate">{branch.name}</span>
+                  <span className="truncate modern:font-mono">{branch.name}</span>
                   {branch.tag && <span className="ml-auto text-meta text-sol-text-dim">tag</span>}
                   {!branch.tag && branch.name === defaultBranch && (
                     <span className="ml-auto text-meta text-sol-text-dim">default</span>

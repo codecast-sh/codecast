@@ -775,3 +775,6 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
    "show earlier" button brings its own inset. */
 .th-kind-chat .th-card-open > .th-task-earlier,
 .th-kind-dm .th-card-open > .th-task-earlier { padding: 8px 14px 2px; }
+
+/* Modern (.modern-style): the anchor is a file path, so mono. */
+.modern-style .th-card-anchor-text { font-family: var(--font-mono), monospace; }

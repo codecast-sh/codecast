@@ -1,11 +1,18 @@
 import { Component, ReactNode } from "react";
-import { RefreshCw, X } from "lucide-react";
+import { AlertTriangle, RefreshCw, X } from "lucide-react";
 import { captureError } from "@/lib/analytics";
 import { describeError, errorSummary, rootError } from "@/lib/errorCause";
 import { showErrorToast } from "@/lib/errorToast";
 import { isChunkLoadError, tryReloadForStaleChunk } from "../lib/chunkReloadGuard";
 import { isCallPanelWindow } from "@/lib/desktop";
 import { scheduleVoiceHostReload } from "../lib/voiceHostRecovery";
+// lib/visualStyle reads the root class, not the store: a share page that
+// shows nothing of the app (SharedMessageView) mounts this boundary too.
+import { isModernStyle } from "../lib/visualStyle";
+import { Button } from "./ui/button";
+import { EmptyState } from "./ui/empty-state";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { focusRing } from "./ui/styles";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -97,6 +104,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
     const level = this.props.level ?? "panel";
     const name = this.props.name;
+    if (isModernStyle()) return this.renderModern(level, name);
 
     if (level === "inline") {
       return (
@@ -143,6 +151,59 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             {this.state.isChunk ? "Reload" : "Retry"}
           </button>
         </div>
+      </div>
+    );
+  }
+
+  // The Modern style: the panel is the shared empty state (components/ui/
+  // empty-state) with Retry and the trace behind a "Details" disclosure; the
+  // inline row opens its trace in a popover that flips to whichever side has
+  // room (a boundary in the header would open one above the window).
+  renderModern(level: "panel" | "inline", name: string | undefined) {
+    const error = this.state.error!;
+    const retryLabel = this.state.isChunk ? "Reload" : "Retry";
+    const details = (
+      <>
+        <p className="mb-2 font-mono text-meta text-sol-red [overflow-wrap:anywhere]">{errorSummary(error)}</p>
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all font-mono text-meta text-sol-text-dim">
+          {describeError(error)}
+        </pre>
+      </>
+    );
+    if (level === "inline") {
+      return (
+        <div className="flex min-h-control-sm items-center gap-1.5 px-3 py-1 text-meta text-sol-text-dim">
+          <AlertTriangle className="size-3.5 shrink-0 text-sol-red" aria-hidden />
+          <Popover open={this.state.showDetails} onOpenChange={(open) => this.setState({ showDetails: open })}>
+            <PopoverTrigger asChild>
+              <button type="button" className={`min-w-0 truncate rounded-control hover:text-sol-text ${focusRing}`} title="Show error details">
+                Failed to load{name ? ` ${name}` : ""}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" collisionPadding={8} className="w-[min(32rem,calc(100vw-16px))]">
+              {details}
+            </PopoverContent>
+          </Popover>
+          <Button variant="ghost" size="xs" className="text-sol-cyan" onClick={this.retry}>
+            {retryLabel}
+          </Button>
+        </div>
+      );
+    }
+    return (
+      <div data-error-boundary={name || "app"} className="h-full flex items-center justify-center p-4">
+        <EmptyState
+          icon={AlertTriangle}
+          title={name ? `Couldn't load ${name}` : "Something went wrong"}
+          action={{ label: retryLabel, onClick: this.retry, icon: RefreshCw }}
+        >
+          <details className="w-full max-w-md text-left text-meta text-sol-text-dim">
+            <summary className={`mx-auto w-fit cursor-pointer select-none list-none rounded-control px-1 hover:text-sol-text [&::-webkit-details-marker]:hidden ${focusRing}`}>
+              Details
+            </summary>
+            <div className="mt-2 rounded-card border border-sol-border bg-sol-bg-inset p-3">{details}</div>
+          </details>
+        </EmptyState>
       </div>
     );
   }

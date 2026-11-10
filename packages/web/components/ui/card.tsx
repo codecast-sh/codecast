@@ -10,6 +10,9 @@ const Card = React.forwardRef<
     ref={ref}
     className={cn(
       "rounded-xl border bg-card text-card-foreground shadow",
+      // Modern: a white card on the hairline with 10px corners, and no
+      // shadow (a card sits on the page; only what floats casts one).
+      "modern:rounded-card modern:border-sol-border modern:bg-sol-card modern:text-sol-text modern:shadow-none",
       className
     )}
     {...props}

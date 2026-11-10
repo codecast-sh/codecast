@@ -16,7 +16,7 @@ export function AddPeopleButton({
   const { open, adding } = useAddToCall({ roomKey, liveTranscriptId: live?.transcript_id ?? null, routes: live?.routes ?? [], teamId: live?.team_id });
   return (
     <button
-      className={className || "rounded-md p-1.5 text-sol-text-muted transition-colors hover:bg-sol-base02"}
+      className={className || "rounded-md p-1.5 text-sol-text-muted transition-colors hover:bg-sol-bg-alt"}
       onClick={open}
       disabled={!!adding}
       title={adding ? "An agent is joining the call" : "Add to the call: ring a teammate, or bring in a role or an agent"}

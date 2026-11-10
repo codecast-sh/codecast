@@ -1,6 +1,8 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { WorkState } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "../org/orgMeta";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { ModernSectionHeader } from "./ModernSectionHeader";
 
 // The states a group header tallies: the two a person acts on or watches.
 const HEADER_STATES: WorkState[] = ["needs_input", "working"];
@@ -48,6 +50,11 @@ export function SectionHeader({
   /** Work-state tallies over the group's rows, nested ones included. */
   states?: Partial<Record<WorkState, number>>;
 }) {
+  // Modern draws one quiet header for every section (ModernSectionHeader).
+  const modern = useIsModernStyle();
+  if (modern && !inRow) {
+    return <ModernSectionHeader label={label} count={count} color={color} sectionKey={sectionKey} collapsed={collapsed} monoLabel={monoLabel} landedColor={landedColor} onToggle={onToggle} action={action} icon={icon} states={states} />;
+  }
   if (action) {
     return (
       <div data-sv-sec-row className={`sticky top-0 z-10 flex items-center bg-sol-bg ${color}`}>

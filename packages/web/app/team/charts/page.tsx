@@ -293,7 +293,7 @@ function MemberBreakdown({
               alt=""
               className="w-5 h-5 rounded-full ring-1 ring-sol-border/20"
               fallback={
-                <div className="w-5 h-5 rounded-full bg-sol-base02 flex items-center justify-center text-meta font-semibold text-sol-text-secondary">
+                <div className="w-5 h-5 rounded-full bg-sol-bg-highlight flex items-center justify-center text-meta font-semibold text-sol-text-secondary">
                   {m.display_name[0]?.toUpperCase() || "?"}
                 </div>
               }

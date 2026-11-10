@@ -171,3 +171,6 @@ button.lwp-section svg { width: 13px; height: 13px; margin-left: auto; align-sel
 .lwp-twins .lwp-title { color: var(--lw-ink-2); font-weight: 500; }
 .lwp-twin .lwp-row-act-c { grid-column: 1 / -1; font-size: 12px; }
 .lwp-twin-n { color: var(--lw-ink-3); }
+
+/* Modern (.modern-style): an id stays mono beside the sans. */
+.modern-style .lwp-sub-held-ref { font-family: var(--lw-mono); }

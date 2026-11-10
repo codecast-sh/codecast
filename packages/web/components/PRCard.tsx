@@ -106,11 +106,11 @@ export function PRCard(props: PRCardProps) {
             {props.head_ref && (
               <>
                 <span>•</span>
-                <span className="text-sol-green">{props.head_ref}</span>
+                <span className="modern:font-mono text-sol-green">{props.head_ref}</span>
                 {props.base_ref && (
                   <>
                     <span className="text-sol-text-dim">→</span>
-                    <span className="text-sol-blue">{props.base_ref}</span>
+                    <span className="modern:font-mono text-sol-blue">{props.base_ref}</span>
                   </>
                 )}
               </>

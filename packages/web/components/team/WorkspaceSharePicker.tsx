@@ -420,7 +420,7 @@ function WorkspaceSection({
                       </span>
                     )}
                   </div>
-                  <div className="mt-0.5 truncate text-xs text-sol-text-dim">
+                  <div className="mt-0.5 truncate modern:font-mono text-xs text-sol-text-dim">
                     {ws.path}
                   </div>
                   <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-sol-text-dim">

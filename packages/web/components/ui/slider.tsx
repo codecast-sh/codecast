@@ -1,6 +1,7 @@
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
+import "./slider.css"
 
 interface SliderProps {
   value: number
@@ -19,8 +20,9 @@ interface SliderProps {
 /** A styled native range input. Native, because the platform already ships the
  *  keyboard model (arrows, Home/End, page steps) and the a11y wiring a custom
  *  thumb would have to re-earn; the `.cc-range` class in globals.css restyles
- *  the track and thumb with sol tokens. The filled portion of the track is
- *  painted by the `--fill` custom property this component keeps in step. */
+ *  the track and thumb with sol tokens, and slider.css gives Modern its face.
+ *  The filled portion of the track is painted by the `--fill` custom property
+ *  this component keeps in step. */
 export function Slider({
   value,
   min = 0,

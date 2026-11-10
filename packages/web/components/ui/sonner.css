@@ -307,3 +307,80 @@
   color: var(--sol-text);
   background: color-mix(in srgb, var(--sol-text) 6%, transparent);
 }
+
+/* ── Modern (the opt-in style: .modern-style on <html>) ───────────────────────
+ * Everything above is Classic and Minimal, untouched. Modern draws the toast
+ * on the primitive tokens (app/globals.css): the card radius, the one
+ * hairline, the toast elevation (which deepens in dark mode on its own), a
+ * calm white card whatever the type (the glyph chip carries the colour), the
+ * control height and radius for the buttons, the press timing and the one
+ * focus ring. Each rule names .modern-style once more than the rule it
+ * replaces, so it wins there and nowhere else. */
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  border-radius: var(--radius-card);
+  border-color: var(--sol-border);
+  background: var(--sol-card);
+  box-shadow: var(--shadow-toast);
+}
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"]:is([data-type="success"], [data-type="error"], [data-type="info"], [data-type="warning"], [data-type="loading"]) {
+  border-color: var(--sol-border);
+  background: var(--sol-card);
+}
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-icon] {
+  background: color-mix(in srgb, var(--toast-accent) 12%, transparent);
+}
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-button] {
+  height: var(--control-sm);
+  border-radius: var(--radius-control);
+  transition:
+    background var(--motion-press) var(--motion-ease),
+    color var(--motion-press) var(--motion-ease),
+    border-color var(--motion-press) var(--motion-ease);
+}
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-button]:focus-visible,
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-action]:active {
+  background-color: var(--btn-fill-press);
+}
+/* The quiet answer: Modern's white outline face. */
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button],
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-quiet-action [data-action][data-button] {
+  color: var(--sol-text);
+  background: var(--sol-card);
+  border-color: var(--sol-border);
+}
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button]:hover,
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-quiet-action [data-action][data-button]:hover {
+  background: color-mix(in srgb, var(--sol-text) 5%, var(--sol-card));
+  border-color: color-mix(in srgb, var(--sol-text-dim) 45%, var(--sol-border));
+}
+/* The close control: a 24px square, the floor for anything pressable. */
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button] {
+  right: 6px;
+  top: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-control);
+  transition:
+    opacity var(--motion-press) var(--motion-ease),
+    background var(--motion-press) var(--motion-ease),
+    color var(--motion-press) var(--motion-ease);
+}
+/* The undo receipt: one quiet line on the card face, no glass. */
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt {
+  min-height: var(--control-md);
+  border-radius: var(--radius-card);
+  border-color: var(--sol-border);
+  background: var(--sol-card);
+  backdrop-filter: none;
+  box-shadow: var(--shadow-popover);
+}
+.modern-style .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-receipt.cc-toast-receipt [data-action][data-button] {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+}

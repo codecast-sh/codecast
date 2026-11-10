@@ -3,6 +3,7 @@ import { memo, useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 import { useBottomAnchoredList, prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
 import { lineGroupKey, buildChatTimeline, type TimelineRow } from "../../lib/chatTimeline";
+import { isModernStyle } from "../../lib/visualStyle";
 import { ChatMessage, ChatDayDivider, ChatNewDivider } from "./ChatMessage";
 import type { ChatMessageView } from "./chatTypes";
 import { shouldHoldChatLanding } from "./chatLanding";
@@ -58,10 +59,12 @@ const estimateRow = (row: ListRow | undefined): number => {
   // A voice bubble is one padded line around its transcript, plus the control
   // and clock that sit on the same line as the words.
   if (m.voice) {
-    const spoken = Math.max(1, Math.ceil(m.content.length / 80));
+    const spoken = Math.max(1, Math.ceil(m.content.length / (isModernStyle() ? 100 : 80)));
     return (row.grouped ? 8 : 26) + spoken * 20;
   }
-  const lines = Math.max(1, Math.ceil(m.content.length / 92));
+  // Characters per line of the message column: 92 in the mono face, about 20%
+  // more in Modern's sans; erring high keeps the guess small.
+  const lines = Math.max(1, Math.ceil(m.content.length / (isModernStyle() ? 115 : 92)));
   // A huddle digest carries its own header plus the transcript disclosure line.
   if (m.call) return 26 + lines * 21 + 22 + (m.reactions?.length ? 24 : 0) + (m.replyCount ? 26 : 0);
   return (row.grouped ? 4 : 22) + lines * 21 + (m.reactions?.length ? 24 : 0) + (m.replyCount ? 26 : 0);

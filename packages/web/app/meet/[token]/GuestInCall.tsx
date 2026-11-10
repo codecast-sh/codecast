@@ -212,7 +212,7 @@ export function GuestInCall({
   return (
     // Inside the notch and the rounded corners on a phone (index.html sets
     // viewport-fit=cover): the bottom bar keeps its own inset.
-    <div className="meet dark fixed inset-0 flex flex-col !bg-none bg-sol-base03 pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] pt-[env(safe-area-inset-top)] text-sol-text">
+    <div className="meet dark fixed inset-0 flex flex-col !bg-none bg-sol-bg pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] pt-[env(safe-area-inset-top)] text-sol-text">
       {/* The bar: where this is, who is in it, and what is being kept. */}
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-white/[0.06] px-3 sm:px-4">
         <span className="meet-mark text-sol-text-secondary max-sm:hidden" aria-hidden>

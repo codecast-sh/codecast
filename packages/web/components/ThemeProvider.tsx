@@ -12,7 +12,7 @@ import type { ModRow } from "../lib/mods/host";
 import "./simple/laneLook";
 
 export type Theme = "dark" | "light";
-export type VisualStyle = "classic" | "minimal";
+export type VisualStyle = "classic" | "minimal" | "modern";
 
 interface ThemeContextType {
   theme: Theme;
@@ -31,18 +31,32 @@ function getInitialTheme(): Theme {
   return localStorage.getItem("codecast-theme") === "dark" ? "dark" : "light";
 }
 
-function normalizeVisualStyle(value: string | null | undefined): VisualStyle {
+type BaseStyle = Exclude<VisualStyle, "modern">;
+
+function normalizeVisualStyle(value: string | null | undefined): BaseStyle {
   return value === "minimal" || value === "codex" ? "minimal" : "classic";
 }
 
-function getInitialVisualStyle(): VisualStyle {
+function getInitialVisualStyle(): BaseStyle {
   if (typeof window === "undefined") return "classic";
   return normalizeVisualStyle(localStorage.getItem("codecast-visual-style"));
 }
 
+// Modern is stored apart from `visual_style` (its own ui key and its own
+// localStorage key). A build from before Modern normalizes any style it does
+// not know to Classic and writes that back, so a "modern" value in the shared
+// key would be fought over by an old tab and a new one. Old builds never read
+// this key, and under it they show Classic.
+const MODERN_STYLE_KEY = "codecast-modern-style";
+function getInitialModern(): boolean {
+  return typeof window !== "undefined" && localStorage.getItem(MODERN_STYLE_KEY) === "1";
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [initialTheme] = useState<Theme>(getInitialTheme);
-  const [visualStyle, setVisualStyleState] = useState<VisualStyle>(getInitialVisualStyle);
+  const [visualStyle, setVisualStyleState] = useState<BaseStyle>(getInitialVisualStyle);
+  const [modernOn, setModernOn] = useState<boolean>(getInitialModern);
+  const serverModern = useInboxStore((s) => s.clientState.ui?.modern_style);
   const [mounted, setMounted] = useState(false);
   const storedTheme = useInboxStore((s) => s.clientState.ui?.theme);
   const theme = storedTheme ?? initialTheme;
@@ -60,7 +74,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => setLock((cur) => (cur === locked ? null : cur));
   }, []);
   const shownTheme = lock ?? theme;
-  const shownStyle: VisualStyle = lock ? "classic" : resolveVisualStyle({ visual_style: visualStyle });
+  const shownStyle: VisualStyle = lock ? "classic" : modernOn ? "modern" : resolveVisualStyle({ visual_style: visualStyle });
 
   // One custom property on the root; the stylesheet mixes the fill from it.
   useWatchEffect(() => {
@@ -104,10 +118,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     if (mounted) localStorage.setItem("codecast-visual-style", visualStyle);
   }, [visualStyle, mounted]);
 
+  // This device's own choice wins; a device that has never chosen takes the
+  // stored one.
+  useWatchEffect(() => {
+    if (!mounted || serverModern === undefined) return;
+    if (localStorage.getItem(MODERN_STYLE_KEY) === null) setModernOn(serverModern === true);
+  }, [serverModern, mounted]);
+
   useWatchEffect(() => {
     if (!styleReady) return;
     document.documentElement.classList.remove("codex-style");
     document.documentElement.classList.toggle("minimal-style", shownStyle === "minimal");
+    // Modern is the opt-in redesign: its rules and the `modern:` variant key on
+    // this class, so Classic and Minimal never see them.
+    document.documentElement.classList.toggle("modern-style", shownStyle === "modern");
   }, [shownStyle, styleReady]);
 
   // The color theme (lib/theme): Verdigris unless the person chose another,
@@ -125,7 +149,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const chosen = themes.find((c) => c.key === colorThemeKey)?.theme;
     return chosen ?? (modsKnown ? themes.find((c) => c.key === DEFAULT_COLOR_THEME)?.theme : undefined);
   }, [colorThemeKey, modMap, installed, modsKnown]);
-  const colorVars = useMemo(() => (colorTheme ? themeVarsByMode(colorTheme) : null), [colorTheme]);
+  // Original sets no variables, so the stylesheet's Solarized shows through.
+  // Modern was not drawn for Solarized: under it, Original means the default
+  // theme's palette.
+  const modernBase = useMemo(() => availableThemes([], []).find((c) => c.key === DEFAULT_COLOR_THEME)?.theme, []);
+  const paintedTheme = shownStyle === "modern" && colorTheme && !colorTheme.light ? modernBase : colorTheme;
+  const colorVars = useMemo(() => (paintedTheme ? themeVarsByMode(paintedTheme) : null), [paintedTheme]);
   useWatchEffect(() => {
     if (!styleReady || !colorVars) return;
     applyThemeVars(!lock ? colorVars[shownTheme] : {});
@@ -138,15 +167,29 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [initialTheme, updateClientUI]);
 
   const setVisualStyle = useCallback((style: VisualStyle) => {
-    setVisualStyleState(style);
-    updateClientUI({ visual_style: style });
+    // Modern sits on Classic's rules (simple view and list density follow the
+    // person's own toggles), so the base style under it is Classic.
+    const modern = style === "modern";
+    const base: BaseStyle = modern ? "classic" : style;
+    setModernOn(modern);
+    localStorage.setItem(MODERN_STYLE_KEY, modern ? "1" : "0");
+    setVisualStyleState(base);
+    updateClientUI({ visual_style: base, modern_style: modern });
   }, [updateClientUI]);
+
+  // One object per real change: every session card and page header reads the
+  // style from this context, and a fresh object each render would re-render
+  // them all whenever this provider did.
+  const themeContext = useMemo(
+    () => ({ theme: shownTheme, toggleTheme, visualStyle: shownStyle, setVisualStyle }),
+    [shownTheme, toggleTheme, shownStyle, setVisualStyle],
+  );
 
   if (!mounted) return null;
 
   return (
     <ThemeLockContext.Provider value={acquireLock}>
-      <ThemeContext.Provider value={{ theme: shownTheme, toggleTheme, visualStyle: shownStyle, setVisualStyle }}>
+      <ThemeContext.Provider value={themeContext}>
         {children}
       </ThemeContext.Provider>
     </ThemeLockContext.Provider>

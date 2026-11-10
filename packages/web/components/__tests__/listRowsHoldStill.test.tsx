@@ -47,3 +47,113 @@ test("a card whose send is pending delivery, or that is restarting, holds still"
 test("a running liveness dot (board tiles, task rows) holds still", () => {
   expect(renderToStaticMarkup(<LivenessDot state="active" />)).not.toMatch(MOTION);
 });
+
+// The Modern style's rows (lib/sessionStatus): the card in every state, the
+// marks, the section header, the board's tiles, the /sessions and /windows
+// rows. Stricter than the Classic rule: no spinner either.
+const STILL = /animate-(ping|pulse|spin|bounce)/;
+const { MemoryRouter } = await import("react-router");
+const { ModernSessionCardView } = await import("../inbox/ModernSessionCard");
+const { SessionStatusMark, SessionStatusLabel } = await import("../inbox/SessionStatusMark");
+const { ModernSectionHeader } = await import("../inbox/ModernSectionHeader");
+const { ModernFleetBody } = await import("../fleet/ModernFleetBoard");
+const { ModernSessionsRow } = await import("../../app/sessions/ModernSessionRow");
+const { ModernWindowRow } = await import("../../app/windows/ModernWindowRow");
+const { SESSION_STATUSES } = await import("../../lib/sessionStatus");
+const { DEFAULT_IDENTITY_PREFS } = await import("../../lib/sessionIdentity");
+
+const settled = (over: Record<string, unknown> = {}) => row({
+  session_id: "s-hold", message_count: 8, is_idle: true, agent_status: "idle", is_connected: true,
+  updated_at: Date.now() - 5 * 60_000, agent_status_updated_at: Date.now() - 5 * 60_000, started_at: Date.now() - 3_600_000, last_heartbeat: Date.now(),
+  idle_summary: "Made the retry idempotent", worktree_name: "wt-1", cloud_placement: "pending", ...over,
+});
+const noop = () => {};
+const modernCard = (session: any, props: Record<string, unknown> = {}, live: Record<string, unknown> = {}) => renderToStaticMarkup(
+  <MemoryRouter>
+    <ModernSessionCardView
+      session={session}
+      isActive={false}
+      isFavorite={false}
+      sessionLabel={null}
+      now={Date.now()}
+      chrome={{ showModelBadge: true, showAgentIcon: true, showBranchPill: true, prefs: DEFAULT_IDENTITY_PREFS }}
+      liveness={{ isLive: false, pendingSend: false, restarting: false, draft: "", ...live }}
+      viewerId={null}
+      author={null}
+      viewers={[]}
+      spawnedByTitle={null}
+      anchorIdentity={null}
+      onSelect={noop}
+      onPin={noop}
+      onDismiss={noop}
+      onStash={noop}
+      {...props}
+    />
+  </MemoryRouter>,
+);
+
+test("a Modern card holds still in every state, mid-send, mid-restart and nested", () => {
+  const aside = { onRestore: noop, onKill: noop, onDismiss: undefined, onStash: undefined, onPin: undefined };
+  const cards: Array<[string, string]> = [
+    ["working", modernCard(settled({ is_idle: false, agent_status: "working" }), { variant: "working" }, { isLive: true })],
+    ["needs_you", modernCard(settled(), { sectionStatus: "blocked" })],
+    ["error", modernCard(settled({ pending_api_error: true, pending_api_error_kind: "limit" }), { sectionStatus: "blocked" })],
+    ["starting", modernCard(settled({ message_count: 0, is_connected: false, started_at: Date.now(), updated_at: Date.now() }))],
+    ["done", modernCard(settled(), { sectionStatus: "done" })],
+    ["dormant", modernCard(settled(), { sectionStatus: "dormant" })],
+    ["idle", modernCard(settled({ message_count: 0, started_at: Date.now() - 600_000, updated_at: Date.now() - 600_000 }))],
+    ["stashed", modernCard(settled(), { variant: "stashed", ...aside })],
+    ["killed", modernCard(settled(), { variant: "dismissed", ...aside })],
+    // A send in flight: the section still decides the word, the line says "Sending".
+    ["needs_you", modernCard(settled(), { sectionStatus: "blocked" }, { pendingSend: true })],
+    ["working", modernCard(settled({ is_idle: false, agent_status: "working" }), { variant: "working" }, { restarting: true })],
+    ["working", modernCard(settled({ is_subagent: true, parent_conversation_id: "p", is_idle: false, agent_status: "working" }), { variant: "working" }, { isLive: true })],
+  ];
+  const seen = new Set<string>();
+  for (const [want, html] of cards) {
+    const status = html.match(/data-mc-status="([a-z_]+)"/)?.[1];
+    expect(status).toBe(want);
+    seen.add(status!);
+    expect(html).not.toMatch(STILL);
+  }
+  expect([...seen].sort()).toEqual([...SESSION_STATUSES].sort());
+});
+
+test("every status mark, the Modern section header, board tiles and the other Modern rows hold still", () => {
+  for (const s of SESSION_STATUSES) {
+    expect(renderToStaticMarkup(<SessionStatusMark status={s} />)).not.toMatch(STILL);
+    expect(renderToStaticMarkup(<SessionStatusLabel status={s} />)).not.toMatch(STILL);
+  }
+  expect(renderToStaticMarkup(<ModernSectionHeader label="Working" count={3} color="text-sol-green" sectionKey="working" collapsed={false} />)).not.toMatch(STILL);
+  const working = settled({ _id: "jx7000000000000000000000000000hw1", is_idle: false, agent_status: "working" });
+  const asking = settled({ _id: "jx7000000000000000000000000000hw2", awaiting_input: true });
+  const done = settled({ _id: "jx7000000000000000000000000000hw3", settle_verdict: "done" });
+  const placed = { questions: [asking], pinned: [], needsInput: [], done: [done], dormant: [], working: [working], newSessions: [], placements: new Map() } as any;
+  const board = renderToStaticMarkup(
+    <MemoryRouter>
+      <ModernFleetBody placed={placed} opts={{ queued: new Set(), pendingSendIds: new Set(), now: Date.now(), stopped: () => null }} onOpen={noop} />
+    </MemoryRouter>,
+  );
+  expect(board.match(/data-session-tile=/g)).toHaveLength(3);
+  expect(board).not.toMatch(STILL);
+  const sessionsRow = renderToStaticMarkup(
+    <MemoryRouter>
+      <ModernSessionsRow
+        row={{ _id: "m1", session_id: "s1", conversation_id: working._id, conversation_title: "Row", bucket: "active", awakeIdleMs: 0, lastActiveAt: Date.now(), lastActiveMs: 0, uptime: 60_000, pinned: false, dismissed: false, killed: false, isAlive: true }}
+        inbox={working}
+        now={Date.now()}
+        busy={false}
+        expanded={false}
+        parking={false}
+        onToggleExpand={noop}
+        onPin={noop}
+        onStash={noop}
+        onKill={noop}
+        onPrune={noop}
+      />
+    </MemoryRouter>,
+  );
+  expect(sessionsRow).toContain('data-mc-status="working"');
+  expect(sessionsRow).not.toMatch(STILL);
+  expect(renderToStaticMarkup(<ModernWindowRow session={working} now={Date.now()} onOpen={noop} />)).not.toMatch(STILL);
+});

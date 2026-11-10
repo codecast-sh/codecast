@@ -1816,6 +1816,8 @@ export type ClientUI = {
   // default_agent is absent. Stamped like last_picked_device_id.
   last_picked_agent?: string;
   visual_style?: "classic" | "minimal";
+  /** The opt-in Modern style, kept apart from visual_style (components/ThemeProvider.tsx says why). */
+  modern_style?: boolean;
   sidebar_collapsed?: boolean;
   // The sidebar sections the chevrons pin open (true) or closed (false), by
   // section key. A section the user never touched is absent and follows the
@@ -3632,6 +3634,34 @@ function sharedPlacementOf(s: InboxSession, live: LiveFacts, asking: boolean, ep
   const entry: RowPlacementEntry = { epoch, live: key, asking, bucket: p.bucket, work_state: p.work_state };
   _rowPlacementCache.set(s, entry);
   return entry;
+}
+
+// One row placed the way the rail's sections place it: its live facts
+// re-derived at `now` (deriveLiveAt, as placeInboxRows does) at the minute
+// epoch, with no membership, riders, ask or in-flight overlays (the caller
+// knows those: lib/sessionStatus applies them). sessionPlacement reads the
+// row's shipped live fields instead, which lag the rail inside the idle grace.
+// Its own cache, so it never evicts the chokepoint's entry for the row. The
+// Modern status vocabulary reads it wherever no section decides a row's word.
+// `state` is the placement's work state, renamed so render code never names a
+// projection stamp field (inboxProjectionGuards).
+export type RailPlacement = { bucket: InboxBucket; state: WorkState };
+const _railRowCache = new WeakMap<object, { key: string; p: RailPlacement }>();
+export function railRowPlacement(s: InboxSession, now: number): RailPlacement {
+  const live = deriveLiveAt(liveFactsOf(s), now);
+  const epoch = inboxEpoch(now);
+  const key = `${epoch}|${liveKeyOf(live)}`;
+  const hit = _railRowCache.get(s);
+  if (hit && hit.key === key) return hit.p;
+  const placed = placeProjectableRow(projectableRowOf(s, live), false, epoch);
+  const p: RailPlacement = { bucket: placed.bucket, state: placed.work_state };
+  _railRowCache.set(s, { key, p });
+  return p;
+}
+/** A row's entry in placeInboxRows' placements, in the same shape. */
+export function placedRailPlacement(placed: Pick<PlacedInbox, "placements">, id: string): RailPlacement | null {
+  const p = placed.placements.get(id);
+  return p ? { bucket: p.bucket, state: p.work_state } : null;
 }
 
 // Structural signature for the pending `cast decide` rows the questions
@@ -7281,7 +7311,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // would collapse the laptop's sidebar on the ultrawide, or send a headset id
 // to a phone that cannot open it.
 export const PER_DEVICE_UI_KEYS = new Set([
-  "visual_style",
+  "visual_style", "modern_style",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
   "trigger_prompt_height", "thread_state_collapsed", "calls_list_open", "people_view", "float_face_size",

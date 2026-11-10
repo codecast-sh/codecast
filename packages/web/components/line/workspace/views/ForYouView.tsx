@@ -158,6 +158,7 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
       <div className="fy-pane" data-settling={ready ? undefined : ""}>
         <DecisionList
           title="Decisions"
+          page={false}
           state={state}
           rows={listRows}
           tabs={FLOW_TABS}

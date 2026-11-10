@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, type ComponentType } from "react";
+import Link from "next/link";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { copyToClipboard } from "../lib/utils";
@@ -7,12 +8,17 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { cliJustConnected, markCliConnected } from "../lib/cliConnected";
 import { bridge, type DaemonSetupState } from "../lib/desktop";
 import { useMountEffect } from "../hooks/useMountEffect";
-import { TerminalSquare } from "lucide-react";
+import { MessageSquare, TerminalSquare } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { Button } from "./ui/button";
+import { EmptyState as ModernEmptyState } from "./ui/empty-state";
 
 interface EmptyStateProps {
   title: string;
   description: string;
+  /** The subject's icon in the Modern style; a chat bubble when none is given. */
+  icon?: ComponentType<{ className?: string }>;
   action?: {
     label: string;
     href: string;
@@ -204,14 +210,14 @@ function SetupTokenCommand({ onStart, accent, auto }: { onStart?: () => void; ac
   return (
     <div className="space-y-2">
       <div className="rounded-xl overflow-hidden border border-sol-border/80">
-        <div className="flex items-center justify-between gap-3 bg-sol-base02 px-4 py-3">
-          <code className="text-sol-base1 text-sm font-mono truncate">
-            <span className="text-sol-base01 select-none">$ </span>
+        <div className="flex items-center justify-between gap-3 bg-sol-bg-inset px-4 py-3">
+          <code className="text-sol-text text-sm font-mono truncate">
+            <span className="text-sol-text-dim select-none">$ </span>
             curl -fsSL codecast.sh/install | sh -s -- <span className="text-sol-green">{setupToken?.slice(0, 8)}...</span>
           </code>
           <button
             onClick={() => handleCopy(installCommand!)}
-            className="p-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-base01 rounded-md transition-colors shrink-0"
+            className="p-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight rounded-md transition-colors shrink-0"
             title="Copy to clipboard"
           >
             {copied ? (
@@ -391,8 +397,10 @@ function StartTeamLink() {
   );
 }
 
-export function EmptyState({ title, description, action, variant, hasOtherSessions }: EmptyStateProps) {
+export function EmptyState({ title, description, action, variant, hasOtherSessions, icon }: EmptyStateProps) {
+  const modern = useIsModernStyle();
   if (variant === "onboarding") return <OnboardingEmptyState hasOtherSessions={hasOtherSessions} />;
+  if (modern) return <ModernPlainEmpty title={title} description={description} action={action} icon={icon} />;
 
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -422,5 +430,33 @@ export function EmptyState({ title, description, action, variant, hasOtherSessio
         </a>
       )}
     </div>
+  );
+}
+
+// The Modern style's plain empty state, on the shared primitive
+// (components/ui/empty-state): the caller's icon (a chat bubble when it names
+// none), the title, and the one action as an in-app link. The description is
+// not drawn as a sentence: it is data (an error, a note about a filter), so it
+// opens behind "Details" on demand.
+function ModernPlainEmpty({ title, description, action, icon }: Pick<EmptyStateProps, "title" | "description" | "action" | "icon">) {
+  return (
+    <ModernEmptyState
+      icon={icon ?? MessageSquare}
+      title={title}
+      action={action ? (
+        <Button asChild size="sm">
+          <Link href={action.href}>{action.label}</Link>
+        </Button>
+      ) : undefined}
+    >
+      {description ? (
+        <details className="max-w-sm text-meta text-sol-text-dim">
+          <summary className="cursor-pointer select-none list-none rounded-control px-1 hover:text-sol-text [&::-webkit-details-marker]:hidden">
+            Details
+          </summary>
+          <p className="mt-1 text-sol-text-muted [overflow-wrap:anywhere]">{description}</p>
+        </details>
+      ) : null}
+    </ModernEmptyState>
   );
 }

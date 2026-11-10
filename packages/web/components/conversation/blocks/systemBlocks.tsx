@@ -30,7 +30,7 @@ import { CallVideoStretchChip } from "../../calls/CallVideoStretchChip";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
 import { agentStatusAt } from "../../../lib/liveness";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
-import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud } from "lucide-react";
+import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud, Info } from "lucide-react";
 import { pendingCancelRef, sessionMessageQueueLabel } from "../../../lib/pendingBanner";
 import { cancelPendingSend } from "../../../lib/cancelPendingSend";
 import { HeldTerminalScreen } from "../HeldTerminalScreen";
@@ -60,24 +60,24 @@ function CommandStatusLine({ content: rawContent, timestamp }: { content: string
 
   if (cmdName) {
     return (
-      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs">
-        <svg className="w-3 h-3 text-sol-cyan/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs" data-cc-row="system" data-cc-row-head>
+        <svg data-cc-row-icon className="w-3 h-3 text-sol-cyan/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
         </svg>
-        <span className="font-mono text-sol-cyan/80 font-medium">/{cmdName}</span>
-        {displayText && <span className="text-meta text-sol-text-dim truncate">{displayText}</span>}
-        <span className="text-sol-text-dim text-meta ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span data-cc-row-object className="font-mono text-sol-cyan/80 font-medium">/{cmdName}</span>
+        {displayText && <span data-cc-row-text className="text-meta text-sol-text-dim truncate">{displayText}</span>}
+        <span data-cc-row-meta className="text-sol-text-dim text-meta ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
     );
   }
 
   return (
-    <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-sol-text-dim">
-      <span className="text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
-      <span className="px-1.5 py-0.5 rounded bg-sol-bg-alt/50 text-sol-text-muted font-mono text-meta">
+    <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-sol-text-dim" data-cc-row="system" data-cc-row-head>
+      <span data-cc-row-meta className="text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      <span data-cc-row-verb className="px-1.5 py-0.5 rounded bg-sol-bg-alt/50 text-sol-text-muted font-mono text-meta">
         {cmdType || "status"}
       </span>
-      <span className="font-mono truncate">{displayText}</span>
+      <span data-cc-row-object className="font-mono truncate">{displayText}</span>
     </div>
   );
 }
@@ -590,26 +590,26 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
   if (isMonitorEventNotification(parsed) && parsed.event) {
     const desc = monitorNotificationDescription(parsed);
     return (
-      <div data-cc-feed-card className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5">
-        <Radar className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-blue/70" />
-        <span data-cc-tech className="text-mark font-medium tracking-wide uppercase text-sol-blue/70 shrink-0 mt-px">monitor</span>
+      <div data-cc-feed-card className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5" data-cc-row="system" data-cc-row-head>
+        <Radar data-cc-row-icon className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-blue/70" />
+        <span data-cc-tech data-cc-row-verb className="text-mark font-medium tracking-wide uppercase text-sol-blue/70 shrink-0 mt-px">monitor</span>
         <ExpandableLine
           text={decodeEntities(parsed.event)}
           className="text-sol-text-muted"
           title={desc ? `Monitor: ${desc}` : undefined}
         />
-        <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span data-cc-row-meta className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
     );
   }
   if (isMonitorEndedNotification(parsed)) {
     const desc = monitorNotificationDescription(parsed);
     return (
-      <div data-cc-feed-card className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30">
-        <Radar className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-text-dim" />
-        <span className="text-mark font-medium tracking-wide uppercase text-sol-text-dim shrink-0 mt-px">monitor ended</span>
+      <div data-cc-feed-card className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30" data-cc-row="system" data-cc-row-head>
+        <Radar data-cc-row-icon className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-text-dim" />
+        <span data-cc-row-verb className="text-mark font-medium tracking-wide uppercase text-sol-text-dim shrink-0 mt-px">monitor ended</span>
         {desc && <ExpandableLine text={desc} className="text-sol-text-dim" />}
-        <span className="text-sol-text-dim shrink-0 whitespace-nowrap ml-auto" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span data-cc-row-meta className="text-sol-text-dim shrink-0 whitespace-nowrap ml-auto" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
     );
   }
@@ -641,31 +641,33 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
         data-status={parsed.status}
         className={`mb-1.5 mx-1 rounded border-l-2 ${cfg.accent}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
         {...(childId ? pressable(() => router.push(`/conversation/${childId}`), "link") : {})}
+        data-cc-row="system"
       >
-        <div className="flex items-start gap-2 px-3 py-2 text-xs">
+        <div className="flex items-start gap-2 px-3 py-2 text-xs" data-cc-row-head>
           {woke ? (
             /* The wake cue takes the status glyph's slot: a corner arrow
                pointing down and into the row below \u2014 the turn this
                notification pulled the agent back for. The status itself still
                reads from the chip on the right. */
             <CornerDownRight
+              data-cc-row-icon
               className={`w-3.5 h-3.5 shrink-0 mt-px ${cfg.color}`}
               strokeWidth={2.25}
               aria-label="Woke the agent"
             />
           ) : (
-            <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
+            <span data-cc-row-icon className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
           )}
-          <span data-cc-tech className={`text-mark font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
+          <span data-cc-tech data-cc-row-verb className={`text-mark font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
           <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
-          <span className={`px-1 py-0 rounded border text-meta font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
+          <span data-cc-row-meta className={`px-1 py-0 rounded border text-meta font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
           {childId && (
             <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           )}
-          <span data-cc-tech className="text-sol-text-dim font-mono text-meta shrink-0">{parsed.taskId}</span>
-          <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+          <span data-cc-tech data-cc-row-tag className="text-sol-text-dim font-mono text-meta shrink-0">{parsed.taskId}</span>
+          <span data-cc-row-tag className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         </div>
       </div>
     );
@@ -677,8 +679,9 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
       data-status={parsed.status}
       className={`mb-2 px-3 py-2 flex items-start gap-2.5 text-xs border rounded ${cfg.bg}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
       {...(childId ? pressable(() => router.push(`/conversation/${childId}`), "link") : {})}
+      data-cc-row="system" data-cc-row-head
     >
-      <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
+      <span data-cc-row-icon className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
       <ExpandableLine text={parsed.summary} className="text-sol-text-muted" />
       {childId && (
         <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -688,9 +691,9 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
       {/* A batch notice names its tasks inside the summary itself, so pinning
           one id on the row would read as if the rest weren't there. */}
       {!isOrphanSummaryNotification(parsed) && (
-        <span data-cc-tech className="text-sol-text-dim font-mono text-meta shrink-0">{parsed.taskId}</span>
+        <span data-cc-tech data-cc-row-tag className="text-sol-text-dim font-mono text-meta shrink-0">{parsed.taskId}</span>
       )}
-      <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      <span data-cc-row-meta className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
     </div>
   );
 }
@@ -713,12 +716,12 @@ export function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCal
 
   if (input.stop) {
     return (
-      <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/40 bg-sol-violet/5">
-        <div className="flex items-center gap-2 px-3 py-1.5">
-          <Zap className="w-3.5 h-3.5 text-sol-violet/50 shrink-0" />
-          <span className="text-mark font-medium tracking-wide uppercase text-sol-violet/60 shrink-0">Loop ended</span>
-          <span className="text-xs text-sol-text-muted truncate">the agent stopped scheduling wakeups</span>
-          <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/40 bg-sol-violet/5" data-cc-row="system">
+        <div className="flex items-center gap-2 px-3 py-1.5" data-cc-row-head>
+          <Zap data-cc-row-icon className="w-3.5 h-3.5 text-sol-violet/50 shrink-0" />
+          <span data-cc-row-verb className="text-mark font-medium tracking-wide uppercase text-sol-violet/60 shrink-0">Loop ended</span>
+          <span data-cc-row-text className="text-xs text-sol-text-muted truncate">the agent stopped scheduling wakeups</span>
+          <span data-cc-row-meta className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         </div>
       </div>
     );
@@ -727,27 +730,27 @@ export function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCal
   const delayMs = Math.max(0, (input.delaySeconds ?? 0) * 1000);
   const wakeAt = timestamp + delayMs;
   return (
-    <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
-        <span className="text-mark font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">Wakeup</span>
+    <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5" data-cc-row="system" data-cc-row-tone={result?.is_error ? "error" : undefined}>
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1" data-cc-row-head>
+        <Zap data-cc-row-icon className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
+        <span data-cc-row-verb className="text-mark font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">Wakeup</span>
         {delayMs > 0 && (
           <ShortcutTooltip label={`Fires at ${fmtClock(wakeAt)}`}>
-            <span className="px-1 py-0 rounded border text-meta font-semibold shrink-0 tabular-nums border-sol-violet/40 text-sol-violet/90 bg-sol-violet/10">
+            <span data-cc-row-tag className="px-1 py-0 rounded border text-meta font-semibold shrink-0 tabular-nums border-sol-violet/40 text-sol-violet/90 bg-sol-violet/10">
               in {fmtDuration(delayMs)}
             </span>
           </ShortcutTooltip>
         )}
-        {input.reason && <span className="text-xs text-sol-text-muted truncate">{input.reason}</span>}
-        <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        {input.reason && <span data-cc-row-text className="text-xs text-sol-text-muted truncate">{input.reason}</span>}
+        <span data-cc-row-meta className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
       {result?.is_error && (
-        <div className="mx-3 mb-2 rounded border border-sol-red/30 bg-sol-red/5 px-2 py-1.5 text-meta leading-relaxed text-sol-red/90">
+        <div data-cc-row-sub className="mx-3 mb-2 rounded border border-sol-red/30 bg-sol-red/5 px-2 py-1.5 text-meta leading-relaxed text-sol-red/90">
           {result.content.slice(0, 300)}
         </div>
       )}
       {input.prompt && (
-        <div className="px-3 pb-2">
+        <div className="px-3 pb-2" data-cc-row-sub>
           <button
             onClick={() => setShowPrompt(!showPrompt)}
             className="flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors"
@@ -1162,15 +1165,15 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
 
   if (subtype === "compact_boundary") {
     return (
-      <div className="my-6 flex items-center gap-3">
-        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent" />
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30">
+      <div className="my-6 flex items-center gap-3" data-cc-row="compaction" data-cc-row-head>
+        <div data-cc-row-rule className="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent" />
+        <div data-cc-row-lead className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30">
           <svg className="w-3.5 h-3.5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
           </svg>
-          <span className="text-xs text-amber-500 font-medium">Context compacted</span>
+          <span data-cc-row-verb className="text-xs text-amber-500 font-medium">Context compacted</span>
         </div>
-        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent" />
+        <div data-cc-row-rule className="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent" />
       </div>
     );
   }
@@ -1178,12 +1181,12 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
   // A cloud agent action's result (Create PR, Apply, Archive): codecast says it, not the agent.
   if (subtype === CLOUD_AGENT_ACTION_SUBTYPE && content) {
     return (
-      <div className="mb-3 flex items-start gap-2 px-3 py-2 bg-sol-violet/5 border-l-2 border-sol-violet/40 text-xs text-sol-text-muted">
-        <Cloud className="w-3.5 h-3.5 mt-px text-sol-violet/70 shrink-0" />
-        <div className="min-w-0 flex-1 break-words [&_p]:m-0">
+      <div className="mb-3 flex items-start gap-2 px-3 py-2 bg-sol-violet/5 border-l-2 border-sol-violet/40 text-xs text-sol-text-muted" data-cc-row="system" data-cc-row-head>
+        <Cloud data-cc-row-icon className="w-3.5 h-3.5 mt-px text-sol-violet/70 shrink-0" />
+        <div data-cc-row-text className="min-w-0 flex-1 break-words [&_p]:m-0">
           <ReactMarkdown remarkPlugins={ASSISTANT_MD_REMARK} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>{content}</ReactMarkdown>
         </div>
-        {timestamp && <span className="text-meta text-sol-text-dim shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>}
+        {timestamp && <span data-cc-row-meta className="text-meta text-sol-text-dim shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>}
       </div>
     );
   }
@@ -1203,13 +1206,13 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
   // generic gray system row.
   if (subtype === "scheduled_task_fire" && content) {
     return (
-      <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
-        <div className="flex items-center gap-2 px-3 py-1.5">
-          <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
-          <span className="text-mark font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">Wakeup fired</span>
-          <span className="text-xs text-sol-text-muted truncate">{stripAnsiCodes(content)}</span>
+      <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5" data-cc-row="system">
+        <div className="flex items-center gap-2 px-3 py-1.5" data-cc-row-head>
+          <Zap data-cc-row-icon className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
+          <span data-cc-row-verb className="text-mark font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">Wakeup fired</span>
+          <span data-cc-row-text className="text-xs text-sol-text-muted truncate">{stripAnsiCodes(content)}</span>
           {timestamp && (
-            <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+            <span data-cc-row-meta className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
           )}
         </div>
       </div>
@@ -1229,13 +1232,13 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
     const prNum = prMatch ? prMatch[1] : "";
     const prTitle = prMatch ? prMatch[2] : content;
     return (
-      <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-violet/5 border border-sol-violet/20 rounded text-xs">
-        <svg className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-violet/5 border border-sol-violet/20 rounded text-xs" data-cc-row="system" data-cc-row-head>
+        <svg data-cc-row-icon className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
         </svg>
-        {prNum && <span className="text-sol-violet font-mono font-medium">#{prNum}</span>}
-        <span className="text-sol-text-secondary truncate">{prTitle}</span>
-        {timestamp && <span className="text-sol-text-dim ml-auto flex-shrink-0">{formatRelativeTime(timestamp)}</span>}
+        <span data-cc-row-verb className="hidden modern:inline">Pull request</span>{prNum && <span data-cc-row-object className="text-sol-violet font-mono font-medium">#{prNum}</span>}
+        <span data-cc-row-text className="text-sol-text-secondary truncate">{prTitle}</span>
+        {timestamp && <span data-cc-row-meta className="text-sol-text-dim ml-auto flex-shrink-0">{formatRelativeTime(timestamp)}</span>}
       </div>
     );
   }
@@ -1243,13 +1246,13 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
   if (subtype === "commit" && content) {
     const sha = messageUuid?.slice(0, 7) || "";
     return (
-      <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-emerald-500/5 border border-emerald-500/20 rounded text-xs">
-        <svg className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-emerald-500/5 border border-emerald-500/20 rounded text-xs" data-cc-row="system" data-cc-row-head>
+        <svg data-cc-row-icon className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m0 0l4-4m6 0v12m0 0l4-4m-4 4l-4-4" />
         </svg>
-        {sha && <span className="text-emerald-500 font-mono font-medium">{sha}</span>}
-        <span className="text-sol-text-secondary truncate">{content}</span>
-        {timestamp && <span className="text-sol-text-dim ml-auto flex-shrink-0">{formatRelativeTime(timestamp)}</span>}
+        <span data-cc-row-verb className="hidden modern:inline">Committed</span>{sha && <span data-cc-row-object className="text-emerald-500 font-mono font-medium">{sha}</span>}
+        <span data-cc-row-text className="text-sol-text-secondary truncate">{content}</span>
+        {timestamp && <span data-cc-row-meta className="text-sol-text-dim ml-auto flex-shrink-0">{formatRelativeTime(timestamp)}</span>}
       </div>
     );
   }
@@ -1262,20 +1265,20 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
       const stderr = content.match(/<local-command-stderr>([\s\S]*?)<\/local-command-stderr>/)?.[1]?.trim();
       const output = stripAnsiCodes(stdout || stderr || "");
       return (
-        <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-bg-alt/30 border-l-2 border-sol-cyan/30 text-xs">
-          <svg className="w-3 h-3 text-sol-cyan/60 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-bg-alt/30 border-l-2 border-sol-cyan/30 text-xs" data-cc-row="system" data-cc-row-head>
+          <svg data-cc-row-icon className="w-3 h-3 text-sol-cyan/60 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <polyline points="4 17 10 11 4 5" />
           </svg>
-          {cmdName && <span className="font-mono text-sol-cyan/80 font-medium">/{cmdName}</span>}
-          {output && <ExpandableLine text={output} className="text-sol-text-muted font-mono" />}
-          {!cmdName && !output && <ExpandableLine text={stripAnsiCodes(content.replace(/<[^>]+>/g, ""))} className="text-sol-text-dim font-mono" />}
+          {cmdName && <span data-cc-row-verb className="font-mono text-sol-cyan/80 font-medium">/{cmdName}</span>}
+          {output && <ExpandableLine text={output} className="text-sol-text-muted font-mono modern:text-meta" />}
+          {!cmdName && !output && <ExpandableLine text={stripAnsiCodes(content.replace(/<[^>]+>/g, ""))} className="text-sol-text-dim font-mono modern:text-meta" />}
         </div>
       );
     }
     return (
-      <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-bg-alt/30 border-l-2 border-sol-border text-xs">
-        <span className="text-meta text-sol-text-dim bg-sol-bg-highlight px-1.5 py-0.5 rounded font-mono shrink-0">hook</span>
-        <ExpandableLine text={stripAnsiCodes(content)} className="text-sol-text-muted font-mono" />
+      <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-bg-alt/30 border-l-2 border-sol-border text-xs" data-cc-row="system" data-cc-row-head>
+        <span data-cc-row-verb className="text-meta text-sol-text-dim bg-sol-bg-highlight px-1.5 py-0.5 rounded font-mono shrink-0">hook</span>
+        <ExpandableLine text={stripAnsiCodes(content)} className="text-sol-text-muted font-mono modern:text-meta" />
       </div>
     );
   }
@@ -1283,14 +1286,14 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
   if (subtype === "away_summary" && content) {
     const text = stripAnsiCodes(content).trim();
     return (
-      <div className="my-2 rounded-lg bg-sol-bg-alt/40 border border-sol-border/40 px-4 py-3">
-        <div className="flex items-center gap-1.5 mb-2">
-          <svg className="w-3 h-3 text-sol-text-dim/50 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <div className="my-2 rounded-lg bg-sol-bg-alt/40 border border-sol-border/40 px-4 py-3" data-cc-row="system">
+        <div className="flex items-center gap-1.5 mb-2" data-cc-row-head>
+          <svg data-cc-row-icon className="w-3 h-3 text-sol-text-dim/50 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
           </svg>
-          <span className="text-mark uppercase tracking-wider font-medium text-sol-text-dim/60">away summary</span>
+          <span data-cc-row-verb className="text-mark uppercase tracking-wider font-medium text-sol-text-dim/60">away summary</span>
         </div>
-        <div className="text-[13px] text-sol-text-secondary break-words leading-relaxed whitespace-pre-line">
+        <div data-cc-row-sub className="text-[13px] text-sol-text-secondary break-words leading-relaxed whitespace-pre-line">
           <FormattedSummary text={text} />
         </div>
       </div>
@@ -1307,14 +1310,14 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
   // banner; every other status line keeps the neutral system gray.
   const warning = isWarningSystemNotice(content, subtype);
   return (
-    <div className={`mb-4 px-3 py-2 border-l-2 text-xs flex items-baseline gap-2 ${warning ? "bg-amber-500/10 border-amber-500/40" : "bg-sol-bg-alt/20 border-sol-border"}`}>
-      {subtype && (
-        <span className={`text-meta shrink-0 ${warning ? "text-amber-500" : "text-sol-text-dim"}`}>
+    <div className={`mb-4 px-3 py-2 border-l-2 text-xs flex items-baseline gap-2 ${warning ? "bg-amber-500/10 border-amber-500/40" : "bg-sol-bg-alt/20 border-sol-border"}`} data-cc-row="system" data-cc-row-tone={warning ? "warn" : undefined} data-cc-row-head>
+      <Info data-cc-row-icon aria-hidden className="hidden modern:block w-4 h-4 shrink-0" />{subtype && (
+        <span data-cc-row-verb className={`text-meta shrink-0 ${warning ? "text-amber-500" : "text-sol-text-dim"}`}>
           {warning ? "warning" : subtype.replace(/_/g, " ")}
         </span>
       )}
       {/* One line, opened in place to the whole notice. */}
-      <ExpandableLine text={cleanText} className={`font-mono ${warning ? "text-amber-500" : "text-sol-text-muted"}`} />
+      <ExpandableLine text={cleanText} className={`font-mono modern:text-meta ${warning ? "text-amber-500" : "text-sol-text-muted"}`} />
     </div>
   );
 }
@@ -1327,13 +1330,13 @@ function DynamicRunCard({ runId, name, goal }: { runId?: string; name?: string; 
   const status = run?.status as string | undefined;
   const sm = wfStatusMeta(status);
   return (
-    <div data-cc-feed-card className="my-2 rounded-lg border border-sol-cyan/25 bg-sol-cyan/[0.06] overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-cyan/15">
-        <Workflow className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
-        <span data-cc-tech className="text-mark text-sol-cyan uppercase tracking-wider font-semibold">Workflow</span>
-        <span className="text-xs text-sol-text-muted truncate">{run?.workflow_name || name || "workflow"}</span>
-        {goal && <span className="text-xs text-sol-text-dim truncate min-w-0">{goal}</span>}
-        <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+    <div data-cc-feed-card className="my-2 rounded-lg border border-sol-cyan/25 bg-sol-cyan/[0.06] overflow-hidden" data-cc-row="workflow">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-cyan/15" data-cc-row-head>
+        <Workflow data-cc-row-icon className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
+        <span data-cc-tech data-cc-row-verb className="text-mark text-sol-cyan uppercase tracking-wider font-semibold">Workflow</span>
+        <span data-cc-row-object className="text-xs text-sol-text-muted truncate">{run?.workflow_name || name || "workflow"}</span>
+        {goal && <span data-cc-row-text className="text-xs text-sol-text-dim truncate min-w-0">{goal}</span>}
+        <div data-cc-row-meta className="ml-auto flex items-center gap-2 flex-shrink-0">
           {run?.agent_count != null && <span data-cc-tech className="text-meta text-sol-text-dim">{run.agent_count} agents</span>}
           {run?.total_tokens ? <span data-cc-tech className="text-meta text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
           {status && (
@@ -1371,12 +1374,12 @@ export function WorkflowEventBlock({ content, workflowRun, onGateChoice }: {
 
   if (wf === "started") {
     return (
-      <div className="my-2 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-sol-violet/10 border border-sol-violet/25 text-xs">
-        <svg className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div className="my-2 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-sol-violet/10 border border-sol-violet/25 text-xs" data-cc-row="workflow" data-cc-row-head>
+        <svg data-cc-row-icon className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
-        <span className="text-sol-text-muted">Workflow started</span>
-        {event.goal && <span className="text-sol-text-dim truncate">— {event.goal}</span>}
+        <span data-cc-row-verb className="text-sol-text-muted">Workflow started</span>
+        {event.goal && <span data-cc-row-text className="text-sol-text-dim truncate">— {event.goal}</span>}
       </div>
     );
   }
@@ -1397,18 +1400,19 @@ export function WorkflowEventBlock({ content, workflowRun, onGateChoice }: {
     const tc = typeColors[nodeType] || typeColors.agent;
 
     return (
-      <div className="my-0.5">
-        <div className="flex items-center gap-1.5 text-xs">
-          {isDone && <span className="text-emerald-400 text-meta">{"\u2713"}</span>}
-          {isFailed && <span className="text-sol-red text-meta">{"\u2717"}</span>}
-          {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow flex-shrink-0" />}
-          <span className={`px-1 py-0.5 rounded text-meta font-medium ${tc.bg} border ${tc.border} ${tc.text}`}>
+      <div className="my-0.5" data-cc-row="workflow" data-cc-row-tone={isFailed ? "error" : undefined}>
+        <div className="flex items-center gap-1.5 text-xs" data-cc-row-head>
+          {isDone && <span data-cc-row-icon className="text-emerald-400 text-meta">{"\u2713"}</span>}
+          {isFailed && <span data-cc-row-icon className="text-sol-red text-meta">{"\u2717"}</span>}
+          {isRunning && <span data-cc-row-icon className="w-1.5 h-1.5 rounded-full bg-sol-yellow flex-shrink-0" />}
+          <span data-cc-row-verb className="hidden modern:inline">{isDone ? "Step finished" : isFailed ? "Step failed" : "Step started"}</span><span data-cc-row-tag className={`px-1 py-0.5 rounded text-meta font-medium ${tc.bg} border ${tc.border} ${tc.text}`}>
             {nodeType}
           </span>
-          <span className={`text-xs ${isFailed ? "text-sol-red/80" : "text-sol-text-muted"}`}>{label}</span>
-          {isRunning && <span className="text-sol-text-dim/50 text-meta">running…</span>}
+          <span data-cc-row-text className={`text-xs ${isFailed ? "text-sol-red/80" : "text-sol-text-muted"}`}>{label}</span>
+          {isRunning && <span data-cc-row-hint className="text-sol-text-dim/50 text-meta">running…</span>}
           {event.session_id && isDone && (
             <Link
+              data-cc-row-meta
               href={`/conversation/${event.session_id}`}
               onClick={(e) => e.stopPropagation()}
               className="text-sol-cyan hover:text-sol-cyan text-meta font-medium underline underline-offset-2"
@@ -1486,7 +1490,7 @@ function GateDecisionBlock({ decisionId, shortId, prompt, resolved }: { decision
       </div>
       {prompt && <p className="mt-1 text-sol-text">{prompt.split("\n")[0]}</p>}
       <Link href={`/decisions/${shortId ?? decisionId}`} className="mt-1.5 inline-flex items-center gap-1 text-[12px] text-sol-blue hover:underline">
-        Open the decision {shortId ?? ""}
+        Open the decision {shortId ? <span className="modern:font-mono">{shortId}</span> : null}
       </Link>
     </div>
   );
@@ -1498,12 +1502,14 @@ export const CompactionSummaryBlock = memo(function CompactionSummaryBlock({ con
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (
-    <div className="mb-4">
+    <div className="mb-4" data-cc-row="compaction">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className="flex items-center gap-2 text-xs text-sol-text-dim hover:text-sol-text-muted transition-colors"
+        aria-expanded={isExpanded} data-cc-row-head
       >
         <svg
+          data-cc-row-hint
           className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
@@ -1511,10 +1517,10 @@ export const CompactionSummaryBlock = memo(function CompactionSummaryBlock({ con
         >
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
         </svg>
-        <span className="text-amber-500/70">Previous context summary</span>
+        <span data-cc-row-verb className="text-amber-500/70">Previous context summary</span>
       </button>
       {isExpanded && (
-        <div className="mt-2 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-amber-500/30 text-xs prose prose-invert prose-sm max-w-none">
+        <div data-cc-row-detail className="mt-2 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-amber-500/30 text-xs prose prose-invert prose-sm max-w-none">
           <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS_NO_PRE}>
             {stripCompactionProvenance(content)}
           </ReactMarkdown>

@@ -13,7 +13,6 @@ import { groupsWithItems, visibleGroups } from "../lib/listGroups";
 import { ContextMenu, useContextMenu } from "./ui/context-menu";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
-import { SyncProgressBadge } from "./SyncProgressBadge";
 import { ListGroupHeader, ListRowShell, type ItemRowState } from "./ListRowShell";
 import {
   Plus,
@@ -36,8 +35,7 @@ import {
 } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
-import { useTitlebarHead } from "../hooks/useTitlebarHead";
-import { activeTabOf, tabSelectionSummary } from "./listTabSelection";
+import { ListViewHeader } from "./ListViewHeader";
 
 export interface ListTab {
   key: string;
@@ -48,90 +46,6 @@ export interface ListTab {
   icon?: any;
   /** Tooltip. */
   title?: string;
-}
-
-/** Compact stand-in for the preset pill row, shown when the header is too narrow
- *  to fit every pill (see .cq-tabs-compact). Surfaces the active preset + count
- *  and drops the list into a popover so no preset is ever out of reach. */
-function TabDropdown({
-  tabs,
-  activeTab,
-  onChange,
-}: {
-  tabs: ListTab[];
-  activeTab: string;
-  onChange: (key: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const active = activeTabOf(tabs, activeTab);
-  const summary = tabSelectionSummary(tabs, activeTab);
-
-  useWatchEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    // Esc closes the popover, and only the popover (captured before the
-    // list's own Esc and the detail's close).
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault(); e.stopPropagation(); setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    document.addEventListener("keydown", onKey, true);
-    return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("keydown", onKey, true); };
-  }, [open]);
-
-  // The label/count only collapse when there's an icon to stand in for them, so
-  // icon-less consumers (e.g. Docs) keep their text at every width.
-  const labelCollapse = summary.icons.length ? "cq-tab-label" : "";
-
-  return (
-    <div ref={ref} className="relative flex-shrink-0">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 h-7 px-2 rounded-md bg-sol-bg-alt border border-sol-border/40 text-xs text-sol-text hover:border-sol-border transition-colors"
-        title={summary.label}
-      >
-        {summary.icons.length > 0 && (
-          <span className="flex items-center -space-x-0.5 flex-shrink-0">
-            {summary.icons.slice(0, 4).map((I, i) => <I key={i} className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-muted" />)}
-          </span>
-        )}
-        <span className={`font-medium whitespace-nowrap max-w-[14rem] truncate ${labelCollapse}`}>{summary.label}</span>
-        {summary.count != null && summary.count > 0 && (
-          <span className={`text-meta tabular-nums text-sol-text-dim ${labelCollapse}`}>{summary.count}</span>
-        )}
-        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
-      </button>
-      {open && (
-        <div className="absolute top-full left-0 mt-1 w-52 max-h-[min(70vh,28rem)] overflow-y-auto bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
-          {tabs.map((t) => {
-            const TIcon = t.icon;
-            const isActive = active?.key === t.key;
-            return (
-              <button
-                key={t.key}
-                onClick={() => { onChange(t.key); setOpen(false); }}
-                title={t.title ?? t.label}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                  isActive ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
-              >
-                {TIcon && <TIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
-                <span className="flex-1 text-left whitespace-nowrap">{t.label}</span>
-                {t.count != null && t.count > 0 && (
-                  <span className="text-meta tabular-nums text-sol-text-dim">{t.count}</span>
-                )}
-                {isActive && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export interface ListSortOption {
@@ -168,7 +82,7 @@ function DisplayOptionRow({
 /** Linear-style "Display" popover. Folds two independent controls — Grouping and
  *  Sorting (with a direction toggle) — plus any page-specific display options
  *  (e.g. a List/Board switch passed as `extra`) behind one button, so the header
- *  toolbar stays a single compact row. Same popover pattern as TabDropdown.
+ *  toolbar stays a single compact row. Same popover pattern as TabDropdown (ListViewHeader).
  *
  *  Grouping is optional: when `groupOptions` is omitted the section is hidden and
  *  the popover is sort-only. Sorting always shows; the asc/desc toggle appears
@@ -468,6 +382,9 @@ export type { ItemRowState } from "./ListRowShell";
 
 export interface GenericListViewProps<T> {
   title: string;
+  /** The list is a page of its own: the shared page header, title shown (the default).
+   *  False when it is one pane of another page that names itself (ListViewHeader). */
+  page?: boolean;
   tabs: ListTab[];
   /** The list's current preset. A value no tab carries is a finer selection the
    *  consumer states elsewhere (tasks: a status chip in the filter bar), and no
@@ -593,6 +510,7 @@ export interface GenericListViewProps<T> {
 
 export function GenericListView<T>({
   title,
+  page = true,
   tabs,
   activeTab,
   onTabChange,
@@ -643,7 +561,6 @@ export function GenericListView<T>({
 }: GenericListViewProps<T>) {
   const paletteKeys = useShortcutParts("palette.toggle");
   const router = useRouter();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const currentPath = usePathname();
 
   // Open/close a row's detail by driving the URL: navigating to the row's route
@@ -1144,63 +1061,21 @@ export function GenericListView<T>({
   );
 
 
-  // The chip-able filter bar renders inside .cq-container (below). When it shows,
-  // the container's own bottom border would land at the bottom of the filter
-  // zone and stack with the next divider (a group header / first row) — at narrow
-  // width, where the action cluster wraps right up against it, that reads as a
-  // doubled line. So the container draws its bottom border only when the filter
-  // bar is hidden; when shown, the filter bar's own top border separates it from
-  // the toolbar and the content below owns the lower edge — one divider, not two.
-  // The bar also has to appear for a MODIFIED view even with no chips showing:
+  // The chip-able filter bar is the header's second row (ListViewHeader). The bar
+  // also has to appear for a MODIFIED view even with no chips showing:
   // clearing a view's only filter is a change you must be able to save or undo,
   // and hiding the bar would take both actions away at exactly that moment.
   const filterBarShown = !!filters && (filters.defs.some(filterIsSet) || !!filters.dirtyView);
-  const activeTabKey = activeTabOf(tabs, activeTab)?.key ?? null;
   return (
     <div className="h-full flex flex-col" data-list-view>
-      {/* Header. The outer wrapper is the container-query context; the inner
-          .cq-header row is what adapts (wraps the toolbar below the tabs) as the
-          panel narrows — a container can't query its own width, only a child's. */}
-      {/* The header's own rule (.cc-panel__head) is the one line under it. */}
-      <div className="cq-container">
-        <div ref={titlebarRef} className="cq-header cq-header-pad cc-panel__head cc-panel__head--flow flex-wrap justify-between gap-x-2">
-        <div className="flex items-center gap-2 min-w-0">
-          {/* The header keeps the page's name for screen readers only. */}
-          <h1 className="sr-only">{title}</h1>
-          {syncScope && <SyncProgressBadge scope={syncScope} />}
-          {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
-              see .cq-tabs-compact in globals.css): a single compact dropdown. */}
-          {tabs.length > 1 && <>
-          <div data-list-tabs className="cq-tabs-pills flex items-center gap-0.5 p-0.5 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 flex-wrap">
-            {tabs.map((tab) => {
-              const isActive = activeTabKey === tab.key;
-              return (
-              <button
-                key={tab.key}
-                onClick={() => { onTabChange(tab.key); setFocusIndex(0); }}
-                title={tab.title}
-                className={`text-xs px-2.5 h-6 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
-                  isActive
-                    ? "bg-sol-bg-highlight text-sol-text shadow-sm"
-                    : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60"
-                }`}
-              >
-                {tab.label}
-                {tab.count != null && tab.count > 0 && <span className="text-meta tabular-nums opacity-60">{tab.count}</span>}
-              </button>
-              );
-            })}
-          </div>
-          <div className="cq-tabs-compact">
-            <TabDropdown
-              tabs={tabs}
-              activeTab={activeTab}
-              onChange={(key) => { onTabChange(key); setFocusIndex(0); }}
-            />
-          </div>
-          </>}
-        </div>
-        <div data-list-toolbar className="cq-header-toolbar flex flex-wrap items-center justify-end gap-1.5 ml-auto">
+      <ListViewHeader
+        page={page}
+        title={title}
+        syncScope={syncScope}
+        tabs={tabs}
+        activeTab={activeTab}
+        onTabChange={(key) => { onTabChange(key); setFocusIndex(0); }}
+        toolbar={<>
           {headerExtra}
           {selectedIds.size > 0 && (
             <span className="text-xs text-sol-cyan">{selectedIds.size} selected</span>
@@ -1262,21 +1137,19 @@ export function GenericListView<T>({
               onClick={onCreate}
               className="flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0"
               title="Create new"
+              aria-label="Create new"
             >
               <Plus className="w-4 h-4" />
             </button>
           )}
-        </div>
-        </div>
-
+        </>}
+      >
         {/* Filter bar — only present once at least one chip-able filter is set (NOT
             filters.hasActive, which also counts the source toggle and would leave an
-            empty chipless row). The header "Filter" button adds the first one. Kept
-            INSIDE .cq-container so its labels and padding collapse with the panel
-            width — a container query needs a containment ancestor or it falls back to
-            the viewport (which is why these classes did nothing out here before). */}
-        {filterBarShown && (
-          <div className="cq-header-pad cq-filter-bar flex items-center flex-wrap gap-x-1.5 gap-y-1.5 px-6 py-2 border-t border-sol-border/30 bg-sol-bg-alt/20">
+            empty chipless row). The header "Filter" button adds the first one. It sits
+            inside the header's query container, so its labels and padding collapse
+            with the panel width. */}
+        {filterBarShown && (<>
           {/* Active filters as removable chips; everything unset lives behind "+ Filter". */}
           {filters.defs.filter(filterIsSet).map((f) => (
             <FilterDropdown
@@ -1410,9 +1283,8 @@ export function GenericListView<T>({
               </button>
             )}
           </div>
-        </div>
-        )}
-      </div>
+        </>)}
+      </ListViewHeader>
 
       {banner}
 

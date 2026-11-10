@@ -46,6 +46,7 @@ import { useOrgPeopleView } from "./useOrgPeopleView";
 import { useOrgMoves } from "./useOrgMoves";
 import { OrgNodeMenu } from "./OrgNodeMenu";
 import { OrgButton } from "./OrgButton";
+import { PageHeader } from "../ui/page-header";
 
 /** The chart's three readings, in the switch's order. */
 export type OrgChartView = "people" | "everything" | "goals";
@@ -297,11 +298,9 @@ export function OrgChart() {
   const menu = useContextMenu<OrgLayoutNode>();
   const onNodeContextMenu = useCallback((e: React.MouseEvent, n: OrgLayoutNode) => menu.open(e, n, { force: true }), [menu]);
   const filter: MapFilter = view;
-  return (
-    <div className="flex h-full min-h-0 flex-col" style={{ background: "var(--sol-bg)" }} data-org-chart={view}>
-      {/* In a reveal band the band's own title names what opened; the chart's controls give the room to it. */}
-      {!inBand && <header className="flex h-12 shrink-0 items-center gap-4 border-b px-5" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)" }}>
-        <h1 className="text-[15px] font-medium" style={{ color: "var(--sol-text)" }}>Org</h1>
+  // The chart's controls, drawn by whichever header is up.
+  const headTabs = (
+    <>
         <ViewSwitch value={view} onChange={setView} />
         {view !== "goals" && <ExpandAllToggle on={people.expandAll} onChange={people.setExpandAll} />}
         {view !== "goals" && <FindBox q={findQ} onQ={(q) => { setFindQ(q); setFindStep(0); }} onStep={(d) => setFindStep((x) => x + d)} count={findCount} showCount={!!findQ || findWaiting} />}
@@ -320,12 +319,32 @@ export function OrgChart() {
             Needs you
           </button>
         )}
-        <div className="ml-auto flex items-center gap-2">
+    </>
+  );
+  const headActions = (
+    <>
           {view !== "goals" && tree && <TidyButton wsKey={workspaceKeyOf(tree)} />}
           <HireButton tree={tree} />
           {!panelOpen && <PanelToggle tree={tree} onOpen={() => goPanel({ kind: "home" })} />}
-        </div>
-      </header>}
+    </>
+  );
+  return (
+    <div className="flex h-full min-h-0 flex-col" style={{ background: "var(--sol-bg)" }} data-org-chart={view}>
+      {/* In a reveal band the band's own title names what opened; the chart's controls give the room to it. */}
+      {!inBand && <PageHeader
+        legacy={
+          <header className="flex h-12 shrink-0 items-center gap-4 border-b px-5" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)" }}>
+            <h1 className="text-[15px] font-medium" style={{ color: "var(--sol-text)" }}>Org</h1>
+            {headTabs}
+            <div className="ml-auto flex items-center gap-2">
+              {headActions}
+            </div>
+          </header>
+        }
+        title="Org"
+        tabs={headTabs}
+        actions={headActions}
+      />}
       <div ref={measure} className="relative min-h-0 flex-1">
         <OrgMap
           tree={tree}

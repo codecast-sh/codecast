@@ -36,7 +36,7 @@ export const TeamSwitcherButton = forwardRef<
   const crest = team ? (
     <TeamCrest icon={team.icon} color={team.icon_color} size="sm" className="w-5 h-5 rounded" />
   ) : (
-    <span className="flex h-5 w-5 items-center justify-center"><User className="w-4 h-4 text-sol-base1" /></span>
+    <span className="flex h-5 w-5 items-center justify-center"><User className="w-4 h-4 text-sol-text-muted" /></span>
   );
   // New for you in a workspace NOT on screen: a dot, so it never reads as
   // this workspace's own count. The menu names where.
@@ -66,7 +66,7 @@ export const TeamSwitcherButton = forwardRef<
       {crest}
       <span data-cc-team-label className={`text-sol-text font-semibold truncate ${rail ? "flex-1" : "max-w-[120px]"}`}>{label}</span>
       <span className="relative flex">
-        <ChevronDown className="w-3.5 h-3.5 text-sol-base1" />
+        <ChevronDown className="w-3.5 h-3.5 text-sol-text-muted" />
         {dot}
       </span>
     </button>
@@ -134,7 +134,7 @@ export function TeamSwitcher({
     return (
       <button
         onClick={() => router.push("/settings/team/create")}
-        className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-sol-base02/50 transition-colors text-sm text-sol-cyan"
+        className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-sol-bg-highlight transition-colors text-sm text-sol-cyan"
       >
         <Plus className="w-4 h-4" />
         <span className="font-medium">Create Team</span>
@@ -154,11 +154,11 @@ export function TeamSwitcher({
         />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side={variant === "rail" && isNarrow ? "right" : "bottom"} className="w-80 bg-sol-bg border-sol-border p-1">
-        <DropdownMenuLabel className="text-sol-base1 text-xs px-2 pt-1.5 pb-1">{teamsOnly ? "Team" : "Workspace"}</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-sol-text-muted text-xs px-2 pt-1.5 pb-1">{teamsOnly ? "Team" : "Workspace"}</DropdownMenuLabel>
         {!teamsOnly && (
           <WorkspaceRow
             selected={!shownTeamId}
-            icon={<span className="flex h-6 w-6 items-center justify-center rounded bg-sol-bg-alt"><User className="w-3.5 h-3.5 text-sol-base1" /></span>}
+            icon={<span className="flex h-6 w-6 items-center justify-center rounded bg-sol-bg-alt"><User className="w-3.5 h-3.5 text-sol-text-muted" /></span>}
             name="Personal"
             detail="Just you"
             badge={shownTeamId ? badgeFor(null) : NO_BADGE}
@@ -186,14 +186,14 @@ export function TeamSwitcher({
         <div className="flex items-center gap-1 px-1 py-0.5">
           <DropdownMenuItem
             onClick={() => router.push("/settings/team/create")}
-            className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer text-xs text-sol-cyan hover:bg-sol-base02/50"
+            className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer text-xs text-sol-cyan hover:bg-sol-bg-highlight"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Create team</span>
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => router.push("/settings/team/join")}
-            className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer text-xs text-sol-base1 hover:bg-sol-base02/50"
+            className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer text-xs text-sol-text-muted hover:bg-sol-bg-highlight"
           >
             <LogIn className="w-3.5 h-3.5" />
             <span>Join team</span>
@@ -201,7 +201,7 @@ export function TeamSwitcher({
           {canInvite && (
             <DropdownMenuItem
               onClick={() => setInviteOpen(true)}
-              className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer text-xs text-sol-base1 hover:bg-sol-base02/50"
+              className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer text-xs text-sol-text-muted hover:bg-sol-bg-highlight"
             >
               <UserPlus className="w-3.5 h-3.5" />
               <span className="truncate">Invite</span>
@@ -238,7 +238,7 @@ function WorkspaceRow({ selected, icon, name, detail, badge, onClear, onSelect }
     <DropdownMenuItem
       onClick={(e) => onSelect(!!(e.target as Element).closest("[data-cc-workspace-unread]"))}
       data-selected={selected || undefined}
-      className="group/row flex items-center gap-2.5 px-2 py-1.5 cursor-pointer text-sol-text hover:bg-sol-base02/50 data-[selected]:bg-sol-bg-alt"
+      className="group/row flex items-center gap-2.5 px-2 py-1.5 cursor-pointer text-sol-text hover:bg-sol-bg-highlight data-[selected]:bg-sol-bg-alt"
     >
       {icon}
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
@@ -252,7 +252,7 @@ function WorkspaceRow({ selected, icon, name, detail, badge, onClear, onSelect }
           title="Mark all read"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); e.preventDefault(); onClear(); }}
-          className="flex h-5 w-5 items-center justify-center rounded text-sol-base1 opacity-0 transition-opacity hover:bg-sol-base02 hover:text-sol-green focus-visible:opacity-100 group-hover/row:opacity-100 group-data-[highlighted]/row:opacity-100"
+          className="flex h-5 w-5 items-center justify-center rounded text-sol-text-muted opacity-0 transition-opacity hover:bg-sol-bg-highlight hover:text-sol-green focus-visible:opacity-100 group-hover/row:opacity-100 group-data-[highlighted]/row:opacity-100"
         >
           <CheckCheck className="h-3.5 w-3.5" />
         </button>

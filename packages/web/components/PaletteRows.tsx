@@ -19,6 +19,9 @@ import { SearchOrigin } from "./search/SearchOrigin";
 import { StampTime } from "./StampTime";
 import { DeviceIcon, deviceDisplayName, type Device } from "./DeviceBadge";
 import { standingMark, type SessionStanding } from "../lib/instantSessionSearch";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { statusOfStanding, type StatusRow } from "../lib/sessionStatus";
+import { SessionStatusMark, SessionStatusWord } from "./inbox/SessionStatusMark";
 
 // Presentational rows of the Cmd+K palette. CommandPalette owns the data and
 // the select handlers; these draw a row from plain props, so the marketing
@@ -195,6 +198,10 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
   const isTeam = conv.isOwn === false;
   const shelved = !!standing?.shelf;
   const authorFirst = conv.authorName?.split(" ")[0];
+  // Modern names the state in the status vocabulary (lib/sessionStatus),
+  // still, before the time; the face then carries no corner mark.
+  const modern = useIsModernStyle();
+  const status = modern ? statusOfStanding(standing, conv as StatusRow, Date.now()) : null;
   return (
     <CommandPrimitive.Item
       data-palette-type="session" data-palette-id={conv._id} data-palette-title={conv.title} data-palette-short-id={conv.short_id}
@@ -204,7 +211,7 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
     >
       {/* Who the session is (session-characters.md S3): its face,
           else the mark this row always had. */}
-      <StandingGlyph standing={standing}>
+      <StandingGlyph standing={status ? undefined : standing}>
         <SessionGlyph
           row={identityRowOf(conv)}
           className="flex-shrink-0"
@@ -229,6 +236,12 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
       <ProjectChip directory={conv.git_root || conv.project_path} />
       {isTeam && authorFirst && (
         <span className="text-meta text-sol-text-dim flex-shrink-0" title={`${conv.authorName}'s session`}>· {authorFirst}</span>
+      )}
+      {status && (
+        <span className="flex flex-shrink-0 items-center gap-1 text-meta">
+          <SessionStatusMark status={status} />
+          <SessionStatusWord status={status} />
+        </span>
       )}
       <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>

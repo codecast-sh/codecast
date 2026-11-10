@@ -16,6 +16,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { formatRelativeTime } from "../../lib/conversationFormat";
 import { FeatureUpsell } from "../agentFeatures/FeatureUpsell";
 import { CommandDisclosure } from "../secrets/parts";
+import { PageFrame, PageHeader } from "../ui/page-header";
 import { ConsequentialSwitch, type SwitchLedger, type SwitchRow } from "../consequential/ConsequentialSwitch";
 
 function Chip({ icon, children }: { icon: string; children: React.ReactNode }) {
@@ -323,12 +324,19 @@ export function ModsPage() {
   const rows = useModRows();
   const mine = rows.filter((r) => r.is_mine !== false);
   const shared = rows.filter((r) => r.is_mine === false);
-  return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-6">
+  const forScripts = <CommandDisclosure label="For scripts" text="cast mod new <name>" />;
+  const legacy = (
       <header className="mb-5 flex items-center gap-3">
         <h1 className="text-[22px] font-semibold tracking-tight text-sol-text">Mods</h1>
-        {rows.length ? <div className="ml-auto"><CommandDisclosure label="For scripts" text="cast mod new <name>" /></div> : null}
+        {rows.length ? <div className="ml-auto">{forScripts}</div> : null}
       </header>
+  );
+  return (
+    <PageFrame
+      header={<PageHeader legacy={legacy} title="Mods" count={rows.length || null} actions={rows.length ? forScripts : null} />}
+      legacyColumn="mx-auto w-full max-w-5xl px-6 py-6"
+      column="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6"
+    >
       <FeatureUpsell slug="mods" className="mb-5" reason="Ask an agent for a view or tool codecast does not have, and watch it get built right in the conversation." />
       {!rows.length ? <EmptyMods /> : null}
       {mine.length ? (
@@ -344,6 +352,6 @@ export function ModsPage() {
           </section>
         </>
       ) : null}
-    </div>
+    </PageFrame>
   );
 }

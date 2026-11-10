@@ -173,7 +173,7 @@ function CommitHeader({
           {/* The same breadcrumb the source pages carry, so a commit is one
               click from its repository and two from the index. */}
           <div
-            className="repo-rise flex items-baseline gap-1 text-[12px] mb-0.5"
+            className="repo-rise flex items-baseline gap-1 modern:font-mono text-[12px] mb-0.5"
             style={{ ["--d" as string]: "0ms" }}
           >
             <Link href="/repo" className="text-sol-text-muted hover:text-sol-text transition-colors">
@@ -221,7 +221,7 @@ function CommitHeader({
                 className="flex items-center gap-1 min-w-0 max-w-full hover:text-sol-text transition-colors"
               >
                 <GitBranch className="w-3 h-3 shrink-0" />
-                <span className="truncate">{commit.branch}</span>
+                <span className="truncate modern:font-mono">{commit.branch}</span>
               </Link>
             )}
             <span className="flex items-center gap-1.5">

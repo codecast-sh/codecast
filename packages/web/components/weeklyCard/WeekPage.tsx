@@ -25,6 +25,8 @@ import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
 import { WeekCardFrame } from "./WeekCardFrame";
 import { weekCardLedger } from "./weekCardLedger";
 import { Button } from "../ui/button";
+import { PageFrame, PageHeader } from "../ui/page-header";
+import { SegmentedToggle } from "../SegmentedToggle";
 
 type CardRow = {
   _id: string;
@@ -57,8 +59,13 @@ function Week({ name, enabled }: { name: string | null; enabled: boolean }) {
   const cards = useCollectionRows<CardRow>("weeklyCards", { sig: cardSig });
   const card = cards.find((c) => c.week_key === keys[which]);
 
-  return (
-    <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-5 px-6 py-8" data-week-page>
+  const everyMonday = (
+        <label className="ml-auto inline-flex items-center gap-2 text-[13px] text-sol-text-muted">
+          Every Monday
+          <Switch checked={enabled} onCheckedChange={(on) => useInboxStore.getState().setWeeklyCardEnabled(on)} aria-label="Build my card every Monday" />
+        </label>
+  );
+  const legacy = (
       <header className="flex flex-wrap items-center gap-4">
         <h1 className="text-[20px] font-semibold text-sol-text">Your week</h1>
         <div className="inline-flex rounded-lg border border-sol-border p-0.5 text-[13px]" role="tablist">
@@ -76,16 +83,35 @@ function Week({ name, enabled }: { name: string | null; enabled: boolean }) {
           ))}
         </div>
         {card && <span className="text-[13px] tabular-nums text-sol-text-dim">{weekRangeLabel(card.stats)}</span>}
-        <label className="ml-auto inline-flex items-center gap-2 text-[13px] text-sol-text-muted">
-          Every Monday
-          <Switch checked={enabled} onCheckedChange={(on) => useInboxStore.getState().setWeeklyCardEnabled(on)} aria-label="Build my card every Monday" />
-        </label>
+        {everyMonday}
       </header>
+  );
 
+  return (
+    <PageFrame
+      header={
+        <PageHeader
+          legacy={legacy}
+          title="Your week"
+          count={card ? weekRangeLabel(card.stats) : null}
+          tabs={<SegmentedToggle value={which} onChange={(w) => setWhich(w as WeekWhich)} items={WEEKS} />}
+          actions={everyMonday}
+        />
+      }
+      legacyColumn="mx-auto flex w-full max-w-[1040px] flex-col gap-5 px-6 py-8"
+      legacyColumnProps={{ "data-week-page": true }}
+      column="mx-auto flex w-full max-w-[1040px] flex-col gap-5 px-4 py-6 sm:px-6"
+      rootProps={{ "data-week-page": true }}
+    >
       {card ? <CardPanel key={card._id} card={card} name={name} which={which} /> : <Building key={keys[which]} which={which} tz={tz} />}
-    </div>
+    </PageFrame>
   );
 }
+
+const WEEKS = [
+  { key: "last", label: "Last week" },
+  { key: "current", label: "This week" },
+];
 
 function useBuild(which: WeekWhich, tz: string) {
   const generate = useAction(api.weeklyCards.generate);
@@ -192,7 +218,7 @@ function ShareRow({ token, stats }: { token: string; stats: WeekCardStats }) {
   const { state: copyState, copy } = useCopy();
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sol-border bg-sol-bg-alt/40 p-2 text-[13px]" data-week-share-row>
-      <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate px-2 text-sol-blue hover:underline">{url}</a>
+      <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate px-2 modern:font-mono text-sol-blue hover:underline">{url}</a>
       <button
         type="button"
         onClick={() => {

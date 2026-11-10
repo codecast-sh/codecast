@@ -365,6 +365,59 @@ html, body {
   --fs-display: 24px;
 }
 
+/* The Modern style's primitive system (components/ui/*, opt-in: .modern-style
+   on <html>). One value per decision, read by every control, surface and
+   motion the primitives draw under the `modern:` variant. Classic and Minimal
+   never see these: every token lives on .modern-style, so a class that reads
+   one outside Modern resolves to nothing. tailwind.config.ts exposes them as
+   rounded-control/-card/-dialog, h-control-sm/-md/-lg (any spacing utility),
+   shadow-popover/-dialog/-toast, duration-press/-pop and ease-ui; lib/utils.ts
+   tells tailwind-merge the names. Colours are never set here: surfaces, ink,
+   the one hairline (--sol-border) and the one accent (--sol-class-cyan, what
+   bg-sol-cyan paints) come from the sol-* theme tokens, which every colour
+   theme and both modes redefine.
+   - Radius: 6px for controls (buttons, inputs, chips, menu items), 10px for
+     cards, popovers, menus and toasts, 14px for dialogs and sheets.
+   - Height: 28 / 32 / 36px controls; an icon button is square at the same
+     heights with a 16px icon. Nothing interactive is under 24px.
+   - Focus: a 2px ring in the accent at 50%, 1px off the edge, on
+     :focus-visible only (components/ui/styles.ts focusRing).
+   - Elevation: three soft two-layer shadows, only on things that float.
+   - Motion: 120ms for hover and press, 160ms for popovers and dialogs.
+     Reduced motion is the base layer's clamp, as everywhere else.
+   - Border: one hairline, --sol-border, for a bare `border` too (the base
+     layer below). */
+.modern-style {
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-dialog: 14px;
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 36px;
+  --motion-press: 120ms;
+  --motion-pop: 160ms;
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --shadow-popover: 0 1px 2px rgb(16 24 22 / 0.06), 0 8px 20px -6px rgb(16 24 22 / 0.14);
+  --shadow-dialog: 0 2px 6px rgb(16 24 22 / 0.06), 0 24px 56px -16px rgb(16 24 22 / 0.24);
+  --shadow-toast: 0 1px 3px rgb(16 24 22 / 0.07), 0 12px 28px -10px rgb(16 24 22 / 0.2);
+}
+/* In the dark the page is near black, so the same lift needs a deeper shadow
+   (dark mode on the root, or a dark stage inside the page). */
+.modern-style.dark,
+.modern-style .dark {
+  --shadow-popover: 0 1px 2px rgb(0 0 0 / 0.4), 0 10px 24px -6px rgb(0 0 0 / 0.55);
+  --shadow-dialog: 0 2px 8px rgb(0 0 0 / 0.45), 0 28px 64px -16px rgb(0 0 0 / 0.7);
+  --shadow-toast: 0 1px 3px rgb(0 0 0 / 0.4), 0 14px 32px -10px rgb(0 0 0 / 0.6);
+}
+/* The ring and the hairline read the theme where they are drawn, so they are
+   declared again on every element that redefines the palette. */
+.modern-style,
+.modern-style .dark,
+.modern-style .hero-sandbox {
+  --focus-ring: color-mix(in srgb, var(--sol-class-cyan) 50%, transparent);
+  --hairline: var(--sol-border);
+}
+
 :root, .hero-sandbox {
   --font-mono: "JetBrains Mono", monospace;
   --font-ui: var(--font-mono);
@@ -765,6 +818,12 @@ html, body {
 @layer base {
   * {
     border-color: hsl(var(--border));
+  }
+  /* Modern has one hairline: a bare `border` is border-sol-border, in every
+     palette (Original Classic draws the bare one beige). A class on the
+     element still wins: this sits in the base layer. */
+  .modern-style * {
+    border-color: var(--sol-border);
   }
   body {
     background-color: hsl(var(--background));
@@ -1831,12 +1890,9 @@ diffs-container {
   padding-left: 8px;
   padding-right: 8px;
 }
-/* Quiet the header's own controls. The :not() is load-bearing: the
-   files-changed pill is a <button> that lives in the header's DOM but is
-   positioned OUT of it, floating over message text. Dimming the ELEMENT makes
-   its background translucent no matter how opaque the background property is,
-   so the one control that must never be see-through was the one this caught.
-   Anything that escapes the header's bounds is content, not chrome. */
+/* Quiet the header's own controls. The files-changed pill keeps its full ink:
+   it once floated over message text, where a dimmed (translucent) pill let
+   the text show through; it sits in the header row now, still undimmed. */
 .simple-view [data-sv-convhead] button:not(.cc-changes-pill),
 .simple-view [data-sv-convhead] a {
   opacity: 0.75;
@@ -2281,15 +2337,12 @@ diffs-container {
   color: #fff;
 }
 
-/* The "N files changed" pill floats over the message body: NO background —
-   fully transparent by design — with a backdrop blur so text sliding under it
-   can't garble the label. It must also shrink to the COLUMN, not the window:
-   the conversation header is the query container (cq-container on
+/* The "N files changed" pill is a chip in the conversation header's action
+   row (ConversationDiffLayout ChangesBar), in the flow: it once floated below
+   the header with a backdrop blur, over the feed's first lines, and text and
+   timestamps ran under it. It shrinks to the COLUMN, not the window: the
+   conversation header is the query container (cq-container on
    [data-sv-convhead]). */
-.cc-changes-pill {
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-}
 .cc-changes-pill:hover {
   background: color-mix(in srgb, var(--sol-bg-alt) 90%, transparent);
 }
@@ -4116,6 +4169,33 @@ diffs-container {
 .minimal-style kbd.font-mono {
   font-family: var(--font-mono);
   letter-spacing: 0;
+}
+
+/* Modern (the opt-in style, .modern-style on <html>): the interface face is
+   a sans, Instrument Sans, which @platform/design/fonts bundles (src/main.tsx
+   imports it beside this sheet, and plugins/uiFontPreload.ts starts its file
+   with the page). Everything code-like keeps JetBrains Mono: code, pre, kbd
+   and samp here, data-mono for a component that cannot take a class, and
+   modern:font-mono (or font-mono) at the element. <body> wears font-mono for
+   Classic; the body rule outranks it, as Minimal's does. Later than the
+   :root token block, which sets --font-ui at the same specificity.
+   lib/__tests__/interfaceFont.guard.test.ts holds Classic mono and this sans. */
+.modern-style {
+  --font-ui: "Instrument Sans Variable", "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.modern-style body {
+  font-family: var(--font-ui);
+}
+.modern-style :where(code, pre, kbd, samp, [data-mono]:not([data-mono="false"])) {
+  font-family: var(--font-mono), monospace;
+}
+/* A diff's header names its file, a file link and a comment's anchor are
+   paths: mono, like the lines they point at. */
+.modern-style diffs-container {
+  --diffs-header-font-family: var(--font-mono), monospace;
+}
+.modern-style :is(.fs-link, .cc-railx-row-where) {
+  font-family: var(--font-mono), monospace;
 }
 
 /* Safety net, first so every rule below it can refine: the shared components
@@ -6003,6 +6083,13 @@ diffs-container {
   --preview-line: #8a8a85;
 }
 
+/* Modern's thumbnail: white page, near-white rails, teal lines. */
+.cc-style-preview--modern {
+  --preview-bg: #ffffff;
+  --preview-panel: #ecf1ef;
+  --preview-line: #11807a;
+}
+
 .dark .cc-style-preview {
   --preview-bg: #002b36;
   --preview-panel: #073642;
@@ -6013,6 +6100,12 @@ diffs-container {
   --preview-bg: #212121;
   --preview-panel: #2f2f2f;
   --preview-line: #8f8f8f;
+}
+
+.dark .cc-style-preview--modern {
+  --preview-bg: #0e1918;
+  --preview-panel: #13221f;
+  --preview-line: #4ccac0;
 }
 
 .cc-style-preview > span {
@@ -6684,9 +6777,9 @@ diffs-container {
 [data-cc-conversation][data-reveal-chrome="band"] [data-cc-conv-actions] {
   display: none;
 }
-/* The chips that float over the top of a feed (files changed, earlier
-   messages) would sit on the band's header row and its close; they step
-   aside while a band is open, as the pinned prompt does. */
+/* The earlier-messages chip floats over the top of a feed and would sit on
+   the band's header row and its close; it steps aside while a band is open,
+   as the pinned prompt does, and so does the header's files-changed chip. */
 [data-cc-conversation][data-reveal-chrome="host"] .cc-changes-pill,
 [data-cc-conversation][data-reveal-chrome="host"] [data-cc-edge="up"] {
   display: none;
@@ -7159,3 +7252,550 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 [data-dormant-section] [data-session-id]:not([data-active="true"]):not(:hover) {
   opacity: 0.62;
 }
+
+/* ============================================================
+   MODERN · THE CONVERSATION (opt-in: .modern-style on <html>)
+   The transcript, its header and the composer in the Modern style. Every
+   rule here starts with .modern-style, so Classic and Minimal never see it;
+   the markup it reads (data-cc-prose, data-cc-row*, data-cc-composer-*,
+   data-cc-code-block) is drawn in every style and only named here.
+   Sizes come from the scale (--fs-*), colours from the sol-* tokens.
+   ============================================================ */
+.modern-style {
+  --cc-m-hover: color-mix(in srgb, var(--sol-text) 5%, transparent);
+  --cc-m-tint: color-mix(in srgb, var(--sol-text) 3.5%, var(--sol-bg));
+  --cc-m-code-inline: color-mix(in srgb, var(--sol-text) 7%, transparent);
+  --cc-m-field-shadow: 0 1px 2px rgb(16 24 22 / 0.05), 0 10px 28px -14px rgb(16 24 22 / 0.22);
+  --cc-m-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E");
+}
+.modern-style.dark,
+.modern-style .dark {
+  --cc-m-field-shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 30px -14px rgb(0 0 0 / 0.6);
+}
+
+/* ---- MODERN · READING ------------------------------------------------------
+   Prose (data-cc-prose: an agent's reply, a user's message, a `cast say`)
+   reads in the sans at 15/24, each text block held to about 80 characters
+   (68ch of Instrument Sans) inside the one column token (.conv-col); code,
+   tables and images keep the column's width. [data-sv-feed] lifts these
+   above simple view's own sizes, which Modern sits on. */
+.modern-style [data-sv-feed] [data-cc-prose] {
+  font-size: var(--fs-read);
+  line-height: 24px;
+}
+.modern-style [data-sv-feed] [data-cc-prose] :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, dl) {
+  max-width: 68ch;
+}
+.modern-style [data-sv-feed] [data-cc-prose] p {
+  margin: 0 0 12px;
+}
+.modern-style [data-sv-feed] [data-cc-prose] :is(h1, h2, h3, h4, h5, h6) {
+  margin: 24px 0 8px;
+  color: var(--sol-text);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.modern-style [data-sv-feed] [data-cc-prose] h1 { font-size: var(--fs-display); line-height: 30px; }
+.modern-style [data-sv-feed] [data-cc-prose] h2 { font-size: var(--fs-title); line-height: 24px; }
+.modern-style [data-sv-feed] [data-cc-prose] h3 { font-size: var(--fs-read); line-height: 24px; }
+.modern-style [data-sv-feed] [data-cc-prose] :is(h4, h5, h6) {
+  font-size: var(--fs-ui);
+  line-height: 20px;
+  color: var(--sol-text-secondary);
+}
+.modern-style [data-sv-feed] [data-cc-prose] :is(ul, ol) {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+.modern-style [data-sv-feed] [data-cc-prose] li {
+  margin: 4px 0;
+  padding-left: 2px;
+}
+.modern-style [data-sv-feed] [data-cc-prose] li > :is(ul, ol) { margin: 4px 0 0; }
+.modern-style [data-sv-feed] [data-cc-prose] li > p { margin: 0 0 4px; }
+.modern-style [data-sv-feed] [data-cc-prose] li::marker { color: var(--sol-text-dim); }
+.modern-style [data-sv-feed] [data-cc-prose] strong { color: var(--sol-text); font-weight: 600; }
+.modern-style [data-sv-feed] [data-cc-prose] blockquote {
+  margin: 0 0 12px;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--sol-border);
+  color: var(--sol-text-muted);
+  font-style: normal;
+}
+.modern-style [data-sv-feed] [data-cc-prose] hr { margin: 20px 0; border-color: var(--sol-border); }
+.modern-style [data-sv-feed] [data-cc-prose] :is(p, ul, ol, blockquote, table, h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+.modern-style [data-sv-feed] [data-cc-prose] :is(p, ul, ol, blockquote, table):last-child { margin-bottom: 0; }
+/* Inline code: mono, one step under its sentence, on a faint tint. */
+.modern-style [data-sv-feed] [data-cc-prose] :not(pre) > code {
+  font-family: var(--font-mono), monospace;
+  font-size: var(--fs-body);
+  font-weight: 400;
+  padding: 1px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--cc-m-code-inline);
+  color: var(--sol-text);
+}
+.modern-style [data-sv-feed] [data-cc-prose] :is(h1, h2) code { font-size: var(--fs-read); }
+.modern-style [data-sv-feed] [data-cc-prose] :is(h4, h5, h6) code { font-size: var(--fs-meta); }
+/* Tables scroll inside their own box: as wide as their content, never
+   wider than the column, with one hairline frame. */
+.modern-style [data-sv-feed] [data-cc-prose] table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0 0 12px;
+  border: 1px solid var(--sol-border);
+  border-radius: var(--radius-card, 10px);
+  border-collapse: separate;
+  border-spacing: 0;
+  background: transparent;
+  font-size: var(--fs-body);
+  line-height: 20px;
+}
+.modern-style [data-sv-feed] [data-cc-prose] :is(th, td) {
+  padding: 7px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--sol-border);
+  background: transparent;
+  text-align: left;
+  vertical-align: top;
+}
+.modern-style [data-sv-feed] [data-cc-prose] :is(th, td) + :is(th, td) {
+  border-left: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+}
+.modern-style [data-sv-feed] [data-cc-prose] th { background: var(--cc-m-tint); color: var(--sol-text); font-weight: 600; }
+.modern-style [data-sv-feed] [data-cc-prose] tr:nth-child(even) td { background: transparent; }
+.modern-style [data-sv-feed] [data-cc-prose] tr:last-child > td { border-bottom: 0; }
+/* Block code (components/CodeBlock): a tinted panel with a hairline. */
+.modern-style [data-cc-conversation] [data-cc-code-block] {
+  --cc-m-code-bg: var(--cc-m-tint);
+  margin: 12px 0;
+  border: 1px solid var(--sol-border);
+  border-radius: var(--radius-card, 10px);
+  background: var(--cc-m-code-bg);
+  overflow: hidden;
+}
+.modern-style [data-cc-conversation] [data-cc-code-block] > pre {
+  padding: 12px 44px 12px 14px !important;
+  font-size: var(--fs-ui);
+  line-height: 20px;
+}
+.modern-style [data-cc-conversation] [data-cc-code-block] > pre code {
+  font-size: var(--fs-ui);
+  line-height: 20px;
+  color: var(--sol-text-secondary);
+}
+.modern-style [data-cc-conversation] [data-cc-code-block] .code-block-accent::before { display: none; }
+.modern-style [data-cc-conversation] [data-cc-code-block] [data-cc-code-tools] {
+  background-image: linear-gradient(to right, transparent, var(--cc-m-code-bg) 1.5rem);
+}
+/* Your messages: a quiet tinted block (the tint and the dropped border are
+   modern: classes on UserPrompt, so the share selection keeps its ring), the
+   author and the time at the meta step. */
+.modern-style [data-sv-feed] [data-cc-message="user"]:not([data-cc-bubble]) {
+  border-radius: 12px;
+  padding-top: 12px;
+  padding-bottom: 14px;
+}
+.modern-style [data-sv-feed] [data-cc-message="user"] [data-cc-message-who] { margin-bottom: 6px; }
+.modern-style [data-sv-feed] [data-cc-message="user"] [data-cc-message-who] > span {
+  color: var(--sol-text);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+}
+.modern-style [data-sv-feed] [data-cc-message-who] > a { font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.modern-style [data-sv-sticky] {
+  background: var(--sol-bg-alt);
+  border-color: var(--sol-border);
+  box-shadow: 0 8px 20px -14px rgb(16 24 22 / 0.3);
+}
+/* Images and screenshots under a row line up with its words. */
+.modern-style [data-sv-feed] [data-cc-row] [data-cc-image] { margin-left: 24px; }
+
+/* ---- MODERN · ROWS ---------------------------------------------------------
+   One anatomy for every tool and system row (CONV-24; the parts are named in
+   components/conversation/blocks/ModernRow.tsx): one line of 16px icon, a
+   verb, the object in mono and a quiet result at the right, then a chevron
+   when the row opens. Rows sit tight with no card around each; what opens
+   lands on a tinted panel under the words. A failed row turns red and its
+   result says what failed. */
+.modern-style [data-sv-feed] [data-cc-row] {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.modern-style [data-sv-feed] [data-cc-row] + [data-cc-row] { margin-top: 0; }
+.modern-style [data-sv-feed] [data-cc-row] + [data-cc-prose] { margin-top: 8px; }
+.modern-style [data-sv-feed] [data-cc-row-head] {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  min-height: 28px;
+  margin: 0 -8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-control, 6px);
+  background: transparent;
+  box-shadow: none;
+  overflow: hidden;
+  font-size: var(--fs-ui);
+  line-height: 20px;
+  font-weight: 400;
+  color: var(--sol-text-muted);
+  text-decoration: none;
+}
+.modern-style [data-sv-feed] :is([data-cc-row-head][aria-expanded], [data-cc-row-head][role="button"], a[data-cc-row-head], button[data-cc-row-head]):hover {
+  background: var(--cc-m-hover);
+  filter: none;
+}
+/* An edit row picked in the diff panel. */
+.modern-style [data-sv-feed] [data-cc-row-head][aria-pressed="true"] {
+  background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
+}
+/* The spacer before the result and the chevron, so both sit at the right. */
+.modern-style [data-sv-feed] [data-cc-row-head]::before {
+  content: "";
+  order: 50;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.modern-style [data-sv-feed] [data-cc-row-head][aria-expanded]::after {
+  content: "";
+  order: 70;
+  flex: none;
+  align-self: flex-start;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--sol-text-dim);
+  background-color: currentColor;
+  -webkit-mask: var(--cc-m-chevron) center / 16px 16px no-repeat;
+  mask: var(--cc-m-chevron) center / 16px 16px no-repeat;
+  opacity: 0.75;
+  transition: transform var(--motion-press, 120ms) var(--motion-ease, ease);
+}
+.modern-style [data-sv-feed] [data-cc-row-head][aria-expanded="true"]::after { transform: rotate(90deg); }
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-lead] { display: contents; }
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-rule] { display: none; }
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-hint] { display: none !important; }
+.modern-style [data-sv-feed] [data-cc-row-head] :is([data-cc-row-icon]:not(:empty), svg[data-cc-row-icon], [data-cc-row-lead] > svg) {
+  flex: none;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--sol-text-dim);
+  opacity: 1;
+  font-size: var(--fs-meta);
+  line-height: 16px;
+}
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-icon]:not(:empty) svg {
+  width: 16px;
+  height: 16px;
+}
+/* A status dot stands in for an icon: the same slot, a quiet dot. */
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-icon]:empty:not(svg) {
+  flex: none;
+  align-self: flex-start;
+  width: 6px;
+  height: 6px;
+  margin: 7px 5px 0;
+  border: 0;
+  border-radius: 9999px;
+  background: currentColor;
+  color: var(--sol-text-dim);
+  opacity: 0.8;
+}
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-verb] {
+  display: inline-block;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-ui);
+  line-height: 20px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  text-decoration: none;
+  white-space: nowrap;
+  color: var(--sol-text-secondary);
+}
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-verb]::first-letter { text-transform: uppercase; }
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-object] {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--font-mono), monospace;
+  font-size: var(--fs-meta);
+  line-height: 20px;
+  font-weight: 400;
+  font-style: normal;
+  color: var(--sol-text-muted);
+  white-space: nowrap;
+  word-break: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-text] {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: var(--fs-ui);
+  line-height: 20px;
+  font-weight: 400;
+  font-style: normal;
+  color: var(--sol-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-text] :is(p, div) { display: inline; margin: 0; }
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-tag] {
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: var(--fs-meta);
+  line-height: 20px;
+  font-weight: 400;
+  font-style: normal;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--sol-text-dim);
+  white-space: nowrap;
+}
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-meta] {
+  order: 60;
+  flex: none;
+  margin-left: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-meta);
+  line-height: 20px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--sol-text-dim);
+  white-space: nowrap;
+}
+/* A failure: red, and its result is the reason, cut to the room it has. */
+.modern-style [data-sv-feed] [data-cc-row-tone="error"] :is([data-cc-row-icon], [data-cc-row-verb], [data-cc-row-meta], [data-cc-row-lead] > svg) {
+  color: var(--sol-red);
+}
+.modern-style [data-sv-feed] [data-cc-row-tone="error"] [data-cc-row-head] [data-cc-row-meta],
+.modern-style [data-sv-feed] [data-cc-row-head][data-cc-row-tone="error"] [data-cc-row-meta] {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.modern-style [data-sv-feed] [data-cc-row-tone="warn"] :is([data-cc-row-icon], [data-cc-row-verb]) {
+  color: var(--sol-amber);
+}
+/* What opens below a row: a tinted panel under its words (past the icon). */
+.modern-style [data-sv-feed] [data-cc-row-detail] {
+  margin: 2px 0 8px 24px;
+  border: 1px solid var(--sol-border);
+  border-radius: var(--radius-card, 10px);
+  background-color: var(--cc-m-tint);
+  box-shadow: none;
+}
+.modern-style [data-sv-feed] [data-cc-row-detail] > :first-child {
+  border-top-left-radius: 9px;
+  border-top-right-radius: 9px;
+}
+.modern-style [data-sv-feed] [data-cc-row-detail] > :last-child {
+  border-bottom-left-radius: 9px;
+  border-bottom-right-radius: 9px;
+}
+/* What a row carries in the open (a comment's body, a run's summary, a
+   decision's question): under its words, set off by one rule. */
+.modern-style [data-sv-feed] [data-cc-row-sub] {
+  margin: 2px 0 6px 24px;
+  padding: 0 0 0 12px;
+  border: 0;
+  border-left: 2px solid var(--sol-border);
+  border-radius: 0;
+  background: transparent;
+}
+.modern-style [data-sv-feed] [data-cc-row-list] { margin: 2px 0 6px 24px; }
+.modern-style [data-sv-feed] [data-cc-row-card] { margin: 4px 0 8px 24px; }
+.modern-style [data-sv-feed] [data-cc-row-foot] {
+  justify-content: flex-start;
+  margin: 0 0 6px 24px;
+  padding: 2px 0;
+  border: 0;
+}
+/* The folded receipt under a condensed reply reads as a row too. */
+.modern-style [data-sv-feed] [data-cc-tool-receipt] {
+  font-size: var(--fs-ui);
+  line-height: 20px;
+  padding: 4px 10px;
+  border-style: solid;
+  border-radius: var(--radius-control, 6px);
+}
+/* An open permission ask stays a card (its answer is pressed right there),
+   on the same hairline and radius as the panels. */
+.modern-style [data-sv-feed] [data-permission-ask] > div {
+  border-radius: var(--radius-card, 10px);
+  box-shadow: none;
+}
+
+/* ---- MODERN · HEADER -------------------------------------------------------
+   One calm line: the title in the reading size, the facts as plain muted
+   text with dots between (the [data-cc-facts] rules above already strip
+   their chips), live things (status, a huddle, viewers) as the only pills,
+   and the actions as 28px icon buttons. The squeeze (useSqueezeToFit,
+   data-squeeze, .cq-sq*) measures what is drawn, so it holds the line at
+   these sizes too; the title still yields last. */
+.modern-style [data-sv-convhead] {
+  --cc-panel-head-h: 44px;
+}
+.modern-style [data-sv-convhead] .cc-panel__head {
+  gap: 10px;
+  padding: 0 10px 0 16px;
+  background: var(--sol-bg);
+  border-bottom: 1px solid var(--sol-border);
+}
+.modern-style [data-sv-convhead] .cq-squeeze-row { gap: 10px; }
+.modern-style [data-sv-convhead] .cc-panel__title {
+  font-size: var(--fs-read);
+  line-height: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--sol-text);
+}
+.modern-style [data-sv-convhead] [data-cc-facts] { color: var(--sol-text-muted); }
+.modern-style [data-sv-convhead] [data-cc-facts] :is(.rounded-full, .rounded) { color: var(--sol-text-muted); }
+.modern-style [data-sv-convhead] [data-cc-facts] [data-session-control-trigger] { font-family: var(--font-ui); }
+.modern-style [data-sv-convhead] [data-cc-conv-status] {
+  height: 22px;
+  gap: 6px;
+  padding: 0 9px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-size: var(--fs-meta);
+  font-weight: 500;
+}
+.modern-style [data-sv-convhead] [data-cc-runner] { border-color: transparent; }
+.modern-style [data-sv-convhead] [data-cc-runner] > * + * { border-left-color: transparent; }
+.modern-style [data-sv-convhead] [data-cc-conv-actions] { gap: 2px; }
+.modern-style [data-sv-convhead] [data-cc-conv-actions] > :is(button, a) {
+  min-width: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control, 6px);
+}
+.modern-style [data-sv-convhead] [data-cc-conv-actions] > :is(button, a) > svg {
+  width: 16px;
+  height: 16px;
+}
+/* The files-changed chip is an action here: plain words, no frame. */
+.modern-style [data-sv-convhead] .cc-changes-pill {
+  height: 28px;
+  border-color: transparent;
+  color: var(--sol-text-muted);
+}
+
+/* ---- MODERN · COMPOSER -----------------------------------------------------
+   One rounded field (14px) on the conversation's column, with a hairline and
+   a soft shadow; the controls (model and effort, the permission mode, and on
+   the new-session page checkout and machine) sit as quiet text buttons in
+   its footer, and Send is a filled accent disc at the right, dimmed until
+   there is something to send (ComposerSendButton). The status line moves
+   under the field. All of it is layout from the composer's own data
+   attributes (ComposerShell): nothing on the keystroke path changes, and
+   the field never moves on focus, because it is already full width. */
+.modern-style [data-cc-composer-stack="dock"] { --cc-col-px: 8px; }
+@media (min-width: 640px) {
+  .modern-style [data-cc-composer-stack="dock"] { --cc-col-px: 16px; }
+}
+.modern-style [data-cc-composer-frame="dock"] { padding-bottom: 32px; }
+.modern-style [data-cc-composer-stack="dock"] > :is(form, [data-cc-composer-meta]) {
+  max-width: var(--conv-col-w, 56rem);
+}
+.modern-style [data-cc-composer-stack="dock"] > [data-cc-composer-meta] {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  min-height: 20px;
+}
+.modern-style [data-cc-composer-stack="dock"] > [data-cc-composer-meta] > p {
+  min-width: 0;
+  padding-left: 15px;
+  font-size: var(--fs-meta);
+  line-height: 20px;
+  color: var(--sol-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.modern-style [data-cc-composer-stack="dock"] [data-cc-composer-controls] {
+  position: absolute;
+  left: calc(var(--cc-col-px) + 8px);
+  bottom: calc(100% + 13px);
+  height: 30px;
+  gap: 6px;
+}
+/* A model's name and a mode's words are not code: the interface face. */
+.modern-style [data-cc-composer-controls] :is([data-session-control-trigger], [data-composer-mode] > button > span) {
+  font-family: var(--font-ui);
+  font-size: var(--fs-meta);
+}
+.modern-style [data-cc-composer-box="dock"],
+.modern-style [data-cc-composer-box="hero"] {
+  border-radius: var(--radius-dialog, 14px);
+  background: var(--sol-card);
+  box-shadow: var(--cc-m-field-shadow);
+}
+.modern-style [data-cc-composer-box="dock"] {
+  padding: 10px 12px 44px 14px;
+}
+.modern-style :is([data-cc-composer-box="dock"], [data-cc-composer-box="hero"]):focus-within {
+  border-color: color-mix(in srgb, var(--sol-cyan) 40%, var(--sol-border));
+}
+.modern-style [data-cc-composer-box="dock"] [data-cc-composer-send] {
+  position: relative;
+  z-index: 1;
+  margin-bottom: -38px;
+}
+/* The triage verbs under the composer: quiet, on the composer's edges. */
+.modern-style [data-triage-bar] > div > div {
+  border-top-color: transparent;
+  padding-left: 6px;
+}
+.modern-style [data-triage-bar] [data-triage-verb] { color: var(--sol-text-dim); }
+/* ---- end of MODERN · THE CONVERSATION ---- */

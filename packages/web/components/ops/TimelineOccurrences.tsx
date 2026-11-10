@@ -194,7 +194,7 @@ export function OccurrencePanel({ sample: x, group, source, onClose }: { sample:
     ["Source", <span key="s" className="inline-flex items-center gap-1.5">{source && <ProviderIcon provider={source.provider} />}{source?.name ?? "-"}</span>],
     ...(level ? [["Level", level] as [string, ReactNode]] : []),
     ...(type ? [["Type", type.replace(/_/g, " ")] as [string, ReactNode]] : []),
-    ...(x.url ? [["URL", <a key="u" href={x.url} target="_blank" rel="noreferrer" className="ops-link break-all">{x.url}</a>] as [string, ReactNode]] : []),
+    ...(x.url ? [["URL", <a key="u" href={x.url} target="_blank" rel="noreferrer" className="ops-link modern:font-mono break-all">{x.url}</a>] as [string, ReactNode]] : []),
     ...(sampleWho(x) ? [["User", sampleWho(x)] as [string, ReactNode]] : []),
     ...(x.release ? [["Release", <span key="r" className="ops-mono">{x.release}</span>] as [string, ReactNode]] : []),
     ...(x.environment ? [["Env", x.environment] as [string, ReactNode]] : []),

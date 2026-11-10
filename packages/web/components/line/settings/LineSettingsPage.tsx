@@ -148,7 +148,7 @@ function Plate({ lp, gate }: { lp: PublishedLineProfile; gate: LineWriteGate }) 
     <div className="lset-plate" data-writable={gate.writable ? "true" : "false"} data-away={gate.writable && gate.away ? "true" : undefined} data-lset-plate>
       <div className="lset-plate-file">
         <span className="lset-plate-path">{gate.file}</span>
-        {lp.root && <span className="lset-dim lset-plate-root" title={lp.root}>in {lp.root}</span>}
+        {lp.root && <span className="lset-dim lset-plate-root" title={lp.root}>in <span className="modern:font-mono">{lp.root}</span></span>}
       </div>
       <p className="lset-plate-says" data-lset-gate={gate.writable ? "writable" : "read-only"}>
         {!gate.writable

@@ -3,10 +3,12 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { SessionWindow } from "@/components/SessionWindow";
 import { WindowTaskbar } from "@/components/WindowTaskbar";
 import { useWindowManager } from "@/store/windowManagerStore";
-import { useTrackedStore, isSessionEffectivelyIdle, filterInboxScopeFromState, type InboxSession } from "@/store/inboxStore";
+import { useTrackedStore, isSessionEffectivelyIdle, filterInboxScopeFromState, sessionsWakeSig, type InboxSession } from "@/store/inboxStore";
 import { makeCollectionSig } from "@/store/wakeSig";
 import { cleanTitle } from "@/lib/conversationProcessor";
 import { Plus, MousePointerClick } from "lucide-react";
+import { useIsModernStyle } from "@/hooks/useVisualStyle";
+import { ModernWindowRow } from "./ModernWindowRow";
 
 export default function WindowsPage() {
   return (
@@ -36,8 +38,11 @@ const OPEN_ALL_CAP = 8;
 
 function WindowManagerView() {
   const { windows, focusedWindowId, openWindow, autoArrange } = useWindowManager();
+  // Modern rows say each session's state, so they wake on what decides it.
+  const modern = useIsModernStyle();
   const s = useTrackedStore([
     (st) => windowRowsSig(st.sessions),
+    (st) => (modern ? sessionsWakeSig(st.sessions) : null),
     // The scope pref lives in the UI prefs; the chokepoint reads it from there.
     (st) => st.clientState.ui,
     (st) => st.currentUser?._id?.toString?.() ?? null,
@@ -65,7 +70,7 @@ function WindowManagerView() {
       .filter(sess => !openSessionIds.has(sess._id) && sess.message_count > 0)
       .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0)),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rowsSig stands in for the churny sessions ref
-    [rowsSig, s.clientState.ui, s.currentUser?._id, s.teamInboxIds, s.currentSessionId, openSessionIds],
+    [rowsSig, modern ? sessionsWakeSig(s.sessions) : null, s.clientState.ui, s.currentUser?._id, s.teamInboxIds, s.currentSessionId, openSessionIds],
   );
 
   const handleOpenSession = useCallback((sessionId: string) => {
@@ -120,6 +125,7 @@ function EmptyState({
   onOpenSession: (id: string) => void;
   onOpenAll: () => void;
 }) {
+  const modern = useIsModernStyle();
   return (
     <div className="h-full flex flex-col items-center justify-center gap-6 px-8">
       <div className="text-center space-y-2">
@@ -139,6 +145,7 @@ function EmptyState({
 
           <div className="max-h-[300px] overflow-y-auto space-y-1 rounded-lg border border-sol-border/20 p-2">
             {sessions.slice(0, 20).map(sess => {
+              if (modern) return <ModernWindowRow key={sess._id} session={sess} now={Date.now()} onOpen={onOpenSession} />;
               const idle = isSessionEffectivelyIdle(sess);
               return (
                 <button

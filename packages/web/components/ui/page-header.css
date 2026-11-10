@@ -1,0 +1,49 @@
+/* The shared page header (components/ui/page-header.tsx).
+ *
+ * The header is its own query container, so it fits the pane it sits in, not
+ * the window: its side padding steps from 16px to 24px once the pane is at
+ * least 640px wide (the body under it does the same), and anything inside that
+ * folds on a container query (SegmentedToggle's .cq-seg-compact, the list
+ * tabs' .cq-tabs-compact) folds against the header's own width.
+ *
+ * The row wraps rather than squeezes: each slot keeps its natural width, so a
+ * pane too narrow for title, tabs and actions on one line drops the actions
+ * (then the tabs) onto a line of their own under the title, still aligned to
+ * the right edge. Only a title wider than the whole pane truncates.
+ *
+ * A query container is a stacking context, so the header sits one tier above
+ * the page body (z-20, the in-page tier) and a menu that drops out of it paints
+ * over the rows below instead of under them.
+ */
+[data-cc-page-head] {
+  container-type: inline-size;
+  position: relative;
+  z-index: 20;
+  flex: 0 0 auto;
+}
+
+.cc-page-head__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 8px;
+  min-height: 48px;
+  padding: 8px 16px;
+}
+
+.cc-page-head__sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 8px;
+}
+
+@container (min-width: 640px) {
+  .cc-page-head__row,
+  .cc-page-head__sub {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}

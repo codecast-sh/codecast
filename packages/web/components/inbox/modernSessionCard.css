@@ -1,0 +1,75 @@
+/* The Modern session card (ModernSessionCard.tsx) and the rail chrome around
+   it. Every rule is scoped to .modern-style: the card only renders in Modern,
+   and the rail rules below must never reach Classic or Minimal.
+
+   Modern sits on Classic's density rules (simple view's floating cards, the
+   compact list's one-line rows, globals.css), so the card keeps its frame from
+   them and sets only its ground, its open state and its own lines. */
+
+/* Ground: the list's surface at rest, a touch of ink under the pointer, the
+   accent's tint when open. Simple view and the compact list paint every card
+   from --sv-card-bg, so the open card sets that variable and every density
+   shows the same open card; the toolbar's fade reads the same ground. */
+:root.modern-style [data-sv-rail] [data-mc] {
+  --mc-ground: var(--sv-card-bg, var(--sol-bg-alt));
+  background: var(--mc-ground);
+}
+:root.modern-style [data-sv-rail] [data-mc]:hover {
+  --mc-ground: color-mix(in srgb, var(--sol-text) 4%, var(--sv-card-bg, var(--sol-bg-alt)));
+}
+:root.modern-style .inbox-compact [data-sv-rail] [data-mc]:hover {
+  --mc-ground: var(--sv-card-bg);
+}
+:root.modern-style [data-sv-rail] [data-mc].mc-parent-active {
+  --mc-ground: color-mix(in srgb, var(--sol-cyan) 6%, var(--sv-card-bg, var(--sol-bg-alt)));
+}
+/* Handed to the viewer and not taken yet: a violet hairline (the strip under
+   the lines carries the note and its button). */
+:root.modern-style [data-sv-rail] [data-mc].mc-handoff {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-violet) 45%, transparent);
+}
+/* Open: a tint and a hairline in the accent. */
+:root.modern-style [data-sv-rail] [data-mc][data-active="true"] {
+  --sv-card-bg: color-mix(in srgb, var(--sol-cyan) 10%, var(--sol-bg));
+  --mc-ground: var(--sv-card-bg);
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+}
+
+/* The toolbar's fade: from nothing to the card's own ground, so a tinted,
+   ticked or hovered card never shows a pale patch under its buttons. */
+[data-mc] > .mc-tools {
+  background: linear-gradient(to right, transparent, var(--mc-ground, var(--sol-bg-alt)) 1.75rem);
+}
+
+/* The third line holds chips that each draw nothing when they have nothing
+   to say; with none, the line takes no room. */
+[data-mc] [data-mc-line3]:empty {
+  display: none;
+}
+
+/* The compact list (clientState.ui.inbox_compact, and the Dormant section,
+   which always wears it): one line per session. The state's mark takes the
+   lead slot, its reason (when it has one) sits before the time, and the
+   second and third lines leave. The handoff strip stays: it carries a button. */
+.modern-style .inbox-compact [data-sv-rail] [data-mc] :is([data-mc-line2], [data-mc-line3]),
+.modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-lead] > [data-mc-agent] {
+  display: none;
+}
+.modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-lead] > [data-mc-lead-status],
+.modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-compact-reason] {
+  display: inline-flex;
+}
+
+/* The hidden buckets' heads (Snoozed, Stashed, Killed: GlobalSessionPanel's
+   renderHiddenBucket) wear the section heads' quiet look (ModernSectionHeader). */
+:root.modern-style [data-sv-rail] [data-sv-hidden-head] {
+  min-height: 32px;
+  background: var(--sol-bg-alt);
+  border-bottom-color: transparent;
+  box-shadow: inset 0 -1px 0 var(--sol-border);
+}
+:root.modern-style [data-sv-rail] [data-sv-hidden-label] {
+  color: var(--sol-text-muted);
+  letter-spacing: 0.06em;
+}

@@ -371,7 +371,7 @@ function RowMenu({ item: it, snoozedView }: { item: AttentionItem; snoozedView: 
         )}
         {it.task?.short_id && people.length > 0 && (
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger data-ops-assign><UserPlus className="w-3.5 h-3.5 mr-2 text-sol-text-muted" />Assign {it.task.short_id}</DropdownMenuSubTrigger>
+            <DropdownMenuSubTrigger data-ops-assign><UserPlus className="w-3.5 h-3.5 mr-2 text-sol-text-muted" />Assign <span className="ml-1 modern:font-mono">{it.task.short_id}</span></DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="ops-home-menu">
               {people.map((p) => (
                 <DropdownMenuItem key={p.id} onSelect={() => assignItems([it], p.id, p.name)} data-ops-assign-to={p.me ? "me" : p.id}>

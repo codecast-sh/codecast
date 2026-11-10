@@ -17,7 +17,7 @@ import type { Report, Workload } from "./harness";
 const only = process.argv[2] as Workload | undefined;
 if (!only) {
   let failed = 0;
-  for (const workload of ["switch", "inbox-load", "inbox-heartbeat", "diff"]) {
+  for (const workload of ["switch", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
     const child = Bun.spawnSync(["bun", import.meta.path, workload], { stdout: "inherit", stderr: "inherit" });
     if (child.exitCode !== 0) failed++;
   }
@@ -94,6 +94,39 @@ await test("inbox-heartbeat", "a rename that arrives through the feed reaches it
   });
   await reset();
   expect(document.querySelector(`[data-session-id="${id}"] [data-sv-title]`)?.textContent).toBe("Renamed by the server");
+});
+
+// The Modern style draws its own card (ModernSessionCardView) and section
+// header over the same panel: the same bounded list, the same two queries, and
+// a heartbeat still re-renders nothing.
+await test("inbox-load-modern", "in the Modern style the inbox over 5,000 sessions draws the same bounded list with the same two queries", async () => {
+  await setup("inbox-load-modern");
+  for (const r of await twice()) {
+    expect(pick(r, ["cards", "convexQueries", "convexSubscribes", "convexMutations"])).toEqual({
+      cards: 51,
+      convexQueries: 0, convexSubscribes: 2, convexMutations: 0,
+    });
+  }
+});
+
+await test("inbox-heartbeat-modern", "in the Modern style a heartbeat on a drawn session re-renders nothing", async () => {
+  await setup("inbox-heartbeat-modern");
+  for (const r of await twice()) {
+    expect({ ...pick(r, ["storeWrites", "commits", "domMutations", "layoutReads"]), rendered: r.detail.rendered }).toEqual({ storeWrites: 1, commits: 0, domMutations: 0, layoutReads: 0, rendered: [] });
+  }
+});
+
+await test("inbox-heartbeat-modern", "in the Modern style a rename that arrives through the feed reaches its card", async () => {
+  const { act } = await import("react");
+  const { useInboxStore } = await import("../store/inboxStore");
+  const id = document.querySelector("[data-session-id]")!.getAttribute("data-session-id")!;
+  await act(async () => {
+    const row = useInboxStore.getState().sessions[id] as any;
+    useInboxStore.getState().syncTable("sessions", [{ ...row, title: "Renamed by the server" }] as any, { isDelta: true } as any);
+  });
+  await reset();
+  expect(document.querySelector(`[data-session-id="${id}"] [data-sv-title]`)?.textContent).toBe("Renamed by the server");
+  expect(document.querySelector(`[data-session-id="${id}"]`)?.getAttribute("data-mc")).toBe("card");
 });
 
 await test("diff", "opening a long diff draws its first 150 rows in 2 commits and 18 DOM mutation records, with 32 layout reads and no store writes", async () => {

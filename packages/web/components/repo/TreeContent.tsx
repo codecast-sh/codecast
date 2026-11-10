@@ -46,7 +46,7 @@ export function Breadcrumb({
 }) {
   const trail = breadcrumbTrail(path);
   return (
-    <div className="flex items-center gap-1 px-4 pb-2 text-[12px] flex-wrap">
+    <div className="flex items-center gap-1 px-4 pb-2 modern:font-mono text-[12px] flex-wrap">
       <Link
         href={repoTreeHref(repository, refName, undefined, family)}
         className={path ? "text-sol-text-muted hover:text-sol-text" : "text-sol-text"}
@@ -200,7 +200,7 @@ export function TreeContent({
                 ) : (
                   <File className="w-3.5 h-3.5 shrink-0 text-sol-text-dim" />
                 )}
-                <span className={`truncate ${isDir ? "text-sol-text" : "text-sol-text-muted"}`}>{name}</span>
+                <span className={`truncate modern:font-mono ${isDir ? "text-sol-text" : "text-sol-text-muted"}`}>{name}</span>
                 </Link>
                 {last ? <><Link href={commitPageHref(repository, last.sha, family)} className="truncate text-sol-text-muted hover:text-sol-blue flex-1" title={last.subject}>{last.subject}</Link>
                   <time title={new Date(last.committed_at).toLocaleString()} className="shrink-0 text-meta text-sol-text-dim">{relTimeShort(last.committed_at)}</time></>

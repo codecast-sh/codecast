@@ -1,0 +1,87 @@
+/* The slider (components/ui/slider.tsx) in the Modern style. Classic and
+ * Minimal keep the `.cc-range` face in app/globals.css; every rule here is
+ * scoped to .modern-style and outranks it.
+ *
+ * The element is a 24px hit area; the track is drawn 4px tall inside it,
+ * filled in the accent up to --fill (the component keeps it at the thumb's
+ * percentage), and the thumb is a white 16px knob that floats over it, so it
+ * is the one part with a shadow. Timing and the ring are the primitive
+ * tokens (app/globals.css).
+ */
+
+.modern-style .cc-range {
+  height: 24px;
+  border-radius: 0;
+  background: transparent;
+  --range-rest: color-mix(in srgb, var(--sol-text) 14%, transparent);
+  --range-knob-edge: color-mix(in srgb, var(--sol-text) 22%, transparent);
+}
+.modern-style .cc-range:focus-visible {
+  box-shadow: none;
+}
+
+.modern-style .cc-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--sol-class-cyan) var(--fill, 50%),
+    var(--range-rest) var(--fill, 50%)
+  );
+}
+.modern-style .cc-range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--range-rest);
+}
+.modern-style .cc-range::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--sol-class-cyan);
+}
+
+.modern-style .cc-range::-webkit-slider-thumb {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border: 1px solid var(--range-knob-edge);
+  background: var(--sol-card);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.16);
+  transition: transform var(--motion-press) var(--motion-ease), box-shadow var(--motion-press) var(--motion-ease);
+}
+.modern-style .cc-range::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--range-knob-edge);
+  background: var(--sol-card);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.16);
+  transition: transform var(--motion-press) var(--motion-ease), box-shadow var(--motion-press) var(--motion-ease);
+}
+
+/* (A browser drops a whole rule that names another engine's pseudo-element,
+   so each engine gets its own.) */
+.modern-style .cc-range:hover::-webkit-slider-thumb,
+.modern-style .cc-range:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.1);
+}
+.modern-style .cc-range:hover::-moz-range-thumb,
+.modern-style .cc-range:focus-visible::-moz-range-thumb {
+  transform: scale(1.1);
+}
+.modern-style .cc-range:disabled::-webkit-slider-thumb {
+  transform: none;
+}
+.modern-style .cc-range:disabled::-moz-range-thumb {
+  transform: none;
+}
+
+/* The focus ring every control wears, drawn on the knob (a 1px gap in the
+   card colour, then 2px of the accent at half strength). */
+.modern-style .cc-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 1px var(--sol-card), 0 0 0 3px var(--focus-ring);
+}
+.modern-style .cc-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 1px var(--sol-card), 0 0 0 3px var(--focus-ring);
+}

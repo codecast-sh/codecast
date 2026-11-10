@@ -410,7 +410,7 @@ function FlowHoverContent({ flow }: { flow: any }) {
     <div className="min-w-0">
       <div className="text-xs font-medium text-sol-text leading-snug">{flow.label}<span className="ml-1.5 text-mark uppercase tracking-wide text-sol-text-dim">{flow.kind === "segment" ? "Segment" : "Flow"}</span></div>
       {flow.description ? <div className="mt-1 text-meta text-sol-text-muted leading-snug">{flow.description}</div> : null}
-      {path ? <div className="mt-1.5 text-meta text-sol-text-muted leading-snug">{path}</div> : null}
+      {path ? <div className="mt-1.5 modern:font-mono text-meta text-sol-text-muted leading-snug">{path}</div> : null}
       <ShortId id={flow.short_id} className="mt-1.5 text-meta text-sol-text-dim" />
     </div>
   );
@@ -1388,14 +1388,14 @@ export function EntityIdPill({
   // id, random hash) — render the caller's original element, or the raw text.
   // Also the transient state while resolveIdType is in flight.
   const suffix = mention?.suffix;
-  if (!type || pageHidden) return fallback !== undefined ? <>{fallback}{suffix}</> : <span>{rawId}{suffix}</span>;
+  if (!type || pageHidden) return fallback !== undefined ? <>{fallback}{suffix}</> : <span><span className="modern:font-mono">{rawId}</span>{suffix}</span>;
   // A pull request or commit reference written as bare text wears a pill only
   // once its row is in hand. `owner/repo#12` is also the shape of a file path
   // with a line hash, and `owner/repo@1234567` of a version pin, so one that
   // names nothing codecast knows stays the text it was written as. A certain
   // reference (a URL, a number in a repository bound conversation) is exempt:
   // it pills and opens the codecast page, which handles a missing row itself.
-  if ((isPr || isCommit) && !entity && !certain) return fallback !== undefined ? <>{fallback}</> : <span>{rawId}</span>;
+  if ((isPr || isCommit) && !entity && !certain) return fallback !== undefined ? <>{fallback}</> : <span className="modern:font-mono">{rawId}</span>;
 
   // Quiet chrome: the reference sits IN the sentence — same size as the
   // prose, no border, a faint tint of the type's color, the way a mention

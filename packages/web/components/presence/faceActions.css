@@ -43,3 +43,6 @@
 .face-actions-fill .face-action {
   flex: 1 1 0;
 }
+
+/* Modern (.modern-style): buttons and their reason in the interface sans. */
+.modern-style :is(.face-action, .face-actions-reason) { font-family: var(--font-ui); }

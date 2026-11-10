@@ -264,7 +264,7 @@ export function ProblemBand(p: ProblemBandProps) {
       // The line's merge step, read from its role when the org is on hand, else from what the ship step said.
       const off = merge ? !merge.on : b.mergeOff;
       facts = <>
-        <Fact k="Approved">{[b.by, b.at != null ? dayTimeWords(b.at) : null].filter(Boolean).join(" · ") || "Yes"}{b.ref && <Link className="lw-link pb-out" href={`/decisions/${encodeURIComponent(b.ref)}`}>{b.ref}</Link>}</Fact>
+        <Fact k="Approved">{[b.by, b.at != null ? dayTimeWords(b.at) : null].filter(Boolean).join(" · ") || "Yes"}{b.ref && <Link className="lw-link pb-out" href={`/decisions/${encodeURIComponent(b.ref)}`}><span className="modern:font-mono">{b.ref}</span></Link>}</Fact>
         {/* Which change is not merged: this run's branch. A commit a later finding calls merged is another change. */}
         <Fact k="Merged" tone="warn">No{branch && <> · <BranchName name={branch} /></>}</Fact>
         {b.behind && <Fact k="Landing" tone="warn">Refused: branch behind {b.behind}</Fact>}
@@ -336,7 +336,7 @@ export function ProblemBand(p: ProblemBandProps) {
     case "trial":
       // A trial records the answer and ships nothing: what was chosen, what the fix changes, and closing it.
       facts = <>
-        <Fact k="You chose" tone="ok">{b.verb}{b.at != null ? ` · ${dayWords(b.at)}` : ""}{b.ref && <Link className="lw-link pb-out" href={`/decisions/${encodeURIComponent(b.ref)}`}>{b.ref}</Link>}</Fact>
+        <Fact k="You chose" tone="ok">{b.verb}{b.at != null ? ` · ${dayWords(b.at)}` : ""}{b.ref && <Link className="lw-link pb-out" href={`/decisions/${encodeURIComponent(b.ref)}`}><span className="modern:font-mono">{b.ref}</span></Link>}</Fact>
         <Fact k="Shipped">No, a trial ships nothing</Fact>
         {b.change && b.change.files > 0 && <Fact k="Change"><span className="pb-stat">{b.change.files} {b.change.files === 1 ? "file" : "files"} <b data-k="add">+{b.change.added}</b> <b data-k="del">−{b.change.removed}</b></span>{b.change.pr && <Out href={b.change.pr}>the pull request</Out>}</Fact>}
       </>;

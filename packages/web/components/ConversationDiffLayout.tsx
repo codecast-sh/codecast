@@ -597,18 +597,13 @@ function ChangesBar({ changes }: { changes: FileChangeEntry[] }) {
   return (
     <button
       onClick={() => setDiffPanelOpen(true)}
-      // --conv-sticky-h (set on the conversation header) pushes the pill below the
-      // sticky prompt card so the two never overlap at narrow widths. While pushed
-      // down it sits in the message tick rail's band, so it also shifts left
-      // (min() saturates at 2.5rem for any visible sticky) to clear the rail.
-      style={{
-        top: "calc(100% + var(--conv-sticky-h, 0px))",
-        right: "calc(0.75rem + min(var(--conv-sticky-h, 0px), 2.5rem))",
-      }}
-      // No background by design (globals.css .cc-changes-pill): the pill is
-      // fully transparent, and its backdrop blur is what keeps the label
-      // readable when it floats over body text in a narrow column.
-      className="cc-changes-pill absolute mt-2 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md border border-sol-border/50 shadow-sm hover:border-sol-border/80 transition-all group cursor-pointer select-none"
+      // A chip in the header's action row (it arrives through headerExtra), in
+      // the flow like its neighbours. It used to be absolutely positioned at
+      // the header's bottom edge, which floated it over the first lines of the
+      // feed: transcript text and timestamps scrolled under it. In the row it
+      // takes its own width, and the header squeeze (useSqueezeToFit) counts
+      // it like any other chip.
+      className="cc-changes-pill flex-shrink-0 whitespace-nowrap flex items-center gap-2 px-2.5 py-1 rounded-md border border-sol-border/50 hover:border-sol-border/80 transition-all group cursor-pointer select-none"
     >
       <div className="flex items-center gap-1">
         {displayFiles.map((f) => (
@@ -728,7 +723,7 @@ function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<C
                 />
               </TooltipTrigger>
               <TooltipContent side="right" className="bg-popover text-popover-foreground border-border shadow-md">
-                <div className="font-medium">
+                <div className={isCommit ? "font-medium" : "modern:font-mono font-medium"}>
                   {isCommit ? "Git commit" : getFileName(change.filePath)}
                 </div>
                 <div className="text-muted-foreground mt-0.5 flex items-center gap-1.5">

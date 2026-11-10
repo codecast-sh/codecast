@@ -14,6 +14,8 @@ import { objectHref, objectKind } from "../../lib/mods/objects";
 import { useModRows } from "../../lib/mods/useMods";
 import { FieldValue, StatusBadge } from "./objectFields";
 import { CommandDisclosure } from "../secrets/parts";
+import { PageFrame, PageHeader } from "../ui/page-header";
+import { SegmentedToggle } from "../SegmentedToggle";
 
 type Row = { _id: string; short_id: string; prefix: string; title: string; status?: string; fields?: Record<string, unknown>; updated_at: number; created_at: number };
 
@@ -104,8 +106,7 @@ export function ObjectsPage({ prefix }: { prefix: string }) {
   }
   const visible = showDone || view === "board" ? rows : rows.filter((r) => !objectStatusIsDone(kind, r.status));
   const doneCount = rows.length - rows.filter((r) => !objectStatusIsDone(kind, r.status)).length;
-  return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-6">
+  const legacy = (
       <header className="mb-5 flex items-center gap-3">
         <span className="flex size-9 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--sol-violet)_13%,transparent)] text-sol-violet">
           <DynamicIcon name={(kind.icon ?? "box") as any} size={18} />
@@ -120,6 +121,22 @@ export function ObjectsPage({ prefix }: { prefix: string }) {
           ))}
         </div>
       </header>
+  );
+  return (
+    <PageFrame
+      header={
+        <PageHeader
+          legacy={legacy}
+          title={kind.plural ?? `${kind.title}s`}
+          count={rows.length}
+          // The mod that declares the kind, which opens Mods.
+          crumbs={<button className="hover:text-sol-text" onClick={() => modNavigate("/mods")}>{kind.modTitle ?? kind.mod}</button>}
+          tabs={<SegmentedToggle value={view} onChange={(v) => setView(v as "table" | "board")} items={OBJECT_VIEWS} />}
+        />
+      }
+      legacyColumn="mx-auto w-full max-w-6xl px-6 py-6"
+      column="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6"
+    >
       <form
         className="mb-4"
         onSubmit={(e) => {
@@ -150,6 +167,11 @@ export function ObjectsPage({ prefix }: { prefix: string }) {
           {doneCount && !showDone ? <button onClick={() => setShowDone(true)} className="mt-3 text-[12px] text-sol-text-muted hover:text-sol-text">Show {doneCount} done</button> : null}
         </>
       )}
-    </div>
+    </PageFrame>
   );
 }
+
+const OBJECT_VIEWS = [
+  { key: "board", label: "Board" },
+  { key: "table", label: "Table" },
+];

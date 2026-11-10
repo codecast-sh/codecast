@@ -15,6 +15,9 @@ import {
 import { groupIdleNotifications } from "@codecast/shared/contracts";
 import { ArrowUpRight, Bell, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../components/ui/context-menu";
+import { PageFrame, PageHeader } from "../../components/ui/page-header";
+import { Button } from "../../components/ui/button";
+import { SegmentedToggle } from "../../components/SegmentedToggle";
 import {
   notificationHref,
   notificationRoute,
@@ -104,10 +107,10 @@ export default function NotificationsPage() {
     { key: "social", label: "Social" },
   ];
 
-  return (
-    <AuthGuard>
-      <DashboardLayout>
-        <div className="max-w-2xl mx-auto">
+  // Classic and Minimal: the title row and the underline tabs. Modern: one
+  // header, the unread count on its tab.
+  const legacy = (
+    <>
           <div className="flex items-center justify-between mb-5">
             <h1 className="text-xl font-semibold text-sol-text">Notifications</h1>
             {unreadCount > 0 && (
@@ -136,7 +139,22 @@ export default function NotificationsPage() {
               </button>
             ))}
           </div>
+    </>
+  );
+  const header = (
+    <PageHeader
+      legacy={legacy}
+      title="Notifications"
+      icon={Bell}
+      tabs={<SegmentedToggle value={activeTab} onChange={(key) => setActiveTab(key as FilterTab)} items={tabs.map((t) => (t.key === "unread" ? { ...t, label: "Unread", count: unreadCount } : t))} collapse />}
+      actions={unreadCount > 0 ? <Button variant="outline" size="sm" onClick={() => markAllAsRead()}>Mark all read</Button> : null}
+    />
+  );
 
+  return (
+    <AuthGuard>
+      <DashboardLayout>
+        <PageFrame header={header} legacyColumn="max-w-2xl mx-auto" column="mx-auto box-content max-w-2xl px-4 py-6 sm:px-6">
           {notifsList === undefined && notifications.length === 0 ? (
             <div className="space-y-3">
               {[...Array(5)].map((_, i) => (
@@ -212,7 +230,7 @@ export default function NotificationsPage() {
               </>
             )}
           </ContextMenu>
-        </div>
+        </PageFrame>
       </DashboardLayout>
     </AuthGuard>
   );

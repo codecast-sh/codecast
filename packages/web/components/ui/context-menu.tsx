@@ -154,13 +154,16 @@ export function CursorPopover<T>({
 
 // "group" so slot content (icons, dots) can restyle on item focus without
 // [&>svg] selectors — those would override per-option icon colors (a red
-// Urgent icon must stay red).
+// Urgent icon must stay red). In the Modern style the row, the panel, the
+// rule and the caption are DropdownMenu's own (styles.ts), which win over
+// these there, so both menus draw one row; only what is particular to this
+// menu (danger's red, the header) carries its own `modern:` classes.
 const ITEM = cn(
   "group text-[13px] leading-none rounded-lg px-2.5 py-2 gap-2.5",
   "text-sol-text-secondary focus:bg-sol-cyan/10 focus:text-sol-text",
 );
 
-const DANGER = cn("text-sol-red/90 focus:bg-sol-red/10 focus:text-sol-red");
+const DANGER = cn("text-sol-red/90 focus:bg-sol-red/10 focus:text-sol-red modern:focus:bg-sol-red/10 modern:data-[highlighted]:bg-sol-red/10");
 
 function ShortcutHint({ action }: { action: ShortcutAction }) {
   const parts = useShortcutParts(action);
@@ -237,7 +240,7 @@ export function CtxCheckItem({
 /** Section header: object identity or a group caption. */
 export function CtxLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-2.5 pt-1.5 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim select-none">
+    <div className="px-2.5 pt-1.5 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim select-none modern:px-2 modern:pt-2 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal">
       {children}
     </div>
   );
@@ -246,8 +249,8 @@ export function CtxLabel({ children }: { children: React.ReactNode }) {
 /** Identity header for menus that name their object (title + mono short id). */
 export function CtxHeader({ title, id }: { title: React.ReactNode; id?: string }) {
   return (
-    <div className="px-2.5 pt-2 pb-1.5 flex items-baseline gap-2 select-none border-b border-[color-mix(in_srgb,var(--sol-border)_28%,transparent)] mb-1">
-      <span className="text-[12px] font-medium text-sol-text truncate">{title}</span>
+    <div className="px-2.5 pt-2 pb-1.5 flex items-baseline gap-2 select-none border-b border-[color-mix(in_srgb,var(--sol-border)_28%,transparent)] mb-1 modern:-mx-1 modern:px-3 modern:border-sol-border/70">
+      <span className="text-[12px] font-medium text-sol-text truncate modern:text-ui">{title}</span>
       <ShortId id={id} className="ml-auto text-meta text-sol-text-dim" />
     </div>
   );

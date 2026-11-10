@@ -403,7 +403,7 @@ export function CallStage({
   // --sol-text (#002b36) on a #002b36 stage and every label disappears.
   return createPortal(
     <div
-      className={`call-stage dark fixed inset-0 z-[200] flex flex-col select-none bg-sol-base03 text-sol-text${
+      className={`call-stage dark fixed inset-0 z-[200] flex flex-col select-none bg-sol-bg text-sol-text${
         // The window is see-through and frameless, so the stage's own surface
         // is the only surface there is: a rounded card, clipped so the video
         // inside it does not square off the corners — and EDGED, because the
@@ -594,7 +594,7 @@ export function CallStage({
           without taking a lane from the people already in the room. */}
       {call.roomKey && call.phase === "connected" && (
         <div className="pointer-events-none absolute right-3 top-12 z-10 w-80 max-w-[calc(100%-24px)]">
-          <div className="pointer-events-auto rounded-lg bg-sol-base03/80 backdrop-blur">
+          <div className="pointer-events-auto rounded-lg bg-sol-bg/80 backdrop-blur">
             <RoomKnocks roomKey={call.roomKey} />
           </div>
         </div>
@@ -611,7 +611,7 @@ export function CallStage({
       {/* The stage itself. */}
       <div className="relative flex min-h-0 flex-1 gap-2 px-3 pb-3 pt-3">
         {call.reconnecting && (
-          <span className="pointer-events-none absolute left-1/2 top-4 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-sol-yellow/40 bg-sol-base03/90 px-2.5 py-1 font-mono text-[12px] text-sol-yellow">
+          <span className="pointer-events-none absolute left-1/2 top-4 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-sol-yellow/40 bg-sol-bg/90 px-2.5 py-1 font-mono text-[12px] text-sol-yellow">
             <span className="h-1.5 w-1.5 rounded-full bg-sol-yellow" />
             reconnecting
           </span>

@@ -79,7 +79,7 @@ function ContextSessionCard({
       className={`group relative flex-shrink-0 w-[13.5rem] rounded-md border px-2.5 py-2 text-left transition-colors ${
         excluded
           ? "border-sol-border/40 bg-sol-bg-alt/30 opacity-45"
-          : "border-sol-border/60 bg-sol-bg-alt/60 hover:border-sol-base1/60"
+          : "border-sol-border/60 bg-sol-bg-alt/60 hover:border-sol-text-dim/60"
       } ${onOpen ? "cursor-pointer" : ""}`}
       onClick={onOpen}
       role={onOpen ? "button" : undefined}

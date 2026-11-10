@@ -304,7 +304,7 @@ function UserListItem({
         <span className={`tabular-nums ${online ? "text-sol-text-muted" : stale ? "text-sol-text-dim" : "text-sol-amber"}`}>
           {lastSeen ? formatRelativeTime(lastSeen) : "never"}
         </span>
-        {user.cli_version && <span>· v{user.cli_version}</span>}
+        {user.cli_version && <span>· <span className="modern:font-mono">v{user.cli_version}</span></span>}
         {user.cli_platform && <span>· {user.cli_platform}</span>}
         <span className="ml-auto flex gap-1">
           <CountBadge n={user.errorCount} tone="error" />

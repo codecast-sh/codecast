@@ -293,7 +293,7 @@ function HistorySection({ d }: { d: Device }) {
                 </p>
                 <p className="mt-0.5 text-meta text-sol-text-muted">
                   {c.why}
-                  <span className="text-sol-text-dim"> · v{c.version}</span>
+                  <span className="text-sol-text-dim"> · <span className="modern:font-mono">v{c.version}</span></span>
                 </p>
               </div>
               <SettingsBadge tone={c.automatic ? "yellow" : "muted"} className="h-fit">

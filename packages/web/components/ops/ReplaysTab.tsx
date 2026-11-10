@@ -548,7 +548,7 @@ function IssueChip({ ids, groupById, counts }: { ids: string[]; groupById: Map<s
 function PathTail({ text, path = false }: { text: string; path?: boolean }) {
   const { head, tail } = path ? pagePathParts(text) : issueTitleParts(text);
   return (
-    <span className="rp-net-path">
+    <span className={path ? "rp-net-path modern:font-mono" : "rp-net-path"}>
       <span className="rp-net-head">{head}</span>
       {tail && <span className="rp-net-tail">{tail}</span>}
     </span>

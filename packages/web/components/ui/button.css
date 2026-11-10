@@ -106,3 +106,53 @@ html body :where(.cc-btn-outline) {
 html body :where(.cc-btn-secondary:active:not(:disabled), .cc-btn-outline:active:not(:disabled)) {
   box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.08);
 }
+
+/* ── Modern (the opt-in style: .modern-style on <html>) ───────────────────────
+ * Everything above is Classic and Minimal, untouched. Modern redraws the
+ * faces flat and precise, since a button does not float: a filled face is
+ * its tint exactly (the theme's accent for primary and cyan, so the primary
+ * button, the focus ring and a selected row are one colour) with a hairline
+ * just inside the edge and no sheen or drop shadow; its label is worked out
+ * from the tint (white on a dark fill, a near-black in the fill's own hue on a
+ * light one, the two inks meeting at 0.62 oklch lightness); hover leans the
+ * fill 10% toward its label and a press darkens it, without a sink. The quiet
+ * faces lose their lift. Same weight as the rules above, and later, so these
+ * win in Modern and a call site's utility class still wins over both. Timing
+ * is the press token (app/globals.css). */
+html body :where(.modern-style .cc-btn) {
+  transition:
+    background-color var(--motion-press) var(--motion-ease),
+    border-color var(--motion-press) var(--motion-ease),
+    box-shadow var(--motion-press) var(--motion-ease),
+    color var(--motion-press) var(--motion-ease);
+}
+html body :where(.modern-style .cc-btn:active:not(:disabled)) {
+  transform: none;
+}
+html body :where(.modern-style .cc-btn-primary, .modern-style .cc-btn-cyan) { --btn-tint: var(--sol-class-cyan); }
+html body :where(.modern-style .cc-btn-destructive) { --btn-tint: var(--sol-class-red); }
+html body :where(.modern-style .cc-btn-fill) {
+  --btn-ink: #fff;
+  --btn-fill: var(--btn-tint);
+  --btn-fill-hover: color-mix(in oklab, var(--btn-fill) 90%, var(--btn-ink));
+  --btn-fill-press: color-mix(in oklab, var(--btn-fill) 86%, #000);
+  --btn-sheen: none;
+  --btn-face: inset 0 0 0 1px rgb(0 0 0 / 0.08);
+  --btn-face-pressed: inset 0 1px 2px rgb(0 0 0 / 0.16), inset 0 0 0 1px rgb(0 0 0 / 0.1);
+  color: var(--btn-ink);
+}
+@supports (color: oklch(from red l c h)) {
+  html body :where(.modern-style .cc-btn-fill) {
+    --btn-ink: oklch(from var(--btn-tint) calc(clamp(0, (0.62 - l) * 100, 1) * 0.78 + 0.22) calc(0.03 - clamp(0, (0.62 - l) * 100, 1) * 0.03) h);
+    --btn-fill: var(--btn-tint);
+  }
+}
+html body :where(.modern-style .cc-btn-fill:active:not(:disabled)) {
+  background-color: var(--btn-fill-press);
+}
+html body :where(.modern-style .cc-btn-secondary, .modern-style .cc-btn-outline) {
+  box-shadow: none;
+}
+html body :where(.modern-style .cc-btn-secondary:active:not(:disabled), .modern-style .cc-btn-outline:active:not(:disabled)) {
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.06);
+}

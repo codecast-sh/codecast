@@ -485,7 +485,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const gutter = bubble ? "" : "ml-8";
 
   return (
-    <div data-cc-message="user" data-cc-bubble={bubble ? "" : undefined} id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${bubble ? `ml-auto w-fit max-w-[84%] mt-4 mb-2 px-3.5 py-2 rounded-[18px] rounded-br-[5px]` : `-mx-4 px-4 py-4 rounded-lg ${effectivelyCollapsed ? "mb-2" : "mb-6"}`} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/15 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : bubble ? "bg-sol-blue/15" : "bg-sol-blue/10 border border-sol-blue/30"} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 pending-stripes queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)}>
+    <div data-cc-message="user" data-cc-bubble={bubble ? "" : undefined} id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${bubble ? `ml-auto w-fit max-w-[84%] mt-4 mb-2 px-3.5 py-2 rounded-[18px] rounded-br-[5px]` : `-mx-4 px-4 py-4 rounded-lg ${effectivelyCollapsed ? "mb-2" : "mb-6"}`} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/15 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : bubble ? "bg-sol-blue/15" : "bg-sol-blue/10 border border-sol-blue/30 modern:bg-sol-bg-alt modern:border-transparent"} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 pending-stripes queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)}>
       {rewinding && conversationId && messageUuid && (
         <RewindReview
           planId={rewinding}
@@ -626,7 +626,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       )}
       {displayContent ? <div
         ref={contentRef}
-        className={`text-sol-text text-sm ${indent} break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}
+        data-cc-prose className={`text-sol-text text-sm ${indent} break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}
         style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? clippedStyle(USER_CONTENT_MAX_HEIGHT) : undefined}
       >
         {(() => {
@@ -1385,7 +1385,7 @@ function AssistantBlockImpl({
     ) : isPlanModeTool(tc.name) ? (
       <PlanModeBlock key={tc.id} tool={tc} result={result} conversationId={conversationId} messageId={src.messageId} onSendMessage={onSendInlineMessage} />
     ) : isSayToolCall(tc) ? (
-      <div key={tc.id} data-cc-said className="text-sol-text prose prose-invert prose-sm max-w-none my-1.5">{renderAssistantBody(sayTextOf(parseCastCommand(tc))!)}</div>
+      <div key={tc.id} data-cc-said data-cc-prose className="text-sol-text prose prose-invert prose-sm max-w-none my-1.5">{renderAssistantBody(sayTextOf(parseCastCommand(tc))!)}</div>
     ) : parseCastCommand(tc) ? (
       <CastCommandBlock key={tc.id} tool={tc} result={result} images={images} globalImageMap={globalImageMap} conversationId={conversationId} />
     ) : (
@@ -1606,7 +1606,7 @@ function AssistantBlockImpl({
 
         {hasContent && (
           <>
-            <div className={parsedApiError ? "" : "text-sol-text prose prose-invert prose-sm max-w-none break-words"}>
+            <div data-cc-prose={parsedApiError ? undefined : ""} className={parsedApiError ? "" : "text-sol-text prose prose-invert prose-sm max-w-none break-words"}>
               {parsedApiError ? (
                 <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} messageUuid={messageUuid} timestamp={timestamp} compact={condensed} />
               ) : (

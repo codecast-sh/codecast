@@ -192,3 +192,6 @@ a.sp-row-ref:hover { color: var(--lw-ink); text-decoration: underline; text-unde
 /* Narrow (a drawer on a phone): the counts wrap as whole chips. */
 .sp-counts { flex-wrap: wrap; }
 .sp-count { white-space: nowrap; }
+
+/* Modern (.modern-style): an id stays mono beside the sans. */
+.modern-style .sp-held-ref { font-family: var(--lw-mono); }

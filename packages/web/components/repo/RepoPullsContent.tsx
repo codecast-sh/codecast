@@ -111,7 +111,7 @@ export function RepoPullsContent({ repository, family }: { repository: string; f
           <div className="flex flex-wrap gap-2 text-xs mt-1.5 text-sol-text-dim">
             <span>#{pull.number}</span>
             {pull.author_login && <span>{pull.author_login}</span>}
-            {pull.head_ref && <Link className="hover:text-sol-text" href={repoTreeHref(repository, pull.head_ref, undefined, family)}>{pull.head_ref}</Link>}
+            {pull.head_ref && <Link className="modern:font-mono hover:text-sol-text" href={repoTreeHref(repository, pull.head_ref, undefined, family)}>{pull.head_ref}</Link>}
             {!!pull.updated_at && <time title={new Date(pull.updated_at).toLocaleString()}>updated {relTimeShort(pull.updated_at)}</time>}
             {pull.checks_state && pull.checks_state !== "none" && (
               <span className={pull.checks_state === "success" ? "text-sol-green" : pull.checks_state === "failure" ? "text-sol-red" : "text-sol-yellow"}>

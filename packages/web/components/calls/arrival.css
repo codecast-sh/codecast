@@ -194,3 +194,6 @@
     animation: none;
   }
 }
+
+/* Modern (.modern-style): the reply is words, in the interface sans. */
+.modern-style .agent-reply { font-family: var(--font-ui); }

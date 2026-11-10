@@ -544,7 +544,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
   return (
     <div
       role="status"
-      className={`pointer-events-auto flex max-w-[380px] items-start gap-2.5 rounded-lg bg-sol-base03/90 px-3 py-2.5 shadow-2xl ring-1 backdrop-blur animate-in fade-in slide-in-from-top-1 duration-200 motion-reduce:animate-none ${
+      className={`pointer-events-auto flex max-w-[380px] items-start gap-2.5 rounded-lg bg-sol-bg/90 px-3 py-2.5 shadow-2xl ring-1 backdrop-blur animate-in fade-in slide-in-from-top-1 duration-200 motion-reduce:animate-none ${
         stopped?.failed ? "ring-sol-orange/30" : stopped ? "ring-white/10" : "ring-sol-red/30"
       }`}
     >

@@ -12,6 +12,6 @@ export function RepositoryPaletteItems({ query, navigate, itemClass, groupClass 
   if (!jump && !matches.length) return null;
   return <Command.Group heading="Code" className={groupClass}>
     {jump && <Command.Item value={`__entity__ code ${jump.href}`} onSelect={() => navigate(jump.href)} className={itemClass}><FolderGit2 className="w-4 h-4 shrink-0" /><span className="truncate">Browse {jump.label}</span></Command.Item>}
-    {matches.map(row => <Command.Item key={row.repository} value={`__entity__ repository ${row.repository}`} onSelect={() => navigate(repoHomeHref(row.repository))} className={itemClass}><FolderGit2 className="w-4 h-4 shrink-0" /><span className="truncate">{row.repository}</span></Command.Item>)}
+    {matches.map(row => <Command.Item key={row.repository} value={`__entity__ repository ${row.repository}`} onSelect={() => navigate(repoHomeHref(row.repository))} className={itemClass}><FolderGit2 className="w-4 h-4 shrink-0" /><span className="truncate modern:font-mono">{row.repository}</span></Command.Item>)}
   </Command.Group>;
 }

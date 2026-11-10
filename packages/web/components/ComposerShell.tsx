@@ -65,11 +65,14 @@ export function ComposerShell({
   after?: ReactNode;
 }) {
   const { colClass } = composerColumn({ inline, expanded });
+  // Which composer this is, for the Modern style's layout (app/globals.css
+  // "MODERN · COMPOSER"): only the conversation's docked one changes shape.
+  const variant = bare ? "bare" : inline ? "inline" : hero ? "hero" : "dock";
   return (
     <div ref={rootRef} data-sv-composer className={`shrink-0 pointer-events-none ${inline || hero ? "" : "sticky bottom-0"} ${lightboxOpen ? "z-[10002]" : "z-10"}`}>
       {!lightboxOpen && !inline && !hero && <ComposerFade />}
-      <div className={`${inline || hero ? "" : bare ? "pb-4" : "pb-3"} pointer-events-auto ${!lightboxOpen && !inline && !hero ? "bg-sol-bg" : ""}`}>
-        <div className="relative">
+      <div data-cc-composer-frame={variant} className={`${inline || hero ? "" : bare ? "pb-4" : "pb-3"} pointer-events-auto ${!lightboxOpen && !inline && !hero ? "bg-sol-bg" : ""}`}>
+        <div data-cc-composer-stack={variant} className="relative">
           {before}
           {/* The composer's status line: always one row tall, so focusing the
               box or the agent changing state never shifts the composer. The
@@ -80,14 +83,14 @@ export function ComposerShell({
               <p className="text-meta text-sol-text-muted pl-1">
                 {meta}
               </p>
-              <div className="flex items-center gap-2">
+              <div data-cc-composer-controls className="flex items-center gap-2">
                 {metaEnd}
               </div>
             </div>
           )}
           {between}
           <form onSubmit={onSubmit} className={bare ? "w-full" : `mx-auto ${colClass}`}>
-            <div data-composer-field={composeMode ? "" : undefined} className={`flex flex-col ${bare ? "" : "border"} transition-colors duration-150 ${bare ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : inline ? "border px-3 py-1.5 rounded-xl bg-sol-bg-alt" : hero ? "border px-4 pt-3 pb-1 rounded-2xl shadow-lg bg-sol-bg-alt focus-within:border-sol-cyan/50 [&_textarea]:min-h-[4.5rem]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${expanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[min(40vh,var(--composer-max-h,40vh))] max-h-[var(--composer-max-h,45vh)]" : ""} ${selectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bare ? "" : hero ? "border-sol-border/60" : "border-sol-border"}`}>
+            <div data-composer-field={composeMode ? "" : undefined} data-cc-composer-box={variant} className={`flex flex-col ${bare ? "" : "border"} transition-colors duration-150 ${bare ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : inline ? "border px-3 py-1.5 rounded-xl bg-sol-bg-alt" : hero ? "border px-4 pt-3 pb-1 rounded-2xl shadow-lg bg-sol-bg-alt focus-within:border-sol-cyan/50 [&_textarea]:min-h-[4.5rem]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${expanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[min(40vh,var(--composer-max-h,40vh))] max-h-[var(--composer-max-h,45vh)]" : ""} ${selectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bare ? "" : hero ? "border-sol-border/60" : "border-sol-border"}`}>
               {fieldTop}
               {children}
               {hero && foot}
@@ -135,7 +138,7 @@ export function ComposerTextRow({
         {children}
       </div>
       {(actions || send) && (
-        <div ref={sendRef} className={`shrink-0 ml-auto flex items-center gap-1 ${tucked ? "basis-full justify-end" : ""}`}>
+        <div ref={sendRef} data-cc-composer-send className={`shrink-0 ml-auto flex items-center gap-1 ${tucked ? "basis-full justify-end" : ""}`}>
           {actions}
           {send}
         </div>
@@ -309,12 +312,12 @@ export function ComposerSendButton({
     ? `w-6 h-6 rounded-md transition-colors flex items-center justify-center ${
         !canSubmit ? "text-sol-text-dim/30 cursor-not-allowed" : "text-sol-cyan hover:bg-sol-cyan/10"
       }`
-    : `w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${
+    : `w-8 h-8 rounded-full transition-colors flex items-center justify-center border modern:border-transparent modern:bg-sol-cyan modern:text-sol-bg ${
         !canSubmit
-          ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed"
+          ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed modern:opacity-35"
           : quotesOnly
-            ? "border-sol-cyan/50 bg-sol-cyan/20 text-sol-cyan hover:bg-sol-cyan/30 hover:border-sol-cyan"
-            : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"
+            ? "border-sol-cyan/50 bg-sol-cyan/20 text-sol-cyan hover:bg-sol-cyan/30 hover:border-sol-cyan modern:hover:bg-sol-cyan modern:hover:text-sol-bg modern:hover:opacity-90"
+            : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue modern:hover:bg-sol-cyan modern:hover:text-sol-bg modern:hover:opacity-90"
       }`;
   return tipped(
     <button

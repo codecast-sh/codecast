@@ -1,6 +1,7 @@
 "use client";
 
 import { PageHeading } from "../PageHeading";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { useCallback, useMemo, useState } from "react";
 import { ShortId } from "../ShortId";
 import Link from "next/link";
@@ -45,6 +46,7 @@ const answeredSig = (d: SessionDecisionItem) => `${d.resolved_at ?? 0}:${d.answe
 // Sessions parked on a terminal question (an AskUserQuestion, a permission
 // prompt) have no authored row and keep the one-at-a-time stepper.
 export function DecisionQueueList() {
+  const modern = useIsModernStyle();
   // The same argument set the stacks index and the stack page use: the feed
   // is a snapshot, so two feeders that disagree on include_done would drop
   // and restore each other's done rows while both are mounted. Done stacks
@@ -111,8 +113,11 @@ export function DecisionQueueList() {
   return (
     <div className="h-full overflow-y-auto" data-main-scroll>
       <div className="mx-auto w-full max-w-3xl px-4 sm:px-6 pt-6 pb-6">
-        <div className="flex items-center gap-x-3 gap-y-2 flex-wrap mb-5">
-          <PageHeading title="Decisions" />
+        {/* Modern: the page header above (GenericListView's) names the page,
+            and the cards view leads with what is waiting and its two ways to
+            work through it. */}
+        <div className={`flex items-center gap-x-3 gap-y-2 flex-wrap mb-5${modern ? " min-h-7" : ""}`}>
+          {!modern && <PageHeading title="Decisions" />}
           {/* A count of nothing says what the empty state below says better. */}
           {(mine > 0 || onDefault > 0 || withLead > 0 || terminal.length > 0) && <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{onDefault ? ` · ${onDefault} going ahead` : ""}{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>}
           <div className="ml-auto flex items-center gap-2 text-meta">

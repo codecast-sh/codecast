@@ -31,11 +31,11 @@ export function RepoRefsContent({ repository, family, tags = false }: { reposito
       {rows.map((row) => <div key={row.name} className="px-4 py-4 flex gap-3 items-start">
         <Icon className="size-4 mt-1 shrink-0 text-sol-blue" />
         <div className="flex-1 min-w-0">
-          <div className="flex gap-2 items-center"><Link href={repoTreeHref(repository, tags ? `refs/tags/${row.name}` : row.name, undefined, family)} className="text-sol-blue truncate">{row.name}</Link>
+          <div className="flex gap-2 items-center"><Link href={repoTreeHref(repository, tags ? `refs/tags/${row.name}` : row.name, undefined, family)} className="modern:font-mono text-sol-blue truncate">{row.name}</Link>
             {!tags && row.name === defaultBranch && <span className="text-meta border border-sol-border rounded-full px-2">default</span>}
           </div>
           <div className="flex flex-wrap gap-2 text-xs mt-2 text-sol-text-dim">
-            <Link href={commitPageHref(repository, row.sha, family)} className="hover:text-sol-text">{row.sha?.slice(0, 7)}</Link>
+            <Link href={commitPageHref(repository, row.sha, family)} className="modern:font-mono hover:text-sol-text">{row.sha?.slice(0, 7)}</Link>
             {row.subject && <Link className="truncate max-w-[50ch] hover:text-sol-text" href={commitPageHref(repository, row.sha, family)}>{row.subject}</Link>}
             {row.author_login && <span>{row.author_login}</span>}
             {!!row.committed_at && <time title={new Date(row.committed_at).toLocaleString()}>{relTimeShort(row.committed_at)}</time>}

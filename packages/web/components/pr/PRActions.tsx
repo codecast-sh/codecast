@@ -533,7 +533,7 @@ export function MergeMenu({ pr }: { pr: any }) {
             onClick={() => setDeleteBranch(!deleteBranch)}
           >
             {deleteBranch ? <Check className="w-3 h-3 text-sol-cyan" /> : <span className="w-3" />}
-            Delete {pr.head_ref ?? "the branch"} after merging
+            Delete {pr.head_ref ? <span className="modern:font-mono">{pr.head_ref}</span> : "the branch"} after merging
           </DropdownMenuItem>
           <DropdownMenuSeparator className="bg-sol-border" />
           {autoOn ? (
@@ -554,7 +554,7 @@ export function MergeMenu({ pr }: { pr: any }) {
           {behind && (
             <DropdownMenuItem className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-text" onClick={() => setReviewing("update")} data-pr-update-branch>
               <GitBranch className="w-3 h-3" />
-              Update branch from {pr.base_ref ?? "base"}
+              Update branch from <span className="modern:font-mono">{pr.base_ref ?? "base"}</span>
             </DropdownMenuItem>
           )}
           {canBypass && (

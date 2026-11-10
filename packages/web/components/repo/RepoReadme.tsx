@@ -124,7 +124,7 @@ export function RepoReadme({ repository, refName, family }: { repository: string
   if (readme.error) return <p className="p-4 text-sol-text-muted text-xs">README could not be loaded.</p>;
   if (!readme.data?.found) return null;
   return <section className="border border-sol-border/60 rounded-lg overflow-hidden">
-    <div className="border-b border-sol-border/50 px-4 py-3 text-xs"><Link href={repoBlobHref(repository, refName, path, family)}>{path}</Link></div>
+    <div className="border-b border-sol-border/50 px-4 py-3 modern:font-mono text-xs"><Link href={repoBlobHref(repository, refName, path, family)}>{path}</Link></div>
     <div className="prose prose-sm max-w-none p-6 text-sol-text repo-readme">
       <ReactMarkdown remarkPlugins={MD_REMARK_PLUGINS} rehypePlugins={README_REHYPE_PLUGINS} components={components}>
         {readme.data.content ?? ""}

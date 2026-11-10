@@ -15,7 +15,7 @@ import { identityPrefsOf, identityRowOf, identitySig, roleLookingAfter } from ".
 import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 import { clickBucketChip, clickProjectChip } from "../../store/chipFilterClicks";
 import { workProjectSig } from "../../lib/workProjectSig";
-import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, railRowPlacement, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
 import { useNowWhen } from "../../hooks/useCoarseNow";
 import { latestRestartRow, restartPending } from "../../lib/sessionCommands";
@@ -29,6 +29,8 @@ import { useTipActions, checkMilestone } from "../../tips";
 import { formatIdleDuration, sessionCardTitle } from "../../lib/sessionCard";
 import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
+import { ModernSessionCardView } from "./ModernSessionCard";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { useInboxSelection } from "../../lib/inboxSelection";
 import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipState";
 import { resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../lib/uiPrefDefaults";
@@ -79,6 +81,14 @@ function liveCardTitle(s: Parameters<typeof hostedRowTitle>[0], cardId: string, 
   return hosted ? hostedRowTitle(s, cardId) : sessionCardTitle(s.sessions[cardId] ?? session);
 }
 
+// The placement the Modern card reads where no section decides its word, as
+// one string for the card's clock signature: a time term that re-files the
+// row (a status aging past its trust, a snooze ending) re-renders it.
+function modernPlacementSig(session: InboxSession, t: number): string {
+  const p = railRowPlacement(session, t);
+  return `${p.state}|${p.bucket}`;
+}
+
 // Store actions the card reaches, the same for every card.
 const toggleFavorite = (id: string) => useInboxStore.getState().toggleFavorite(id);
 const openLabels = (session: InboxSession) =>
@@ -122,6 +132,9 @@ export const SessionCard = memo(function SessionCard({
   // Applied here as well as in the view: the clock signature below reads the
   // blocked chip, which a safety block turns on.
   const session = withSafetyBlock(row);
+  // Modern draws ModernSessionCardView from the same props; Classic and
+  // Minimal draw SessionCardView exactly as before.
+  const modern = useIsModernStyle();
   const tipActions = useTipActions();
   const spawnedById = session.spawned_by_conversation_id || null;
   const anchorId = session.is_anchor ? (session.anchor_id ?? null) : null;
@@ -171,6 +184,9 @@ export const SessionCard = memo(function SessionCard({
     (s) => sessionShipSig(s as any, cardId),
     // The project it works in, as one short string.
     (s) => workProjectSig(s as any, cardId),
+    // Modern only: a pending `cast decide` on this session, so the card in
+    // Decisions says Needs you. Constant (false) in Classic and Minimal.
+    (s) => (modern && !hosted ? awaitingOkIds(s.sessionDecisions).has(cardId) : false),
   ]);
   const liveTitle = liveCardTitle(st, cardId, hosted, session);
   const meId = st.currentUser?._id?.toString?.() ?? null;
@@ -194,7 +210,9 @@ export const SessionCard = memo(function SessionCard({
       `${formatIdleDuration(session.updated_at)}|${sessionIdleAt(session, t) ? 1 : 0}|` +
       `${showsBlockedBadge(session.pending_api_error, false, reviveRequestedAtRef.current, t) ? 1 : 0}|` +
       `${threadStateView(session, session.message_count, t)?.cardLine ?? ""}|` +
-      `${restartPending(restartRowRef.current, t) ? 1 : 0}`,
+      `${restartPending(restartRowRef.current, t) ? 1 : 0}` +
+      // Modern reads the row's placement where no section decides its word.
+      (modern ? `|${modernPlacementSig(session, t)}` : ""),
     30_000,
   );
   // The machine behind a worktree, read straight off the persisted roster —
@@ -320,9 +338,10 @@ export const SessionCard = memo(function SessionCard({
   // typed, else "Untitled draft".
   const unsentDraft = hosted && !liveTitle && isUnsentConversation(session);
   const draftTitle = unsentDraft ? (promptTitle(st.drafts[cardId]?.draft_message as string | undefined) || "Untitled draft") : "";
+  const CardView = modern ? ModernSessionCardView : SessionCardView;
 
   return (
-    <SessionCardView
+    <CardView
       {...rest}
       {...(unsentDraft ? { isUnread: false } : {})}
       session={session}
@@ -345,6 +364,7 @@ export const SessionCard = memo(function SessionCard({
         // mode files it under Your turn with the replies.
         // The pending decision row is the one home for that (awaitingOkIds).
         asksOk: hosted && awaitingOkIds(st.sessionDecisions).has(cardId),
+        ...(modern ? { asking: !hosted && awaitingOkIds(st.sessionDecisions).has(cardId) } : {}),
       }}
       viewerId={meId}
       author={author}

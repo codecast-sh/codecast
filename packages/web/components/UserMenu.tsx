@@ -11,6 +11,7 @@ import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { useTheme } from "./ThemeProvider";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
 import {
   Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, Rss, ListChecks,
   FileText, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut, Waypoints,
@@ -165,7 +166,12 @@ export function UserMenu() {
   const flowsOn = useWorkspaceFeature("line");
   const page = (icon: LucideIcon, label: string, path: string) =>
     <MenuItem key={path} icon={icon} label={label} onClick={() => go(path)} />;
-  const pages = [
+  // Modern keeps this menu to account, settings, appearance and help: every
+  // page it listed is a row of the Modern rail or its More level.
+  const modern = useIsModernStyle();
+  const pages = modern ? [
+    <MenuItem key="profile" icon={CircleUser} label="Profile" onClick={() => go(profileHref)} />,
+  ] : [
     <MenuItem key="profile" icon={CircleUser} label="Profile" onClick={() => go(profileHref)} />,
     // The page's own name: the rail's "Feed" is the team activity page.
     page(Rss, "Message Feed", "/feed"),
@@ -214,7 +220,7 @@ export function UserMenu() {
               )}
             </div>
             {user?.email && (
-              <p className="text-xs text-sol-base0 truncate">{user.email}</p>
+              <p className="text-xs text-sol-text-muted truncate">{user.email}</p>
             )}
           </button>
 
@@ -239,9 +245,9 @@ export function UserMenu() {
             />
             <MenuItem icon={Compass} label="Tours" onClick={() => { setOpen(false); useInboxStore.getState().setToursPanelOpen(true); }} />
             {weeklyCardAllowed(user) && page(CalendarDays, "Your week", "/week")}
-            {page(Blocks, "Agent features", "/agent-features")}
-            {page(SlidersHorizontal, "Agent Config", "/config")}
-            {page(Library, "Capabilities", "/capabilities")}
+            {!modern && page(Blocks, "Agent features", "/agent-features")}
+            {!modern && page(SlidersHorizontal, "Agent Config", "/config")}
+            {!modern && page(Library, "Capabilities", "/capabilities")}
             <MenuItem
               icon={BookOpen}
               label="Documentation"

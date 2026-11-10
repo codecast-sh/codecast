@@ -103,7 +103,7 @@ export function FeatureDialog({
             {feature && <DetailRow label="Writes to">{feature.writesTo}</DetailRow>}
             {hooks.map((h) => (
               <DetailRow key={h.file} label="Hook">
-                {h.name} (~/.claude/hooks/{h.file}), added and removed with the switch
+                {h.name} (<span className="modern:font-mono">~/.claude/hooks/{h.file}</span>), added and removed with the switch
               </DetailRow>
             ))}
             {feature && <DetailRow label="Since">{feature.shipped}</DetailRow>}

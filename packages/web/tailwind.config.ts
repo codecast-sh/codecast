@@ -182,7 +182,34 @@ const config: Config = {
   		borderRadius: {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',
-  			sm: 'calc(var(--radius) - 4px)'
+  			sm: 'calc(var(--radius) - 4px)',
+  			// The Modern style's primitive system (app/globals.css; the variables
+  			// exist only under .modern-style): 6px controls, 10px cards and
+  			// popovers, 14px dialogs and sheets.
+  			control: 'var(--radius-control)',
+  			card: 'var(--radius-card)',
+  			dialog: 'var(--radius-dialog)'
+  		},
+  		// Control heights, usable by any spacing utility (h-, size-, min-h-).
+  		spacing: {
+  			'control-sm': 'var(--control-sm)',
+  			'control-md': 'var(--control-md)',
+  			'control-lg': 'var(--control-lg)'
+  		},
+  		// Elevation: only things that float cast a shadow.
+  		boxShadow: {
+  			popover: 'var(--shadow-popover)',
+  			dialog: 'var(--shadow-dialog)',
+  			toast: 'var(--shadow-toast)'
+  		},
+  		// Motion: hover and press, then popovers and dialogs. tailwindcss-animate
+  		// reads these too, so duration-pop also times an animate-in.
+  		transitionDuration: {
+  			press: 'var(--motion-press)',
+  			pop: 'var(--motion-pop)'
+  		},
+  		transitionTimingFunction: {
+  			ui: 'var(--motion-ease)'
   		},
   		keyframes: {
   			'accordion-down': {
@@ -223,6 +250,8 @@ const config: Config = {
     require("@tailwindcss/typography"),
     plugin(function ({ addVariant }) {
       addVariant("light", ".light &");
+      // The opt-in Modern style (components/ThemeProvider.tsx sets the class).
+      addVariant("modern", ".modern-style &");
     }),
     plugin(function ({ addBase }) {
       addBase({ ":root": scaleDefaults });

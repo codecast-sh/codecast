@@ -18,6 +18,7 @@ import { useDerivedSize } from "../../hooks/useDerivedSize";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { PageHeader } from "../ui/page-header";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import { formatRelativeTime, formatFullTimestamp } from "../../lib/conversationFormat";
@@ -597,17 +598,11 @@ function VaultBody({ fit }: { fit: Fit }) {
 
   // Narrow, the filters keep their words and Search waits as an icon until it is focused (a click or /), then takes a line of its own.
   const searchShut = fit === "narrow" && !searching && !query;
-  const header = (
-    <div ref={titlebarRef} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-sol-border/40 px-5 pb-2.5 pt-4">
-      <h1 className="text-xl font-semibold text-sol-text">Vault</h1>
-      {sample && (
-        <span className="self-center rounded border border-sol-violet/50 px-1.5 text-meta font-medium leading-[18px] text-sol-violet" data-vault-sample>
-          Sample
-        </span>
-      )}
-      {loaded || rows.length > 0 ? <span className="pt-1 text-[13px] tabular-nums text-sol-text-dim">{stored.length}</span> : null}
-      {rows.length > 0 && (
-        <div className={`flex items-center gap-2 ${fit === "narrow" ? "flex-wrap" : ""} ${listFit === "narrow" ? "order-last basis-full" : "ml-auto"}`}>
+  // The filters and search, drawn by whichever header is up. Modern keeps
+  // them with the actions while the list is wide, and gives them the header's
+  // second row once it is narrow.
+  const filterBody = (
+        <>
           <AttentionFilter on={attention} count={attentionCount} onChange={setAttention} />
           {scopeFilterUseful && <ScopeFilter value={scope} onChange={setScope} counts={counts} />}
           <label className={`relative ${searchShut ? "w-7 shrink-0 cursor-pointer" : fit === "narrow" ? "min-w-[12rem] flex-1" : listFit === "narrow" ? "min-w-0 flex-1" : "w-56"}`} title={searchShut ? "Search" : undefined}>
@@ -635,12 +630,42 @@ function VaultBody({ fit }: { fit: Fit }) {
               </span>
             )}
           </label>
-        </div>
+        </>
+  );
+  const filterGroup = rows.length > 0 ? (
+    <div className={`flex items-center gap-2 ${fit === "narrow" ? "flex-wrap" : ""} ${listFit === "narrow" ? "w-full" : ""}`}>{filterBody}</div>
+  ) : null;
+  const sampleMark = (className: string) => sample && (
+    <span className={`${className}rounded border border-sol-violet/50 px-1.5 text-meta font-medium leading-[18px] text-sol-violet`} data-vault-sample>
+      Sample
+    </span>
+  );
+  const legacy = (
+    <div ref={titlebarRef} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-sol-border/40 px-5 pb-2.5 pt-4">
+      <h1 className="text-xl font-semibold text-sol-text">Vault</h1>
+      {sampleMark("self-center ")}
+      {loaded || rows.length > 0 ? <span className="pt-1 text-[13px] tabular-nums text-sol-text-dim">{stored.length}</span> : null}
+      {rows.length > 0 && (
+        <div className={`flex items-center gap-2 ${fit === "narrow" ? "flex-wrap" : ""} ${listFit === "narrow" ? "order-last basis-full" : "ml-auto"}`}>{filterBody}</div>
       )}
       <div className={listFit === "narrow" || rows.length === 0 ? "ml-auto" : ""}>
         <AddMenu onPick={setAdding} compact={fit === "narrow"} />
       </div>
     </div>
+  );
+  const header = (
+    <PageHeader
+      legacy={legacy}
+      title="Vault"
+      count={loaded || rows.length > 0 ? stored.length : null}
+      actions={<>
+        {sampleMark("")}
+        {listFit !== "narrow" && filterGroup}
+        <AddMenu onPick={setAdding} compact={fit === "narrow"} />
+      </>}
+    >
+      {listFit === "narrow" ? filterGroup : null}
+    </PageHeader>
   );
 
   const detail = open ? (

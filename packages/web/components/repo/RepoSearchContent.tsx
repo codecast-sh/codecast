@@ -70,8 +70,8 @@ export function RepoSearchContent({ repository, q, family }: {
           <div className="px-3 py-2 border-b border-sol-border/40 flex gap-2 items-center bg-sol-bg-alt/40">
             <FileCode className="size-3.5 shrink-0 text-sol-cyan" />
             {ref
-              ? <Link href={repoBlobHref(repository, ref, item.path, family)} className="text-sol-blue text-xs truncate">{item.path}</Link>
-              : <span className="text-xs truncate">{item.path}</span>}
+              ? <Link href={repoBlobHref(repository, ref, item.path, family)} className="modern:font-mono text-sol-blue text-xs truncate">{item.path}</Link>
+              : <span className="modern:font-mono text-xs truncate">{item.path}</span>}
           </div>
           {item.matches.map((match, at) => <pre
             key={at}

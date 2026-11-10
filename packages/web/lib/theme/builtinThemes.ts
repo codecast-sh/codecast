@@ -143,7 +143,7 @@ const SOLARIZED_ACCENTS: ThemePalette = {
   red: "#dc322f", orange: "#cb4b16", amber: "#b66f20", yellow: "#b58900",
   green: "#859900", cyan: "#2aa198", blue: "#268bd2", violet: "#6c71c4", magenta: "#d33682",
 };
-export const ORIGINAL_PREVIEW: Record<"classic" | "minimal", Record<"light" | "dark", ThemePalette>> = {
+export const ORIGINAL_PREVIEW: Record<"classic" | "minimal" | "modern", Record<"light" | "dark", ThemePalette>> = {
   classic: {
     light: { bg: "#fbf5e2", "bg-alt": "#eee8d5", card: "#ffffff", border: "#93a1a1", text: "#002b36", "text-muted": "#586e75", ...SOLARIZED_ACCENTS },
     dark: { bg: "#002b36", "bg-alt": "#073642", card: "#08404e", border: "#586e75", text: "#fdf6e3", "text-muted": "#93a1a1", ...SOLARIZED_ACCENTS },
@@ -158,4 +158,7 @@ export const ORIGINAL_PREVIEW: Record<"classic" | "minimal", Record<"light" | "d
       red: "#e8787a", orange: "#e88a64", amber: "#d9a05e", yellow: "#dcb25a", green: "#9bb873", cyan: "#73b2a8", blue: "#7ea7e2", violet: "#a99ce6", magenta: "#d185ad",
     },
   },
+  // Modern has no Solarized: with Original chosen it paints Verdigris, the
+  // palette it was drawn against (components/ThemeProvider.tsx applies it).
+  modern: { light: BUILTIN_THEMES[0].light!, dark: BUILTIN_THEMES[0].dark! },
 };

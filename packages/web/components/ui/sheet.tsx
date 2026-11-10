@@ -4,6 +4,15 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { modernFocusRing } from "./styles"
+
+// The Modern style (the `modern:` classes) draws a sheet as the dialog's paper
+// sliding in from an edge: rounded on the side that faces the page, the
+// dialog shadow, scrolling as a whole when its content is taller (a top or
+// bottom sheet stops short of the far edge), and a <SheetBody> that scrolls
+// alone so the header and footer stay in view. Classic and Minimal are
+// unchanged.
+const MODERN_CLOSE = "modern:right-3 modern:top-3 modern:inline-flex modern:size-7 modern:items-center modern:justify-center modern:rounded-control modern:text-sol-text-dim modern:opacity-100 modern:transition-colors modern:duration-press modern:ease-ui modern:hover:bg-sol-text/[0.06] modern:hover:text-sol-text modern:data-[state=open]:bg-transparent"
 
 const Sheet = SheetPrimitive.Root
 
@@ -20,6 +29,8 @@ const SheetOverlay = React.forwardRef<
   <SheetPrimitive.Overlay
     className={cn(
       "fixed inset-0 z-[200] bg-black/80  data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      // Modern: the page dimmed, not blacked out.
+      "modern:bg-black/40 modern:duration-pop modern:ease-ui",
       className
     )}
     {...props}
@@ -29,16 +40,16 @@ const SheetOverlay = React.forwardRef<
 SheetOverlay.displayName = SheetPrimitive.Overlay.displayName
 
 const sheetVariants = cva(
-  "fixed z-[200] gap-4 bg-background p-6 shadow-lg outline-none transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out",
+  "fixed z-[200] gap-4 bg-background p-6 shadow-lg outline-none transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out modern:overflow-y-auto modern:text-sol-text modern:shadow-dialog",
   {
     variants: {
       side: {
-        top: "inset-x-0 top-0 border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top",
+        top: "inset-x-0 top-0 border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top modern:max-h-[calc(100dvh-2rem)] modern:rounded-b-dialog",
         bottom:
-          "inset-x-0 bottom-0 border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom",
-        left: "inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm",
+          "inset-x-0 bottom-0 border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom modern:max-h-[calc(100dvh-2rem)] modern:rounded-t-dialog",
+        left: "inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm modern:rounded-r-dialog",
         right:
-          "inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm",
+          "inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm modern:rounded-l-dialog",
       },
     },
     defaultVariants: {
@@ -71,7 +82,7 @@ const SheetContent = React.forwardRef<
       {...props}
     >
       {!hideClose && (
-        <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
+        <SheetPrimitive.Close className={cn("absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary", MODERN_CLOSE, modernFocusRing)}>
           <X className="h-4 w-4" />
           <span className="sr-only">Close</span>
         </SheetPrimitive.Close>
@@ -95,6 +106,19 @@ const SheetHeader = ({
   />
 )
 SheetHeader.displayName = "SheetHeader"
+
+// Modern: the part of a sheet that grows; it scrolls alone, edge to edge. In
+// Classic and Minimal it is a plain block.
+const SheetBody = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => (
+  <div
+    className={cn("modern:-mx-6 modern:min-h-0 modern:flex-1 modern:overflow-y-auto modern:px-6", className)}
+    {...props}
+  />
+)
+SheetBody.displayName = "SheetBody"
 
 const SheetFooter = ({
   className,
@@ -142,6 +166,7 @@ export {
   SheetClose,
   SheetContent,
   SheetHeader,
+  SheetBody,
   SheetFooter,
   SheetTitle,
   SheetDescription,

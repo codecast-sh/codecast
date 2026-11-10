@@ -135,7 +135,7 @@ export function useDecisionAnswering(decision: SessionDecisionItem, detail: Deci
   const answeredByLine = !answeredBy
     ? null
     : answeredBy.kind === "policy"
-      ? <>answered by policy: stack {detail.stack?.short_id ?? answeredBy.id.replace(/^stack:/, "")} default</>
+      ? <>answered by policy: stack <span className="modern:font-mono">{detail.stack?.short_id ?? answeredBy.id.replace(/^stack:/, "")}</span> default</>
       : answeredBy.kind === "role"
         ? <>answered by {detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"} under a grant</>
         : <span className="inline-flex items-center gap-1.5 flex-wrap">answered by <PersonChip userId={answeredBy.id} fallbackName={answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person")} fallbackImage={answeredPerson?.avatar_url} />{answeredBy.via && <>through their agent in <EntityIdPill id={answeredBy.via} type="session" compact /></>}</span>;

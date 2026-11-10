@@ -127,7 +127,7 @@ export function StationStrip({ task, embedded, aside }: { task: TaskItem & LineT
                     data-held-by={held.short_id ?? held._id}
                   >
                     <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" />
-                    held · {held.short_id ?? "decision"}
+                    held · {held.short_id ? <span className="modern:font-mono">{held.short_id}</span> : "decision"}
                   </Link>
                 )}
               </span>

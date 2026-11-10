@@ -87,7 +87,7 @@ import "./callVideoPlayer.css";
 // floor of about nine lines (callMedia.css) without the page scrolling.
 const CALL_VIDEO_BOX = "call-video-box relative aspect-video max-h-[min(46vh,calc(100dvh-520px))] min-h-[180px] w-full overflow-hidden bg-black";
 const CALL_VIDEO_FRAME = "dark overflow-hidden rounded-lg bg-black ring-1 ring-sol-border/30";
-const CALL_VIDEO_BAR = "flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 font-mono text-meta text-sol-text-muted";
+const CALL_VIDEO_BAR = "flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/[0.06] bg-sol-bg px-2.5 py-1.5 font-mono text-meta text-sol-text-muted";
 
 /** The player's place, held before there is anything to play (the thread
  *  says the call was filmed and the recordings have not answered yet), so the
@@ -504,7 +504,7 @@ export function CallVideoPlayer({
       {/* What the picture cannot say for itself: the moment asked for has no
           video, or the room's own file is gone and this is all there is. */}
       {(missed || main.kind === "screen") && (
-        <div className="space-y-0.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 text-meta leading-snug text-sol-text-muted" role="status">
+        <div className="space-y-0.5 border-t border-white/[0.06] bg-sol-bg px-2.5 py-1.5 text-meta leading-snug text-sol-text-muted" role="status">
           {missed && (
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span>

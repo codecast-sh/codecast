@@ -35,23 +35,23 @@ function ProfileSkeleton() {
   return (
     <div className="w-full py-4 px-4 animate-pulse motion-reduce:animate-none">
       <div className="flex items-center gap-3 pb-3 mb-0">
-        <div className="w-9 h-9 rounded-full bg-sol-base02" />
+        <div className="w-9 h-9 rounded-full bg-sol-bg-highlight" />
         <div className="flex-1 space-y-1.5">
-          <div className="h-3 w-28 bg-sol-base02 rounded" />
-          <div className="h-2 w-44 bg-sol-base02/60 rounded" />
+          <div className="h-3 w-28 bg-sol-bg-highlight rounded" />
+          <div className="h-2 w-44 bg-sol-bg-highlight/60 rounded" />
         </div>
       </div>
-      <div className="h-16 bg-sol-base02/40 rounded-lg mb-2" />
+      <div className="h-16 bg-sol-bg-highlight/40 rounded-lg mb-2" />
       <div className="flex gap-0 border-b border-sol-border/10 mb-2">
         {["w-10", "w-8", "w-12"].map((w, i) => (
-          <div key={i} className={`${w} h-3 bg-sol-base02/50 rounded mx-3 my-2`} />
+          <div key={i} className={`${w} h-3 bg-sol-bg-highlight/50 rounded mx-3 my-2`} />
         ))}
       </div>
       <div className="space-y-3 mt-3">
         {[1, 2, 3].map((i) => (
           <div key={i} className="space-y-1.5">
-            <div className="h-2.5 w-20 bg-sol-base02/40 rounded" />
-            <div className="h-14 bg-sol-base02/30 rounded-lg" />
+            <div className="h-2.5 w-20 bg-sol-bg-highlight/40 rounded" />
+            <div className="h-14 bg-sol-bg-highlight/30 rounded-lg" />
           </div>
         ))}
       </div>
@@ -164,7 +164,7 @@ function UserProfileContent() {
             alt=""
             className="w-9 h-9 rounded-full ring-1 ring-sol-border/20"
             fallback={
-              <div className="w-9 h-9 rounded-full bg-sol-base02 flex items-center justify-center text-sol-text text-sm font-semibold">
+              <div className="w-9 h-9 rounded-full bg-sol-bg-highlight flex items-center justify-center text-sol-text text-sm font-semibold">
                 {profileUser.name?.[0]?.toUpperCase() || "?"}
               </div>
             }
@@ -478,7 +478,7 @@ function FeedAvatar({ url, name }: { url?: string; name?: string }) {
   return url ? (
     <img src={url} alt="" className="w-[18px] h-[18px] rounded-full flex-shrink-0 mt-px ring-1 ring-sol-border/25 object-cover" />
   ) : (
-    <div className="w-[18px] h-[18px] rounded-full flex-shrink-0 mt-px bg-sol-base02 ring-1 ring-sol-border/25 flex items-center justify-center text-meta font-semibold text-sol-text-secondary">
+    <div className="w-[18px] h-[18px] rounded-full flex-shrink-0 mt-px bg-sol-bg-highlight ring-1 ring-sol-border/25 flex items-center justify-center text-meta font-semibold text-sol-text-secondary">
       {(name || "?")[0]?.toUpperCase()}
     </div>
   );

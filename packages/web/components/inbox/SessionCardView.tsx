@@ -87,6 +87,9 @@ export type SessionCardLiveness = {
   stopped?: NoticeKind | null;
   /** A hosted conversation waits on the person's OK (an approval card). */
   asksOk?: boolean;
+  /** A pending `cast decide` waits on the person (the Decisions section's
+   *  ask). Only the Modern card reads it (lib/sessionStatus). */
+  asking?: boolean;
 };
 
 export type SessionCardViewProps = {

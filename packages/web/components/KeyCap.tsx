@@ -11,7 +11,9 @@ const KEYCAP_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, s
  *  agent dock floating over the desktop): a key on dark glass, and a key on a
  *  white button. */
 const KEYCAP_TONES = {
-  default: "text-sol-text-dim bg-sol-bg-alt border border-sol-border/50",
+  // Modern: muted ink on the full hairline, with a 1px hairline under it for
+  // the key's edge, and 5px corners.
+  default: "text-sol-text-dim bg-sol-bg-alt border border-sol-border/50 modern:text-sol-text-muted modern:border-sol-border modern:rounded-[5px] modern:shadow-[0_1px_0_var(--sol-border)]",
   onAccent: "text-white bg-white/15 border border-white/30",
   glass: "text-white/55 bg-white/[0.08] border border-white/15",
   onLight: "text-black/50 bg-black/[0.06] border border-black/15",

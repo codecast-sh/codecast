@@ -1695,3 +1695,8 @@
 .engagement-card .engagement-card-chat:hover {
   filter: brightness(1.1);
 }
+
+/* Modern (.modern-style): cards and their lines are words, in the interface sans; count
+   badges keep mono. */
+.modern-style .engagement-card :is(.walkie-stage, .ring-card-line),
+.modern-style :is(.face-card, .face-row-size-word) { font-family: var(--font-ui); }

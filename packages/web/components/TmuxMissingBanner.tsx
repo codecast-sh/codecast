@@ -49,7 +49,7 @@ function useTmuxMissingNotice(): StatusNotice | null {
         inbox messaging and remote session control require it. Install with{" "}
         <button
           onClick={handleCopy}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 font-mono text-xs bg-sol-base02 text-sol-base1 rounded cursor-pointer hover:bg-sol-base01 hover:text-sol-base2 transition-colors"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 font-mono text-xs bg-sol-bg-inset text-sol-text-muted rounded cursor-pointer hover:bg-sol-bg-highlight hover:text-sol-text transition-colors"
           title="Click to copy"
         >
           {copied ? "copied!" : installCmd}

@@ -16,6 +16,9 @@ import {
   type Freshness, type GroupBy, type Sort, type SortBy, type TableRow, type Usage,
 } from "./resourceModel";
 import type { ResourceMachine, ResourceMonitorProps, ResourceSessionState } from "./types";
+import { PageHeader } from "../ui/page-header";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { Button } from "../ui/button";
 import "./resources.css";
 
 const FRESH_DOT: Record<Freshness, string> = {
@@ -176,6 +179,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
   const moving = new Map(runs.flatMap((r) => r.rows.filter((row) => !isRowTerminal(row.status)).map((row) => [row.sessionId, { status: row.status, to: destinations.get(row.destinationId) ?? row.destinationId }] as const)));
   const off = actionsDisabledReason ?? "Not available here";
 
+  const modern = useIsModernStyle();
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const selectedSessions = sessions.filter((s) => selected.has(s.sessionId));
   const parkable = selectedSessions.filter((s) => s.state === "idle" || s.state === "needs_input");
@@ -184,7 +188,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
   if (!ready && machines.length === 0) {
     return (
       <div className="res-root flex h-full flex-col bg-sol-bg" aria-busy="true">
-        <div className="h-11 border-b border-sol-border/30" />
+        <PageHeader legacy={<div className="h-11 border-b border-sol-border/30" />} title="Resources" />
         <div className="res-health gap-px border-b border-sol-border/30">
           {Array.from({ length: 6 }, (_, i) => <div key={i} className="h-[88px] animate-pulse bg-sol-bg-highlight/30" />)}
         </div>
@@ -193,16 +197,9 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
     );
   }
 
-  return (
-    <div className="res-root flex h-full min-h-0 bg-sol-bg text-sol-text">
-      <div className="res-list flex min-w-0 flex-1 flex-col" data-reviewing={reviewing ? "" : undefined}>
-        {sampleNotice && (
-          <div className="border-b border-sol-yellow/30 bg-sol-yellow/10 px-4 py-1 text-meta text-sol-yellow" role="note">{sampleNotice}</div>
-        )}
-        <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-sol-border/30 px-4 py-2">
-          <h1 className="text-[13px] font-semibold">Resources</h1>
-          {machines.length > 0 && (
-            <nav className="-mb-px flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto" aria-label="Machines">
+  // The machine tabs and the sample note, drawn by whichever header is up.
+  const machinesNav = (className: string) => (
+            <nav className={`${className}flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto`} aria-label="Machines">
               {machines.length > 1 && (
                 <button type="button" onClick={() => setMachineId("all")} className={cn("shrink-0 rounded px-2 py-1 text-meta", machineId === "all" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text")}>
                   All machines
@@ -227,13 +224,38 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
                 );
               })}
             </nav>
-          )}
-          {plan && !incident && !reviewing && (
-            <button type="button" onClick={() => setReviewing({ deviceId: plan.deviceId })} className="inline-flex shrink-0 items-center gap-1.5 rounded border border-sol-border/50 px-2 py-1 text-meta text-sol-text hover:bg-sol-bg-highlight">
-              <CloudUpload className="h-3.5 w-3.5 text-sol-cyan" />Move load to cloud
-            </button>
-          )}
-        </header>
+  );
+  const review = () => plan && setReviewing({ deviceId: plan.deviceId });
+  const notice = sampleNotice && (
+          <div className="border-b border-sol-yellow/30 bg-sol-yellow/10 px-4 py-1 text-meta text-sol-yellow" role="note">{sampleNotice}</div>
+  );
+
+  return (
+    <div className="res-root flex h-full min-h-0 bg-sol-bg text-sol-text">
+      <div className="res-list flex min-w-0 flex-1 flex-col" data-reviewing={reviewing ? "" : undefined}>
+        {/* Classic and Minimal: the sample note over the page's own header; Modern: the bar, then the note. */}
+        {!modern && notice}
+        <PageHeader
+          legacy={
+            <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-sol-border/30 px-4 py-2">
+              <h1 className="text-[13px] font-semibold">Resources</h1>
+              {machines.length > 0 && machinesNav("-mb-px ")}
+              {plan && !incident && !reviewing && (
+                <button type="button" onClick={review} className="inline-flex shrink-0 items-center gap-1.5 rounded border border-sol-border/50 px-2 py-1 text-meta text-sol-text hover:bg-sol-bg-highlight">
+                  <CloudUpload className="h-3.5 w-3.5 text-sol-cyan" />Move load to cloud
+                </button>
+              )}
+            </header>
+          }
+          title="Resources"
+          tabs={machines.length > 0 ? machinesNav("") : null}
+          actions={plan && !incident && !reviewing ? (
+            <Button variant="outline" size="sm" onClick={review}>
+              <CloudUpload className="text-sol-cyan" />Move load to cloud
+            </Button>
+          ) : null}
+        />
+        {modern && notice}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {machines.length === 0 ? (

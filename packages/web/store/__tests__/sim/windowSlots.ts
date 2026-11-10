@@ -64,6 +64,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // The dev parity check's throttle: one per window, as each browser window keeps its own.
   "store/inboxStore.ts:_lastParityCheckAt": "window",
   "store/inboxStore.ts:_depChanges": { shared: "dev render census, read only from the console" },
+  "lib/navRegistry.ts:BY_ID": CONSTANT,
+  "lib/navRegistry.ts:BY_PATH": CONSTANT,
   "store/inboxStore.ts:KEEP_VISIBLE_OVERLAYS": CONSTANT,
   "store/inboxStore.ts:IN_FLIGHT_OVERLAYS": CONSTANT,
   "store/inboxStore.ts:EMPTY_TEAM_INBOX_IDS": CONSTANT,

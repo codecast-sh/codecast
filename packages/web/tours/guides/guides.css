@@ -194,3 +194,6 @@
   .feature-landing-inner { grid-template-columns: 1fr; grid-template-areas: "head" "side" "gives" "preview"; }
   .feature-landing-gives { grid-template-columns: 1fr 1fr; }
 }
+
+/* Modern (.modern-style): the mark is a word, in the interface sans. */
+.modern-style .feature-landing-new { font-family: var(--font-ui, inherit); }

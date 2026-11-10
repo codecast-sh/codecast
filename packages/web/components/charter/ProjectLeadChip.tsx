@@ -93,7 +93,7 @@ export function ProjectLeadChip({ projectId, size = "sm", editable = false, face
       {pending && (
         <Popover open onOpenChange={(open) => { if (!open) setPending(null); }}>
           <PopoverAnchor className="self-stretch" />
-          <PopoverContent align="start" sideOffset={6} className="w-[300px] p-0 border-0 bg-transparent shadow-none" data-lead-gate>
+          <PopoverContent align="start" sideOffset={6} className="w-[300px] p-0 border-0 bg-transparent shadow-none modern:bg-transparent modern:shadow-none" data-lead-gate>
             <TakeoverGate
               key={pending.role._id}
               workspace={useInboxStore.getState().orgTree?.workspace}

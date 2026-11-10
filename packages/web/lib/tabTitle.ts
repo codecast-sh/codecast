@@ -2,6 +2,8 @@ import type { AppTab } from "../store/inboxStore";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { conversationTitle } from "./conversationTitle";
 import { pathLabel, inboxTabSessionId } from "./pathLabel";
+import { staleNavTitle } from "./navRegistry";
+import { isModernStyle } from "./visualStyle";
 import { isBrowserRoutePath } from "./browserPane";
 import { isConvexId, orgObjectOfRef } from "./entityLinks";
 import { findEntityInStore } from "./liveEntities";
@@ -121,9 +123,11 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
 }
 
 // A stored title with a query string in it is a raw path that leaked in
-// before pathLabel stripped queries, and a stored title that is a bare record
-// id (a call, a session) is no title at all. Never show either; re-derive.
+// before pathLabel stripped queries, a stored title that is a bare record id
+// (a call, a session) is no title at all, and a page's name from the other
+// interface style ("Feed" in Modern, "Activity" back in Classic) is not its
+// name here. Never show any of them; re-derive.
 function storedTitle(tab: AppTab): string | null {
   const t = tab.title;
-  return t && !t.includes("?") && !isConvexId(t) ? t : null;
+  return t && !t.includes("?") && !isConvexId(t) && !staleNavTitle(tab.path, t, isModernStyle()) ? t : null;
 }

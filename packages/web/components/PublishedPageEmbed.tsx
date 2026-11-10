@@ -636,7 +636,7 @@ function PublishedPageFrame({ slug, caption, height, decision, whole = false, on
           href={pageShareUrl(slug)}
           target="_blank"
           rel="noopener noreferrer"
-          className="break-all text-sol-text-dim hover:text-sol-blue"
+          className="break-all modern:font-mono text-sol-text-dim hover:text-sol-blue"
         >
           {pageShareUrl(slug)}
         </a>

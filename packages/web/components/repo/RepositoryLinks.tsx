@@ -122,7 +122,7 @@ export function RepositoryLinks({ taskId, planId, projectId, conversationIds = [
   if (!names.length) return null;
   return <nav aria-label="Related code" className="my-3 space-y-1">
     {names.map(name => <div key={name} className="flex items-center gap-1 flex-wrap text-xs">
-      <Link href={repoHomeHref(name)} className={linkClass} title={`Browse source for ${name}`}><FolderGit2 className="h-3.5 w-3.5 shrink-0" /><span className="break-all">{name}</span></Link>
+      <Link href={repoHomeHref(name)} className={linkClass} title={`Browse source for ${name}`}><FolderGit2 className="h-3.5 w-3.5 shrink-0" /><span className="break-all modern:font-mono">{name}</span></Link>
       <Link href={repoCommitsHref(name, "HEAD")} className={linkClass}>History</Link>
       <Link href={repoPullsHref(name)} className={linkClass}>Pull requests</Link>
       <a href={toStandaloneHref(repoHomeHref(name))} target="_blank" rel="noopener noreferrer" className={linkClass} title={`Open ${name} without the app sidebar`} aria-label={`Open ${name} in a separate browser tab`}><ExternalLink className="h-3 w-3" /></a>

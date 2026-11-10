@@ -51,7 +51,7 @@ function HistoryRail({ repository, branch }: { repository: string; branch: strin
     <aside className="repo-rail w-[320px] shrink-0 self-stretch border-l border-sol-border/50 bg-sol-bg-alt/20">
       <div className="px-4 py-3 border-b border-sol-border/30">
         <h2 className="text-mark uppercase tracking-wider text-sol-text-dim">Recent activity</h2>
-        <p className="mt-0.5 text-meta text-sol-text-dim">{branch}</p>
+        <p className="mt-0.5 modern:font-mono text-meta text-sol-text-dim">{branch}</p>
       </div>
       <div className="px-2 py-2 space-y-0.5">
         {events.map((event: any) => (

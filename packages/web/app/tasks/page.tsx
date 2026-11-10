@@ -173,7 +173,7 @@ function TaskCombineDialog({ source, target, onClose }: {
             <span className="min-w-0">
               <span className="block text-xs font-medium text-sol-text">Add as subtask</span>
               <span className="block text-meta text-sol-text-muted">
-                {source.short_id} files under {target.short_id}; both stay open.
+                <span className="modern:font-mono">{source.short_id}</span> files under <span className="modern:font-mono">{target.short_id}</span>; both stay open.
               </span>
             </span>
           </button>
@@ -185,7 +185,7 @@ function TaskCombineDialog({ source, target, onClose }: {
             <span className="min-w-0">
               <span className="block text-xs font-medium text-sol-text">Mark as duplicate</span>
               <span className="block text-meta text-sol-text-muted">
-                {source.short_id} is dropped and linked to {target.short_id} as the original.
+                <span className="modern:font-mono">{source.short_id}</span> is dropped and linked to <span className="modern:font-mono">{target.short_id}</span> as the original.
               </span>
             </span>
           </button>
@@ -1234,7 +1234,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           activeItemId={(projectId ? params?.taskId : params?.id) as string | undefined}
           paletteTargetType="task"
           getComposeRef={taskComposeRef}
-          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : "Tasks"}
+          // Inside a project or a scope the list is one pane of that page, which names itself.
+          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : "Tasks"} page={!projectId && !scope}
           tabs={[
             // The answers worth a click: the live work, what can start now,
             // everything, the finished work. Anything finer is the Status filter in the bar

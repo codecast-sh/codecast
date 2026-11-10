@@ -161,7 +161,7 @@ function Replaced({ row }: { row: OrgProposalListRow }) {
   const withdraw = useInboxStore((s) => s.withdrawOrgProposal);
   return (
     <div className="flex items-center gap-2 py-1 text-[12px]" style={{ color: "var(--sol-text-dim)" }} data-suggestion-replaced={row.short_id}>
-      <span className="min-w-0 flex-1 truncate"><span className="line-through">{row.title}</span> · replaced by {row.superseded_by?.short_id}</span>
+      <span className="min-w-0 flex-1 truncate"><span className="line-through">{row.title}</span> · replaced by <span className="modern:font-mono">{row.superseded_by?.short_id}</span></span>
       <Button variant="ghost" size="xs" onClick={() => withdraw(row._id)}>Withdraw</Button>
     </div>
   );

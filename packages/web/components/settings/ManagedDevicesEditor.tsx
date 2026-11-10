@@ -290,7 +290,7 @@ function Devices({ teamId, devices }: { teamId: Id<"teams">; devices?: DeviceRow
       {(devices ?? []).map((d) => (
         <div key={d._id} className="flex items-center gap-3 py-1.5 text-xs" data-mdm-device={d.status}>
           <Laptop className={`h-3.5 w-3.5 shrink-0 ${d.status === "revoked" ? "text-sol-text-dim/50" : "text-sol-text-dim"}`} />
-          <span className={`w-36 truncate ${d.status === "revoked" ? "text-sol-text-dim" : "text-sol-text"}`} title={d.hostname ?? undefined}>{d.hostname ?? "Unnamed Mac"}</span>
+          <span className={`w-36 truncate ${d.hostname ? "modern:font-mono" : ""} ${d.status === "revoked" ? "text-sol-text-dim" : "text-sol-text"}`} title={d.hostname ?? undefined}>{d.hostname ?? "Unnamed Mac"}</span>
           <span className="w-44 truncate text-sol-text-muted" title={d.email ?? undefined}>{d.person_name ?? d.email ?? "—"}</span>
           <span className={`w-32 ${STATUS[d.status].cls}`}>{STATUS[d.status].label}</span>
           <span className="flex-1 text-sol-text-dim">

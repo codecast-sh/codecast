@@ -1,7 +1,8 @@
 // The timeline's masthead: the page name, the repository when the team works
 // in more than one, what is live right now in one quiet line, and two
 // controls that open what the page tucks away: the filters, and the work
-// still in progress. Every filter writes the URL.
+// still in progress. Every filter writes the URL. Modern draws it as the
+// shared page header (components/ui/page-header).
 import { ChevronDown, ListFilter } from "lucide-react";
 import { useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
@@ -11,6 +12,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatDateSmart } from "../../lib/utils";
 import { Pill } from "../feed/ExternalEventRow";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { PageHeader } from "../ui/page-header";
 import { areaFill, areaLabel } from "./areaColor";
 import { plural } from "./format";
 import { InTheWorks } from "./InTheWorks";
@@ -64,7 +66,9 @@ function Chip({ active, onClick, children, color }: { active: boolean; onClick: 
   );
 }
 
-function FilterBar({ url, setUrl, options, inputRef, personName }: {
+function FilterBar({ url, setUrl, options, inputRef, personName, className }: {
+  /** Where it sits: under the masthead (Classic) or in the page header's second row (Modern). */
+  className: string;
   url: ChangesUrl;
   setUrl: SetChangesUrl;
   options: FilterOptions;
@@ -79,7 +83,7 @@ function FilterBar({ url, setUrl, options, inputRef, personName }: {
   }, [url.q]);
   const colors = useAreaColors();
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+    <div className={`${className} flex flex-wrap items-center gap-1.5`}>
       <input
         ref={inputRef}
         value={q}
@@ -198,39 +202,76 @@ export function TimelineHeader(props: {
   filterToggleRef?: RefObject<HTMLButtonElement | null>;
   options: FilterOptions;
   personName: (id: string) => string;
+  /** The work still in progress is open (in the masthead in Classic, at the top of the page in Modern). */
+  worksOpen: boolean;
+  onToggleWorks: () => void;
 }) {
   const { url, setUrl } = props;
-  const [worksOpen, setWorksOpen] = useState(false);
   const filtering = hasFilters(url);
   const moving = props.works.filter((w) => w.kind !== "branch").length;
-  return (
-    <header className="pt-6" data-changes-header>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <h1 className="chg-ui text-[20px] font-semibold text-sol-text">Changes</h1>
-        <RepoPicker repos={props.repos} repo={props.repo} onPick={(repo) => setUrl({ repo, story: undefined }, "push")} />
-        <div className="ml-auto flex items-center gap-2">
+  const live = props.live.length > 0;
+  const filterShown = props.filterOpen || filtering;
+  // The masthead's parts, drawn by whichever header is up.
+  const repoPicker = <RepoPicker repos={props.repos} repo={props.repo} onPick={(repo) => setUrl({ repo, story: undefined }, "push")} />;
+  const controls = (
+    <>
           <ZoomControl zoom={url.zoom} onZoom={(zoom) => setUrl({ zoom })} />
           {moving > 0 && (
-            <Toggle open={worksOpen} onClick={() => setWorksOpen((o) => !o)}>
+            <Toggle open={props.worksOpen} onClick={props.onToggleWorks}>
               in progress <span className="tabular-nums text-sol-text-dim">{moving}</span>
             </Toggle>
           )}
-          <Toggle open={props.filterOpen || filtering} onClick={props.onToggleFilter} buttonRef={props.filterToggleRef}>
+          <Toggle open={filterShown} onClick={props.onToggleFilter} buttonRef={props.filterToggleRef}>
             <ListFilter className="h-3 w-3" />
             filter
             <KeyHint action="changes.filter" />
           </Toggle>
+    </>
+  );
+  const filterBar = (className: string) => filterShown && (
+    <FilterBar className={className} url={url} setUrl={setUrl} options={props.options} inputRef={props.filterRef} personName={props.personName} />
+  );
+  // Classic and Minimal: the masthead at the top of the page's column, the
+  // work in progress opening inside it. Modern: the page header, pinned (the
+  // work in progress opens at the top of the page, ChangesPage); chg-root
+  // gives its controls the page's focus ring and tokens.
+  return (
+    <PageHeader
+      legacy={
+        <header className="pt-6" data-changes-header>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <h1 className="chg-ui text-[20px] font-semibold text-sol-text">Changes</h1>
+            {repoPicker}
+            <div className="ml-auto flex items-center gap-2">
+              {controls}
+            </div>
+          </div>
+          <div className="mt-1.5"><LiveLine live={props.live} /></div>
+          {filterBar("mt-3")}
+          {props.worksOpen && <TimelineWorks works={props.works} />}
+        </header>
+      }
+      className="chg-root"
+      data-changes-header
+      title="Changes"
+      tabs={repoPicker}
+      actions={controls}
+    >
+      {live || filterShown ? (
+        <div className="w-full">
+          <LiveLine live={props.live} />
+          {filterBar("mt-2 first:mt-0")}
         </div>
-      </div>
-      <div className="mt-1.5"><LiveLine live={props.live} /></div>
-      {(props.filterOpen || filtering) && (
-        <FilterBar url={url} setUrl={setUrl} options={props.options} inputRef={props.filterRef} personName={props.personName} />
-      )}
-      {worksOpen && (
-        <div className="mt-4 rounded-lg border border-sol-border/25 bg-sol-card/50 p-4">
-          <InTheWorks works={props.works} areas={[]} areasLabel="" live viewed="" />
-        </div>
-      )}
-    </header>
+      ) : null}
+    </PageHeader>
+  );
+}
+
+/** What is still in progress, opened from the header's toggle. */
+export function TimelineWorks({ works }: { works: readonly WorksRow[] }) {
+  return (
+    <div className="mt-4 rounded-lg border border-sol-border/25 bg-sol-card/50 p-4">
+      <InTheWorks works={works} areas={[]} areasLabel="" live viewed="" />
+    </div>
   );
 }

@@ -278,7 +278,7 @@ function ActionRows({ actions, style }: { actions: CloudAgentActions; style: key
       {page && (
         <DropdownMenuItem onSelect={() => window.open(page.href, "_blank", "noopener")} className={row.item}>
           <ExternalLink className={row.icon} />
-          Open on {page.host}
+          Open on <span className="modern:font-mono">{page.host}</span>
         </DropdownMenuItem>
       )}
       {items.map(({ action, label, title, Icon, disabledReason }) => (

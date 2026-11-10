@@ -122,7 +122,7 @@ export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void;
 function DeviceCodeSteps({ prompt }: { prompt: { url: string; code: string } }) {
   return (
     <span className="mt-1.5 block space-y-1">
-      <a href={prompt.url} target="_blank" rel="noreferrer" className="block underline underline-offset-2">Open {prompt.url.replace(/^https:\/\//, "")}</a>
+      <a href={prompt.url} target="_blank" rel="noreferrer" className="block underline underline-offset-2">Open <span className="modern:font-mono">{prompt.url.replace(/^https:\/\//, "")}</span></a>
       <span className="block">and enter <span className="select-all rounded bg-sol-bg px-1.5 py-0.5 font-mono text-[12px] font-bold tracking-wider text-sol-text">{prompt.code}</span></span>
     </span>
   );

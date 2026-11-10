@@ -37,6 +37,11 @@ export type ImageData = {
   // (swapped for storage_id) once the background upload completes.
   preview_url?: string;
   uploading?: boolean;
+  // The picture's size in pixels, when the sender recorded it: the Modern
+  // style reserves the image's box from it before the bytes load
+  // (lib/imageDims). Absent on every message today.
+  width?: number;
+  height?: number;
 };
 
 export type Message = {

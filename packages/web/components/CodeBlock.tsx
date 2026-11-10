@@ -65,10 +65,11 @@ export const CodeBlock = memo(function CodeBlock({ code, language }: CodeBlockPr
   return (
     <div
       ref={containerRef}
+      data-cc-code-block
       className="code-block-resizable relative group my-2 transition-all duration-200"
       style={expandStyle}
     >
-      <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20 flex items-center gap-1.5 pl-8 pr-2 pt-1.5 pb-1.5 bg-gradient-to-r from-transparent to-[var(--sol-bg)] via-[var(--sol-bg)]">
+      <div data-cc-code-tools className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20 flex items-center gap-1.5 pl-8 pr-2 pt-1.5 pb-1.5 bg-gradient-to-r from-transparent to-[var(--sol-bg)] via-[var(--sol-bg)]">
         <button
           onClick={toggleWrap}
           className={`p-1 rounded select-none ${wrapped ? "text-sol-cyan" : "text-sol-text-dim/60 hover:text-sol-text-secondary"}`}

@@ -46,7 +46,7 @@ export function RoadmapDetail({ row: r, now, index, updates, map, onClose, onSel
     <aside className={cn("flex shrink-0 flex-col border-l", phone ? "fixed inset-0 z-50 w-full" : "w-[440px]")} style={{ borderColor: HAIR, background: "var(--sol-bg)" }} data-roadmap-detail>
       <div className="flex items-start gap-2 px-5 pb-3 pt-4">
         <div className="min-w-0 flex-1">
-          <div className="text-meta" style={{ color: DIM }}>{r.kind === "goal" ? "Goal" : r.kind === "project" ? "Project" : "Role"} · {r.ref}</div>
+          <div className="text-meta" style={{ color: DIM }}>{r.kind === "goal" ? "Goal" : r.kind === "project" ? "Project" : "Role"} · <span className="modern:font-mono">{r.ref}</span></div>
           <h2 className="mt-1 text-[19px] font-medium leading-[1.25]" style={{ fontFamily: "var(--font-serif)" }}>{r.title}</h2>
         </div>
         <Link href={href} className="grid h-7 w-7 place-items-center rounded-md transition-colors hover:bg-sol-bg-highlight" title="Open its page" aria-label="Open its page"><ArrowUpRight className="h-4 w-4" style={{ color: MUTED }} /></Link>
@@ -206,7 +206,7 @@ function SessionLine({ s, now }: { s: OrgSession; now: number }) {
 function TaskLine({ t, right, done }: { t: RoadTask; right: string; done?: boolean }) {
   return (
     <Link href={`/tasks/${t.short_id ?? t._id}`} className="-mx-1.5 flex items-center gap-2 rounded px-1.5 py-1 transition-colors hover:bg-sol-bg-highlight/60">
-      <span className="w-[62px] shrink-0 text-meta tabular-nums" style={{ color: DIM }}>{t.short_id}</span>
+      <span className="w-[62px] shrink-0 modern:font-mono text-meta tabular-nums" style={{ color: DIM }}>{t.short_id}</span>
       <span className={cn("min-w-0 flex-1 truncate", done && "opacity-70")}>{t.title}</span>
       <span className="shrink-0 text-meta tabular-nums" style={{ color: DIM }}>{right}</span>
     </Link>

@@ -404,3 +404,6 @@
   gap: 0;
   font-size: 0;
 }
+
+/* Modern (.modern-style): names, initials and words in the interface sans. */
+.modern-style :is(.face-avatar-fallback, .face-name, .face-waiting, .faces-btn-word, .faces-reconnecting) { font-family: var(--font-ui); }

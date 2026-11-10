@@ -47,7 +47,7 @@ function RepoPlaneRow({ r }: { r: RepoPlane }) {
     <li className="flex items-center gap-2 text-meta min-w-0">
       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tone.dot}`} />
       <span className="font-mono text-sol-text-secondary truncate">{repoBase(r.root)}</span>
-      {r.branch && <span className="text-sol-text-dim truncate">{r.branch}</span>}
+      {r.branch && <span className="modern:font-mono text-sol-text-dim truncate">{r.branch}</span>}
       {(r.ahead ?? 0) > 0 && <span className="text-sol-cyan shrink-0">↑{r.ahead}</span>}
       {(r.behind ?? 0) > 0 && <span className="text-sol-orange shrink-0">↓{r.behind}</span>}
       {r.identity === "device" && (

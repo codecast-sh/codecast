@@ -22,7 +22,11 @@ import {
 } from "../../store/inboxStore";
 import { deriveTriageFlags } from "./triageFlags";
 import { ACTIVE_AGENT_STATUSES, HEARTBEAT_ALIVE_MS } from "@codecast/shared/contracts";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { PageFrame, PageHeader } from "../../components/ui/page-header";
+import { SessionsLegacyHeader } from "./SessionsLegacyHeader";
+import { Button } from "../../components/ui/button";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { ModernSessionsRow } from "./ModernSessionRow";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { sessionStructuralSig } from "../../store/inboxStore";
 
@@ -348,7 +352,6 @@ export function SessionsView() {
   // Store-fed (hooks/useSyncManagedSessions): the fleet table paints from the
   // cached rows synchronously; "loading" shows only for a genuinely cold cache.
   const { sessions: managedRows, ready: managedReady } = useManagedSessions();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const sessions = managedReady || managedRows.length > 0 ? managedRows : undefined;
   // Triage state (pinned / needs-input / working / dismissed) lives on the
   // conversation row — the inbox's own synced sessions collection, joined by
@@ -367,6 +370,7 @@ export function SessionsView() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   // The shared coarse clock (one timer, deferred while typing) drives the ages.
   const now = useCoarseNow(15_000);
+  const modern = useIsModernStyle();
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
   // The bulk kill's review (destructive, fleet-wide) is open.
   const [bulkConfirm, setBulkConfirm] = useState(false);
@@ -571,62 +575,57 @@ export function SessionsView() {
       ? { ...bulkKillBase, rows: [...bulkKillBase.rows, { k: "Pruned", v: count(bulkPruneCount, "stale row") }] }
       : bulkKillBase;
 
+  // The two presses' reviews, open or not, drawn by whichever header is up.
+  const reviews = {
+    park: parkConfirm && parkCandidates.length > 0 && (
+      <SwitchReview
+        ledger={hibernateLedger(parkCandidates.length)}
+        onClose={() => setParkConfirm(false)}
+        onConfirm={() => {
+          setParkRequests(parkCandidates.map(row => requestHibernate(String(row.conversation_id), row.session_id, row.owner_device_id!)));
+          setParkConfirm(false);
+        }}
+      />
+    ),
+    kill: bulkConfirm && bulkRows.length > 0 && (
+      <SwitchReview
+        ledger={bulkKillLedger}
+        onClose={() => setBulkConfirm(false)}
+        onConfirm={() => { handleBulk(bulkRows); setBulkConfirm(false); }}
+      />
+    ),
+  };
+  const park = () => setParkConfirm(true);
+  const kill = () => setBulkConfirm(true);
+  // Modern: the liveness split (active, idle, hibernated, dead) is on the
+  // filter buttons under the header; the header says the total.
+  const header = (
+    <PageHeader
+      legacy={<SessionsLegacyHeader counts={counts} parkCount={parkCandidates.length} onPark={park} killCount={bulkRows.length} onKill={kill} reviews={reviews} />}
+      title="Sessions"
+      count={counts.total}
+      crumbs={<Link href="/inbox" className="hover:text-sol-text">Inbox</Link>}
+      actions={<>
+        <Button asChild variant="ghost" size="sm" title="CPU, memory and processes per machine and session"><Link href="/resources">Resources</Link></Button>
+        <Button variant="outline" size="sm" disabled={!parkCandidates.length} onClick={park} aria-haspopup="dialog" title="Request parking for your idle sessions in this view; the daemon checks safety again">Hibernate idle ({parkCandidates.length})</Button>
+        {reviews.park}
+        {bulkRows.length > 0 && (
+          <Button variant="red" size="sm" onClick={kill} aria-haspopup="dialog" title="Kill every session in the current view (terminates tmux + claude + child processes)">
+            Kill all {bulkRows.length}
+          </Button>
+        )}
+        {reviews.kill}
+      </>}
+    />
+  );
+
   return (
-    <div className="h-full min-h-0 overflow-y-auto bg-sol-bg text-sol-text">
-      <div className="max-w-[1200px] mx-auto px-6 py-6">
-        {/* Header */}
-        <div ref={titlebarRef} className="flex flex-wrap items-center justify-between gap-3 mb-6">
-          <div className="flex flex-wrap items-center gap-4">
-            <Link href="/inbox" aria-label="Back to inbox" title="Back to inbox" className="text-sol-text-muted hover:text-sol-text-secondary transition-colors">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-              </svg>
-            </Link>
-            <h1 className="text-lg font-medium tracking-tight">Sessions</h1>
-            <Link href="/resources" className="rounded border border-sol-border px-2 py-0.5 text-xs text-sol-text-secondary hover:border-sol-text-dim hover:text-sol-text" title="CPU, memory and processes per machine and session">Resources</Link>
-            <div className="flex flex-wrap items-center gap-3 text-xs text-sol-text-muted font-mono">
-              <span><span className="text-sol-blue">{counts.active}</span> active</span>
-              <span className="text-sol-border">|</span>
-              <span><span className={counts.idle > 0 ? "text-sol-yellow" : "text-sol-text-dim"}>{counts.idle}</span> idle 2h+</span>
-              <span className="text-sol-border">|</span>
-              <span><span className="text-sol-text-dim">{counts.dead}</span> dead</span>
-              <span className="text-sol-border">|</span>
-              <span><span className="text-sol-blue">{counts.hibernated}</span> hibernated</span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-          <button className="px-3 py-1.5 text-xs rounded border border-sol-blue/30 text-sol-blue disabled:opacity-40" disabled={!parkCandidates.length} onClick={() => setParkConfirm(true)} aria-haspopup="dialog" title="Request parking for your idle sessions in this view; the daemon checks safety again">Hibernate idle ({parkCandidates.length})</button>
-          {parkConfirm && parkCandidates.length > 0 && (
-            <SwitchReview
-              ledger={hibernateLedger(parkCandidates.length)}
-              onClose={() => setParkConfirm(false)}
-              onConfirm={() => {
-                setParkRequests(parkCandidates.map(row => requestHibernate(String(row.conversation_id), row.session_id, row.owner_device_id!)));
-                setParkConfirm(false);
-              }}
-            />
-          )}
-          {bulkRows.length > 0 && (
-            <button
-              onClick={() => setBulkConfirm(true)}
-              aria-haspopup="dialog"
-              className="px-3 py-1.5 text-xs bg-sol-red/15 text-sol-red border border-sol-red/30 rounded-md hover:bg-sol-red/20 transition-colors"
-              title="Kill every session in the current view (terminates tmux + claude + child processes)"
-            >
-              Kill all {bulkRows.length}
-            </button>
-          )}
-          {bulkConfirm && bulkRows.length > 0 && (
-            <SwitchReview
-              ledger={bulkKillLedger}
-              onClose={() => setBulkConfirm(false)}
-              onConfirm={() => { handleBulk(bulkRows); setBulkConfirm(false); }}
-            />
-          )}
-          </div>
-        </div>
-
+    <PageFrame
+      header={header}
+      legacyScroll="h-full min-h-0 overflow-y-auto bg-sol-bg text-sol-text"
+      legacyColumn="max-w-[1200px] mx-auto px-6 py-6"
+      column="max-w-[1200px] mx-auto px-4 py-6 sm:px-6 text-sol-text"
+    >
         {parkRequests.length > 0 && <div role="status" className="mb-4 rounded border border-sol-border p-3 text-xs text-sol-text-dim">
           {parkCounts.pending} parking requested · {parkCounts.succeeded} hibernated · {parkCounts.skipped} skipped · {parkCounts.failed} failed
           {parkResultError && parkCounts.pending > 0 && <div className="mt-1">Command results unavailable; parking is not confirmed.</div>}
@@ -715,6 +714,8 @@ export function SessionsView() {
                 const style = BUCKET_STYLES[session.bucket];
                 const isBusy = busy.has(session.session_id);
                 const isExpanded = expandedSession === session.session_id;
+                if (modern) return <ModernSessionsRow key={session._id} row={session} inbox={session.conversation_id ? inboxById.get(String(session.conversation_id)) : undefined} now={now} busy={isBusy} expanded={isExpanded} parking={commands.some(c => c.conversation_id === session.conversation_id && !c.executed_at)}
+                  onToggleExpand={() => setExpandedSession(isExpanded ? null : session.session_id)} onPin={() => handleTogglePin(session)} onStash={() => handleToggleDismiss(session)} onKill={() => handleKill(session)} onPrune={() => handlePrune(session)}><SessionMetricsChart sessionId={session.session_id} /></ModernSessionsRow>;
 
                 return (
                   <div
@@ -924,8 +925,7 @@ export function SessionsView() {
               })}
           </div>
         )}
-      </div>
-    </div>
+    </PageFrame>
   );
 }
 
