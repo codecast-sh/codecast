@@ -2,6 +2,7 @@ import '@/lib/polyfills';
 import { ComposeHost } from '@/components/session/NewSessionSheet';
 import { UndoBarHost } from '@/components/UndoBar';
 import { PopupHost } from '@/components/PopupHost';
+import { BiometricGate } from '@/components/BiometricGate';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments, usePathname } from 'expo-router';
@@ -301,7 +302,6 @@ function RootLayoutNav() {
                   <Stack.Screen name="record" options={{ headerShown: false }} />
                   <Stack.Screen name="calls" options={{ headerShown: false }} />
                   <Stack.Screen name="recording/[id]" options={{ headerShown: false }} />
-                  <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
                   <Stack.Screen
                     name="call"
                     options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'slide_from_bottom' }}
@@ -317,6 +317,8 @@ function RootLayoutNav() {
                     </Suspense>
                   </OverlayErrorBoundary>
                 ) : null}
+                {/* Last, so the lock sits above every host before it. */}
+                <BiometricGate />
               </AuthGate>
             </ThemeProvider>
           </AuthProvider>

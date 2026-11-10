@@ -610,23 +610,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.text,
     lineHeight: 20,
   },
-  planLink: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: Theme.bgAlt,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-  },
-  planLinkText: {
-    fontSize: 14,
-    fontWeight: "500",
-    color: Theme.cyan,
-    flex: 1,
-  },
   parentLink: {
     flexDirection: "row",
     alignItems: "center",
@@ -703,11 +686,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.text,
     padding: 0,
   },
-  labelRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-  },
   labelChip: {
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -760,11 +738,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontFamily: "JetBrainsMono",
     color: Theme.textMuted,
     lineHeight: 20,
-  },
-  moreText: {
-    fontSize: 12,
-    color: Theme.textMuted0,
-    marginTop: 4,
   },
   commentRow: {
     marginBottom: 14,

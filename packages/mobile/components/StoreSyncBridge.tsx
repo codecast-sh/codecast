@@ -89,7 +89,7 @@ function StoreSyncBridgeInner() {
   useSyncTeamMembers(useInboxStore(activeTeamIdOf));
   useChatChannelsSync();
   useCallBaseFeeds();
-  // Teams, roster, notifications, tasks, plans, docs, projects and org roles.
+  // Notifications, tasks, plans, docs, projects and org roles.
   useSyncWorkspaceData();
   // Vault metadata, so Settings counts open requests before the page opens.
   useSyncSecrets();

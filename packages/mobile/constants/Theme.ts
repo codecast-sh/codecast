@@ -187,13 +187,6 @@ export function themedStyles<T extends StyleSheet.NamedStyles<T>>(build: (theme:
   return liveView(() => sheetFor(activeScheme), Object.keys(sheetFor('light')) as (keyof T)[]);
 }
 
-// The same live sheet, built from the scheme's name rather than its palette,
-// for a surface that names its colours per scheme.
-export function schemedStyles<T extends StyleSheet.NamedStyles<T>>(build: (scheme: ColorScheme) => T): T {
-  const sheets: Partial<Record<ColorScheme, T>> = {};
-  const sheetFor = (scheme: ColorScheme): T => (sheets[scheme] ??= build(scheme));
-  return liveView(() => sheetFor(activeScheme), Object.keys(sheetFor('light')) as (keyof T)[]);
-}
 
 export function useActiveScheme(): ColorScheme {
   return useSyncExternalStore(subscribeScheme, getActiveScheme, getActiveScheme);

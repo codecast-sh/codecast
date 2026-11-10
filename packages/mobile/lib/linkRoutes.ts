@@ -9,6 +9,7 @@
 import { entityRoute, isOrgObjectKind, parseEntityUrl, parseRepoObjectId, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
 import { laneRedirectTarget, pageAliasTarget } from '@codecast/web/lib/laneRedirect';
 import { settingsPathFor } from '@codecast/web/lib/settingsSections';
+import { isMobileSettingsSection } from './settingsSections';
 
 /**
  * One URL vocabulary for every surface. `www.` hosts count: people paste them
@@ -91,6 +92,9 @@ export function mobileEntityRoute(type: EntityType, id: string): string | null {
  *  segment of the Tasks tab, which reads `segment` from its address. */
 const PAGE_ROUTES: Record<string, string> = {
   '/inbox': '/(tabs)/inbox',
+  '/tasks': '/(tabs)/tasks',
+  '/notifications': '/(tabs)/notifications',
+  '/settings': '/(tabs)/settings',
   '/decisions': '/decisions',
   '/questions': '/decisions',
   '/calls': '/calls',
@@ -157,6 +161,11 @@ export function mobileRouteForUrl(url: string): string | null {
   if (alias) return mobileRouteForUrl(alias);
   const page = PAGE_ROUTES[path.length > 1 ? path.replace(/\/+$/, '') : path];
   if (page) return page;
+  // A settings section the phone has a page of its own for, under the web's
+  // name for it (/settings/devices, /settings/notifications). The web's other
+  // sections (keyboard, daemon, ...) have no phone page and stay on the web.
+  const section = /^\/settings\/([^/]+)\/?$/.exec(path);
+  if (section && isMobileSettingsSection(section[1])) return `/settings/${section[1]}`;
   // Team invites are completed on the web; the Chat tab (where the team
   // lives on the phone) is the nearest screen. The web's chat pages land
   // there too.

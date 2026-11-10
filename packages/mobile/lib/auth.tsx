@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, createContext, useContext, ReactNode } from 'react';
-import { Platform, Pressable, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, createContext, useContext, ReactNode } from 'react';
+import { Platform, Pressable, View } from 'react-native';
+import { Text } from '@/components/Themed';
 import * as SecureStore from 'expo-secure-store';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as AppleAuthentication from 'expo-apple-authentication';
@@ -15,8 +16,8 @@ import { authRenderDecision, localBootTrust, shouldClearMemoryFor, shouldRelease
 import { bootMark } from './bootProfile';
 import { STORE_SHOTS } from './storeShots/flag';
 import { setCatchUpToken } from './foregroundResume';
+import { unlockVerdict } from './biometricLock';
 
-const TOKEN_KEY = 'convex_auth_token';
 const BIOMETRIC_ENABLED_KEY = 'biometric_enabled';
 // The last principal this device verified with the server — the owner of the
 // SQLite cache. Local-first boot trust anchors on it (see lib/authTrust).
@@ -31,6 +32,9 @@ export interface AuthContextType {
   currentUserId: string | null;
   isBiometricAvailable: boolean;
   isBiometricEnabled: boolean;
+  // False for the instant the keychain read of the setting takes at launch.
+  // The lock (components/BiometricGate) covers the app until it is known.
+  isBiometricSettingLoaded: boolean;
   isAppleAuthAvailable: boolean;
   signInWithGitHub: () => Promise<void>;
   signInWithApple: () => Promise<void>;
@@ -40,6 +44,9 @@ export interface AuthContextType {
   signOut: () => Promise<void>;
   enableBiometric: () => Promise<void>;
   disableBiometric: () => Promise<void>;
+  // The system's check (Face ID, Touch ID, or the device passcode when those
+  // fail). True when the app may open; see lib/biometricLock for the phone
+  // that has nothing to check against.
   authenticateWithBiometric: () => Promise<boolean>;
 }
 
@@ -230,6 +237,7 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
   }, [isAuthenticated, accessIdentity?.principalId, accessIdentity?.subject, currentUser, currentUserId]);
   const [isBiometricAvailable, setIsBiometricAvailable] = useState(false);
   const [isBiometricEnabled, setIsBiometricEnabled] = useState(false);
+  const [isBiometricSettingLoaded, setIsBiometricSettingLoaded] = useState(false);
   const [isAppleAuthAvailable, setIsAppleAuthAvailable] = useState(false);
 
   useEffect(() => {
@@ -251,12 +259,20 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
     setIsBiometricAvailable(compatible && enrolled);
   };
 
+  // A keychain that cannot be read counts as the setting off: the lock must
+  // never hold the app shut over a setting it could not load.
   const checkBiometricEnabled = async () => {
-    const enabled = await SecureStore.getItemAsync(BIOMETRIC_ENABLED_KEY);
-    setIsBiometricEnabled(enabled === 'true');
+    try {
+      const enabled = await SecureStore.getItemAsync(BIOMETRIC_ENABLED_KEY);
+      setIsBiometricEnabled(enabled === 'true');
+    } catch {
+      setIsBiometricEnabled(false);
+    } finally {
+      setIsBiometricSettingLoaded(true);
+    }
   };
 
-  const handleOAuthSignIn = async (provider: string) => {
+  const handleOAuthSignIn = useCallback(async (provider: string) => {
     const redirectUrl = Linking.createURL('auth/callback');
     const result = await signIn(provider, { redirectTo: redirectUrl });
     if (result.redirect) {
@@ -272,13 +288,13 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-  };
+  }, [signIn]);
 
-  const signInWithGitHub = async () => {
+  const signInWithGitHub = useCallback(async () => {
     await handleOAuthSignIn('github');
-  };
+  }, [handleOAuthSignIn]);
 
-  const signInWithApple = async () => {
+  const signInWithApple = useCallback(async () => {
     // Native Sign in with Apple: present Apple's system sheet and hand the
     // resulting identity token to our `apple-native` Convex provider, which
     // verifies it server-side. No web browser / OAuth redirect (the old path,
@@ -303,53 +319,70 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
     if (credential.email) params.email = credential.email;
     if (fullName) params.fullName = fullName;
     await signIn('apple-native', params);
-  };
+  }, [signIn]);
 
   // When the backend has email verification enabled (Password provider
   // `verify`), signUp/signIn resolve with signingIn:false after emailing an
   // OTP; the caller must then collect the code and call verifyEmailCode.
-  const signInWithEmail = async (email: string, password: string) => {
+  const signInWithEmail = useCallback(async (email: string, password: string) => {
     const result = await signIn('password', { email, password, flow: 'signIn' });
     return { needsVerification: result?.signingIn === false };
-  };
+  }, [signIn]);
 
-  const signUpWithEmail = async (email: string, password: string) => {
+  const signUpWithEmail = useCallback(async (email: string, password: string) => {
     const result = await signIn('password', { email, password, flow: 'signUp' });
     return { needsVerification: result?.signingIn === false };
-  };
+  }, [signIn]);
 
-  const verifyEmailCode = async (email: string, code: string) => {
+  const verifyEmailCode = useCallback(async (email: string, code: string) => {
     await signIn('password', { email, code, flow: 'email-verification' });
-  };
+  }, [signIn]);
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     clearProtectedInboxMemory();
     // Drop the local-first trust anchor with the session: a signed-out device
     // must not render the old principal's (now cleared) cache on next boot.
     memoryPrincipal.current = null;
     setBootPrincipal(null);
-    await SecureStore.deleteItemAsync(LAST_PRINCIPAL_KEY);
+    // Keychain failures must not strand the session: memory is already
+    // cleared, so the server sign-out below has to run whatever they do.
+    await SecureStore.deleteItemAsync(LAST_PRINCIPAL_KEY).catch(() => {});
+    // The lock belongs to the session that turned it on; the next account
+    // (and the login screen) starts without it.
+    setIsBiometricEnabled(false);
+    await SecureStore.deleteItemAsync(BIOMETRIC_ENABLED_KEY).catch(() => {});
+    // NEEDS convex: users.push_token still names this phone after sign-out, so
+    // the account keeps pushing to it. Once a clear mutation exists
+    // (api.users.clearPushToken, args { push_token }), call it here, while the
+    // session can still authenticate it, with getDevicePushToken() from
+    // lib/devicePushToken.
     await convexSignOut();
-    await SecureStore.deleteItemAsync(TOKEN_KEY);
-  };
+  }, [convexSignOut]);
 
-  const enableBiometric = async () => {
+  const enableBiometric = useCallback(async () => {
     await SecureStore.setItemAsync(BIOMETRIC_ENABLED_KEY, 'true');
     setIsBiometricEnabled(true);
-  };
+  }, []);
 
-  const disableBiometric = async () => {
+  const disableBiometric = useCallback(async () => {
     await SecureStore.deleteItemAsync(BIOMETRIC_ENABLED_KEY);
     setIsBiometricEnabled(false);
-  };
+  }, []);
 
-  const authenticateWithBiometric = async (): Promise<boolean> => {
-    const result = await LocalAuthentication.authenticateAsync({
-      promptMessage: 'Authenticate to access Codecast',
-      fallbackLabel: 'Use password',
-    });
-    return result.success;
-  };
+  const authenticateWithBiometric = useCallback(async (): Promise<boolean> => {
+    try {
+      // No fallbackLabel and no disableDeviceFallback: the system offers the
+      // device passcode by itself when Face ID or Touch ID cannot be used.
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Unlock Codecast',
+      });
+      return unlockVerdict(result) !== 'stay';
+    } catch {
+      // The check itself could not run (no native module answer). Open, as for
+      // a phone with nothing enrolled: a lock nobody can pass protects nothing.
+      return true;
+    }
+  }, []);
 
   // Local-first render: a locally trusted boot shows the cached app
   // immediately; "blank" covers only the ms-long anchor read and an
@@ -372,25 +405,48 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
     }
   }, [hydrated, renderDecision]);
 
+  // One value per real change: this provider re-renders on every push of the
+  // user doc (getCurrentUser above), and a fresh object each time would
+  // re-render every useAuth() consumer, the root gate included.
+  const contextValue = useMemo<AuthContextType>(() => ({
+    isAuthenticated,
+    isLoading,
+    currentUserId,
+    isBiometricAvailable,
+    isBiometricEnabled,
+    isBiometricSettingLoaded,
+    isAppleAuthAvailable,
+    signInWithGitHub,
+    signInWithApple,
+    signInWithEmail,
+    signUpWithEmail,
+    verifyEmailCode,
+    signOut,
+    enableBiometric,
+    disableBiometric,
+    authenticateWithBiometric,
+  }), [
+    isAuthenticated,
+    isLoading,
+    currentUserId,
+    isBiometricAvailable,
+    isBiometricEnabled,
+    isBiometricSettingLoaded,
+    isAppleAuthAvailable,
+    signInWithGitHub,
+    signInWithApple,
+    signInWithEmail,
+    signUpWithEmail,
+    verifyEmailCode,
+    signOut,
+    enableBiometric,
+    disableBiometric,
+    authenticateWithBiometric,
+  ]);
+
   return (
     <AuthContext.Provider
-      value={{
-        isAuthenticated,
-        isLoading,
-        currentUserId,
-        isBiometricAvailable,
-        isBiometricEnabled,
-        isAppleAuthAvailable,
-        signInWithGitHub,
-        signInWithApple,
-        signInWithEmail,
-        signUpWithEmail,
-        verifyEmailCode,
-        signOut,
-        enableBiometric,
-        disableBiometric,
-        authenticateWithBiometric,
-      }}
+      value={contextValue}
     >
       {(() => {
         if (renderDecision === "children") return children;
@@ -435,6 +491,26 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
+const storeShotsDone = async () => {};
+const STORE_SHOTS_AUTH: AuthContextType = {
+  isAuthenticated: true,
+  isLoading: false,
+  currentUserId: 'hero-u-me',
+  isBiometricAvailable: false,
+  isBiometricEnabled: false,
+  isBiometricSettingLoaded: true,
+  isAppleAuthAvailable: false,
+  signInWithGitHub: storeShotsDone,
+  signInWithApple: storeShotsDone,
+  signInWithEmail: async () => ({ needsVerification: false }),
+  signUpWithEmail: async () => ({ needsVerification: false }),
+  verifyEmailCode: storeShotsDone,
+  signOut: storeShotsDone,
+  enableBiometric: storeShotsDone,
+  disableBiometric: storeShotsDone,
+  authenticateWithBiometric: async () => true,
+};
+
 // Store shots mode (lib/storeShots/flag): signed in as the fixture world's
 // Alex Rivera with no server. Seeds the store once the disk cache has
 // hydrated, so the cache can never merge over the fixture rows.
@@ -447,27 +523,8 @@ function StoreShotsAuthProvider({ children }: { children: ReactNode }) {
     setSeeded(true);
     void SplashScreen.hideAsync();
   }, [hydrated, seeded]);
-  const done = async () => {};
   return (
-    <AuthContext.Provider
-      value={{
-        isAuthenticated: true,
-        isLoading: false,
-        currentUserId: 'hero-u-me',
-        isBiometricAvailable: false,
-        isBiometricEnabled: false,
-        isAppleAuthAvailable: false,
-        signInWithGitHub: done,
-        signInWithApple: done,
-        signInWithEmail: async () => ({ needsVerification: false }),
-        signUpWithEmail: async () => ({ needsVerification: false }),
-        verifyEmailCode: done,
-        signOut: done,
-        enableBiometric: done,
-        disableBiometric: done,
-        authenticateWithBiometric: async () => true,
-      }}
-    >
+    <AuthContext.Provider value={STORE_SHOTS_AUTH}>
       {seeded ? children : null}
     </AuthContext.Provider>
   );

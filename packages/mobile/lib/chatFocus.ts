@@ -16,10 +16,6 @@ export function clearChatFocus(): void {
   focus = {};
 }
 
-export function getChatFocus(): ChatFocusState {
-  return focus;
-}
-
 /** Should a foreground banner about this push stay quiet? Same rule as the web
  *  toast tier's "already on screen" branch: same channel AND same thread
  *  context. A thread reply still banners while you sit on the channel floor —

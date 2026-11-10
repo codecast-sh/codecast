@@ -1,6 +1,5 @@
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, isConvexId } from "@codecast/web/store/inboxStore";
-import { useSyncTeams } from "@codecast/web/hooks/useSyncTeams";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { useSyncCollection } from "@codecast/web/hooks/useSyncCollection";
 import { useBootstrapCollection } from "@codecast/web/hooks/useBootstrapCollection";
 import { useSyncOrgTreeFeeder } from "@codecast/web/hooks/useSyncOrgTree";
@@ -9,23 +8,16 @@ import { workspaceStamp } from "@codecast/web/hooks/useWorkspaceArgs";
 import { useSyncTasks } from "./useSyncTasks";
 import { useSyncPlans } from "./useSyncPlans";
 import { useSyncDocs } from "./useSyncDocs";
-import { useWorkspaceArgs, useActiveTeamId } from "./useWorkspaceArgs";
+import { useWorkspaceArgs } from "./useWorkspaceArgs";
 
-// The workspace's work data, fed ahead of any screen: teams (feature gates),
-// the roster, notifications, tasks, plans, docs, projects and the org's roles.
+// The workspace's work data, fed ahead of any screen: notifications, tasks,
+// plans, docs, projects and the org's roles. Teams and the roster are fed by
+// StoreSyncBridge itself, beside the chat feeders that also need them.
 // Mounted once in StoreSyncBridge so the Tasks tab, a task/plan/doc opened
 // from a push, the Notifications tab and Settings all open on rows already in
 // the persisted store. Screens read the store; none of them waits on these.
 export function useSyncWorkspaceData(): void {
   const wsArgs = useWorkspaceArgs();
-  const teamId = useActiveTeamId();
-
-  useSyncTeams();
-  useSyncCollection(
-    "teamMembers",
-    api.teams.getTeamMembers,
-    teamId && isConvexId(String(teamId)) ? { team_id: teamId as any } : "skip",
-  );
   useSyncCollection("notifications", api.notifications.list, {});
   useSyncTasks();
   useSyncPlans();

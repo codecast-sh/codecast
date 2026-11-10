@@ -4,7 +4,7 @@ import { forkSessionAsAgent, sessionRowFor, switchSessionAgent } from '@codecast
 import { usePinnedAgentIds } from '@codecast/web/hooks/usePinnedAgents';
 import { AccountRecoveryBanner } from '@/components/AccountRecoveryBanner';
 import { ConversationSlideOut, useConversationDrawer } from '@/components/inbox/ConversationSlideOut';
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, Pressable, Modal, Animated, Easing, Dimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
@@ -16,6 +16,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { mixColor } from '@/lib/solColor';
 import { showNotice } from '@/lib/undoBar';
+import { copyToClipboard } from '@/lib/clipboard';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ConversationSkeleton } from '@/components/SkeletonLoader';
 import { MobileAgentSpeaker, MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
@@ -39,7 +40,7 @@ import { chatWakePlace, chatWakeAction, isToolResultCarrier, type ChatWakePrompt
 import { buildNavigatorRows, sampleTicks, stickyEligibleIds, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { hasRichMarkdown } from '@codecast/web/lib/richMarkdown';
-import { isCommandMessage, isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
+import { formatModel, isCommandMessage, isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
 import { SentFileBlock, type SentFileData } from '@/components/session/SentFileBlock';
 import { StructuredResultBlock } from '@/components/session/StructuredResultBlock';
@@ -91,7 +92,7 @@ import { hostedConnectionWords } from '@codecast/web/components/conversation/Hos
 import { useLinkDown } from '@/hooks/useLinkDown';
 import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
-import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, sessionEscalationCaption, stripPastedContent, stripCompactionProvenance, isPollResponsePayload, type VaultReadyMessage } from '@codecast/shared/contracts';
+import { agentDisplayName, agentSupportsFork, contextWindowTokens, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, sessionEscalationCaption, stripPastedContent, stripCompactionProvenance, isPollResponsePayload, type VaultReadyMessage } from '@codecast/shared/contracts';
 import { DELIVERY_FAILED_SUBTYPE, parseDeliveryFailedNotice } from '@codecast/shared/contracts/deliveryFailed';
 import { MarkdownContent, CodeBlockWithCopy, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { AnsiText } from '@/components/CodeText';
@@ -292,20 +293,6 @@ function formatFullTimestamp(ts: number): string {
   });
 }
 
-function formatModel(model?: string): string {
-  if (!model) return '';
-  if (model.includes('claude-sonnet')) {
-    return model.replace('claude-sonnet-', 'sonnet-').replace('-20', "-'");
-  }
-  if (model.includes('claude-opus')) {
-    return model.replace('claude-opus-', 'opus-').replace('-20', "-'");
-  }
-  if (model.includes('claude-haiku')) {
-    return model.replace('claude-haiku-', 'haiku-').replace('-20', "-'");
-  }
-  return model;
-}
-
 function formatAgentType(agentType?: string): string {
   return agentType ? agentDisplayName(agentType) : 'Unknown';
 }
@@ -315,28 +302,6 @@ function agentTypeColor(agentType?: string): string {
   if (tint) return tint;
   if (agentType === 'grok') return Theme.text;
   return Theme.accent;
-}
-
-function agentTypeIcon(agentType?: string): string {
-  if (agentType === 'codex') return 'terminal';
-  if (agentType === 'cursor') return 'mouse-pointer';
-  if (agentType === 'gemini') return 'star';
-  if (agentType === 'opencode') return 'code';
-  if (agentType === 'pi') return 'bolt';
-  if (agentType === 'grok') return 'times';
-  return 'bolt';
-}
-
-function formatDuration(startTs: number): string {
-  const diff = Date.now() - startTs;
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return '<1m';
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remainMin = minutes % 60;
-  if (hours < 24) return remainMin ? `${hours}h ${remainMin}m` : `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h`;
 }
 
 // Concrete hex for each semantic color token the shared tool visuals return.
@@ -358,14 +323,6 @@ function toolLabel(name: string): string {
   const label = formatToolName(name);
   return name.startsWith('mcp__') && !mcpToolNames[name] ? label.slice(0, 12) : label;
 }
-
-
-const PLAN_PREFIXES = [
-  /^implement\s+the\s+following\s+plan\s*:\s*/i,
-  /^implement\s+this\s+plan\s*:\s*/i,
-  /^here(?:'s| is)\s+the\s+plan\s*:\s*/i,
-  /^plan\s*:\s*\n/i,
-];
 
 function isPlanFile(filePath: string, content: string): boolean {
   const fileName = filePath.split('/').pop()?.toLowerCase() || '';
@@ -2100,36 +2057,6 @@ function SystemMessage({ message, conversationId }: { message: Message; conversa
   );
 }
 
-function formatTokenCount(n: number): string {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return n.toString();
-}
-
-function UsageBar({ usage }: { usage: UsageData }) {
-  const Theme = useTheme();
-  const CONTEXT_LIMIT = 200000;
-  const contextPercent = (usage.contextSize / CONTEXT_LIMIT) * 100;
-  const isWarning = contextPercent > 80;
-
-  return (
-    <RNView style={styles.usageBar}>
-      <RNText style={styles.usageLabel}>In: <RNText style={styles.usageValue}>{formatTokenCount(usage.inputTokens)}</RNText></RNText>
-      <RNText style={styles.usageLabel}>Out: <RNText style={styles.usageValue}>{formatTokenCount(usage.outputTokens)}</RNText></RNText>
-      {(usage.cacheCreation > 0 || usage.cacheRead > 0) && (
-        <RNText style={styles.usageLabel}>Cache: <RNText style={[styles.usageValue, { color: Theme.cyan }]}>{formatTokenCount(usage.cacheRead)}</RNText></RNText>
-      )}
-      <RNView style={styles.usageContextRow}>
-        <RNText style={styles.usageLabel}>Ctx:</RNText>
-        <RNView style={styles.usageContextBar}>
-          <RNView style={[styles.usageContextFill, { width: `${Math.min(100, contextPercent)}%` as any, backgroundColor: isWarning ? '#ef4444' : Theme.green }]} />
-        </RNView>
-        <RNText style={[styles.usageValue, isWarning && { color: '#ef4444' }]}>{Math.round(contextPercent)}%</RNText>
-      </RNView>
-    </RNView>
-  );
-}
-
 const CONTENT_TRUNCATE_LENGTH = 3000;
 const ASSISTANT_CONTENT_MAX_HEIGHT = 400;
 
@@ -2271,7 +2198,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         label: 'Copy text',
         icon: 'copy',
         onPress: () => {
-          Clipboard.setString(messageText);
+          void copyToClipboard(messageText);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           showToast?.('Copied to clipboard');
         },
@@ -2280,7 +2207,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         label: 'Copy link',
         icon: 'link',
         onPress: () => {
-          Clipboard.setString(`https://codecast.sh/conversation/${conversationId}#msg-${message._id}`);
+          void copyToClipboard(`https://codecast.sh/conversation/${conversationId}#msg-${message._id}`);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           showToast?.('Link copied');
         },
@@ -2393,7 +2320,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
           {model && !hostedAgent && (
             <RNText style={styles.modelBadge}>{formatModel(model)}</RNText>
           )}
-          <Pressable onPress={() => { Clipboard.setString(formatFullTimestamp(message.timestamp)); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast?.('Timestamp copied'); }}>
+          <Pressable onPress={() => { void copyToClipboard(formatFullTimestamp(message.timestamp)); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast?.('Timestamp copied'); }}>
             <RelativeTime timestamp={message.timestamp} style={[styles.bubbleTime, styles.assistantTime]} />
           </Pressable>
           {isBookmarked && (
@@ -2732,14 +2659,9 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
   // The session row's live fields (synced with the inbox): is_connected is
   // the heartbeat verdict, agent_status what the agent is doing now.
   const sessionFields = useManagedSessionFields(conversationId as string);
-  const managedSessionQ = sessionFields
+  const managedSession = sessionFields
     ? { managed: !!sessionFields.is_connected, agent_status: sessionFields.agent_status as string | undefined }
     : undefined;
-  // The design-mock session fakes a working agent so the footer status chip is
-  // reviewable without server data (see DESIGN_MOCK_CONVO).
-  const managedSession = (conversationId as string) === '__designmock__'
-    ? { managed: true as const, agent_status: 'working' }
-    : managedSessionQ;
 
   const draftRef = useRef(seed);
   // Same store path as web MessageInput: debounce setDraft / clearDraftFinal.
@@ -2910,69 +2832,6 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
 
 // --- Main screen with pagination ---
 
-// TEMPORARY (design iteration): a fully-populated mock conversation so the header
-// strip renders every chip type without depending on server data. Reached via the
-// deep link codecast://session/__designmock__ . Remove before shipping.
-const DESIGN_MOCK_ID = '__designmock__';
-const DESIGN_MOCK_STARTED = Date.now() - 21 * 3600 * 1000;
-const DESIGN_MOCK_CONVO: ConversationData = {
-  _id: DESIGN_MOCK_ID,
-  title: 'Counterparty matching strategy optimization',
-  status: 'archived',
-  is_own: true,
-  agent_type: 'claude',
-  model: 'opus-4-8',
-  started_at: DESIGN_MOCK_STARTED,
-  updated_at: DESIGN_MOCK_STARTED,
-  message_count: 16,
-  fork_count: 3,
-  git_branch: 'ashot/apollo-include-similar-titles-fix',
-  git_remote_url: 'https://github.com/ashot/codecast.git',
-  messages: [
-    ...Array.from({ length: 16 }, (_, i) => ({
-      _id: `mock-msg-${i}`,
-      role: i % 2 === 0 ? 'user' : 'assistant',
-      content: i % 2 === 0
-        ? `Mock prompt ${i / 2 + 1}: tighten the counterparty matching heuristic and re-run the similar-titles backfill.`
-        : `Acknowledged. Working on step ${Math.ceil(i / 2)} — scanning the candidate set, scoring by title overlap, and parking the cleanup behind the Phase-0 reworks. This line is padded so the bubble has enough height to make the list scrollable for verifying the header collapse behavior.`,
-      timestamp: DESIGN_MOCK_STARTED + i * 60000,
-      message_uuid: `mock-uuid-${i}`,
-    })),
-    // Exercises the CastCanvas renderer: title extraction, sol tokens, table
-    // layout, chart placeholder, and the overflow -> "Show all" path.
-    {
-      _id: 'mock-msg-canvas',
-      role: 'assistant',
-      content: 'Here is the funnel summary:\n\n```cast-canvas\n<div data-canvas-title="Intro volume funnel">\n<div style="font-size:11px;letter-spacing:1px;color:var(--sol-text-dim);text-transform:uppercase">Intro volume funnel</div>\n<h2 style="margin:6px 0;color:var(--sol-text)">Weekly conversion</h2>\n<table style="width:100%;border-collapse:collapse">\n<tr style="border-bottom:1px solid var(--sol-border-light)"><th style="text-align:left;padding:6px;color:var(--sol-text-muted)">Stage</th><th style="text-align:right;padding:6px;color:var(--sol-text-muted)">Count</th></tr>\n<tr><td style="padding:6px">Intros sent</td><td style="text-align:right;padding:6px;color:var(--sol-blue)">412</td></tr>\n<tr style="background:var(--sol-bg-alt)"><td style="padding:6px">Replies</td><td style="text-align:right;padding:6px;color:var(--sol-cyan)">187</td></tr>\n<tr><td style="padding:6px">Meetings</td><td style="text-align:right;padding:6px;color:var(--sol-green)">63</td></tr>\n</table>\n<div class="cast-chart" data-spec=\'{"marks":[{"type":"barY"}]}\'></div>\n<p style="color:var(--sol-text-secondary)">Reply rate is <b style="color:var(--sol-orange)">45%</b>, up 6pts week over week. The drop from replies to meetings is the leak worth chasing.</p>\n<script>alert("must never run")</script>\n</div>\n```\n\nThe sanitizer strips the script above.',
-      timestamp: DESIGN_MOCK_STARTED + 17 * 60000,
-      message_uuid: 'mock-uuid-canvas',
-    },
-    // Exercises AskUserQuestion option previews (the ASCII mockup box the
-    // terminal shows next to each option).
-    {
-      _id: 'mock-msg-auq',
-      role: 'assistant',
-      content: '',
-      tool_calls: [{
-        id: 'mock-tool-auq',
-        name: 'AskUserQuestion',
-        input: JSON.stringify({
-          questions: [{
-            question: 'Which layout for the stats header?',
-            header: 'Layout',
-            options: [
-              { label: 'Stacked (Recommended)', description: 'Title above the chip row', preview: '┌──────────────────┐\n│ Title            │\n│ [chip] [chip]    │\n└──────────────────┘' },
-              { label: 'Inline', description: 'Title and chips share one row', preview: '┌──────────────────┐\n│ Title [chip][chip]│\n└──────────────────┘' },
-            ],
-          }],
-        }),
-      }],
-      timestamp: DESIGN_MOCK_STARTED + 18 * 60000,
-      message_uuid: 'mock-uuid-auq',
-    },
-  ] as Message[],
-};
-
 // Height of the compact custom title bar (back + title + actions), below the
 // safe-area inset. The collapsing metadata strip is positioned just under it.
 const HEADER_BAR_HEIGHT = MOBILE_SESSION_HEADER_HEIGHT;
@@ -3115,7 +2974,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // vanished on the next liveness tick, then reappeared when the row synced.
   useFocusEffect(
     useCallback(() => {
-      if (typeof id === "string" && id !== DESIGN_MOCK_ID) {
+      if (typeof id === "string") {
         useInboxStore.getState().setCurrentSession(id);
       }
     }, [id]),
@@ -3124,7 +2983,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // Server-backed read mark: clears this session's unread dot on every device
   // of this viewer's, but only while the screen is focused and the app is in
   // the foreground.
-  useAckActiveSession(typeof id === "string" && id !== DESIGN_MOCK_ID ? id : null);
+  useAckActiveSession(typeof id === "string" ? id : null);
 
   const flatListRef = useRef<FlatList>(null);
   const loadCooldownRef = useRef(false);
@@ -3212,12 +3071,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     if (missingLookup.row) useInboxStore.getState().seedSession(missingLookup.row);
   }, [missingLookup.row]);
   const conversation = storeConv
-    ?? (id === DESIGN_MOCK_ID ? DESIGN_MOCK_CONVO : missingLookup.row === null && !missingLookup.failed ? null : undefined);
+    ?? (missingLookup.row === null && !missingLookup.failed ? null : undefined);
   // Who this session is (its character, or its role): the header wears the
   // same face and name the inbox row does.
   const identityRow = useSessionIdentityRow(conversation?._id ? String(conversation._id) : null, conversation as any);
   // A regulated team's audit log gets one entry per open (lib/accessLogOpen).
-  useRecordConversationOpen(conversation?._id && conversation._id !== DESIGN_MOCK_ID ? String(conversation._id) : null, conversation?.team_id ? String(conversation.team_id) : null);
+  useRecordConversationOpen(conversation?._id ? String(conversation._id) : null, conversation?.team_id ? String(conversation.team_id) : null);
   const seatIdentity = identityRow ? sessionIdentity(identityRow) : null;
   const boardHref = boardHrefProp ?? (seatIdentity?.kind === 'role' ? `/org/${seatIdentity.role.short_id}/board` : null);
   // A conversation with the hosted assistant runs on no machine: the header
@@ -3600,7 +3459,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         return `[${ts}] ${label}:\n${msg.content}\n`;
       })
       .join('\n');
-    Clipboard.setString(formatted);
+    void copyToClipboard(formatted);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     showToast('Conversation copied');
   }, [allMessages, showToast]);
@@ -3617,7 +3476,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       if (!resumeId) return;
       cmd = `cast resume ${resumeId}`;
     }
-    Clipboard.setString(cmd);
+    void copyToClipboard(cmd);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     showToast('Resume command copied');
   }, [conversation?.short_id, conversation?.session_id, conversation?.agent_type, showToast]);
@@ -3678,7 +3537,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       onPress: attempt(async () => {
         const token = conversation.share_token ?? await generateShareLink({ conversation_id: convId });
         if (!token) return;
-        Clipboard.setString(conversationShareLink(token));
+        void copyToClipboard(conversationShareLink(token));
         showToast('Share link copied');
       }),
     });
@@ -3975,7 +3834,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   }, [jumpToMessage]);
 
   const latestUsage = useMemo(() => {
-    if (id === DESIGN_MOCK_ID) return { inputTokens: 0, outputTokens: 0, cacheCreation: 0, cacheRead: 0, contextSize: 124000 };
     let latest: UsageData | null = null;
     let latestTs = 0;
     for (const msg of allMessages) {
@@ -4173,7 +4031,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       const label = m.role === 'user' ? 'User' : 'Assistant';
       return `[${ts}] ${label}:\n${m.content || ''}`;
     }).join('\n\n');
-    Clipboard.setString(text);
+    void copyToClipboard(text);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     showToast(`${selected.length} message${selected.length > 1 ? 's' : ''} copied`);
     setShareSelectionMode(false);
@@ -4786,7 +4644,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                       <RNView style={styles.metaChip}>
                         <FontAwesome name="bar-chart" size={10} color={Theme.textDim} />
                         <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaChipText}>
-                          {Math.round((latestUsage.contextSize / 200000) * 100)}%
+                          {Math.round((latestUsage.contextSize / (contextWindowTokens(conversation.model, conversation.agent_type) ?? 200_000)) * 100)}%
                         </RNText>
                       </RNView>
                     )}
@@ -6568,38 +6426,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 0 },
-  },
-  usageBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-  },
-  usageLabel: {
-    fontSize: 10,
-    color: Theme.textDim,
-  },
-  usageValue: {
-    fontSize: 10,
-    fontFamily: 'JetBrainsMono-Regular',
-    color: Theme.textMuted,
-  },
-  usageContextRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  usageContextBar: {
-    width: 50,
-    height: 4,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  usageContextFill: {
-    height: '100%',
-    borderRadius: 2,
   },
   taskNotificationRow: {
     flexDirection: 'row',

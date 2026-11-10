@@ -31,6 +31,3 @@ const native: NativeModule | null =
 
 export const liveActivityNative = native;
 
-export function liveActivitySupported(): boolean {
-  return !!native?.supported;
-}
