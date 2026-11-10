@@ -13,7 +13,7 @@ let bin: string;
 function run(payload: Record<string, unknown>, extraEnv: Record<string, string> = {}): void {
   execFileSync("bash", [hookFile], {
     input: JSON.stringify(payload),
-    env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
+    env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
   });
 }
 
