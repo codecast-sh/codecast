@@ -7,7 +7,8 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { useAuthActions, useAuthToken } from '@convex-dev/auth/react';
-import { useConvexAuth, useQuery } from 'convex/react';
+import { useConvexAuth, useMutation, useQuery } from 'convex/react';
+import { getDevicePushToken } from './devicePushToken';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { clearProtectedInboxMemory, useInboxStore } from '@codecast/web/store/inboxStore';
 import { openPrincipalDispatchOutbox } from './dispatchOutbox';
@@ -338,6 +339,7 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
     await signIn('password', { email, code, flow: 'email-verification' });
   }, [signIn]);
 
+  const clearPushToken = useMutation(api.users.clearPushToken);
   const signOut = useCallback(async () => {
     clearProtectedInboxMemory();
     // Drop the local-first trust anchor with the session: a signed-out device
@@ -351,13 +353,13 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
     // (and the login screen) starts without it.
     setIsBiometricEnabled(false);
     await SecureStore.deleteItemAsync(BIOMETRIC_ENABLED_KEY).catch(() => {});
-    // NEEDS convex: users.push_token still names this phone after sign-out, so
-    // the account keeps pushing to it. Once a clear mutation exists
-    // (api.users.clearPushToken, args { push_token }), call it here, while the
-    // session can still authenticate it, with getDevicePushToken() from
-    // lib/devicePushToken.
+    // Take this phone off the account while the session can still authenticate
+    // the call; otherwise the signed-out account keeps pushing to it. A failure
+    // must not block sign-out.
+    const pushToken = getDevicePushToken();
+    if (pushToken) await clearPushToken({ push_token: pushToken }).catch(() => {});
     await convexSignOut();
-  }, [convexSignOut]);
+  }, [convexSignOut, clearPushToken]);
 
   const enableBiometric = useCallback(async () => {
     await SecureStore.setItemAsync(BIOMETRIC_ENABLED_KEY, 'true');
